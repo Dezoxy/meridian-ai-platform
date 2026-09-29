@@ -64,7 +64,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # The scanner version is pinned to the one used locally: .gitleaks.toml
+      # uses the [[allowlists]] syntax, which gitleaks reads from 8.25 on, and
+      # the action's bundled default was older.
       - name: Scan for committed secrets
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_VERSION: "8.30.1"
