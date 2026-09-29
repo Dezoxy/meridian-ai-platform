@@ -6,10 +6,9 @@ description: Write a one-page threat-model note before building a security-relev
 # feature-threat-model
 
 A lightweight, written threat model done *before* coding. One page. The
-platform's trust boundaries are numbered in the architecture (edge, ingress to
-APIs, runtime to gateway, gateway to providers, runtime to MCP servers,
-untrusted content, agent proposal to human decision, git to cluster); name the
-ones the feature crosses.
+platform's trust boundaries are numbered `TB-1` to `TB-9` in
+`docs/architecture/security/threat-model.md`, each tied to relationships in
+the architecture model; name the ones the feature crosses.
 
 ## Produce these sections
 

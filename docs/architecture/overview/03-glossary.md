@@ -13,6 +13,7 @@
 | Interrupt | A LangGraph pause with durable state; how human approval is implemented. |
 | Idempotency key | Client-supplied key that makes a repeated mutating tool call return the original result. |
 | MCP | Model Context Protocol: the interface between the runtime and tool servers. |
+| Trust boundary | A place where the caller and the callee trust different things, numbered `TB-1` to `TB-9` in the threat model. |
 | Tenant | A team or use case with its own quotas, budgets, data class and policies. |
 | Trajectory | The sequence of model and tool calls in one run, visible as a trace. |
 | SLO, SLI | Service level objective and indicator; targets until measured in milestone M3. |
