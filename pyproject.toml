@@ -27,9 +27,13 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/meridian/**" = ["S101", "S603", "S607"]
+"tests/synthetic/**" = ["S101", "S603", "S607"]
+# Not cryptographic: a seeded random.Random is what makes the data reproducible.
+"data/synthetic/generator/**" = ["S311"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/meridian"]
+testpaths = ["tests/meridian", "tests/synthetic"]
+pythonpath = ["data/synthetic"]
 addopts = "--import-mode=importlib"
 
 [tool.importlinter]

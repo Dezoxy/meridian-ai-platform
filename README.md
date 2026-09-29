@@ -61,6 +61,7 @@ graph LR
 | Decisions: Azure and kind with AWS designed; LangGraph behind a framework-agnostic contract; a thin model gateway | Accepted | `docs/architecture/decisions/` |
 | Engineering harness: reviewers, skills, hooks, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `scripts/` |
 | Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
+| Synthetic data and golden set: policies, claim history, four policy wordings and 40 first-notice-of-loss claims with expected outcomes, from a seeded generator whose reruns are identical | Implemented | `data/synthetic/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1 | ADR 3 |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1 | ADR 2 |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
@@ -88,6 +89,7 @@ the [plan](docs/meridian-plan.md).
 .agents/            byte-identical skill mirror for non-Claude agents
 .codex/             Codex hooks, prompts, agent twins, config example
 .github/workflows/  documentation gate; Python gates; architecture PDF release
+data/synthetic/     seeded generator, its committed output and the golden set
 docs/
   README.md         documentation index
   architecture/     Structurizr model, views, ADRs, requirements; README.md is the front door
@@ -97,13 +99,13 @@ src/meridian/       the one Python package (src layout)
   workloads/        use cases built on the platform contract
 tests/              tests for the scripts and the bash guard
   meridian/         pytest tests for the package, including the import-contract check
+  synthetic/        pytest tests for the generator: reruns, labels, citations
 pyproject.toml      uv project: Python 3.13, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, synthetic
 ```
 
-Planned, milestone by milestone: `config/registry/`, `api/`, `infra/`,
-`data/synthetic/`.
+Planned, milestone by milestone: `config/registry/`, `api/`, `infra/`.
 
 ## Working in this repository
 
@@ -114,7 +116,8 @@ make view     # browse the model at http://localhost:8080/workspace/1
 make mermaid  # regenerate derived Mermaid blocks, render every fence (Docker)
 make pdf      # the Documentation tab and every view as one PDF
 make lint     # ruff, format check, import-linter contracts (needs uv)
-make pytest   # package tests, including the import-contract check (needs uv)
+make pytest   # package and generator tests, including the import-contract check (needs uv)
+make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)
 ```
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin

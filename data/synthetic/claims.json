@@ -1,0 +1,806 @@
+[
+  {
+    "claim_id": "CLM-0001",
+    "policy_number": "POL-0049",
+    "reported_on": "2026-07-13",
+    "loss_date": "2026-07-13",
+    "peril": "storm",
+    "claimed_amount": 2890,
+    "loss_location": {
+      "city": "Linz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Bence Novak",
+      "email": "bence.novak49@example.com"
+    },
+    "description": "On 13 July 2026 a severe storm hit Linz and part of the roof of my house gave way. Water ran down the walls, and part of the ceiling has come down. The roof tiles were old and rotten before the storm and had not been repaired for years.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0002",
+    "policy_number": "POL-0036",
+    "reported_on": "2026-07-25",
+    "loss_date": "2026-07-24",
+    "peril": "burst_pipe",
+    "claimed_amount": 890,
+    "loss_location": {
+      "city": "Bratislava",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Jakub Horváth",
+      "email": "jakub.horvath36@example.com"
+    },
+    "description": "On 24 July 2026 I came home to my apartment in Bratislava and found a burst pipe in the bathroom. The plumber shut off the water, and the floor and the walls are wet.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0003",
+    "policy_number": "POL-0034",
+    "reported_on": "2026-07-29",
+    "loss_date": "2026-07-26",
+    "peril": "burst_pipe",
+    "claimed_amount": 5330,
+    "loss_location": {
+      "city": "Zagreb",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Marek Wagner",
+      "email": "marek.wagner34@example.com"
+    },
+    "description": "On 26 July 2026 a pipe under the kitchen sink of my apartment in Zagreb burst and water spread across the floor. The flooring is swollen and the walls are damp in two rooms.",
+    "documents": []
+  },
+  {
+    "claim_id": "CLM-0004",
+    "policy_number": "POL-0007",
+    "reported_on": "2026-07-28",
+    "loss_date": "2026-07-26",
+    "peril": "flood",
+    "claimed_amount": 2970,
+    "loss_location": {
+      "city": "Zagreb",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Hana Novak",
+      "email": "hana.novak7@example.com"
+    },
+    "description": "On 26 July 2026 heavy rain flooded the street in Zagreb and water came into my house. The water was about twenty centimetres deep and we needed pumps to clear it.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0005",
+    "policy_number": "POL-0038",
+    "reported_on": "2026-08-11",
+    "loss_date": "2026-08-11",
+    "peril": "glass",
+    "claimed_amount": 1220,
+    "loss_location": {
+      "city": "Zagreb",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Lukas Nagy",
+      "email": "lukas.nagy38@example.com"
+    },
+    "description": "On 11 August 2026 the rear window of my Škoda Octavia shattered while it was parked in Zagreb. The glass has to be replaced before the car can be used again.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0006",
+    "policy_number": "POL-0004",
+    "reported_on": "2026-07-03",
+    "loss_date": "2026-07-01",
+    "peril": "fire",
+    "claimed_amount": 5010,
+    "loss_location": {
+      "city": "Linz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Bence Müller",
+      "email": "bence.muller4@example.com"
+    },
+    "description": "On 1 July 2026 a fire started in the kitchen of my apartment in Linz. The fire brigade put it out, but there is heavy smoke and fire damage in several rooms.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0007",
+    "policy_number": "POL-0010",
+    "reported_on": "2026-07-22",
+    "loss_date": "2026-07-18",
+    "peril": "third_party_liability",
+    "claimed_amount": 2501,
+    "loss_location": {
+      "city": "Maribor",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Bence Gruber",
+      "email": "bence.gruber10@example.com"
+    },
+    "description": "On 18 July 2026 near Maribor I drove into the back of another car while driving my Škoda Octavia. The other party has sent me a written claim through a lawyer.",
+    "documents": [
+      "accident_statement"
+    ]
+  },
+  {
+    "claim_id": "CLM-0008",
+    "policy_number": "POL-0045",
+    "reported_on": "2026-08-14",
+    "loss_date": "2026-08-11",
+    "peril": "collision",
+    "claimed_amount": 17800,
+    "loss_location": {
+      "city": "Graz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Mateja Gruber",
+      "email": "mateja.gruber45@example.com"
+    },
+    "description": "On 11 August 2026 in Graz a van reversed into my Opel Astra while I was waiting at a junction. The front bumper and one wing are damaged, but the car can still be driven.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0009",
+    "policy_number": "POL-0018",
+    "reported_on": "2026-05-16",
+    "loss_date": "2026-05-16",
+    "peril": "collision",
+    "claimed_amount": 5540,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Stefan Müller",
+      "email": "stefan.muller18@example.com"
+    },
+    "description": "On 16 May 2026 in Ljubljana a van reversed into my Dacia Duster while I was waiting at a junction. The front bumper and one wing are damaged, but the car can still be driven.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0010",
+    "policy_number": "POL-0048",
+    "reported_on": "2026-05-07",
+    "loss_date": "2026-05-03",
+    "peril": "storm",
+    "claimed_amount": 1950,
+    "loss_location": {
+      "city": "Vienna",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Stefan Pichler",
+      "email": "stefan.pichler48@example.com"
+    },
+    "description": "On 3 May 2026 a strong gust in Vienna blew a roof panel onto my Opel Astra. The bonnet and the roof are covered in dents.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0011",
+    "policy_number": "POL-0016",
+    "reported_on": "2026-05-10",
+    "loss_date": "2026-05-07",
+    "peril": "third_party_liability",
+    "claimed_amount": 460,
+    "loss_location": {
+      "city": "Linz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Hana Novák",
+      "email": "hana.novak16@example.com"
+    },
+    "description": "On 7 May 2026 near Linz I drove into the back of another car while driving my Peugeot 308. The other driver has asked me to pay for the repair of the car.",
+    "documents": [
+      "accident_statement"
+    ]
+  },
+  {
+    "claim_id": "CLM-0012",
+    "policy_number": "POL-0008",
+    "reported_on": "2026-06-26",
+    "loss_date": "2026-05-20",
+    "peril": "third_party_liability",
+    "claimed_amount": 2470,
+    "loss_location": {
+      "city": "Vienna",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Petra Varga",
+      "email": "petra.varga8@example.com"
+    },
+    "description": "On 20 May 2026 near Vienna another driver and I collided while I was driving my Kia Ceed. The other driver has asked me to pay for the repair of the car. I am sorry for the delay; I was in hospital for several weeks afterwards and could not deal with the claim.",
+    "documents": [
+      "accident_statement"
+    ]
+  },
+  {
+    "claim_id": "CLM-0013",
+    "policy_number": "POL-0031",
+    "reported_on": "2026-07-29",
+    "loss_date": "2026-07-25",
+    "peril": "theft",
+    "claimed_amount": 3550,
+    "loss_location": {
+      "city": "Zagreb",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Stefan Horváth",
+      "email": "stefan.horvath31@example.com"
+    },
+    "description": "On 25 July 2026 I found that my Peugeot 308 was gone from the spot where I had parked it in Zagreb. The car was locked, and there was broken glass on the ground where it had stood.",
+    "documents": [
+      "police_report"
+    ]
+  },
+  {
+    "claim_id": "CLM-0014",
+    "policy_number": "POL-0017",
+    "reported_on": "2026-05-05",
+    "loss_date": "2026-05-02",
+    "peril": "third_party_liability",
+    "claimed_amount": 1150,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Zsófia Potočnik",
+      "email": "zsofia.potocnik17@example.com"
+    },
+    "description": "On 2 May 2026 near Split another driver and I collided while I was driving my Renault Clio. The other party has sent me a written claim through a lawyer.",
+    "documents": [
+      "accident_statement"
+    ]
+  },
+  {
+    "claim_id": "CLM-0015",
+    "policy_number": "POL-0037",
+    "reported_on": "2026-08-19",
+    "loss_date": "2026-08-19",
+    "peril": "collision",
+    "claimed_amount": 2800,
+    "loss_location": {
+      "city": "Linz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Anna Müller",
+      "email": "anna.muller37@example.com"
+    },
+    "description": "On 19 August 2026 my Škoda Octavia was hit by another car in a car park in Linz. The other driver gave me his details and nobody was hurt.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0016",
+    "policy_number": "POL-0027",
+    "reported_on": "2026-06-01",
+    "loss_date": "2026-05-30",
+    "peril": "burglary",
+    "claimed_amount": 2080,
+    "loss_location": {
+      "city": "Košice",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Nina Müller",
+      "email": "nina.muller27@example.com"
+    },
+    "description": "On 30 May 2026 burglars entered my apartment in Košice through a window. They took a laptop, some jewellery and cash.",
+    "documents": [
+      "police_report",
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0017",
+    "policy_number": "POL-0050",
+    "reported_on": "2026-05-06",
+    "loss_date": "2026-05-06",
+    "peril": "glass",
+    "claimed_amount": 3940,
+    "loss_location": {
+      "city": "Graz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Lena Gruber",
+      "email": "lena.gruber50@example.com"
+    },
+    "description": "On 6 May 2026 the side window of my Škoda Fabia was smashed while it stood in Graz. The broken glass makes the car unsafe to drive until it is fixed.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0018",
+    "policy_number": "POL-0009",
+    "reported_on": "2026-05-19",
+    "loss_date": "2026-05-18",
+    "peril": "storm",
+    "claimed_amount": 3320,
+    "loss_location": {
+      "city": "Linz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Dávid Kovács",
+      "email": "david.kovacs9@example.com"
+    },
+    "description": "On 18 May 2026 strong wind and hail damaged my house in Linz. Some windows are broken and there is water damage inside.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0019",
+    "policy_number": "POL-0021",
+    "reported_on": "2026-06-25",
+    "loss_date": "2026-06-24",
+    "peril": "flood",
+    "claimed_amount": 1380,
+    "loss_location": {
+      "city": "Maribor",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Mateja Tóth",
+      "email": "mateja.toth21@example.com"
+    },
+    "description": "On 24 June 2026 water from a swollen stream reached my house in Maribor and stood in the rooms for hours. The water was about twenty centimetres deep and we needed pumps to clear it.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0020",
+    "policy_number": "POL-0035",
+    "reported_on": "2026-06-10",
+    "loss_date": "2026-06-08",
+    "peril": "collision",
+    "claimed_amount": 4360,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Luka Varga",
+      "email": "luka.varga35@example.com"
+    },
+    "description": "On 8 June 2026 in Ljubljana a van reversed into my Seat Leon while I was waiting at a junction. The other driver gave me his details and nobody was hurt.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0021",
+    "policy_number": "POL-0005",
+    "reported_on": "2026-05-17",
+    "loss_date": "2026-05-17",
+    "peril": "accidental_damage",
+    "claimed_amount": 860,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Eva Müller",
+      "email": "eva.muller5@example.com"
+    },
+    "description": "On 17 May 2026 a heavy mirror fell over in my apartment in Ljubljana and broke against the tiles. The damage is not dangerous, but it cannot be left as it is.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0022",
+    "policy_number": "POL-0040",
+    "reported_on": "2026-05-17",
+    "loss_date": "2026-05-13",
+    "peril": "flood",
+    "claimed_amount": 5160,
+    "loss_location": {
+      "city": "Zagreb",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Hana Huber",
+      "email": "hana.huber40@example.com"
+    },
+    "description": "On 13 May 2026 water from a swollen stream reached my apartment in Zagreb and stood in the rooms for hours. The floors, the walls and part of the furniture are soaked.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0023",
+    "policy_number": "POL-0003",
+    "reported_on": "2026-06-02",
+    "loss_date": "2026-05-29",
+    "peril": "burst_pipe",
+    "claimed_amount": 1530,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Lukas Kovács",
+      "email": "lukas.kovacs3@example.com"
+    },
+    "description": "On 29 May 2026 a pipe burst in the wall of my house in Ljubljana and water poured into the room. The plumber shut off the water, and the floor and the walls are wet.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0024",
+    "policy_number": "POL-0024",
+    "reported_on": "2026-05-31",
+    "loss_date": "2026-05-28",
+    "peril": "theft",
+    "claimed_amount": 13900,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Stefan Kovács",
+      "email": "stefan.kovacs24@example.com"
+    },
+    "description": "On 28 May 2026 I found that my Dacia Duster was gone from the spot where I had parked it in Split. I told the police the same day and I still have both keys.",
+    "documents": [
+      "police_report"
+    ]
+  },
+  {
+    "claim_id": "CLM-0025",
+    "policy_number": "POL-0014",
+    "reported_on": "2026-08-24",
+    "loss_date": "2026-08-20",
+    "peril": "burglary",
+    "claimed_amount": 7100,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Luka Novák",
+      "email": "luka.novak14@example.com"
+    },
+    "description": "On 20 August 2026 burglars entered my house in Split through a window. They took a laptop, some jewellery and cash.",
+    "documents": [
+      "police_report",
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0026",
+    "policy_number": "POL-0025",
+    "reported_on": "2026-05-16",
+    "loss_date": "2026-05-12",
+    "peril": "collision",
+    "claimed_amount": 1190,
+    "loss_location": {
+      "city": "Maribor",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Ivana Novak",
+      "email": "ivana.novak25@example.com"
+    },
+    "description": "On 12 May 2026 my Opel Astra hit a lamp post in Maribor. The bumper and one wing are crushed, and nobody else was involved. A friend without a driving licence was at the wheel, because I had let him borrow the car.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0027",
+    "policy_number": "POL-0028",
+    "reported_on": "2026-05-13",
+    "loss_date": "2026-05-12",
+    "peril": "flood",
+    "claimed_amount": 4580,
+    "loss_location": {
+      "city": "Vienna",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Tomáš Novak",
+      "email": "tomas.novak28@example.com"
+    },
+    "description": "On 12 May 2026 heavy rain flooded the street in Vienna and water came into my apartment. The water was about twenty centimetres deep and we needed pumps to clear it.",
+    "documents": []
+  },
+  {
+    "claim_id": "CLM-0028",
+    "policy_number": "POL-0046",
+    "reported_on": "2026-06-21",
+    "loss_date": "2026-06-20",
+    "peril": "burglary",
+    "claimed_amount": 3430,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Matej Bauer",
+      "email": "matej.bauer46@example.com"
+    },
+    "description": "On 20 June 2026 burglars entered my house in Ljubljana through a window. They took a laptop, some jewellery and cash.",
+    "documents": [
+      "police_report",
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0029",
+    "policy_number": "POL-0002",
+    "reported_on": "2026-05-17",
+    "loss_date": "2026-05-15",
+    "peril": "glass",
+    "claimed_amount": 2150,
+    "loss_location": {
+      "city": "Maribor",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Katarína Šimko",
+      "email": "katarina.simko2@example.com"
+    },
+    "description": "On 15 May 2026 the side window of my Dacia Duster was smashed while it stood in Maribor. The broken glass makes the car unsafe to drive until it is fixed.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0030",
+    "policy_number": "POL-0001",
+    "reported_on": "2026-05-06",
+    "loss_date": "2026-05-06",
+    "peril": "burglary",
+    "claimed_amount": 2660,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Hana Kovačič",
+      "email": "hana.kovacic1@example.com"
+    },
+    "description": "On 6 May 2026 burglars entered my apartment in Split through a window. Drawers were emptied and the door frame is broken.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0031",
+    "policy_number": "POL-0039",
+    "reported_on": "2026-06-21",
+    "loss_date": "2026-06-17",
+    "peril": "burst_pipe",
+    "claimed_amount": 2060,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Jakub Šimko",
+      "email": "jakub.simko39@example.com"
+    },
+    "description": "On 17 June 2026 the plumber opened a bathroom wall of my apartment in Split and found a pipe that was dripping. The flooring is swollen and the skirting boards are ruined. The leak had been going on for months before I noticed it; the wall was wet through by then.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0032",
+    "policy_number": "POL-0042",
+    "reported_on": "2026-06-12",
+    "loss_date": "2026-06-11",
+    "peril": "theft",
+    "claimed_amount": 4390,
+    "loss_location": {
+      "city": "Graz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Lena Babić",
+      "email": "lena.babic42@example.com"
+    },
+    "description": "Overnight on 11 June 2026 someone stole my Kia Ceed from the street in Graz. The car was locked, and there was broken glass on the ground where it had stood.",
+    "documents": []
+  },
+  {
+    "claim_id": "CLM-0033",
+    "policy_number": "POL-0011",
+    "reported_on": "2026-06-20",
+    "loss_date": "2026-06-19",
+    "peril": "accidental_damage",
+    "claimed_amount": 1860,
+    "loss_location": {
+      "city": "Košice",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Katarína Babić",
+      "email": "katarina.babic11@example.com"
+    },
+    "description": "On 19 June 2026 I was moving furniture in my apartment in Košice and dropped a heavy cabinet onto the floor. The tiles are cracked and have to be replaced.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0034",
+    "policy_number": "POL-0023",
+    "reported_on": "2026-06-20",
+    "loss_date": "2026-05-06",
+    "peril": "storm",
+    "claimed_amount": 2950,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Dávid Wagner",
+      "email": "david.wagner23@example.com"
+    },
+    "description": "On 6 May 2026 a severe storm hit Split and tore tiles off the roof above my apartment. Some windows are broken and there is water damage inside. The delay is because I was away on a long family stay abroad afterwards and could not deal with it.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0035",
+    "policy_number": "POL-0026",
+    "reported_on": "2026-05-15",
+    "loss_date": "2026-05-11",
+    "peril": "third_party_liability",
+    "claimed_amount": 3610,
+    "loss_location": {
+      "city": "Bratislava",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Zsófia Horváth",
+      "email": "zsofia.horvath26@example.com"
+    },
+    "description": "On 11 May 2026 near Bratislava I drove into the back of another car while driving my Dacia Duster. The other driver has asked me to pay for the repair of the car.",
+    "documents": []
+  },
+  {
+    "claim_id": "CLM-0036",
+    "policy_number": "POL-0022",
+    "reported_on": "2026-07-04",
+    "loss_date": "2026-07-01",
+    "peril": "fire",
+    "claimed_amount": 2970,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Stefan Babić",
+      "email": "stefan.babic22@example.com"
+    },
+    "description": "On 1 July 2026 a fire broke out in my house in Ljubljana while I was at work. Most of the damage was caused by the smoke and by the water used to put out the fire.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0037",
+    "policy_number": "POL-0019",
+    "reported_on": "2026-08-13",
+    "loss_date": "2026-08-10",
+    "peril": "third_party_liability",
+    "claimed_amount": 1940,
+    "loss_location": {
+      "city": "Bratislava",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Dávid Kovačič",
+      "email": "david.kovacic19@example.com"
+    },
+    "description": "On 10 August 2026 at the racing circuit near Bratislava I misjudged a corner in my Volkswagen Passat and hit another car. The other driver has asked me to pay for the repair of his car. It happened during a track day, in a timed session for amateur drivers.",
+    "documents": [
+      "accident_statement"
+    ]
+  },
+  {
+    "claim_id": "CLM-0038",
+    "policy_number": "POL-0006",
+    "reported_on": "2026-07-10",
+    "loss_date": "2026-07-09",
+    "peril": "collision",
+    "claimed_amount": 2120,
+    "loss_location": {
+      "city": "Linz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Lena Müller",
+      "email": "lena.muller6@example.com"
+    },
+    "description": "On 9 July 2026 shortly before midnight I lost control of my Renault Clio in Linz and drove into a fence. The front of the car is badly damaged, and nobody else was involved. Earlier that evening I had drinks with colleagues, and then I drove myself home.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0039",
+    "policy_number": "POL-0030",
+    "reported_on": "2026-08-13",
+    "loss_date": "2026-08-10",
+    "peril": "collision",
+    "claimed_amount": 1960,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Stefan Varga",
+      "email": "stefan.varga30@example.com"
+    },
+    "description": "On 10 August 2026 my Škoda Octavia was hit by another car in a car park in Ljubljana. The front bumper and one wing are damaged, but the car can still be driven.",
+    "documents": [
+      "photos",
+      "repair_estimate"
+    ]
+  },
+  {
+    "claim_id": "CLM-0040",
+    "policy_number": "POL-0020",
+    "reported_on": "2026-07-04",
+    "loss_date": "2026-07-04",
+    "peril": "fire",
+    "claimed_amount": 940,
+    "loss_location": {
+      "city": "Graz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Dávid Horvat",
+      "email": "david.horvat20@example.com"
+    },
+    "description": "On 4 July 2026 a fire broke out in my apartment in Graz while I was at work. The fire brigade put it out, but there is heavy smoke and fire damage in several rooms.",
+    "documents": [
+      "photos"
+    ]
+  }
+]

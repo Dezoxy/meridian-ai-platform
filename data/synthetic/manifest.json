@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "generator_version": "1",
+  "seed": 20260929,
+  "reference_date": "2026-09-01",
+  "currency": "EUR",
+  "auto_approval_limit": 2500,
+  "counts": {
+    "policies": 50,
+    "claim_history": 44,
+    "claims": 40,
+    "expected_outcomes": 40,
+    "wordings": 4
+  },
+  "reasons": {
+    "within_threshold": 8,
+    "over_threshold": 6,
+    "fraud_indicator": 6,
+    "excluded": 8,
+    "policy_inactive": 6,
+    "missing_documents": 6
+  },
+  "files": {
+    "claim-history.json": "54d23a46515f7b4c572e02f451330ee0291769d6cd92262497e4c71f07859d0a",
+    "claims.json": "984dfc56d6f395a9151e77fa9882fb3bccf908db6305b2f37ce11ebdec746057",
+    "expected-outcomes.json": "0a7db913ccebd81d7b00b54fe5749b144e1078de3afc52101e7dde275537aeaa",
+    "policies.json": "1f35a6eb7437f139aca70db1f243fcf8f67b2d10ca050f8f2818ff9d73726b9b",
+    "wordings/HOME-PLUS.md": "10457dfe550c4b3f6943f4f9a60f3359b6a1eb76ebd8c91f2cd3d46a975dd9e0",
+    "wordings/HOME-STD.md": "c9e6cb34702902cde640a7f028fb3db273169a197ccab309702350e062e4941a",
+    "wordings/MOTOR-COMP.md": "d5fb9223d41ce5b4a5f1e79fbf293a330c548e5daa60cc415de12e1af32abda7",
+    "wordings/MOTOR-TPL.md": "df33b667c14078a2bc37500c20a9778a787c03818ea3dab781ff06cca7444109"
+  }
+}

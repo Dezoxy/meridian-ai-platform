@@ -1,0 +1,2 @@
+# LF line endings: the generator output is byte-for-byte and the manifest hashes depend on it.
+data/synthetic/** text eol=lf
