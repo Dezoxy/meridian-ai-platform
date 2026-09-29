@@ -124,8 +124,9 @@ A change that violates one is wrong even if it works.
 - Reviewers in `.claude/agents/`: `python-reviewer`, `fastapi-reviewer`,
   `security-reviewer`, `database-reviewer`, `rag-pipeline-reviewer`,
   `silent-failure-hunter`, `tdd-guide` (from ECC), plus `infra-reviewer` and
-  `platform-boundary-reviewer` (this repository). Codex twins are generated
-  into `.codex/agents/` by `scripts/codex_agents.py`.
+  `platform-boundary-reviewer` (this repository). `implementer` (this
+  repository) takes delegated coding against a written contract. Codex twins
+  are generated into `.codex/agents/` by `scripts/codex_agents.py`.
 - Project skills: `architecture-views`, `architecture-docs`, `docs-sync`,
   `feature-threat-model`, and copies of ECC skills for Python, FastAPI,
   PostgreSQL, Docker, Kubernetes, deployment, security review, TDD,
@@ -149,9 +150,11 @@ carry the same effort.
   orchestrates: reads, plans, delegates, reviews results. The setting applies
   to new sessions; `/model` still switches mid-session.
 - **Subagents: Sonnet at high effort** (`model: sonnet`, `effort: high` in
-  every `.claude/agents/*.md`). Coding, reviewing and exploration are
-  delegated to them; the Agent tool's `model` parameter may override per
-  call when a task needs more.
+  every `.claude/agents/*.md`). Coding goes to `implementer` and reviews to
+  the reviewers; a built-in agent such as `general-purpose` carries no such
+  frontmatter, so it is not used for coding. Broad searches go to Explore.
+  The Agent tool's `model` parameter may override per call when a task
+  needs more.
 - **Advisor: Fable** (`advisorModel: fable`). Claude Code's advisor tool
   consults it at decision points: before committing to an approach, when an
   error recurs, before declaring a task done. Each consultation re-reads the
