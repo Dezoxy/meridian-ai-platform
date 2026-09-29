@@ -89,9 +89,9 @@ and Pydantic, at the cost of one dependency.
   sign-in and stay designed until S021 exists.
 - **Cost.** Evaluation uses the replay provider unless `--live` is passed
   (C-04).
-- **Placement.** `src/platform/cli/`, importing only platform packages. The
-  Evaluation Harness reaches workloads through the runtime API, so the
-  import contract from S002 covers the CLI too.
+- **Placement.** `src/meridian/platform/cli/`, importing only platform
+  packages. The Evaluation Harness reaches workloads through the runtime
+  API, so the import contract from S002 covers the CLI too.
 
 ### Demo checkpoints
 
@@ -110,7 +110,7 @@ and Pydantic, at the cost of one dependency.
 |---|---|---|---|---|
 | S000 | Plan, harness and architecture bootstrap | Model with five views, ADRs 1 to 3, constraints C-01 to C-07, harness (rules, skills, reviewers, hooks), Mermaid tooling; `make docs`, `make test` and `make check` pass | done | — |
 | S001 | Commit and publish | First commit on `main`; public GitHub repository; docs CI green on GitHub; the README's derived diagram renders on GitHub; architecture-base Mermaid PR merged; agent-base `yarn.lock` reverted | done | S000 |
-| S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty `src/platform` and `src/workloads` packages; ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `src/platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | todo | S001 |
+| S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty ~~`src/platform` and `src/workloads`~~ `meridian.platform` and `meridian.workloads` packages under `src/meridian/` (see S002 decisions); ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `meridian.platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | done | S001 |
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | todo | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | todo | S001 |
 | S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | todo | S002 |
@@ -277,6 +277,89 @@ request~~ merged as #1; Part D question 4 (licence) stays open.
 3. architecture-base: commit `feat/mermaid-diagrams`, open a PR to `main`,
    merge after CI, confirm the content landed.
 4. agent-base: revert the `yarn.lock` that the installer's help run changed.
+
+### S002 — Python workspace and CI gates
+
+**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-29
+**Goal:** A Python 3.13 uv project with empty platform and workload
+packages, and CI gates (ruff, pytest, an import contract) that fail a
+platform package importing the agent framework.
+**Decisions:**
+
+- One distribution, `meridian`, with regular packages `meridian.platform`
+  and `meridian.workloads` under `src/meridian/`, not `src/platform/` and
+  `src/workloads/`. A top-level package named `platform` would shadow the
+  standard library's `platform` module, which libraries such as httpx and
+  uvicorn import. Nothing needs a separate dependency declaration per
+  package: the boundary is enforced on module names by import-linter, and
+  every container will be built from this one distribution. Rejected: two
+  workspace members with `meridian_platform` and `meridian_workloads` inside
+  (`src/platform/meridian_platform/gateway/` stutters, and a third area for
+  the runtime host would need a third member).
+- The import rule is a layers contract (`meridian.workloads` above
+  `meridian.platform`) plus a forbidden contract for the agent framework, so
+  a runtime layer can be inserted later with one line.
+- The Makefile keeps the kit's `test` and `docs` unchanged (the docs CI job
+  runs them without uv) and gains a delimited Python section.
+- The Python workflow has no path filters: once it is a required check, a
+  pull request that touches no Python would otherwise never receive it.
+- The forbidden contract lists eleven modules: `langgraph`, `langgraph_sdk`,
+  `langchain`, `langchain_core`, `langchain_community`,
+  `langchain_text_splitters`, `langchain_postgres` and the adapters for this
+  platform's providers (`langchain_openai`, `langchain_mistralai`,
+  `langchain_aws`, `langchain_anthropic`). ADR 2's `langchain*` cannot be
+  written as a wildcard: import-linter rejects `langchain_*` with "A
+  wildcard can only replace a whole module".
+
+**Work log:**
+
+- `pyproject.toml`: distribution `meridian` 0.0.0, Apache-2.0, Python
+  `>=3.13,<3.14` (`.python-version` 3.13), `uv_build` backend; dev group
+  pinned exactly: ruff 0.16.9, pytest 9.1.1, import-linter 2.15; `uv.lock`
+  committed and CI installs with `uv sync --locked`.
+- Packages `meridian`, `meridian.platform`, `meridian.workloads`, docstrings
+  only. Two import-linter contracts: the forbidden contract above and a
+  layers contract, `meridian.workloads` above `meridian.platform`.
+- `tests/meridian/test_import_contracts.py`: copies `src/` and the
+  pyproject into a temporary directory, plants one forbidden import in
+  `meridian.platform`, runs `lint-imports` there and requires the broken
+  import in the output; seven probes, plus a clean copy that must pass with
+  at least one kept contract.
+- `.github/workflows/python.yml`, job `python`: `uv sync --locked`,
+  `make lint`, `make pytest`. `astral-sh/setup-uv` is pinned to `v10.2.0`
+  because the action has published no floating major tag since v8.
+  Makefile targets `lint` and `pytest`; Dependabot covers `uv`.
+- Docs brought in line with the new paths: `CLAUDE.md` and `AGENTS.md`,
+  the README, ADR 2 (the path only), the platform-boundary reviewer and its
+  regenerated Codex twin, and `check-boundary.sh`, whose patterns were
+  pipe-tested against platform, workload and gateway paths.
+- gitleaks already runs in CI as the `secret scan` job from S001.
+- Found on the way: import-linter flags an import of a package that is not
+  installed, so CI needs no LangGraph to keep it out; `lint-imports` exits
+  0 when no contract exists, which is why the clean-copy test requires a
+  kept contract; `python -m importlinter.cli` exits 0 without output even
+  on a violation, so the test calls the `lint-imports` script; ruff 0.16
+  also formats Python fences in Markdown, so `make lint` covers the docs'
+  code samples.
+
+**Result / verification:** locally, `make lint` printed both contracts
+`KEPT` and `Contracts: 2 kept, 0 broken.`; `make pytest` printed `8
+passed`; before the contracts existed the same eight tests failed with
+`Contracts: 0 kept, 0 broken.`. A probe
+`from langchain_openai import ChatOpenAI` in `meridian.platform` made
+`lint-imports` exit 1 with `meridian.platform._probe -> langchain_openai`.
+`make docs` (13 checks), `make test` (116 tests) and the guard suite (35
+cases) pass. The first CI run of the `python` job is on this step's pull
+request.
+**Follow-ups:**
+
+- Add `python` to the required checks of the `protect-main` ruleset, after
+  its first green run and with the owner's approval.
+- S009: place the runtime host, which may import LangGraph, as a layer
+  between `meridian.workloads` and `meridian.platform`.
+- S010: enforce hard rule 4 (provider SDKs only in the gateway) with an
+  import-linter contract once `meridian.platform.gateway` exists; until then
+  the hook and the reviewer enforce it.
 
 ## Part D — Open questions
 

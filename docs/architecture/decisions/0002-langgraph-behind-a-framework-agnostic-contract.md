@@ -43,7 +43,7 @@ exists.
 
 Option 2. Rules:
 
-- Platform packages (`src/platform/*`: gateway, MCP servers, knowledge,
+- Platform packages (`src/meridian/platform/*`: gateway, MCP servers, knowledge,
   evaluation harness, registry, common) must not import `langgraph` or
   `langchain*`. An import-linter contract in CI fails the build on a
   violation.

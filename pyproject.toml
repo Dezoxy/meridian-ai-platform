@@ -1,0 +1,68 @@
+[project]
+name = "meridian"
+version = "0.0.0"
+description = "Enterprise agentic AI platform with a claims-triage reference workload."
+license = "Apache-2.0"
+requires-python = ">=3.13,<3.14"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.9",
+    "pytest==9.1.1",
+    "import-linter==2.15",
+]
+
+[tool.ruff]
+target-version = "py313"
+# The vendored kit and harness Python are not project code.
+extend-exclude = ["scripts", "tests/test_*.py", ".claude", ".agents", ".codex"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/meridian/**" = ["S101", "S603", "S607"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/meridian"]
+addopts = "--import-mode=importlib"
+
+[tool.importlinter]
+root_package = "meridian"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "platform never imports the agent framework (ADR 2)"
+type = "forbidden"
+source_modules = ["meridian.platform"]
+# ADR 2 says langchain*, but import-linter wildcards replace whole module names
+# only, so each distribution is listed: the core packages, the provider
+# adapters for this platform's providers and the retrieval integrations.
+forbidden_modules = [
+    "langgraph",
+    "langgraph_sdk",
+    "langchain",
+    "langchain_core",
+    "langchain_community",
+    "langchain_text_splitters",
+    "langchain_postgres",
+    "langchain_openai",
+    "langchain_mistralai",
+    "langchain_aws",
+    "langchain_anthropic",
+]
+
+[[tool.importlinter.contracts]]
+name = "workloads build on the platform, never the reverse"
+type = "layers"
+# Highest first: a layer may import the ones below it, never the ones above.
+# The runtime host that runs LangGraph graphs goes between these two (S009).
+layers = [
+    "meridian.workloads",
+    "meridian.platform",
+]

@@ -22,7 +22,7 @@ PORT      ?= 8080
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -87,3 +87,17 @@ pdf:
 ## clean           delete the generated folder (exports and PDFs; all gitignored)
 clean:
 	rm -rf $(GENERATED)
+
+# ── Python workspace ─────────────────────────────────────────────────────────
+# Run through uv, which creates and syncs .venv on first use. The targets above
+# keep working without uv; the docs CI job relies on that.
+
+## lint            ruff check, ruff format --check and the import-linter contracts
+lint:
+	uv run ruff check .
+	uv run ruff format --check .
+	uv run lint-imports
+
+## pytest          tests under tests/meridian, including the import-contract detection test
+pytest:
+	uv run pytest
