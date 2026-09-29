@@ -285,7 +285,7 @@ request~~ merged as #1; Part D question 4 (licence) stays open.
 | 1 | How many hours per week, and when do interviews start? | S002 | Plan in two-week increments; cut M3 before M2 |
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? | S007 | HCP Terraform, for consistency with the homelab |
 | 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | S015 | Keep, recorded as a procedural closure in C-02 |
-| 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? | Before anyone asks to reuse the code | All rights reserved |
+| 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
 
 ## Part E — Changelog
 
@@ -294,3 +294,5 @@ request~~ merged as #1; Part D question 4 (licence) stays open.
 - **v0.2, 2026-09-29:** developer CLI added: a `### Developer CLI` section in
   Part B, `registry validate` in S008, `eval run` and `eval compare` in S017,
   and S039 (workload scaffold) as a fourth optional M4 item.
+- **v0.3, 2026-09-29:** Part D question 4 answered: Apache-2.0, with a
+  `NOTICE` for the ECC material.

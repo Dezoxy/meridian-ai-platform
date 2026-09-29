@@ -118,3 +118,9 @@ authoring kit.
 - [docs/README.md](docs/README.md): index.
 - [docs/architecture/README.md](docs/architecture/README.md): model, view
   register, decisions, requirements.
+
+## Licence
+
+[Apache License 2.0](LICENSE), copyright 2026 Dezoxy. The rules, skills and
+reviewer agents copied from ECC stay under their MIT licence;
+[NOTICE](NOTICE) lists them.
