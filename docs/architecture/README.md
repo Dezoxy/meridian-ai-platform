@@ -53,13 +53,15 @@ every `.md` file in that folder.
 | Area | Documents |
 |---|---|
 | Narrative (opens the tab and the PDF) | [01 overview](overview/01-meridian-ai-platform.md) · [02 scope](overview/02-scope.md) · [03 glossary](overview/03-glossary.md) |
-| Requirements | [constraints](requirements/constraints.md) |
+| Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
+| Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
-symlink (`overview/10-constraints.md`). Add a concern document when there is
-something true to say: quality attributes when a number is argued about,
-security when the first trust boundary is implemented, deployment and
-reliability when something runs.
+symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,
+`22-data-classification.md`, `23-threat-model.md`). The security and quality
+registers came before the code they govern, so later steps cite their IDs
+instead of inventing them. Add other concern documents when there is
+something true to say: deployment and reliability when something runs.
 
 ## Diagrams
 

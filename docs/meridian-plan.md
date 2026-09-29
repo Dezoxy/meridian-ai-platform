@@ -112,7 +112,7 @@ and Pydantic, at the cost of one dependency.
 | S001 | Commit and publish | First commit on `main`; public GitHub repository; docs CI green on GitHub; the README's derived diagram renders on GitHub; architecture-base Mermaid PR merged; agent-base `yarn.lock` reverted | done | S000 |
 | S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty ~~`src/platform` and `src/workloads`~~ `meridian.platform` and `meridian.workloads` packages under `src/meridian/` (see S002 decisions); ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `meridian.platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | done | S001 |
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | done | S002 |
-| S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | todo | S001 |
+| S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | done | S001 |
 | S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | todo | S002 |
 | S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | todo | S002 |
 | S007 | Azure foundation | Terraform with remote state, a resource group, a budget with 50, 80 and 100 % alerts (C-04), Key Vault, and Azure OpenAI `gpt-4.1-mini` plus `text-embedding-3-large` on DataZoneStandard in Sweden Central with a West Europe fallback; plan reviewed; apply confirmed by the owner | todo | S001 |
@@ -140,7 +140,7 @@ and Pydantic, at the cost of one dependency.
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | todo | S018 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
-| S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020 |
+| S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | todo | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent | todo | S020 |
@@ -455,6 +455,99 @@ pass; gitleaks found no leaks in the files this branch adds or changes.
   delegated coding, with `model: sonnet` and `effort: high` in its
   frontmatter; added right after this step.
 
+### S004 — Security and quality registers
+
+**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-29
+**Goal:** Number the trust boundaries and write the threat model, the data
+classification and the quality attributes before the first security-relevant
+code (S008, S010), so later steps cite T- and QA- IDs instead of inventing
+them.
+**Decisions:**
+
+- Nine trust boundaries, `TB-1` to `TB-9`, each tied to named relationships
+  in `model/containers.dsl`. The `feature-threat-model` skill lists eight;
+  the workload plane calling the control plane (TB-3) is a boundary of its
+  own, because a workload must not be able to claim another tenant.
+- Every threat carries the step that builds its mitigation, or says "no
+  step yet". Only controls with evidence in the repository are marked
+  implemented (secret scanning, the protected branch and its checks, the
+  lockfile and Dependabot). Two threats are open: claimants have no identity
+  in the model (T-01), and document upload has no design (T-38). One risk is
+  accepted: graph code runs inside the runtime process with its credentials
+  (T-09), which holds while every workload is this repository's own code.
+- Until claimant identity is decided, the claimant pages sit behind the
+  staff sign-in and the presenter plays the claimant, so the internet-facing
+  demo never collects a real person's data.
+- S022 now depends on S021 as well as S020: the pipeline must not deploy to
+  AKS before users have to sign in.
+- Data classes: `internal` routes to EU labels only; `special` is refused
+  outright; a tenant's class is the minimum for its requests, which detected
+  content can raise and nothing can lower. The claims tenant is `personal`
+  although its data is synthetic, so the demo exercises EU-only routing.
+  The evaluation tenant
+  takes the class of the workload it evaluates; on `synthetic` it could
+  route to a `global` deployment and would measure a model production never
+  calls.
+- Retention periods are not invented: every environment here is destroyed
+  after use, and a production deployment would take its periods from the
+  insurer's schedule.
+- Quality targets are initial and unmeasured, each with the step that
+  measures it. Residency, audit completeness, human oversight and budget
+  enforcement are absolute (100 %, zero), because each guards a constraint
+  or a threat.
+- The registers are prose, written in the main session; the `implementer`
+  agent takes code. A `security-reviewer` pass checks the threat model
+  against the model and the plan.
+
+**Work log:**
+
+- `docs/architecture/security/threat-model.md`: nine trust boundaries and
+  38 threats; `docs/architecture/security/data-classification.md`: four
+  classes, three tenants, an inventory of 15 kinds of data;
+  `docs/architecture/requirements/quality-attributes.md`: `QA-01` to
+  `QA-12`. Symlinked into `overview/` as `11-`, `22-` and `23-`; the
+  architecture README, the glossary and the root README updated.
+- The first draft had 26 threats. The security review found no critical
+  issue and eight high ones, all accepted: an adjuster decision that a
+  steered agent could record, tool arguments that could reach another
+  claimant's record, the kind mock issuer reaching Azure, residency labels
+  never checked against the deployed SKU, unguarded resume of paused runs,
+  a code-owner review claimed but not required, a claimant-facing demo that
+  could collect real data, and a wrong cross-reference. It also corrected
+  step references that no step's "done when" covers; those are follow-ups
+  below rather than claims.
+- The `feature-threat-model` skill now points at `TB-1` to `TB-9` in the
+  register instead of listing eight boundaries of its own.
+- The approval flow in the model now matches T-31: the Claims Triage App
+  records the adjuster's decision and resumes the run; no tool records a
+  decision. The `ClaimsApproval` view, the Claims MCP Server's description
+  and the overview table changed with it.
+
+**Result / verification:** `make docs` passed 13 checks. The ID check is
+live for both new families: a planted citation of an undefined threat ID
+and quality ID, number 99 of each, failed it with "cites …, which … does not
+define", and every real citation resolves.
+`make check` ended with no ERROR line; `make test` (116 tests) and the guard
+suite (35 cases) pass. `make pdf` built the PDF with constraints, quality
+attributes, data classification and threat model in that order. In the
+Documentation tab served by `make view`, all seven pages appear in the
+navigation, the three new ones as sections 5 to 7, and the register tables
+render.
+**Follow-ups:** controls that the threat model needs and no step's "done
+when" covers yet; each step adds its line when it starts.
+
+- S009: one database role per service and an insert-only audit table
+  (T-25).
+- S013: service identity between runtime, gateway and MCP servers (T-08,
+  T-24), and every tool call bound to the run's claim and tenant (T-22).
+- S019: a rate limit at the ingress (T-02).
+- S021: Grafana behind sign-in (T-03); pin the issuer per environment and
+  refuse the mock issuer outside kind (T-06).
+- S016 and S021: decide claimant identity (T-01).
+- A step for document upload before any claimant can attach a file (T-38).
+- S020: the Application Gateway web application firewall when the Azure
+  edge is built, or it stays designed (T-02).
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -475,3 +568,5 @@ pass; gitleaks found no leaks in the files this branch adds or changes.
   `NOTICE` for the ECC material.
 - **v0.4, 2026-09-29:** Part A delegates implementation to the `implementer`
   subagent.
+- **v0.5, 2026-09-29:** S022 depends on S021 as well as S020 (S004
+  threat model: no deployment to AKS before sign-in).
