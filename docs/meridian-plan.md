@@ -209,6 +209,25 @@ kit changes it depends on.
 - Before the first commit, private context was removed from tracked files:
   third-party organisation names in ADRs 1 and 2, local paths in the Codex
   hook configuration, and references to the owner's DNS setup.
+**Work log:**
+
+- First commit `9acdc12` pushed to `main`; repository created public with
+  description and topics; settings and security features applied.
+- The first CI run on `main` failed its secret scan: gitleaks-action v2
+  installed gitleaks 8.24.3, which ignores the `[[allowlists]]` syntax. CI
+  now pins gitleaks 8.30.1, the local version (`fe9d285`, pushed before the
+  ruleset existed).
+- Ruleset `protect-main` created after the first run registered the four
+  check names; GitHub's effective rules for `main` list all five rules.
+- GitHub renders the README's derived SystemContext diagram: its Mermaid
+  viewer reports the block as rendered.
+- Dependabot opened its first pull request (gitleaks-action v2 to v3), left
+  for review.
+
+**Result / verification:** this plan update is the first change to reach
+`main` through a pull request and the four required checks.
+**Follow-ups:** architecture-base Mermaid pull request; agent-base
+`yarn.lock` revert; review the Dependabot pull request; Part D question 4.
 **Prepared actions:**
 
 1. Review the working tree, then make the first commit on `main`. There is no
