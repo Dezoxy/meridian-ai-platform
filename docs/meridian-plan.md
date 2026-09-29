@@ -598,6 +598,8 @@ that ADR 2 promised.
 - `make pytest`: `195 passed`; the root `uv.lock` is unchanged.
 - `make test`: `Ran 116 tests`, `OK`.
 - `make docs`: `13 checks passed`. `make check`: exit 0, no ERROR line.
+- `make view`: ADR 2 renders the struck reason as a strikethrough, not as
+  literal tildes, and the matrix as a 14-row table inside the page width.
 
 **Follow-ups:**
 
@@ -610,6 +612,11 @@ that ADR 2 promised.
 - S014: the policy-validity rule reads `lapsed_on`, not only `status`; the
   spike's simpler rule proposes a rejection for CLM-0010, which the golden
   set labels `auto_approve`.
+- S014, with its threat model update: a threat for checkpoint
+  deserialization. Whoever can write the checkpoint store can make the
+  runtime load types it did not write (pickles in Microsoft Agent Framework,
+  permissive msgpack in LangGraph by default). T-10 covers who may resume,
+  not what loading a checkpoint executes.
 
 ## Part D — Open questions
 

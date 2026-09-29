@@ -132,6 +132,7 @@ deployed, and not the second workload implementation of option 3.
 | PostgreSQL checkpoint store | None. `agent-framework-postgres` 1.0.0a260910 is an alpha vector store (read from its package description) | `langgraph-checkpoint-postgres` 3.1.2 (not run in the spike) |
 | Telemetry | Native OpenTelemetry spans per workflow, executor, edge group and message; payloads stay out unless sensitive data is switched on | No OpenTelemetry of its own: zero spans under the same tracer provider |
 | Footprint | 10 packages, no provider SDK | 41 packages with the SQLite saver, `langchain-core` and `langsmith` among them; no provider SDK |
+| Ecosystem (read from PyPI on 2026-09-29, not run) | Core 1.19.0; the PostgreSQL, Redis, Cosmos DB and Durable Task integrations are alpha or beta pre-releases | `langgraph-checkpoint-postgres` 3.1.2 is a stable release; tools come from `langchain-core` |
 | Flow code | 152 non-blank lines, including the pickle allowlist and pause addressing | 92 non-blank lines |
 | Licence | MIT | MIT |
 
@@ -150,9 +151,10 @@ supports:
 - A failed checkpoint save in Microsoft Agent Framework does not fail the
   run, so a run can report a pause with nothing durable behind it, which is
   what QA-08 guards against.
-- Neither framework enforces T-10: both let one pause be decided twice, one
-  by replaying and one by dropping the second decision silently. The runtime
-  enforces it either way, so the better pause is not decisive.
+- Neither framework enforces T-10. Microsoft Agent Framework lets one pause
+  be decided twice by replaying it; LangGraph keeps the first decision but
+  tells the second caller nothing, so they believe theirs was recorded. The
+  runtime enforces it either way, so the better pause is not decisive.
 
 ### What the runtime contract takes on
 
