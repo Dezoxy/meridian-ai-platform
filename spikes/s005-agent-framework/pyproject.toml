@@ -1,0 +1,24 @@
+[project]
+name = "s005-agent-framework"
+version = "0.0.0"
+description = "Throwaway spike: one claim flow with an approval pause in Microsoft Agent Framework and LangGraph."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "agent-framework-core==1.19.0",
+    "langgraph==1.2.12",
+    "langgraph-checkpoint-sqlite==3.1.1",
+]
+
+[dependency-groups]
+dev = [
+    "opentelemetry-sdk==1.45.0",
+    "pytest==9.1.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "--import-mode=importlib"

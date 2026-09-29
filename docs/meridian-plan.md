@@ -113,7 +113,7 @@ and Pydantic, at the cost of one dependency.
 | S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty ~~`src/platform` and `src/workloads`~~ `meridian.platform` and `meridian.workloads` packages under `src/meridian/` (see S002 decisions); ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `meridian.platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | done | S001 |
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | done | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | done | S001 |
-| S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | todo | S002 |
+| S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | doing | S002 |
 | S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | todo | S002 |
 | S007 | Azure foundation | Terraform with remote state, a resource group, a budget with 50, 80 and 100 % alerts (C-04), Key Vault, and Azure OpenAI `gpt-4.1-mini` plus `text-embedding-3-large` on DataZoneStandard in Sweden Central with a West Europe fallback; plan reviewed; apply confirmed by the owner | todo | S001 |
 
@@ -547,6 +547,31 @@ when" covers yet; each step adds its line when it starts.
 - A step for document upload before any claimant can attach a file (T-38).
 - S020: the Application Gateway web application firewall when the Azure
   edge is built, or it stays designed (T-02).
+
+### S005 — Agent framework spike
+**Status:** doing · **Started:** 2026-09-29 · **Finished:** —
+**Goal:** measure Microsoft Agent Framework against LangGraph on the same
+three-step claim flow with an approval pause, and append the decision matrix
+that ADR 2 promised.
+
+**Decisions:**
+
+- The spike is its own uv project under `spikes/s005-agent-framework/` with
+  its own lockfile, not a workspace member. Rejected: adding the frameworks
+  to the root lock, which would put LangGraph into the workspace before S009
+  and a second framework into it for good.
+- The same flow is built in LangGraph too, under the same tests. Rejected:
+  filling the LangGraph column from documentation, which would compare a
+  measurement with a claim. This is a spike twin, not the second workload
+  implementation that ADR 2 rejected as option 3; it is never deployed.
+- No model call. The matrix rows (state, tool contracts, approval pauses,
+  checkpoints, telemetry) need none, and the spike needs no credentials.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
