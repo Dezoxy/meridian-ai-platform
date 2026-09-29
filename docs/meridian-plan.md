@@ -71,6 +71,28 @@ implemented, simulated or designed (C-07).
 - **Spend late.** Cloud cost starts with the Azure foundation (S007) and stays
   small until M2 creates the full environment.
 
+### Developer CLI
+
+A thin `meridian` command grows with the steps that need it; it is not a
+step of its own. Typer: commands from type hints, the same idiom as FastAPI
+and Pydantic, at the cost of one dependency.
+
+- **What it owns.** Platform work an agent developer does before opening a
+  pull request. `make` keeps environment lifecycle (kind, the demo, the
+  documentation gates); Terraform and Helm keep infrastructure.
+- **One entry point.** CI runs the same command a developer runs, so a check
+  that passes locally passes in CI. S008 adds `registry validate`; S017 adds
+  `eval run` and `eval compare`; S039 would add `workload new`.
+- **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
+  decisions stay in the UI, where they are audited (C-02). Commands that call
+  the platform APIs, such as run inspection or audit search, need an Entra
+  sign-in and stay designed until S021 exists.
+- **Cost.** Evaluation uses the replay provider unless `--live` is passed
+  (C-04).
+- **Placement.** `src/platform/cli/`, importing only platform packages. The
+  Evaluation Harness reaches workloads through the runtime API, so the
+  import contract from S002 covers the CLI too.
+
 ### Demo checkpoints
 
 | After | What can be shown |
@@ -99,7 +121,7 @@ implemented, simulated or designed (C-07).
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload | todo | S002 |
+| S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload; `meridian registry validate` is the check developers and CI both run | todo | S002 |
 | S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a decision; one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind | todo | S006, S008 |
 | S010 | Gateway routing and resilience | Registry-driven routing by data class and residency; Azure OpenAI adapter; timeout, retry, circuit breaker and fallback to the second region; a residency mismatch is refused and audited; contract tests pass | todo | S004, S007, S009 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
@@ -108,7 +130,7 @@ implemented, simulated or designed (C-07).
 | S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S012, S013 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
-| S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes | todo | S003, S014 |
+| S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017 |
 
 ### M2 — Azure, identity, delivery
@@ -145,6 +167,7 @@ implemented, simulated or designed (C-07).
 | S036 | AWS validate-only Terraform | The module passes `terraform validate` and a policy scan; it is never applied | todo | S025 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | todo | S012 |
+| S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | todo | S018 |
 
 ## Part C — Step details
 
@@ -251,3 +274,6 @@ kit changes it depends on.
 
 - **v0.1, 2026-09-29:** plan created from the bootstrap session; steps S000
   to S038.
+- **v0.2, 2026-09-29:** developer CLI added: a `### Developer CLI` section in
+  Part B, `registry validate` in S008, `eval run` and `eval compare` in S017,
+  and S039 (workload scaffold) as a fourth optional M4 item.
