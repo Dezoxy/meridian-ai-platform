@@ -109,7 +109,7 @@ and Pydantic, at the cost of one dependency.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S000 | Plan, harness and architecture bootstrap | Model with five views, ADRs 1 to 3, constraints C-01 to C-07, harness (rules, skills, reviewers, hooks), Mermaid tooling; `make docs`, `make test` and `make check` pass | done | — |
-| S001 | Commit and publish | First commit on `main`; public GitHub repository; docs CI green on GitHub; the README's derived diagram renders on GitHub; architecture-base Mermaid PR merged; agent-base `yarn.lock` reverted | doing | S000 |
+| S001 | Commit and publish | First commit on `main`; public GitHub repository; docs CI green on GitHub; the README's derived diagram renders on GitHub; architecture-base Mermaid PR merged; agent-base `yarn.lock` reverted | done | S000 |
 | S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty `src/platform` and `src/workloads` packages; ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `src/platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | todo | S001 |
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | todo | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | todo | S001 |
@@ -212,7 +212,7 @@ checked in the PDF and in the served Documentation tab.
 
 ### S001 — Commit and publish
 
-**Status:** doing · **Started:** 2026-09-29 · **Finished:** —
+**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-29
 **Goal:** Put the bootstrap under version control, publish it, and land the
 kit changes it depends on.
 **Decisions:**
@@ -246,12 +246,29 @@ kit changes it depends on.
   viewer reports the block as rendered.
 - Dependabot opened its first pull request (gitleaks-action v2 to v3), left
   for review.
+- #1 merged the Dependabot update; the v3 action still honours
+  `GITLEAKS_VERSION` and installs 8.30.1. #2 recorded the publish work in
+  this plan. #3 added the developer CLI (plan v0.2).
+- The architecture-base Mermaid pull request merged. It also added a
+  `derived diagrams` CI job to the base, because `make docs` skips the
+  derived-block comparison on a fresh checkout, where the generated views
+  do not exist. Before merge, the base passed `make docs`, `make test`,
+  `make check`, `make mermaid` and `make pdf`.
+- agent-base: the installer's `yarn.lock` change reverted; the working tree
+  is clean and level with `origin/main`.
+- The Bash guard denied a plain `git push` because its push rule read past
+  the push command into later segments of the same call. #4 judges the rule
+  per command segment and adds 15 regression cases.
 
-**Result / verification:** this plan update is the first change to reach
-`main` through a pull request and the four required checks.
-**Follow-ups:** architecture-base Mermaid pull request; agent-base
-`yarn.lock` revert; review the Dependabot pull request; Part D question 4.
-**Prepared actions:**
+**Result / verification:** #2 was the first change to reach `main` through a
+pull request and the four required checks. After each merge, the files the
+branch changed were compared with `origin/main` and matched: #2 and #3
+here, all 27 files of the architecture-base pull request there. CI on
+`main` is green on all four checks; the guard suite passes 35 of 35 cases.
+**Follow-ups:** ~~architecture-base Mermaid pull request~~ merged;
+~~agent-base `yarn.lock` revert~~ done; ~~review the Dependabot pull
+request~~ merged as #1; Part D question 4 (licence) stays open.
+**Prepared actions (all done):**
 
 1. Review the working tree, then make the first commit on `main`. There is no
    history to preserve yet, so this one commit goes straight to `main`.
