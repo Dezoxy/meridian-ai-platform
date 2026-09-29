@@ -1,0 +1,26 @@
+Meridian AI Platform
+Copyright 2026 Dezoxy
+
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+This repository includes third-party material.
+
+Everything Claude Code (ECC)
+https://github.com/affaan-m/ECC
+Copyright (c) 2026 Affaan Mustafa
+Licensed under the MIT License; the full text is in .claude/rules/ecc/LICENSE.
+
+ECC material in this repository:
+
+- Rules: .claude/rules/ecc/
+- Skills, in .claude/skills/ and mirrored in .agents/skills/:
+  agent-harness-construction, api-design, coding-standards, contract-first,
+  cost-aware-llm-pipeline, database-migrations, deployment-patterns,
+  docker-patterns, error-handling, eval-harness, fastapi-patterns,
+  github-ops, kubernetes-patterns, mcp-server-patterns, postgres-patterns,
+  production-audit, python-patterns, security-review, tdd-workflow,
+  verification-loop
+- Reviewer agents, in .claude/agents/ with generated twins in .codex/agents/:
+  database-reviewer, fastapi-reviewer, python-reviewer,
+  rag-pipeline-reviewer, security-reviewer, silent-failure-hunter,
+  tdd-guide

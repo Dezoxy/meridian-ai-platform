@@ -81,6 +81,8 @@ A change that violates one is wrong even if it works.
   to `.agents/skills/<name>/`. The `.claude/` copy is the source; `make docs`
   fails if they diverge. Copied ECC and architecture-base skills stay
   byte-identical to their canonical source; improve them there, then re-copy.
+- **Licence**: Apache-2.0 (`LICENSE`). ECC material is MIT; when you copy in
+  an ECC skill, agent or rule, add it to `NOTICE`.
 - **This file and `AGENTS.md` are twins**, byte-identical. Edit `CLAUDE.md`,
   then `cp CLAUDE.md AGENTS.md`. `make docs` enforces it.
 - **Merge discipline** (`.claude/rules/ecc/common/merge-discipline.md`):
