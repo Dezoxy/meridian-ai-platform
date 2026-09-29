@@ -1,0 +1,1400 @@
+[
+  {
+    "policy_number": "POL-0001",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Hana Kovačič",
+      "email": "hana.kovacic1@example.com",
+      "address": {
+        "street": "Meadow Close 111",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-08-18",
+    "end_date": "2026-08-17",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 360000,
+    "limit": 360000,
+    "insured_object": {
+      "address": {
+        "street": "Meadow Close 111",
+        "city": "Split",
+        "country": "HR"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0002",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Katarína Šimko",
+      "email": "katarina.simko2@example.com",
+      "address": {
+        "street": "Station Avenue 87",
+        "city": "Bratislava",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-09-10",
+    "end_date": "2026-09-09",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 16500,
+    "limit": 16500,
+    "insured_object": {
+      "make": "Dacia",
+      "model": "Duster",
+      "year": 2015,
+      "registration": "SYN-9483"
+    }
+  },
+  {
+    "policy_number": "POL-0003",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lukas Kovács",
+      "email": "lukas.kovacs3@example.com",
+      "address": {
+        "street": "Cedar Court 113",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-08-04",
+    "end_date": "2026-08-03",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 95000,
+    "limit": 95000,
+    "insured_object": {
+      "address": {
+        "street": "Cedar Court 113",
+        "city": "Ljubljana",
+        "country": "SI"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0004",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Bence Müller",
+      "email": "bence.muller4@example.com",
+      "address": {
+        "street": "Harbour View 82",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-03-24",
+    "end_date": "2027-03-23",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 160000,
+    "limit": 160000,
+    "insured_object": {
+      "address": {
+        "street": "Harbour View 82",
+        "city": "Linz",
+        "country": "AT"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0005",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Eva Müller",
+      "email": "eva.muller5@example.com",
+      "address": {
+        "street": "Hillcrest Road 24",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-11-29",
+    "end_date": "2026-11-28",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 395000,
+    "limit": 395000,
+    "insured_object": {
+      "address": {
+        "street": "Hillcrest Road 24",
+        "city": "Ljubljana",
+        "country": "SI"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0006",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lena Müller",
+      "email": "lena.muller6@example.com",
+      "address": {
+        "street": "Station Avenue 73",
+        "city": "Graz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-10-06",
+    "end_date": "2026-10-05",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 27500,
+    "limit": 27500,
+    "insured_object": {
+      "make": "Renault",
+      "model": "Clio",
+      "year": 2025,
+      "registration": "SYN-8145"
+    }
+  },
+  {
+    "policy_number": "POL-0007",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Hana Novak",
+      "email": "hana.novak7@example.com",
+      "address": {
+        "street": "Maple Street 5",
+        "city": "Zagreb",
+        "country": "HR"
+      }
+    },
+    "start_date": "2026-02-26",
+    "end_date": "2027-02-25",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 140000,
+    "limit": 140000,
+    "insured_object": {
+      "address": {
+        "street": "Maple Street 5",
+        "city": "Zagreb",
+        "country": "HR"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0008",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Petra Varga",
+      "email": "petra.varga8@example.com",
+      "address": {
+        "street": "Maple Street 87",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-09-06",
+    "end_date": "2026-09-05",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Kia",
+      "model": "Ceed",
+      "year": 2023,
+      "registration": "SYN-6996"
+    }
+  },
+  {
+    "policy_number": "POL-0009",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Dávid Kovács",
+      "email": "david.kovacs9@example.com",
+      "address": {
+        "street": "Orchard Lane 51",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-05-30",
+    "end_date": "2027-05-29",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 365000,
+    "limit": 365000,
+    "insured_object": {
+      "address": {
+        "street": "Orchard Lane 51",
+        "city": "Linz",
+        "country": "AT"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0010",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Bence Gruber",
+      "email": "bence.gruber10@example.com",
+      "address": {
+        "street": "Mill Road 103",
+        "city": "Bratislava",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-09-22",
+    "end_date": "2026-09-21",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Škoda",
+      "model": "Octavia",
+      "year": 2024,
+      "registration": "SYN-2117"
+    }
+  },
+  {
+    "policy_number": "POL-0011",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Katarína Babić",
+      "email": "katarina.babic11@example.com",
+      "address": {
+        "street": "Station Avenue 5",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-11-03",
+    "end_date": "2026-11-02",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 220000,
+    "limit": 220000,
+    "insured_object": {
+      "address": {
+        "street": "Station Avenue 5",
+        "city": "Košice",
+        "country": "SK"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0012",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Jakub Marković",
+      "email": "jakub.markovic12@example.com",
+      "address": {
+        "street": "Chestnut Row 56",
+        "city": "Bratislava",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-05-02",
+    "end_date": "2026-05-01",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 300000,
+    "limit": 300000,
+    "insured_object": {
+      "address": {
+        "street": "Chestnut Row 56",
+        "city": "Bratislava",
+        "country": "SK"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0013",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lukas Potočnik",
+      "email": "lukas.potocnik13@example.com",
+      "address": {
+        "street": "Chestnut Row 114",
+        "city": "Bratislava",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-10-18",
+    "end_date": "2026-10-17",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 33500,
+    "limit": 33500,
+    "insured_object": {
+      "make": "Opel",
+      "model": "Astra",
+      "year": 2022,
+      "registration": "SYN-6100"
+    }
+  },
+  {
+    "policy_number": "POL-0014",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Luka Novák",
+      "email": "luka.novak14@example.com",
+      "address": {
+        "street": "Orchard Lane 34",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2026-05-09",
+    "end_date": "2027-05-08",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 85000,
+    "limit": 85000,
+    "insured_object": {
+      "address": {
+        "street": "Orchard Lane 34",
+        "city": "Split",
+        "country": "HR"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0015",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Zsófia Kovács",
+      "email": "zsofia.kovacs15@example.com",
+      "address": {
+        "street": "Linden Road 38",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-12-14",
+    "end_date": "2026-12-13",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Škoda",
+      "model": "Fabia",
+      "year": 2012,
+      "registration": "SYN-7926"
+    }
+  },
+  {
+    "policy_number": "POL-0016",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Hana Novák",
+      "email": "hana.novak16@example.com",
+      "address": {
+        "street": "Linden Road 48",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-08-13",
+    "end_date": "2026-08-12",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Peugeot",
+      "model": "308",
+      "year": 2025,
+      "registration": "SYN-8527"
+    }
+  },
+  {
+    "policy_number": "POL-0017",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Zsófia Potočnik",
+      "email": "zsofia.potocnik17@example.com",
+      "address": {
+        "street": "Linden Road 97",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-02-27",
+    "end_date": "2026-02-26",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Renault",
+      "model": "Clio",
+      "year": 2025,
+      "registration": "SYN-8295"
+    }
+  },
+  {
+    "policy_number": "POL-0018",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Stefan Müller",
+      "email": "stefan.muller18@example.com",
+      "address": {
+        "street": "Linden Road 72",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2026-01-11",
+    "end_date": "2027-01-10",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 38500,
+    "limit": 38500,
+    "insured_object": {
+      "make": "Dacia",
+      "model": "Duster",
+      "year": 2019,
+      "registration": "SYN-9200"
+    }
+  },
+  {
+    "policy_number": "POL-0019",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Dávid Kovačič",
+      "email": "david.kovacic19@example.com",
+      "address": {
+        "street": "Chestnut Row 93",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-10-29",
+    "end_date": "2026-10-28",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Volkswagen",
+      "model": "Passat",
+      "year": 2018,
+      "registration": "SYN-8338"
+    }
+  },
+  {
+    "policy_number": "POL-0020",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Dávid Horvat",
+      "email": "david.horvat20@example.com",
+      "address": {
+        "street": "Harbour View 12",
+        "city": "Graz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-06-30",
+    "end_date": "2027-06-29",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 265000,
+    "limit": 265000,
+    "insured_object": {
+      "address": {
+        "street": "Harbour View 12",
+        "city": "Graz",
+        "country": "AT"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0021",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Mateja Tóth",
+      "email": "mateja.toth21@example.com",
+      "address": {
+        "street": "Linden Road 69",
+        "city": "Maribor",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-10-29",
+    "end_date": "2026-10-28",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 195000,
+    "limit": 195000,
+    "insured_object": {
+      "address": {
+        "street": "Linden Road 69",
+        "city": "Maribor",
+        "country": "SI"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0022",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Stefan Babić",
+      "email": "stefan.babic22@example.com",
+      "address": {
+        "street": "Cedar Court 2",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-06-05",
+    "end_date": "2026-06-04",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 400000,
+    "limit": 400000,
+    "insured_object": {
+      "address": {
+        "street": "Cedar Court 2",
+        "city": "Ljubljana",
+        "country": "SI"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0023",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Dávid Wagner",
+      "email": "david.wagner23@example.com",
+      "address": {
+        "street": "Linden Road 110",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-12-31",
+    "end_date": "2026-12-30",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 160000,
+    "limit": 160000,
+    "insured_object": {
+      "address": {
+        "street": "Linden Road 110",
+        "city": "Split",
+        "country": "HR"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0024",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Stefan Kovács",
+      "email": "stefan.kovacs24@example.com",
+      "address": {
+        "street": "Linden Road 48",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-11-18",
+    "end_date": "2026-11-17",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 11500,
+    "limit": 11500,
+    "insured_object": {
+      "make": "Dacia",
+      "model": "Duster",
+      "year": 2025,
+      "registration": "SYN-8110"
+    }
+  },
+  {
+    "policy_number": "POL-0025",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Ivana Novak",
+      "email": "ivana.novak25@example.com",
+      "address": {
+        "street": "Cedar Court 16",
+        "city": "Zagreb",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-08-05",
+    "end_date": "2026-08-04",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 26000,
+    "limit": 26000,
+    "insured_object": {
+      "make": "Opel",
+      "model": "Astra",
+      "year": 2015,
+      "registration": "SYN-3051"
+    }
+  },
+  {
+    "policy_number": "POL-0026",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Zsófia Horváth",
+      "email": "zsofia.horvath26@example.com",
+      "address": {
+        "street": "Willow Way 91",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-11-17",
+    "end_date": "2026-11-16",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Dacia",
+      "model": "Duster",
+      "year": 2023,
+      "registration": "SYN-4071"
+    }
+  },
+  {
+    "policy_number": "POL-0027",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Nina Müller",
+      "email": "nina.muller27@example.com",
+      "address": {
+        "street": "Willow Way 29",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-09-02",
+    "end_date": "2026-09-01",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 400000,
+    "limit": 400000,
+    "insured_object": {
+      "address": {
+        "street": "Willow Way 29",
+        "city": "Košice",
+        "country": "SK"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0028",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Tomáš Novak",
+      "email": "tomas.novak28@example.com",
+      "address": {
+        "street": "Linden Road 85",
+        "city": "Vienna",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-08-09",
+    "end_date": "2026-08-08",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 260000,
+    "limit": 260000,
+    "insured_object": {
+      "address": {
+        "street": "Linden Road 85",
+        "city": "Vienna",
+        "country": "AT"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0029",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Zsófia Huber",
+      "email": "zsofia.huber29@example.com",
+      "address": {
+        "street": "Chestnut Row 18",
+        "city": "Maribor",
+        "country": "SI"
+      }
+    },
+    "start_date": "2026-04-08",
+    "end_date": "2027-04-07",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Seat",
+      "model": "Leon",
+      "year": 2021,
+      "registration": "SYN-9072"
+    }
+  },
+  {
+    "policy_number": "POL-0030",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Stefan Varga",
+      "email": "stefan.varga30@example.com",
+      "address": {
+        "street": "Willow Way 116",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-08-10",
+    "end_date": "2026-08-09",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 23000,
+    "limit": 23000,
+    "insured_object": {
+      "make": "Škoda",
+      "model": "Octavia",
+      "year": 2025,
+      "registration": "SYN-3380"
+    }
+  },
+  {
+    "policy_number": "POL-0031",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Stefan Horváth",
+      "email": "stefan.horvath31@example.com",
+      "address": {
+        "street": "Willow Way 15",
+        "city": "Graz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-07-09",
+    "end_date": "2027-07-08",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 20500,
+    "limit": 20500,
+    "insured_object": {
+      "make": "Peugeot",
+      "model": "308",
+      "year": 2016,
+      "registration": "SYN-1146"
+    }
+  },
+  {
+    "policy_number": "POL-0032",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Marek Kovács",
+      "email": "marek.kovacs32@example.com",
+      "address": {
+        "street": "Harbour View 18",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-05-01",
+    "end_date": "2026-04-30",
+    "status": "lapsed",
+    "lapsed_on": "2026-01-13",
+    "deductible": 150,
+    "sum_insured": 190000,
+    "limit": 190000,
+    "insured_object": {
+      "address": {
+        "street": "Harbour View 18",
+        "city": "Ljubljana",
+        "country": "SI"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0033",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lena Potočnik",
+      "email": "lena.potocnik33@example.com",
+      "address": {
+        "street": "Riverside Drive 29",
+        "city": "Zagreb",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-11-26",
+    "end_date": "2026-11-25",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 35500,
+    "limit": 35500,
+    "insured_object": {
+      "make": "Volkswagen",
+      "model": "Passat",
+      "year": 2025,
+      "registration": "SYN-9236"
+    }
+  },
+  {
+    "policy_number": "POL-0034",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Marek Wagner",
+      "email": "marek.wagner34@example.com",
+      "address": {
+        "street": "Meadow Close 28",
+        "city": "Zagreb",
+        "country": "HR"
+      }
+    },
+    "start_date": "2026-04-23",
+    "end_date": "2027-04-22",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 175000,
+    "limit": 175000,
+    "insured_object": {
+      "address": {
+        "street": "Meadow Close 28",
+        "city": "Zagreb",
+        "country": "HR"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0035",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Luka Varga",
+      "email": "luka.varga35@example.com",
+      "address": {
+        "street": "Station Avenue 28",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-08-27",
+    "end_date": "2026-08-26",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Seat",
+      "model": "Leon",
+      "year": 2012,
+      "registration": "SYN-8285"
+    }
+  },
+  {
+    "policy_number": "POL-0036",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Jakub Horváth",
+      "email": "jakub.horvath36@example.com",
+      "address": {
+        "street": "Maple Street 97",
+        "city": "Bratislava",
+        "country": "SK"
+      }
+    },
+    "start_date": "2026-04-08",
+    "end_date": "2027-04-07",
+    "status": "lapsed",
+    "lapsed_on": "2026-07-24",
+    "deductible": 150,
+    "sum_insured": 120000,
+    "limit": 120000,
+    "insured_object": {
+      "address": {
+        "street": "Maple Street 97",
+        "city": "Bratislava",
+        "country": "SK"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0037",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Anna Müller",
+      "email": "anna.muller37@example.com",
+      "address": {
+        "street": "Riverside Drive 91",
+        "city": "Graz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-12-27",
+    "end_date": "2026-12-26",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 42500,
+    "limit": 42500,
+    "insured_object": {
+      "make": "Škoda",
+      "model": "Octavia",
+      "year": 2016,
+      "registration": "SYN-7096"
+    }
+  },
+  {
+    "policy_number": "POL-0038",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lukas Nagy",
+      "email": "lukas.nagy38@example.com",
+      "address": {
+        "street": "Maple Street 97",
+        "city": "Maribor",
+        "country": "SI"
+      }
+    },
+    "start_date": "2026-01-28",
+    "end_date": "2027-01-27",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 22500,
+    "limit": 22500,
+    "insured_object": {
+      "make": "Škoda",
+      "model": "Octavia",
+      "year": 2014,
+      "registration": "SYN-5829"
+    }
+  },
+  {
+    "policy_number": "POL-0039",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Jakub Šimko",
+      "email": "jakub.simko39@example.com",
+      "address": {
+        "street": "Station Avenue 62",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-09-16",
+    "end_date": "2026-09-15",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 350000,
+    "limit": 350000,
+    "insured_object": {
+      "address": {
+        "street": "Station Avenue 62",
+        "city": "Split",
+        "country": "HR"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0040",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Hana Huber",
+      "email": "hana.huber40@example.com",
+      "address": {
+        "street": "Meadow Close 101",
+        "city": "Zagreb",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-08-21",
+    "end_date": "2026-08-20",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 375000,
+    "limit": 375000,
+    "insured_object": {
+      "address": {
+        "street": "Meadow Close 101",
+        "city": "Zagreb",
+        "country": "HR"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0041",
+    "product": "MOTOR-TPL",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Petra Kováč",
+      "email": "petra.kovac41@example.com",
+      "address": {
+        "street": "Willow Way 18",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2026-06-21",
+    "end_date": "2027-06-20",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 0,
+    "sum_insured": null,
+    "limit": 1000000,
+    "insured_object": {
+      "make": "Suzuki",
+      "model": "Vitara",
+      "year": 2014,
+      "registration": "SYN-8202"
+    }
+  },
+  {
+    "policy_number": "POL-0042",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lena Babić",
+      "email": "lena.babic42@example.com",
+      "address": {
+        "street": "Riverside Drive 115",
+        "city": "Graz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-09-28",
+    "end_date": "2026-09-27",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 23000,
+    "limit": 23000,
+    "insured_object": {
+      "make": "Kia",
+      "model": "Ceed",
+      "year": 2013,
+      "registration": "SYN-4098"
+    }
+  },
+  {
+    "policy_number": "POL-0043",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Marek Potočnik",
+      "email": "marek.potocnik43@example.com",
+      "address": {
+        "street": "Harbour View 71",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-04-03",
+    "end_date": "2027-04-02",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 165000,
+    "limit": 165000,
+    "insured_object": {
+      "address": {
+        "street": "Harbour View 71",
+        "city": "Linz",
+        "country": "AT"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0044",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Marek Horváth",
+      "email": "marek.horvath44@example.com",
+      "address": {
+        "street": "Station Avenue 101",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-08-02",
+    "end_date": "2026-08-01",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 295000,
+    "limit": 295000,
+    "insured_object": {
+      "address": {
+        "street": "Station Avenue 101",
+        "city": "Košice",
+        "country": "SK"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0045",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Mateja Gruber",
+      "email": "mateja.gruber45@example.com",
+      "address": {
+        "street": "Willow Way 5",
+        "city": "Košice",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-12-23",
+    "end_date": "2026-12-22",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 34000,
+    "limit": 34000,
+    "insured_object": {
+      "make": "Opel",
+      "model": "Astra",
+      "year": 2022,
+      "registration": "SYN-1351"
+    }
+  },
+  {
+    "policy_number": "POL-0046",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Matej Bauer",
+      "email": "matej.bauer46@example.com",
+      "address": {
+        "street": "Chestnut Row 64",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-09-28",
+    "end_date": "2026-09-27",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 165000,
+    "limit": 165000,
+    "insured_object": {
+      "address": {
+        "street": "Chestnut Row 64",
+        "city": "Ljubljana",
+        "country": "SI"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0047",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lena Pichler",
+      "email": "lena.pichler47@example.com",
+      "address": {
+        "street": "Harbour View 105",
+        "city": "Maribor",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-10-25",
+    "end_date": "2026-10-24",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 29500,
+    "limit": 29500,
+    "insured_object": {
+      "make": "Volkswagen",
+      "model": "Passat",
+      "year": 2019,
+      "registration": "SYN-5213"
+    }
+  },
+  {
+    "policy_number": "POL-0048",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Stefan Pichler",
+      "email": "stefan.pichler48@example.com",
+      "address": {
+        "street": "Harbour View 74",
+        "city": "Vienna",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-12-25",
+    "end_date": "2026-12-24",
+    "status": "lapsed",
+    "lapsed_on": "2026-06-04",
+    "deductible": 300,
+    "sum_insured": 32000,
+    "limit": 32000,
+    "insured_object": {
+      "make": "Opel",
+      "model": "Astra",
+      "year": 2017,
+      "registration": "SYN-9553"
+    }
+  },
+  {
+    "policy_number": "POL-0049",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Bence Novak",
+      "email": "bence.novak49@example.com",
+      "address": {
+        "street": "Willow Way 71",
+        "city": "Linz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-05-14",
+    "end_date": "2027-05-13",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 190000,
+    "limit": 190000,
+    "insured_object": {
+      "address": {
+        "street": "Willow Way 71",
+        "city": "Linz",
+        "country": "AT"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0050",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lena Gruber",
+      "email": "lena.gruber50@example.com",
+      "address": {
+        "street": "Station Avenue 20",
+        "city": "Maribor",
+        "country": "SI"
+      }
+    },
+    "start_date": "2025-11-18",
+    "end_date": "2026-11-17",
+    "status": "lapsed",
+    "lapsed_on": "2026-04-10",
+    "deductible": 300,
+    "sum_insured": 30000,
+    "limit": 30000,
+    "insured_object": {
+      "make": "Škoda",
+      "model": "Fabia",
+      "year": 2019,
+      "registration": "SYN-6463"
+    }
+  }
+]

@@ -111,7 +111,7 @@ and Pydantic, at the cost of one dependency.
 | S000 | Plan, harness and architecture bootstrap | Model with five views, ADRs 1 to 3, constraints C-01 to C-07, harness (rules, skills, reviewers, hooks), Mermaid tooling; `make docs`, `make test` and `make check` pass | done | — |
 | S001 | Commit and publish | First commit on `main`; public GitHub repository; docs CI green on GitHub; the README's derived diagram renders on GitHub; architecture-base Mermaid PR merged; agent-base `yarn.lock` reverted | done | S000 |
 | S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty ~~`src/platform` and `src/workloads`~~ `meridian.platform` and `meridian.workloads` packages under `src/meridian/` (see S002 decisions); ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `meridian.platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | done | S001 |
-| S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | todo | S002 |
+| S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | done | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | todo | S001 |
 | S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | todo | S002 |
 | S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | todo | S002 |
@@ -360,6 +360,96 @@ request.
 - S010: enforce hard rule 4 (provider SDKs only in the gateway) with an
   import-linter contract once `meridian.platform.gateway` exists; until then
   the hook and the reviewer enforce it.
+
+### S003 — Synthetic data and golden set
+
+**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-29
+**Goal:** A seeded, stdlib-only generator that writes policies, claim
+history, policy wordings and first-notice-of-loss claims with labelled
+expected outcomes, identically on every run.
+**Decisions:**
+
+- The generator is development tooling, not runtime code: a small package
+  at `data/synthetic/generator/` with its output committed beside it, as
+  hard rule 2 and this step already say. It stays out of the `meridian`
+  distribution, so no container ships it. Rejected: a module under
+  `src/meridian/`, which would ship and would need a place in the layers
+  contract for code that no service runs.
+- The output is committed. A changed expected outcome then shows in the
+  pull request diff, and a test regenerates the data and compares it with
+  the committed files, so the committed copy cannot drift from the code.
+- Inputs and labels are separate files. The claims API will ingest
+  `claims.json`; if the expected outcome sat in the same record, the agent
+  could read its own grade.
+- One product catalogue is the source of both the wording documents and
+  the expected outcomes, so a clause and the label that cites it cannot
+  disagree. Scenarios are built outcome first, for balanced coverage, and
+  the generator stops if the outcome derived from the built data differs
+  from the intended one.
+- Business parameters, chosen here and cheap to change with a rerun:
+  euro amounts in whole euros, an auto-approval threshold of EUR 2,500
+  payable, a 30-day reporting window, and a fictional insurer in eurozone
+  Central Europe (Austria, Slovakia, Slovenia, Croatia).
+- No real personal data by construction: names are random pairs from short
+  lists of common given names and surnames, e-mail addresses use the
+  reserved `example.com` domain, there are no phone numbers, and vehicle
+  registrations use a format no country issues.
+
+**Work log:**
+
+- `data/synthetic/generator/`, standard library only: a product catalogue,
+  wording rendering, names and addresses, claim narratives, scenario
+  builders, the oracle that derives expected outcomes, and the writer.
+  `make synthetic` runs it with seed 20260929 and the fixed reference date
+  2026-09-01.
+- Output: 50 policies, 44 prior claims in the claim history, four wordings
+  (`MOTOR-TPL`, `MOTOR-COMP`, `HOME-STD`, `HOME-PLUS`) with numbered clauses,
+  and 40 claims with their expected outcomes: 8 approved automatically
+  within the threshold, 6 over it, 6 with a fraud indicator (early loss,
+  frequent claims, late report), 8 excluded, 6 on a policy not in force and
+  6 with documents missing. `manifest.json` records the seed, the counts and
+  a SHA-256 per file, so an evaluation report can name the data it used.
+- The oracle applies one precedence, first match wins: policy not in force,
+  then an exclusion, then a missing document, then a fraud indicator, then
+  the threshold. Every rejection goes to the adjuster (C-02). A label cites
+  the deciding clauses: the cover clause and the deductible, the limit when
+  it caps the payout, the reporting clause on a late report.
+- Claim numbers are shuffled, so the order of the files does not give the
+  labels away. The fact behind an exclusion is never a claim field; the
+  claimant's description states it.
+- Reading the generated claims found what the tests could not: a pipe
+  freezing in July, and a claimant "waiting at a junction" whose unlicensed
+  friend was driving. Each exclusion now has its own consistent story, and
+  a test sweeps every combination the builders can produce.
+- A Python review with a mutation sweep found three date boundaries whose
+  in-force side no test pinned, and background claim history that other
+  seeds dated after a policy had ended. Both are fixed and tested. A seed
+  other than the committed one now needs an explicit `--out`, and
+  `.gitattributes` keeps `data/synthetic/` at LF line endings, which the
+  byte-for-byte output and the manifest hashes depend on.
+- `pyproject.toml`: the pytest paths gain `tests/synthetic` and
+  `data/synthetic`; ruff ignores S311 (seeded, not cryptographic) in the
+  generator only.
+
+**Result / verification:** `make synthetic` run twice gave byte-identical
+files (`shasum` compared). A test does the same in two processes with
+different `PYTHONHASHSEED` values, and another regenerates the data and
+compares it with the committed files. `make lint` printed
+`Contracts: 2 kept, 0 broken.`; `make pytest` printed `195 passed`; `make
+docs` (13 checks), `make test` (116 tests) and the guard suite (35 cases)
+pass; gitleaks found no leaks in the files this branch adds or changes.
+**Follow-ups:**
+
+- S008 and S014: the threshold, the reporting window and the fraud rules
+  are generator constants. When the triage workload gets its configuration,
+  give both one source, or a test that they agree.
+- S012: the citations in the expected outcomes are a ready labelled query
+  set for the retrieval check.
+- S017: record the manifest's version and hashes in every evaluation
+  report. The oracle's tests pin the fraud-indicator boundaries, but no
+  golden-set claim sits exactly on one (a report 30 days after the loss);
+  add such cases, and an unknown policy number, if the harness needs them.
+- S032: injection cases in claimant descriptions extend this generator.
 
 ## Part D — Open questions
 

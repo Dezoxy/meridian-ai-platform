@@ -22,7 +22,7 @@ PORT      ?= 8080
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -98,6 +98,10 @@ lint:
 	uv run ruff format --check .
 	uv run lint-imports
 
-## pytest          tests under tests/meridian, including the import-contract detection test
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test
 pytest:
 	uv run pytest
+
+## synthetic       regenerate the synthetic data and golden set under data/synthetic (seeded; reruns are identical)
+synthetic:
+	PYTHONPATH=data/synthetic uv run python -m generator

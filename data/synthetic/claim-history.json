@@ -1,0 +1,354 @@
+[
+  {
+    "history_id": "HIST-0001",
+    "policy_number": "POL-0002",
+    "loss_date": "2025-09-16",
+    "peril": "storm",
+    "paid_amount": 4430,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0002",
+    "policy_number": "POL-0002",
+    "loss_date": "2025-11-15",
+    "peril": "collision",
+    "paid_amount": 2620,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0003",
+    "policy_number": "POL-0002",
+    "loss_date": "2026-03-09",
+    "peril": "third_party_liability",
+    "paid_amount": 3760,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0004",
+    "policy_number": "POL-0003",
+    "loss_date": "2026-03-28",
+    "peril": "burglary",
+    "paid_amount": 2430,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0005",
+    "policy_number": "POL-0004",
+    "loss_date": "2025-10-22",
+    "peril": "burst_pipe",
+    "paid_amount": 2020,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0006",
+    "policy_number": "POL-0006",
+    "loss_date": "2024-07-12",
+    "peril": "fire",
+    "paid_amount": 4360,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0007",
+    "policy_number": "POL-0006",
+    "loss_date": "2025-01-27",
+    "peril": "collision",
+    "paid_amount": 740,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0008",
+    "policy_number": "POL-0008",
+    "loss_date": "2023-08-09",
+    "peril": "third_party_liability",
+    "paid_amount": 520,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0009",
+    "policy_number": "POL-0008",
+    "loss_date": "2024-04-03",
+    "peril": "third_party_liability",
+    "paid_amount": 1060,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0010",
+    "policy_number": "POL-0009",
+    "loss_date": "2025-08-02",
+    "peril": "flood",
+    "paid_amount": 2650,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0011",
+    "policy_number": "POL-0010",
+    "loss_date": "2025-12-30",
+    "peril": "third_party_liability",
+    "paid_amount": 1450,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0012",
+    "policy_number": "POL-0012",
+    "loss_date": "2025-06-24",
+    "peril": "burst_pipe",
+    "paid_amount": 510,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0013",
+    "policy_number": "POL-0013",
+    "loss_date": "2024-05-08",
+    "peril": "fire",
+    "paid_amount": 2140,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0014",
+    "policy_number": "POL-0013",
+    "loss_date": "2025-07-13",
+    "peril": "collision",
+    "paid_amount": 2140,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0015",
+    "policy_number": "POL-0016",
+    "loss_date": "2025-11-08",
+    "peril": "third_party_liability",
+    "paid_amount": 3850,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0016",
+    "policy_number": "POL-0018",
+    "loss_date": "2024-04-06",
+    "peril": "third_party_liability",
+    "paid_amount": 3230,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0017",
+    "policy_number": "POL-0018",
+    "loss_date": "2024-11-18",
+    "peril": "storm",
+    "paid_amount": 3440,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0018",
+    "policy_number": "POL-0021",
+    "loss_date": "2026-03-12",
+    "peril": "fire",
+    "paid_amount": 1550,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0019",
+    "policy_number": "POL-0024",
+    "loss_date": "2024-05-02",
+    "peril": "third_party_liability",
+    "paid_amount": 950,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0020",
+    "policy_number": "POL-0024",
+    "loss_date": "2024-09-23",
+    "peril": "third_party_liability",
+    "paid_amount": 2060,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0021",
+    "policy_number": "POL-0028",
+    "loss_date": "2023-07-05",
+    "peril": "accidental_damage",
+    "paid_amount": 2800,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0022",
+    "policy_number": "POL-0028",
+    "loss_date": "2024-12-06",
+    "peril": "burst_pipe",
+    "paid_amount": 2680,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0023",
+    "policy_number": "POL-0029",
+    "loss_date": "2023-09-07",
+    "peril": "third_party_liability",
+    "paid_amount": 350,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0024",
+    "policy_number": "POL-0029",
+    "loss_date": "2024-10-01",
+    "peril": "third_party_liability",
+    "paid_amount": 2530,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0025",
+    "policy_number": "POL-0030",
+    "loss_date": "2026-05-10",
+    "peril": "glass",
+    "paid_amount": 2970,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0026",
+    "policy_number": "POL-0033",
+    "loss_date": "2024-01-23",
+    "peril": "glass",
+    "paid_amount": 1340,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0027",
+    "policy_number": "POL-0033",
+    "loss_date": "2025-05-20",
+    "peril": "storm",
+    "paid_amount": 1580,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0028",
+    "policy_number": "POL-0037",
+    "loss_date": "2026-01-08",
+    "peril": "storm",
+    "paid_amount": 260,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0029",
+    "policy_number": "POL-0038",
+    "loss_date": "2024-01-24",
+    "peril": "glass",
+    "paid_amount": 1390,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0030",
+    "policy_number": "POL-0038",
+    "loss_date": "2024-02-23",
+    "peril": "storm",
+    "paid_amount": 1180,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0031",
+    "policy_number": "POL-0041",
+    "loss_date": "2025-03-06",
+    "peril": "third_party_liability",
+    "paid_amount": 2430,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0032",
+    "policy_number": "POL-0041",
+    "loss_date": "2025-08-22",
+    "peril": "third_party_liability",
+    "paid_amount": 2010,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0033",
+    "policy_number": "POL-0042",
+    "loss_date": "2024-03-27",
+    "peril": "storm",
+    "paid_amount": 1550,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0034",
+    "policy_number": "POL-0042",
+    "loss_date": "2024-06-03",
+    "peril": "glass",
+    "paid_amount": 530,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0035",
+    "policy_number": "POL-0043",
+    "loss_date": "2024-03-03",
+    "peril": "burst_pipe",
+    "paid_amount": 1330,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0036",
+    "policy_number": "POL-0043",
+    "loss_date": "2025-02-01",
+    "peril": "flood",
+    "paid_amount": 3820,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0037",
+    "policy_number": "POL-0045",
+    "loss_date": "2023-11-22",
+    "peril": "fire",
+    "paid_amount": 4340,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0038",
+    "policy_number": "POL-0045",
+    "loss_date": "2025-01-23",
+    "peril": "fire",
+    "paid_amount": 2550,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0039",
+    "policy_number": "POL-0046",
+    "loss_date": "2025-11-07",
+    "peril": "burglary",
+    "paid_amount": 2820,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0040",
+    "policy_number": "POL-0046",
+    "loss_date": "2026-01-29",
+    "peril": "fire",
+    "paid_amount": 4190,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0041",
+    "policy_number": "POL-0046",
+    "loss_date": "2026-04-09",
+    "peril": "storm",
+    "paid_amount": 300,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0042",
+    "policy_number": "POL-0047",
+    "loss_date": "2026-02-13",
+    "peril": "glass",
+    "paid_amount": 2560,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0043",
+    "policy_number": "POL-0050",
+    "loss_date": "2024-01-01",
+    "peril": "glass",
+    "paid_amount": 3510,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0044",
+    "policy_number": "POL-0050",
+    "loss_date": "2024-01-25",
+    "peril": "glass",
+    "paid_amount": 910,
+    "status": "closed"
+  }
+]
