@@ -59,15 +59,19 @@ shopt -s nocasematch
   decide deny "Recursive force-delete of a sensitive path. Run it yourself if truly intended."
 [[ "$cmd" =~ terraform[[:space:]].*destroy ]] && \
   decide deny "terraform destroy is destructive; run it yourself after confirming the workspace."
-[[ "$cmd" =~ git[[:space:]]+push([[:space:]].*)?[[:space:]](--force|-[a-zA-Z]*f|[+]|--mirror|--prune) ]] && \
-  decide deny "Destructive push (--force*, bundled -f, +refspec, --mirror/--prune) can rewrite shared refs. Run it yourself if you must."
-# Secret printing is judged per command segment (split on newlines, ;, &&, ||
-# and |), so a reader in one segment and a secret-looking path in another, such
-# as `echo done && jq '.env' settings.json`, is not a match.
+# Destructive pushes and secret printing are judged per command segment (split
+# on newlines, ;, &&, || and |), so a flag or path in one segment does not
+# combine with a command in another: `git push -q; rm -f x` is not a force
+# push, and `echo done && jq '.env' settings.json` prints no secret. Line
+# continuations are joined first, so `git push \<newline> --force` stays one
+# segment.
+bs_nl=$'\\\n'
 while IFS= read -r seg; do
+  [[ "$seg" =~ git[[:space:]]+push([[:space:]].*)?[[:space:]](--force|-[a-zA-Z]*f|[+]|--mirror|--prune) ]] && \
+    decide deny "Destructive push (--force*, bundled -f, +refspec, --mirror/--prune) can rewrite shared refs. Run it yourself if you must."
   [[ "$seg" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config) ]] && \
     decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig)."
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 [[ "$cmd" =~ az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|download|backup|restore) ]] && \
   decide deny "Key Vault secret values never enter the transcript or the command line. Run it yourself; list secret names with 'az keyvault secret list'."
 [[ "$cmd" =~ kubectl[[:space:]]+get[[:space:]]+secrets?[[:space:]].*-o[[:space:]]*(yaml|json) ]] && \
