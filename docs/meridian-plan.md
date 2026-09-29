@@ -518,6 +518,10 @@ them.
   below rather than claims.
 - The `feature-threat-model` skill now points at `TB-1` to `TB-9` in the
   register instead of listing eight boundaries of its own.
+- The approval flow in the model now matches T-31: the Claims Triage App
+  records the adjuster's decision and resumes the run; no tool records a
+  decision. The `ClaimsApproval` view, the Claims MCP Server's description
+  and the overview table changed with it.
 
 **Result / verification:** `make docs` passed 13 checks. The ID check is
 live for both new families: a planted citation of an undefined threat ID
@@ -541,8 +545,8 @@ when" covers yet; each step adds its line when it starts.
   refuse the mock issuer outside kind (T-06).
 - S016 and S021: decide claimant identity (T-01).
 - A step for document upload before any claimant can attach a file (T-38).
-- S025: the web application firewall belongs to the Azure design and its
-  AWS mapping (T-02).
+- S020: the Application Gateway web application firewall when the Azure
+  edge is built, or it stays designed (T-02).
 
 ## Part D — Open questions
 
@@ -564,3 +568,5 @@ when" covers yet; each step adds its line when it starts.
   `NOTICE` for the ECC material.
 - **v0.4, 2026-09-29:** Part A delegates implementation to the `implementer`
   subagent.
+- **v0.5, 2026-09-29:** S022 depends on S021 as well as S020 (S004
+  threat model: no deployment to AKS before sign-in).
