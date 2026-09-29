@@ -113,7 +113,7 @@ and Pydantic, at the cost of one dependency.
 | S002 | Python workspace and CI gates | `pyproject.toml` uv workspace with empty ~~`src/platform` and `src/workloads`~~ `meridian.platform` and `meridian.workloads` packages under `src/meridian/` (see S002 decisions); ruff, pytest, an import-linter contract (no `langgraph` or `langchain` under `meridian.platform`) and gitleaks run in CI; a deliberate framework import in a platform package fails CI | done | S001 |
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | done | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | done | S001 |
-| S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | doing | S002 |
+| S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | done | S002 |
 | S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | todo | S002 |
 | S007 | Azure foundation | Terraform with remote state, a resource group, a budget with 50, 80 and 100 % alerts (C-04), Key Vault, and Azure OpenAI `gpt-4.1-mini` plus `text-embedding-3-large` on DataZoneStandard in Sweden Central with a West Europe fallback; plan reviewed; apply confirmed by the owner | todo | S001 |
 
@@ -549,7 +549,7 @@ when" covers yet; each step adds its line when it starts.
   edge is built, or it stays designed (T-02).
 
 ### S005 — Agent framework spike
-**Status:** doing · **Started:** 2026-09-29 · **Finished:** —
+**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-29
 **Goal:** measure Microsoft Agent Framework against LangGraph on the same
 three-step claim flow with an approval pause, and append the decision matrix
 that ADR 2 promised.
@@ -566,12 +566,50 @@ that ADR 2 promised.
   implementation that ADR 2 rejected as option 3; it is never deployed.
 - No model call. The matrix rows (state, tool contracts, approval pauses,
   checkpoints, telemetry) need none, and the spike needs no credentials.
+- LangGraph stays the workload framework (ADR 2 appendix). The reason ADR 2
+  gave for rejecting Microsoft Agent Framework, immature checkpoints and
+  pauses, is struck with a note: the spike contradicted it. The surviving
+  reasons are pickled checkpoints, no PostgreSQL checkpoint store and a
+  failed checkpoint save that does not fail the run. Rejected: switching,
+  because the better pause does not remove the runtime's own resume checks.
+- Dependabot does not cover `spikes/`: the pins are the versions the notes
+  describe. Rejected: a Dependabot entry, which would move the pins away from
+  the evidence.
 
 **Work log:**
 
+- The `implementer` subagent built the spike against a written contract:
+  shared rules, one flow module per framework, a CLI for a two-process
+  pause and resume, and 72 tests over both. Every framework API was read
+  from the installed package, and the README cites the source line behind
+  each observation.
+- Spot-checked three citations against the installed source: the
+  checkpoint-save warning in `agent_framework/_workflows/_runner.py`, the
+  pickle security note in `_checkpoint_encoding.py`, and the
+  `Command(resume=None)` crash in `langgraph/pregel/_loop.py`.
+- Wrote the matrix, its reading and the runtime obligations into ADR 2;
+  added the spike to the README capability table and layout.
+
 **Result / verification:**
 
+- In the spike, `uv run pytest -q`: `72 passed`.
+- `make lint`: exit 0, `Contracts: 2 kept, 0 broken.`; the spike's `.venv`
+  is not linted (`ruff check spikes --show-files` lists no `.venv` path).
+- `make pytest`: `195 passed`; the root `uv.lock` is unchanged.
+- `make test`: `Ran 116 tests`, `OK`.
+- `make docs`: `13 checks passed`. `make check`: exit 0, no ERROR line.
+
 **Follow-ups:**
+
+- S009: the runtime issues run IDs and maps them to LangGraph threads; one
+  span per node, because LangGraph emits none; `LANGGRAPH_STRICT_MSGPACK`
+  set in the runtime.
+- S015: resume once, as a conditional update before the framework is
+  called; the adjuster from the sign-in, not the payload; delete a completed
+  run's checkpoints or keep claim text out of the graph state (T-10, T-32).
+- S014: the policy-validity rule reads `lapsed_on`, not only `status`; the
+  spike's simpler rule proposes a rejection for CLM-0010, which the golden
+  set labels `auto_approve`.
 
 ## Part D — Open questions
 
