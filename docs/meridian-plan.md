@@ -29,10 +29,10 @@ blurs what the step was for.
 3. **Open the step.** Add its section to Part C from the template and set the
    status to `doing`.
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
-   with paths, names and what not to touch, delegates implementation to
-   Sonnet subagents at high effort, and consults the advisor before
-   committing to an approach and before declaring done. It runs every gate
-   itself; a subagent's report is a claim, not evidence.
+   with paths, names and what not to touch, delegates implementation to the
+   `implementer` subagent (Sonnet at high effort), and consults the advisor
+   before committing to an approach and before declaring done. It runs every
+   gate itself; a subagent's report is a claim, not evidence.
 5. **Gates.** Always `make docs` and `make test`. `make check` when the model
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
@@ -450,6 +450,10 @@ pass; gitleaks found no leaks in the files this branch adds or changes.
   golden-set claim sits exactly on one (a report 30 days after the loss);
   add such cases, and an unknown policy number, if the harness needs them.
 - S032: injection cases in claimant descriptions extend this generator.
+- Harness: this step delegated its coding to a built-in agent with a model
+  override, whose effort no setting pins. An `implementer` agent now takes
+  delegated coding, with `model: sonnet` and `effort: high` in its
+  frontmatter; added right after this step.
 
 ## Part D — Open questions
 
@@ -469,3 +473,5 @@ pass; gitleaks found no leaks in the files this branch adds or changes.
   and S039 (workload scaffold) as a fourth optional M4 item.
 - **v0.3, 2026-09-29:** Part D question 4 answered: Apache-2.0, with a
   `NOTICE` for the ECC material.
+- **v0.4, 2026-09-29:** Part A delegates implementation to the `implementer`
+  subagent.
