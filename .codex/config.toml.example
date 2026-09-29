@@ -1,0 +1,17 @@
+# Meridian AI Platform: recommended Codex configuration.
+# Codex reads the GLOBAL ~/.codex/config.toml (not a repo file), so copy or
+# merge this there. AGENTS.md is read automatically from the repo root.
+
+# model = "gpt-5-codex"          # set to your available Codex model
+
+# Approval and sandbox are how Codex enforces the same boundary as the
+# Claude Code hooks in .claude/settings.json:
+approval_policy = "on-request"       # ask before risky or destructive commands
+sandbox_mode    = "workspace-write"  # writes confined to the repo
+
+[sandbox_workspace_write]
+network_access = false               # no surprise network; approve explicitly
+
+# Hooks: .codex/hooks.json (same scripts as Claude Code, via .codex/hooks).
+# Prompts: link the prompt files so they appear as /feature-threat-model etc.
+#   ln -s "$PWD/.codex/prompts/"*.md ~/.codex/prompts/

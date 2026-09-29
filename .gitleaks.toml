@@ -1,0 +1,11 @@
+# gitleaks configuration: the default rules plus one narrow allowlist.
+# Local: `gitleaks dir .`; CI: the secret scan job (gitleaks-action) reads this
+# file from the repository root.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documentation example (X-API-Key: sk_live_...) in the vendored ECC api-design skill; not a credential"
+targetRules = ["generic-api-key"]
+paths = ['''^\.(claude|agents)/skills/api-design/SKILL\.md$''']

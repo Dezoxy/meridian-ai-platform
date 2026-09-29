@@ -1,0 +1,11 @@
+# Keeps the GitHub Actions used by the workflows current. Python and container
+# dependencies are added when they exist (plan steps S002 and S019).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

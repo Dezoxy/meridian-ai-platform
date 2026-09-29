@@ -1,0 +1,20 @@
+{"expect":"deny","command":"terraform -chdir=infra/terraform/azure/envs/demo destroy -auto-approve"}
+{"expect":"none","command":"cat > docs/runbook.md <<'EOF'\nNever run terraform destroy without a plan.\nEOF\nmake docs"}
+{"expect":"deny","command":"bash <<'EOF'\nterraform destroy -auto-approve\nEOF"}
+{"expect":"deny","command":"cat <<'EOF' | bash\nterraform destroy\nEOF"}
+{"expect":"deny","command":"cat > run.sh <<'EOF'\nterraform destroy\nEOF\nbash run.sh"}
+{"expect":"ask","command":"kubectl apply -f infra/kind/bootstrap.yaml"}
+{"expect":"none","command":"ls -la && git status"}
+{"expect":"deny","command":"git push --force-with-lease origin main"}
+{"expect":"deny","command":"az keyvault secret show --vault-name kv-x --name provider-key"}
+{"expect":"none","command":"az keyvault secret list --vault-name kv-x --query '[].name' -o tsv"}
+{"expect":"deny","command":"kubectl get secret gateway-keys -o yaml"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/azure/envs/demo apply"}
+{"expect":"none","command":"python3 - <<'PY'\nprint('hello')\nPY"}
+{"expect":"deny","command":"python3 - <<'PY'\nimport os; os.system('terraform destroy')\nPY"}
+{"expect":"none","command":"cat > tests/guard-bash-cases.jsonl <<'EOF'\n{\"command\":\"terraform destroy\"}\nEOF"}
+{"expect":"none","command":"cp a b && printf 'ok\\n' && jq -e '.env' settings.json"}
+{"expect":"deny","command":"printf 'hi\\n' && cat config/.env"}
+{"expect":"deny","command":"git status; head -5 infra/demo.tfvars"}
+{"expect":"none","command":"cat config/.env.example"}
+{"expect":"deny","command":"cat config/.env | grep KEY"}
