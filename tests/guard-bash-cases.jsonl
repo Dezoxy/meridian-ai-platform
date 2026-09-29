@@ -18,3 +18,18 @@
 {"expect":"deny","command":"git status; head -5 infra/demo.tfvars"}
 {"expect":"none","command":"cat config/.env.example"}
 {"expect":"deny","command":"cat config/.env | grep KEY"}
+{"expect":"none","command":"git commit -F - <<'EOF'\ndocs: record the release\nEOF\ngit push -q\ngh pr view 4 --json body | python3 - <<'PY'\nimport json, sys\nnew_ver = (old_ver + 1)\nPY"}
+{"expect":"none","command":"git push -q; rm -f /tmp/x"}
+{"expect":"none","command":"git push -q && python3 -c 'print(1 + 2)'"}
+{"expect":"none","command":"git push -u origin s000-guard-push-segments"}
+{"expect":"deny","command":"git push --force"}
+{"expect":"deny","command":"git push -f origin main"}
+{"expect":"deny","command":"git push -uf origin x"}
+{"expect":"deny","command":"git push origin +main"}
+{"expect":"deny","command":"git push --mirror"}
+{"expect":"deny","command":"git push --prune origin"}
+{"expect":"deny","command":"git fetch && git push --force-with-lease"}
+{"expect":"deny","command":"git status; git push -f origin main"}
+{"expect":"deny","command":"git push \\\n  --force-with-lease origin main"}
+{"expect":"deny","command":"cat \\\n  config/.env"}
+{"expect":"deny","command":"python3 - <<'PY'\nimport os; os.system('git push --force')\nPY"}
