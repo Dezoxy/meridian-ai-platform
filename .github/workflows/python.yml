@@ -1,0 +1,41 @@
+name: Python / Lint and test
+
+# The Python gates: ruff (lint and format check), the import-linter contracts
+# that keep the agent framework out of platform packages (ADR 2), and pytest,
+# which includes a test that plants a deliberate violation and expects the
+# contracts to catch it. Runs on every pull request and on main. Read-only.
+# The job name is meant to be a required status check in the protect-main
+# ruleset; rename the job and the ruleset entry in the same change.
+#
+# There are deliberately no path filters. A required check that a path filter
+# skips never reports, and GitHub then blocks every pull request that touches
+# no Python, such as a documentation-only change, waiting for it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # setup-uv has published no floating major tag since v8, so the pin is a
+      # full version. Dependabot's actions group bumps it.
+      - uses: astral-sh/setup-uv@v10.2.0
+      # --locked fails when uv.lock is out of date with pyproject.toml.
+      - name: Install the locked environment
+        run: uv sync --locked
+      - name: Lint, format check and import contracts
+        run: make lint
+      - name: Tests
+        run: make pytest

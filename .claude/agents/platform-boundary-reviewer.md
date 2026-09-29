@@ -13,13 +13,13 @@ wrong. Be concrete and cite `file:line`.
 ## Invariants you enforce
 
 1. **Platform packages never import the agent framework.** Nothing under
-   `src/platform/` imports `langgraph` or `langchain*` (ADR 2). The runtime
-   hosts graphs behind the agent contract: start, resume, status, checkpoint
-   store, tool client.
+   `src/meridian/platform/` imports `langgraph` or `langchain*` (ADR 2). The
+   runtime hosts graphs behind the agent contract: start, resume, status,
+   checkpoint store, tool client.
 2. **Every model call goes through the Model Gateway.** Provider SDKs
    (`openai`, `anthropic`, `mistralai`, `boto3` for Bedrock, `litellm`) are
-   imported only under `src/platform/gateway/` (ADR 3). Workloads and MCP
-   servers use the gateway client.
+   imported only under `src/meridian/platform/gateway/` (ADR 3). Workloads
+   and MCP servers use the gateway client.
 3. **Every tool is declared and allowlisted.** A tool exists in
    `config/registry/tools.yaml` with an input schema, a scope, an audit flag
    and, for a mutating tool, a required idempotency key and an approval

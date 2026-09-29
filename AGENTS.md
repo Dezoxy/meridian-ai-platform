@@ -47,10 +47,10 @@ A change that violates one is wrong even if it works.
    `eu-zone`, `global`) and its allowed data classes; personal data routes
    only to EU labels; the gateway refuses a mismatch and records the route.
 4. **Every model call goes through the Model Gateway.** Provider SDKs are
-   imported only under `src/platform/gateway/` (ADR 3).
+   imported only under `src/meridian/platform/gateway/` (ADR 3).
 5. **Platform packages never import the agent framework.** Nothing under
-   `src/platform/` imports `langgraph` or `langchain*`; import-linter enforces
-   it in CI once code exists, reviewers enforce it until then (ADR 2).
+   `src/meridian/platform/` imports `langgraph` or `langchain*`; import-linter
+   enforces it in CI (ADR 2).
 6. **Every tool is declared, allowlisted and audited.** A tool exists in the
    registry with a schema and a scope; an agent calls only allowlisted tools;
    a mutating tool needs an idempotency key and, where a human must decide,
@@ -70,11 +70,12 @@ A change that violates one is wrong even if it works.
 
 - **Python** 3.13, one `uv` workspace, `ruff` for lint and format, `pytest`,
   FastAPI with Pydantic v2, one PostgreSQL instance with separate schemas.
-- **Layout**: `src/platform/` (shared services), `src/workloads/` (use
-  cases), `config/registry/` (declarative registry with JSON Schemas),
-  `infra/` (Terraform, Helm, kind), `api/` (OpenAPI and MCP tool contracts),
-  `data/synthetic/`, `docs/`. Code, charts and Terraform arrive milestone by
-  milestone; the root README says what exists.
+- **Layout**: `src/meridian/platform/` (shared services),
+  `src/meridian/workloads/` (use cases), `config/registry/` (declarative
+  registry with JSON Schemas), `infra/` (Terraform, Helm, kind), `api/`
+  (OpenAPI and MCP tool contracts), `data/synthetic/`, `docs/`. Code, charts
+  and Terraform arrive milestone by milestone; the root README says what
+  exists.
 - **ECC rules** are vendored under `.claude/rules/ecc/` from the agent-base
   fork. Do not edit them here; re-copy them from the base.
 - **Skills** live in `.claude/skills/<name>/` and are mirrored byte-for-byte

@@ -60,6 +60,7 @@ graph LR
 | Architecture model: context, container, governance and two runtime views | Designed | `docs/architecture/` |
 | Decisions: Azure and kind with AWS designed; LangGraph behind a framework-agnostic contract; a thin model gateway | Accepted | `docs/architecture/decisions/` |
 | Engineering harness: reviewers, skills, hooks, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `scripts/` |
+| Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1 | ADR 3 |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1 | ADR 2 |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
@@ -86,16 +87,23 @@ the [plan](docs/meridian-plan.md).
 .claude/            rules (vendored from ECC), skills, agents, hooks, settings
 .agents/            byte-identical skill mirror for non-Claude agents
 .codex/             Codex hooks, prompts, agent twins, config example
-.github/workflows/  documentation gate; architecture PDF release
+.github/workflows/  documentation gate; Python gates; architecture PDF release
 docs/
   README.md         documentation index
   architecture/     Structurizr model, views, ADRs, requirements; README.md is the front door
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf
+src/meridian/       the one Python package (src layout)
+  platform/         shared platform services; never import the agent framework
+  workloads/        use cases built on the platform contract
+tests/              tests for the scripts and the bash guard
+  meridian/         pytest tests for the package, including the import-contract check
+pyproject.toml      uv project: Python 3.13, dev tools, ruff, pytest, import-linter
+uv.lock             locked dependency versions
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest
 ```
 
-Planned, milestone by milestone: `src/platform/`, `src/workloads/`,
-`config/registry/`, `api/`, `infra/`, `data/synthetic/`, `tests/`.
+Planned, milestone by milestone: `config/registry/`, `api/`, `infra/`,
+`data/synthetic/`.
 
 ## Working in this repository
 
@@ -105,6 +113,8 @@ make check    # Structurizr validate + inspect with the pinned image (Docker)
 make view     # browse the model at http://localhost:8080/workspace/1
 make mermaid  # regenerate derived Mermaid blocks, render every fence (Docker)
 make pdf      # the Documentation tab and every view as one PDF
+make lint     # ruff, format check, import-linter contracts (needs uv)
+make pytest   # package tests, including the import-contract check (needs uv)
 ```
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin

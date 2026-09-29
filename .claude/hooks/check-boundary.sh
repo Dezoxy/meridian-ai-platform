@@ -9,17 +9,17 @@ case "$f" in *.py) ;; *) exit 0 ;; esac
 [ -f "$f" ] || exit 0
 findings=""
 case "$f" in
-  */src/platform/*)
+  */src/meridian/platform/*)
     if grep -nE '^[[:space:]]*(from|import)[[:space:]]+(langgraph|langchain)' "$f" >/dev/null 2>&1; then
       findings="${findings}- Platform package imports the agent framework. Platform code never imports langgraph or langchain (ADR 2).\n"
     fi
   ;;
 esac
 case "$f" in
-  */src/platform/gateway/*) ;;
+  */src/meridian/platform/gateway/*) ;;
   */src/*)
     if grep -nE '^[[:space:]]*(from|import)[[:space:]]+(openai|anthropic|mistralai|boto3|litellm)' "$f" >/dev/null 2>&1; then
-      findings="${findings}- Provider SDK imported outside src/platform/gateway. Every model call goes through the Model Gateway (ADR 3).\n"
+      findings="${findings}- Provider SDK imported outside src/meridian/platform/gateway. Every model call goes through the Model Gateway (ADR 3).\n"
     fi
   ;;
 esac
