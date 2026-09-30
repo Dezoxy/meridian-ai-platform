@@ -943,8 +943,29 @@ the apply.
   Then check the data-zone quota, move back to `gpt-4.1-mini` or its
   successor on DataZoneStandard, add the West Europe account and update the
   ADR 3 amendment.
-- S010: the gateway's fallback region waits for that upgrade. Key
-  authentication is off, so S010 also decides how a pod on kind
+- S010: a second-region chat fallback waits for that upgrade. On
+  2026-09-30 the trial had chat quota on an EU SKU only in Sweden Central
+  (`gpt-4o` 50 units; `gpt-4o-mini` 200, which Azure no longer deploys);
+  France Central, Germany West Central, Italy North, Poland Central, Spain
+  Central, North Europe and West Europe had none. Until the upgrade, S010
+  can still build the whole fallback mechanism, with only the second
+  region labelled designed:
+  - a second `gpt-4o` deployment in Sweden Central (the 50 units fit two
+    of 20 to 25), so the registry's candidate list, the circuit breaker
+    and a test that injects a failure are real; it does not survive a
+    Sweden Central outage;
+  - the replay provider of ADR 3 as the last candidate, so the demo keeps
+    running offline, labelled simulated;
+  - optionally an embedding fallback region: `text-embedding-3-large` has
+    regional Standard quota in Germany West Central, France Central and
+    Poland Central, and the same model version gives the same vectors.
+    Terraform gives every account both deployments today, so a
+    region with embeddings only needs per-location deployment sets first;
+  - not a fallback: `gpt-4.1-mini` on GlobalStandard (200 units on the
+    trial) may process data outside the EU, so the gateway must refuse it
+    for claims (hard rule 3); showing that refusal is residency evidence.
+
+  Key authentication is off, so S010 also decides how a pod on kind
   authenticates to Azure OpenAI.
 - S008: the registry labels these deployments `eu-region` and compares its
   labels with `terraform output -json openai_deployments` (T-12). CI has no
