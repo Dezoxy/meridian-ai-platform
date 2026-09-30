@@ -1,0 +1,11 @@
+# Envoy Gateway controller (gateway-helm). The chart installs the Gateway API
+# CRDs too (crds.enabled defaults to true). The proxy that serves traffic is
+# configured by manifests/gateway.yaml (EnvoyProxy), not here.
+deployment:
+  envoyGateway:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 384Mi

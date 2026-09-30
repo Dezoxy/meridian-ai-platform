@@ -86,6 +86,14 @@ done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
 [[ "$cmd" =~ kind[[:space:]]+delete ]] && \
   decide ask "Deleting the kind cluster loses local state; confirm."
+# `make down` and infra/kind/down.sh wrap `kind delete`, so the rule above never
+# sees them. `make` is matched as a whole word, any options may precede the
+# target, and the target must end at a space, separator or the end of the line.
+nl=$'\n'
+[[ "$cmd" =~ (^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?down([[:space:]]|$|[;\&\|\)]) ]] && \
+  decide ask "make down deletes the kind cluster and its local state; confirm."
+[[ "$cmd" =~ (^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)down\.sh ]] && \
+  decide ask "infra/kind/down.sh deletes the kind cluster and its local state; confirm."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
 [[ "$cmd" =~ kubectl[[:space:]].*(apply|delete|scale|rollout[[:space:]]+restart) ]] && \

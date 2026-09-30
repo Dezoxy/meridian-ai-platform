@@ -4,7 +4,7 @@
 meridian = softwareSystem "Meridian AI Platform" "Builds, runs and governs LLM agents for a fictional insurer, with a claims-triage reference workload." {
 
     group "Edge (internet-facing)" {
-        ingress = container "Ingress" "Terminates TLS and routes requests to the platform." "ingress-nginx on kind; Azure Application Gateway WAF in the Azure design" "Layer Edge,Gateway,Internet-exposed"
+        ingress = container "Ingress" "Terminates TLS and routes requests to the platform." "Envoy Gateway (Gateway API) on kind; Azure Application Gateway WAF in the Azure design" "Layer Edge,Gateway,Internet-exposed"
     }
 
     group "Control plane" {

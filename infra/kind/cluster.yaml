@@ -1,0 +1,19 @@
+# kind cluster for the local platform, created by up.sh with
+#   kind create cluster --name meridian --image "$KIND_NODE_IMAGE" \
+#     --config infra/kind/cluster.yaml --kubeconfig infra/kind/kubeconfig
+# One node: control plane and workloads share it, which keeps memory low.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  # kind's default, made explicit: the API server listens on loopback only.
+  # Changing it needs a new cluster.
+  apiServerAddress: "127.0.0.1"
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Edge: laptop 127.0.0.1:8088 -> node port 30080 -> Envoy proxy Service.
+      # Loopback only (threat model T-01, T-03); never 0.0.0.0.
+      - containerPort: 30080
+        hostPort: 8088
+        listenAddress: "127.0.0.1"
+        protocol: TCP

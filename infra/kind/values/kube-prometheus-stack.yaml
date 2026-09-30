@@ -1,0 +1,144 @@
+# kube-prometheus-stack: Prometheus (with its operator, kube-state-metrics and
+# node-exporter) and Grafana (bundled subchart). Sized for a laptop.
+# Release name is kube-prometheus-stack; services are named after it.
+
+# Alertmanager arrives with S024.
+alertmanager:
+  enabled: false
+windowsMonitoring:
+  enabled: false
+
+# kind runs the control plane as static pods that listen on the node's
+# loopback; these four endpoints are not reachable and would show as down.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+defaultRules:
+  rules:
+    alertmanager: false
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+prometheus-node-exporter:
+  # Docker Desktop cannot propagate the host root mount ("path / is mounted on
+  # / but it is not a shared or slave mount"); node-exporter would not start.
+  hostRootFsMount:
+    enabled: false
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 48Mi
+
+prometheus:
+  prometheusSpec:
+    # Native OTLP receiver: the collector pushes metrics to
+    # /api/v1/otlp/v1/metrics on the Prometheus service.
+    enableOTLPReceiver: true
+    retention: 24h
+    retentionSize: 1GB
+    # Without this, only ServiceMonitors that carry the Helm release label
+    # are picked up.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 384Mi
+      limits:
+        memory: 640Mi
+
+grafana:
+  # Admin user "admin", password from Secret grafana-admin (created by up.sh,
+  # printed only by `make grafana-password`).
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  grafana.ini:
+    users:
+      allow_sign_up: false
+    auth.anonymous:
+      enabled: false
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+  testFramework:
+    enabled: false
+  # Grafana 13 peaks at start while it migrates its database and provisions
+  # the chart's dashboards; 320Mi was OOM-killed once on a clean `make up`.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+  sidecar:
+    # Both sidecars (dashboards, datasources) list every labelled ConfigMap at
+    # start; 64Mi was OOM-killed in a loop on the first run.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 160Mi
+    datasources:
+      # Prometheus keeps the chart's default datasource, uid "prometheus".
+      # Alertmanager is off, so its datasource would point nowhere.
+      alertmanager:
+        enabled: false
+  # Provisioned datasources with fixed uids; smoke.sh and future dashboards
+  # refer to them by uid. In Grafana provisioning "$$" writes a literal "$".
+  additionalDataSources:
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo.observability.svc.cluster.local:3200
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          filterByTraceID: false
+          filterBySpanID: false
+          customQuery: true
+          query: '{service_name=~".+"} | trace_id="$${__span.traceId}"'
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.observability.svc.cluster.local:3100
+      jsonData:
+        derivedFields:
+          - name: trace_id
+            matcherType: label
+            matcherRegex: trace_id
+            url: '$${__value.raw}'
+            datasourceUid: tempo
+            urlDisplayLabel: View trace

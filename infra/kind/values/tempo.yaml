@@ -1,0 +1,17 @@
+# Tempo 3.x in monolithic mode: one process, local storage, no Kafka (the chart
+# README: "Monolithic mode still runs every component in one process and needs
+# no Kafka"). Traces arrive over OTLP; the collector is the only sender.
+tempo:
+  retention: 24h
+  # No usage reporting to Grafana Labs.
+  reportingEnabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 448Mi
+# A small volume backs /var/tempo (the chart mounts nothing there otherwise).
+persistence:
+  enabled: true
+  size: 2Gi
