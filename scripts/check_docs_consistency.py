@@ -10,7 +10,7 @@ Every check whose subject is missing is skipped, not failed, so a repository
 adopts them as it grows: no docs index, no view register, no speaker notes and
 no requirement documents still passes. What exists must be consistent.
 
-The canonical copy lives in architecture-base (scripts/); repositories copy it
+The canonical copy lives in development-base (scripts/); repositories copy it
 unchanged.
 
 Run from anywhere: python3 scripts/check_docs_consistency.py
@@ -68,9 +68,9 @@ PROSE_WIDTH = 80
 # Copied skills stay byte-identical to their canonical source, so a consuming
 # repository does not get to rewrap them.
 SKILL_DIRS = (REPO / ".claude" / "skills", REPO / ".agents" / "skills")
-# Agent definitions are prompts, and copies from an agent kit keep their
-# upstream line lengths, so they are exempt like skills.
-AGENT_DIRS = (REPO / ".claude" / "agents",)
+# Agent and command definitions are prompts, and copies from an agent kit keep
+# their upstream line lengths, so they are exempt like skills.
+AGENT_DIRS = (REPO / ".claude" / "agents", REPO / ".claude" / "commands")
 OVERVIEW = ARCH / "overview"
 # overview/ IS the imported folder, so its own files need no pointer. ADRs are
 # imported by `!adrs`, not `!docs`, and reach the document by their own route.

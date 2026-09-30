@@ -3,7 +3,7 @@ name: docs-sync
 description: Audit the branch diff for documentation it falsifies and fix those docs in the same branch — run before opening or updating any PR
 ---
 
-<!-- Canonical copy: architecture-base. A consumer repository copies this file and
+<!-- Canonical copy: development-base. A consumer repository copies this file and
      rewrites the doc-surface table in step 2 for its own paths. -->
 
 Before a PR leaves this repo, the documentation must still be TRUE. This skill
@@ -38,7 +38,7 @@ of those goes stale silently when something is added or renamed.
    | Where | What it claims |
    | --- | --- |
    Rewrite this table for the repository you are in; these rows are the ones a
-   repository built from architecture-base always has.
+   repository built from development-base always has.
 
    | Where | What it claims |
    | --- | --- |

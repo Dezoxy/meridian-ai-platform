@@ -76,11 +76,12 @@ A change that violates one is wrong even if it works.
   (OpenAPI and MCP tool contracts), `data/synthetic/`, `docs/`. Code, charts
   and Terraform arrive milestone by milestone; the root README says what
   exists.
-- **ECC rules** are vendored under `.claude/rules/ecc/` from the agent-base
+- **ECC rules** are vendored under `.claude/rules/ecc/` from the owner's
+  development base (`development-base`), which curates them from the ECC
   fork. Do not edit them here; re-copy them from the base.
 - **Skills** live in `.claude/skills/<name>/` and are mirrored byte-for-byte
   to `.agents/skills/<name>/`. The `.claude/` copy is the source; `make docs`
-  fails if they diverge. Copied ECC and architecture-base skills stay
+  fails if they diverge. Copied ECC and development-base skills stay
   byte-identical to their canonical source; improve them there, then re-copy.
 - **Licence**: Apache-2.0 (`LICENSE`). ECC material is MIT; when you copy in
   an ECC skill, agent or rule, add it to `NOTICE`.
@@ -97,7 +98,7 @@ A change that violates one is wrong even if it works.
   `.agents/skills/architecture-views/SKILL.md`.
 - For architecture documentation beyond diagrams, read
   `.agents/skills/architecture-docs/SKILL.md`. Use both for mixed requests.
-- These skills come from architecture-base. Apply this repository's own
+- These skills come from development-base. Apply this repository's own
   evidence, paths, tool pins and checks. Do not copy the base's fictional
   Payment Platform.
 - Use automatic layout and verify rendered readability. Export PNG or SVG
