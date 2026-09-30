@@ -24,12 +24,14 @@ __pycache__/
 *.tfvars
 !*.tfvars.example
 kubeconfig*
+infra/terraform/local.env*
 
 # Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
 crash.log
+*.tfplan
 
 # Claude Code local state
 .claude/settings.local.json

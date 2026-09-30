@@ -76,7 +76,7 @@ done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
   decide deny "Key Vault secret values never enter the transcript or the command line. Run it yourself; list secret names with 'az keyvault secret list'."
 [[ "$cmd" =~ kubectl[[:space:]]+get[[:space:]]+secrets?[[:space:]].*-o[[:space:]]*(yaml|json) ]] && \
   decide deny "That would print Kubernetes secret values to the transcript."
-[[ "$cmd" =~ az[[:space:]].*(group|keyvault|postgres|aks|cognitiveservices|acr)[[:space:]].*delete ]] && \
+[[ "$cmd" =~ az[[:space:]].*(group|keyvault|postgres|aks|cognitiveservices|acr)[[:space:]]+(.*[[:space:]])?delete([[:space:]]|$) ]] && \
   decide deny "Azure resource delete is destructive; run it yourself after confirming subscription and resource."
 [[ "$cmd" =~ kubectl[[:space:]].*delete[[:space:]].*(namespace|[[:space:]]ns[[:space:]]|pvc|persistentvolumeclaim|--all) ]] && \
   decide deny "Deleting namespaces, volumes or --all is destructive; run it yourself."
@@ -94,6 +94,40 @@ nl=$'\n'
   decide ask "make down deletes the kind cluster and its local state; confirm."
 [[ "$cmd" =~ (^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)down\.sh ]] && \
   decide ask "infra/kind/down.sh deletes the kind cluster and its local state; confirm."
+# `make azure-state`, `make azure-apply` and the scripts behind them create
+# Azure resources without the word terraform or az on the command line, so the
+# rules above never see them. Same anchoring as the down rules, widened for the
+# ways a command can be dressed: leading VAR=value assignments, `env`, `time`,
+# quoted targets, and a body inside `bash -c "..."` or `sh -c '...'` (a quote
+# may start a command). `azure-plan`, `azure-smoke`, `foundation.sh plan|smoke`
+# and `shellcheck .../state.sh` pass.
+sq="'"
+cmd_start="(^|[;&|(\`\"${sq}]|${nl})[[:space:]]*((time|nohup|exec|command)[[:space:]]+)?"
+assignment="([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|${sq}[^${sq}]*${sq}|[^[:space:]]*)[[:space:]]+)*"
+runner="${cmd_start}${assignment}(env[[:space:]]+${assignment})?"
+script_end="([[:space:]]|\$|[;\&\|\)\"${sq}])"
+azure_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?[\"${sq}]?azure-(state|apply)[\"${sq}]?${script_end}"
+[[ "$cmd" =~ $azure_make_re ]] && \
+  decide ask "make azure-state and make azure-apply create or change Azure resources; confirm the plan and subscription first."
+# An interpreter may be followed by flags and a bare script name (after a cd);
+# without an interpreter the script needs a path (infra/terraform/ or ./).
+script_path="((bash|sh|zsh)[[:space:]]+(-[a-z]+[[:space:]]+)*[\"${sq}]?([^[:space:]]*/)?|[\"${sq}]?([^[:space:]]*infra/terraform/|\./))"
+state_re="${runner}${script_path}state\.sh${script_end}"
+[[ "$cmd" =~ $state_re ]] && \
+  decide ask "infra/terraform/state.sh creates Azure resources; confirm the plan and subscription first."
+foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?apply${script_end}"
+[[ "$cmd" =~ $foundation_apply_re ]] && \
+  decide ask "foundation.sh apply creates or changes Azure resources; confirm the plan and subscription first."
+# Deletes and purges, state surgery, and a bearer token in the transcript.
+# (Deletes of resource groups, vaults, databases, clusters, registries and
+# Cognitive Services accounts are denied above; this asks for the rest, such as
+# locks, storage accounts and role assignments.)
+[[ "$cmd" =~ (^|[^[:alnum:]_.-])az[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?(delete|purge)([[:space:]]|$) ]] && \
+  decide ask "Azure delete or purge is destructive; confirm the subscription and resource (hard rule 8)."
+[[ "$cmd" =~ (^|[^[:alnum:]_.-])terraform[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?(state[[:space:]]+(rm|push|mv|pull)|force-unlock|import|taint|untaint)([[:space:]]|$) ]] && \
+  decide ask "terraform state surgery, import, taint or force-unlock can orphan or corrupt resources, and state pull prints resource secrets; confirm the workspace and the reason."
+[[ "$cmd" =~ (^|[^[:alnum:]_.-])az[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?account[[:space:]]+get-access-token ]] && \
+  decide ask "That would put a bearer token into the transcript; run it yourself, or use a script that passes it on stdin."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
 [[ "$cmd" =~ kubectl[[:space:]].*(apply|delete|scale|rollout[[:space:]]+restart) ]] && \

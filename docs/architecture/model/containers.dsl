@@ -49,7 +49,7 @@ meridian.runtime -> meridian.platformDb "Checkpoints graph state and writes audi
 // Model gateway
 meridian.gateway -> meridian.registry "Loads model, provider, policy and tenant definitions from" "File read at startup" "Layer Services"
 meridian.gateway -> meridian.keyVault "Reads provider credentials from" "HTTPS, workload identity" "Layer Services"
-meridian.gateway -> azureOpenAI "Sends redacted prompts to EU data-zone deployments of" "HTTPS/JSON" "Layer Services"
+meridian.gateway -> azureOpenAI "Sends redacted prompts to EU deployments of" "HTTPS/JSON" "Layer Services"
 meridian.gateway -> mistralFoundry "Routes EU-resident requests and fallbacks to" "HTTPS/JSON" "Layer Services"
 meridian.gateway -> meridian.platformDb "Records usage, cost and policy decisions in" "PostgreSQL" "Layer Services"
 

@@ -7,7 +7,8 @@
   delivery and infrastructure as code.
 - One reference workload: claims triage for motor and property claims with a
   human approval step, on synthetic data.
-- A local Kubernetes environment (kind) that runs the whole demo, and an
+- A local Kubernetes environment (kind) that runs the whole demo, a small
+  persistent Azure foundation (budget, Key Vault, Azure OpenAI) and an
   ephemeral Azure environment created and destroyed by Terraform.
 - The operating model: SLOs, runbooks, a game-day incident record, cost
   budgets, a provider onboarding process and a service acceptance checklist.
