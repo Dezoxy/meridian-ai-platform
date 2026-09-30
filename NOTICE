@@ -14,13 +14,22 @@ ECC material in this repository:
 
 - Rules: .claude/rules/ecc/
 - Skills, in .claude/skills/ and mirrored in .agents/skills/:
-  agent-harness-construction, api-design, coding-standards, contract-first,
-  cost-aware-llm-pipeline, database-migrations, deployment-patterns,
-  docker-patterns, error-handling, eval-harness, fastapi-patterns,
-  github-ops, kubernetes-patterns, mcp-server-patterns, postgres-patterns,
-  production-audit, python-patterns, security-review, tdd-workflow,
+  agent-architecture-audit, agent-harness-construction,
+  ai-regression-testing, api-design, browser-qa, canary-watch,
+  coding-standards, contract-first, cost-aware-llm-pipeline,
+  database-migrations, deployment-patterns, docker-patterns, e2e-testing,
+  error-handling, eval-harness, fastapi-patterns, gateguard, github-ops,
+  kubernetes-patterns, mcp-server-patterns, postgres-patterns,
+  production-audit, python-patterns, python-testing,
+  regex-vs-llm-structured-text, security-review, tdd-workflow,
   verification-loop
 - Reviewer agents, in .claude/agents/ with generated twins in .codex/agents/:
-  database-reviewer, fastapi-reviewer, python-reviewer,
+  code-reviewer, database-reviewer, fastapi-reviewer, python-reviewer,
   rag-pipeline-reviewer, security-reviewer, silent-failure-hunter,
   tdd-guide
+- Slash commands, in .claude/commands/: resume-session, save-session,
+  test-coverage
+- Hook runtime, in .claude/hooks/node/ and .claude/hooks/lib/: GateGuard
+  and the session hooks. GateGuard came into ECC from
+  https://github.com/zunoworks/gateguard, also under the MIT License.
+- The chrome-devtools server entry in .mcp.json

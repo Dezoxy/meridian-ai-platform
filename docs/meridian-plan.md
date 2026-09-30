@@ -124,6 +124,7 @@ and Pydantic, at the cost of one dependency.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload; `meridian registry validate` is the check developers and CI both run | done | S002 |
+| S040 | Harness refresh | The ECC plugin is off, so the harness this repository needs is copied in from development-base: the remaining drifted rules and skills re-copied, a code reviewer, the Python rules that fit, the skills later steps need, three slash commands, the gate and session hooks, the chrome-devtools MCP server and the git hook-bypass denies with their cases; `make docs`, `make test` and the guard-bash cases pass | done | S008 |
 | S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a decision; one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind | todo | S006, S008 |
 | S010 | Gateway routing and resilience | Registry-driven routing by data class and residency; Azure OpenAI adapter; timeout, retry, circuit breaker and fallback to the second region; a residency mismatch is refused and audited; contract tests pass | todo | S004, S007, S009 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
@@ -1150,6 +1151,131 @@ fails before it merges (T-12, T-21, T-31, T-35).
 - S022: compare the registry with the live Terraform outputs in CI once the
   pipeline has an Azure identity, closing T-12's residual.
 
+### S040 — Harness refresh
+
+**Status:** done · **Started:** 2026-09-30 · **Finished:** 2026-09-30
+**Goal:** Carry the harness this repository needs itself, now that the owner
+has turned the ECC plugin off, by copying it from development-base.
+**Decisions:**
+
+- A plan step, not a chore pull request like #16: this one adds runtime
+  code (the vendored hooks), a server fetched over the network and new hook
+  behaviour, which deserve recorded decisions. #16 had already re-copied the
+  `agents` rule, `docs-sync`, the three documentation scripts and the base's
+  new name; this step takes the rest.
+- Copy, never curate here: every copied file is byte-identical to
+  development-base's `main`, and improvements go there first. Rejected: the
+  base README's `rsync --ignore-existing` one-liner, which would bring in all
+  19 of its agents (homelab, network, React, SEO).
+- This repository keeps its own `implementer`, `infra-reviewer`,
+  `check-iac.sh` and guard-bash's Azure, kind and Makefile rules; the base's
+  copies are neutral versions of them.
+- The six Python rules have been here since S000; only `coding-style` had
+  drifted and is re-copied (ruff, not black and isort). The survey before
+  this step missed them and proposed taking two. They stay byte-identical,
+  and where they disagree with this repository the hard rules win:
+  `security` shows a `.env` file and an API key in the environment (hard
+  rules 1 and 4), `hooks` names black and mypy, `patterns` uses dataclass
+  DTOs where the platform uses frozen Pydantic models, and `fastapi`'s path
+  globs (`**/app/**`, `**/fastapi/**`, `**/*_api.py`) match nothing under
+  `src/meridian/` yet.
+- `github-ops` loses `references/ecc-release-checklist.md` with the base's
+  copy: the base cut ECC's maintainer release checklist and the paragraph
+  pointing at it.
+- The skills later steps need arrive now rather than step by step, at the
+  owner's request; a skill costs nothing until a task matches it.
+- GateGuard is vendored with the owner's tuning in the project's
+  `settings.json` (the routine Bash gate off; Markdown, `docs/`, `tests/`,
+  `.context/` and the scratch paths exempt), so a clone behaves like the
+  owner's machine, and `enabledPlugins` turns ECC off for the repository so
+  no gate fires twice. Rejected: relying on the owner's global settings,
+  which a clone does not have.
+- `ECC_SKIP_LLM_SUMMARY=1` is set (security review, must fix). On a stop
+  past a context threshold and on every compaction, the session hooks ask
+  `claude -p` with Haiku for a summary. That child runs in this repository,
+  so it inherits the pre-approved Edit, Write and `git push` with no human
+  at the prompt, and its prompt carries transcript text that may quote
+  fetched pages or issues. A stop now falls back to the hooks' mechanical
+  extraction, and a compaction logs only a marker. The base should give the
+  child a temporary working directory,
+  `--tools ""` and `--no-session-persistence`.
+- `chrome-devtools-mcp` is pinned at 1.10.1 and fetched by `npx` on first
+  use, after Claude Code asks, with Google's usage statistics, CrUX lookups
+  and update checks turned off (security review). That makes `.mcp.json`
+  differ from the base by those three settings; the Codex example config
+  matches this file.
+- GateGuard, the session hooks and the slash commands are Claude Code only;
+  Codex keeps the shell hooks.
+- The git hook-bypass denies ship as the base wrote them. The security
+  review showed ordinary shapes that slip past them: a flag after a quoted
+  message containing `;`, `&&` or `|`; global options such as `--no-pager`
+  between `git` and `commit`; a quoted `"-n"`; exported `SKIP=` or
+  `GIT_CONFIG_KEY_0`; a git alias. It also showed false positives: the
+  hooksPath rule denies any git command that merely names the setting, and
+  a commit message or pull-request body that names `--no-verify` is denied
+  (this step's own commit and pull request use `-F` and `--body-file` for
+  that reason). The reviewer ranked it must fix unless nothing is exposed;
+  this repository has no git hooks, so nothing is, and the fix belongs in
+  the base, where these rules came from. The residual stays either way:
+  `python3` is pre-approved, so no text guard is a boundary here; the rules
+  catch a habitual `--no-verify`, not an adversary.
+
+**Work log:**
+
+- Surveyed development-base (`main` at 4ff9e49) against this repository.
+  The survey ran from the S008 branch, so it missed #16 and the Python
+  rules already here; both are corrected above.
+- `implementer` copied the rules, the twelve skills in both mirrors,
+  `code-reviewer`, three commands, the 22 hook runtime files and
+  `.mcp.json`; ported the hook-bypass block into `guard-bash.sh` (26 lines
+  added, none removed) with the base's 33 new cases; and generated
+  `.codex/agents/code-reviewer.toml`. It stopped on `github-ops`, whose
+  reference file the base no longer has, as the contract required.
+- The main session re-copied `github-ops` without that file, merged
+  `settings.json` with `jq` (additions only), and wrote `NOTICE`,
+  `CLAUDE.md` and `AGENTS.md`, the README row, the Codex example config and
+  this section.
+- `security-reviewer`: no permission weakened and GateGuard can only deny;
+  two must-fix findings, the summary subprocess (fixed with
+  `ECC_SKIP_LLM_SUMMARY=1`) and the bypassable hook-bypass rules (accepted
+  above); the telemetry defaults fixed; the rest recorded below.
+
+**Result / verification:**
+
+- Copied files against development-base by `cmp` and `diff -r`: 59 of 60
+  identical, `github-ops` included; `.mcp.json` differs by the three
+  telemetry settings recorded above.
+- `bash tests/test_guard_bash.sh`: 147 of 147; `shellcheck` clean.
+- `settings.json` parses; permissions unchanged (70 allow, 10 ask, 17
+  deny); every existing hook kept.
+- `node --check` passes on the 22 runtime files. Piped by hand, the
+  GateGuard command returns a deny decision for a first edit, and the
+  SessionStart command exits 0 and picks this worktree's own session.
+- `make docs` (13 checks), `make test` (117 tests), `make lint`
+  (`Contracts: 2 kept, 0 broken.`), `make pytest` (413 passed); gitleaks
+  8.30.1 on the staged diff: no leaks.
+- Not yet proven: that a fresh session runs exactly one GateGuard. This
+  session loaded the plugin at start, so both fired here.
+
+**Follow-ups:**
+
+- The first fresh session: confirm one gate fires, not two, and that the
+  plugin's `ecc:` agents are gone.
+- development-base, then re-copy: the hook-bypass rules, with the
+  reviewer's changes as the specification (match `SKIP=`, `GIT_CONFIG_KEY`
+  and `--no-veri` against the whole command, allow any global option
+  between `git` and `commit`, scope the hooksPath rule to `config`, `-c`,
+  `--config-env` and `GIT_CONFIG_`); the summary child's hardening;
+  `/resume-session` scoped to the worktree the way SessionStart already
+  is; the chrome-devtools opt-outs; `code-review.md` naming reviewers this
+  repository lacks.
+- Known and left: session files keep the last user messages unredacted at
+  0644 under `~/.claude/session-data/`; `/resume-session` with no argument
+  can load another project's session; the owner's global instincts and
+  learned skills, empty today, would be injected here too.
+- S009: when the FastAPI module path is chosen, widen `fastapi.md`'s path
+  globs in the base first, then re-copy.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -1176,3 +1302,5 @@ fails before it merges (T-12, T-21, T-31, T-35).
   done-when names `gpt-4o` on regional Standard in Sweden Central after the
   move to a free-trial subscription, with the West Europe fallback after
   its upgrade.
+- **v0.7, 2026-09-30:** S040 (harness refresh) added to M1 after the owner
+  turned the ECC plugin off.

@@ -67,8 +67,11 @@ Use these agents for code review:
 | **security-reviewer** | Security vulnerabilities, OWASP Top 10 |
 | **typescript-reviewer** | TypeScript/JavaScript specific issues |
 | **python-reviewer** | Python specific issues |
-| **go-reviewer** | Go specific issues |
-| **rust-reviewer** | Rust specific issues |
+| **react-reviewer** | React/JSX specific issues |
+| **fastapi-reviewer** | FastAPI specific issues |
+| **database-reviewer** | SQL, migrations, schema design |
+| **silent-failure-hunter** | Swallowed errors, bad fallbacks |
+| **infra-reviewer** | Terraform, Helm, Dockerfiles, workflows |
 
 ## Review Workflow
 

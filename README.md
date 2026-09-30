@@ -61,7 +61,7 @@ graph LR
 |---|---|---|
 | Architecture model: context, container, governance and two runtime views | Designed | `docs/architecture/` |
 | Decisions: Azure and kind with AWS designed; LangGraph behind a framework-agnostic contract; a thin model gateway | Accepted | `docs/architecture/decisions/` |
-| Engineering harness: reviewers, skills, hooks, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `scripts/` |
+| Engineering harness: reviewers, skills, hooks, slash commands, an MCP server, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `.mcp.json`, `scripts/` |
 | Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
 | Synthetic data and golden set: policies, claim history, four policy wordings and 40 first-notice-of-loss claims with expected outcomes, from a seeded generator whose reruns are identical | Implemented | `data/synthetic/` |
 | Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Designed | `docs/architecture/security/`, `docs/architecture/requirements/` |
@@ -92,9 +92,10 @@ the [plan](docs/meridian-plan.md).
 ## Layout
 
 ```text
-.claude/            rules (vendored from ECC), skills, agents, hooks, settings
+.claude/            rules (vendored from ECC), skills, agents, slash commands, hooks, settings
 .agents/            byte-identical skill mirror for non-Claude agents
 .codex/             Codex hooks, prompts, agent twins, config example
+.mcp.json           the chrome-devtools MCP server, pinned
 .github/workflows/  documentation gate; Python gates; architecture PDF release
 config/registry/    platform registry: YAML, generated JSON Schemas, Terraform output snapshot
 data/synthetic/     seeded generator, its committed output and the golden set

@@ -78,7 +78,8 @@ A change that violates one is wrong even if it works.
   exists.
 - **ECC rules** are vendored under `.claude/rules/ecc/` from the owner's
   development base (`development-base`), which curates them from the ECC
-  fork. Do not edit them here; re-copy them from the base.
+  fork: `common/` always loads, `python/` only for Python files. Do not edit
+  them here; re-copy them from the base.
 - **Skills** live in `.claude/skills/<name>/` and are mirrored byte-for-byte
   to `.agents/skills/<name>/`. The `.claude/` copy is the source; `make docs`
   fails if they diverge. Copied ECC and development-base skills stay
@@ -122,25 +123,45 @@ A change that violates one is wrong even if it works.
 
 ## Agents, skills and hooks
 
-- Reviewers in `.claude/agents/`: `python-reviewer`, `fastapi-reviewer`,
-  `security-reviewer`, `database-reviewer`, `rag-pipeline-reviewer`,
-  `silent-failure-hunter`, `tdd-guide` (from ECC), plus `infra-reviewer` and
-  `platform-boundary-reviewer` (this repository). `implementer` (this
-  repository) takes delegated coding against a written contract. Codex twins
-  are generated into `.codex/agents/` by `scripts/codex_agents.py`.
+- Reviewers in `.claude/agents/`: `code-reviewer`, `python-reviewer`,
+  `fastapi-reviewer`, `security-reviewer`, `database-reviewer`,
+  `rag-pipeline-reviewer`, `silent-failure-hunter`, `tdd-guide` (from ECC),
+  plus `infra-reviewer` and `platform-boundary-reviewer` (this repository).
+  `implementer` (this repository) takes delegated coding against a written
+  contract. Codex twins are generated into `.codex/agents/` by
+  `scripts/codex_agents.py`.
 - Project skills: `architecture-views`, `architecture-docs`, `docs-sync`,
-  `feature-threat-model`, and copies of ECC skills for Python, FastAPI,
-  PostgreSQL, Docker, Kubernetes, deployment, security review, TDD,
-  verification, evaluation harnesses, MCP servers, cost-aware LLM pipelines,
-  agent tool design, API design, contracts, production audits, GitHub
-  operations, migrations, error handling and coding standards.
+  `feature-threat-model`, and copies of ECC skills for Python and pytest,
+  FastAPI, PostgreSQL, Docker, Kubernetes, deployment, security review, TDD,
+  verification, evaluation harnesses, AI regression tests, agent
+  architecture audits, MCP servers, cost-aware LLM pipelines, regex versus
+  LLM parsing, agent tool design, API design, contracts, production audits,
+  Playwright end-to-end tests, browser QA, post-deploy canary checks, GitHub
+  operations, migrations, error handling, coding standards and GateGuard.
 - Hooks in `.claude/settings.json`: `guard-bash.sh` denies destructive
-  commands and asks before mutating ones (heredoc bodies are ignored, so
-  documentation that mentions a dangerous command is not blocked for the
-  mention); `check-py.sh`, `check-iac.sh`, `check-docs.sh` and
-  `check-boundary.sh` inject advisory findings after an edit. Codex runs the
-  same scripts through `.codex/hooks.json`. Open `/hooks` once after a fresh
-  clone to activate them.
+  commands and git hook bypasses, and asks before mutating commands
+  (heredoc bodies are ignored, so documentation that mentions a dangerous
+  command is not blocked for the mention); `check-py.sh`, `check-iac.sh`,
+  `check-docs.sh` and `check-boundary.sh` inject advisory findings after an
+  edit. GateGuard, vendored from ECC under `.claude/hooks/node/` and
+  `.claude/hooks/lib/`, denies the first edit of each file and destructive
+  commands until the agent states the facts; Markdown, `docs/`, `tests/`
+  and `.context/` are exempt. The session hooks save a summary to
+  `~/.claude/session-data/` when a session stops and load this worktree's
+  latest one at the next start; `ECC_SKIP_LLM_SUMMARY` keeps them from
+  running `claude -p` with this repository's permissions. Give
+  `/resume-session` this repository's session file: with no argument it
+  may pick another project's. The ECC plugin stays disabled here so no gate
+  fires twice. Codex
+  runs the shell hooks through `.codex/hooks.json`; GateGuard, the session
+  hooks and the slash commands are Claude Code only. Open `/hooks` once
+  after a fresh clone to activate them.
+- Slash commands in `.claude/commands/`: `/save-session`, `/resume-session`
+  and `/test-coverage`.
+- MCP: `.mcp.json` declares `chrome-devtools` (Lighthouse audits,
+  performance traces), pinned, with Google's usage statistics, CrUX lookups
+  and update checks off; Claude Code asks before its first use, and `npx`
+  downloads it then.
 
 ## Model and effort routing
 
