@@ -3,6 +3,14 @@
   "model": "claude-opus-5-5",
   "effortLevel": "high",
   "advisorModel": "fable",
+  "enabledPlugins": {
+    "ecc@ecc": false
+  },
+  "env": {
+    "GATEGUARD_BASH_ROUTINE_DISABLED": "1",
+    "GATEGUARD_EXEMPT_GLOBS": "**/*.md,docs/**,**/docs/**,tests/**,**/tests/**,.context/**,/private/tmp/claude-*/**,/tmp/claude-*/**",
+    "ECC_SKIP_LLM_SUMMARY": "1"
+  },
   "permissions": {
     "allow": [
       "Read",
@@ -109,7 +117,27 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" session:start hooks/node/session-start.js minimal,standard,strict"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" pre:edit-write:gateguard-fact-force hooks/node/gateguard-fact-force.js standard,strict",
+            "timeout": 5
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [
@@ -117,6 +145,11 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" pre:bash:gateguard-fact-force hooks/node/gateguard-fact-force.js standard,strict",
+            "timeout": 5
           }
         ]
       }
@@ -144,6 +177,40 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-boundary.sh\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" pre:compact hooks/node/pre-compact.js standard,strict"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" stop:session-end hooks/node/session-end.js minimal,standard,strict",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" session:end:marker hooks/node/session-end-marker.js minimal,standard,strict",
+            "timeout": 10,
+            "async": true
           }
         ]
       }

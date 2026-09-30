@@ -112,3 +112,36 @@
 {"expect": "ask", "command": "terraform -chdir=infra/terraform/foundation state pull"}
 {"expect": "ask", "command": "terraform taint azurerm_key_vault.foundation"}
 {"expect": "none", "command": "terraform -chdir=infra/terraform/foundation state list"}
+{"expect":"deny","command":"git commit --no-verify -m x"}
+{"expect":"deny","command":"git push --no-verify origin feat/x"}
+{"expect":"deny","command":"git commit --no-veri -m x"}
+{"expect":"deny","command":"git merge --no-verify feat"}
+{"expect":"deny","command":"git commit -n -m x"}
+{"expect":"deny","command":"git commit -anm \"x\""}
+{"expect":"deny","command":"git -C repo commit -n -m x"}
+{"expect":"deny","command":"cd sub && git commit -n -m wip"}
+{"expect":"deny","command":"bash -c \"git commit --no-verify -m x\""}
+{"expect":"deny","command":"git -c core.hooksPath=/dev/null commit -m x"}
+{"expect":"deny","command":"git --config-env=core.hooksPath=HP push"}
+{"expect":"deny","command":"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x"}
+{"expect":"deny","command":"git config core.hooksPath /dev/null"}
+{"expect":"deny","command":"git config --unset core.hooksPath"}
+{"expect":"deny","command":"git config --global core.hooksPath ~/hooks"}
+{"expect":"deny","command":"SKIP=ruff git commit -m x"}
+{"expect":"deny","command":"HUSKY=0 git commit -m x"}
+{"expect":"deny","command":"export HUSKY=0 && git push"}
+{"expect":"deny","command":"LEFTHOOK=0 git push"}
+{"expect":"deny","command":"rm .githooks/pre-push"}
+{"expect":"deny","command":"mv .git/hooks/pre-commit /tmp/x"}
+{"expect":"deny","command":"chmod -x .githooks/pre-push"}
+{"expect":"none","command":"git push -n origin main"}
+{"expect":"none","command":"git log -n 5"}
+{"expect":"none","command":"git config core.hooksPath .githooks"}
+{"expect":"none","command":"git config --local core.hooksPath .githooks"}
+{"expect":"none","command":"git config --get core.hooksPath"}
+{"expect":"none","command":"git config core.hooksPath"}
+{"expect":"none","command":"chmod +x .githooks/pre-push"}
+{"expect":"none","command":"git commit -m \"fix nginx config\""}
+{"expect":"none","command":"git commit --amend --no-edit"}
+{"expect":"none","command":"SKIP_TESTS=1 make test"}
+{"expect":"none","command":"cat > notes.md <<'EOF'\nnever use git commit --no-verify\nEOF"}

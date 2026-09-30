@@ -12,6 +12,15 @@ sandbox_mode    = "workspace-write"  # writes confined to the repo
 [sandbox_workspace_write]
 network_access = false               # no surprise network; approve explicitly
 
-# Hooks: .codex/hooks.json (same scripts as Claude Code, via .codex/hooks).
+# MCP: the same chrome-devtools server as .mcp.json, at the same pin, with
+# Google's usage statistics, CrUX lookups and update checks off. With
+# network_access = false above, npx needs an explicit approval to fetch it.
+[mcp_servers.chrome-devtools]
+command = "npx"
+args    = ["-y", "chrome-devtools-mcp@1.10.1", "--no-usage-statistics", "--no-performance-crux"]
+env     = { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS = "1" }
+
+# Hooks: .codex/hooks.json (the shell hooks Claude Code runs, via
+# .codex/hooks); GateGuard and the session hooks are Claude Code only.
 # Prompts: link the prompt files so they appear as /feature-threat-model etc.
 #   ln -s "$PWD/.codex/prompts/"*.md ~/.codex/prompts/

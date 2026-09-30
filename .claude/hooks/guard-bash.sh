@@ -69,9 +69,35 @@ bs_nl=$'\\\n'
 while IFS= read -r seg; do
   [[ "$seg" =~ git[[:space:]]+push([[:space:]].*)?[[:space:]](--force|-[a-zA-Z]*f|[+]|--mirror|--prune) ]] && \
     decide deny "Destructive push (--force*, bundled -f, +refspec, --mirror/--prune) can rewrite shared refs. Run it yourself if you must."
+  # Git hook bypasses. A repository's hooks are its guard rails (a pre-push
+  # hook may be the only thing stopping a push to main), so an agent never
+  # skips them: every form is denied, and a human runs it if truly needed.
+  # Git accepts abbreviated long options (--no-veri), and only `commit` reads
+  # -n as --no-verify; `git push -n` is a dry run and `git log -n` a count.
+  [[ "$seg" =~ git[[:space:]].*--no-veri ]] && \
+    decide deny "Skipping git hooks (--no-verify) is not allowed. Fix what the hook reports, or run it yourself."
+  [[ "$seg" =~ git[[:space:]]+(-[cC][[:space:]]+[^[:space:]]+[[:space:]]+)*commit([[:space:]].*)?[[:space:]]-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$) ]] && \
+    decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
+  # Repointing or unsetting core.hooksPath (git config, -c, --config-env or
+  # GIT_CONFIG_KEY_n) disables every hook at once. Reading it, or pointing it
+  # at the repository's own .githooks, is the activation step and passes.
+  if [[ "$seg" =~ (^|[[:space:]])git[[:space:]] && "$seg" =~ core\.hookspath ]] && \
+     ! [[ "$seg" =~ git[[:space:]]+config[[:space:]]+((--local|--get)[[:space:]]+)*core\.hookspath([[:space:]]+(\./)?\.githooks/?)?[[:space:]]*$ ]]; then
+    decide deny "Changing core.hooksPath disables the repository's git hooks. Run it yourself if intended."
+  fi
+  [[ "$seg" =~ (^|[[:space:]])SKIP=[^[:space:]]+[[:space:]]+(.*[[:space:]])?git[[:space:]] ]] && \
+    decide deny "SKIP= bypasses pre-commit hooks. Fix what the hook reports, or run it yourself."
+  [[ "$seg" =~ (^|[[:space:]])(rm|mv|unlink|truncate)[[:space:]].*(\.git/hooks/|\.githooks/|\.husky/) || \
+     "$seg" =~ chmod[[:space:]]+[ugoa]*-[rwx]*x.*(\.git/hooks/|\.githooks/|\.husky/) ]] && \
+    decide deny "Removing or disabling a git hook file bypasses it. Run it yourself if intended."
   [[ "$seg" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config) ]] && \
     decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig)."
 done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+# Hook-manager switches, checked across the whole command because
+# `export HUSKY=0 && git push` splits them from the git call. They have no use
+# other than turning hooks off.
+[[ "$cmd" =~ (^|[^[:alnum:]_])(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0) ]] && \
+  decide deny "Disabling the hook manager (HUSKY=0, LEFTHOOK=0) bypasses git hooks. Fix what the hook reports, or run it yourself."
 [[ "$cmd" =~ az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|download|backup|restore) ]] && \
   decide deny "Key Vault secret values never enter the transcript or the command line. Run it yourself; list secret names with 'az keyvault secret list'."
 [[ "$cmd" =~ kubectl[[:space:]]+get[[:space:]]+secrets?[[:space:]].*-o[[:space:]]*(yaml|json) ]] && \
