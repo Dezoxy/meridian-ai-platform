@@ -31,9 +31,17 @@ def test_tool_carries_its_name_and_docstring_description(framework: str) -> None
     assert tool.description == "Look up an insurance policy by its policy number."
 
 
-def test_maf_tool_declares_its_own_approval_mode() -> None:
-    # A field on the tool itself; LangChain's BaseTool has no such field.
+def test_maf_tool_carries_an_approval_mode_and_an_invocation_limit_field() -> None:
+    # Fields on the tool itself; LangChain's BaseTool has neither. The default,
+    # "never_require", is what the decorator gives when nothing is passed.
     assert maf_tools.lookup_policy.approval_mode == "never_require"
+    assert maf_tools.lookup_policy.max_invocations is None
+
+
+def test_langchain_tool_has_no_approval_or_invocation_limit_field() -> None:
+    fields = set(type(langgraph_tools.lookup_policy).model_fields)
+
+    assert not {"approval_mode", "max_invocations"} & fields
 
 
 def test_tool_body_returns_the_policy_fields() -> None:

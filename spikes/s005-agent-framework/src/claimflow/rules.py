@@ -40,10 +40,18 @@ class Assessment:
 
 @dataclass
 class AdjusterDecision:
-    """The payload of the approval pause. Both frameworks build it from a dict."""
+    """The payload of the approval pause. Both frameworks build it from a dict.
+
+    Both run `__post_init__` when they build it, so the value rule is enforced
+    by either framework and not only by the type check.
+    """
 
     decision: Decision
     adjuster_id: str
+
+    def __post_init__(self) -> None:
+        if not self.adjuster_id.strip():
+            raise ValueError("adjuster_id must not be empty")
 
 
 @dataclass(frozen=True)

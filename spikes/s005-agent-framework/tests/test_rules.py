@@ -94,3 +94,15 @@ def test_auto_approve_pick_is_labelled_auto_approve_in_the_golden_set() -> None:
 def test_out_of_date_pick_has_an_active_policy() -> None:
     # CLM-0014 exercises the term rule independently of the status rule.
     assert rules.validate(OUT_OF_DATE_CLAIM).policy["status"] == "active"
+
+
+@pytest.mark.parametrize("adjuster_id", ["", " ", "\t\n"])
+def test_adjuster_decision_refuses_a_blank_adjuster_id(adjuster_id: str) -> None:
+    with pytest.raises(ValueError, match="adjuster_id must not be empty"):
+        rules.AdjusterDecision("approve", adjuster_id)
+
+
+def test_adjuster_decision_accepts_a_non_blank_adjuster_id() -> None:
+    decision = rules.AdjusterDecision("approve", "A")
+
+    assert (decision.decision, decision.adjuster_id) == ("approve", "A")

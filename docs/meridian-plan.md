@@ -566,12 +566,16 @@ that ADR 2 promised.
   implementation that ADR 2 rejected as option 3; it is never deployed.
 - No model call. The matrix rows (state, tool contracts, approval pauses,
   checkpoints, telemetry) need none, and the spike needs no credentials.
-- LangGraph stays the workload framework (ADR 2 appendix). The reason ADR 2
+- LangGraph stays the workload framework (ADR 2 appendix); the owner chose
+  it on 2026-09-30 after the review below narrowed the gap. The reason ADR 2
   gave for rejecting Microsoft Agent Framework, immature checkpoints and
-  pauses, is struck with a note: the spike contradicted it. The surviving
-  reasons are pickled checkpoints, no PostgreSQL checkpoint store and a
-  failed checkpoint save that does not fail the run. Rejected: switching,
-  because the better pause does not remove the runtime's own resume checks.
+  pauses, is struck with a note: the spike contradicted it. What remains is
+  LangGraph's stable PostgreSQL checkpoint store, against a store this
+  project would write and maintain, and a failed save that raises without
+  caller code. Rejected: switching to Microsoft Agent Framework for its
+  pause, telemetry, footprint and Azure fit, because the checkpoint store is
+  the component one maintainer should least build alone (C-01). The margin
+  is narrow, and ADR 2 says so.
 - Dependabot does not cover `spikes/`: the pins are the versions the notes
   describe. Rejected: a Dependabot entry, which would move the pins away from
   the evidence.
@@ -589,23 +593,43 @@ that ADR 2 promised.
   `Command(resume=None)` crash in `langgraph/pregel/_loop.py`.
 - Wrote the matrix, its reading and the runtime obligations into ADR 2;
   added the spike to the README capability table and layout.
+- An independent review of each framework's column, against the official
+  documentation and the installed source, found the first version unfair to
+  Microsoft Agent Framework: its runs were addressed by an immutable
+  checkpoint ID, so "resume twice" replayed the pause, while LangGraph runs
+  had a stable thread ID. Addressed by workflow name, Microsoft Agent
+  Framework refuses the second resume. The reviews also showed that a
+  pickle-free store needs only the public storage protocol, that LangGraph
+  raises on a failed save, that both frameworks enforce value rules carried
+  by the payload type, and that LangGraph's default deserialization is no
+  safer than a restricted unpickler. The three experiments the new
+  reasoning rests on were rerun in the main session before it was rewritten.
+- The `implementer` corrected the spike so that each finding is pinned by a
+  test in the repository, and ADR 2's appendix was rewritten from them. A
+  last test pair resumes one pause from two threads at once: Microsoft Agent
+  Framework completes both with different outcomes, and LangGraph can tell
+  the two callers different outcomes while storing one, so the runtime's
+  conditional update is needed with either framework.
 
 **Result / verification:**
 
-- In the spike, `uv run pytest -q`: `72 passed`.
+- In the spike, `uv run pytest -q`: `135 passed` after the review (`72 passed`
+  before it); the two concurrent-resume tests passed in eight further runs.
 - `make lint`: exit 0, `Contracts: 2 kept, 0 broken.`; the spike's `.venv`
   is not linted (`ruff check spikes --show-files` lists no `.venv` path).
 - `make pytest`: `195 passed`; the root `uv.lock` is unchanged.
 - `make test`: `Ran 116 tests`, `OK`.
 - `make docs`: `13 checks passed`. `make check`: exit 0, no ERROR line.
 - `make view`: ADR 2 renders the struck reason as a strikethrough, not as
-  literal tildes, and the matrix as a 14-row table inside the page width.
+  literal tildes, and the matrix as a 16-row table inside the page width.
 
 **Follow-ups:**
 
-- S009: the runtime issues run IDs and maps them to LangGraph threads; one
-  span per node, because LangGraph emits none; `LANGGRAPH_STRICT_MSGPACK`
-  set in the runtime.
+- S009: the runtime issues run IDs and maps them to LangGraph threads; a
+  callback handler opens one span per node, because LangGraph emits none;
+  `LANGGRAPH_STRICT_MSGPACK=true` set before LangGraph is imported, with
+  graph state holding only primitives and dicts; `durability="sync"` and the
+  pause read from the interrupts.
 - S015: resume once, as a conditional update before the framework is
   called; the adjuster from the sign-in, not the payload; delete a completed
   run's checkpoints or keep claim text out of the graph state (T-10, T-32).

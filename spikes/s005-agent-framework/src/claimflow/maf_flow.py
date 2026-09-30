@@ -1,12 +1,14 @@
 """The claim flow in Microsoft Agent Framework (agent-framework-core)."""
 
 import asyncio
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, Literal, Never
 
 from agent_framework import (
     Case,
+    CheckpointStorage,
     Default,
     Executor,
     FileCheckpointStorage,
@@ -20,6 +22,7 @@ from agent_framework import (
 )
 
 from claimflow import rules
+from claimflow.maf_json_store import JsonCheckpointStorage
 from claimflow.rules import (
     AdjusterDecision,
     AssessedClaim,
@@ -28,17 +31,9 @@ from claimflow.rules import (
     ValidatedClaim,
 )
 
-WORKFLOW_NAME = "claimflow"
+WORKFLOW_NAME_PREFIX = "claimflow"
 
-# FileCheckpointStorage unpickles only an allowlist. Every application type that
-# lands in a message, a request or a response has to be named here.
-ALLOWED_CHECKPOINT_TYPES = [
-    "claimflow.rules:ValidatedClaim",
-    "claimflow.rules:Assessment",
-    "claimflow.rules:AssessedClaim",
-    "claimflow.maf_flow:ApprovalRequest",
-    "claimflow.rules:AdjusterDecision",
-]
+StoreKind = Literal["file", "json"]
 
 
 @dataclass
@@ -49,6 +44,21 @@ class ApprovalRequest:
     proposal: rules.Proposal
     claimed_amount: int
     policy_valid: bool
+
+
+# Every application type that lands in a message, a request or a response. The
+# pickle store unpickles only these names (plus MAF's own types); the JSON store
+# rebuilds only these types.
+CHECKPOINT_TYPES = [
+    rules.ValidatedClaim,
+    rules.Assessment,
+    rules.AssessedClaim,
+    ApprovalRequest,
+    rules.AdjusterDecision,
+]
+ALLOWED_CHECKPOINT_TYPES = [
+    f"{t.__module__}:{t.__qualname__}" for t in CHECKPOINT_TYPES
+]
 
 
 @executor(id="validate")
@@ -108,19 +118,28 @@ class ApprovalStep(Executor):
         await ctx.yield_output(outcome)
 
 
-def _storage(store_dir: Path) -> FileCheckpointStorage:
+def workflow_name(run_ref: str) -> str:
+    """MAF has no run id: a run is the checkpoints that share a workflow name."""
+    return f"{WORKFLOW_NAME_PREFIX}-{run_ref}"
+
+
+def open_storage(store_dir: Path, store: StoreKind = "file") -> CheckpointStorage:
+    if store == "json":
+        return JsonCheckpointStorage(store_dir, CHECKPOINT_TYPES)
     return FileCheckpointStorage(
         store_dir, allowed_checkpoint_types=ALLOWED_CHECKPOINT_TYPES
     )
 
 
-def build_workflow(store_dir: Path) -> Workflow:
+def build_workflow(
+    store_dir: Path, run_ref: str, store: StoreKind = "file"
+) -> Workflow:
     approval = ApprovalStep()
     return (
         WorkflowBuilder(
-            name=WORKFLOW_NAME,
+            name=workflow_name(run_ref),
             start_executor=validate_step,
-            checkpoint_storage=_storage(store_dir),
+            checkpoint_storage=open_storage(store_dir, store),
         )
         .add_edge(validate_step, assess_step)
         .add_switch_case_edge_group(
@@ -137,39 +156,54 @@ def build_workflow(store_dir: Path) -> Workflow:
     )
 
 
-def start(claim_id: str, store_dir: Path) -> RunResult:
-    return asyncio.run(_start(claim_id, store_dir))
+def start(claim_id: str, store_dir: Path, store: StoreKind = "file") -> RunResult:
+    return asyncio.run(_start(claim_id, store_dir, store))
 
 
-def resume(run_ref: str, decision: dict[str, Any], store_dir: Path) -> RunResult:
-    return asyncio.run(_resume(run_ref, decision, store_dir))
+def resume(
+    run_ref: str,
+    decision: dict[str, Any],
+    store_dir: Path,
+    store: StoreKind = "file",
+) -> RunResult:
+    return asyncio.run(_resume(run_ref, decision, store_dir, store))
 
 
-async def _start(claim_id: str, store_dir: Path) -> RunResult:
-    workflow = build_workflow(store_dir)
+async def _start(claim_id: str, store_dir: Path, store: StoreKind) -> RunResult:
+    run_ref = str(
+        uuid.uuid4()
+    )  # the application chooses the handle, as with a thread_id
+    workflow = build_workflow(store_dir, run_ref, store)
     result = await workflow.run(claim_id)
-    return await _to_run_result(workflow, result)
+    return await _to_run_result(workflow, run_ref, result)
 
 
-async def _resume(run_ref: str, decision: dict[str, Any], store_dir: Path) -> RunResult:
-    workflow = build_workflow(store_dir)
-    checkpoint = await _storage(store_dir).load(run_ref)
-    request_ids = list(checkpoint.pending_request_info_events)
+async def _resume(
+    run_ref: str, decision: dict[str, Any], store_dir: Path, store: StoreKind
+) -> RunResult:
+    workflow = build_workflow(store_dir, run_ref, store)
+    storage = open_storage(store_dir, store)
+    latest = await storage.get_latest(workflow_name=workflow_name(run_ref))
+    if latest is None:  # the framework's signal for "no such run" is None
+        raise LookupError(f"no checkpoint for run {run_ref}")
+    request_ids = list(latest.pending_request_info_events)
     result = await workflow.run(
         responses={request_id: decision for request_id in request_ids},
-        checkpoint_id=run_ref,
+        checkpoint_id=latest.checkpoint_id,
     )
-    return await _to_run_result(workflow, result)
+    return await _to_run_result(workflow, run_ref, result)
 
 
-async def _to_run_result(workflow: Workflow, result: WorkflowRunResult) -> RunResult:
+async def _to_run_result(
+    workflow: Workflow, run_ref: str, result: WorkflowRunResult
+) -> RunResult:
     requests = result.get_request_info_events()
     if requests:
         request: ApprovalRequest = requests[0].data
-        run_ref = await workflow.resolve_pause_checkpoint_id(
+        pause_checkpoint = await workflow.resolve_pause_checkpoint_id(
             [event.request_id for event in requests]
         )
-        if run_ref is None:
+        if pause_checkpoint is None:
             raise RuntimeError("the pause was not checkpointed; the run cannot resume")
         return RunResult(
             "awaiting_approval", run_ref, request.claim_id, request.proposal, None, None
@@ -180,7 +214,7 @@ async def _to_run_result(workflow: Workflow, result: WorkflowRunResult) -> RunRe
     outcome: RunOutcome = outputs[0]
     return RunResult(
         "completed",
-        workflow.get_last_checkpoint_id() or "",
+        run_ref,
         outcome.claim_id,
         outcome.proposal,
         outcome.outcome,

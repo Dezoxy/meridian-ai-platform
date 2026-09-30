@@ -97,7 +97,7 @@ def _invoke(payload: Any, run_ref: str, store_dir: Path) -> RunResult:
         graph.invoke(payload, config)
         snapshot = graph.get_state(config)
     values = snapshot.values
-    if snapshot.next:
+    if snapshot.interrupts:  # not `.next`: it can name a node with no interrupt
         return RunResult(
             "awaiting_approval",
             run_ref,

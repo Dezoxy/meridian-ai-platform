@@ -5,7 +5,7 @@ from agent_framework import tool
 from claimflow import rules
 
 
-@tool(approval_mode="never_require")
+@tool
 def lookup_policy(policy_number: str) -> str:
     """Look up an insurance policy by its policy number."""
     return rules.policy_summary(policy_number)

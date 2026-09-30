@@ -91,10 +91,11 @@ Rejected options:
 - Option 4: ~~less mature checkpoint and interrupt support at the time of
   writing; revisit if the spike contradicts this.~~ The S005 spike
   contradicted it: Microsoft Agent Framework 1.19 pauses, checkpoints and
-  resumes across processes, and refuses more bad resumes than LangGraph. It
-  stays rejected for the reasons in the appendix: pickled checkpoints, no
-  PostgreSQL checkpoint store, and a failed checkpoint save that does not
-  fail the run.
+  resumes across processes as well as LangGraph does. It stays rejected on a
+  narrower ground, set out in the appendix: LangGraph ships a stable
+  PostgreSQL checkpoint store and Microsoft Agent Framework does not, so this
+  project would write and maintain the store that holds paused runs and
+  their personal data.
 
 ## Risks
 
@@ -119,42 +120,56 @@ line behind each cell are in `spikes/s005-agent-framework/`. The LangGraph
 twin exists so that both columns are measured; it is spike code, never
 deployed, and not the second workload implementation of option 3.
 
+The first version addressed Microsoft Agent Framework runs by checkpoint ID
+and LangGraph runs by a stable thread ID, which made one row unfair. An
+independent review of each column caught that and several other cells before
+merge; the spike README records what changed.
+
 | Criterion | Microsoft Agent Framework | LangGraph |
 |---|---|---|
-| State handling | Typed messages passed between executors; a step sees only the message it receives | One typed state per thread; each node returns an update to it |
+| State handling | Typed messages between executors, plus an untyped shared key/value state saved in every checkpoint | One typed state per thread; each node returns an update to it |
 | Routing | Switch-case edge groups over the message | Conditional edges that return the next node's name |
-| Tool contracts | A decorated function gives a JSON Schema from its signature and docstring; the tool carries an approval mode and invocation limits | Needs `langchain_core`'s decorator; the same schema; no approval or limit fields |
-| Approval pause | `request_info` with a response type; the payload is coerced and type-checked, `Literal` values included | `interrupt` with a response schema, validated only when it is a Pydantic model, dataclass or `TypedDict`; the node reruns from its first line on resume |
-| Bad resumes | Refuses an unknown run and a completed run. A second resume from the same pause replays it: two completed runs, two different outcomes | Refuses neither. An unknown thread ID starts a new thread; resuming a completed run, or resuming twice, returns the first result and drops the new payload without a signal |
-| Run identity | None of its own: the handle is a checkpoint ID that changes at every step | A thread ID the caller chooses, stable from start to completion |
-| Checkpoint format | JSON with base64 pickles behind an allowlist that the framework's own documentation says is not a security boundary. A failed save logs a warning and the run goes on | msgpack in SQLite; deserialization is permissive unless `LANGGRAPH_STRICT_MSGPACK=true`. Save failure not tested |
-| Checkpoint contents | The claimant's name, e-mail and description in the checkpoints the claim passed through, base64-encoded; nothing deleted on completion | The same data, readable in the raw bytes; nothing deleted on completion |
-| PostgreSQL checkpoint store | None. `agent-framework-postgres` 1.0.0a260910 is an alpha vector store (read from its package description) | `langgraph-checkpoint-postgres` 3.1.2 (not run in the spike) |
-| Telemetry | Native OpenTelemetry spans per workflow, executor, edge group and message; payloads stay out unless sensitive data is switched on | No OpenTelemetry of its own: zero spans under the same tracer provider |
-| Footprint | 10 packages, no provider SDK | 41 packages with the SQLite saver, `langchain-core` and `langsmith` among them; no provider SDK |
-| Ecosystem (read from PyPI on 2026-09-29, not run) | Core 1.19.0; the PostgreSQL, Redis, Cosmos DB and Durable Task integrations are alpha or beta pre-releases | `langgraph-checkpoint-postgres` 3.1.2 is a stable release; tools come from `langchain-core` |
-| Flow code | 152 non-blank lines, including the pickle allowlist and pause addressing | 92 non-blank lines |
+| Tool contracts | A decorated function gives a JSON Schema from its signature and docstring; the tool carries an approval mode and invocation limits, used by the agent tool loop, not by workflows | The same schema through `langchain_core`'s decorator; no approval or limit fields on the tool; approval is `interrupt()` inside the tool |
+| Approval pause | `request_info` with a response type; the payload is coerced and type-checked | `interrupt` with a response schema, validated when it is a Pydantic model, dataclass or `TypedDict`; the node reruns from its first line on resume |
+| Payload validation | Types always; value rules when the response type carries them | The same through the response schema; an empty resume re-pauses without an error, and a refused payload stays stored until the next resume |
+| Bad resumes, run addressed by its own ID | Refuses a completed run and a second resume of the same pause; an unknown run has no checkpoint, which the caller turns into a refusal | Refuses none: an unknown thread ID starts a new thread, and resuming a completed or already decided run returns the first result and drops the payload. `get_state` gives the signal to refuse all three |
+| Replay and concurrency | Resuming from an explicit checkpoint ID replays it, by design; two resumes at once both complete, with different outcomes | Going back to the pause checkpoint lands a second decision too; two resumes at once are never refused, and the two callers can be told different outcomes while only one is stored |
+| Run identity | None of its own: a run is a lineage of checkpoints grouped by a workflow name the application chooses; the name is not checked on restore | A thread ID the caller chooses |
+| Checkpoint format | Pickle in every first-party store, behind an allowlist that its documentation calls no security boundary. The storage protocol is public: a pickle-free JSON store is in the spike | msgpack. By default any importable type is revived, and its documentation warns of code execution from a writable store; strict mode limits the types but turns unlisted ones into plain dicts |
+| Failed save | Logs a warning and still reports the pause; the caller must check `resolve_pause_checkpoint_id` | Raises from `invoke`, but in the default durability mode only after the nodes have run |
+| Checkpoint contents | Whatever the flow keeps in messages or shared state, personal data included; nothing deleted on completion | The same, readable in the raw bytes; `delete_thread` and an encrypting serializer exist |
+| PostgreSQL checkpoint store | None. First-party stores: in-memory, file, Cosmos DB (beta) and Foundry (beta) | `langgraph-checkpoint-postgres` 3.1.2, a stable release (not run in the spike) |
+| Telemetry | Native spans per workflow, executor, edge group and message; they carry IDs and types, not payloads | None of its own; a callback handler gives a span per node |
+| Footprint | 10 packages, no provider SDK | 41: 38 for LangGraph and 3 for the SQLite saver, `langchain-core` and `langsmith` among them; no provider SDK |
+| Ecosystem (read from PyPI on 2026-09-29, not run) | Core 1.19.0; the persistent stores and most integrations are alpha or beta pre-releases | The PostgreSQL saver is a stable release; tools come from `langchain-core` |
 | Licence | MIT | MIT |
 
 ### Reading the matrix
 
-The reason this record gave for rejecting option 4 no longer holds. Microsoft
-Agent Framework has the better pause: a typed response, refusals for an
-unknown or completed run, and native telemetry at a quarter of the footprint.
-LangGraph stays the workload framework for three reasons that the matrix
-supports:
+Used as each framework documents, the two are closer than a first reading
+suggested. Both pause, checkpoint and resume across processes; both refuse a
+malformed payload; both replay a pause when a caller addresses its checkpoint
+directly; neither stops two decisions that arrive at once. Both need their
+checkpoints hardened: Microsoft Agent Framework through a custom store,
+because every first-party store pickles, and LangGraph through strict msgpack
+and a state that holds only primitives.
 
-- Checkpoints hold personal data (see the data classification) and belong
-  in the Platform Database. LangGraph has a PostgreSQL saver and a strict msgpack
-  mode; Microsoft Agent Framework would store pickles and has no PostgreSQL
-  checkpoint store, so this project would write one.
-- A failed checkpoint save in Microsoft Agent Framework does not fail the
-  run, so a run can report a pause with nothing durable behind it, which is
-  what QA-08 guards against.
-- Neither framework enforces T-10. Microsoft Agent Framework lets one pause
-  be decided twice by replaying it; LangGraph keeps the first decision but
-  tells the second caller nothing, so they believe theirs was recorded. The
-  runtime enforces it either way, so the better pause is not decisive.
+Microsoft Agent Framework is ahead on the pause, which is typed and refuses
+bad resumes without caller code, on telemetry and on footprint, and it sits
+closer to the Azure stack of ADR 1. LangGraph stays the workload framework
+for one reason the matrix supports, and a smaller second one:
+
+- The checkpoint store holds paused runs and their personal data, and it
+  belongs in the Platform Database. LangGraph ships a stable PostgreSQL
+  store. With Microsoft Agent Framework this project would write and maintain
+  one, with its lineage, pending responses and concurrent writers: the most
+  safety-critical storage in the platform, kept by one maintainer (C-01).
+- A failed save raises in LangGraph without caller code; in Microsoft Agent
+  Framework the caller has to ask whether the pause was saved.
+
+The margin is narrow. The runtime contract keeps the framework out of the
+platform packages, so a later switch would rewrite the workload and the
+runtime host, not the platform.
 
 ### What the runtime contract takes on
 
@@ -162,11 +177,20 @@ supports:
   framework's thread; no caller sees a framework handle (S009).
 - **Resume once.** The runtime moves a run from awaiting approval to running
   in one conditional update before it calls the framework, and refuses an
-  unknown, completed or already decided run itself (T-10, S015).
-- **Adjuster identity from the sign-in.** Both frameworks accept an empty
-  adjuster ID, so the decision's adjuster comes from the authenticated caller,
-  never from the payload (T-32, S015).
-- **Strict checkpoints.** `LANGGRAPH_STRICT_MSGPACK=true`, and a completed
-  run's checkpoints are deleted or kept free of claim text; S015 chooses which.
-- **Spans.** LangGraph emits none, so the runtime opens a span per node to
-  keep one trace across API, runtime and gateway (S009).
+  unknown, completed or already decided run itself. Neither framework stops
+  concurrent resumes, and both replay a pause addressed by checkpoint ID
+  (T-10, S015).
+- **Adjuster identity from the sign-in.** The payload type can refuse an
+  empty adjuster ID in either framework, but only the sign-in can say who
+  decided (T-32, S015).
+- **Hardened checkpoints.** `LANGGRAPH_STRICT_MSGPACK=true`, set before
+  LangGraph is imported; graph state holds only primitives and dicts, because
+  strict mode turns other types into dicts without an error; a completed
+  run's checkpoints are deleted with `delete_thread` or kept free of claim
+  text, and S015 chooses which.
+- **Saves.** `durability="sync"`, the pause read from the interrupts rather
+  than the next node, and idempotency keys on mutating tools, because in the
+  default mode nodes can run before a failed save surfaces (QA-08).
+- **Spans.** LangGraph emits none of its own, so the runtime passes a
+  callback handler that opens a span per node, keeping one trace across API,
+  runtime and gateway (S009).
