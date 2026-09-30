@@ -1378,7 +1378,9 @@ demonstrable with `make demo` on kind~~ (the kind half moved to S041).
   outage on a NUL byte); `infra-reviewer` passed with fixes.
 - `implementer`, contract C: all 24 review items. The main session removed
   the unused instrumentation, replaced a sleep in the LangSmith control
-  test with LangChain's own flush, fixed the platform-boundary reviewer's
+  test with LangChain's own flush, added a Claims API test for an error
+  that no handler catches inside the claim's span (it fails when exception
+  recording is switched back on), fixed the platform-boundary reviewer's
   stale checklist and updated the README, the registry README, CLAUDE.md,
   AGENTS.md and the threat model (T-41 added; T-03, T-07, T-14, T-25, T-39,
   T-40 and T-41 set to implemented, in part where later steps finish them).
@@ -1390,9 +1392,10 @@ demonstrable with `make demo` on kind~~ (the kind half moved to S041).
   `adjuster` drafted by `replay-chat`; rows in `claims.claims`,
   `claims.triage_proposals`, `runtime.runs` (`Completed`) and three
   `audit.events`; one trace ID over spans from `claims-api`,
-  `agent-runtime` and `model-gateway`, the gateway call a child of the
-  `langgraph.node draft_proposal` span; no claimant name, email or
-  description in any span or audit row.
+  `agent-runtime` and `model-gateway`, the gateway's span descending from
+  the `langgraph.node draft_proposal` span, which descends from the run and
+  from the claim's span; no claimant name, email or description in any span
+  or audit row. Run on its own, verbose, against a fresh database: 3 passed.
 - `make pytest-db`: 933 passed (all database tests run); `make pytest`: 804
   passed, 129 skipped without a database; `make lint`: `Contracts: 2 kept,
   0 broken.`; `make registry`, `make docs` (13 checks), `make test` (117

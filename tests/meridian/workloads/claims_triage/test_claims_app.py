@@ -427,6 +427,28 @@ def test_a_database_error_inside_the_span_leaves_no_message_in_any_span(
     assert span.status.description == "NotNullViolation"
 
 
+def test_an_unexpected_error_inside_the_span_leaves_no_message_in_any_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Not a psycopg error, so no handler in the Claims API catches it: only the
+    # span wrapper and the catch-all middleware stand between it and a trace.
+    def explode(*_a: object, **_k: object) -> None:
+        raise RuntimeError(CANARY)
+
+    monkeypatch.setattr(claims_app, "connect", explode)
+    exporter = InMemorySpanExporter()
+
+    response = make_client(exporter=exporter).post(
+        "/claims", json=claim_with_id("CLM-9107")
+    )
+
+    assert response.status_code == 500
+    assert CANARY not in response.text
+    assert_spans_hold_no_exception_and_no_canary(exporter, CANARY)
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == "claims.submit"]
+    assert span.status.description == "RuntimeError"
+
+
 # ── validation: no database needed, no content echoed ───────────────────────
 @pytest.mark.parametrize(
     "overrides",
