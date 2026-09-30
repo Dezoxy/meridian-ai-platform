@@ -8,6 +8,8 @@ import pytest
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
+from meridian.platform.cli import registry as cli_registry
+from meridian.platform.registry import load_registry
 
 runner = CliRunner()
 SUMMARY = re.compile(
@@ -197,21 +199,23 @@ def test_summary_uses_singular_and_plural_correctly(registry_copy: Path) -> None
 
 
 def test_terraform_summary_is_singular_for_one_deployment(
-    registry_copy: Path, snapshot_path: Path, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    real_registry: Path,
+    snapshot_path: Path,
+    tmp_path: Path,
 ) -> None:
-    models = registry_copy / "models.yaml"
-    text = models.read_text(encoding="utf-8")
-    start = text.index("  - id: aoai-sdc-text-embedding-3-large")
-    end = text.index("  - id: replay-chat")
-    models.write_text(text[:start] + text[end:], encoding="utf-8")
-    policies = registry_copy / "policies.yaml"
-    policies.write_text(
-        policies.read_text(encoding="utf-8").replace(
-            "candidates: [aoai-sdc-text-embedding-3-large]",
-            "candidates: [replay-embedding]",
-        ),
-        encoding="utf-8",
+    # A valid registry needs two Azure deployments (a route per purpose, and
+    # replay is never a candidate), so the one-deployment registry is built
+    # past the checks.
+    full = load_registry(real_registry)
+    one = full.model_copy(
+        update={
+            "deployments": tuple(
+                d for d in full.deployments if d.id != "aoai-sdc-text-embedding-3-large"
+            )
+        }
     )
+    monkeypatch.setattr(cli_registry, "load_registry", lambda _directory: one)
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     outputs = tmp_path / "outputs.json"
     outputs.write_text(
@@ -224,7 +228,7 @@ def test_terraform_summary_is_singular_for_one_deployment(
             "registry",
             "validate",
             "--registry-dir",
-            str(registry_copy),
+            str(real_registry),
             "--terraform-outputs",
             str(outputs),
         ],

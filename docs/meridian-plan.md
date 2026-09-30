@@ -2,8 +2,8 @@
 
 > **Status:** bootstrap, 2026-09-30. The architecture model, the first
   decisions, the engineering harness, a local platform on kind, the Azure
-  foundation and the platform registry exist; no platform service does
-  yet.
+  foundation, the platform registry and a walking skeleton of the Claims
+  API, the Agent Runtime and the Model Gateway exist; none is deployed yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -99,7 +99,7 @@ and Pydantic, at the cost of one dependency.
 
 | After | What can be shown |
 |---|---|
-| S009 | A claim flows through API, runtime and gateway, visible as one trace |
+| S041 | A claim flows through API, runtime and gateway, visible as one trace |
 | S015 | A triage proposal pauses for an adjuster and resumes on the decision |
 | S017 | An evaluation report comparing two prompt versions |
 | S018 | The full fifteen-minute demo on kind, from a clean checkout |
@@ -125,7 +125,8 @@ and Pydantic, at the cost of one dependency.
 |---|---|---|---|---|
 | S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload; `meridian registry validate` is the check developers and CI both run | done | S002 |
 | S040 | Harness refresh | The ECC plugin is off, so the harness this repository needs is copied in from development-base: the remaining drifted rules and skills re-copied, a code reviewer, the Python rules that fit, the skills later steps need, three slash commands, the gate and session hooks, the chrome-devtools MCP server and the git hook-bypass denies with their cases; `make docs`, `make test` and the guard-bash cases pass | done | S008 |
-| S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a decision; one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind | todo | S006, S008 |
+| S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a ~~decision~~ triage proposal; ~~one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind~~ an end-to-end test proves one trace across API, runtime and gateway; per-service schemas, roles and migrations tested against PostgreSQL in CI (split on 2026-09-30: the kind half is S041) | done | S006, S008 |
+| S041 | Walking skeleton on kind | One image for the three services, manifests in namespace `meridian`, an HTTPRoute on a `*.localhost` hostname, per-service database roles on the cluster; `make demo` posts a claim and the one trace spanning API, runtime and gateway is found in Tempo; `make smoke` stays green | todo | S009 |
 | S010 | Gateway routing and resilience | Registry-driven routing by data class and residency; Azure OpenAI adapter; timeout, retry, circuit breaker and fallback to the second region; a residency mismatch is refused and audited; contract tests pass | todo | S004, S007, S009 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set | todo | S003, S009 |
@@ -134,7 +135,7 @@ and Pydantic, at the cost of one dependency.
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041 |
 
 ### M2 — Azure, identity, delivery
 
@@ -1256,11 +1257,17 @@ has turned the ECC plugin off, by copying it from development-base.
   8.30.1 on the staged diff: no leaks.
 - Not yet proven: that a fresh session runs exactly one GateGuard. This
   session loaded the plugin at start, so both fired here.
+- **Added 2026-09-30, after the merge (#17, 52916e1):** in a restarted
+  session the `ecc:` agents and the plugin's chrome-devtools server were
+  gone and the project's `chrome-devtools` server connected. A first
+  `Write` of a new file got one denial in the vendored gate's wording and
+  created nothing; a branch delete got one gate, not two. The session file
+  for this worktree was updated when the previous session stopped.
 
 **Follow-ups:**
 
-- The first fresh session: confirm one gate fires, not two, and that the
-  plugin's `ecc:` agents are gone.
+- ~~The first fresh session: confirm one gate fires, not two, and that the
+  plugin's `ecc:` agents are gone.~~ Done; see the verification above.
 - development-base, then re-copy: the hook-bypass rules, with the
   reviewer's changes as the specification (match `SKIP=`, `GIT_CONFIG_KEY`
   and `--no-veri` against the whole command, allow any global option
@@ -1275,6 +1282,147 @@ has turned the ECC plugin off, by copying it from development-base.
   learned skills, empty today, would be injected here too.
 - S009: when the FastAPI module path is chosen, widen `fastapi.md`'s path
   globs in the base first, then re-copy.
+
+### S009 — Walking skeleton
+
+**Status:** done · **Started:** 2026-09-30 · **Finished:** 2026-09-30
+**Goal:** A claim posted to the claims API runs a one-node LangGraph graph
+that calls the gateway's replay provider and stores a ~~decision~~ triage
+proposal, visible as one trace across API, runtime and gateway~~, and
+demonstrable with `make demo` on kind~~ (the kind half moved to S041).
+**Decisions:**
+
+- Split, by the owner: the three services, the graph, the database and an
+  in-process trace here; the image, manifests, route and `make demo` in
+  S041. Rejected: one step, which would be the longest session yet and
+  needs the owner at a prompt for every `kubectl apply`.
+- Three services, each a FastAPI app. The Claims API lives in
+  `meridian.workloads.claims_triage`, which also owns the graph package, as
+  the model says. The Agent Runtime is a new top-level package
+  `meridian.runtime`, because the forbidden-import contract covers all of
+  `meridian.platform` and the runtime hosts LangGraph; the layers become
+  workloads, runtime, platform. The runtime cannot import a workload, so it
+  finds a graph through a Python entry point named after the registry's
+  agent ID. The Model Gateway is `meridian.platform.gateway`.
+- The runtime contract (ADR 2): `POST /runs` starts a run and answers when
+  it ends or pauses; `GET /runs/{run_id}` reads its status. The runtime
+  issues random run IDs and keeps them in its own `runs` table; callers
+  never see a LangGraph thread. Sync, because a replay run takes
+  milliseconds; an asynchronous start waits until runs outgrow a request.
+  `MemorySaver` until S015 makes the PostgreSQL checkpointer part of its
+  done-when; strict msgpack and `durability="sync"` from the start.
+- The gateway API, by the owner: minimal internal JSON, `POST /v1/chat`,
+  with tenant and agent in `X-Meridian-Tenant` and `X-Meridian-Agent`.
+  Rejected: an OpenAI-compatible surface, which would promise features the
+  gateway does not have. The runtime's injected client sets the headers;
+  graph code never does (T-08 direction).
+- Replay is an explicit gateway mode, by the owner, set per deployment and
+  recorded in `policies.yaml` as the replay deployment per purpose.
+  Rejected: replay as the last route candidate, which would answer a real
+  outage with canned text and no error.
+- Replay content is hand-written and labelled simulated: nothing live exists
+  to record from. It never reads the golden set's expected outcomes.
+- What is stored: a triage proposal in the `claims` schema. The graph's
+  route rule sends every claim to the adjuster at this step; no status
+  change, no approval (C-02, T-30, T-31, QA-06).
+- Database: one PostgreSQL database, a schema and a role per service
+  (`claims`, `runtime`, `gateway`) and an insert-only `audit` schema; a
+  separate owner role runs migrations (T-25). Tested against a PostgreSQL
+  service container in the `python` job, by the owner. Rejected: in-memory
+  fakes, which would leave the SQL and the grants untested until the demo.
+- Tracing: W3C trace context between the services, service names
+  `claims-api`, `agent-runtime` and `model-gateway`; span attributes carry
+  claim, run, tenant, agent and deployment IDs, never claimant fields or
+  prompt text (T-03).
+- Trace context is injected explicitly (`propagate.inject`) rather than
+  through the httpx instrumentation, which crashes on Starlette's test
+  client (it subclasses the `httpx2` fork LangSmith brings in); the
+  instrumentation package was removed as unused.
+- Endpoints are sync `def`, because psycopg, httpx and the LangGraph invoke
+  are synchronous here; FastAPI runs them in its threadpool. The vendored
+  `fastapi.md` rule's "async def for I/O" is about not blocking the event
+  loop, which sync endpoints do not. Health checks are `async def` with no
+  database call, so a saturated threadpool cannot fail them.
+- After review: spans never record an exception's message or stack trace
+  (one `start_span` wrapper, and a catch-all middleware because the FastAPI
+  instrumentation records unhandled exceptions on the server span too);
+  LangSmith tracing forced off and refused at startup (new T-41); NUL bytes
+  refused at the API; only a lost connection is a 503; connect and
+  statement timeouts; audit rows stamped by a trigger with their time, ID
+  and database role, insert-only for the services that write them and
+  nothing for the Claims API; a claim with no proposal can be triaged
+  again; the stored route accepts only `adjuster` until S014; a body limit
+  per service; checkpoints deleted when a run ends; claimant contact
+  details kept out of the run's input.
+- Strict msgpack is checked through LangGraph's private `_msgpack` module,
+  the only place the flag is exposed; a LangGraph upgrade that moves it
+  fails the runtime's startup, loudly.
+
+**Work log:**
+
+- Explore brief of the architecture, the registry and the kind platform;
+  `feature-threat-model` added T-39 and T-40 and pointed T-25 at S009 and
+  S041; the owner answered four design questions (split, replay mode,
+  gateway API shape, database tests in CI).
+- `implementer`, contract A: dependencies (FastAPI 0.142.2, uvicorn 0.54.0,
+  httpx 0.28.1, psycopg 3.3.6, OpenTelemetry 1.45.0 with instrumentation
+  0.66b0, LangGraph 1.2.12), the `meridian.runtime` layer, replay in the
+  registry, `meridian.platform.common`, migration `0001` with its runner and
+  `meridian db migrate`, PostgreSQL 17.11 in CI and `make pytest-db`.
+- `implementer`, contract B: the gateway, the runtime, the Claims API, the
+  one-node graph and the walking-skeleton test.
+- Reviews: `security-reviewer`, `platform-boundary-reviewer` and
+  `python-reviewer` blocked (exception text in spans, LangSmith egress,
+  lost run and proposal states, the input size, partial writes);
+  `fastapi-reviewer` found two must-fix items (no connect timeout, a fake
+  outage on a NUL byte); `infra-reviewer` passed with fixes.
+- `implementer`, contract C: all 24 review items. The main session removed
+  the unused instrumentation, replaced a sleep in the LangSmith control
+  test with LangChain's own flush, fixed the platform-boundary reviewer's
+  stale checklist and updated the README, the registry README, CLAUDE.md,
+  AGENTS.md and the threat model (T-41 added; T-03, T-07, T-14, T-25, T-39,
+  T-40 and T-41 set to implemented, in part where later steps finish them).
+
+**Result / verification:**
+
+- `tests/meridian/test_walking_skeleton.py` posts CLM-0001 through the
+  Claims API, the runtime and the gateway in one process: 201 with route
+  `adjuster` drafted by `replay-chat`; rows in `claims.claims`,
+  `claims.triage_proposals`, `runtime.runs` (`Completed`) and three
+  `audit.events`; one trace ID over spans from `claims-api`,
+  `agent-runtime` and `model-gateway`, the gateway call a child of the
+  `langgraph.node draft_proposal` span; no claimant name, email or
+  description in any span or audit row.
+- `make pytest-db`: 933 passed (all database tests run); `make pytest`: 804
+  passed, 129 skipped without a database; `make lint`: `Contracts: 2 kept,
+  0 broken.`; `make registry`, `make docs` (13 checks), `make test` (117
+  tests) and `actionlint` pass; no provider SDK imported anywhere; the
+  LangSmith guard tests passed five runs in a row.
+- Proven red by the implementer: flipping exception recording back on fails
+  five tests; the concurrent-runner test fails without the lock fix; the
+  LangSmith control receives requests without the guard.
+
+**Follow-ups:**
+
+- S041: the image and manifests; `uvicorn --factory` on each
+  `create_app_from_env`; `MERIDIAN_ENVIRONMENT=kind` and the gateway in
+  replay mode; the CNPG roles `meridian_owner`, `claims_api`,
+  `agent_runtime` and `model_gateway` with passwords from Secrets created
+  out of band; migrations as a Job before the services; `/healthz` probes;
+  `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector; a body cap at the route
+  as well as in the apps; `/docs` left on for kind only.
+- S010: routing by the registry, the Azure OpenAI adapter and its SDK
+  import contract; client-side response models that tolerate added fields;
+  keep `gateway/__init__.py` free of provider imports, because the runtime
+  imports the gateway's wire models.
+- S015: the PostgreSQL checkpointer (claimant contact details already stay
+  out of graph state); a reconcile path for a run left `Running` when its
+  final write fails twice; two concurrent identical submissions can both
+  store a proposal; retry semantics for failed triage.
+- Later: a connection pool before any load test (S027); migrations share
+  the 10 s statement timeout, so a long migration will need its own
+  connection settings; `fastapi.md`'s path globs match none of the three
+  apps, so widen them in development-base, then re-copy.
 
 ## Part D — Open questions
 
@@ -1304,3 +1452,7 @@ has turned the ECC plugin off, by copying it from development-base.
   its upgrade.
 - **v0.7, 2026-09-30:** S040 (harness refresh) added to M1 after the owner
   turned the ECC plugin off.
+- **v0.8, 2026-09-30:** S009 split by the owner: S009 keeps the services,
+  the graph, the database and one trace proven in-process; the new S041
+  puts the skeleton on kind with `make demo`. The first demo checkpoint
+  moves to S041, and S018 depends on it.

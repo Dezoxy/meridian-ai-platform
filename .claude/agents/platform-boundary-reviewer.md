@@ -14,25 +14,33 @@ wrong. Be concrete and cite `file:line`.
 
 1. **Platform packages never import the agent framework.** Nothing under
    `src/meridian/platform/` imports `langgraph` or `langchain*` (ADR 2). The
-   runtime hosts graphs behind the agent contract: start, resume, status,
-   checkpoint store, tool client.
+   runtime (`src/meridian/runtime/`, the layer between workloads and
+   platform) hosts graphs behind the agent contract: start, resume, status,
+   checkpoint store, tool client; it may import LangGraph, and it loads a
+   workload's graph by entry point, never by import.
 2. **Every model call goes through the Model Gateway.** Provider SDKs
    (`openai`, `anthropic`, `mistralai`, `boto3` for Bedrock, `litellm`) are
    imported only under `src/meridian/platform/gateway/` (ADR 3). Workloads
    and MCP servers use the gateway client.
 3. **Every tool is declared and allowlisted.** A tool exists in
-   `config/registry/tools.yaml` with an input schema, a scope, an audit flag
-   and, for a mutating tool, a required idempotency key and an approval
-   requirement where a human must decide. An agent may call a tool only if
+   `config/registry/tools.yaml` with an input schema and a scope and, for a
+   mutating tool, a required idempotency key and an approval requirement
+   where a human must decide; every tool call is audited, so there is no
+   audit flag to switch off (T-14). An agent may call a tool only if
    `agents.yaml` allowlists it.
 4. **Every deployment carries residency and data classes.** An entry in
-   `models.yaml` names provider, region, SKU, residency label, allowed data
-   classes, price and deprecation date. A tenant in `tenants.yaml` has a data
-   class and a budget.
-5. **Audit and attribution.** Every state-changing tool call and every
-   approval decision emits an audit event; every span carries tenant, agent,
-   model, provider, tokens and cost; tenant and agent headers propagate from
-   the workload through the runtime to the gateway.
+   `models.yaml` names provider, residency label, allowed data classes,
+   price and retirement date, and for a real provider its region and SKU.
+   Replay is a gateway mode (`replay` in `policies.yaml`), never a route
+   candidate (T-39). A tenant in `tenants.yaml` has a data class and the
+   agents it may run; budgets arrive in S011.
+5. **Audit and attribution.** Every model call, every state-changing tool
+   call and every approval decision emits an audit event, and a failed audit
+   write fails the call (QA-05); gateway spans carry tenant, agent,
+   deployment, provider and tokens, and cost from S011; the runtime sets the
+   tenant and agent headers on every gateway call, never graph code. Span
+   attributes come only from the allowlist in
+   `meridian.platform.common.telemetry` (T-03).
 6. **No personal data or secrets in logs or traces.** Logs carry identifiers
    and metadata; prompt and completion bodies are stored only where the
    policy says so, redacted.

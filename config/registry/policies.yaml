@@ -11,10 +11,17 @@ data_classes:
   - id: special
     residency: []
 
-# The replay deployments are in no route on purpose: S009 and S010 decide
-# whether replay is a mode for CI and kind or the last candidate.
 routes:
   - purpose: chat
     candidates: [aoai-sdc-gpt-4o]
   - purpose: embedding
     candidates: [aoai-sdc-text-embedding-3-large]
+
+# In replay mode the gateway sends every request of a purpose to this
+# deployment instead of walking the route (S009). Replay is never a route
+# candidate, so a real outage can never be answered with canned text.
+replay:
+  - purpose: chat
+    deployment: replay-chat
+  - purpose: embedding
+    deployment: replay-embedding

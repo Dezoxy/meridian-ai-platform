@@ -110,6 +110,7 @@ def check_unique_ids(registry: Registry) -> list[str]:
         (f"{TENANTS}: tenants", "id", [t.id for t in registry.tenants]),
         (f"{POLICIES}: data_classes", "id", [c.id for c in registry.data_classes]),
         (f"{POLICIES}: routes", "purpose", [r.purpose for r in registry.routes]),
+        (f"{POLICIES}: replay", "purpose", [r.purpose for r in registry.replay]),
     )
     errors = [
         f"{where}: duplicate {field} {value!r}"
@@ -405,6 +406,78 @@ def check_routes(registry: Registry) -> list[str]:
     return errors
 
 
+def _is_replay(registry: Registry, deployment: Deployment) -> bool:
+    provider = registry.provider(deployment.provider)
+    return provider is not None and provider.kind == "replay"
+
+
+def check_replay(registry: Registry) -> list[str]:
+    """Replay is a gateway mode: one replay deployment per routed purpose.
+
+    A replay deployment is never a route candidate, so a real outage cannot be
+    answered with canned text.
+    """
+    errors: list[str] = []
+    for i, entry in enumerate(registry.replay):
+        where = f"{POLICIES}: replay[{i}].deployment"
+        dep = registry.deployment(entry.deployment)
+        if dep is None:
+            errors.append(f"{where}: unknown deployment {entry.deployment!r}")
+            continue
+        provider = registry.provider(dep.provider)
+        if provider is not None and provider.kind != "replay":
+            errors.append(
+                f"{where}: deployment {dep.id!r} is not a replay deployment "
+                f"(provider kind {provider.kind!r})"
+            )
+        if dep.purpose != entry.purpose:
+            errors.append(
+                f"{where}: deployment {dep.id!r} has purpose {dep.purpose!r}, "
+                f"the replay entry is {entry.purpose!r}"
+            )
+    for i, route in enumerate(registry.routes):
+        errors += [
+            f"{POLICIES}: routes[{i}].candidates[{j}]: deployment {name!r} is a "
+            "replay deployment; replay is a gateway mode, never a route candidate"
+            for j, name in enumerate(route.candidates)
+            if (dep := registry.deployment(name)) and _is_replay(registry, dep)
+        ]
+    covered = {r.purpose for r in registry.replay}
+    errors += [
+        f"{POLICIES}: replay: no replay deployment for purpose {route.purpose!r}"
+        for route in registry.routes
+        if route.purpose not in covered
+    ]
+    errors += _replay_tenant_errors(registry)
+    return errors
+
+
+def _replay_tenant_errors(registry: Registry) -> list[str]:
+    """Replay stands in for the route of a purpose, so it must serve every
+    tenant the route serves: its classes must include the tenant's class and
+    its label must be one that class may reach."""
+    errors: list[str] = []
+    routed = {route.purpose for route in registry.routes}
+    for i, entry in enumerate(registry.replay):
+        dep = registry.deployment(entry.deployment)
+        if dep is None or entry.purpose not in routed:
+            continue
+        where = f"{POLICIES}: replay[{i}]: deployment {dep.id!r}"
+        for tenant in registry.tenants:
+            policy = registry.data_class(tenant.data_class)
+            who = f"data class {tenant.data_class!r} of tenant {tenant.id!r}"
+            if tenant.data_class not in dep.data_classes:
+                errors.append(
+                    f"{where} does not allow {who}, so replay mode could not serve it"
+                )
+            if policy is not None and dep.residency not in policy.residency:
+                errors.append(
+                    f"{where} has residency {dep.residency!r}, which {who} "
+                    "may not reach"
+                )
+    return errors
+
+
 def check_tenant_coverage(registry: Registry) -> list[str]:
     """Every tenant must be servable for every purpose that has a route."""
     errors: list[str] = []
@@ -432,6 +505,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_tools,
     check_no_decision_tools,
     check_routes,
+    check_replay,
     check_tenant_coverage,
 )
 

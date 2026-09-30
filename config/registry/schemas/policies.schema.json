@@ -33,6 +33,31 @@
       "title": "DataClassPolicy",
       "type": "object"
     },
+    "ReplayRoute": {
+      "additionalProperties": false,
+      "description": "The deployment the gateway uses for a purpose in replay mode.",
+      "properties": {
+        "deployment": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Deployment",
+          "type": "string"
+        },
+        "purpose": {
+          "enum": [
+            "chat",
+            "embedding"
+          ],
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "purpose",
+        "deployment"
+      ],
+      "title": "ReplayRoute",
+      "type": "object"
+    },
     "Route": {
       "additionalProperties": false,
       "properties": {
@@ -71,6 +96,13 @@
       "title": "Data Classes",
       "type": "array"
     },
+    "replay": {
+      "items": {
+        "$ref": "#/$defs/ReplayRoute"
+      },
+      "title": "Replay",
+      "type": "array"
+    },
     "routes": {
       "items": {
         "$ref": "#/$defs/Route"
@@ -81,7 +113,8 @@
   },
   "required": [
     "data_classes",
-    "routes"
+    "routes",
+    "replay"
   ],
   "title": "PoliciesFile",
   "type": "object"
