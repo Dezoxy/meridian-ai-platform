@@ -144,9 +144,9 @@ make registry-snapshot  # refresh the registry's copy of Terraform's deployment 
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin
 [AGENTS.md](AGENTS.md). The harness (reviewers, skills, hooks, permissions)
-is described there; it is assembled from the owner's
-[ECC fork](https://github.com/Dezoxy/ECC) and the owner's architecture
-authoring kit.
+is described there; it is copied from the owner's development base, which
+curates it from the owner's [ECC fork](https://github.com/Dezoxy/ECC) and
+carries the architecture authoring kit.
 
 ## Documentation
 

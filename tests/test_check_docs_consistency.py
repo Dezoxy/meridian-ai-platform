@@ -232,7 +232,7 @@ def load_checker_for(repo):
     check.VIEWS_DSL = arch / "model" / "views.dsl"
     check.MERMAID_VIEWS = arch / "generated" / "mermaid-views"
     check.SKILL_DIRS = (repo / ".claude" / "skills", repo / ".agents" / "skills")
-    check.AGENT_DIRS = (repo / ".claude" / "agents",)
+    check.AGENT_DIRS = (repo / ".claude" / "agents", repo / ".claude" / "commands")
     check.VENDORED = repo / ".claude" / "rules"
     return check
 
@@ -588,6 +588,12 @@ class AgentPromptWidth(TreeCase):
     def test_agent_definition_is_exempt_from_the_prose_width_rule(self):
         self.write(
             ".claude/agents/reviewer.md", f"---\nname: reviewer\n---\n{self.LONG}"
+        )
+        self.assertEqual(self.failures(), [])
+
+    def test_command_definition_is_exempt_from_the_prose_width_rule(self):
+        self.write(
+            ".claude/commands/build-fix.md", f"---\ndescription: x\n---\n{self.LONG}"
         )
         self.assertEqual(self.failures(), [])
 

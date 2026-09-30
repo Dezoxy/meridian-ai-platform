@@ -26,7 +26,7 @@ plain text lines joined by <br/>. Colours (the `style` lines) and everything
 else stay as exported. The transform is a fixed sequence of substitutions, so
 the same export always gives the same block.
 
-The canonical copy lives in architecture-base (scripts/); repositories copy it
+The canonical copy lives in development-base (scripts/); repositories copy it
 unchanged, together with check_docs_consistency.py, which it imports.
 
 Run from anywhere:
