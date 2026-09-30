@@ -1116,14 +1116,17 @@ fails before it merges (T-12, T-21, T-31, T-35).
 - `make registry` printed `registry OK: 2 providers, 4 deployments, 5
   tools, 1 agent, 3 tenants`, `terraform outputs OK: 2 deployments match`
   and `schemas OK: up to date`.
-- 17 bypasses from the reviews, replayed against copies of the registry,
-  all exit 1 with a named error: an empty `terraform_key`, `special` and
-  `personal` widened in `policies.yaml`, `personal` on a `GlobalStandard`
-  deployment, a decision tool labelled `write`, `claim_approved`, a nested
-  open object, a remote `$ref`, `maxLength: 999999999`, an
-  `idempotencyKey` argument, an unbounded string, a YAML alias, an
-  impossible date, empty routes, a wildcard scope, a fake replay provider,
-  and a hand-made Azure deployment Terraform does not know.
+- 18 bypasses from the reviews, each planted in a copy of the registry
+  and run once against the committed code, all exit 1 with a named error:
+  an empty `terraform_key`; `special` widened in `policies.yaml`;
+  `personal` widened to `global` together with a `GlobalStandard`
+  deployment; `personal` on a `GlobalStandard` deployment with the policy
+  untouched; a `GlobalStandard` SKU labelled `eu-region`; a decision tool
+  labelled `write`; `claim_approved`; a nested open object; a remote
+  `$ref`; `maxLength: 999999999`; an `idempotencyKey` argument; an
+  unbounded string; a YAML alias; an impossible date; empty routes; a
+  wildcard scope; a fake replay provider; and a hand-made Azure deployment
+  Terraform does not know.
 - `make lint` (`Contracts: 2 kept, 0 broken.`), `make pytest` (413
   passed), `make test` (116 tests), `make docs` (13 checks), `shellcheck`
   clean; gitleaks 8.30.1 on the staged diff found no leaks, and no tracked
