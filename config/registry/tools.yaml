@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=schemas/tools.schema.json
+# MCP servers and their tools: effect, scope and the model-facing input schema.
+# The runtime injects the idempotency key, so it is not an input argument.
+servers:
+  - id: policy-mcp
+    description: Policy and claim-history lookups.
+  - id: knowledge-mcp
+    description: Search over policy wordings.
+  - id: claims-mcp
+    description: Claim notes and approval requests.
+
+tools:
+  - id: policy_lookup
+    server: policy-mcp
+    description: Look up a policy by its number.
+    effect: read
+    scope: policy:read
+    input_schema:
+      type: object
+      properties:
+        policy_number: {type: string, pattern: "^POL-[0-9]{4}$", maxLength: 8}
+      required: [policy_number]
+      additionalProperties: false
+
+  - id: claim_history
+    server: policy-mcp
+    description: List earlier claims on a policy.
+    effect: read
+    scope: claims:history:read
+    input_schema:
+      type: object
+      properties:
+        policy_number: {type: string, pattern: "^POL-[0-9]{4}$", maxLength: 8}
+      required: [policy_number]
+      additionalProperties: false
+
+  - id: wording_search
+    server: knowledge-mcp
+    description: Search the policy wordings of one product.
+    effect: read
+    scope: knowledge:search
+    input_schema:
+      type: object
+      properties:
+        query: {type: string, minLength: 1, maxLength: 500}
+        product: {type: string, enum: [HOME-STD, HOME-PLUS, MOTOR-COMP]}
+        top_k: {type: integer, minimum: 1, maximum: 10}
+      required: [query, product]
+      additionalProperties: false
+
+  - id: add_claim_note
+    server: claims-mcp
+    description: Add a note to a claim.
+    effect: write
+    scope: claims:note:write
+    idempotency_key_required: true
+    input_schema:
+      type: object
+      properties:
+        claim_id: {type: string, pattern: "^CLM-[0-9]{4}$", maxLength: 8}
+        note: {type: string, minLength: 1, maxLength: 2000}
+      required: [claim_id, note]
+      additionalProperties: false
+
+  - id: request_approval
+    server: claims-mcp
+    description: Ask an adjuster to approve or decline a claim.
+    effect: write
+    scope: claims:approval:request
+    idempotency_key_required: true
+    input_schema:
+      type: object
+      properties:
+        claim_id: {type: string, pattern: "^CLM-[0-9]{4}$", maxLength: 8}
+        reason: {type: string, minLength: 1, maxLength: 1000}
+      required: [claim_id, reason]
+      additionalProperties: false

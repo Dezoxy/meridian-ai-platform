@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "Provider": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "azure-openai",
+            "replay"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "description"
+      ],
+      "title": "Provider",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "providers": {
+      "items": {
+        "$ref": "#/$defs/Provider"
+      },
+      "title": "Providers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "providers"
+  ],
+  "title": "ProvidersFile",
+  "type": "object"
+}

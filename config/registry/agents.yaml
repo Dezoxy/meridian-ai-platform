@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=schemas/agents.schema.json
+# Agents and the tools each may call; anything not listed is refused.
+agents:
+  - id: claims-triage
+    description: Triages a new claim and prepares it for an adjuster.
+    tools:
+      - policy_lookup
+      - claim_history
+      - wording_search
+      - add_claim_note
+      - request_approval

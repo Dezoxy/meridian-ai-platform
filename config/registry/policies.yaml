@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=schemas/policies.schema.json
+# Which residency labels each data class may reach, and the ordered candidates per purpose.
+# Keep data_classes equal to the table in docs/architecture/security/data-classification.md.
+data_classes:
+  - id: synthetic
+    residency: [eu-region, eu-zone, global]
+  - id: internal
+    residency: [eu-region, eu-zone]
+  - id: personal
+    residency: [eu-region, eu-zone]
+  - id: special
+    residency: []
+
+# The replay deployments are in no route on purpose: S009 and S010 decide
+# whether replay is a mode for CI and kind or the last candidate.
+routes:
+  - purpose: chat
+    candidates: [aoai-sdc-gpt-4o]
+  - purpose: embedding
+    candidates: [aoai-sdc-text-embedding-3-large]

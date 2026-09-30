@@ -39,3 +39,5 @@ jobs:
         run: make lint
       - name: Tests
         run: make pytest
+      - name: Registry validation
+        run: make registry

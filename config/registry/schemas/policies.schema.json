@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "DataClassPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "synthetic",
+            "internal",
+            "personal",
+            "special"
+          ],
+          "title": "Id",
+          "type": "string"
+        },
+        "residency": {
+          "items": {
+            "enum": [
+              "eu-region",
+              "eu-zone",
+              "global"
+            ],
+            "type": "string"
+          },
+          "title": "Residency",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "residency"
+      ],
+      "title": "DataClassPolicy",
+      "type": "object"
+    },
+    "Route": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "purpose": {
+          "enum": [
+            "chat",
+            "embedding"
+          ],
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "purpose",
+        "candidates"
+      ],
+      "title": "Route",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "data_classes": {
+      "items": {
+        "$ref": "#/$defs/DataClassPolicy"
+      },
+      "title": "Data Classes",
+      "type": "array"
+    },
+    "routes": {
+      "items": {
+        "$ref": "#/$defs/Route"
+      },
+      "title": "Routes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "data_classes",
+    "routes"
+  ],
+  "title": "PoliciesFile",
+  "type": "object"
+}

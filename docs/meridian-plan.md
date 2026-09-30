@@ -1,8 +1,9 @@
 # Meridian AI Platform — Plan
 
 > **Status:** bootstrap, 2026-09-30. The architecture model, the first
-  decisions, the engineering harness, a local platform on kind and the Azure
-  foundation exist; no platform service does yet.
+  decisions, the engineering harness, a local platform on kind, the Azure
+  foundation and the platform registry exist; no platform service does
+  yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -122,7 +123,7 @@ and Pydantic, at the cost of one dependency.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload; `meridian registry validate` is the check developers and CI both run | todo | S002 |
+| S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload; `meridian registry validate` is the check developers and CI both run | done | S002 |
 | S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a decision; one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind | todo | S006, S008 |
 | S010 | Gateway routing and resilience | Registry-driven routing by data class and residency; Azure OpenAI adapter; timeout, retry, circuit breaker and fallback to the second region; a residency mismatch is refused and audited; contract tests pass | todo | S004, S007, S009 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
@@ -910,12 +911,12 @@ the apply.
 - `make azure-smoke`, all six checks:
 
   ```text
-  PASS  account oai-meridian-sdc-974b59: key authentication is off (disableLocalAuth true)
-  PASS  account oai-meridian-sdc-974b59: swedencentral is an EU region
+  PASS  account oai-meridian-sdc-<suffix>: key authentication is off (disableLocalAuth true)
+  PASS  account oai-meridian-sdc-<suffix>: swedencentral is an EU region
   PASS  deployment sdc/gpt-4o: gpt-4o 2024-11-20 on Standard in swedencentral
   PASS  deployment sdc/text-embedding-3-large: text-embedding-3-large 1 on Standard in swedencentral
-  PASS  chat oai-meridian-sdc-974b59: gpt-4o answered (model gpt-4o-2024-11-20, 15 tokens)
-  PASS  embedding oai-meridian-sdc-974b59: text-embedding-3-large returned a 3072-dimension vector
+  PASS  chat oai-meridian-sdc-<suffix>: gpt-4o answered (model gpt-4o-2024-11-20, 15 tokens)
+  PASS  embedding oai-meridian-sdc-<suffix>: text-embedding-3-large returned a 3072-dimension vector
   ```
 
 - A second `make azure-plan`: `No changes. Your infrastructure matches the
@@ -982,6 +983,172 @@ the apply.
 - S022: the role assignments go to the signed-in user as `principal_type =
   "User"`; when Terraform runs as the pipeline's identity, the operator
   becomes a variable or the assignments move.
+
+### S008 — Platform registry
+
+**Status:** done · **Started:** 2026-09-30 · **Finished:** 2026-09-30
+**Goal:** Declare models, providers, tools, agents, policies and tenants in
+`config/registry/` with generated JSON Schemas and cross-file checks, so the
+runtime and the gateway (S009, S010, S013) load facts that CI has already
+checked, and a residency mislabel, a widened allowlist or a decision tool
+fails before it merges (T-12, T-21, T-31, T-35).
+**Decisions:**
+
+- Pydantic v2 models in `src/meridian/platform/registry/` are the single
+  source. The JSON Schemas in `config/registry/schemas/` are generated from
+  them and committed for editors and reviewers; a test fails when they
+  drift. Rejected: hand-written JSON Schemas checked with `jsonschema`,
+  because the runtime and the gateway need typed objects anyway, and two
+  sources of one shape drift apart.
+- Six files: `providers.yaml`, `models.yaml` (the name hard rule 3 uses),
+  `tools.yaml`, `agents.yaml`, `policies.yaml` and `tenants.yaml`. Every
+  model forbids unknown keys and the loader refuses a repeated YAML key, so
+  a misspelt or duplicated entry fails instead of vanishing (T-35).
+- Checks beyond the schema, each with a test that plants the violation:
+  references resolve; a deployment's residency label matches its SKU and
+  region (`Standard` in an EU region is `eu-region`, `DataZoneStandard`
+  `eu-zone`, `GlobalStandard` `global`, replay `eu-region`); a deployment
+  allows only the data classes its label permits, so `personal` never
+  reaches `global` and `special` reaches nothing (hard rule 3); a mutating
+  tool requires an idempotency key (hard rule 6); no agent's allowlist holds
+  a decision tool (T-31); a route's candidates serve the route's purpose.
+- The data classes and their allowed labels live in `policies.yaml` and in
+  the table in `security/data-classification.md`; a test checks that the
+  two agree.
+- T-12: `meridian registry validate --terraform-outputs FILE` compares each
+  Azure deployment with `terraform output -json openai_deployments`: model,
+  version, SKU, region and deployment name. CI has no Azure access until
+  S022, so it compares with a committed snapshot of that output without
+  account names and endpoints; `make registry-snapshot` refreshes it from
+  Azure, and `git diff` shows the drift. Rejected: no comparison in CI until
+  S022, which leaves T-35's case, a mislabelled deployment merged, open for
+  fourteen steps. Residual: a pull request can edit the snapshot and the
+  registry together; the live comparison stays a human step until the
+  pipeline has an Azure identity (S022).
+- Endpoints and account names never enter the registry, which is public;
+  S010 injects them at deploy time from the Terraform outputs.
+- Routes are ordered candidate lists per purpose (chat, embedding), the
+  structure ADR 3's routing flow needs, and hold the Azure deployments. The
+  replay deployments are registered but in no route: whether replay is a
+  mode for CI and kind or the last candidate is for S009 and S010 to decide
+  (S007 follow-up).
+- Price and retirement date on every deployment, as ADR 3 requires, with
+  verified values only. Retirement dates from `az cognitiveservices model
+  list` in Sweden Central on 2026-09-30: `gpt-4o` 2024-11-20 on 2027-04-14
+  (lifecycle "Legacy"), `text-embedding-3-large` 1 on 2028-02-09. Prices are
+  USD retail list prices per million tokens from the Azure Retail Prices API
+  on the same day, with the meter name as the source: `gpt-4o` regional
+  3.025 input and 12.10 output, the embedding 0.158. The API rounds EUR
+  prices to four decimals (the embedding shows 0.0001 against 0.000158 USD,
+  about a quarter off), so the registry keeps USD and S011 converts for the
+  EUR budget.
+- Tools carry their input schema inline, and it is the contract until
+  S013, which makes each MCP server publish exactly these schemas or moves
+  them to `api/mcp/` with a test that both agree. A tool's effect is `read`,
+  `write` or `decision`; the claims workload declares no decision tool,
+  because adjusters decide in the Claims Triage App (C-02).
+- A tenant carries its data class and the agents it may run, so evaluation
+  runs the claims-triage agent under a tenant of its own at `personal`
+  (data classification). Budgets and quotas arrive with S011.
+- `meridian` is a Typer command installed with the project
+  (`[project.scripts]`). `meridian registry validate` runs as `make
+  registry` and in the `python` job, which keeps its name because the
+  ruleset requires it.
+- S003 follow-up: the triage threshold, the reporting window and the fraud
+  rules are the claims workload's business rules, not platform facts, so
+  they stay out of the registry; S014 gives them one source.
+- After review: each data class's residency ceiling is also fixed in the
+  validator's code. With the ceiling only in `policies.yaml`, one pull
+  request could widen `personal` to `global` in the file and in the
+  document table and pass (both reviewers reproduced it); now it must
+  change the check itself, which is the visible diff T-35 relies on.
+- After review: no per-tool audit flag. Every tool call will be audited
+  (T-14, from S013), so a flag that must always be true adds nothing. `approval_required`
+  declares a tool whose effect waits for a human (hard rule 6).
+- After review: tool input schemas are closed and bounded at every depth,
+  checked structurally without a JSON Schema library, and `$ref` is
+  refused, because S013 hands these schemas to the MCP servers and the
+  model. YAML anchors and aliases are refused: they hide the effective
+  value from a reviewer and allow an alias bomb.
+- After review: T-31 gets a second signal, the tool's name and scope, since
+  the effect is declared by the tool's author; a mislabelled tool under a
+  neutral name remains a residual, recorded on T-31.
+- The snapshot keeps an allowlist of the seven compared fields rather than
+  dropping account names and endpoints, so a field added to the Terraform
+  output later stays out of the public repository; a GUID in the result
+  stops the command.
+
+**Work log:**
+
+- Opened the step, verified the retirement dates and prices (above), and
+  added `foundation.sh outputs` and `make registry-snapshot`, which wrote
+  `config/registry/snapshots/terraform-openai-deployments.json` from the
+  live Terraform state: two deployments, seven fields each, no account
+  name, endpoint or GUID.
+- The `implementer` wrote the Pydantic models, loader, checks, Terraform
+  comparison and schema generator under `src/meridian/platform/registry/`,
+  the Typer CLI under `src/meridian/platform/cli/`, the six YAML files,
+  the generated schemas, the tests under `tests/meridian/registry/`, the
+  `make registry` target and the CI step. New runtime dependencies:
+  `pydantic` 2.13.5, `pyyaml` 6.0.3 and `typer` 0.27.2.
+- Reviews: `infra-reviewer` PASS with four fixes to the snapshot command
+  (allowlist, stderr kept out of the JSON, no empty snapshot, no stray
+  `.tmp` file), all made. `platform-boundary-reviewer` BLOCK, `python-reviewer`
+  BLOCK and `security-reviewer` with one must-fix: the residency ceiling
+  lived only in editable YAML; an empty `terraform_key` skipped the
+  Terraform comparison while counting as matched; an impossible date
+  crashed the loader; tool schemas were closed at the top level only; YAML
+  aliases were accepted. All fixed, with a test per case.
+- The security review found the S007 smoke evidence in this plan carrying
+  the Azure OpenAI account name; the current text is redacted to
+  `oai-meridian-sdc-<suffix>`. The name stays in the history of `main`
+  (2f2becb): removing it needs a force-push, which the ruleset forbids. It
+  is not a credential: key authentication is off and access is Entra ID
+  only.
+- Second review round: both blocking reviewers passed. The boundary
+  re-review found the decision-word check blind to inflections
+  (`claim_approved`), bounds checked for presence only (`maxLength:
+  999999999`), a camel-case `idempotencyKey`, and a narrow hygiene scan;
+  all fixed, and the audit claim reworded, since audit arrives in S013.
+
+**Result / verification:**
+
+- `make registry` printed `registry OK: 2 providers, 4 deployments, 5
+  tools, 1 agent, 3 tenants`, `terraform outputs OK: 2 deployments match`
+  and `schemas OK: up to date`.
+- 18 bypasses from the reviews, each planted in a copy of the registry
+  and run once against the committed code, all exit 1 with a named error:
+  an empty `terraform_key`; `special` widened in `policies.yaml`;
+  `personal` widened to `global` together with a `GlobalStandard`
+  deployment; `personal` on a `GlobalStandard` deployment with the policy
+  untouched; a `GlobalStandard` SKU labelled `eu-region`; a decision tool
+  labelled `write`; `claim_approved`; a nested open object; a remote
+  `$ref`; `maxLength: 999999999`; an `idempotencyKey` argument; an
+  unbounded string; a YAML alias; an impossible date; empty routes; a
+  wildcard scope; a fake replay provider; and a hand-made Azure deployment
+  Terraform does not know.
+- `make lint` (`Contracts: 2 kept, 0 broken.`), `make pytest` (413
+  passed), `make test` (116 tests), `make docs` (13 checks), `shellcheck`
+  clean; gitleaks 8.30.1 on the staged diff found no leaks, and no tracked
+  file holds a GUID, an endpoint or the account suffix.
+- `make registry-snapshot`, rerun after the allowlist change, wrote a
+  byte-identical snapshot.
+
+**Follow-ups:**
+
+- S009: the runtime loads agents and allowlists through `load_registry`;
+  decide how replay is selected (a mode or the last candidate) and record
+  it in `policies.yaml`.
+- S010: the gateway loads deployments and routes through `load_registry`,
+  filters candidates by the request's data class, refuses a deployment
+  past its `retires` date, and injects endpoints at deploy time.
+- S011: tenant budgets and quotas in `tenants.yaml`; cost from the
+  registry's USD prices, converted for the EUR budget.
+- S013: the MCP servers publish exactly the registry's input schemas, or
+  the schemas move to `api/mcp/` with a test that both agree; enforce
+  `approval_required` and the scopes; bind claim and tenant (T-22).
+- S022: compare the registry with the live Terraform outputs in CI once the
+  pipeline has an Azure identity, closing T-12's residual.
 
 ## Part D — Open questions
 
