@@ -1,10 +1,10 @@
 ## Quality attributes
 
-Status on 2026-09-29: every target below is an initial target and is
-unmeasured. Nothing runs yet, so no number here is a measurement; the step in
-the last column is the one that measures it, and S027 turns measured values
-into SLO thresholds. A target changes when a measurement argues with it, and
-the change is recorded here.
+Status on 2026-09-30: every target below is an initial target. Only the kind
+half of QA-11 has a measurement; every other number is a target, not a
+measurement. The step column names the step that measures it, and S027 turns
+measured values into SLO thresholds. A target changes when a measurement argues
+with it, and the change is recorded here.
 
 This register owns the `QA-NN` IDs. Constraints (`C-NN`) are fixed and live in
 the [constraints](constraints.md); these targets can be traded off.
@@ -25,7 +25,7 @@ owner's laptop and on the smallest AKS environment of ADR 1.
 | QA-08 | Durability | The runtime restarts while a run waits for an adjuster | The run resumes from its checkpoint; a node that runs again repeats no effect, because every mutating call carries an idempotency key | Restart test on kind | S015 | Unmeasured |
 | QA-09 | Security | The injection suite runs against the triage workload | No tool call outside the allowlist and no route changed by injected text; at least 90 % of injections detected | Injection evaluation suite | S032 | Unmeasured |
 | QA-10 | Recoverability | The Platform Database is lost during an environment's lifetime | Restored from a backup kept outside the environment within 60 minutes, losing at most 24 hours of data | Restore drill into a scratch environment | S029 | Unmeasured |
-| QA-11 | Reproducibility | The environment is created from a clean checkout | kind up in under 10 minutes; Azure created in under 30 minutes, and after removal no resource is left but the Terraform state store | Timed runs; resource listing after removal | S006, S020 | Unmeasured |
+| QA-11 | Reproducibility | The environment is created from a clean checkout | kind up in under 10 minutes; Azure created in under 30 minutes, and after removal no resource is left but the Terraform state store | Timed runs; resource listing after removal | S006, S020 | kind: 245 s from no cluster on 2026-09-30 (S006), with the node image already local; Azure unmeasured |
 | QA-12 | Cost control | A tenant reaches its daily token budget, with concurrent requests | The next request is refused; the cost is reserved before each call, so concurrent calls cannot overspend; the monthly total stays inside C-04 | Budget exhaustion test and game day | S011, S028 | Unmeasured |
 
 The thresholds for QA-01, QA-02, QA-04 and QA-07 are guesses sized for a demo

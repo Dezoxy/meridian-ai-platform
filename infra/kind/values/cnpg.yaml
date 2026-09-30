@@ -1,0 +1,7 @@
+# CloudNativePG operator. Its CRDs come with the chart (crds.create default).
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    memory: 256Mi

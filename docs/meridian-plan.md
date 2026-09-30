@@ -114,7 +114,7 @@ and Pydantic, at the cost of one dependency.
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | done | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | done | S001 |
 | S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | done | S002 |
-| S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | todo | S002 |
+| S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | doing | S002 |
 | S007 | Azure foundation | Terraform with remote state, a resource group, a budget with 50, 80 and 100 % alerts (C-04), Key Vault, and Azure OpenAI `gpt-4.1-mini` plus `text-embedding-3-large` on DataZoneStandard in Sweden Central with a West Europe fallback; plan reviewed; apply confirmed by the owner | todo | S001 |
 
 ### M1 — Claims triage on kind
@@ -643,6 +643,119 @@ that ADR 2 promised.
   runtime load types it did not write (pickles in Microsoft Agent Framework,
   permissive msgpack in LangGraph by default). T-10 covers who may resume,
   not what loading a checkpoint executes.
+
+### S006 — Local platform on kind
+**Status:** doing · **Started:** 2026-09-30 · **Finished:** —
+**Goal:** one command creates the local platform on kind (gateway, PostgreSQL
+with pgvector and the observability stack) from pinned Helm charts, proves a
+test trace reaches Grafana, and one command removes it.
+
+**Decisions:**
+
+- The edge is the Gateway API served by Envoy Gateway, chosen by the owner
+  on 2026-09-30. The model named ingress-nginx, which Kubernetes retired in
+  March 2026: no releases and no security fixes since. Rejected: keeping
+  ingress-nginx, an unpatched edge; Traefik, lighter but less common in
+  Azure estates. HTTPRoute objects are what Azure Application Gateway for
+  Containers reads, so the routes can carry over to AKS; the Azure edge
+  itself is decided in S020.
+- PostgreSQL on kind runs under the CloudNativePG operator, with its
+  standard image, which ships pgvector. The operator generates the database
+  credentials inside the cluster, so none are written by hand, and it
+  manages the `vector` extension declaratively. Rejected: the Bitnami
+  chart, whose free images Broadcom withdrew in 2025; a hand-written
+  StatefulSet with the `pgvector/pgvector` image, which is lighter but
+  leaves credentials and extensions to our own scripts. On Azure the same
+  role is PostgreSQL Flexible Server (ADR 1); the workloads see a
+  connection string from a Secret in both places.
+- The owner authorised one `make down` on 2026-09-30 to verify the step,
+  deleting only the `meridian` kind cluster this session creates (hard
+  rule 8).
+
+**Work log:**
+
+- The `implementer` subagent built `infra/kind/` against a written
+  contract: one `pins.env` with every chart version and image digest,
+  values per release, the Gateway and namespace manifests, and `up.sh`,
+  `smoke.sh`, `grafana.sh` and `down.sh` behind new `make` targets. Every
+  `kubectl` and `helm` call names `infra/kind/kubeconfig` and the
+  `kind-meridian` context, so the owner's `~/.kube/config` and other
+  clusters are never read or changed, and no chart repository is added to
+  the owner's Helm configuration.
+- Chart facts found on the way: Grafana moved its open-source charts to
+  `grafana-community` in 2026, so Tempo and Loki come from there and
+  Grafana arrives as kube-prometheus-stack's subchart; Tempo 3 in
+  monolithic mode needs no Kafka; Loki's memcached caches are off, since
+  they alone would ask for several GiB; node-exporter needs
+  `hostRootFsMount` off on Docker Desktop; Envoy sends no identifying
+  header on a 404, so the smoke test reads Envoy's request counter instead.
+- Replaced ingress-nginx with Envoy Gateway in the model and the overview;
+  T-03 names S006 for Grafana's sign-in outside the gateway; QA-11 records
+  the kind measurement; the README lists the local platform.
+- Raised Grafana's memory limit from 320Mi to 512Mi after its container was
+  OOM-killed once while starting on the clean run; `helm --wait` had not
+  noticed, because the pod recovered.
+- The `infra-reviewer` passed the step with one must-fix, confirmed here:
+  `make smoke` left its Grafana port-forward running, because it
+  backgrounded a shell function and so killed a subshell instead of
+  kubectl. The `implementer` fixed it and the hardening the review asked
+  for: the kubeconfig is refreshed on every `make up`, `make up` waits for
+  the Envoy proxy, the scripts refuse a Docker engine that is not a local
+  socket, curl ignores `~/.curlrc` and proxies, a failed `kind get
+  clusters` no longer reads as "no cluster", unknown Loki keys are gone,
+  and the API server address is pinned to `127.0.0.1`.
+- The guard hook asked before `kind delete` but not before `make down`,
+  which wraps it (hard rule 8). It now asks before `make down` and before
+  running `infra/kind/down.sh`, with test cases for both and for commands
+  that must not match.
+
+**Result / verification:**
+
+- `make down` (authorised by the owner): exit 0, `Deleted nodes:
+  ["meridian-control-plane"]`; afterwards `kind get clusters` printed `No
+  kind clusters found.`, no `meridian` container was left and
+  `infra/kind/kubeconfig` was gone.
+- `make up` from no cluster: exit 0 in 245 s (QA-11 target: under 10
+  minutes), with the kind node image already local and every other image
+  pulled. A second `make up`: exit 0 in 37 s; it replaced only the Grafana
+  pod, whose values had changed, and restarted nothing.
+- `helm list -A`: seven releases `deployed`. All pods Running and Ready with
+  zero restarts after the Grafana fix; Gateway `edge` `PROGRAMMED True`,
+  proxy Service `80:30080/TCP`; port 8088 listens on `127.0.0.1` only.
+- `make smoke`: exit 0, six PASS lines, among them `PASS  trace: Tempo has
+  trace be295bf023e36c828bf2b7bd5a77af90 for meridian-smoke-1790761201`,
+  read through Grafana's Tempo datasource. A made-up service name returns 0
+  traces and 0 log streams; the real one returns 1 trace. Grafana answers
+  401 without credentials and with a wrong password.
+- `docker stats` on the node: 3.59 GiB of 7.65 GiB; the memory limits add up
+  to 4,464 Mi.
+- `~/.kube/config` unchanged (last modified 2025-11-26).
+- After the review fixes: `make up` exit 0 in 27 s, `make smoke` six PASS
+  lines, no `port-forward` process left afterwards, no pod restarted;
+  `DOCKER_HOST=tcp://192.0.2.1:2375 infra/kind/smoke.sh` refuses with
+  `error: the Docker engine is not local` and exit 1.
+- `bash tests/test_guard_bash.sh`: exit 0, 46 cases `ok`.
+- `shellcheck infra/kind/*.sh`: exit 0. `make docs`: `13 checks passed`.
+  `make test`: `Ran 116 tests`, `OK`. `make check`: exit 0, no ERROR line.
+  `make lint`: `Contracts: 2 kept, 0 broken.`
+
+**Follow-ups:**
+
+- S019: TLS on the gateway, default-deny NetworkPolicy, hardened security
+  contexts, digests for every chart image, and limits on the two
+  containers that have none (Envoy's shutdown manager, Prometheus's config
+  reloader).
+- S020: the Azure edge. The kind routes are Gateway API objects, which
+  Application Gateway for Containers reads; the model still names
+  Application Gateway WAF for Azure.
+- S009: when the first HTTPRoute lands, give the edge listener or the route
+  a hostname (for example `*.localhost`). A web page in the owner's browser
+  can otherwise reach `127.0.0.1:8088` through DNS rebinding (T-01). Today
+  the edge has no route, so it answers 404 to everything.
+- S022: run `make up` and `make smoke` on kind in CI; today they run on the
+  owner's laptop only.
+- The chart pins in `pins.env` are not watched by Dependabot; bumping them
+  is manual until a step adds Renovate or similar.
 
 ## Part D — Open questions
 

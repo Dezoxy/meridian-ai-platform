@@ -1,0 +1,37 @@
+# CloudNativePG Cluster "platform-db" in namespace meridian. One instance,
+# PostgreSQL 17 with pgvector. The image (pinned by digest in pins.env) is set
+# by up.sh with --set cluster.imageName. CloudNativePG generates the "app" role
+# and its Secret platform-db-app; no credential is set here.
+# Without this the chart names the Cluster "platform-db-cluster".
+fullnameOverride: platform-db
+
+type: postgresql
+mode: standalone
+version:
+  postgresql: "17"
+
+cluster:
+  instances: 1
+  # A PodDisruptionBudget on a single instance would block node drains.
+  enablePDB: false
+  # No superuser Secret; the operator reaches PostgreSQL over the local socket.
+  enableSuperuserAccess: false
+  storage:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  initdb:
+    database: app
+    owner: app
+
+# Enable pgvector declaratively (CloudNativePG Database resource). The
+# extension ships in the "standard" image.
+databases:
+  - name: app
+    owner: app
+    extensions:
+      - name: vector

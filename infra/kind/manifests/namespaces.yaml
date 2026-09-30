@@ -1,0 +1,25 @@
+# Namespaces for the local platform. Helm creates none of them
+# (no --create-namespace), so every release lands in one declared here.
+# envoy-gateway-system: the Envoy Gateway controller, proxy and Gateway "edge".
+# cnpg-system:          the CloudNativePG operator.
+# observability:        Prometheus, Grafana, Tempo, Loki, the collector.
+# meridian:             platform-db and, from S009, the Meridian applications.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: envoy-gateway-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: meridian

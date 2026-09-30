@@ -22,7 +22,7 @@ PORT      ?= 8080
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic up smoke grafana grafana-password down
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -105,3 +105,27 @@ pytest:
 ## synthetic       regenerate the synthetic data and golden set under data/synthetic (seeded; reruns are identical)
 synthetic:
 	PYTHONPATH=data/synthetic uv run python -m generator
+
+# ── Local platform on kind ───────────────────────────────────────────────────
+# infra/kind/README.md says what these create. The cluster's credentials stay in
+# infra/kind/kubeconfig (gitignored); ~/.kube/config is never touched.
+
+## up              create the kind cluster and install the local platform (needs Docker, kind, kubectl, helm; first run pulls images)
+up:
+	infra/kind/up.sh
+
+## smoke           prove the edge, pgvector and a trace, log and metric reaching Grafana's datasources
+smoke:
+	infra/kind/smoke.sh
+
+## grafana         port-forward Grafana to http://127.0.0.1:3000 (Ctrl-C stops it)
+grafana:
+	infra/kind/grafana.sh forward
+
+## grafana-password print the Grafana admin password
+grafana-password:
+	@infra/kind/grafana.sh password
+
+## down            delete the kind cluster "meridian" and its credentials file (destructive; the owner runs it)
+down:
+	infra/kind/down.sh

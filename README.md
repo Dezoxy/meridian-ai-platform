@@ -5,10 +5,11 @@ LLM agents, with a claims-triage reference workload for a fictional insurer.
 Built and operated by one person as a portfolio project, designed as if a
 platform team had to keep it alive.
 
-**Status on 2026-09-29: bootstrap.** The architecture model, the first three
-decisions and the engineering harness exist. No service, chart or Terraform
-module is implemented yet. Every capability below is labelled implemented,
-simulated or designed; an unlabelled claim is a documentation defect.
+**Status on 2026-09-30: bootstrap.** The architecture model, the first three
+decisions, the engineering harness and a local platform on kind exist. No
+platform service or Terraform module is implemented yet. Every capability
+below is labelled implemented, simulated or designed; an unlabelled claim is
+a documentation defect.
 
 ## Architecture at a glance
 
@@ -64,12 +65,13 @@ graph LR
 | Synthetic data and golden set: policies, claim history, four policy wordings and 40 first-notice-of-loss claims with expected outcomes, from a seeded generator whose reruns are identical | Implemented | `data/synthetic/` |
 | Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Designed | `docs/architecture/security/`, `docs/architecture/requirements/` |
 | Agent framework spike: one claim flow with an approval pause in Microsoft Agent Framework and in LangGraph under one test suite, and the decision matrix in ADR 2 | Implemented as a spike, never deployed | `spikes/` |
+| Local platform on kind: a Gateway API edge (Envoy Gateway), PostgreSQL 17 with pgvector (CloudNativePG), OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; `make up`, `make smoke`, `make down` | Implemented, laptop only | `infra/kind/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1 | ADR 3 |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1 | ADR 2 |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
 | Evaluation harness with a golden set and a CI gate | Designed, M1 | Architecture overview |
-| Observability, SLOs, runbooks, game-day incident record | Designed, M2 and M3 | Milestones |
-| Helm on kind, Terraform for an ephemeral Azure environment, signed images | Designed, M2 | ADR 1 |
+| SLOs, alerts and dashboards as code, runbooks, game-day incident record | Designed, M2 and M3 | Milestones |
+| Hardened Helm charts for the platform services, Terraform for an ephemeral Azure environment, signed images | Designed, M2 | ADR 1 |
 
 ## Milestones
 
@@ -95,6 +97,7 @@ data/synthetic/     seeded generator, its committed output and the golden set
 docs/
   README.md         documentation index
   architecture/     Structurizr model, views, ADRs, requirements; README.md is the front door
+infra/kind/         local platform: pinned chart versions, values, up, smoke and down scripts
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
 spikes/             throwaway experiments, each its own uv project; never deployed
 src/meridian/       the one Python package (src layout)
@@ -105,10 +108,11 @@ tests/              tests for the scripts and the bash guard
   synthetic/        pytest tests for the generator: reruns, labels, citations
 pyproject.toml      uv project: Python 3.13, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, synthetic
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, synthetic, up, smoke, grafana, down
 ```
 
-Planned, milestone by milestone: `config/registry/`, `api/`, `infra/`.
+Planned, milestone by milestone: `config/registry/`, `api/`, and Terraform and
+the platform's own Helm charts under `infra/`.
 
 ## Working in this repository
 
@@ -121,6 +125,10 @@ make pdf      # the Documentation tab and every view as one PDF
 make lint     # ruff, format check, import-linter contracts (needs uv)
 make pytest   # package and generator tests, including the import-contract check (needs uv)
 make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)
+make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm)
+make smoke    # edge, pgvector, and a test trace, log and metric read back through Grafana
+make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password
+make down     # delete the kind cluster; destructive
 ```
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin

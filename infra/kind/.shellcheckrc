@@ -1,0 +1,3 @@
+# Follow the "# shellcheck source=" hints so pins.env and common.sh are read.
+external-sources=true
+source-path=SCRIPTDIR

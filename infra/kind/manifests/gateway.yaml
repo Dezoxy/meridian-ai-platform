@@ -1,0 +1,67 @@
+# The edge: GatewayClass "envoy", Gateway "edge" and the EnvoyProxy that shapes
+# the proxy Service. Applied by up.sh after Envoy Gateway is installed (the
+# CRDs come with its chart). There is no HTTPRoute yet; the first application
+# route arrives in S009, so the edge answers 404 to everything.
+#
+# On kind a LoadBalancer Service stays Pending forever, so the proxy Service is
+# a NodePort with a fixed port. kind maps 127.0.0.1:8088 on the laptop to that
+# node port (infra/kind/cluster.yaml). Plain HTTP for now; TLS is S019.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: local
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+        container:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+      envoyService:
+        type: NodePort
+        # Strategic merge: the Service port is matched by its "port" (the
+        # listener port, 80) and receives the fixed node port.
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - port: 80
+                  nodePort: 30080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: local
+    namespace: envoy-gateway-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edge
+  namespace: envoy-gateway-system
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              kubernetes.io/metadata.name: meridian

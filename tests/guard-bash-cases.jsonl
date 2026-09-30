@@ -33,3 +33,14 @@
 {"expect":"deny","command":"git push \\\n  --force-with-lease origin main"}
 {"expect":"deny","command":"cat \\\n  config/.env"}
 {"expect":"deny","command":"python3 - <<'PY'\nimport os; os.system('git push --force')\nPY"}
+{"expect":"ask","command":"make down"}
+{"expect":"ask","command":"make -C . down"}
+{"expect":"ask","command":"infra/kind/down.sh"}
+{"expect":"ask","command":"bash infra/kind/down.sh"}
+{"expect":"ask","command":"cd infra/kind && ./down.sh"}
+{"expect":"ask","command":"time make down"}
+{"expect":"none","command":"make up"}
+{"expect":"none","command":"make smoke"}
+{"expect":"none","command":"make docs"}
+{"expect":"none","command":"make downtime"}
+{"expect":"none","command":"shellcheck infra/kind/down.sh"}
