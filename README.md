@@ -63,6 +63,7 @@ graph LR
 | Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
 | Synthetic data and golden set: policies, claim history, four policy wordings and 40 first-notice-of-loss claims with expected outcomes, from a seeded generator whose reruns are identical | Implemented | `data/synthetic/` |
 | Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Designed | `docs/architecture/security/`, `docs/architecture/requirements/` |
+| Agent framework spike: one claim flow with an approval pause in Microsoft Agent Framework and in LangGraph under one test suite, and the decision matrix in ADR 2 | Implemented as a spike, never deployed | `spikes/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1 | ADR 3 |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1 | ADR 2 |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
@@ -95,6 +96,7 @@ docs/
   README.md         documentation index
   architecture/     Structurizr model, views, ADRs, requirements; README.md is the front door
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
+spikes/             throwaway experiments, each its own uv project; never deployed
 src/meridian/       the one Python package (src layout)
   platform/         shared platform services; never import the agent framework
   workloads/        use cases built on the platform contract
