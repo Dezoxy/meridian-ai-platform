@@ -111,14 +111,15 @@ Rejected options:
 
 ## Appendix: framework decision matrix
 
-Added by plan step S005 on 2026-09-29. Every cell is a measurement unless it
-says otherwise: the same three-step claim flow with an approval pause was
-built in Microsoft Agent Framework (`agent-framework-core` 1.19.0) and in
-LangGraph 1.2.12 with `langgraph-checkpoint-sqlite` 3.1.1, and one test suite
-runs against both. No model is called. The code, the tests and the source
-line behind each cell are in `spikes/s005-agent-framework/`. The LangGraph
-twin exists so that both columns are measured; it is spike code, never
-deployed, and not the second workload implementation of option 3.
+Added by plan step S005 on 2026-09-29 and revised on 2026-09-30 after review.
+Every cell is a measurement unless it says otherwise: the same three-step
+claim flow with an approval pause was built in Microsoft Agent Framework
+(`agent-framework-core` 1.19.0) and in LangGraph 1.2.12 with
+`langgraph-checkpoint-sqlite` 3.1.1, and one test suite runs against both. No
+model is called. The code, the tests and the source line behind each cell are
+in `spikes/s005-agent-framework/`. The LangGraph twin exists so that both
+columns are measured; it is spike code, never deployed, and not the second
+workload implementation of option 3.
 
 The first version addressed Microsoft Agent Framework runs by checkpoint ID
 and LangGraph runs by a stable thread ID, which made one row unfair. An

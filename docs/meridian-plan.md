@@ -549,7 +549,7 @@ when" covers yet; each step adds its line when it starts.
   edge is built, or it stays designed (T-02).
 
 ### S005 — Agent framework spike
-**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-29
+**Status:** done · **Started:** 2026-09-29 · **Finished:** 2026-09-30
 **Goal:** measure Microsoft Agent Framework against LangGraph on the same
 three-step claim flow with an approval pause, and append the decision matrix
 that ADR 2 promised.
@@ -615,6 +615,8 @@ that ADR 2 promised.
 
 - In the spike, `uv run pytest -q`: `135 passed` after the review (`72 passed`
   before it); the two concurrent-resume tests passed in eight further runs.
+  The LangGraph one is the suite's only probabilistic assertion: it retries
+  up to ten pauses until the two callers are told different outcomes.
 - `make lint`: exit 0, `Contracts: 2 kept, 0 broken.`; the spike's `.venv`
   is not linted (`ruff check spikes --show-files` lists no `.venv` path).
 - `make pytest`: `195 passed`; the root `uv.lock` is unchanged.
