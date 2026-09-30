@@ -19,10 +19,12 @@ MERMAID_IMAGE     ?= minlag/mermaid-cli:11.17.0
 ARCH_DIR  ?= docs/architecture
 GENERATED := $(ARCH_DIR)/generated
 PORT      ?= 8080
+# The registry's copy of Terraform's deployment outputs (T-12).
+REGISTRY_SNAPSHOT := config/registry/snapshots/terraform-openai-deployments.json
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic up smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic up smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -102,6 +104,11 @@ lint:
 pytest:
 	uv run pytest
 
+## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas
+registry:
+	uv run meridian registry validate --terraform-outputs $(REGISTRY_SNAPSHOT)
+	uv run meridian registry schemas --check
+
 ## synthetic       regenerate the synthetic data and golden set under data/synthetic (seeded; reruns are identical)
 synthetic:
 	PYTHONPATH=data/synthetic uv run python -m generator
@@ -150,3 +157,8 @@ azure-apply:
 ## azure-smoke     prove the foundation: live models match Terraform, key auth is off, one chat and one embedding call per account (well under EUR 0.01)
 azure-smoke:
 	infra/terraform/foundation.sh smoke
+
+## registry-snapshot refresh the registry's copy of Terraform's deployment outputs (only the compared fields); read-only in Azure
+registry-snapshot:
+	infra/terraform/foundation.sh outputs > $(REGISTRY_SNAPSHOT).tmp || { rm -f $(REGISTRY_SNAPSHOT).tmp; exit 1; }
+	mv $(REGISTRY_SNAPSHOT).tmp $(REGISTRY_SNAPSHOT)

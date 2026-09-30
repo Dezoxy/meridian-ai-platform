@@ -149,11 +149,17 @@ az cognitiveservices usage list -l swedencentral --subscription "<pinned subscri
 | `make azure-plan` | `terraform init` against the remote state, then `plan` into `foundation/foundation.tfplan`. Review it. | No |
 | `make azure-apply` | Apply exactly the saved plan, then remove the plan file. Refuses to run without a plan. | Yes |
 | `make azure-smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. | No, apart from two tiny model calls per account |
+| `make registry-snapshot` | `foundation.sh outputs`: the `openai_deployments` output as JSON without account names and endpoints, written to `config/registry/snapshots/`. | No |
 
 The order is `azure-state` once, then `azure-plan`, review, `azure-apply`,
 `azure-smoke`. The hooks ask for confirmation before `azure-state` and
 `azure-apply`, and ask before or deny any `az … delete` or `az … purge`.
 `foundation.sh init` is the same `terraform init` on its own.
+
+The registry (`config/registry/`) compares its Azure deployments with that
+snapshot in CI, which has no Azure access (T-12). After a change to the
+deployments, run `make registry-snapshot` and commit the snapshot with the
+registry change; `git diff` on the snapshot shows what Azure changed.
 
 ## What `make azure-smoke` proves
 

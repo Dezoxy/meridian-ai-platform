@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drive the Azure foundation (infra/terraform/foundation): `make azure-plan`,
-# `make azure-apply`, `make azure-smoke`.
+# `make azure-apply`, `make azure-smoke`, `make registry-snapshot`.
 #   init   terraform init against the remote state that state.sh created
 #   plan   init, then plan into foundation.tfplan; changes nothing in Azure
 #   apply  apply exactly that saved plan, then remove it (creates Azure resources)
@@ -8,6 +8,9 @@
 #          outputs and stay in the EU, key authentication is off, and each
 #          account answers one chat completion and one embedding through Entra
 #          ID. Read-only apart from a few tiny model calls (well under EUR 0.01).
+#   outputs print the model deployments from Terraform's outputs as JSON, only
+#          the fields the registry compares (no account names or endpoints):
+#          the snapshot the registry is checked against (T-12). Read-only.
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
 set -euo pipefail
@@ -27,7 +30,7 @@ fail() {
 }
 
 usage() {
-  printf 'usage: %s <init|plan|apply|smoke>\n' "$(basename "$0")" >&2
+  printf 'usage: %s <init|plan|apply|smoke|outputs>\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -250,6 +253,31 @@ cmd_smoke() {
   printf '\nAll checks passed.\n'
 }
 
+# ── outputs ──────────────────────────────────────────────────────────────────
+# The snapshot is committed to a public repository, so it keeps an allowlist of
+# fields, the ones the registry compares: a field added to the output later,
+# such as an account name or a resource ID, stays out until it is added here.
+# The GUID check is the backstop. Logs and Terraform's warnings go to stderr,
+# redacted; stdout is the JSON alone, ready to redirect into a file.
+readonly SNAPSHOT_FIELDS='{capacity, deployment_name, location, model_name, model_version, purpose, sku_name}'
+readonly GUID_PATTERN='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+
+cmd_outputs() {
+  tf_init >&2
+  local out errors status=0 snapshot
+  errors="$(mktemp)"
+  out="$(tf output -json openai_deployments 2>"${errors}")" || status=$?
+  redact <"${errors}" >&2
+  rm -f "${errors}"
+  ((status == 0)) || die "terraform output failed (exit ${status})"
+  snapshot="$(jq -S "map_values(${SNAPSHOT_FIELDS})" <<<"${out}" 2>/dev/null)" ||
+    die "the openai_deployments output is not a map of deployments"
+  jq -e 'length > 0' <<<"${snapshot}" >/dev/null ||
+    die "the openai_deployments output has no deployments"
+  [[ ! "${snapshot}" =~ ${GUID_PATTERN} ]] || die "the snapshot would contain a GUID; refusing to print it"
+  printf '%s\n' "${snapshot}"
+}
+
 [[ $# -eq 1 ]] || usage
 case "$1" in
   init)
@@ -265,5 +293,9 @@ case "$1" in
     cmd_apply
     ;;
   smoke) cmd_smoke ;;
+  outputs)
+    need_tools terraform az jq
+    cmd_outputs
+    ;;
   *) usage ;;
 esac

@@ -6,8 +6,9 @@ Built and operated by one person as a portfolio project, designed as if a
 platform team had to keep it alive.
 
 **Status on 2026-09-30: bootstrap.** The architecture model, the first three
-decisions, the engineering harness, a local platform on kind and the Azure
-foundation exist. No platform service is implemented yet. Every capability
+decisions, the engineering harness, a local platform on kind, the Azure
+foundation and the platform registry exist. No platform service is
+implemented yet. Every capability
 below is labelled implemented, simulated or designed; an unlabelled claim is
 a documentation defect.
 
@@ -67,6 +68,7 @@ graph LR
 | Agent framework spike: one claim flow with an approval pause in Microsoft Agent Framework and in LangGraph under one test suite, and the decision matrix in ADR 2 | Implemented as a spike, never deployed | `spikes/` |
 | Local platform on kind: a Gateway API edge (Envoy Gateway), PostgreSQL 17 with pgvector (CloudNativePG), OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; `make up`, `make smoke`, `make down` | Implemented, laptop only | `infra/kind/` |
 | Azure foundation: Terraform with its state in Azure Storage (Entra ID only), a 60-euro monthly budget with alerts at 50, 80 and 100 %, Key Vault, and Azure OpenAI `gpt-4o` and `text-embedding-3-large` on regional deployments in Sweden Central with key authentication disabled; the West Europe fallback waits for the subscription's upgrade to pay-as-you-go | Implemented, persistent in a free-trial subscription of its own | `infra/terraform/` |
+| Platform registry: models, providers, tools, agents, routing policies and tenants in YAML, with JSON Schemas generated from Pydantic models; `meridian registry validate` checks references, residency labels against SKU and region, personal data on EU labels only, idempotency keys on mutating tools, no decision tool in an allowlist, and the Azure deployments against Terraform's outputs, locally and in CI | Implemented; no service reads it until S009 | `config/registry/`, `src/meridian/platform/registry/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1 | ADR 3 |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1 | ADR 2 |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
@@ -94,6 +96,7 @@ the [plan](docs/meridian-plan.md).
 .agents/            byte-identical skill mirror for non-Claude agents
 .codex/             Codex hooks, prompts, agent twins, config example
 .github/workflows/  documentation gate; Python gates; architecture PDF release
+config/registry/    platform registry: YAML, generated JSON Schemas, Terraform output snapshot
 data/synthetic/     seeded generator, its committed output and the golden set
 docs/
   README.md         documentation index
@@ -103,19 +106,18 @@ infra/terraform/    Azure foundation: Terraform root module, state bootstrap, pl
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
 spikes/             throwaway experiments, each its own uv project; never deployed
 src/meridian/       the one Python package (src layout)
-  platform/         shared platform services; never import the agent framework
+  platform/         shared platform services and the meridian CLI; never import the agent framework
   workloads/        use cases built on the platform contract
 tests/              tests for the scripts and the bash guard
-  meridian/         pytest tests for the package, including the import-contract check
+  meridian/         pytest tests for the package: import contracts, registry checks
   synthetic/        pytest tests for the generator: reruns, labels, citations
-pyproject.toml      uv project: Python 3.13, dev tools, ruff, pytest, import-linter
+pyproject.toml      uv project: Python 3.13, the meridian command, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, synthetic, up, smoke, grafana, down, azure-*
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, registry, synthetic, up, smoke, grafana, down, azure-*
 ```
 
-Planned, milestone by milestone: `config/registry/`, `api/`, the Terraform for
-the ephemeral Azure environment and the platform's own Helm charts under
-`infra/`.
+Planned, milestone by milestone: `api/`, the Terraform for the ephemeral
+Azure environment and the platform's own Helm charts under `infra/`.
 
 ## Working in this repository
 
@@ -127,6 +129,7 @@ make mermaid  # regenerate derived Mermaid blocks, render every fence (Docker)
 make pdf      # the Documentation tab and every view as one PDF
 make lint     # ruff, format check, import-linter contracts (needs uv)
 make pytest   # package and generator tests, including the import-contract check (needs uv)
+make registry # validate the registry and its schemas, against the Terraform output snapshot (needs uv)
 make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)
 make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm)
 make smoke    # edge, pgvector, and a test trace, log and metric read back through Grafana
@@ -136,6 +139,7 @@ make azure-state  # once: the Terraform state storage in Azure (creates Azure re
 make azure-plan   # plan the Azure foundation into a saved plan file
 make azure-apply  # apply exactly that saved plan (changes Azure; the owner confirms)
 make azure-smoke  # the deployments as planned, keys off, one chat and one embedding call with Entra ID
+make registry-snapshot  # refresh the registry's copy of Terraform's deployment outputs (read-only)
 ```
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin

@@ -1,0 +1,107 @@
+{
+  "$defs": {
+    "Server": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "description"
+      ],
+      "title": "Server",
+      "type": "object"
+    },
+    "Tool": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_required": {
+          "default": false,
+          "title": "Approval Required",
+          "type": "boolean"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "effect": {
+          "enum": [
+            "read",
+            "write",
+            "decision"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "idempotency_key_required": {
+          "default": false,
+          "title": "Idempotency Key Required",
+          "type": "boolean"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "scope": {
+          "pattern": "^[a-z]+(:[a-z]+)+$",
+          "title": "Scope",
+          "type": "string"
+        },
+        "server": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Server",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "server",
+        "description",
+        "effect",
+        "scope",
+        "input_schema"
+      ],
+      "title": "Tool",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "servers": {
+      "items": {
+        "$ref": "#/$defs/Server"
+      },
+      "title": "Servers",
+      "type": "array"
+    },
+    "tools": {
+      "items": {
+        "$ref": "#/$defs/Tool"
+      },
+      "title": "Tools",
+      "type": "array"
+    }
+  },
+  "required": [
+    "servers",
+    "tools"
+  ],
+  "title": "ToolsFile",
+  "type": "object"
+}

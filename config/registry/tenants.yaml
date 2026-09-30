@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=schemas/tenants.schema.json
+# Tenants: the data class of their requests and the agents they may run.
+tenants:
+  - id: claims-triage
+    description: The claims workload in production use.
+    data_class: personal
+    agents: [claims-triage]
+  - id: evaluation
+    description: Evaluation runs of the claims-triage agent, at the same class.
+    data_class: personal
+    agents: [claims-triage]
+  - id: development
+    description: Development and tests on synthetic data only.
+    data_class: synthetic
+    agents: [claims-triage]

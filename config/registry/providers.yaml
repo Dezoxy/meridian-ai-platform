@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=schemas/providers.schema.json
+# Where model calls can go. Endpoints and account names stay out: S010 injects them.
+providers:
+  - id: azure-openai
+    kind: azure-openai
+    description: Azure OpenAI; Entra ID only, keys off (S007).
+  - id: replay
+    kind: replay
+    description: Deterministic replay inside the platform; sends nothing out.

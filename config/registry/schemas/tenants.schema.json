@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "Tenant": {
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "type": "string"
+          },
+          "title": "Agents",
+          "type": "array"
+        },
+        "data_class": {
+          "enum": [
+            "synthetic",
+            "internal",
+            "personal",
+            "special"
+          ],
+          "title": "Data Class",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "data_class",
+        "agents"
+      ],
+      "title": "Tenant",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "tenants": {
+      "items": {
+        "$ref": "#/$defs/Tenant"
+      },
+      "title": "Tenants",
+      "type": "array"
+    }
+  },
+  "required": [
+    "tenants"
+  ],
+  "title": "TenantsFile",
+  "type": "object"
+}

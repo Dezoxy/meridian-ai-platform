@@ -1,0 +1,20 @@
+{
+  "sdc/gpt-4o": {
+    "capacity": 20,
+    "deployment_name": "gpt-4o",
+    "location": "swedencentral",
+    "model_name": "gpt-4o",
+    "model_version": "2024-11-20",
+    "purpose": "chat",
+    "sku_name": "Standard"
+  },
+  "sdc/text-embedding-3-large": {
+    "capacity": 20,
+    "deployment_name": "text-embedding-3-large",
+    "location": "swedencentral",
+    "model_name": "text-embedding-3-large",
+    "model_version": "1",
+    "purpose": "embedding",
+    "sku_name": "Standard"
+  }
+}

@@ -1,10 +1,13 @@
 ## Data classification
 
-Status on 2026-09-29: designed. The classes decide which model deployments
-may process a request (C-02, ADR 3); nothing enforces them yet. The gateway
-enforces them from S010 and the registry schema from S008. This document owns
-the classes and the inventory; the [threat model](threat-model.md) owns the
-threats against them.
+Status on 2026-09-30: implemented in part. The classes decide which model
+deployments may process a request (C-02, ADR 3). Since S008 the registry
+refuses a deployment that allows a class its residency label does not
+permit; the validator's code fixes each class's ceiling, and a test keeps
+the table below and `config/registry/policies.yaml` in agreement. The
+gateway enforces the classes per request from S010. This
+document owns the classes and the inventory; the
+[threat model](threat-model.md) owns the threats against them.
 
 ### Classes
 

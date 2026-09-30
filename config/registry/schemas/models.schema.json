@@ -1,0 +1,217 @@
+{
+  "$defs": {
+    "Deployment": {
+      "additionalProperties": false,
+      "properties": {
+        "data_classes": {
+          "items": {
+            "enum": [
+              "synthetic",
+              "internal",
+              "personal",
+              "special"
+            ],
+            "type": "string"
+          },
+          "title": "Data Classes",
+          "type": "array"
+        },
+        "deployment_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deployment Name"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "price": {
+          "$ref": "#/$defs/Price"
+        },
+        "provider": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Provider",
+          "type": "string"
+        },
+        "purpose": {
+          "enum": [
+            "chat",
+            "embedding"
+          ],
+          "title": "Purpose",
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "residency": {
+          "enum": [
+            "eu-region",
+            "eu-zone",
+            "global"
+          ],
+          "title": "Residency",
+          "type": "string"
+        },
+        "retires": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retires"
+        },
+        "sku": {
+          "anyOf": [
+            {
+              "enum": [
+                "Standard",
+                "DataZoneStandard",
+                "GlobalStandard"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sku"
+        },
+        "terraform_key": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9-]+/[a-z0-9.-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terraform Key"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "purpose",
+        "model",
+        "version",
+        "residency",
+        "data_classes",
+        "price"
+      ],
+      "title": "Deployment",
+      "type": "object"
+    },
+    "Price": {
+      "additionalProperties": false,
+      "description": "USD retail list price per million tokens.\n\nYAML floats such as ``3.025`` load exactly (Pydantic converts through the\nshortest repr) up to about 15 significant digits; quote longer values.",
+      "properties": {
+        "checked": {
+          "format": "date",
+          "title": "Checked",
+          "type": "string"
+        },
+        "currency": {
+          "const": "USD",
+          "title": "Currency",
+          "type": "string"
+        },
+        "input_per_million_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Input Per Million Tokens"
+        },
+        "output_per_million_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Per Million Tokens"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "currency",
+        "input_per_million_tokens",
+        "source",
+        "checked"
+      ],
+      "title": "Price",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "deployments": {
+      "items": {
+        "$ref": "#/$defs/Deployment"
+      },
+      "title": "Deployments",
+      "type": "array"
+    }
+  },
+  "required": [
+    "deployments"
+  ],
+  "title": "ModelsFile",
+  "type": "object"
+}
