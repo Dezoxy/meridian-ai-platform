@@ -1,7 +1,8 @@
 # Meridian AI Platform — Plan
 
-> **Status:** bootstrap, 2026-09-29. The architecture model, the first
-  decisions and the engineering harness exist; no platform code does yet.
+> **Status:** bootstrap, 2026-09-30. The architecture model, the first
+  decisions, the engineering harness and a local platform on kind exist; no
+  platform service does yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -114,7 +115,7 @@ and Pydantic, at the cost of one dependency.
 | S003 | Synthetic data and golden set | A seeded generator under `data/synthetic/` produces policies, policy-wording documents and first-notice-of-loss claims with labelled expected outcomes; a rerun produces identical output; no real names or documents | done | S002 |
 | S004 | Security and quality registers | `security/threat-model.md` with T-IDs per trust boundary, `security/data-classification.md` with the data classes, `requirements/quality-attributes.md` with targets marked unmeasured; all symlinked into `overview/`; `make docs` resolves every cited ID | done | S001 |
 | S005 | Agent framework spike | A three-step flow with an approval pause in Microsoft Agent Framework under `spikes/`, with notes; a decision matrix appended to ADR 2 | done | S002 |
-| S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | doing | S002 |
+| S006 | Local platform on kind | `make up` creates a kind cluster with ingress, PostgreSQL with pgvector, OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; a test trace appears in Grafana; `make down` removes it | done | S002 |
 | S007 | Azure foundation | Terraform with remote state, a resource group, a budget with 50, 80 and 100 % alerts (C-04), Key Vault, and Azure OpenAI `gpt-4.1-mini` plus `text-embedding-3-large` on DataZoneStandard in Sweden Central with a West Europe fallback; plan reviewed; apply confirmed by the owner | todo | S001 |
 
 ### M1 — Claims triage on kind
@@ -645,7 +646,7 @@ that ADR 2 promised.
   not what loading a checkpoint executes.
 
 ### S006 — Local platform on kind
-**Status:** doing · **Started:** 2026-09-30 · **Finished:** —
+**Status:** done · **Started:** 2026-09-30 · **Finished:** 2026-09-30
 **Goal:** one command creates the local platform on kind (gateway, PostgreSQL
 with pgvector and the observability stack) from pinned Helm charts, proves a
 test trace reaches Grafana, and one command removes it.
