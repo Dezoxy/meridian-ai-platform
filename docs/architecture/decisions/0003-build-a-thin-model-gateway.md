@@ -76,6 +76,15 @@ Central with a West Europe deployment as fallback (milestone M1); Mistral
 Large 3 on Azure AI Foundry (M2); Claude on AWS Bedrock in Frankfurt as an
 optional M3 or M4 adapter.
 
+Amended on 2026-09-30 (S007): Meridian moved to a new free-trial
+subscription, where Azure OpenAI has no EU quota for `gpt-4.1-mini` and no
+current chat model on an EU SKU in West Europe. Until that subscription is
+upgraded to pay-as-you-go, M1 uses `gpt-4o` 2024-11-20 on regional
+`Standard` in Sweden Central, labelled `eu-region`, with no second region,
+because Azure no longer accepts new `gpt-4o-mini` deployments; the fallback
+stays designed. The gateway's contract does not change: a deployment is a
+registry entry.
+
 ## Consequences
 
 Positive:

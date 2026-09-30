@@ -7,7 +7,7 @@ agentDeveloper = person "Agent Developer" "Builds a workload on the platform con
 platformOperator = person "Platform Operator" "Runs the platform: SLOs, budgets, incidents, upgrades." "Staff"
 
 identityProvider = softwareSystem "Microsoft Entra ID" "Issues tokens for staff and workload identities. A mock OIDC issuer stands in on kind." "External"
-azureOpenAI = softwareSystem "Azure OpenAI" "Hosted OpenAI models on EU data-zone deployments: Sweden Central primary, West Europe fallback." "External"
+azureOpenAI = softwareSystem "Azure OpenAI" "Hosted OpenAI models on EU deployments: Sweden Central primary, West Europe fallback." "External"
 mistralFoundry = softwareSystem "Mistral on Azure AI Foundry" "EU-resident Mistral models on the data-zone SKU. Third provider from milestone M2." "External"
 
 adjuster -> identityProvider "Signs in with" "OIDC" "Person"

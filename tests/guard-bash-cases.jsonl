@@ -44,3 +44,71 @@
 {"expect":"none","command":"make docs"}
 {"expect":"none","command":"make downtime"}
 {"expect":"none","command":"shellcheck infra/kind/down.sh"}
+{"expect":"ask","command":"make azure-state"}
+{"expect":"ask","command":"make azure-apply"}
+{"expect":"ask","command":"make -C . azure-apply"}
+{"expect":"ask","command":"infra/terraform/state.sh"}
+{"expect":"ask","command":"bash infra/terraform/state.sh"}
+{"expect":"ask","command":"infra/terraform/foundation.sh apply"}
+{"expect":"ask","command":"cd infra/terraform && ./foundation.sh apply"}
+{"expect":"none","command":"make azure-plan"}
+{"expect":"none","command":"make azure-smoke"}
+{"expect":"none","command":"infra/terraform/foundation.sh plan"}
+{"expect":"none","command":"infra/terraform/foundation.sh smoke"}
+{"expect":"none","command":"shellcheck infra/terraform/state.sh infra/terraform/foundation.sh"}
+{"expect":"none","command":"make azure-applyx"}
+{"expect":"ask","command":"AZURE_SUBSCRIPTION=x infra/terraform/state.sh"}
+{"expect":"ask","command":"AZURE_SUBSCRIPTION=\"Azure subscription 1\" make azure-state"}
+{"expect":"ask","command":"AZURE_SUBSCRIPTION='Azure subscription 1' infra/terraform/state.sh"}
+{"expect":"ask","command":"env AZURE_SUBSCRIPTION=x make azure-state"}
+{"expect":"ask","command":"env AZURE_SUBSCRIPTION=x ./state.sh"}
+{"expect":"ask","command":"make 'azure-apply'"}
+{"expect":"ask","command":"make \"azure-state\""}
+{"expect":"ask","command":"cd infra/terraform && bash state.sh"}
+{"expect":"ask","command":"cd infra/terraform && bash -x state.sh"}
+{"expect":"ask","command":"bash -c \"infra/terraform/state.sh\""}
+{"expect":"ask","command":"sh -c 'AZURE_SUBSCRIPTION=x ./state.sh'"}
+{"expect":"ask","command":"bash -c \"make azure-apply\""}
+{"expect":"ask","command":"AZURE_SUBSCRIPTION=x infra/terraform/foundation.sh apply"}
+{"expect":"ask","command":"cd infra/terraform && bash foundation.sh apply"}
+{"expect":"ask","command":"sh -c './foundation.sh apply'"}
+{"expect":"ask","command":"echo start\ninfra/terraform/state.sh"}
+{"expect":"ask","command":"time infra/terraform/state.sh"}
+{"expect":"none","command":"AZURE_SUBSCRIPTION=x infra/terraform/foundation.sh plan"}
+{"expect":"none","command":"make 'azure-plan'"}
+{"expect":"none","command":"bash infra/terraform/foundation.sh smoke"}
+{"expect":"none","command":"bash -c 'make azure-smoke'"}
+{"expect":"none","command":"grep -n state.sh README.md"}
+{"expect":"none","command":"cd infra/terraform && shellcheck state.sh"}
+{"expect":"none","command":"make azure-state-of-the-art"}
+{"expect":"ask","command":"az lock delete --name lock-tfstate --resource-group rg-meridian-tfstate"}
+{"expect":"ask","command":"az storage account delete --name stmeridiantfabc123"}
+{"expect":"ask","command":"az role assignment delete --ids /subscriptions/x"}
+{"expect":"ask","command":"az keyvault purge --name kv-meridian-abc123"}
+{"expect":"ask","command":"az lock delete --name x && echo done"}
+{"expect":"deny","command":"az cognitiveservices account delete --name oai-x --resource-group rg-x"}
+{"expect":"deny","command":"az group delete --name rg-x"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/foundation state rm azurerm_key_vault.foundation"}
+{"expect":"ask","command":"terraform state push terraform.tfstate"}
+{"expect":"ask","command":"terraform state mv a.b c.d"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/foundation force-unlock 1234"}
+{"expect":"ask","command":"az account get-access-token --resource https://cognitiveservices.azure.com"}
+{"expect":"ask","command":"TOKEN=$(az account get-access-token --query accessToken -o tsv)"}
+{"expect":"none","command":"az cognitiveservices account list"}
+{"expect":"none","command":"az account show --query name -o tsv"}
+{"expect":"none","command":"az lock list --resource-group rg-meridian-tfstate"}
+{"expect":"none","command":"terraform state list"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/foundation state list"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/foundation output -json"}
+{"expect":"none","command":"az keyvault secret list --vault-name kv-x --query '[].name' -o tsv"}
+{"expect": "deny", "command": "az group delete --name rg-scratch --yes"}
+{"expect": "deny", "command": "az keyvault delete --name kv-scratch"}
+{"expect": "deny", "command": "az cognitiveservices account delete -n oai-scratch -g rg-scratch"}
+{"expect": "none", "command": "az keyvault show -n kv-scratch --query properties.softDeleteRetentionInDays"}
+{"expect": "none", "command": "az storage account blob-service-properties show -n st -g rg-meridian-tfstate --query deleteRetentionPolicy"}
+{"expect": "ask", "command": "az lock delete --name lock-tfstate --resource-group rg-meridian-tfstate"}
+{"expect": "ask", "command": "infra/terraform/foundation.sh \"apply\""}
+{"expect": "ask", "command": "terraform -chdir=infra/terraform/foundation import azurerm_resource_group.foundation x"}
+{"expect": "ask", "command": "terraform -chdir=infra/terraform/foundation state pull"}
+{"expect": "ask", "command": "terraform taint azurerm_key_vault.foundation"}
+{"expect": "none", "command": "terraform -chdir=infra/terraform/foundation state list"}

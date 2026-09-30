@@ -6,8 +6,8 @@ Built and operated by one person as a portfolio project, designed as if a
 platform team had to keep it alive.
 
 **Status on 2026-09-30: bootstrap.** The architecture model, the first three
-decisions, the engineering harness and a local platform on kind exist. No
-platform service or Terraform module is implemented yet. Every capability
+decisions, the engineering harness, a local platform on kind and the Azure
+foundation exist. No platform service is implemented yet. Every capability
 below is labelled implemented, simulated or designed; an unlabelled claim is
 a documentation defect.
 
@@ -36,7 +36,7 @@ graph LR
     style 4 fill:#ede9fe,stroke:#2563eb,color:#1f2937
     5("Microsoft Entra ID<br/>[Software System]<br/>Issues tokens for staff and<br/>workload identities. A mock<br/>OIDC issuer stands in on<br/>kind.")
     style 5 fill:#f1f3f5,stroke:#8a96a8,color:#1f2937
-    6("Azure OpenAI<br/>[Software System]<br/>Hosted OpenAI models on EU<br/>data-zone deployments: Sweden<br/>Central primary, West Europe<br/>fallback.")
+    6("Azure OpenAI<br/>[Software System]<br/>Hosted OpenAI models on EU<br/>deployments: Sweden Central<br/>primary, West Europe<br/>fallback.")
     style 6 fill:#f1f3f5,stroke:#8a96a8,color:#1f2937
     7("Mistral on Azure AI Foundry<br/>[Software System]<br/>EU-resident Mistral models on<br/>the data-zone SKU. Third<br/>provider from milestone M2.")
     style 7 fill:#f1f3f5,stroke:#8a96a8,color:#1f2937
@@ -46,7 +46,7 @@ graph LR
     3-- "Registers agents, tools,<br/>prompts and policies in<br/>[Git pull request]" -->10
     4-- "Watches SLOs, cost and traces<br/>in<br/>[HTTPS]" -->10
     10-- "Validates user tokens against<br/>[OIDC/JWKS]" -->5
-    10-- "Sends redacted prompts to EU<br/>data-zone deployments of<br/>[HTTPS/JSON]" -->6
+    10-- "Sends redacted prompts to EU<br/>deployments of<br/>[HTTPS/JSON]" -->6
     10-- "Routes EU-resident requests<br/>and fallbacks to<br/>[HTTPS/JSON]" -->7
     2-- "Signs in with<br/>[OIDC]" -->5
     3-- "Signs in with<br/>[OIDC]" -->5
@@ -66,6 +66,7 @@ graph LR
 | Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Designed | `docs/architecture/security/`, `docs/architecture/requirements/` |
 | Agent framework spike: one claim flow with an approval pause in Microsoft Agent Framework and in LangGraph under one test suite, and the decision matrix in ADR 2 | Implemented as a spike, never deployed | `spikes/` |
 | Local platform on kind: a Gateway API edge (Envoy Gateway), PostgreSQL 17 with pgvector (CloudNativePG), OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; `make up`, `make smoke`, `make down` | Implemented, laptop only | `infra/kind/` |
+| Azure foundation: Terraform with its state in Azure Storage (Entra ID only), a 60-euro monthly budget with alerts at 50, 80 and 100 %, Key Vault, and Azure OpenAI `gpt-4o` and `text-embedding-3-large` on regional deployments in Sweden Central with key authentication disabled; the West Europe fallback waits for the subscription's upgrade to pay-as-you-go | Implemented, persistent in a free-trial subscription of its own | `infra/terraform/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1 | ADR 3 |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1 | ADR 2 |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
@@ -98,6 +99,7 @@ docs/
   README.md         documentation index
   architecture/     Structurizr model, views, ADRs, requirements; README.md is the front door
 infra/kind/         local platform: pinned chart versions, values, up, smoke and down scripts
+infra/terraform/    Azure foundation: Terraform root module, state bootstrap, plan, apply and smoke scripts
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
 spikes/             throwaway experiments, each its own uv project; never deployed
 src/meridian/       the one Python package (src layout)
@@ -108,11 +110,12 @@ tests/              tests for the scripts and the bash guard
   synthetic/        pytest tests for the generator: reruns, labels, citations
 pyproject.toml      uv project: Python 3.13, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, synthetic, up, smoke, grafana, down
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, synthetic, up, smoke, grafana, down, azure-*
 ```
 
-Planned, milestone by milestone: `config/registry/`, `api/`, and Terraform and
-the platform's own Helm charts under `infra/`.
+Planned, milestone by milestone: `config/registry/`, `api/`, the Terraform for
+the ephemeral Azure environment and the platform's own Helm charts under
+`infra/`.
 
 ## Working in this repository
 
@@ -129,6 +132,10 @@ make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl
 make smoke    # edge, pgvector, and a test trace, log and metric read back through Grafana
 make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password
 make down     # delete the kind cluster; destructive
+make azure-state  # once: the Terraform state storage in Azure (creates Azure resources)
+make azure-plan   # plan the Azure foundation into a saved plan file
+make azure-apply  # apply exactly that saved plan (changes Azure; the owner confirms)
+make azure-smoke  # the deployments as planned, keys off, one chat and one embedding call with Entra ID
 ```
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin

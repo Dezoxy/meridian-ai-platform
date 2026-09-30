@@ -22,7 +22,7 @@ PORT      ?= 8080
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic up smoke grafana grafana-password down
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic up smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -129,3 +129,24 @@ grafana-password:
 ## down            delete the kind cluster "meridian" and its credentials file (destructive; the owner runs it)
 down:
 	infra/kind/down.sh
+
+# ── Azure foundation ─────────────────────────────────────────────────────────
+# infra/terraform/README.md says what these create. They use the subscription
+# pinned in infra/terraform/local.env (gitignored); the first azure-state needs
+# AZURE_SUBSCRIPTION=<name or id>. Needs az (logged in), terraform, jq and curl.
+
+## azure-state     CREATES Azure resources: the Terraform state storage account (Entra ID only) and infra/terraform/local.env; the owner runs it
+azure-state:
+	infra/terraform/state.sh
+
+## azure-plan      terraform init and plan of the foundation into foundation.tfplan; changes nothing in Azure
+azure-plan:
+	infra/terraform/foundation.sh plan
+
+## azure-apply     CREATES Azure resources: applies the saved plan (Key Vault, Azure OpenAI, budget); the owner confirms the plan first
+azure-apply:
+	infra/terraform/foundation.sh apply
+
+## azure-smoke     prove the foundation: live models match Terraform, key auth is off, one chat and one embedding call per account (well under EUR 0.01)
+azure-smoke:
+	infra/terraform/foundation.sh smoke
