@@ -1,0 +1,13 @@
+# Allowlist: nothing enters the build context unless it is listed below, so the
+# kubeconfig, .env files, .context/ and infra/terraform/local.env never can.
+*
+!pyproject.toml
+!uv.lock
+!src/
+!config/registry/
+# Re-exclude what the allowed folders can hold.
+**/__pycache__
+**/*.pyc
+**/.env*
+**/*.pem
+**/*.key

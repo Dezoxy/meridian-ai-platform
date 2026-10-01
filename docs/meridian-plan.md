@@ -1,9 +1,10 @@
 # Meridian AI Platform — Plan
 
-> **Status:** bootstrap, 2026-09-30. The architecture model, the first
+> **Status:** bootstrap, 2026-10-01. The architecture model, the first
   decisions, the engineering harness, a local platform on kind, the Azure
   foundation, the platform registry and a walking skeleton of the Claims
-  API, the Agent Runtime and the Model Gateway exist; none is deployed yet.
+  API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
+  kind with `make demo`, and nothing runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -126,7 +127,7 @@ and Pydantic, at the cost of one dependency.
 | S008 | Platform registry | `config/registry/` YAML for models, providers, tools, agents, policies and tenants, with JSON Schemas; every deployment carries a residency label and allowed data classes; validated in CI; seeded for the claims workload; `meridian registry validate` is the check developers and CI both run | done | S002 |
 | S040 | Harness refresh | The ECC plugin is off, so the harness this repository needs is copied in from development-base: the remaining drifted rules and skills re-copied, a code reviewer, the Python rules that fit, the skills later steps need, three slash commands, the gate and session hooks, the chrome-devtools MCP server and the git hook-bypass denies with their cases; `make docs`, `make test` and the guard-bash cases pass | done | S008 |
 | S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a ~~decision~~ triage proposal; ~~one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind~~ an end-to-end test proves one trace across API, runtime and gateway; per-service schemas, roles and migrations tested against PostgreSQL in CI (split on 2026-09-30: the kind half is S041) | done | S006, S008 |
-| S041 | Walking skeleton on kind | One image for the three services, manifests in namespace `meridian`, an HTTPRoute on a `*.localhost` hostname, per-service database roles on the cluster; `make demo` posts a claim and the one trace spanning API, runtime and gateway is found in Tempo; `make smoke` stays green | todo | S009 |
+| S041 | Walking skeleton on kind | One image for the three services, manifests in namespace `meridian`, an HTTPRoute on a `*.localhost` hostname, per-service database roles on the cluster; `make demo` posts a claim and the one trace spanning API, runtime and gateway is found in Tempo; `make smoke` stays green | done | S009 |
 | S010 | Gateway routing and resilience | Registry-driven routing by data class and residency; Azure OpenAI adapter; timeout, retry, circuit breaker and fallback to the second region; a residency mismatch is refused and audited; contract tests pass | todo | S004, S007, S009 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set | todo | S003, S009 |
@@ -1426,6 +1427,163 @@ demonstrable with `make demo` on kind~~ (the kind half moved to S041).
   the 10 s statement timeout, so a long migration will need its own
   connection settings; `fastapi.md`'s path globs match none of the three
   apps, so widen them in development-base, then re-copy.
+
+### S041 — Walking skeleton on kind
+
+**Status:** done · **Started:** 2026-10-01 · **Finished:** 2026-10-01
+**Goal:** the S009 skeleton runs on the local kind platform: one image for
+the three services, a role per service on the cluster's database, the
+Claims API behind the edge on a `*.localhost` hostname, and `make demo`
+posts a claim and finds its one trace in Tempo.
+**Decisions:**
+
+- One image for the three services, built from the lockfile with the
+  package installed non-editable, a numeric non-root user and no
+  credential; each Deployment picks its app with `uvicorn --factory`. The
+  image is built on the laptop and loaded with `kind load`, tagged by its
+  own ID so a changed image rolls the Deployments. Rejected: an image per
+  service, three builds of one lockfile for no isolation gain; a local
+  registry, which S022's ACR replaces anyway.
+- Plain manifests applied by `make deploy`; S019 turns them into hardened
+  Helm charts. Probes, limits and a non-root, no-escalation security
+  context are here because the S009 follow-ups name them; NetworkPolicy,
+  disruption budgets and read-only file systems stay in S019.
+- Only the Claims API is routed, on `claims.meridian.localhost`; the runtime
+  and the gateway are ClusterIP Services with no route. The hostname closes
+  S006's DNS-rebinding follow-up (T-01): `*.localhost` always resolves to
+  loopback, so a page on another site cannot point its own name at the
+  edge. The route caps a body at the app's own 64 KiB.
+- Database roles come from CloudNativePG's declarative role management:
+  `meridian_owner` and one login role per service, each with a password
+  Secret that `make up` generates once, on the cluster, before the database
+  release that needs it (T-42). A new database `meridian` owned by
+  `meridian_owner` holds the schemas. Rejected: re-owning the bootstrap
+  `app` database, because CloudNativePG applies `initdb` once and a changed
+  bootstrap would not converge on the existing cluster.
+- Connections verify the database's certificate (`verify-full` with the
+  cluster's CA), since the CA is already a Secret in the namespace. After
+  review the server enforces it too: `pg_hba` rules refuse a connection
+  without TLS, admit the four roles to `meridian` and nowhere else, and no
+  other role to `meridian`. Rejected for now: revoking `CONNECT` and
+  `TEMP` from `PUBLIC` in a migration, which `pg_hba` covers on kind;
+  Azure's Flexible Server takes no `pg_hba` of ours, so S020 adds it.
+- After review the tracer samples every span whatever the caller's
+  sampled flag says, so a `traceparent` ending in `-00` cannot switch
+  tracing off for a request.
+- Migrations run as a Job, named per image, before the Deployments roll;
+  only the Job can read the owner role's Secret.
+- `make demo` posts the first golden-set claim not yet triaged, with a
+  `traceparent` it generates, and looks that trace ID up in Tempo through
+  Grafana, as `make smoke` does. Accepting a caller's trace context at the
+  edge is fine on a laptop; the Azure edge decides it in S020.
+
+**Work log:**
+
+- Read against the live cluster before the contract: CloudNativePG's
+  managed roles default to `login: false`; its own `platform-db-app` Secret
+  is `basic-auth` with a `uri` key, which the role Secrets copy; the
+  cluster chart 0.8.1 takes `cluster.roles` and a list of `databases`;
+  Envoy Gateway 1.9.2 caps a body with `BackendTrafficPolicy`
+  `requestBuffer`. `feature-threat-model`: T-42 added, T-01 names the
+  hostname.
+- `implementer`, contract A: the `Dockerfile` and its allowlist
+  `.dockerignore`, the roles and the `meridian` database in
+  `platform-db.yaml`, the Secrets and a wait for the roles in `up.sh`,
+  manifests in `infra/kind/manifests/meridian/`, `deploy.sh` and `demo.sh`
+  behind `make deploy` and `make demo`, and
+  `tests/meridian/test_kind_manifests.py`, which ties the manifests to the
+  code's constants (it failed when the route's limit was raised to 128Ki).
+- Found on the way: the image packages `0001_schemas.sql` without a
+  packaging change; the FastAPI instrumentation reads
+  `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` at import, so the image sets it and
+  probes stay out of Tempo; the pods mount only `ca.crt` from
+  `platform-db-ca`, which also holds the CA's private key.
+- The edge Gateway had been `Programmed=False` (`AddressNotAssigned`) since
+  2026-09-30 19:22, before this step, while still serving; `make up` timed
+  out waiting for it. Restarting the Envoy Gateway controller cleared it;
+  the annotation used to nudge it was removed afterwards.
+- `smoke.sh` and `gateway.yaml` no longer say the edge has no route.
+- Reviews: `infra-reviewer` passed with no must-fix; `security-reviewer`
+  found no critical or high issue and three medium ones (TLS enforced by
+  the client only, a caller's sampled flag switching tracing off, `PUBLIC`
+  able to connect to the new database), plus wording in T-01, T-25 and
+  T-42. A mutation run by the infra reviewer showed what the manifest
+  test missed.
+- `implementer`, contract B: the `pg_hba` rules; the `ALWAYS_ON` sampler
+  with a test that failed without it; a test that a `text/plain` claim is
+  refused (the app already did); `deploy.sh` applies the manifests by glob,
+  checks the database is ready and reruns the migration Job each time,
+  with a 300 s deadline; `demo.sh` strips control characters from what it
+  prints, reports a failing Tempo query and waits for the edge after a
+  rollout (a first post right after one got a 503); `up.sh` turns off
+  `xtrace` around the passwords; the `.dockerignore` re-excludes keys and
+  `.env` files; the README covers rotation (both keys, then restart) and
+  names the kubeconfig in every snippet; the manifest test grew to 48
+  cases, three of them proven red by mutation.
+
+**Result / verification:**
+
+- `make up` on the existing cluster: exit 0 in 34 s; the same 31 pods with
+  the same UIDs and zero restarts before and after. Database
+  `platform-db-meridian` applied, owned by `meridian_owner`; the four roles
+  in `managedRolesStatus.byStatus.reconciled`.
+- `make demo` (deploy included): exit 0 in 11 s; CLM-0002 to CLM-0004 were
+  already triaged, so it posted CLM-0005: `201`, route `adjuster`, drafted
+  by `replay-chat` (provider `replay`, mode `replay`); `PASS trace
+  f42b134c8ba4ba9f8f03d06a79e40a56 has spans from all of: claims-api
+  agent-runtime model-gateway` (6, 5 and 5 spans).
+- `make smoke`: exit 0, six PASS lines.
+- The edge: `404` for `127.0.0.1:8088`, for `Host: evil.example` and for
+  `agent-runtime.meridian.localhost`; `200` for
+  `claims.meridian.localhost/healthz`; `404` for `POST /runs` on the claims
+  host; `413` for a 70 KB body. One HTTPRoute in the cluster; the three
+  services are ClusterIP.
+- Inside the Claims API pod, as `claims_api` over TLS with `verify-full`:
+  reading `claims.claims` works; reading `runtime.runs` and
+  `audit.events`, inserting into `audit.events`, updating `claims.claims`
+  and creating a table are refused with `42501`. CLM-0005's audit rows
+  carry `db_role` `agent_runtime`, `model_gateway`, `agent_runtime`.
+- Not tested: `make up` from no cluster. Every run in this step converged
+  an existing cluster; the cold path, where the Secrets, then the roles,
+  then the database are created in order, needs `make down`, the owner's
+  call, and is S018's "from a clean checkout".
+- After contract B: `make up` exit 0 in 33 s, the same 24 running pods and
+  no restarts (`pg_hba` reloads without one); `make demo` exit 0 in 13 s,
+  CLM-0009 `201`, `PASS trace 0293b20f84198e19ba63cf242c8747d7` (6, 5 and
+  5 spans); `make smoke` six PASS lines.
+- `pg_hba`, from the Claims API pod with its own credentials: the
+  configured connection reaches `meridian` over TLS; the same with
+  `sslmode=disable`, or to the `app` or `postgres` database, is refused
+  with `pg_hba.conf rejects connection`.
+- A request through the edge with `traceparent` sampled flag `00` (a 422)
+  is in Tempo with four `claims-api` spans.
+- `shellcheck infra/kind/*.sh`: exit 0. `make pytest`: 855 passed, 130
+  skipped. `make pytest-db`: 985 passed. `make lint`: `Contracts: 2 kept,
+  0 broken.` `make docs`: 13 checks passed. `make test`: 117 tests OK.
+
+**Follow-ups:**
+
+- S019: NetworkPolicy for the runtime, the gateway and the migration Job
+  (today any pod can call them); Pod Security labels on `meridian` once
+  the CloudNativePG pods are checked against `restricted`; a read-only
+  root file system needs an `emptyDir` for `/tmp`, since the image's user
+  has no home.
+- S020: revoke `CONNECT` and `TEMP` on the database from `PUBLIC` in a
+  migration, because Flexible Server takes no `pg_hba` of ours; decide
+  whether the edge strips or regenerates inbound trace context; workload
+  identity replaces the password Secrets.
+- S022: build the image in CI, with an SBOM, a scan and a digest instead of
+  a tag; run `shellcheck` on `infra/kind/*.sh` in a gate (today only by
+  hand); the `uv_build` backend is fetched at build time without a hash.
+- No step yet: `make up` waits on the Gateway's `Programmed` condition,
+  which Envoy Gateway left `False` (`AddressNotAssigned`) for hours while
+  the edge kept serving; find the cause or wait on something sturdier.
+- No step yet: `make demo` uses one of the 40 golden-set claims per run
+  and fails once all are triaged; old `meridian:*` images pile up on the
+  laptop and the node until `make down`.
+- Dependabot now watches the Dockerfile's base images; the kind pins in
+  `pins.env` are still bumped by hand (S006).
+- S012: decide whether pgvector moves to the `meridian` database.
 
 ## Part D — Open questions
 

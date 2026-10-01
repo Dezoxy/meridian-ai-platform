@@ -1,7 +1,8 @@
 # The edge: GatewayClass "envoy", Gateway "edge" and the EnvoyProxy that shapes
 # the proxy Service. Applied by up.sh after Envoy Gateway is installed (the
-# CRDs come with its chart). There is no HTTPRoute yet; the first application
-# route arrives in S009, so the edge answers 404 to everything.
+# CRDs come with its chart). The only route is the Claims API's, on
+# claims.meridian.localhost (manifests/meridian/route.yaml, S041); every other
+# host gets 404.
 #
 # On kind a LoadBalancer Service stays Pending forever, so the proxy Service is
 # a NodePort with a fixed port. kind maps 127.0.0.1:8088 on the laptop to that

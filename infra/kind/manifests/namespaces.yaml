@@ -3,7 +3,7 @@
 # envoy-gateway-system: the Envoy Gateway controller, proxy and Gateway "edge".
 # cnpg-system:          the CloudNativePG operator.
 # observability:        Prometheus, Grafana, Tempo, Loki, the collector.
-# meridian:             platform-db and, from S009, the Meridian applications.
+# meridian:             platform-db and, from S041, the Meridian applications.
 apiVersion: v1
 kind: Namespace
 metadata:

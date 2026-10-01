@@ -1,0 +1,38 @@
+# The only route on the edge: the Claims API, on a *.localhost name. The Agent
+# Runtime and the Model Gateway have none and stay reachable only in the cluster.
+# A request with another Host header (127.0.0.1:8088, a rebinding page) matches
+# no route and gets 404 (threat model T-01). Plain HTTP until S019.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: claims-api
+  namespace: meridian
+  labels:
+    app.kubernetes.io/name: claims-api
+    app.kubernetes.io/part-of: meridian
+spec:
+  parentRefs:
+    - name: edge
+      namespace: envoy-gateway-system
+  hostnames:
+    - claims.meridian.localhost
+  rules:
+    - backendRefs:
+        - name: claims-api
+          port: 8000
+---
+# Envoy buffers each request in full and answers 413 above the limit, so an
+# oversized body never reaches the Claims API. 64Ki is the app's own limit
+# (SMALL_BODY_LIMIT_BYTES); the app still enforces it for chunked bodies.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claims-api
+  namespace: meridian
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: claims-api
+  requestBuffer:
+    limit: 64Ki

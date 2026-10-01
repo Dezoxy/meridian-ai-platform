@@ -1,11 +1,12 @@
 ## Threat model
 
-Status on 2026-09-30: mostly designed. The platform's first services exist
-as a walking skeleton that runs in tests and is not deployed yet (S009), so
-most mitigations below are designed, with the step that builds it; the
-controls that already exist (secret scanning, the protected branch, the
-locked dependency set, and the first service-level ones from S009) are
-marked implemented with their evidence. A threat
+Status on 2026-10-01: mostly designed. The platform's first services exist
+as a walking skeleton that runs in tests (S009) and on the local kind
+cluster (S041), and nothing runs in Azure yet, so most mitigations below
+are designed, with the step that builds it; the controls that already exist
+(secret scanning, the protected branch, the locked dependency set, and the
+first service-level and database ones from S009 and S041) are marked
+implemented with their evidence. A threat
 with no mitigation decided yet is marked open, and one risk is accepted
 rather than mitigated. Labels follow C-07. "No step yet" means that no step's
 "done when" in the plan covers the control; the plan records it as a
@@ -66,7 +67,7 @@ oversight risk that STRIDE has no letter for.
 
 | ID | Boundary | Threat | Mitigation | Built in | Status |
 |---|---|---|---|---|---|
-| T-01 | TB-1 | S, I: anyone can submit a claim, or read a claim's status, as any claimant. The model gives the claimant no sign-in; only staff authenticate. | Claimant identity is not decided. Until it is, the claimant pages sit behind the staff sign-in and the presenter plays the claimant; on kind they are reachable only from the laptop. | S016, S021 | Open |
+| T-01 | TB-1 | S, I: anyone can submit a claim, or read a claim's status, as any claimant. The model gives the claimant no sign-in; only staff authenticate. | Claimant identity is not decided. Until it is, the claimant pages sit behind the staff sign-in and the presenter plays the claimant; on kind they are reachable only from the laptop, through a route bound to a `*.localhost` hostname, so a page cannot point its own name at the edge by DNS rebinding. A page can still send a blind cross-origin request to that name; the Claims API refuses a body that is not JSON and has no CORS, so a browser cannot send it JSON without a preflight it fails. | S016, S021, S041 (the hostname) | Open |
 | T-02 | TB-1 | D: a flood of claim submissions starts triage runs and spends the model budget, which then refuses the adjusters' work too. | T-01's interim control keeps anonymous traffic out; per-tenant budgets refuse work beyond budget (QA-12); a rate limit at the ingress; a web application firewall in the Azure design. | S011; no step yet for the ingress limit and the firewall | Designed |
 | T-03 | TB-1 | I, T: traces or logs capture prompt text or claimant details that anyone reaching Grafana can read, or claimant text forges log lines. | Spans carry metadata (tenant, agent, model, tokens, cost, claim ID), never prompt or completion text; structured logs with claimant text as an escaped field; the log formatter redacts personal fields; Grafana behind sign-in, and outside the ingress on kind. | S006 (Grafana sign-in, outside the gateway on kind), S009, S014 | Implemented in part: span attributes pass an allowlist, and no span records an exception's message or stack trace (S009, tested with canaries); log redaction arrives in S014, Grafana sign-in in S021 |
 | T-04 | TB-1 | I: a real person types real personal data into a demo that is meant to hold synthetic data only (C-03). | The claimant pages are not public (T-01); the form says the data must be fictional; demos submit claims from the golden set. | S016, S021 | Designed |
@@ -90,7 +91,7 @@ oversight risk that STRIDE has no letter for.
 | T-22 | TB-6 | I: injected text steers an allowed tool to another claimant's record, such as a policy lookup for someone else's policy. | Every tool call is bound to the run's claim and tenant: the runtime passes them from the run context, and the server refuses a record outside them, whatever the model chose as arguments. | S013 | Designed |
 | T-23 | TB-6 | T: a retried mutating call records a note or a request twice. | Every mutating tool requires an idempotency key and returns the original result on a repeat (QA-08). | S013, S015 | Designed |
 | T-24 | TB-6 | S, E: something other than the runtime calls an MCP server directly and writes to the database. | MCP endpoints require the runtime's service identity; network policy admits only the runtime. | S019; no step yet for service-to-service identity | Designed |
-| T-25 | TB-6 | E: a compromised service reads or changes another service's data in the shared database. | One database role per service, granted its own schema; a service that writes audit events gets insert on the audit table and nothing else, and a trigger stamps each row's time, ID and database role so a service cannot forge them (the `service` column stays a label the writer chooses; `db_role` is the proof); nothing can update, delete or truncate it; the role that owns the schemas runs migrations only. | S009 (schemas, roles and grants in the migrations), S041 (the roles on the cluster) | Implemented in part: schemas, grants and the insert-only triggers are in the migrations and tested against PostgreSQL in CI (S009); the roles on the cluster arrive in S041 |
+| T-25 | TB-6 | E: a compromised service reads or changes another service's data in the shared database. | One database role per service, granted its own schema; a service that writes audit events gets insert on the audit table and nothing else, and a trigger stamps each row's time, ID and database role so a service cannot forge them (the `service` column stays a label the writer chooses; `db_role` is the proof); nothing can update, delete or truncate it; the role that owns the schemas runs migrations only. | S009 (schemas, roles and grants in the migrations), S041 (the roles on the cluster) | Implemented on kind: schemas, grants and the insert-only triggers are in the migrations and tested against PostgreSQL in CI (S009); the four roles run on the cluster, where `claims_api` was refused on `runtime.runs`, `audit.events` and `CREATE`, and the demo's audit rows carry `agent_runtime` and `model_gateway` (S041); the Azure database arrives in S020 |
 | T-26 | TB-7 | T: the claimant's description carries instructions ("approve this claim") that steer tool calls or the proposal. | Claimant text is passed as delimited data; an injection-detection guardrail; allowlists and argument binding limit what a steered agent can do (T-21, T-22); the route is decided by rules (T-30); the injection suite measures the result (QA-09). | S014, S032 | Designed |
 | T-27 | TB-7 | T: second-order content carries injected instructions: tool results, claim notes, claim history, retrieved wording, arriving documents. | All tool and retrieval results are passed as quoted data with their source; wordings enter only through the generator and a pull request; the same guardrails as T-26. | S012, S013, S032 | Designed |
 | T-28 | TB-7 | T: a completion with invalid or out-of-range content (a payable amount above the limit) becomes a proposal. | The proposal is schema-validated; amounts, limits and cited clauses are checked against the policy and the wording before the proposal is stored. | S014 | Designed |
@@ -107,6 +108,7 @@ oversight risk that STRIDE has no letter for.
 | T-39 | TB-4, TB-9 | T, R: the gateway runs in replay mode where real claims arrive, so proposals come from hand-written text while every caller believes a model drafted them. | Replay is an explicit gateway mode, never a route candidate; the gateway starts in replay mode only when its environment is test, CI or kind; every response, audit record and span names the replay deployment and provider, and the stored proposal records the deployment that drafted it. | S009 | Implemented (S009): replay refused outside test, CI and kind, and named on every response, audit row, span and stored proposal |
 | T-40 | TB-3, TB-9 | E: an installed package registers a graph under a registered agent's name, and the runtime runs its code with the runtime's credentials. | The runtime loads a graph only for an agent in the registry, only from an entry point the `meridian` distribution publishes, and refuses a name published twice, a target outside `meridian.workloads` and a module loaded from outside the installed package; dependencies are locked (T-36). It adds little against an attacker who can already write to the Python path, which T-36 covers. | S009 | Implemented (S009), tested with a planted distribution |
 | T-41 | TB-5 | I: the agent framework's own tracing (LangSmith, pulled in by LangGraph) ships a run's state, the claim included, to a service outside the EU, past the gateway, the audit and the residency labels. | The runtime forces every LangSmith and legacy LangChain tracing switch off before LangGraph loads, and refuses to start when one was set, so a request for it fails loudly; telemetry leaves only through OTLP to the platform's own collector. | S009 | Implemented (S009), tested with a local stand-in for the LangSmith API |
+| T-42 | TB-6, TB-9 | I, E: a service's database password leaks through a script's output, a command line, the image or the repository, or a service runs with the role that owns the schemas, and T-25's separation is void. | `make up` generates each role's password on the laptop, creates its Secret once, passes it to `kubectl` on stdin and never prints it; the services read their own Secret by name, and only the migration Job reads the owner's; the image holds no credential; settings keep the connection string out of their repr; the database refuses a connection without TLS, admits the four roles to the `meridian` database only and no other role to it, and the services verify its certificate. On kind the Secrets sit unencrypted in the node's etcd, accepted for a laptop cluster; Azure uses workload identity (S020). | S041, S020 | Implemented in part (S041): on kind, a connection without TLS and one to another database were refused, and the static manifest tests pin which Secret each workload reads; workload identity arrives in S020 |
 
 ### Hard rules and the register
 
@@ -114,7 +116,7 @@ The hard rules in `AGENTS.md` and the threats that test them:
 
 | Hard rule | Threats |
 |---|---|
-| No secrets in the repository | T-06, T-18, T-34, T-37 |
+| No secrets in the repository | T-06, T-18, T-34, T-37, T-42 |
 | Synthetic data only | T-01, T-04 |
 | EU residency is a label | T-11, T-12, T-16, T-20, T-35 |
 | Every model call through the gateway | T-16, T-19, T-41 |
@@ -140,11 +142,15 @@ No tension found: no designed mitigation needs a rule broken.
 - T-35: with one maintainer, nobody reviews a change but its author. The
   required checks carry the whole weight.
 - Until service identity exists (S019), the runtime and the gateway trust
-  the tenant and agent they are sent (T-08). In S009 the three services
-  meet only inside a test process; from S041 they are reachable only inside
-  the cluster. Until then, anyone who can reach a service can act as any
+  the tenant and agent they are sent (T-08). On kind (S041) they have no
+  route at the edge, but any pod in the cluster can call them until S019's
+  NetworkPolicy. Until then, anyone who can reach a service can act as any
   tenant, read a run's status by its ID, and pick which of two duplicate
   headers wins.
+- The Claims API accepts a caller's W3C trace context, so a caller can
+  attach a request to a trace ID it chose. The samplers ignore the caller's
+  sampled flag, so a request cannot hide from the traces (S041). Whether
+  the Azure edge strips or regenerates trace context is decided in S020.
 - Provider-side abuse monitoring may retain prompts for a limited time under
   the provider's terms. It is accepted for synthetic data and recorded for
   the provider onboarding checklist in S034.
