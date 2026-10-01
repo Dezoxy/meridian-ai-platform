@@ -117,6 +117,8 @@ def test_a_chat_call_is_answered_audited_and_traced(
         "gen_ai.response.model": "replay-chat",
         "gen_ai.usage.input_tokens": usage["input_tokens"],
         "gen_ai.usage.output_tokens": usage["output_tokens"],
+        "meridian.attempts": 1,
+        "meridian.skipped": 0,
     }
     assert body["output"]["finish_reason"] == "stop"
 

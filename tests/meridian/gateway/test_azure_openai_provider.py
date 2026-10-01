@@ -103,7 +103,7 @@ def deployment() -> Deployment:
 
 def error_of(provider: AzureOpenAIProvider, deployment: Deployment) -> ProviderError:
     with pytest.raises(ProviderError) as raised:
-        provider.chat(deployment, REQUEST)
+        provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
     return raised.value
 
 
@@ -114,7 +114,7 @@ def test_the_request_goes_to_the_deployment_path_with_the_api_version(
     requests: list[httpx.Request] = []
     provider = make_provider(answer(), requests)
 
-    provider.chat(deployment, REQUEST)
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     (request,) = requests
     assert request.method == "POST"
@@ -130,7 +130,7 @@ def test_a_trailing_slash_on_the_endpoint_gives_the_same_url(
     requests: list[httpx.Request] = []
     provider = make_provider(answer(), requests, endpoints={"sdc": ENDPOINT + "/"})
 
-    provider.chat(deployment, REQUEST)
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert requests[0].url.path == "/openai/deployments/chat-deploy/chat/completions"
 
@@ -141,7 +141,7 @@ def test_the_request_carries_a_bearer_token_and_no_api_key(
     requests: list[httpx.Request] = []
     provider = make_provider(answer(), requests)
 
-    provider.chat(deployment, REQUEST)
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     headers = requests[0].headers
     assert headers["authorization"] == f"Bearer {FAKE_TOKEN}"
@@ -157,7 +157,7 @@ def test_a_key_in_the_environment_never_becomes_an_api_key_header(
     requests: list[httpx.Request] = []
     provider = make_provider(answer(), requests)
 
-    provider.chat(deployment, REQUEST)
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     headers = requests[0].headers
     assert "api-key" not in headers
@@ -171,7 +171,7 @@ def test_the_body_holds_the_messages_in_order_and_the_output_limit(
     requests: list[httpx.Request] = []
     provider = make_provider(answer(), requests)
 
-    provider.chat(deployment, REQUEST)
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     body = json.loads(requests[0].content)
     assert body["messages"] == [
@@ -195,8 +195,8 @@ def test_each_location_key_has_its_own_endpoint(deployment: Deployment) -> None:
     )
     in_gwc = deployment.model_copy(update={"terraform_key": "gwc/gpt-4o"})
 
-    provider.chat(deployment, REQUEST)
-    provider.chat(in_gwc, REQUEST)
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
+    provider.chat(in_gwc, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert [r.url.host for r in requests] == [
         "oai-meridian-sdc-a1b2c3.openai.azure.com",
@@ -241,6 +241,40 @@ def test_connect_plus_read_stays_under_the_runtimes_timeout_to_the_gateway() -> 
     timeout = built_sdk_client(provider).timeout
 
     assert timeout.connect + timeout.read < GATEWAY_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "connect", "rest"),
+    [(25.0, 5.0, 20.0), (12.0, 5.0, 7.0), (3.0, 1.5, 1.5)],
+)
+def test_the_attempt_budget_is_split_between_connecting_and_the_other_phases(
+    deployment: Deployment, timeout_seconds: float, connect: float, rest: float
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(answer(), requests)
+
+    provider.chat(deployment, REQUEST, timeout_seconds=timeout_seconds)
+
+    (request,) = requests
+    assert request.extensions["timeout"] == {
+        "connect": connect,
+        "read": rest,
+        "write": rest,
+        "pool": rest,
+    }
+    assert connect + rest <= timeout_seconds
+
+
+def test_the_next_call_is_not_bound_by_the_previous_calls_timeout(
+    deployment: Deployment,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(answer(), requests)
+
+    provider.chat(deployment, REQUEST, timeout_seconds=3.0)
+    provider.chat(deployment, REQUEST, timeout_seconds=12.0)
+
+    assert [r.extensions["timeout"]["read"] for r in requests] == [1.5, 7.0]
 
 
 def test_one_built_client_is_shared_by_every_location(
@@ -381,7 +415,7 @@ def test_the_process_environment_is_checked_by_default(
 def test_a_200_maps_to_a_provider_reply(deployment: Deployment) -> None:
     provider = make_provider(answer())
 
-    reply = provider.chat(deployment, REQUEST)
+    reply = provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert reply == ProviderReply(
         text="Drafted.",
@@ -400,7 +434,7 @@ def test_finish_reason_length_is_returned(deployment: Deployment) -> None:
     }
     provider = make_provider(answer(choices=[choice]))
 
-    reply = provider.chat(deployment, REQUEST)
+    reply = provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert (reply.text, reply.finish_reason) == ("Cut o", "length")
 
@@ -414,7 +448,12 @@ def test_only_the_first_choice_is_read(deployment: Deployment) -> None:
     first = completion()["choices"][0]
     provider = make_provider(answer(choices=[first, second]))
 
-    assert provider.chat(deployment, REQUEST).text == "Drafted."
+    assert (
+        provider.chat(
+            deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS
+        ).text
+        == "Drafted."
+    )
 
 
 def test_content_filter_is_rejected(deployment: Deployment) -> None:
@@ -528,7 +567,12 @@ def test_a_model_name_of_128_characters_is_the_longest_accepted(
 ) -> None:
     provider = make_provider(answer(model="m" * 128))
 
-    assert provider.chat(deployment, REQUEST).model == "m" * 128
+    assert (
+        provider.chat(
+            deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS
+        ).model
+        == "m" * 128
+    )
 
 
 @pytest.mark.parametrize(
@@ -542,7 +586,7 @@ def test_the_sdk_coerces_a_numeric_string_or_bool_count_before_the_adapter_sees_
     # a change in the SDK shows (the contract asked for bad-response here).
     provider = make_provider(answer(usage=bad_usage(prompt_tokens=sent)))
 
-    reply = provider.chat(deployment, REQUEST)
+    reply = provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert reply.input_tokens == seen_by_the_adapter
 
@@ -552,7 +596,7 @@ def test_zero_tokens_are_accepted(deployment: Deployment) -> None:
         answer(usage=bad_usage(prompt_tokens=0, completion_tokens=0))
     )
 
-    reply = provider.chat(deployment, REQUEST)
+    reply = provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert (reply.input_tokens, reply.output_tokens) == (0, 0)
 
@@ -585,7 +629,7 @@ def test_a_reply_that_is_not_json_is_a_bad_response(deployment: Deployment) -> N
     ("status", "kind"),
     [
         (400, "rejected"),
-        (404, "rejected"),
+        (404, "unavailable"),
         (422, "rejected"),
         (401, "auth"),
         (403, "auth"),
@@ -594,9 +638,12 @@ def test_a_reply_that_is_not_json_is_a_bad_response(deployment: Deployment) -> N
         (502, "unavailable"),
         (503, "unavailable"),
         (504, "unavailable"),
-        (408, "unavailable"),
-        (409, "unavailable"),
-        (418, "unavailable"),
+        (408, "timeout"),
+        (409, "rejected"),
+        (413, "rejected"),
+        (415, "rejected"),
+        (418, "rejected"),
+        (499, "rejected"),
     ],
 )
 def test_a_status_maps_to_its_kind_and_keeps_the_status(
@@ -759,7 +806,7 @@ def test_an_unknown_location_key_raises_before_any_request(
     provider = make_provider(answer(), requests, endpoints={"gwc": OTHER_ENDPOINT})
 
     with pytest.raises(ValueError, match="sdc"):
-        provider.chat(deployment, REQUEST)
+        provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert requests == []
 
@@ -772,7 +819,7 @@ def test_a_deployment_without_a_terraform_key_raises_before_any_request(
     keyless = deployment.model_copy(update={"terraform_key": None})
 
     with pytest.raises(ValueError, match="terraform_key"):
-        provider.chat(keyless, REQUEST)
+        provider.chat(keyless, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert requests == []
 
@@ -785,7 +832,7 @@ def test_a_deployment_without_a_deployment_name_raises_before_any_request(
     nameless = deployment.model_copy(update={"deployment_name": None})
 
     with pytest.raises(ValueError, match="deployment_name"):
-        provider.chat(nameless, REQUEST)
+        provider.chat(nameless, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
 
     assert requests == []
 

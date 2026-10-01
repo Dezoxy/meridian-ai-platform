@@ -6,7 +6,8 @@ which tenant runs which agent. Status: **implemented** (S008) as validated
 configuration; the Model Gateway and the Agent Runtime load it at startup
 (S009), and in live mode the gateway routes each chat call by it: the
 tenant's data class against every candidate's residency label and data
-classes (S010). The design is in the plan's S008 section and in
+classes (S010), then the candidates it kept, in the route's order, until
+one answers (S042). The design is in the plan's S008 section and in
 [ADR 3](../../docs/architecture/decisions/0003-build-a-thin-model-gateway.md).
 
 ## Files

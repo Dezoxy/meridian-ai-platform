@@ -115,7 +115,8 @@ def test_validate_fails_on_terraform_drift(
     assert result.exit_code == 1
     assert "registry OK" in result.stdout
     assert "terraform outputs OK" not in result.stdout
-    assert result.stderr.count("ERROR models.yaml: deployment") == 2
+    # One line per Azure deployment: two chat and one embedding.
+    assert result.stderr.count("ERROR models.yaml: deployment") == 3
 
 
 def test_validate_reports_a_missing_terraform_file_without_a_traceback(
@@ -208,11 +209,10 @@ def test_terraform_summary_is_singular_for_one_deployment(
     # replay is never a candidate), so the one-deployment registry is built
     # past the checks.
     full = load_registry(real_registry)
+    dropped = {"aoai-sdc-gpt-4o-b", "aoai-sdc-text-embedding-3-large"}
     one = full.model_copy(
         update={
-            "deployments": tuple(
-                d for d in full.deployments if d.id != "aoai-sdc-text-embedding-3-large"
-            )
+            "deployments": tuple(d for d in full.deployments if d.id not in dropped)
         }
     )
     monkeypatch.setattr(cli_registry, "load_registry", lambda _directory: one)

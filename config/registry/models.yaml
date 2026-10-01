@@ -21,6 +21,28 @@ deployments:
       checked: 2026-09-30
     terraform_key: sdc/gpt-4o
 
+  # The same model once more in the same account: the chat route's second
+  # candidate until a second region has quota (S042). Its own rate limit, the
+  # same region, so it is no answer to a regional outage.
+  - id: aoai-sdc-gpt-4o-b
+    provider: azure-openai
+    purpose: chat
+    model: gpt-4o
+    version: "2024-11-20"
+    deployment_name: gpt-4o-b
+    sku: Standard
+    region: swedencentral
+    residency: eu-region
+    data_classes: [synthetic, internal, personal]
+    retires: 2027-04-14
+    price:
+      currency: USD
+      input_per_million_tokens: 3.025
+      output_per_million_tokens: 12.10
+      source: "Azure Retail Prices API, meters 'gpt 4o 1120 Inp regnl Tokens' and 'gpt 4o 1120 Outp regnl Tokens'"
+      checked: 2026-09-30
+    terraform_key: sdc/gpt-4o-b
+
   - id: aoai-sdc-text-embedding-3-large
     provider: azure-openai
     purpose: embedding

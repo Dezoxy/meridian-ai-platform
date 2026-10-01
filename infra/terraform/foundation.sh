@@ -11,9 +11,10 @@
 #   outputs print the model deployments from Terraform's outputs as JSON, only
 #          the fields the registry compares (no account names or endpoints):
 #          the snapshot the registry is checked against (T-12). Read-only.
-#   gateway-live  one real chat call through the Model Gateway in live mode on
-#          this laptop, with this az login and a throwaway PostgreSQL (needs
-#          Docker). Read-only in Azure apart from that call (well under EUR 0.01).
+#   gateway-live  two real chat calls through the Model Gateway in live mode on
+#          this laptop, one of them with the first candidate made to fail, with
+#          this az login and a throwaway PostgreSQL (needs Docker). Read-only
+#          in Azure apart from those calls (well under EUR 0.01).
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
 set -euo pipefail
@@ -174,51 +175,65 @@ check_account() {
        .value.sku_name, .value.location] | @tsv' <<<"${deployments}")
 }
 
-# deployment_for ACCOUNT PURPOSE: the name of the deployment with that purpose
-# (chat or embedding) on the account, from Terraform's outputs.
-deployment_for() {
+# deployments_for ACCOUNT PURPOSE: the names of the deployments with that
+# purpose (chat or embedding) on the account, one per line, from Terraform's
+# outputs. An account can hold two chat deployments (S042).
+deployments_for() {
   jq -r --arg account "$1" --arg purpose "$2" \
-    '[.[] | select(.account_name == $account and .purpose == $purpose)][0].deployment_name // empty' \
+    '.[] | select(.account_name == $account and .purpose == $purpose) | .deployment_name' \
     <<<"${deployments}"
 }
 
-# check_calls ACCOUNT ENDPOINT: one chat completion and one embedding, to the
-# deployments the outputs name for those purposes.
+# A deployment name becomes part of a URL the token is sent to.
+url_safe_name() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+# check_calls ACCOUNT ENDPOINT: one chat completion or one embedding to every
+# deployment the outputs name for those purposes.
 check_calls() {
-  local account=$1 endpoint="${2%/}/" chat embedding model tokens dimensions
+  local account=$1 endpoint="${2%/}/" chats embeddings name model tokens dimensions
   # The token is valid for any Cognitive Services account, and the endpoint
   # comes from Terraform state, so it goes only to an Azure OpenAI endpoint.
   if [[ ! "${endpoint}" =~ ^https://[a-z0-9-]+\.openai\.azure\.com/$ ]]; then
     fail "calls ${account}: ${endpoint} is not an Azure OpenAI endpoint; no token sent"
     return
   fi
-  chat="$(deployment_for "${account}" chat)"
-  embedding="$(deployment_for "${account}" embedding)"
+  chats="$(deployments_for "${account}" chat)"
+  embeddings="$(deployments_for "${account}" embedding)"
 
-  if [[ -z "${chat}" ]]; then
-    fail "chat ${account}: no deployment with purpose chat in the outputs"
-  elif api_post "${endpoint}openai/deployments/${chat}/chat/completions?api-version=${OPENAI_API_VERSION}" \
-    '{"messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":5,"temperature":0}'; then
-    model="$(jq -r '.model // "unknown"' <<<"${api_body}")"
-    tokens="$(jq -r '.usage.total_tokens // "unknown"' <<<"${api_body}")"
-    pass "chat ${account}: ${chat} answered (model ${model}, ${tokens} tokens)"
-  else
-    fail "chat ${account}: $(api_failure)"
-  fi
-
-  if [[ -z "${embedding}" ]]; then
-    fail "embedding ${account}: no deployment with purpose embedding in the outputs"
-  elif api_post "${endpoint}openai/deployments/${embedding}/embeddings?api-version=${OPENAI_API_VERSION}" \
-    '{"input":"meridian smoke"}'; then
-    dimensions="$(jq -r '.data[0].embedding | length' <<<"${api_body}")"
-    if [[ "${dimensions}" =~ ^[0-9]+$ ]] && ((dimensions > 0)); then
-      pass "embedding ${account}: ${embedding} returned a ${dimensions}-dimension vector"
+  [[ -n "${chats}" ]] || fail "chat ${account}: no deployment with purpose chat in the outputs"
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    if ! url_safe_name "${name}"; then
+      fail "chat ${account}: a deployment name in the outputs is not a plain name; no token sent"
+    elif api_post "${endpoint}openai/deployments/${name}/chat/completions?api-version=${OPENAI_API_VERSION}" \
+      '{"messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":5,"temperature":0}'; then
+      model="$(jq -r '.model // "unknown"' <<<"${api_body}")"
+      tokens="$(jq -r '.usage.total_tokens // "unknown"' <<<"${api_body}")"
+      pass "chat ${account}: ${name} answered (model ${model}, ${tokens} tokens)"
     else
-      fail "embedding ${account}: no vector in the response"
+      fail "chat ${account}: ${name}: $(api_failure)"
     fi
-  else
-    fail "embedding ${account}: $(api_failure)"
-  fi
+  done <<<"${chats}"
+
+  [[ -n "${embeddings}" ]] || fail "embedding ${account}: no deployment with purpose embedding in the outputs"
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    if ! url_safe_name "${name}"; then
+      fail "embedding ${account}: a deployment name in the outputs is not a plain name; no token sent"
+    elif api_post "${endpoint}openai/deployments/${name}/embeddings?api-version=${OPENAI_API_VERSION}" \
+      '{"input":"meridian smoke"}'; then
+      dimensions="$(jq -r '.data[0].embedding | length' <<<"${api_body}")"
+      if [[ "${dimensions}" =~ ^[0-9]+$ ]] && ((dimensions > 0)); then
+        pass "embedding ${account}: ${name} returned a ${dimensions}-dimension vector"
+      else
+        fail "embedding ${account}: ${name}: no vector in the response"
+      fi
+    else
+      fail "embedding ${account}: ${name}: $(api_failure)"
+    fi
+  done <<<"${embeddings}"
 }
 
 cmd_smoke() {
@@ -282,7 +297,7 @@ cmd_outputs() {
 }
 
 # ── gateway-live ─────────────────────────────────────────────────────────────
-# One real chat call through the Model Gateway on this laptop (S010). The
+# Real chat calls through the Model Gateway on this laptop (S010, S042). The
 # endpoints come from Terraform's outputs and the token from this az login, so
 # nothing is stored; both reach the test through the environment only. An
 # endpoint holds the account name and a failed login can name the signed-in
@@ -304,7 +319,7 @@ cmd_gateway_live() {
   endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
     <<<"${deployments}" 2>/dev/null)" ||
     die "the openai_deployments output has no endpoints"
-  log "one chat call through the gateway as tenant development (synthetic prompt)"
+  log "two chat calls through the gateway as tenant development (synthetic prompt)"
   MERIDIAN_LIVE_AZURE=1 \
     MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
     MERIDIAN_AZURE_TENANT_ID="${ARM_TENANT_ID}" \
