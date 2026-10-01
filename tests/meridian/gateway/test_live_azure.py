@@ -1,0 +1,103 @@
+"""One real chat call through the gateway in live mode (S010). Opt-in.
+
+Skipped unless ``MERIDIAN_LIVE_AZURE=1``, so neither CI nor a plain ``make
+pytest`` ever reaches Azure. ``make gateway-live`` sets the three variables
+below from Terraform's outputs and this ``az login``, and starts the throwaway
+PostgreSQL the audit row needs. The prompt is synthetic. The test prints the
+deployment, the model string the provider reports, the finish reason and the
+token counts; never the endpoint, the tenant ID or any text.
+"""
+
+import os
+import uuid
+
+import pytest
+from dbsupport import DatabaseHandle
+from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from servicesupport import REGISTRY_DIR, audit_events
+
+from meridian.platform.common.db import DATABASE_URL_ENV
+from meridian.platform.common.env import REGISTRY_DIR_ENV
+from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.gateway.app import create_app
+from meridian.platform.gateway.settings import (
+    CREDENTIAL_ENV,
+    ENDPOINTS_ENV,
+    ENVIRONMENT_ENV,
+    MODE_ENV,
+    TENANT_ID_ENV,
+    GatewaySettings,
+)
+
+LIVE_ENV = "MERIDIAN_LIVE_AZURE"
+PROMPT = "Reply with the single word: ready."
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get(LIVE_ENV) != "1",
+    reason=f"opt-in: set {LIVE_ENV}=1 (make gateway-live)",
+)
+
+
+def test_one_synthetic_prompt_is_answered_by_the_routed_deployment_and_audited(
+    fresh_database: DatabaseHandle,
+) -> None:
+    settings = GatewaySettings.from_env(
+        {
+            MODE_ENV: "live",
+            ENVIRONMENT_ENV: "local",
+            DATABASE_URL_ENV: fresh_database.dsn("model_gateway"),
+            REGISTRY_DIR_ENV: str(REGISTRY_DIR),
+            CREDENTIAL_ENV: "azure-cli",
+            ENDPOINTS_ENV: os.environ[ENDPOINTS_ENV],
+            TENANT_ID_ENV: os.environ[TENANT_ID_ENV],
+        }
+    )
+    exporter = InMemorySpanExporter()
+    client = TestClient(
+        create_app(settings, tracer_provider=make_tracer_provider("gw", exporter))
+    )
+    run_id = uuid.uuid4()
+    headers = {
+        "X-Meridian-Tenant": "development",
+        "X-Meridian-Agent": "claims-triage",
+        "X-Meridian-Run": str(run_id),
+    }
+    body = {
+        "messages": [{"role": "user", "content": PROMPT}],
+        "max_output_tokens": 16,
+    }
+
+    response = client.post("/v1/chat", json=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    reply = response.json()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == "gateway.chat"]
+    provider_model = span.attributes["gen_ai.response.model"]
+    usage = reply["usage"]
+    print(f"\ndeployment:    {reply['deployment']}")
+    print(f"provider model: {provider_model}")
+    print(f"finish reason:  {reply['output']['finish_reason']}")
+    print(
+        f"tokens:         input {usage['input_tokens']}, "
+        f"output {usage['output_tokens']}"
+    )
+    assert reply["mode"] == "live"
+    assert reply["output"]["finish_reason"] in {"stop", "length"}
+    assert usage["input_tokens"] > 0
+    assert usage["output_tokens"] > 0
+    (event,) = audit_events(fresh_database, run_id)
+    assert (event["event"], event["outcome"], event["tenant"]) == (
+        "model.call",
+        "completed",
+        "development",
+    )
+    assert event["deployment"] == reply["deployment"]
+    assert (event["input_tokens"], event["output_tokens"]) == (
+        usage["input_tokens"],
+        usage["output_tokens"],
+    )
+    assert event["data_class"] == "synthetic"
+    assert PROMPT not in str(event)

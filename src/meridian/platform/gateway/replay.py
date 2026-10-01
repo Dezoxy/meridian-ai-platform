@@ -12,7 +12,9 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from meridian.platform.gateway.models import Message
+from meridian.platform.gateway.models import ChatRequest, Message
+from meridian.platform.gateway.providers.base import ProviderReply
+from meridian.platform.registry.models import Deployment
 
 REPLAY_PREFIX = "Replay response (simulated; no model was called)."
 FINGERPRINT_CHARS = 12
@@ -50,3 +52,17 @@ def replay_chat(messages: Sequence[Message]) -> ReplayReply:
         input_tokens=_tokens(sum(len(m.content) for m in messages)),
         output_tokens=_tokens(len(text)),
     )
+
+
+class ReplayProvider:
+    """``replay_chat`` behind the provider protocol (SIMULATED, like the rest)."""
+
+    def chat(self, deployment: Deployment, request: ChatRequest) -> ProviderReply:
+        reply = replay_chat(request.messages)
+        return ProviderReply(
+            text=reply.text,
+            finish_reason="stop",
+            model=deployment.model,
+            input_tokens=reply.input_tokens,
+            output_tokens=reply.output_tokens,
+        )

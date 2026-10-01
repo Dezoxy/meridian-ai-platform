@@ -4,8 +4,9 @@ The declarative source of truth for the platform: which models exist, which
 data may reach them, which tools exist and which agent may call them, and
 which tenant runs which agent. Status: **implemented** (S008) as validated
 configuration; the Model Gateway and the Agent Runtime load it at startup
-(S009), and S010 adds routing by it. The design is in the plan's S008
-section and in
+(S009), and in live mode the gateway routes each chat call by it: the
+tenant's data class against every candidate's residency label and data
+classes (S010). The design is in the plan's S008 section and in
 [ADR 3](../../docs/architecture/decisions/0003-build-a-thin-model-gateway.md).
 
 ## Files

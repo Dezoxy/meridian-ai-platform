@@ -28,10 +28,12 @@ REGISTRY_SNAPSHOT := config/registry/snapshots/terraform-openai-deployments.json
 PYTEST_DB_IMAGE     := postgres:17.11@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
 PYTEST_DB_CONTAINER ?= meridian-pytest-db
 PYTEST_DB_PORT      ?= 55432
+# Extra pytest arguments for `make pytest-db`, e.g. one test file.
+PYTEST_ARGS         ?=
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -127,7 +129,7 @@ pytest-db:
 		sleep 1; \
 	done; \
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
-	MERIDIAN_REQUIRE_DB=1 uv run pytest
+	MERIDIAN_REQUIRE_DB=1 uv run pytest $(PYTEST_ARGS)
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas
 registry:
@@ -190,6 +192,10 @@ azure-apply:
 ## azure-smoke     prove the foundation: live models match Terraform, key auth is off, one chat and one embedding call per account (well under EUR 0.01)
 azure-smoke:
 	infra/terraform/foundation.sh smoke
+
+## gateway-live    one real chat call through the Model Gateway in live mode on this laptop: az login, a synthetic prompt, a throwaway PostgreSQL (needs Docker; well under EUR 0.01)
+gateway-live:
+	infra/terraform/foundation.sh gateway-live
 
 ## registry-snapshot refresh the registry's copy of Terraform's deployment outputs (only the compared fields); read-only in Azure
 registry-snapshot:

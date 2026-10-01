@@ -21,7 +21,7 @@ from servicesupport import (
 from meridian.platform.common import audit
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.gateway import app as gateway_app
-from meridian.platform.gateway.app import create_app, request_allowed
+from meridian.platform.gateway.app import create_app
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.registry import load_registry
 
@@ -94,6 +94,11 @@ def test_a_chat_call_is_answered_audited_and_traced(
             "model": "replay-chat",
             "input_tokens": usage["input_tokens"],
             "output_tokens": usage["output_tokens"],
+            "reason": None,
+            "data_class": "personal",
+            "sku": None,  # a replay deployment has no sku or region
+            "region": None,
+            "residency": "eu-region",
         }
     ]
     (chat_span,) = [
@@ -106,10 +111,14 @@ def test_a_chat_call_is_answered_audited_and_traced(
         "meridian.deployment": "replay-chat",
         "meridian.provider": "replay",
         "meridian.mode": "replay",
+        "meridian.residency": "eu-region",
+        "meridian.data_class": "personal",
         "gen_ai.request.model": "replay-chat",
+        "gen_ai.response.model": "replay-chat",
         "gen_ai.usage.input_tokens": usage["input_tokens"],
         "gen_ai.usage.output_tokens": usage["output_tokens"],
     }
+    assert body["output"]["finish_reason"] == "stop"
 
 
 def test_the_same_request_gets_the_same_text_twice(
@@ -140,14 +149,19 @@ def test_no_span_and_no_audit_row_holds_the_message_content(
 
 # ── policy ──────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize(
-    ("tenant", "agent"),
+    ("tenant", "agent", "reason", "data_class"),
     [
-        ("no-such-tenant", "claims-triage"),  # unknown tenant
-        ("claims-triage", "some-other-agent"),  # agent not in the tenant's list
+        ("no-such-tenant", "claims-triage", "unknown-tenant", None),
+        # agent not in the tenant's list
+        ("claims-triage", "some-other-agent", "agent-not-allowed", "personal"),
     ],
 )
 def test_a_refused_request_answers_403_and_is_audited(
-    fresh_database: DatabaseHandle, tenant: str, agent: str
+    fresh_database: DatabaseHandle,
+    tenant: str,
+    agent: str,
+    reason: str,
+    data_class: str | None,
 ) -> None:
     client = make_client(fresh_database.dsn("model_gateway"))
     run_id = uuid.uuid4()
@@ -172,6 +186,8 @@ def test_a_refused_request_answers_403_and_is_audited(
         "replay",
         "replay-chat",
     )
+    assert (event["reason"], event["data_class"]) == (reason, data_class)
+    assert (event["sku"], event["region"]) == (None, None)
 
 
 def test_a_data_class_the_replay_deployment_does_not_allow_is_refused(
@@ -230,15 +246,14 @@ def test_a_refusal_span_carries_the_deployment_provider_and_mode() -> None:
     )
 
 
-def test_a_residency_the_data_class_does_not_allow_is_refused() -> None:
+def test_a_residency_the_data_class_does_not_allow_is_refused(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The registry checks already refuse a deployment whose label its classes
     # cannot reach, so this second line of defence is tested on a registry
-    # built in memory.
+    # narrowed in memory after it was loaded: personal data may now reach
+    # eu-zone only, and the replay deployment is eu-region.
     registry = load_registry(REGISTRY_DIR)
-    deployment = registry.replay_deployment("chat")
-    assert deployment is not None
-    assert deployment.residency == "eu-region"
-    assert request_allowed(registry, deployment, "claims-triage", "claims-triage")
     narrowed = registry.model_copy(
         update={
             "data_classes": tuple(
@@ -249,9 +264,20 @@ def test_a_residency_the_data_class_does_not_allow_is_refused() -> None:
             )
         }
     )
+    monkeypatch.setattr(gateway_app, "load_registry", lambda _: narrowed)
+    client = make_client(fresh_database.dsn("model_gateway"))
+    refused_run, allowed_run = uuid.uuid4(), uuid.uuid4()
 
-    assert not request_allowed(narrowed, deployment, "claims-triage", "claims-triage")
-    assert request_allowed(narrowed, deployment, "development", "claims-triage")
+    personal = client.post(
+        "/v1/chat", json=BODY, headers=headers("claims-triage", run_id=refused_run)
+    )
+    synthetic = client.post(
+        "/v1/chat", json=BODY, headers=headers("development", run_id=allowed_run)
+    )
+
+    assert (personal.status_code, synthetic.status_code) == (403, 200)
+    (event,) = audit_events(fresh_database, refused_run)
+    assert (event["outcome"], event["reason"]) == ("refused", "no-allowed-deployment")
 
 
 # ── the audit write is part of the answer (QA-05) ───────────────────────────

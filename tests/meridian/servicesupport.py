@@ -25,7 +25,7 @@ GATEWAY_REPLY = {
     "deployment": "replay-chat",
     "provider": "replay",
     "model": "replay-chat",
-    "output": {"text": "drafted"},
+    "output": {"text": "drafted", "finish_reason": "stop"},
     "usage": {"input_tokens": 1, "output_tokens": 1},
 }
 
@@ -42,6 +42,11 @@ AUDIT_COLUMNS = (
     "model",
     "input_tokens",
     "output_tokens",
+    "reason",
+    "data_class",
+    "sku",
+    "region",
+    "residency",
 )
 
 
@@ -65,7 +70,8 @@ def audit_events(db: DatabaseHandle, run_id: uuid.UUID) -> list[dict]:
     rows = owner_rows(
         db,
         "SELECT service, event, outcome, tenant, agent, run_id, reference, "
-        "deployment, provider, model, input_tokens, output_tokens "
+        "deployment, provider, model, input_tokens, output_tokens, "
+        "reason, data_class, sku, region, residency "
         "FROM audit.events WHERE run_id = %s ORDER BY recorded_at, event",
         (run_id,),
     )

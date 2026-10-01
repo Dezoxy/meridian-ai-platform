@@ -4,8 +4,12 @@ import hashlib
 import json
 import re
 
-from meridian.platform.gateway.models import Message
-from meridian.platform.gateway.replay import REPLAY_PREFIX, replay_chat
+from servicesupport import REGISTRY_DIR
+
+from meridian.platform.gateway.models import ChatRequest, Message
+from meridian.platform.gateway.providers.base import ChatProvider, ProviderReply
+from meridian.platform.gateway.replay import REPLAY_PREFIX, ReplayProvider, replay_chat
+from meridian.platform.registry import load_registry
 
 MESSAGES = (
     Message(role="system", content="You draft triage summaries."),
@@ -70,3 +74,21 @@ def test_a_partial_token_rounds_up() -> None:
     reply = replay_chat((Message(role="user", content="abcde"),))
 
     assert reply.input_tokens == 2
+
+
+def test_the_replay_provider_returns_the_same_text_and_tokens_as_replay_chat() -> None:
+    deployment = load_registry(REGISTRY_DIR).replay_deployment("chat")
+    assert deployment is not None
+    provider: ChatProvider = ReplayProvider()
+    request = ChatRequest(messages=MESSAGES, max_output_tokens=7)
+
+    reply = provider.chat(deployment, request)
+
+    direct = replay_chat(MESSAGES)
+    assert reply == ProviderReply(
+        text=direct.text,
+        finish_reason="stop",
+        model=deployment.model,
+        input_tokens=direct.input_tokens,
+        output_tokens=direct.output_tokens,
+    )

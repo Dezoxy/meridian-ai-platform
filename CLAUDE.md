@@ -47,7 +47,8 @@ A change that violates one is wrong even if it works.
    `eu-zone`, `global`) and its allowed data classes; personal data routes
    only to EU labels; the gateway refuses a mismatch and records the route.
 4. **Every model call goes through the Model Gateway.** Provider SDKs are
-   imported only under `src/meridian/platform/gateway/` (ADR 3).
+   imported only under `src/meridian/platform/gateway/`; import-linter
+   enforces it in CI (ADR 3).
 5. **Platform packages never import the agent framework.** Nothing under
    `src/meridian/platform/` imports `langgraph` or `langchain*`; import-linter
    enforces it in CI (ADR 2).

@@ -5,9 +5,11 @@ description = "Enterprise agentic AI platform with a claims-triage reference wor
 license = "Apache-2.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "azure-identity==1.25.3",
     "fastapi==0.142.2",
     "httpx==0.28.1",
     "langgraph==1.2.12",
+    "openai==3.22.1",
     "opentelemetry-api==1.45.0",
     "opentelemetry-exporter-otlp-proto-http==1.45.0",
     "opentelemetry-instrumentation-fastapi==0.66b0",
@@ -94,4 +96,48 @@ layers = [
     "meridian.workloads",
     "meridian.runtime",
     "meridian.platform",
+]
+
+[[tool.importlinter.contracts]]
+name = "only the gateway imports a provider SDK (hard rule 4, T-19)"
+type = "forbidden"
+# Every first-party package except meridian.platform.gateway. import-linter has
+# no "all except" form, so each is listed; test_import_contracts.py fails when a
+# new package under src/meridian/platform/ is missing from this list.
+source_modules = [
+    "meridian.workloads",
+    "meridian.runtime",
+    "meridian.platform.cli",
+    "meridian.platform.common",
+    "meridian.platform.migrations",
+    "meridian.platform.registry",
+]
+# Indirect imports count: a chain through the gateway's adapter is a violation.
+# Each distribution is listed because wildcards replace whole module names only.
+forbidden_modules = [
+    "openai",
+    "mistralai",
+    "anthropic",
+    "boto3",
+    "botocore",
+    "litellm",
+    # `azure` is a namespace package and import-linter refuses a subpackage of
+    # an external package, so `azure.identity` and `azure.core` cannot be named:
+    # `azure` covers every azure.* distribution.
+    "azure",
+]
+
+[[tool.importlinter.contracts]]
+name = "inside the gateway only the Azure OpenAI adapter imports openai"
+type = "forbidden"
+source_modules = ["meridian.platform.gateway"]
+# The contract also keeps azure out of the rest of the gateway (app.py reaches
+# the credential through the adapter's check_token).
+forbidden_modules = ["openai", "azure"]
+# Direct imports only: the rest of the gateway may import the adapter, which
+# imports openai and azure. The adapter's own imports are the ignored edges.
+allow_indirect_imports = true
+ignore_imports = [
+    "meridian.platform.gateway.providers.azure_openai -> openai",
+    "meridian.platform.gateway.providers.azure_openai -> azure",
 ]

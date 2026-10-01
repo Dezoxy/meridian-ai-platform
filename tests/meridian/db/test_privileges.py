@@ -349,6 +349,12 @@ def test_the_audit_log_has_no_content_columns(
         "model",
         "input_tokens",
         "output_tokens",
+        # 0002: identifiers and labels, still no content.
+        "reason",
+        "data_class",
+        "sku",
+        "region",
+        "residency",
     }
 
 

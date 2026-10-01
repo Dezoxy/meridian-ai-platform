@@ -74,7 +74,7 @@ def test_a_changed_checksum_is_refused(empty_database: DatabaseHandle) -> None:
 def test_a_missing_service_role_fails_clearly_and_leaves_nothing(
     empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    [(name, text)] = migration_files()
+    name, text = migration_files()[0]  # 0001: the one that checks the roles
     guard = "ARRAY['claims_api'"
     assert guard in text
     broken = text.replace(guard, "ARRAY['role_that_does_not_exist'")

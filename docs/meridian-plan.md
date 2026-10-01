@@ -4,7 +4,8 @@
   decisions, the engineering harness, a local platform on kind, the Azure
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
-  kind with `make demo`, and nothing runs in Azure yet.
+  kind with `make demo`, the gateway routes a call to Azure OpenAI by data
+  class and residency from a laptop, and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -128,7 +129,8 @@ and Pydantic, at the cost of one dependency.
 | S040 | Harness refresh | The ECC plugin is off, so the harness this repository needs is copied in from development-base: the remaining drifted rules and skills re-copied, a code reviewer, the Python rules that fit, the skills later steps need, three slash commands, the gate and session hooks, the chrome-devtools MCP server and the git hook-bypass denies with their cases; `make docs`, `make test` and the guard-bash cases pass | done | S008 |
 | S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a ~~decision~~ triage proposal; ~~one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind~~ an end-to-end test proves one trace across API, runtime and gateway; per-service schemas, roles and migrations tested against PostgreSQL in CI (split on 2026-09-30: the kind half is S041) | done | S006, S008 |
 | S041 | Walking skeleton on kind | One image for the three services, manifests in namespace `meridian`, an HTTPRoute on a `*.localhost` hostname, per-service database roles on the cluster; `make demo` posts a claim and the one trace spanning API, runtime and gateway is found in Tempo; `make smoke` stays green | done | S009 |
-| S010 | Gateway routing and resilience | Registry-driven routing by data class and residency; Azure OpenAI adapter; timeout, retry, circuit breaker and fallback to the second region; a residency mismatch is refused and audited; contract tests pass | todo | S004, S007, S009 |
+| S010 | Gateway routing ~~and resilience~~ | Registry-driven routing by data class and residency; Azure OpenAI adapter; ~~timeout, retry, circuit breaker and fallback to the second region;~~ a residency mismatch is refused and audited; contract tests pass (split on 2026-10-01: resilience is S042) | done | S004, S007, S009 |
+| S042 | Gateway resilience | Timeout, retry, circuit breaker and fallback across a route's candidates, with a second `gpt-4o` deployment in Sweden Central as the real second candidate and the second region labelled designed until the subscription is upgraded; a fault injected into the first candidate is answered by the second, and every attempt is audited; contract tests pass | todo | S010 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set | todo | S003, S009 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited | todo | S008, S009 |
@@ -136,7 +138,7 @@ and Pydantic, at the cost of one dependency.
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042 |
 
 ### M2 — Azure, identity, delivery
 
@@ -1585,6 +1587,188 @@ posts a claim and finds its one trace in Tempo.
   `pins.env` are still bumped by hand (S006).
 - S012: decide whether pgvector moves to the `meridian` database.
 
+### S010 — Gateway routing
+
+**Status:** done · **Started:** 2026-10-01 · **Finished:** 2026-10-01
+**Goal:** in live mode the Model Gateway routes a chat call by the registry:
+it takes the tenant's data class, keeps the route's candidates whose
+residency label and data classes allow it, calls Azure OpenAI through an
+adapter, and refuses and audits a request no candidate may serve.
+**Decisions:**
+
+- Split, by the owner on 2026-10-01: routing, the adapter, the refusal and
+  the contract tests here; timeout, retry, circuit breaker and fallback in
+  the new S042. Rejected: one step, the longest session yet and one large
+  pull request.
+- The credential, by the owner: live mode runs on the laptop with the
+  signed-in developer's Azure CLI login, so no secret is created anywhere;
+  the gateway on kind stays in replay mode until S020 brings workload
+  identity. Rejected: a one-hour Entra token copied into a Kubernetes
+  Secret on demo days, which leaves a token in the cluster and a demo that
+  stops after an hour; a service principal with a client secret, a
+  long-lived secret to rotate and a new Entra object.
+- A second `gpt-4o` deployment in Sweden Central, by the owner: yes, so the
+  candidate list and the breaker are real. It arrives with S042, the step
+  that walks the list; its plan is reviewed and applied there.
+- One request path for both modes: decide the route, refuse and audit when
+  nothing is allowed, call the first allowed candidate through its
+  provider, audit the outcome. Replay passes its one deployment through the
+  same filter; live passes the chat route's candidates. The filter runs
+  once, before any call, so what S042 walks is already the allowed list
+  (T-44).
+- The request's data class is its tenant's class from the registry. A class
+  raised per request belongs to S014, where the runtime classifies
+  claimant text (T-13).
+- The provider SDK is `openai` with `azure-identity`, as ADR 3 chose direct
+  SDKs. The SDK's own retries are off, so one gateway attempt is one HTTP
+  request and one audit row; retries become S042's, where they are counted.
+  Rejected: calling the REST API with `httpx`, which would leave hard rule
+  4 with no SDK to fence in and the error taxonomy to maintain by hand.
+- One named credential, the Azure CLI login, never a discovery chain
+  (`DefaultAzureCredential` would pick up whatever identity the machine
+  offers). Live mode building its own providers starts only in a new
+  environment `local`, a laptop outside any cluster, and fetches one token
+  at start, so a missing login fails the start and not the first claim.
+  Replay stays refused in `local`: T-39's rule names test, CI and kind,
+  and a laptop replay run uses `test`.
+- Endpoints stay out of the repository: a JSON map from Terraform location
+  key to endpoint in `MERIDIAN_AZURE_OPENAI_ENDPOINTS`, each `https` on a
+  host under `openai.azure.com` (T-43).
+- The audit row gains `reason`, `data_class`, `sku`, `region` and
+  `residency` (migration `0002`, additive), so a row records the label
+  beside the facts it stands for (T-12). `reason` says why a call was
+  refused or failed; `reference` stays the caller's own identifier, which
+  the runtime fills with the claim ID.
+- A provider failure answers 504 for a timeout and 502 otherwise, with a
+  generic detail; the error kind goes to the audit row and the span, and
+  the provider's own message goes nowhere, because it can echo a prompt
+  (T-18).
+- The runtime parses the gateway's reply with its own tolerant models and no
+  longer imports the gateway's, so a newer gateway does not break an older
+  runtime and the SDK cannot reach the runtime through an import.
+- The provider's HTTP client is the adapter's own: 5 s to connect and 20 s
+  for each other phase, so connect plus read stays under the runtime's 30 s
+  to the gateway, which is under the Claims API's 60 s to the runtime. It
+  follows no redirect and reads no proxy variable. These bound each phase;
+  a deadline for the whole call is S042's.
+- After review: a `200` of the wrong shape is a `bad-response`, every field
+  read is type-checked, and the response is built before the `completed`
+  row is written, so nothing after the audit write can fail; an unexpected
+  error in a provider call leaves a `failed` row with reason `internal`
+  and answers 500. An endpoint must be this project's own account name for
+  its location key, and the tenant ID is required. Live mode refuses to
+  start while a variable the SDK reads is set, as the runtime does for
+  LangSmith (T-41). The runtime accepts only the modes it knows, because
+  the stored proposal records the mode (T-39).
+- Not done, with reasons: restricting injected providers to test and CI
+  (the argument is reachable from code only); an `attempted` row before
+  the call (S011 reserves the cost before the call, and S042 audits every
+  attempt).
+
+**Work log:**
+
+- Closed S041 first: pull request 19 was merged as `d69c5be`; the 25 files
+  the branch changed are identical on `main`.
+- Read what S007, S008 and S009 left for this step; the owner answered
+  three questions (the credential, the second deployment, the split).
+  `feature-threat-model`: T-43 and T-44 added, T-17 and QA-04 moved to
+  S042.
+- `implementer`, contract A: `routing.py` (`decide`, pure), the provider
+  protocol in `providers/base.py`, the Azure OpenAI adapter in
+  `providers/azure_openai.py` (`openai` 3.22.1, `azure-identity` 1.25.3),
+  `ReplayProvider`, the live-mode settings, and two import contracts for
+  hard rule 4 with probes.
+- Found on the way: `raise … from None` inside an `except` arm still
+  leaves the SDK's error in `__context__`, with a message that can echo a
+  prompt, so the adapter maps the error to a kind and a status inside the
+  arm and raises after the block; a `200` whose body is not JSON reaches
+  the caller as a plain string, mapped to `bad-response`; an explicit
+  token provider keeps a stray `OPENAI_API_KEY` from becoming an `api-key`
+  header; `azure` is a namespace package, so `azure.identity` is fenced by
+  a subprocess test on `sys.modules`, not by an import contract.
+- The main session added `make gateway-live`: `foundation.sh gateway-live`
+  reads the endpoints from Terraform's outputs, passes them and the tenant
+  through the environment and runs the opt-in live test against the
+  throwaway PostgreSQL of `make pytest-db`.
+- `implementer`, contract B: one request path for both modes in `app.py`,
+  the start rules for live mode, migration `0002` and the five audit
+  columns, the runtime's own tolerant reply model, the live request tests
+  and the opt-in live test. It added the new span keys to the telemetry
+  allowlist and moved the registry fixtures up one level, both outside the
+  contract's named paths and both needed.
+- Reviews: `platform-boundary-reviewer` blocked (the import contracts did
+  not fence `azure.identity` or `azure.core`, shown with planted imports);
+  `python-reviewer` blocked (a malformed `200` escaped the adapter as a 500
+  with no audit row, or wrote a `completed` row before failing);
+  `security-reviewer` found no critical issue, the same audit gap, and
+  three medium ones (the SDK's default client follows redirects and reads
+  the environment; the credential library logs the CLI's error text; any
+  `*.openai.azure.com` host passed). All three found the residency filter
+  sound.
+- `implementer`, contract C: the review items. It was stopped by an
+  interrupt in the main session before its report, with four of five items
+  in place; the main session checked each against the contract, finished
+  the last (the runtime's mode and a test that the gateway's response
+  parses as the runtime's reply) and reran every gate. `import-linter`
+  cannot name a subpackage of an external package, so the contracts forbid
+  `azure` as a whole.
+- The Azure CLI's cached session had expired (`AADSTS50132`); the owner
+  signed in again with a device code, away from the laptop.
+
+**Result / verification:**
+
+- `make gateway-live`, on the final gateway code: `deployment:
+  aoai-sdc-gpt-4o`, `provider model: gpt-4o-2024-11-20`, `finish reason:
+  stop`, `tokens: input 15, output 2`, `1 passed`. One synthetic prompt as
+  tenant `development`; the test asserts the `completed` audit row with
+  data class `synthetic`. So the service accepts `max_tokens` on API
+  version 2024-10-21.
+- `make pytest-db`: 1305 passed, 1 skipped (the opt-in live test). `make
+  pytest`: 1144 passed, 162 skipped without a database. `make lint`:
+  `Contracts: 4 kept, 0 broken.` `make registry`: `registry OK`,
+  `terraform outputs OK: 2 deployments match`, `schemas OK`. `shellcheck
+  infra/terraform/*.sh`: exit 0.
+- Mutations run by the main session, each red and then restored: the
+  SDK's retries switched on (3 tests: the mock saw three requests); the
+  residency condition dropped from `deployment_allows` (5 routing tests);
+  the live path taking the route's first candidate without the filter
+  (the test with a `global` deployment first, for the personal tenant);
+  the audit row for an unexpected provider failure removed (2 tests).
+- Not tested: the gateway on kind. The cluster no longer exists on the
+  laptop and was not recreated; on kind the gateway stays in replay mode,
+  and migration `0002` is applied after `0001` against PostgreSQL in the
+  test suite, not by the migration Job.
+
+**Follow-ups:**
+
+- S042: retry, circuit breaker and fallback over the kept candidates, with
+  a second `gpt-4o` deployment in Sweden Central (the owner approved it;
+  the plan is reviewed and applied there); an audit row per attempt; a
+  deadline for the whole provider call; `timeouts.request` on the kind
+  route at or above the runtime's 30 s once live calls pass the edge.
+- S011: reserve before the call, so a sent call is never unrecorded; the
+  `call_id` and the provider's HTTP status on the audit row; the model
+  string the provider reports beside the registry's name.
+- S014: the request's own data class, which can only be raised (T-13); use
+  `finish_reason`, which the runtime ignores today, so a truncated draft
+  is not taken as complete.
+- S020: workload identity as a second credential source, and live mode in
+  the `azure` environment.
+- S021: the tenant, and with it the data class, comes from a header the
+  caller sets; a caller that claims `development` reaches what synthetic
+  data may reach (T-08).
+- S022: a cooldown for new dependency releases (`openai` 3.22.1 was a day
+  old when it was locked); an optional extra for the provider SDKs, so the
+  replay-only kind image does not carry them; the pipeline's live
+  comparison of endpoint, region and label (T-12, T-43).
+- No step yet: a deployment past its `retires` date still routes.
+- Owner: the Azure CLI session of the trial account expired within a day
+  (`AADSTS50132`, a session expiry, not a refusal of the account), and
+  signing in again needs a person. Workload identity (S020) and the
+  pipeline's OIDC federation (S022) remove that for everything but a
+  laptop; whether a dedicated tenant should hold Meridian is Part D
+  question 5.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -1593,6 +1777,7 @@ posts a claim and finds its one trace in Tempo.
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
 | 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | S015 | Keep, recorded as a procedural closure in C-02 |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
+| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 
 ## Part E — Changelog
 
@@ -1617,3 +1802,10 @@ posts a claim and finds its one trace in Tempo.
   the graph, the database and one trace proven in-process; the new S041
   puts the skeleton on kind with `make demo`. The first demo checkpoint
   moves to S041, and S018 depends on it.
+- **v0.9, 2026-10-01:** S010 split by the owner: S010 keeps routing by
+  data class and residency, the Azure OpenAI adapter, the audited refusal
+  and the contract tests; the new S042 takes timeout, retry, circuit
+  breaker and fallback, with a second deployment in Sweden Central. S018
+  depends on S042.
+- **v0.10, 2026-10-01:** Part D question 5 added: a dedicated tenant for
+  Meridian, to decide by S021 or at the subscription upgrade.

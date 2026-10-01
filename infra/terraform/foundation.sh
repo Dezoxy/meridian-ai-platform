@@ -11,6 +11,9 @@
 #   outputs print the model deployments from Terraform's outputs as JSON, only
 #          the fields the registry compares (no account names or endpoints):
 #          the snapshot the registry is checked against (T-12). Read-only.
+#   gateway-live  one real chat call through the Model Gateway in live mode on
+#          this laptop, with this az login and a throwaway PostgreSQL (needs
+#          Docker). Read-only in Azure apart from that call (well under EUR 0.01).
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
 set -euo pipefail
@@ -30,7 +33,7 @@ fail() {
 }
 
 usage() {
-  printf 'usage: %s <init|plan|apply|smoke|outputs>\n' "$(basename "$0")" >&2
+  printf 'usage: %s <init|plan|apply|smoke|outputs|gateway-live>\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -278,6 +281,38 @@ cmd_outputs() {
   printf '%s\n' "${snapshot}"
 }
 
+# ── gateway-live ─────────────────────────────────────────────────────────────
+# One real chat call through the Model Gateway on this laptop (S010). The
+# endpoints come from Terraform's outputs and the token from this az login, so
+# nothing is stored; both reach the test through the environment only. An
+# endpoint holds the account name and a failed login can name the signed-in
+# user, so the test's output is filtered for any Azure OpenAI host, the account
+# name and anything shaped like an email address, as well as for GUIDs.
+redact_account() {
+  sed -E \
+    -e 's/[A-Za-z0-9-]+\.openai\.azure\.com/<account>.openai.azure.com/g' \
+    -e 's/oai-meridian-[a-z0-9-]+/oai-meridian-<redacted>/g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g'
+}
+
+cmd_gateway_live() {
+  tf_init
+  local deployments endpoints
+  deployments="$(tf output -json openai_deployments 2>/dev/null)" ||
+    die "Terraform has no openai_deployments output; run 'make azure-apply' first"
+  # "<location key>/<deployment>" => endpoint becomes {"<location key>": endpoint}.
+  endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
+    <<<"${deployments}" 2>/dev/null)" ||
+    die "the openai_deployments output has no endpoints"
+  log "one chat call through the gateway as tenant development (synthetic prompt)"
+  MERIDIAN_LIVE_AZURE=1 \
+    MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
+    MERIDIAN_AZURE_TENANT_ID="${ARM_TENANT_ID}" \
+    make -C "${TF_DIR}/../.." --no-print-directory pytest-db \
+    PYTEST_ARGS='tests/meridian/gateway/test_live_azure.py -s -q -p no:cacheprovider' 2>&1 |
+    redact | redact_account
+}
+
 [[ $# -eq 1 ]] || usage
 case "$1" in
   init)
@@ -296,6 +331,10 @@ case "$1" in
   outputs)
     need_tools terraform az jq
     cmd_outputs
+    ;;
+  gateway-live)
+    need_tools terraform az jq docker uv make
+    cmd_gateway_live
     ;;
   *) usage ;;
 esac

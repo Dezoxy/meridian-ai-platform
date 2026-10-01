@@ -6,12 +6,11 @@ graph code neither sets headers nor knows the gateway's address (T-08).
 
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 from opentelemetry import propagate
-from pydantic import ValidationError
-
-from meridian.platform.gateway.models import ChatResponse
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 CHAT_PATH = "/v1/chat"
 
@@ -52,6 +51,37 @@ class ChatResult:
     output_tokens: int
 
 
+class _Reply(BaseModel):
+    """Only the fields of the gateway's reply that ``ChatResult`` needs.
+
+    Unknown fields are ignored, so a newer gateway (a finish reason, a field
+    added later) never breaks the runtime. An unknown mode is refused: the
+    stored proposal records it as provenance (T-39). The runtime does not
+    import the gateway's models: the two services share a wire contract, not
+    code.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    class Output(BaseModel):
+        model_config = ConfigDict(extra="ignore", frozen=True)
+
+        text: str
+
+    class Usage(BaseModel):
+        model_config = ConfigDict(extra="ignore", frozen=True)
+
+        input_tokens: int
+        output_tokens: int
+
+    deployment: str
+    provider: str
+    model: str
+    mode: Literal["replay", "live"]
+    output: Output
+    usage: Usage
+
+
 class ModelClient:
     """Built per run, over an injected client whose base URL is the gateway."""
 
@@ -80,7 +110,7 @@ class ModelClient:
         if not 200 <= response.status_code < 300:
             raise ModelCallError(response.status_code)
         try:
-            reply = ChatResponse.model_validate(response.json())
+            reply = _Reply.model_validate(response.json())
         except (ValueError, ValidationError):
             raise ModelCallError(0) from None
         return ChatResult(

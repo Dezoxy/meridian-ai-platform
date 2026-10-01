@@ -25,6 +25,7 @@ class ChatRequest(WireModel):
 
 class ChatOutput(WireModel):
     text: str
+    finish_reason: Literal["stop", "length"]
 
 
 class Usage(WireModel):
@@ -34,7 +35,7 @@ class Usage(WireModel):
 
 class ChatResponse(WireModel):
     call_id: UUID
-    mode: Literal["replay"]
+    mode: Literal["replay", "live"]
     deployment: str
     provider: str
     model: str
