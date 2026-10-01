@@ -35,4 +35,9 @@ class ProviderReply:
 
 
 class ChatProvider(Protocol):
-    def chat(self, deployment: Deployment, request: ChatRequest) -> ProviderReply: ...
+    """``timeout_seconds`` is the budget of the whole attempt, connecting and
+    answering."""
+
+    def chat(
+        self, deployment: Deployment, request: ChatRequest, *, timeout_seconds: float
+    ) -> ProviderReply: ...

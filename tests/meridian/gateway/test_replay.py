@@ -82,7 +82,7 @@ def test_the_replay_provider_returns_the_same_text_and_tokens_as_replay_chat() -
     provider: ChatProvider = ReplayProvider()
     request = ChatRequest(messages=MESSAGES, max_output_tokens=7)
 
-    reply = provider.chat(deployment, request)
+    reply = provider.chat(deployment, request, timeout_seconds=1.0)
 
     direct = replay_chat(MESSAGES)
     assert reply == ProviderReply(

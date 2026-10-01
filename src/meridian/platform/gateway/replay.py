@@ -57,7 +57,9 @@ def replay_chat(messages: Sequence[Message]) -> ReplayReply:
 class ReplayProvider:
     """``replay_chat`` behind the provider protocol (SIMULATED, like the rest)."""
 
-    def chat(self, deployment: Deployment, request: ChatRequest) -> ProviderReply:
+    def chat(
+        self, deployment: Deployment, request: ChatRequest, *, timeout_seconds: float
+    ) -> ProviderReply:
         reply = replay_chat(request.messages)
         return ProviderReply(
             text=reply.text,

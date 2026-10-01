@@ -38,6 +38,9 @@ variable "openai_locations" {
 }
 
 variable "chat_model" {
+  # An account in chat_second_locations holds this deployment twice. The trial's
+  # quota is 50 units, and a plan cannot see quota: above 25 the second
+  # deployment fails in the middle of an apply.
   description = "Chat model deployed to every Azure OpenAI account. capacity is in units of 1,000 tokens per minute."
   type = object({
     name     = string
@@ -55,6 +58,21 @@ variable "chat_model" {
   validation {
     condition     = contains(["Standard", "DataZoneStandard"], var.chat_model.sku_name)
     error_message = "sku_name must be Standard or DataZoneStandard. Global SKUs may process data outside the EU (hard rule 3: EU residency)."
+  }
+}
+
+# The gateway walks an ordered list of chat deployments (S042). Until a second
+# region has quota, the second candidate is a second deployment of the same
+# model in the accounts named here. It has its own rate limit and shares the
+# account's region, so it is no answer to a regional outage.
+variable "chat_second_locations" {
+  description = "Keys of openai_locations whose account gets a second deployment of chat_model, named \"<chat_model.name>-b\"."
+  type        = set(string)
+  default     = ["sdc"]
+
+  validation {
+    condition     = alltrue([for key in var.chat_second_locations : contains(keys(var.openai_locations), key)])
+    error_message = "Every key must be a key of openai_locations."
   }
 }
 

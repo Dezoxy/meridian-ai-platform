@@ -13,7 +13,7 @@ data_classes:
 
 routes:
   - purpose: chat
-    candidates: [aoai-sdc-gpt-4o]
+    candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]
   - purpose: embedding
     candidates: [aoai-sdc-text-embedding-3-large]
 

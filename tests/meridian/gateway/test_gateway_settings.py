@@ -233,8 +233,15 @@ def test_the_account_name_prefix_is_the_one_terraform_gives_the_accounts() -> No
         encoding="utf-8"
     )
 
+    # The account's own block: a deployment's name is not an account name.
+    account = re.search(
+        r'^resource "azurerm_cognitive_account" "openai" \{\n(.*?)^\}',
+        terraform,
+        re.M | re.S,
+    )
+    assert account is not None
     names = re.findall(
-        r'^\s*(?:name|custom_subdomain_name)\s*=\s*"([^"]*)"', terraform, re.M
+        r'^\s*(?:name|custom_subdomain_name)\s*=\s*"([^"]*)"', account.group(1), re.M
     )
 
     expected = ACCOUNT_NAME_PREFIX + "${each.key}-"

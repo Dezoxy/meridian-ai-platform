@@ -33,6 +33,20 @@ output "openai_deployments" {
       }
     },
     {
+      for key, deployment in azurerm_cognitive_deployment.chat_second :
+      "${key}/${deployment.name}" => {
+        account_name    = azurerm_cognitive_account.openai[key].name
+        endpoint        = azurerm_cognitive_account.openai[key].endpoint
+        location        = azurerm_cognitive_account.openai[key].location
+        deployment_name = deployment.name
+        purpose         = "chat"
+        model_name      = deployment.model[0].name
+        model_version   = deployment.model[0].version
+        sku_name        = deployment.sku[0].name
+        capacity        = deployment.sku[0].capacity
+      }
+    },
+    {
       for key, deployment in azurerm_cognitive_deployment.embedding :
       "${key}/${deployment.name}" => {
         account_name    = azurerm_cognitive_account.openai[key].name

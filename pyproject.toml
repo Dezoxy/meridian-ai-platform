@@ -128,12 +128,20 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "inside the gateway only the Azure OpenAI adapter imports openai"
+name = "inside the gateway only the Azure OpenAI adapter imports a provider SDK"
 type = "forbidden"
 source_modules = ["meridian.platform.gateway"]
-# The contract also keeps azure out of the rest of the gateway (app.py reaches
-# the credential through the adapter's check_token).
-forbidden_modules = ["openai", "azure"]
+# The list of the contract above; azure is in it, so app.py reaches the
+# credential through the adapter's check_token.
+forbidden_modules = [
+    "openai",
+    "mistralai",
+    "anthropic",
+    "boto3",
+    "botocore",
+    "litellm",
+    "azure",
+]
 # Direct imports only: the rest of the gateway may import the adapter, which
 # imports openai and azure. The adapter's own imports are the ignored edges.
 allow_indirect_imports = true

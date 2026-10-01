@@ -4,7 +4,8 @@ The import contracts in ``pyproject.toml`` make this the only module in
 ``src/`` that imports ``openai`` or any ``azure`` package.
 
 One gateway attempt is one HTTP request: the SDK's own retries are off
-(``max_retries=0``), so the audit row is true (retry and fallback are S042).
+(``max_retries=0``), so the audit row is true; the next candidate is the
+gateway's walk (S042), never the SDK's.
 The credential is a bearer token from a named source, never an API key: key
 authentication is off on the account (S007). A ``ProviderError`` carries a kind
 and an HTTP status and no cause or context, and tests pin that a provider's
@@ -40,9 +41,9 @@ from meridian.platform.gateway.providers.base import (
 from meridian.platform.registry.models import Deployment
 
 API_VERSION = "2024-10-21"  # the version S007's smoke test uses
-# These bound each phase (connect, write, read, pool) on its own, not the call:
-# connect plus read stays under the runtime's 30 s to the gateway. A total
-# deadline across phases is S042's.
+# The client's default, and the most any phase of one request may take. The
+# gateway passes each attempt the time left under its call deadline (S042);
+# ``chat`` fits connect and the other phases inside that budget.
 CONNECT_TIMEOUT_SECONDS = 5.0
 PROVIDER_TIMEOUT_SECONDS = 20.0
 # The variables the SDK reads, which can add headers, switch on its logging or
@@ -56,13 +57,25 @@ TOKEN_REFRESH_MARGIN_SECONDS = 300
 
 STATUS_KINDS: Mapping[int, ProviderErrorKind] = {
     400: "rejected",
-    404: "rejected",
+    # Azure answers 404 for a deployment that does not exist, which no prompt causes.
+    404: "unavailable",
+    408: "timeout",
     422: "rejected",
     401: "auth",
     403: "auth",
     429: "rate-limited",
 }
-DEFAULT_STATUS_KIND: ProviderErrorKind = "unavailable"
+CLIENT_ERRORS = range(400, 500)
+
+
+def kind_of_status(status: int) -> ProviderErrorKind:
+    """The table first; any other 4xx is the request's fault (T-45), so it ends
+    the walk and counts for no circuit; everything else is the service's."""
+    explicit = STATUS_KINDS.get(status)
+    if explicit is not None:
+        return explicit
+    return "rejected" if status in CLIENT_ERRORS else "unavailable"
+
 
 Failure = tuple[ProviderErrorKind, int | None]
 
@@ -181,12 +194,23 @@ class AzureOpenAIProvider:
             )
         return client
 
-    def chat(self, deployment: Deployment, request: ChatRequest) -> ProviderReply:
-        """One chat completion; raise ``ProviderError`` (kind and status only)
-        for anything the provider does wrong."""
+    def chat(
+        self, deployment: Deployment, request: ChatRequest, *, timeout_seconds: float
+    ) -> ProviderReply:
+        """One chat completion within ``timeout_seconds``, the budget of the whole
+        attempt; raise ``ProviderError`` (kind and status only) for anything the
+        provider does wrong."""
         if deployment.deployment_name is None:
             raise ValueError(f"deployment {deployment.id} has no deployment_name")
         client = self._client_for(deployment)
+        # Connect gets at most half the budget and the other phases the rest, so
+        # connect plus the answer stay inside it: 25 s gives 5 s and 20 s, 12 s
+        # gives 5 s and 7 s, 3 s gives 1.5 s and 1.5 s. Writing the request and
+        # waiting for a pooled connection are phases of their own, the read
+        # limit is between bytes, and the token source runs before the request:
+        # none is inside the budget, so the runtime's own 30 s is the last line.
+        connect = min(CONNECT_TIMEOUT_SECONDS, timeout_seconds / 2)
+        rest = min(PROVIDER_TIMEOUT_SECONDS, timeout_seconds - connect)
         failure: Failure
         try:
             completion = client.chat.completions.create(
@@ -198,6 +222,7 @@ class AzureOpenAIProvider:
                 # opt-in live test is the arbiter.
                 max_tokens=request.max_output_tokens,
                 n=1,
+                timeout=openai.Timeout(rest, connect=connect),
             )
         # The provider's exception is mapped to (kind, status) and dropped
         # inside the arm. Raising from the arm would leave it in __context__
@@ -208,7 +233,7 @@ class AzureOpenAIProvider:
             failure = ("unavailable", None)
         except openai.APIStatusError as error:
             status = error.status_code
-            failure = (STATUS_KINDS.get(status, DEFAULT_STATUS_KIND), status)
+            failure = (kind_of_status(status), status)
         except openai.APIResponseValidationError:
             failure = ("bad-response", None)
         except AzureError:  # the token provider failed, before any request

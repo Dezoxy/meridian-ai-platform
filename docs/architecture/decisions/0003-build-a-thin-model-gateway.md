@@ -85,6 +85,17 @@ because Azure no longer accepts new `gpt-4o-mini` deployments; the fallback
 stays designed. The gateway's contract does not change: a deployment is a
 registry entry.
 
+Amended on 2026-10-01 (S042): the gateway walks a route's allowed
+candidates as the flowchart draws it, with two readings made exact. A
+retry is the next candidate, never the same deployment again. And only a
+deployment's own failure counts for its circuit and moves the walk on: a
+timeout, a connection failure, a 5xx, a 404, a 429 or a malformed answer.
+A request the provider rejects and a credential that fails end the call
+and count for nothing, or one caller could open the circuit for everyone
+(T-45). The chat route has two candidates, both `gpt-4o` in the one
+Sweden Central account, so the walk answers a deployment that fails or is
+rate-limited; the fallback to a second region stays designed.
+
 ## Consequences
 
 Positive:
