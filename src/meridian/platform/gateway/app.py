@@ -1,11 +1,16 @@
 """The Model Gateway app: ``POST /v1/chat``, replay and live (S009, S010).
 
 One path for both modes: decide the route, refuse and audit when nothing is
-allowed, call the first allowed candidate through its provider, audit the
-outcome. The audit write is part of the answer, so a call that cannot be
-recorded returns no output (QA-05). No retry, breaker or fallback yet (S042).
+allowed, then walk the allowed candidates in order under one deadline (S042). A
+candidate whose circuit is open, or that the deadline leaves no time for, is
+skipped; a deployment's own failure moves the walk to the next candidate; a
+rejected request ends it. Every candidate touched leaves one audit row. The
+audit write is part of the answer, so a call that cannot be recorded returns no
+output (QA-05). There is no retry of one deployment: the next candidate is the
+retry.
 """
 
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, NoReturn
@@ -24,16 +29,18 @@ from meridian.platform.common.http import (
     error_responses,
 )
 from meridian.platform.common.telemetry import set_span_attributes, start_span
-from meridian.platform.gateway.models import (
-    ChatOutput,
-    ChatRequest,
-    ChatResponse,
-    Usage,
-)
+from meridian.platform.gateway.models import ChatRequest, ChatResponse
 from meridian.platform.gateway.providers.base import ChatProvider, ProviderError
 from meridian.platform.gateway.replay import ReplayProvider
+from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
 from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.gateway.walk import (
+    CandidateWalker,
+    Unanswered,
+    route_attributes,
+    route_facts,
+)
 from meridian.platform.registry import Registry, load_registry
 from meridian.platform.registry.models import Deployment
 
@@ -47,13 +54,17 @@ AZURE_KIND = "azure-openai"
 REPLAY_KIND = "replay"
 
 HTTP_BAD_GATEWAY = 502
+HTTP_SERVICE_UNAVAILABLE = 503
 HTTP_GATEWAY_TIMEOUT = 504
 # One fixed text per status: the provider's own words can echo a prompt (T-18).
 PROVIDER_TIMED_OUT = "the model provider did not answer in time"
 PROVIDER_FAILED = "the model provider failed"
-# The audit reason and span error type of a provider call that raised something
-# other than a ProviderError.
-INTERNAL_REASON = "internal"
+# No attempt was made: every candidate was skipped.
+PROVIDER_UNAVAILABLE = "the model provider is unavailable"
+# The route's own description of 503; the shared one names the database only.
+CHAT_UNAVAILABLE = (
+    "The audit log is unavailable, or no model deployment can be tried now."
+)
 
 
 def _check_start_allowed(
@@ -175,42 +186,18 @@ def _live_providers(
     return {AZURE_KIND: provider}, provider.close
 
 
-def _route_facts(
-    deployment: Deployment | None, data_class: str | None
-) -> dict[str, str | None]:
-    """The audit columns that say where a call went and why it could go there."""
-    facts: dict[str, str | None] = {"data_class": data_class}
-    if deployment is not None:
-        facts |= {
-            "deployment": deployment.id,
-            "provider": deployment.provider,
-            "model": deployment.model,
-            "sku": deployment.sku,
-            "region": deployment.region,
-            "residency": deployment.residency,
-        }
-    return facts
-
-
-def _route_attributes(
-    deployment: Deployment, data_class: str | None = None
-) -> dict[str, str]:
-    """The span attributes for the deployment a call goes to. A replay
-    deployment has no sku or region; before policy decides there is no data
-    class to say."""
-    attributes = {
-        "meridian.deployment": deployment.id,
-        "meridian.provider": deployment.provider,
-        "gen_ai.request.model": deployment.model,
-        "meridian.residency": deployment.residency,
-    }
-    if data_class is not None:
-        attributes["meridian.data_class"] = data_class
-    if deployment.sku is not None:
-        attributes["meridian.sku"] = deployment.sku
-    if deployment.region is not None:
-        attributes["meridian.region"] = deployment.region
-    return attributes
+def _unanswered(result: Unanswered) -> NoReturn:
+    """The status when no candidate answered: the last attempt's kind, or 503
+    when none was called. Never a word of the provider's (T-18)."""
+    if result.attempts == 0:
+        raise HTTPException(
+            status_code=HTTP_SERVICE_UNAVAILABLE, detail=PROVIDER_UNAVAILABLE
+        )
+    timed_out = result.last_attempt_kind == "timeout"
+    raise HTTPException(
+        status_code=HTTP_GATEWAY_TIMEOUT if timed_out else HTTP_BAD_GATEWAY,
+        detail=PROVIDER_TIMED_OUT if timed_out else PROVIDER_FAILED,
+    )
 
 
 def create_app(
@@ -218,13 +205,15 @@ def create_app(
     *,
     tracer_provider: TracerProvider | None = None,
     providers: Mapping[str, ChatProvider] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     """Build the app; raise when the registry fails to load or the mode,
     environment and providers are not an allowed combination.
 
     ``providers`` is keyed by provider kind (``replay``, ``azure-openai``); a
     test injects fakes. Without it the app builds the replay provider and, in
-    live mode, the Azure one.
+    live mode, the Azure one. ``clock`` times the circuit breaker (one per app)
+    and each request's deadline; a test injects a fake.
     """
     _check_start_allowed(settings, providers)
     registry = load_registry(settings.registry_dir)
@@ -262,6 +251,16 @@ def create_app(
             AuditEvent(service=SERVICE_NAME, event=event, outcome=outcome, **fields),
         )
 
+    walker = CandidateWalker(
+        tracer=tracer,
+        providers=providers,
+        kinds=kinds,
+        breaker=CircuitBreaker(clock=clock),
+        audit=audit,
+        clock=clock,
+        mode=settings.mode,
+    )
+
     def refuse(
         span: Span,
         who: dict[str, object],
@@ -273,27 +272,19 @@ def create_app(
             "model.call",
             "refused",
             **who,
-            **_route_facts(replay, data_class),
+            **route_facts(replay, data_class),
             reason=refusal,
         )
         raise HTTPException(status_code=403, detail=REFUSED)
 
-    def fail(
-        span: Span, who: dict[str, object], facts: dict[str, str | None], kind: str
-    ) -> NoReturn:
-        set_span_attributes(span, {"error.type": kind})
-        audit("model.call", "failed", **who, **facts, reason=kind)
-        timed_out = kind == "timeout"
-        raise HTTPException(
-            status_code=HTTP_GATEWAY_TIMEOUT if timed_out else HTTP_BAD_GATEWAY,
-            detail=PROVIDER_TIMED_OUT if timed_out else PROVIDER_FAILED,
-        )
+    chat_responses = error_responses(403, 413, 500, 502, 503, 504)
+    chat_responses[HTTP_SERVICE_UNAVAILABLE]["description"] = CHAT_UNAVAILABLE
 
     @app.post(
         "/v1/chat",
         tags=["chat"],
         summary="Answer a chat request (replay simulates, live calls a model).",
-        responses=error_responses(403, 413, 500, 502, 503, 504),
+        responses=chat_responses,
     )
     def chat(
         body: ChatRequest,
@@ -312,56 +303,17 @@ def create_app(
                 },
             )
             if replay is not None:
-                set_span_attributes(span, _route_attributes(replay))
+                set_span_attributes(span, route_attributes(replay))
             who = {"tenant": tenant_id, "agent": agent_id, "run_id": run_id}
             decision = decide(registry, considered, tenant_id, agent_id)
             if decision.refusal is not None:
                 refuse(span, who, decision.data_class, decision.refusal)
-            deployment = decision.candidates[0]
-            facts = _route_facts(deployment, decision.data_class)
-            attributes = _route_attributes(deployment, decision.data_class)
-            set_span_attributes(span, attributes)
-            try:
-                reply = providers[kinds[deployment.id]].chat(deployment, body)
-            except ProviderError as error:
-                fail(span, who, facts, error.kind)
-            except Exception:
-                # Whatever it was, the call may have reached the provider, so it
-                # leaves a row. Nothing of the exception is kept (T-03, T-18);
-                # it is re-raised for the unexpected-error middleware's 500.
-                set_span_attributes(span, {"error.type": INTERNAL_REASON})
-                audit("model.call", "failed", **who, **facts, reason=INTERNAL_REASON)
-                raise
-            response = ChatResponse(
-                call_id=uuid.uuid4(),
-                mode=settings.mode,
-                deployment=deployment.id,
-                provider=deployment.provider,
-                model=deployment.model,
-                output=ChatOutput(text=reply.text, finish_reason=reply.finish_reason),
-                usage=Usage(
-                    input_tokens=reply.input_tokens,
-                    output_tokens=reply.output_tokens,
-                ),
-            )
-            set_span_attributes(
-                span,
-                {
-                    "gen_ai.usage.input_tokens": reply.input_tokens,
-                    "gen_ai.usage.output_tokens": reply.output_tokens,
-                    "gen_ai.response.model": reply.model,
-                },
-            )
-            # The last thing that can fail: nothing after the audit write may.
-            audit(
-                "model.call",
-                "completed",
-                **who,
-                **facts,
-                input_tokens=reply.input_tokens,
-                output_tokens=reply.output_tokens,
-            )
-            return response
+            if decision.data_class is not None:
+                set_span_attributes(span, {"meridian.data_class": decision.data_class})
+            result = walker.run(span, who, body, decision)
+            if isinstance(result, Unanswered):
+                _unanswered(result)
+            return result
 
     return app
 

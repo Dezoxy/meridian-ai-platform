@@ -140,7 +140,9 @@ def test_platform_import_of_forbidden_module_breaks_a_contract(
 
 # ── provider SDKs belong to the gateway's adapter (hard rule 4, T-19) ─────────
 SDK_CONTRACT = "only the gateway imports a provider SDK (hard rule 4, T-19)"
-ADAPTER_CONTRACT = "inside the gateway only the Azure OpenAI adapter imports openai"
+ADAPTER_CONTRACT = (
+    "inside the gateway only the Azure OpenAI adapter imports a provider SDK"
+)
 ADAPTER_MODULE = "meridian.platform.gateway.providers.azure_openai"
 GATEWAY_PACKAGE = "meridian.platform.gateway"
 
@@ -200,6 +202,31 @@ def test_a_chain_to_the_sdk_through_the_gateway_adapter_breaks_the_contract(
     assert exit_code != 0, output
     assert f"{probe} -> {ADAPTER_MODULE}" in output, output
     assert f"{ADAPTER_MODULE} -> openai" in output, output
+
+
+@pytest.mark.parametrize(
+    "sdk", ["anthropic", "mistralai", "boto3", "botocore", "litellm"]
+)
+@pytest.mark.parametrize(
+    "package",
+    [
+        pytest.param(GATEWAY_PACKAGE, id="gateway"),
+        pytest.param(f"{GATEWAY_PACKAGE}.providers", id="another-provider-module"),
+    ],
+)
+def test_a_gateway_module_other_than_the_adapter_importing_another_sdk_breaks_it(
+    project_copy: Path, package: str, sdk: str
+) -> None:
+    # Arrange: walk.py is such a module; it must not reach for another SDK.
+    probe = add_probe_in(project_copy, package, f"import {sdk}\n")
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code != 0, output
+    assert ADAPTER_CONTRACT in output, output
+    assert f"{probe} -> {sdk}" in output, output
 
 
 @pytest.mark.parametrize(

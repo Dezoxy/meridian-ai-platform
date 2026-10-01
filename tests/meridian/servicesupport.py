@@ -1,6 +1,7 @@
 """Helpers shared by the tests of the three services (S009)."""
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -28,6 +29,88 @@ GATEWAY_REPLY = {
     "output": {"text": "drafted", "finish_reason": "stop"},
     "usage": {"input_tokens": 1, "output_tokens": 1},
 }
+
+# The deployment after the Azure ones: where a planted deployment goes.
+REPLAY_ENTRY = "  - id: replay-chat\n"
+CHAT_ROUTE = re.compile(r"(- purpose: chat\n\s+candidates: )\[[^\]]*\]")
+
+
+def azure_chat_deployment_yaml(
+    deployment_id: str,
+    deployment_name: str,
+    *,
+    sku: str,
+    residency: str,
+    data_classes: str,
+) -> str:
+    """A chat deployment for ``models.yaml`` that passes the registry checks,
+    ending in the blank line that separates entries."""
+    return f"""\
+  - id: {deployment_id}
+    provider: azure-openai
+    purpose: chat
+    model: gpt-4o
+    version: "2024-11-20"
+    deployment_name: {deployment_name}
+    sku: {sku}
+    region: swedencentral
+    residency: {residency}
+    data_classes: {data_classes}
+    retires: 2027-04-14
+    price:
+      currency: USD
+      input_per_million_tokens: 2.5
+      output_per_million_tokens: 10
+      source: "a test fixture"
+      checked: 2026-09-30
+    terraform_key: sdc/{deployment_name}
+
+"""
+
+
+# A test-only global deployment: synthetic data only.
+GLOBAL_DEPLOYMENT_YAML = azure_chat_deployment_yaml(
+    "aoai-sdc-gpt-4o-global",
+    "gpt-4o-global",
+    sku="GlobalStandard",
+    residency="global",
+    data_classes="[synthetic]",
+)
+# A test-only second EU deployment, a copy of the real one under another name.
+SECOND_DEPLOYMENT_YAML = azure_chat_deployment_yaml(
+    "aoai-sdc-gpt-4o-second",
+    "gpt-4o-second",
+    sku="Standard",
+    residency="eu-region",
+    data_classes="[synthetic, internal, personal]",
+)
+
+
+def pin_chat_route(registry_dir: Path, *candidates: str) -> Path:
+    """Rewrite the chat route's ``candidates:`` line in a planted registry, so a
+    test does not depend on how many deployments the real route lists."""
+    path = registry_dir / "policies.yaml"
+    pinned, count = CHAT_ROUTE.subn(
+        lambda m: f"{m[1]}[{', '.join(candidates)}]",
+        path.read_text(encoding="utf-8"),
+    )
+    assert count == 1, f"policies.yaml has {count} chat routes, not one"
+    path.write_text(pinned, encoding="utf-8")
+    return registry_dir
+
+
+class FakeClock:
+    """A clock a test moves by hand, for the gateway's breaker and deadline."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
 
 AUDIT_COLUMNS = (
     "service",

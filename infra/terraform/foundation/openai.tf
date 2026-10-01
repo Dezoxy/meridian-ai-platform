@@ -65,6 +65,32 @@ resource "azurerm_cognitive_deployment" "embedding" {
   depends_on = [azurerm_cognitive_deployment.chat]
 }
 
+# The chat model once more, under another name, in the accounts
+# var.chat_second_locations names: same model, version, SKU and capacity, so
+# the gateway's chat route has two candidates (S042). It waits for the
+# embedding deployment for the reason that one waits for the first.
+resource "azurerm_cognitive_deployment" "chat_second" {
+  for_each = { for key in var.chat_second_locations : key => azurerm_cognitive_account.openai[key] }
+
+  name                 = "${var.chat_model.name}-b"
+  cognitive_account_id = each.value.id
+
+  model {
+    format  = "OpenAI"
+    name    = var.chat_model.name
+    version = var.chat_model.version
+  }
+
+  sku {
+    name     = var.chat_model.sku_name
+    capacity = var.chat_model.capacity
+  }
+
+  version_upgrade_option = "NoAutoUpgrade"
+
+  depends_on = [azurerm_cognitive_deployment.embedding]
+}
+
 # Owner is a control-plane role. Calling a model needs this data-plane role.
 resource "azurerm_role_assignment" "openai_user" {
   for_each = azurerm_cognitive_account.openai

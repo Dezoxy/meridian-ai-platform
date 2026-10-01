@@ -18,9 +18,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from servicesupport import (
+    GLOBAL_DEPLOYMENT_YAML,
     REGISTRY_DIR,
+    REPLAY_ENTRY,
     assert_spans_hold_no_exception_and_no_canary,
     audit_events,
+    pin_chat_route,
 )
 
 from meridian.platform.common import audit
@@ -57,36 +60,13 @@ EU_DEPLOYMENT = "aoai-sdc-gpt-4o"
 GLOBAL_DEPLOYMENT = "aoai-sdc-gpt-4o-global"
 ERROR_KINDS = get_args(ProviderErrorKind)
 
-GLOBAL_DEPLOYMENT_YAML = f"""\
-  - id: {GLOBAL_DEPLOYMENT}
-    provider: azure-openai
-    purpose: chat
-    model: gpt-4o
-    version: "2024-11-20"
-    deployment_name: gpt-4o-global
-    sku: GlobalStandard
-    region: swedencentral
-    residency: global
-    data_classes: [synthetic]
-    retires: 2027-04-14
-    price:
-      currency: USD
-      input_per_million_tokens: 2.5
-      output_per_million_tokens: 10
-      source: "a test fixture"
-      checked: 2026-09-30
-    terraform_key: sdc/gpt-4o-global
-
-"""
-
-
-REPLAY_ENTRY = "  - id: replay-chat\n"  # the first deployment after the Azure ones
-
 
 class CrashingProvider:
     """Raises something that is not a ``ProviderError``, with a canary in it."""
 
-    def chat(self, deployment: Deployment, request: ChatRequest) -> ProviderReply:
+    def chat(
+        self, deployment: Deployment, request: ChatRequest, *, timeout_seconds: float
+    ) -> ProviderReply:
         raise RuntimeError(f"{CANARY} {request.messages[0].content}")
 
 
@@ -98,7 +78,9 @@ class FakeProvider:
         self.called: list[str] = []
         self.requests: list[ChatRequest] = []
 
-    def chat(self, deployment: Deployment, request: ChatRequest) -> ProviderReply:
+    def chat(
+        self, deployment: Deployment, request: ChatRequest, *, timeout_seconds: float
+    ) -> ProviderReply:
         self.called.append(deployment.id)
         self.requests.append(request)
         if self.error is not None:
@@ -159,13 +141,18 @@ def global_first_registry(plant: Callable[..., Path]) -> Path:
     """A registry that passes the checks, whose chat route is the global
     deployment (synthetic data only) followed by the EU one."""
     directory = plant(
-        ("models.yaml", REPLAY_ENTRY, GLOBAL_DEPLOYMENT_YAML + REPLAY_ENTRY),
-        (
-            "policies.yaml",
-            f"candidates: [{EU_DEPLOYMENT}]",
-            f"candidates: [{GLOBAL_DEPLOYMENT}, {EU_DEPLOYMENT}]",
-        ),
+        ("models.yaml", REPLAY_ENTRY, GLOBAL_DEPLOYMENT_YAML + REPLAY_ENTRY)
     )
+    pin_chat_route(directory, GLOBAL_DEPLOYMENT, EU_DEPLOYMENT)
+    assert run_checks(load_registry(directory)) == ()
+    return directory
+
+
+@pytest.fixture
+def one_candidate_registry(plant: Callable[..., Path]) -> Path:
+    """A registry whose chat route lists the one EU deployment, however many the
+    real route lists (S042 walks the candidates, so a failure test needs one)."""
+    directory = pin_chat_route(plant(), EU_DEPLOYMENT)
     assert run_checks(load_registry(directory)) == ()
     return directory
 
@@ -232,6 +219,8 @@ def test_a_live_call_reaches_the_routed_deployment_and_is_audited_and_traced(
         "gen_ai.response.model": PROVIDER_MODEL,
         "gen_ai.usage.input_tokens": 11,
         "gen_ai.usage.output_tokens": 7,
+        "meridian.attempts": 1,
+        "meridian.skipped": 0,
     }
 
 
@@ -300,12 +289,14 @@ def test_a_tenant_no_candidate_may_reach_is_refused_without_a_provider_call(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The registry checks refuse a route nobody can use, so the registry is
-    # narrowed in memory after it was loaded.
+    # narrowed in memory after it was loaded: every chat candidate, however
+    # many the route lists.
+    candidates = load_registry(REGISTRY_DIR).route("chat").candidates
     narrowed = narrowed_registry(
         lambda r: {
             "deployments": tuple(
                 d.model_copy(update={"data_classes": ("synthetic",)})
-                if d.id == EU_DEPLOYMENT
+                if d.id in candidates
                 else d
                 for d in r.deployments
             )
@@ -400,12 +391,17 @@ def test_live_mode_refuses_an_unknown_tenant_and_an_agent_not_allowed(
 # ── a provider failure ──────────────────────────────────────────────────────
 @pytest.mark.parametrize("kind", ERROR_KINDS)
 def test_a_provider_error_answers_a_generic_502_or_504_and_is_audited(
-    fresh_database: DatabaseHandle, kind: ProviderErrorKind
+    fresh_database: DatabaseHandle,
+    one_candidate_registry: Path,
+    kind: ProviderErrorKind,
 ) -> None:
     exporter = InMemorySpanExporter()
     provider = FakeProvider(error=ProviderError(kind, 500))
     client = live_client(
-        provider, fresh_database.dsn("model_gateway"), exporter=exporter
+        provider,
+        fresh_database.dsn("model_gateway"),
+        registry_dir=one_candidate_registry,
+        exporter=exporter,
     )
     run_id = uuid.uuid4()
 
@@ -446,11 +442,14 @@ def test_a_provider_error_answers_a_generic_502_or_504_and_is_audited(
 
 # ── a provider call that fails in a way no one planned ──────────────────────
 def test_an_unexpected_provider_exception_is_audited_as_internal_and_answers_500(
-    fresh_database: DatabaseHandle,
+    fresh_database: DatabaseHandle, one_candidate_registry: Path
 ) -> None:
     exporter = InMemorySpanExporter()
     client = live_client(
-        CrashingProvider(), fresh_database.dsn("model_gateway"), exporter=exporter
+        CrashingProvider(),
+        fresh_database.dsn("model_gateway"),
+        registry_dir=one_candidate_registry,
+        exporter=exporter,
     )
     run_id = uuid.uuid4()
 
@@ -490,13 +489,13 @@ def test_an_unexpected_provider_exception_is_audited_as_internal_and_answers_500
 
 
 def test_when_the_audit_of_an_unexpected_failure_fails_the_answer_is_503(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, one_candidate_registry: Path
 ) -> None:
     def fail_connect(*_args: object, **_kwargs: object) -> None:
         raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(audit, "connect", fail_connect)
-    client = live_client(CrashingProvider())
+    client = live_client(CrashingProvider(), registry_dir=one_candidate_registry)
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 
@@ -505,7 +504,7 @@ def test_when_the_audit_of_an_unexpected_failure_fails_the_answer_is_503(
 
 
 def test_a_malformed_provider_reply_through_the_real_adapter_is_a_502_and_one_row(
-    fresh_database: DatabaseHandle,
+    fresh_database: DatabaseHandle, one_candidate_registry: Path
 ) -> None:
     # A 200 whose first choice has no message: before the fix the adapter raised
     # AttributeError and the call left no audit row.
@@ -528,7 +527,10 @@ def test_a_malformed_provider_reply_through_the_real_adapter_is_a_502_and_one_ro
     )
     exporter = InMemorySpanExporter()
     client = live_client(
-        provider, fresh_database.dsn("model_gateway"), exporter=exporter
+        provider,
+        fresh_database.dsn("model_gateway"),
+        registry_dir=one_candidate_registry,
+        exporter=exporter,
     )
     run_id = uuid.uuid4()
 
@@ -543,14 +545,14 @@ def test_a_malformed_provider_reply_through_the_real_adapter_is_a_502_and_one_ro
 
 
 def test_when_the_audit_write_of_a_failed_call_fails_the_answer_is_503(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, one_candidate_registry: Path
 ) -> None:
     def fail_connect(*_args: object, **_kwargs: object) -> None:
         raise psycopg.OperationalError("connection refused: password=hunter2")
 
     monkeypatch.setattr(audit, "connect", fail_connect)
     provider = FakeProvider(error=ProviderError("unavailable", 503))
-    client = live_client(provider)
+    client = live_client(provider, registry_dir=one_candidate_registry)
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 

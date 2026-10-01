@@ -5,7 +5,8 @@
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, the gateway routes a call to Azure OpenAI by data
-  class and residency from a laptop, and no service runs in Azure yet.
+  class and residency from a laptop and falls back to a second deployment
+  in the same region, and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -130,7 +131,7 @@ and Pydantic, at the cost of one dependency.
 | S009 | Walking skeleton | A claim posted to the claims API starts a one-node LangGraph run that calls the gateway's replay provider and stores a ~~decision~~ triage proposal; ~~one trace spans API, runtime and gateway in Tempo; `make demo` runs it on kind~~ an end-to-end test proves one trace across API, runtime and gateway; per-service schemas, roles and migrations tested against PostgreSQL in CI (split on 2026-09-30: the kind half is S041) | done | S006, S008 |
 | S041 | Walking skeleton on kind | One image for the three services, manifests in namespace `meridian`, an HTTPRoute on a `*.localhost` hostname, per-service database roles on the cluster; `make demo` posts a claim and the one trace spanning API, runtime and gateway is found in Tempo; `make smoke` stays green | done | S009 |
 | S010 | Gateway routing ~~and resilience~~ | Registry-driven routing by data class and residency; Azure OpenAI adapter; ~~timeout, retry, circuit breaker and fallback to the second region;~~ a residency mismatch is refused and audited; contract tests pass (split on 2026-10-01: resilience is S042) | done | S004, S007, S009 |
-| S042 | Gateway resilience | Timeout, retry, circuit breaker and fallback across a route's candidates, with a second `gpt-4o` deployment in Sweden Central as the real second candidate and the second region labelled designed until the subscription is upgraded; a fault injected into the first candidate is answered by the second, and every attempt is audited; contract tests pass | todo | S010 |
+| S042 | Gateway resilience | Timeout, retry, circuit breaker and fallback across a route's candidates, with a second `gpt-4o` deployment in Sweden Central as the real second candidate and the second region labelled designed until the subscription is upgraded; a fault injected into the first candidate is answered by the second, and every attempt is audited; contract tests pass | done | S010 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set | todo | S003, S009 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited | todo | S008, S009 |
@@ -1768,6 +1769,208 @@ adapter, and refuses and audits a request no candidate may serve.
   pipeline's OIDC federation (S022) remove that for everything but a
   laptop; whether a dedicated tenant should hold Meridian is Part D
   question 5.
+
+### S042 — Gateway resilience
+
+**Status:** done · **Started:** 2026-10-01 · **Finished:** 2026-10-01
+**Goal:** a model call survives the failure of one deployment: the gateway
+walks the candidates S010 kept, bounded by one deadline, skips a deployment
+whose circuit is open, and leaves an audit row for every attempt.
+**Decisions:**
+
+- A retry is the next candidate, never the same one again, as ADR 3's
+  flowchart draws it: the row says retry "across a route's candidates", and
+  two deployments of one model in one account answer a second request to
+  the first no better than the second deployment does. Rejected: one more
+  request to the same deployment after a connection failure, which doubles
+  the requests an outage sends (T-46) for a case the next candidate covers.
+  A route left with one candidate, because the other's circuit is open, has
+  no retry.
+- Which failures walk on, and which count toward the circuit:
+
+  | Kind | Next candidate | Counts |
+  |---|---|---|
+  | `timeout`, `unavailable`, `rate-limited`, `bad-response` | yes | yes |
+  | `rejected` (400, 422, any other 4xx, the content filter) | no | no |
+  | `auth` | no | no |
+
+  A rejected request is the request's fault, and the same model answers it
+  the same way; were it counted, one caller could open the circuit for
+  every tenant (T-45). The credential is the gateway's own and shared by
+  both deployments of an account, so a failed one ends the call; this is
+  reconsidered when a second account has its own role assignment (S020).
+  A 404 moves from `rejected` to `unavailable`: Azure answers it for a
+  deployment that does not exist, which no prompt can cause, and a deleted
+  or retired deployment is what a fallback is for. A 408 is a `timeout`.
+- One deadline for the whole call, 25 s, under the runtime's 30 s to the
+  gateway. An attempt gets the time left as its budget for connecting and
+  answering: at most 5 s, and at most half of it, to connect, and the
+  rest, at most 20 s, for each other phase; so the first attempt has what
+  S010 gave it. None starts with under 10 s left, which is what connecting
+  and a default-length answer need. So a first candidate that fails fast,
+  as a refused connection, a 5xx or a 429 does, leaves the second nearly
+  the whole budget, and one that used its whole read limit leaves the
+  second a recorded skip, never an attempt that is bound to time out and
+  would count against a second circuit. Rejected: splitting the budget
+  evenly, which cuts a slow but healthy completion on both candidates;
+  lengthening the chain of timeouts above the gateway, a change to two
+  other services for a case the game day (S028) has not measured yet. The
+  limits bound connecting and the gap between bytes, as `httpx` does, not
+  the wall clock: writing the request, waiting for a pooled connection and
+  fetching the token are outside the budget, and the runtime's 30 s is the
+  last line.
+- The circuit breaker is one small module of the gateway's own, in process,
+  one circuit per deployment: closed, open after 3 counted failures in a
+  row, half-open after 30 s, when one request is let through as the probe.
+  A call takes a permit; a permit acts only on the circuit state it was
+  taken for, so a call that began before a circuit opened can neither
+  settle nor free its probe, and settling twice is harmless. The state
+  lives and dies with the process, which is right for one replica (C-01).
+  Rejected: `pybreaker` and `tenacity`, a dependency each for about a
+  hundred lines that ADR 3 wants owned here, with no hook for the audit
+  row.
+- The circuits are shared by all tenants, and a timeout and a 429 count,
+  though both come from traffic as well as from the deployment. So until
+  S011 a caller whose requests outlast an attempt, or exhaust the quota,
+  can open a circuit for every tenant, 30 s at a time, and the probe after
+  the cooldown is the next caller's request. Accepted and recorded in
+  T-45: the owner's split put per-tenant limits in S011, and live mode
+  runs on a laptop only until S020. Rejected after the security review:
+  a circuit per tenant, which stops no caller while the tenant is an
+  unauthenticated header (T-08, S021) and would ship a design no reviewer
+  read; a probe request of the gateway's own; a threshold on
+  `max_output_tokens` for counting a timeout.
+- The audit keeps its columns: every candidate the walk touches leaves one
+  `model.call` row, `completed`, `failed` with the error kind, or `skipped`
+  with `circuit-open` or `deadline`. So a row is one decision about one
+  deployment, and a call that fell back reads as a `failed` row for the
+  first and a `completed` row for the second under one run. A run makes
+  one gateway call today, so the rows of a call are the rows of its run;
+  nothing on a row links it to a span, and telling two calls of one run
+  apart needs the `call_id` S011 adds. Rejected: a migration for a call ID
+  now, raised again by the security review and left with S011.
+- The second deployment is `gpt-4o-b`, 20 units, in the Sweden Central
+  account only: the same model, version and SKU, so the same residency
+  label. It has its own rate limit, so it answers a 429 or a broken first
+  deployment; it shares the account and the region, so it answers no
+  regional outage, and the second region stays designed (hard rule 7).
+  When West Europe returns, its own deployment is the fallback and this
+  one can go.
+- Replay stays a mode and never becomes the last candidate, as S009 and
+  the registry checks decided, although S007's notes had offered it.
+
+**Work log:**
+
+- `feature-threat-model` for the walk: T-45 (a caller opens the circuit
+  for everyone) and T-46 (an outage multiplies requests and cost) added;
+  T-44 already covers a fallback that widens the route.
+- `implementer`, contract A: `resilience.py` (the breaker and the
+  deadline, pure, on an injected clock), `walk.py` (one pass over the kept
+  candidates), a timeout per attempt in the provider protocol, the 404
+  remap, three span attributes, and the tests with a fake clock and a fake
+  provider that fails per deployment.
+- The main session wrote the Terraform change: a variable
+  `chat_second_locations`, the resource
+  `azurerm_cognitive_deployment.chat_second` and one more entry in the
+  `openai_deployments` output. `infra-reviewer`: safe to apply, with two
+  findings taken up here (the smoke test called only the first chat
+  deployment of an account; a comment on the capacity the quota allows).
+  The plan added one resource and changed and removed none; the owner
+  approved it and `make azure-apply` created the deployment.
+- Then, in this order: `make registry-snapshot` from the live outputs, the
+  deployment in `models.yaml`, the second candidate in the chat route, and
+  the registry tests that had the one-candidate route as a literal. One of
+  them was a real case: narrowing one deployment no longer leaves a tenant
+  unserved while a second candidate serves it.
+- `make azure-smoke` now calls every deployment and refuses a deployment
+  name that is not a plain name before it enters a URL. The opt-in live
+  test gained a second case, the first candidate made to fail in the test
+  process.
+- Reviews of contract A. `python-reviewer`: approve with fixes (a probe
+  permit could leak on an exception before the provider call; the deadline
+  could reach 30 s because connect and read each had the whole budget; a
+  call that began before a circuit opened could free its probe; the
+  16-thread test passed with the lock removed).
+  `platform-boundary-reviewer`: the code passes every hard rule, the
+  documents were blocked for hard rule 7, and the import contract inside
+  the gateway forbade only `openai` and `azure`. `security-reviewer`: T-44
+  mitigated as the register says, T-45 and T-46 in part; it blocked on the
+  shared circuit and on the audit rows of one call, both decided above.
+- `implementer`, contract B: permits with a probe serial, the release on
+  every path, one budget per attempt, an unmapped 4xx as `rejected`, no
+  audit write inside an `except` arm (a failed audit write would have
+  carried the provider's exception in `__context__`), the 503's own
+  description on the chat route, the full SDK list in the gateway's import
+  contract with ten probes, and tests that can fail. It wrote most source
+  edits through scripts, past the edit hooks, and said so; the main
+  session read every changed source file. The main session's own script
+  edit of `foundation.sh` went past the same hooks.
+- The documents the boundary review listed: T-17, T-44, T-45, T-46, QA-04,
+  both READMEs, the registry's README, a dated amendment to ADR 3, and the
+  model's description of Azure OpenAI, which called West Europe the
+  fallback as if it existed.
+- Seen on the way and left out: the output filter of `foundation.sh` lets
+  through the base64 ID of Terraform's client-config data source, which
+  encodes the tenant, subscription and object IDs. It reached the terminal
+  only; raised as a separate task.
+
+**Result / verification:**
+
+- `make gateway-live`, on the final code, two real calls: `deployment:
+  aoai-sdc-gpt-4o`, `provider model: gpt-4o-2024-11-20`, `finish reason:
+  stop`, `tokens: input 15, output 1`; then `first candidate:
+  aoai-sdc-gpt-4o failed`, `reason: unavailable (injected)`, `answered by:
+  aoai-sdc-gpt-4o-b`, `tokens: input 15, output 1`; `2 passed`. The second
+  test asserts the `failed` row of the first candidate, the `completed`
+  row of the second and one span per attempt. The fault is injected in the
+  test process, so this proves the walk and the second deployment, not how
+  Azure fails.
+- `make azure-smoke`: 8 PASS, among them `deployment sdc/gpt-4o-b: gpt-4o
+  2024-11-20 on Standard in swedencentral` and `gpt-4o-b answered (model
+  gpt-4o-2024-11-20, 15 tokens)`; `All checks passed.`
+- `make pytest-db`: 1394 passed, 2 skipped (the opt-in live tests). `make
+  pytest`: 1198 passed, 198 skipped without a database. `make lint`:
+  `Contracts: 4 kept, 0 broken.` `make registry`: `registry OK`, `terraform
+  outputs OK: 3 deployments match`, `schemas OK`. `make test`: 117 OK.
+  `make docs`: 13 checks. `make check`: no ERROR line. `make mermaid`: one
+  derived block rewritten, 4 diagrams rendered. `uv lock --check`,
+  `shellcheck infra/terraform/*.sh` and `terraform fmt -check`: exit 0.
+- Mutations run by the main session on the final code, each red and then
+  restored: a release that frees any probe (4 tests); the minimum attempt
+  time lowered to 5 s (the test that a slow first candidate leaves the
+  second circuit untouched); an unmapped 4xx counted as `unavailable`
+  (5); the release on every path removed (2); `rejected` counted and
+  walked on (2); the residency filter dropped from routing (9, among them
+  both tests that a failing EU candidate never leads to a `global` one); a
+  call from before the circuit opened allowed to settle it (9).
+- Not tested: the gateway on kind, where it stays in replay mode and the
+  walk has one candidate; `make up` from no cluster is still untested
+  since S041. Not measured: QA-04's 60 s and 5 %, which need a second
+  region and the game day (S028).
+
+**Follow-ups:**
+
+- S011: per-tenant limits, which close what T-45 accepts; reserve before
+  the call, so an attempt the gateway gave up on is not unrecorded cost;
+  `call_id` on every row of a call, and the provider's HTTP status, so a
+  missing deployment (404) does not read as an outage; a limit on what an
+  open circuit writes, one `skipped` row per candidate per call.
+- S014 or S011: `MAX_OUTPUT_TOKENS` is 4096, which `gpt-4o` cannot
+  generate inside the 20 s read limit, so the contract promises more than
+  the adapter can serve; lower it or stream.
+- S020: live mode in Azure needs T-45's residual closed or accepted again;
+  `auth` as a walk-on kind once a second account has its own role.
+- S028: the game day measures QA-04; `timeouts.request` on the kind route
+  at or above the runtime's 30 s once live calls pass the edge.
+- After the subscription's upgrade: West Europe as one line in
+  `openai_locations`, its `gpt-4o` as the second candidate, `gpt-4o-b`
+  removed, and T-17 and QA-04 read again.
+- No step yet: a registry notice when every candidate of a route shares a
+  region, so a route like today's cannot be read as a regional fallback; a
+  failure count with a time window, since three failures days apart, with
+  no success between them, open a circuit; a deployment that fails two
+  calls in three never opens one.
+- Separate task: mask the client-config ID in `foundation.sh`'s filter.
 
 ## Part D — Open questions
 

@@ -45,7 +45,13 @@ REFERENCE_CASES = [
         id="tenant-agent",
     ),
     pytest.param(
-        [("policies.yaml", "candidates: [aoai-sdc-gpt-4o]", "candidates: [ghost]")],
+        [
+            (
+                "policies.yaml",
+                "candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]",
+                "candidates: [ghost]",
+            )
+        ],
         "policies.yaml: routes[0].candidates[0]: unknown deployment 'ghost'",
         id="route-candidate",
     ),
@@ -156,7 +162,7 @@ def test_replay_deployment_with_azure_fields_is_reported(
     errors = load_errors(directory)
 
     assert (
-        f"models.yaml: deployments[2].{field}: must not be set for provider kind "
+        f"models.yaml: deployments[3].{field}: must not be set for provider kind "
         "'replay' (deployment 'replay-chat')"
     ) in errors
 
@@ -298,7 +304,7 @@ def test_route_candidate_with_the_wrong_purpose_is_reported(
     directory = plant(
         (
             "policies.yaml",
-            "candidates: [aoai-sdc-gpt-4o]",
+            "candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]",
             "candidates: [aoai-sdc-text-embedding-3-large]",
         )
     )
@@ -330,6 +336,12 @@ def test_tenant_with_no_allowed_candidate_is_reported(
         GLOBAL_SKU,
         GLOBAL_LABEL,
         ("models.yaml", GPT4O_CLASSES, "    data_classes: [synthetic]\n"),
+        # The route's second candidate would still serve personal data.
+        (
+            "policies.yaml",
+            "candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]",
+            "candidates: [aoai-sdc-gpt-4o]",
+        ),
     )
 
     errors = load_errors(directory)
@@ -534,7 +546,7 @@ def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> Non
                 "      source: Runs inside",
                 '      source: ""\n      x: Runs inside',
             ),
-            "models.yaml: deployments[2].price.source",
+            "models.yaml: deployments[3].price.source",
             id="empty-price-source",
         ),
         pytest.param(
@@ -553,7 +565,11 @@ def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> Non
             id="scope-without-action",
         ),
         pytest.param(
-            ("policies.yaml", "candidates: [aoai-sdc-gpt-4o]", "candidates: []"),
+            (
+                "policies.yaml",
+                "candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]",
+                "candidates: []",
+            ),
             "policies.yaml: routes[0].candidates",
             id="route-without-candidates",
         ),
@@ -697,7 +713,7 @@ def test_replay_deployment_with_a_real_model_name_is_reported(
     errors = load_errors(directory)
 
     assert errors == (
-        "models.yaml: deployments[2].model: a replay deployment's model must start "
+        "models.yaml: deployments[3].model: a replay deployment's model must start "
         "with 'replay-' (deployment 'replay-chat')",
     )
 
@@ -726,7 +742,8 @@ def test_empty_routes_report_every_purpose(
     directory = plant(
         (
             "policies.yaml",
-            "routes:\n  - purpose: chat\n    candidates: [aoai-sdc-gpt-4o]\n"
+            "routes:\n  - purpose: chat\n"
+            "    candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]\n"
             "  - purpose: embedding\n"
             "    candidates: [aoai-sdc-text-embedding-3-large]\n",
             "routes: []\n",
@@ -901,7 +918,7 @@ REPLAY_CASES = [
         [
             (
                 "policies.yaml",
-                "candidates: [aoai-sdc-gpt-4o]",
+                "candidates: [aoai-sdc-gpt-4o, aoai-sdc-gpt-4o-b]",
                 "candidates: [replay-chat]",
             )
         ],

@@ -31,6 +31,10 @@ is `gpt-4o` 2024-11-20, the owner's choice. It costs roughly six times
 upgrade; the West Europe account for the gateway's fallback returns as one
 line in `openai_locations`.
 
+Until then the gateway's second chat candidate is a second deployment of
+`gpt-4o` in the same account (`chat_second_locations`, S042): 40 of the 50
+units are in use. A fallback to a second region stays **designed**.
+
 ## What the foundation creates
 
 Names ending in `<suffix>` carry the first six hex characters of the SHA-1 of
@@ -44,6 +48,7 @@ the subscription ID, so they are unique and stable without containing the ID.
 | Key Vault | `kv-meridian-<suffix>` | Home of runtime secrets. RBAC authorisation, purge protection, 7-day soft delete. No secret is created yet |
 | Azure OpenAI account | `oai-meridian-sdc-<suffix>` | Sweden Central. Key authentication is off; callers use Entra ID (T-18) |
 | Deployment `gpt-4o` | on the account | Version `2024-11-20`, SKU `Standard` (regional), 20,000 tokens per minute |
+| Deployment `gpt-4o-b` | on the account | The chat model once more: same version, SKU and capacity, so the gateway's chat route has two candidates (S042). It has its own rate limit and shares the account's region, so it answers a rate limit or a broken deployment, not a regional outage |
 | Deployment `text-embedding-3-large` | on the account | Version `1`, SKU `Standard` (regional), 20,000 tokens per minute |
 | Role assignments | vault and account | The signed-in user gets Key Vault Secrets Officer on the vault and Cognitive Services OpenAI User on the account |
 
@@ -148,9 +153,9 @@ az cognitiveservices usage list -l swedencentral --subscription "<pinned subscri
 | `make azure-state` | Register the providers, create the state storage and `local.env`. Safe to rerun. | Yes |
 | `make azure-plan` | `terraform init` against the remote state, then `plan` into `foundation/foundation.tfplan`. Review it. | No |
 | `make azure-apply` | Apply exactly the saved plan, then remove the plan file. Refuses to run without a plan. | Yes |
-| `make azure-smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. | No, apart from two tiny model calls per account |
+| `make azure-smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. | No, apart from one tiny model call per deployment |
 | `make registry-snapshot` | `foundation.sh outputs`: the `openai_deployments` output as JSON without account names and endpoints, written to `config/registry/snapshots/`. | No |
-| `make gateway-live` | One real chat call through the Model Gateway in live mode on this laptop: this `az login`, a synthetic prompt and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from one tiny model call |
+| `make gateway-live` | Two real chat calls through the Model Gateway in live mode on this laptop, one with the first candidate made to fail: this `az login`, a synthetic prompt and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from two tiny model calls |
 
 The order is `azure-state` once, then `azure-plan`, review, `azure-apply`,
 `azure-smoke`. The hooks ask for confirmation before `azure-state` and
@@ -172,8 +177,8 @@ registry change; `git diff` on the snapshot shows what Azure changed.
    Europe.
 3. **Key authentication is off.** Each account reports
    `disableLocalAuth: true`.
-4. **Each account answers through Entra ID.** One chat completion and one
-   embedding per account, with the deployment names taken from the outputs
+4. **Every deployment answers through Entra ID.** One chat completion or
+   one embedding per deployment, with the names taken from the outputs
    (the reply's model, the token count and the vector length are shown). A
    few tokens each, well under EUR 0.01. The Entra token reaches `curl` on
    stdin, never on the command line. A failure prints the HTTP status and
@@ -193,6 +198,13 @@ class is `synthetic`, goes through the registry's route to the Azure OpenAI
 adapter. The test prints the deployment ID, the provider's model string,
 the finish reason and the token counts, and asserts the `completed` audit
 row. The output is filtered for GUIDs and for the account name.
+
+A second request proves the fallback (S042). The first chat candidate is
+made to fail inside the test, before any request leaves the laptop, and
+the real second deployment answers; the test asserts a `failed` audit row
+for the first candidate, a `completed` row for the second and one span
+per attempt. The fault is injected, so this proves the walk and the
+second deployment, not how Azure fails.
 
 The gateway on kind stays in replay mode: a pod there has no Azure identity
 until workload identity arrives with S020.

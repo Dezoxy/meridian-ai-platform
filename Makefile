@@ -189,11 +189,11 @@ azure-plan:
 azure-apply:
 	infra/terraform/foundation.sh apply
 
-## azure-smoke     prove the foundation: live models match Terraform, key auth is off, one chat and one embedding call per account (well under EUR 0.01)
+## azure-smoke     prove the foundation: live models match Terraform, key auth is off, one tiny call per deployment (well under EUR 0.01)
 azure-smoke:
 	infra/terraform/foundation.sh smoke
 
-## gateway-live    one real chat call through the Model Gateway in live mode on this laptop: az login, a synthetic prompt, a throwaway PostgreSQL (needs Docker; well under EUR 0.01)
+## gateway-live    two real chat calls through the Model Gateway in live mode on this laptop, one with the first candidate made to fail: az login, a synthetic prompt, a throwaway PostgreSQL (needs Docker; well under EUR 0.01)
 gateway-live:
 	infra/terraform/foundation.sh gateway-live
 
