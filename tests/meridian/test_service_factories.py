@@ -1,0 +1,55 @@
+"""The ``create_app_from_env`` factories S041 runs under ``uvicorn --factory``."""
+
+import pytest
+from servicesupport import REGISTRY_DIR
+
+from meridian.platform.common.env import SettingsError
+from meridian.platform.gateway.app import create_app_from_env as gateway_from_env
+from meridian.runtime.app import create_app_from_env as runtime_from_env
+from meridian.workloads.claims_triage.app import create_app_from_env as claims_from_env
+
+DSN = "postgresql://role:pw@db.invalid/meridian"
+VARIABLES = {
+    "gateway": {
+        "MERIDIAN_REGISTRY_DIR": str(REGISTRY_DIR),
+        "MERIDIAN_GATEWAY_MODE": "replay",
+        "MERIDIAN_ENVIRONMENT": "kind",
+        "MERIDIAN_DATABASE_URL": DSN,
+    },
+    "runtime": {
+        "MERIDIAN_REGISTRY_DIR": str(REGISTRY_DIR),
+        "MERIDIAN_GATEWAY_URL": "http://gateway.invalid",
+        "MERIDIAN_DATABASE_URL": DSN,
+    },
+    "claims": {
+        "MERIDIAN_RUNTIME_URL": "http://runtime.invalid",
+        "MERIDIAN_DATABASE_URL": DSN,
+    },
+}
+FACTORIES = {
+    "gateway": gateway_from_env,
+    "runtime": runtime_from_env,
+    "claims": claims_from_env,
+}
+
+
+@pytest.mark.parametrize("service", FACTORIES)
+def test_each_factory_builds_its_app_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, service: str
+) -> None:
+    for name, value in VARIABLES[service].items():
+        monkeypatch.setenv(name, value)
+
+    assert FACTORIES[service]().title.startswith("Meridian")
+
+
+@pytest.mark.parametrize("service", FACTORIES)
+def test_each_factory_names_the_database_variable_when_it_is_missing(
+    monkeypatch: pytest.MonkeyPatch, service: str
+) -> None:
+    for name, value in VARIABLES[service].items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("MERIDIAN_DATABASE_URL")
+
+    with pytest.raises(SettingsError, match="MERIDIAN_DATABASE_URL"):
+        FACTORIES[service]()

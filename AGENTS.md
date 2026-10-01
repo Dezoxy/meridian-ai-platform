@@ -71,6 +71,7 @@ A change that violates one is wrong even if it works.
 - **Python** 3.13, one `uv` workspace, `ruff` for lint and format, `pytest`,
   FastAPI with Pydantic v2, one PostgreSQL instance with separate schemas.
 - **Layout**: `src/meridian/platform/` (shared services),
+  `src/meridian/runtime/` (the Agent Runtime, which may import LangGraph),
   `src/meridian/workloads/` (use cases), `config/registry/` (declarative
   registry with JSON Schemas), `infra/` (Terraform, Helm, kind), `api/`
   (OpenAPI and MCP tool contracts), `data/synthetic/`, `docs/`. Code, charts

@@ -130,9 +130,17 @@ class Route(RegistryModel):
     candidates: Candidates
 
 
+class ReplayRoute(RegistryModel):
+    """The deployment the gateway uses for a purpose in replay mode."""
+
+    purpose: Purpose
+    deployment: EntityId
+
+
 class PoliciesFile(RegistryModel):
     data_classes: tuple[DataClassPolicy, ...]
     routes: tuple[Route, ...]
+    replay: tuple[ReplayRoute, ...]
 
 
 class Tenant(RegistryModel):
@@ -169,6 +177,7 @@ class Registry(RegistryModel):
     agents: tuple[Agent, ...]
     data_classes: tuple[DataClassPolicy, ...]
     routes: tuple[Route, ...]
+    replay: tuple[ReplayRoute, ...]
     tenants: tuple[Tenant, ...]
 
     def provider(self, provider_id: str) -> Provider | None:
@@ -188,6 +197,19 @@ class Registry(RegistryModel):
 
     def route(self, purpose: str) -> Route | None:
         return next((r for r in self.routes if r.purpose == purpose), None)
+
+    def replay_deployment(self, purpose: str) -> Deployment | None:
+        entry = next((r for r in self.replay if r.purpose == purpose), None)
+        return None if entry is None else self.deployment(entry.deployment)
+
+    def tenant(self, tenant_id: str) -> Tenant | None:
+        return next((t for t in self.tenants if t.id == tenant_id), None)
+
+    def tenant_may_run(self, tenant_id: str, agent_id: str) -> bool:
+        """The tenant exists and lists the agent (the runtime and the gateway
+        both ask this)."""
+        tenant = self.tenant(tenant_id)
+        return tenant is not None and agent_id in tenant.agents
 
     def has_provider(self, provider_id: str) -> bool:
         return self.provider(provider_id) is not None

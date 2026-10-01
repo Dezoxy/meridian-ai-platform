@@ -21,10 +21,17 @@ GENERATED := $(ARCH_DIR)/generated
 PORT      ?= 8080
 # The registry's copy of Terraform's deployment outputs (T-12).
 REGISTRY_SNAPSHOT := config/registry/snapshots/terraform-openai-deployments.json
+# The throwaway PostgreSQL of `make pytest-db`; the image is the one the python
+# workflow runs as its service container (a test compares the two strings), so
+# it is pinned with := and a command line does not override it. A run that
+# overlaps another needs its own name and port.
+PYTEST_DB_IMAGE     := postgres:17.11@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+PYTEST_DB_CONTAINER ?= meridian-pytest-db
+PYTEST_DB_PORT      ?= 55432
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest synthetic up smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db synthetic up smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -103,6 +110,24 @@ lint:
 ## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test
 pytest:
 	uv run pytest
+
+## pytest-db       pytest with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
+pytest-db:
+	@set -e; \
+	docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true; \
+	trap 'docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	docker run -d --name $(PYTEST_DB_CONTAINER) \
+		--tmpfs /var/lib/postgresql/data -p 127.0.0.1:$(PYTEST_DB_PORT):5432 \
+		-e POSTGRES_HOST_AUTH_METHOD=trust $(PYTEST_DB_IMAGE); \
+	for i in $$(seq 1 60); do \
+		docker exec $(PYTEST_DB_CONTAINER) pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break; \
+		[ $$i -eq 60 ] && { echo "pytest-db: PostgreSQL did not become ready" >&2; exit 1; }; \
+		sleep 1; \
+	done; \
+	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
+	MERIDIAN_REQUIRE_DB=1 uv run pytest
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas
 registry:

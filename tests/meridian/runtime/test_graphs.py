@@ -1,0 +1,224 @@
+"""Finding a workload's graph factory by the registry's agent ID (T-40)."""
+
+import importlib
+import importlib.metadata
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+from servicesupport import REGISTRY_DIR, TESTS_ROOT
+
+from meridian.platform.registry import load_registry
+from meridian.runtime import graphs
+from meridian.runtime.graphs import GraphLoadError, load_graph_factory
+
+
+@dataclass
+class FakeDist:
+    name: str
+
+
+@dataclass
+class FakeEntryPoint:
+    name: str
+    dist: FakeDist | None
+    loads: Callable[[], Any]
+    value: str = "meridian.workloads.claims_triage.graph:build"
+
+    def load(self) -> Any:
+        return self.loads()
+
+
+def build(model: object) -> None:
+    """Stands in for a workload's factory."""
+
+
+def published(monkeypatch: pytest.MonkeyPatch, *entries: FakeEntryPoint) -> None:
+    def fake_entry_points(*, group: str) -> list[FakeEntryPoint]:
+        assert group == "meridian.graphs"
+        return list(entries)
+
+    monkeypatch.setattr(graphs, "entry_points", fake_entry_points)
+    # The stand-in factory below lives in tests/, outside the meridian package;
+    # the package-directory check has its own tests at the end of this file.
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", TESTS_ROOT)
+
+
+def entry(
+    name: str = "claims-triage", dist: str | None = "meridian", loads: Any = None
+) -> FakeEntryPoint:
+    return FakeEntryPoint(
+        name=name,
+        dist=None if dist is None else FakeDist(dist),
+        loads=loads or (lambda: build),
+    )
+
+
+REGISTRY = load_registry(REGISTRY_DIR)
+
+
+def test_the_factory_of_the_meridian_distribution_is_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry())
+
+    assert load_graph_factory("claims-triage", REGISTRY) is build
+
+
+def test_only_the_entry_point_named_by_the_agent_id_is_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(name="other-agent", loads=lambda: 1 / 0), entry())
+
+    assert load_graph_factory("claims-triage", REGISTRY) is build
+
+
+def test_the_normalised_distribution_name_is_compared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(dist="Meridian"))
+
+    assert load_graph_factory("claims-triage", REGISTRY) is build
+
+
+@pytest.mark.parametrize("dist", ["meridian-evil", "evil", "meridian2", None])
+def test_an_entry_point_of_another_distribution_is_refused(
+    monkeypatch: pytest.MonkeyPatch, dist: str | None
+) -> None:
+    published(monkeypatch, entry(dist=dist))
+
+    with pytest.raises(GraphLoadError, match="distribution"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_name_published_twice_is_refused_even_by_a_second_meridian_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(), entry())
+
+    with pytest.raises(GraphLoadError, match="more than once"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_foreign_duplicate_of_the_name_is_refused_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(), entry(dist="evil"))
+
+    with pytest.raises(GraphLoadError, match="more than once"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_an_agent_that_is_not_in_the_registry_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(name="rogue-agent"))
+
+    with pytest.raises(GraphLoadError, match="registry"):
+        load_graph_factory("rogue-agent", REGISTRY)
+
+
+def test_an_agent_without_an_entry_point_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch)
+
+    with pytest.raises(GraphLoadError, match="no graph"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_an_entry_point_that_fails_to_import_is_a_load_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken() -> None:
+        raise ImportError("secret path /opt/x")
+
+    published(monkeypatch, entry(loads=broken))
+
+    with pytest.raises(GraphLoadError):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_an_entry_point_that_is_not_callable_is_a_load_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(loads=lambda: "not callable"))
+
+    with pytest.raises(GraphLoadError, match="callable"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+# ── where the factory comes from (T-40) ─────────────────────────────────────
+@pytest.mark.parametrize(
+    "value",
+    [
+        "evil.graph:build",
+        "meridian:build",
+        "meridian.workloadsevil.graph:build",
+        "meridian.platform.registry.loader:load_registry",
+    ],
+)
+def test_an_entry_point_value_outside_the_workloads_package_is_refused(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    def must_not_load() -> Any:
+        raise AssertionError("an untrusted entry point was imported")
+
+    published(
+        monkeypatch,
+        FakeEntryPoint("claims-triage", FakeDist("meridian"), must_not_load, value),
+    )
+
+    with pytest.raises(GraphLoadError, match=r"meridian\.workloads"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_factory_whose_module_lies_outside_the_package_directory_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    published(monkeypatch, entry())
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", tmp_path)  # not where build lives
+
+    with pytest.raises(GraphLoadError, match="outside"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_the_real_workload_graph_passes_both_checks() -> None:
+    factory = load_graph_factory("claims-triage", REGISTRY)
+
+    assert factory.__module__ == "meridian.workloads.claims_triage.graph"
+
+
+def test_a_fake_meridian_distribution_first_on_the_path_cannot_substitute_a_graph(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # importlib.metadata keeps the first distribution of a name it finds, so a
+    # dist-info called "meridian" earlier on sys.path hides the real one and its
+    # entry points; the loader must not follow them.
+    dist_info = tmp_path / "meridian-9.9.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: meridian\nVersion: 9.9\n", encoding="utf-8"
+    )
+    (dist_info / "entry_points.txt").write_text(
+        "[meridian.graphs]\nclaims-triage = shadow_graph_module:build\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "shadow_graph_module.py").write_text(
+        "raise SystemExit('the shadow module was imported')\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    assert [
+        ep.value
+        for ep in importlib.metadata.entry_points(group="meridian.graphs")
+        if ep.name == "claims-triage"
+    ] == ["shadow_graph_module:build"]  # the premise: the real entry is hidden
+
+    with pytest.raises(GraphLoadError, match=r"meridian\.workloads"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+    assert "shadow_graph_module" not in sys.modules

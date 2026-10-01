@@ -4,8 +4,10 @@ Status on 2026-09-30: implemented in part. The classes decide which model
 deployments may process a request (C-02, ADR 3). Since S008 the registry
 refuses a deployment that allows a class its residency label does not
 permit; the validator's code fixes each class's ceiling, and a test keeps
-the table below and `config/registry/policies.yaml` in agreement. The
-gateway enforces the classes per request from S010. This
+the table below and `config/registry/policies.yaml` in agreement. Since
+S009 the gateway checks each request's class, taken from the tenant,
+against the deployment it would use (the replay deployment so far), and
+refuses a mismatch; routing by class arrives in S010. This
 document owns the classes and the inventory; the
 [threat model](threat-model.md) owns the threats against them.
 

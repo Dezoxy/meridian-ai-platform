@@ -3,8 +3,9 @@
 The declarative source of truth for the platform: which models exist, which
 data may reach them, which tools exist and which agent may call them, and
 which tenant runs which agent. Status: **implemented** (S008) as validated
-configuration; no service reads it until the runtime and the gateway exist
-(S009, S010). The design is in the plan's S008 section and in
+configuration; the Model Gateway and the Agent Runtime load it at startup
+(S009), and S010 adds routing by it. The design is in the plan's S008
+section and in
 [ADR 3](../../docs/architecture/decisions/0003-build-a-thin-model-gateway.md).
 
 ## Files
@@ -15,7 +16,7 @@ configuration; no service reads it until the runtime and the gateway exist
 | `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema, idempotency |
 | `agents.yaml` | Agents and their tool allowlists |
-| `policies.yaml` | Data classes with the residency labels they allow, and the ordered routes per purpose |
+| `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, and the replay deployment per purpose |
 | `tenants.yaml` | Tenants with their data class and the agents they may run |
 | `schemas/` | JSON Schemas generated from the Pydantic models; never edited by hand |
 | `snapshots/` | Terraform's deployment outputs without account names or endpoints |
@@ -56,8 +57,17 @@ job. Beyond the schemas, validation refuses:
   purpose, and a tenant that no route can serve;
 - a replay provider other than `replay`, or a replay deployment of a real
   model;
+- a `replay` entry that repeats a purpose, names an unknown deployment, a
+  deployment of another purpose or one whose provider is not `replay`, a
+  routed purpose without a replay entry, a replay deployment among a
+  route's candidates, and a replay deployment that does not allow some
+  tenant's data class or whose residency that class may not reach (replay
+  must serve every tenant, or a test run would refuse one);
 - an Azure deployment that differs from Terraform's outputs, and a deployed
   model that is not registered (T-12).
+
+Replay is a gateway mode, set per deployment in `policies.yaml`, never a
+route candidate: a real outage must not be answered with canned text.
 
 Every tool call will be audited (T-14, from S013), so a tool has no audit
 flag to switch off. `approval_required` marks a tool whose effect waits for a human; the

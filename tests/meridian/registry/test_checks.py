@@ -822,3 +822,182 @@ def test_every_seeded_tool_passes_the_decision_word_check(real_registry: Path) -
     registry = load_registry(real_registry)
 
     assert set(registry.agents[0].tools) == {t.id for t in registry.tools}
+
+
+# ── replay: an explicit gateway mode, never a route candidate (S009) ────────
+REPLAY_CHAT = "  - purpose: chat\n    deployment: replay-chat\n"
+REPLAY_EMBEDDING = "  - purpose: embedding\n    deployment: replay-embedding\n"
+
+
+def test_replay_deployment_is_found_per_purpose(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    chat = registry.replay_deployment("chat")
+    embedding = registry.replay_deployment("embedding")
+
+    assert chat is not None
+    assert chat.id == "replay-chat"
+    assert embedding is not None
+    assert embedding.id == "replay-embedding"
+
+
+def test_replay_deployment_of_an_unknown_purpose_is_none(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    assert registry.replay_deployment("ghost") is None
+
+
+def test_tenant_is_found_by_id(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    tenant = registry.tenant("development")
+
+    assert tenant is not None
+    assert tenant.data_class == "synthetic"
+    assert registry.tenant("ghost") is None
+
+
+def test_policies_without_a_replay_section_are_refused(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    directory = plant(
+        ("policies.yaml", f"replay:\n{REPLAY_CHAT}{REPLAY_EMBEDDING}", "")
+    )
+
+    errors = load_errors(directory)
+
+    assert "policies.yaml: replay: Field required" in errors
+
+
+REPLAY_CASES = [
+    pytest.param(
+        [("policies.yaml", REPLAY_EMBEDDING, REPLAY_CHAT)],
+        "policies.yaml: replay: duplicate purpose 'chat'",
+        id="purpose-listed-twice",
+    ),
+    pytest.param(
+        [("policies.yaml", "deployment: replay-chat", "deployment: ghost")],
+        "policies.yaml: replay[0].deployment: unknown deployment 'ghost'",
+        id="unknown-deployment",
+    ),
+    pytest.param(
+        [("policies.yaml", "deployment: replay-chat", "deployment: aoai-sdc-gpt-4o")],
+        "policies.yaml: replay[0].deployment: deployment 'aoai-sdc-gpt-4o' is not "
+        "a replay deployment (provider kind 'azure-openai')",
+        id="real-deployment",
+    ),
+    pytest.param(
+        [("policies.yaml", "deployment: replay-chat", "deployment: replay-embedding")],
+        "policies.yaml: replay[0].deployment: deployment 'replay-embedding' has "
+        "purpose 'embedding', the replay entry is 'chat'",
+        id="wrong-purpose",
+    ),
+    pytest.param(
+        [("policies.yaml", REPLAY_EMBEDDING, "")],
+        "policies.yaml: replay: no replay deployment for purpose 'embedding'",
+        id="purpose-without-an-entry",
+    ),
+    pytest.param(
+        [
+            (
+                "policies.yaml",
+                "candidates: [aoai-sdc-gpt-4o]",
+                "candidates: [replay-chat]",
+            )
+        ],
+        "policies.yaml: routes[0].candidates[0]: deployment 'replay-chat' is a "
+        "replay deployment; replay is a gateway mode, never a route candidate",
+        id="replay-as-route-candidate",
+    ),
+]
+
+
+@pytest.mark.parametrize(("edits", "expected"), REPLAY_CASES)
+def test_replay_rule_violation_is_reported(
+    plant: Plant, load_errors: LoadErrors, edits: list[Edit], expected: str
+) -> None:
+    errors = load_errors(plant(*edits))
+
+    assert expected in errors
+
+
+def test_replay_entries_in_the_other_order_are_accepted(plant: Plant) -> None:
+    directory = plant(
+        (
+            "policies.yaml",
+            REPLAY_CHAT + REPLAY_EMBEDDING,
+            REPLAY_EMBEDDING + REPLAY_CHAT,
+        )
+    )
+
+    registry = load_registry(directory)
+
+    chat = registry.replay_deployment("chat")
+    assert chat is not None
+    assert chat.id == "replay-chat"
+
+
+# ── replay must serve every tenant, or a test run would refuse one (S009) ───
+
+
+def test_a_replay_deployment_that_does_not_allow_a_tenants_class_is_reported(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    directory = plant(
+        (
+            "models.yaml",
+            "    residency: eu-region\n    data_classes: [synthetic, internal, "
+            "personal]\n    price:\n      currency: USD\n      "
+            "input_per_million_tokens: 0\n      output_per_million_tokens: 0\n",
+            "    residency: eu-region\n    data_classes: [synthetic]\n    price:\n"
+            "      currency: USD\n      input_per_million_tokens: 0\n      "
+            "output_per_million_tokens: 0\n",
+        )
+    )
+
+    errors = load_errors(directory)
+
+    for tenant in ("claims-triage", "evaluation"):
+        assert (
+            "policies.yaml: replay[0]: deployment 'replay-chat' does not allow "
+            f"data class 'personal' of tenant {tenant!r}, so replay mode could "
+            "not serve it"
+        ) in errors
+    assert not any("tenant 'development'" in e and "replay[0]" in e for e in errors)
+
+
+def test_a_replay_residency_the_tenants_class_may_not_reach_is_reported(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    directory = plant(
+        (
+            "policies.yaml",
+            "  - id: personal\n    residency: [eu-region, eu-zone]\n",
+            "  - id: personal\n    residency: [eu-zone]\n",
+        )
+    )
+
+    errors = load_errors(directory)
+
+    assert (
+        "policies.yaml: replay[0]: deployment 'replay-chat' has residency "
+        "'eu-region', which data class 'personal' of tenant 'claims-triage' may "
+        "not reach"
+    ) in errors
+
+
+def test_the_seeded_replay_deployments_serve_every_tenant(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    for entry in registry.replay:
+        dep = registry.replay_deployment(entry.purpose)
+        assert dep is not None
+        assert {t.data_class for t in registry.tenants} <= set(dep.data_classes)
+
+
+def test_a_tenant_may_run_only_an_agent_it_lists(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    assert registry.tenant_may_run("claims-triage", "claims-triage")
+    assert not registry.tenant_may_run("claims-triage", "rogue-agent")
+    assert not registry.tenant_may_run("no-such-tenant", "claims-triage")

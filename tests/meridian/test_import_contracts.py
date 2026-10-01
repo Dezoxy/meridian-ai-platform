@@ -115,6 +115,11 @@ def test_unmodified_copy_passes_with_at_least_one_kept_contract(
             "meridian.workloads",
             id="platform-imports-workloads",
         ),
+        pytest.param(
+            "import meridian.runtime\n",
+            "meridian.runtime",
+            id="platform-imports-runtime",
+        ),
     ],
 )
 def test_platform_import_of_forbidden_module_breaks_a_contract(

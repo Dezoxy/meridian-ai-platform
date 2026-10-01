@@ -5,13 +5,27 @@ description = "Enterprise agentic AI platform with a claims-triage reference wor
 license = "Apache-2.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "fastapi==0.142.2",
+    "httpx==0.28.1",
+    "langgraph==1.2.12",
+    "opentelemetry-api==1.45.0",
+    "opentelemetry-exporter-otlp-proto-http==1.45.0",
+    "opentelemetry-instrumentation-fastapi==0.66b0",
+    "opentelemetry-sdk==1.45.0",
+    "psycopg[binary]==3.3.6",
     "pydantic==2.13.5",
     "pyyaml==6.0.3",
     "typer==0.27.2",
+    "uvicorn==0.54.0",
 ]
 
 [project.scripts]
 meridian = "meridian.platform.cli:app"
+
+# The runtime finds a workload's graph factory here by the registry's agent ID
+# and accepts only entry points published by this distribution (T-40).
+[project.entry-points."meridian.graphs"]
+claims-triage = "meridian.workloads.claims_triage.graph:build"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13"]
@@ -41,7 +55,8 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/meridian", "tests/synthetic"]
-pythonpath = ["data/synthetic"]
+# tests/meridian holds dbsupport.py, shared by the database fixtures and tests.
+pythonpath = ["data/synthetic", "tests/meridian"]
 addopts = "--import-mode=importlib"
 
 [tool.importlinter]
@@ -73,8 +88,10 @@ forbidden_modules = [
 name = "workloads build on the platform, never the reverse"
 type = "layers"
 # Highest first: a layer may import the ones below it, never the ones above.
-# The runtime host that runs LangGraph graphs goes between these two (S009).
+# The runtime host that runs LangGraph graphs sits between the two (S009): it
+# may import the platform, and only workloads may import it.
 layers = [
     "meridian.workloads",
+    "meridian.runtime",
     "meridian.platform",
 ]
