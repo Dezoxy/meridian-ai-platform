@@ -9,9 +9,10 @@ platform team had to keep it alive.
 decisions, the engineering harness, a local platform on kind, the Azure
 foundation, the platform registry and a walking skeleton of the Claims API,
 the Agent Runtime and the Model Gateway exist; the skeleton runs on the
-local kind cluster with `make demo`, and nothing runs in Azure yet. Every
-capability below is labelled implemented, simulated or designed; an unlabelled claim is
-a documentation defect.
+local kind cluster with `make demo`, the gateway routes a call to Azure
+OpenAI by data class and residency from a laptop, and no service runs in
+Azure yet. Every capability below is labelled implemented, simulated or
+designed; an unlabelled claim is a documentation defect.
 
 ## Architecture at a glance
 
@@ -71,7 +72,7 @@ graph LR
 | Azure foundation: Terraform with its state in Azure Storage (Entra ID only), a 60-euro monthly budget with alerts at 50, 80 and 100 %, Key Vault, and Azure OpenAI `gpt-4o` and `text-embedding-3-large` on regional deployments in Sweden Central with key authentication disabled; the West Europe fallback waits for the subscription's upgrade to pay-as-you-go | Implemented, persistent in a free-trial subscription of its own | `infra/terraform/` |
 | Platform registry: models, providers, tools, agents, routing policies and tenants in YAML, with JSON Schemas generated from Pydantic models; `meridian registry validate` checks references, residency labels against SKU and region, personal data on EU labels only, idempotency keys on mutating tools, no decision tool in an allowlist, and the Azure deployments against Terraform's outputs, locally and in CI | Implemented; the gateway and the runtime load it at startup | `config/registry/`, `src/meridian/platform/registry/` |
 | Walking skeleton: a claim posted to the Claims API runs a one-node LangGraph graph in the Agent Runtime, which calls the Model Gateway; the triage proposal is stored, every claim goes to an adjuster, and one trace spans the three services; a schema and a role per service with an insert-only audit table | Implemented, laptop only: one image on kind, the Claims API at `claims.meridian.localhost:8088`, `make demo` finds the trace in Tempo (S041); the gateway's replay provider is simulated | `src/meridian/`, `tests/meridian/test_walking_skeleton.py`, `Dockerfile`, `infra/kind/manifests/meridian/` |
-| Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1; the replay mode, the tenant and data-class check and an audit record per call are implemented | ADR 3, `src/meridian/platform/gateway/` |
+| Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Implemented in part: routing by data class and residency label, an Azure OpenAI adapter, an audited refusal and an audit record per call with the deployment's SKU, region and label (S010). Live calls run from a laptop with the developer's Azure login (`make gateway-live`); on kind the gateway answers in replay mode, simulated. Designed, M1: retry, circuit breaker and fallback (S042), quotas, budgets and cost (S011), redaction (S014) | ADR 3, `src/meridian/platform/gateway/` |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1; starting a run and reading its status are implemented, approval and durable checkpoints arrive in S015 | ADR 2, `src/meridian/runtime/` |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
 | Evaluation harness with a golden set and a CI gate | Designed, M1 | Architecture overview |
@@ -146,6 +147,7 @@ make azure-state  # once: the Terraform state storage in Azure (creates Azure re
 make azure-plan   # plan the Azure foundation into a saved plan file
 make azure-apply  # apply exactly that saved plan (changes Azure; the owner confirms)
 make azure-smoke  # the deployments as planned, keys off, one chat and one embedding call with Entra ID
+make gateway-live # one real chat call through the gateway in live mode on this laptop (az login, Docker)
 make registry-snapshot  # refresh the registry's copy of Terraform's deployment outputs (read-only)
 ```
 

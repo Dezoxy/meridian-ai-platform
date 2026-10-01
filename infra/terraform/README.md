@@ -150,6 +150,7 @@ az cognitiveservices usage list -l swedencentral --subscription "<pinned subscri
 | `make azure-apply` | Apply exactly the saved plan, then remove the plan file. Refuses to run without a plan. | Yes |
 | `make azure-smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. | No, apart from two tiny model calls per account |
 | `make registry-snapshot` | `foundation.sh outputs`: the `openai_deployments` output as JSON without account names and endpoints, written to `config/registry/snapshots/`. | No |
+| `make gateway-live` | One real chat call through the Model Gateway in live mode on this laptop: this `az login`, a synthetic prompt and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from one tiny model call |
 
 The order is `azure-state` once, then `azure-plan`, review, `azure-apply`,
 `azure-smoke`. The hooks ask for confirmation before `azure-state` and
@@ -180,6 +181,21 @@ registry change; `git diff` on the snapshot shows what Azure changed.
 
 A new role assignment can take several minutes to reach the model, so a 401
 or 403 straight after `make azure-apply` is worth one rerun.
+
+## What `make gateway-live` proves
+
+The gateway's live path end to end (S010), where `make azure-smoke` proves
+the account with `curl`. The gateway runs in-process in live mode with
+environment `local`: the endpoints come from the `openai_deployments`
+output and the token from this `az login`, both through the environment
+only, so nothing is stored. One request as tenant `development`, whose data
+class is `synthetic`, goes through the registry's route to the Azure OpenAI
+adapter. The test prints the deployment ID, the provider's model string,
+the finish reason and the token counts, and asserts the `completed` audit
+row. The output is filtered for GUIDs and for the account name.
+
+The gateway on kind stays in replay mode: a pod there has no Azure identity
+until workload identity arrives with S020.
 
 ## Removal
 

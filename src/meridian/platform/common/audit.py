@@ -15,11 +15,13 @@ from meridian.platform.common.db import connect
 INSERT_EVENT = """
 INSERT INTO audit.events (
     service, event, outcome, tenant, agent, run_id, reference,
-    deployment, provider, model, input_tokens, output_tokens
+    deployment, provider, model, input_tokens, output_tokens,
+    reason, data_class, sku, region, residency
 ) VALUES (
     %(service)s, %(event)s, %(outcome)s, %(tenant)s, %(agent)s, %(run_id)s,
     %(reference)s, %(deployment)s, %(provider)s, %(model)s,
-    %(input_tokens)s, %(output_tokens)s
+    %(input_tokens)s, %(output_tokens)s,
+    %(reason)s, %(data_class)s, %(sku)s, %(region)s, %(residency)s
 )
 """
 
@@ -43,6 +45,13 @@ class AuditEvent:
     model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    # Why a call was refused or failed, and what route it took (S010, T-12).
+    # ``reference`` stays the caller's own identifier.
+    reason: str | None = None
+    data_class: str | None = None
+    sku: str | None = None
+    region: str | None = None
+    residency: str | None = None
 
 
 def record_event(conn: psycopg.Connection, event: AuditEvent) -> None:

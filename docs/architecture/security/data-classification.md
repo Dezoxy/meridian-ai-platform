@@ -6,8 +6,9 @@ refuses a deployment that allows a class its residency label does not
 permit; the validator's code fixes each class's ceiling, and a test keeps
 the table below and `config/registry/policies.yaml` in agreement. Since
 S009 the gateway checks each request's class, taken from the tenant,
-against the deployment it would use (the replay deployment so far), and
-refuses a mismatch; routing by class arrives in S010. This
+against the deployment it would use, and refuses a mismatch; since S010
+it routes by class in live mode, keeping only the route's candidates the
+class may reach before any provider is called. This
 document owns the classes and the inventory; the
 [threat model](threat-model.md) owns the threats against them.
 

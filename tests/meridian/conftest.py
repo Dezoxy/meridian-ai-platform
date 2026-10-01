@@ -11,7 +11,9 @@ afterwards. Without the variable the tests skip, unless
 
 import os
 import secrets
-from collections.abc import Iterator
+import shutil
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 # First, before anything that can import langgraph: the runtime package forces
 # LangGraph's strict msgpack mode, which LangGraph reads once, at first import.
@@ -30,6 +32,9 @@ from psycopg import sql
 
 from meridian.platform.common.db import connect
 from meridian.platform.migrations.runner import apply_migrations
+
+# (file name, text to find, replacement); the first occurrence is replaced.
+Edit = tuple[str, str, str]
 
 TEST_DATABASE_URL_ENV = "MERIDIAN_TEST_DATABASE_URL"
 REQUIRE_DB_ENV = "MERIDIAN_REQUIRE_DB"
@@ -138,3 +143,41 @@ def fresh_database(
         yield handle
     finally:
         _drop_database(handle)
+
+
+# ── a scratch copy of the registry to plant a variant in ────────────────────
+# Moved up from tests/meridian/registry/conftest.py (S010) so the gateway tests
+# can build a registry that passes the checks but routes differently.
+@pytest.fixture
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture
+def real_registry(repo_root: Path) -> Path:
+    return repo_root / "config" / "registry"
+
+
+@pytest.fixture
+def registry_copy(real_registry: Path, tmp_path: Path) -> Path:
+    """The repository's registry directory, copied where tests may edit it."""
+    return shutil.copytree(real_registry, tmp_path / "registry")
+
+
+@pytest.fixture
+def plant(registry_copy: Path) -> Callable[..., Path]:
+    """Apply edits to the copy and return its directory.
+
+    Failing when the text is absent keeps a test from passing because its
+    violation was never planted.
+    """
+
+    def apply(*edits: Edit) -> Path:
+        for name, old, new in edits:
+            path = registry_copy / name
+            text = path.read_text(encoding="utf-8")
+            assert old in text, f"{name} has no {old!r} to replace"
+            path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return registry_copy
+
+    return apply

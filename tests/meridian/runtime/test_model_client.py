@@ -1,6 +1,8 @@
 """The runtime's gateway client sets the identity headers itself."""
 
 import json
+import subprocess
+import sys
 import uuid
 
 import httpx
@@ -15,6 +17,7 @@ from meridian.platform.common.telemetry import (
     configure_propagation,
     make_tracer_provider,
 )
+from meridian.platform.gateway.models import ChatOutput, ChatResponse, Usage
 from meridian.runtime.model_client import (
     ChatResult,
     ModelCallError,
@@ -80,6 +83,120 @@ def test_a_non_2xx_answer_raises_with_the_status_code_only() -> None:
     assert raised.value.status_code == 403
     assert "secret claimant text" not in str(raised.value)
     assert str(raised.value) == "model gateway answered 403"
+
+
+def reply_client(reply: dict) -> httpx.Client:
+    return httpx.Client(
+        base_url="http://gateway.invalid",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=reply)),
+    )
+
+
+def test_a_live_reply_with_a_finish_reason_and_an_unknown_field_parses() -> None:
+    reply = {
+        **GATEWAY_REPLY,
+        "mode": "live",
+        "deployment": "aoai-sdc-gpt-4o",
+        "provider": "azure-openai",
+        "model": "gpt-4o",
+        "output": {"text": "drafted", "finish_reason": "length", "added_later": 1},
+        "added_later": {"nested": True},
+    }
+
+    result = model(reply_client(reply)).chat([{"role": "user", "content": "hi"}])
+
+    assert result == ChatResult(
+        text="drafted",
+        deployment="aoai-sdc-gpt-4o",
+        provider="azure-openai",
+        model="gpt-4o",
+        mode="live",
+        input_tokens=1,
+        output_tokens=1,
+    )
+
+
+def test_a_mode_the_runtime_does_not_know_is_no_usable_answer() -> None:
+    # The stored proposal records the mode (T-39), so an unknown one is
+    # refused instead of being written down as provenance.
+    reply = {**GATEWAY_REPLY, "mode": "shadow"}
+
+    with pytest.raises(ModelCallError) as caught:
+        model(reply_client(reply)).chat([{"role": "user", "content": "hi"}])
+
+    assert caught.value.status_code == 0
+
+
+@pytest.mark.parametrize("mode", ["replay", "live"])
+def test_what_the_gateway_answers_is_what_the_runtime_parses(mode: str) -> None:
+    # The runtime keeps its own copy of the contract; this is the one place
+    # the two sides meet, so a renamed field fails here and not in a demo.
+    answered = ChatResponse(
+        call_id=uuid.uuid4(),
+        mode=mode,
+        deployment="aoai-sdc-gpt-4o",
+        provider="azure-openai",
+        model="gpt-4o",
+        output=ChatOutput(text="drafted", finish_reason="stop"),
+        usage=Usage(input_tokens=7, output_tokens=3),
+    ).model_dump(mode="json")
+
+    result = model(reply_client(answered)).chat([{"role": "user", "content": "hi"}])
+
+    assert result == ChatResult(
+        text="drafted",
+        deployment="aoai-sdc-gpt-4o",
+        provider="azure-openai",
+        model="gpt-4o",
+        mode=mode,
+        input_tokens=7,
+        output_tokens=3,
+    )
+
+
+def test_a_reply_without_the_output_text_is_still_no_usable_answer() -> None:
+    reply = {**GATEWAY_REPLY, "output": {"finish_reason": "stop"}}
+
+    with pytest.raises(ModelCallError) as raised:
+        model(reply_client(reply)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 0
+
+
+@pytest.mark.parametrize(
+    "missing", ["deployment", "provider", "model", "mode", "usage"]
+)
+def test_a_reply_missing_a_field_the_result_needs_is_an_error(missing: str) -> None:
+    reply = {k: v for k, v in GATEWAY_REPLY.items() if k != missing}
+
+    with pytest.raises(ModelCallError) as raised:
+        model(reply_client(reply)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 0
+
+
+def test_the_runtime_does_not_import_the_gateway_package() -> None:
+    # A fresh interpreter, so no earlier test has loaded the gateway.
+    code = (
+        "import sys\n"
+        "import meridian.runtime.app\n"
+        "import meridian.runtime.model_client\n"
+        "loaded = sorted(m for m in sys.modules "
+        "if m == 'meridian.platform.gateway' "
+        "or m.startswith('meridian.platform.gateway.'))\n"
+        "print('loaded:' + ','.join(loaded))\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "loaded:", completed.stdout
 
 
 def test_a_reply_that_is_not_the_contract_is_an_error() -> None:
