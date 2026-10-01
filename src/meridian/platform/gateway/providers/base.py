@@ -13,12 +13,23 @@ ProviderErrorKind = Literal[
 
 class ProviderError(Exception):
     """A provider call failed. It carries the kind and the HTTP status only,
-    never the provider's message or body: that can echo a prompt (T-18, T-03)."""
+    never the provider's message or body: that can echo a prompt (T-18, T-03).
 
-    def __init__(self, kind: ProviderErrorKind, status_code: int | None = None) -> None:
+    ``sent`` is ``False`` only when the failure is known to have happened before
+    a request left the gateway (no credential, no connection), so nothing can
+    have been billed. It is not part of ``args`` or ``__str__``."""
+
+    def __init__(
+        self,
+        kind: ProviderErrorKind,
+        status_code: int | None = None,
+        *,
+        sent: bool = True,
+    ) -> None:
         super().__init__(kind, status_code)
         self.kind = kind
         self.status_code = status_code
+        self.sent = sent
 
     def __str__(self) -> str:
         suffix = "" if self.status_code is None else f" (HTTP {self.status_code})"

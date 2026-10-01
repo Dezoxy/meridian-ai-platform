@@ -55,6 +55,17 @@
           "title": "Purpose",
           "type": "string"
         },
+        "rate_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateLimits"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "region": {
           "anyOf": [
             {
@@ -196,6 +207,28 @@
         "checked"
       ],
       "title": "Price",
+      "type": "object"
+    },
+    "RateLimits": {
+      "additionalProperties": false,
+      "description": "A deployment's own limits at the provider.",
+      "properties": {
+        "requests_per_10_seconds": {
+          "minimum": 1,
+          "title": "Requests Per 10 Seconds",
+          "type": "integer"
+        },
+        "tokens_per_minute": {
+          "minimum": 1,
+          "title": "Tokens Per Minute",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requests_per_10_seconds",
+        "tokens_per_minute"
+      ],
+      "title": "RateLimits",
       "type": "object"
     }
   },

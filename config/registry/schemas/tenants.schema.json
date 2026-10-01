@@ -1,5 +1,41 @@
 {
   "$defs": {
+    "ExchangeRate": {
+      "additionalProperties": false,
+      "description": "The planning rate the EUR cost quota is computed with.",
+      "properties": {
+        "checked": {
+          "format": "date",
+          "title": "Checked",
+          "type": "string"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "usd_per_eur": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Usd Per Eur"
+        }
+      },
+      "required": [
+        "usd_per_eur",
+        "source",
+        "checked"
+      ],
+      "title": "ExchangeRate",
+      "type": "object"
+    },
     "Tenant": {
       "additionalProperties": false,
       "properties": {
@@ -30,20 +66,69 @@
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Id",
           "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/TenantLimits"
         }
       },
       "required": [
         "id",
         "description",
         "data_class",
-        "agents"
+        "agents",
+        "limits"
       ],
       "title": "Tenant",
+      "type": "object"
+    },
+    "TenantLimits": {
+      "additionalProperties": false,
+      "description": "What a tenant may use. The two rate windows are Azure OpenAI's own.",
+      "properties": {
+        "cost_per_month_eur": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d{0,6}0*$",
+              "type": "string"
+            }
+          ],
+          "title": "Cost Per Month Eur"
+        },
+        "requests_per_10_seconds": {
+          "minimum": 1,
+          "title": "Requests Per 10 Seconds",
+          "type": "integer"
+        },
+        "tokens_per_day": {
+          "minimum": 1,
+          "title": "Tokens Per Day",
+          "type": "integer"
+        },
+        "tokens_per_minute": {
+          "minimum": 1,
+          "title": "Tokens Per Minute",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requests_per_10_seconds",
+        "tokens_per_minute",
+        "tokens_per_day",
+        "cost_per_month_eur"
+      ],
+      "title": "TenantLimits",
       "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
+    "exchange": {
+      "$ref": "#/$defs/ExchangeRate"
+    },
     "tenants": {
       "items": {
         "$ref": "#/$defs/Tenant"
@@ -53,6 +138,7 @@
     }
   },
   "required": [
+    "exchange",
     "tenants"
   ],
   "title": "TenantsFile",

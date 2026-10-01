@@ -754,6 +754,10 @@ def raise_timeout(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadTimeout(CANARY, request=request)
 
 
+def raise_connect_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectTimeout(CANARY, request=request)
+
+
 def fail_token() -> str:
     raise ClientAuthenticationError(message=CANARY)
 
@@ -765,6 +769,7 @@ CANARY_CASES = [
     pytest.param(raise_status(500), id="500"),
     pytest.param(raise_transport, id="connect-error"),
     pytest.param(raise_timeout, id="timeout"),
+    pytest.param(raise_connect_timeout, id="connect-timeout"),
 ]
 
 
@@ -796,6 +801,113 @@ def test_the_error_carries_a_kind_and_a_status_only() -> None:
 
     assert error.args == ("rate-limited", 429)
     assert str(error) == "provider call failed: rate-limited (HTTP 429)"
+
+
+# ── sent: was a request on the wire when the call failed (S011) ──────────────
+def test_sent_is_keyword_only_defaults_to_true_and_is_not_in_the_text() -> None:
+    sent = ProviderError("timeout")
+    unsent = ProviderError("timeout", None, sent=False)
+
+    assert sent.sent is True
+    assert unsent.sent is False
+    assert unsent.args == ("timeout", None)
+    assert str(unsent) == str(sent) == "provider call failed: timeout"
+    with pytest.raises(TypeError):
+        ProviderError("timeout", None, False)  # type: ignore[misc]
+
+
+def raising(failure: type[httpx.TransportError]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise failure(CANARY, request=request)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("failure", "kind", "sent"),
+    [
+        (httpx.ConnectTimeout, "timeout", False),
+        (httpx.ReadTimeout, "timeout", True),
+        (httpx.WriteTimeout, "timeout", True),
+        (httpx.PoolTimeout, "timeout", True),
+        (httpx.ConnectError, "unavailable", False),
+        (httpx.ReadError, "unavailable", True),
+        (httpx.WriteError, "unavailable", True),
+        (httpx.RemoteProtocolError, "unavailable", True),
+    ],
+)
+def test_a_transport_failure_says_whether_the_request_left(
+    deployment: Deployment,
+    failure: type[httpx.TransportError],
+    kind: str,
+    sent: bool,
+) -> None:
+    error = error_of(make_provider(raising(failure)), deployment)
+
+    assert (error.kind, error.status_code, error.sent) == (kind, None, sent)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+@pytest.mark.parametrize("status", [400, 401, 404, 408, 422, 429, 500, 503])
+def test_an_error_status_is_a_sent_request(deployment: Deployment, status: int) -> None:
+    error = error_of(make_provider(raise_status(status)), deployment)
+
+    assert error.status_code == status
+    assert error.sent is True
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ClientAuthenticationError(message=CANARY),
+        CredentialUnavailableError(message=CANARY),
+    ],
+    ids=["client-authentication", "credential-unavailable"],
+)
+def test_a_failing_token_provider_is_a_request_that_never_left(
+    deployment: Deployment, failure: Exception
+) -> None:
+    def failing() -> str:
+        raise failure
+
+    error = error_of(make_provider(answer(), token_provider=failing), deployment)
+
+    assert (error.kind, error.sent) == ("auth", False)
+
+
+FILTERED_CHOICE = {
+    "index": 0,
+    "finish_reason": "content_filter",
+    "message": {"role": "assistant", "content": None},
+}
+
+
+@pytest.mark.parametrize(
+    ("reply", "kind"),
+    [
+        (answer(choices=[FILTERED_CHOICE]), "rejected"),
+        (answer(choices=[]), "bad-response"),
+        (lambda _request: httpx.Response(200, content=b"not json"), "bad-response"),
+    ],
+    ids=["content-filter", "no-choices", "not-json"],
+)
+def test_a_failure_in_reading_a_200_is_a_sent_request(
+    deployment: Deployment, reply: Handler, kind: str
+) -> None:
+    error = error_of(make_provider(reply), deployment)
+
+    assert (error.kind, error.status_code, error.sent) == (kind, None, True)
+
+
+def test_check_token_failure_is_a_request_that_never_left() -> None:
+    def failing() -> str:
+        raise ClientAuthenticationError(message=CANARY)
+
+    with pytest.raises(ProviderError) as raised:
+        check_token(failing)
+
+    assert raised.value.sent is False
 
 
 # ── configuration errors ─────────────────────────────────────────────────────

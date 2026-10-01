@@ -1,15 +1,43 @@
 # yaml-language-server: $schema=schemas/tenants.schema.json
-# Tenants: the data class of their requests and the agents they may run.
+# Tenants: the data class of their requests, the agents they may run and what
+# they may use. The Model Gateway enforces four limits per tenant:
+#   requests_per_10_seconds  sliding 10 s window, in process
+#   tokens_per_minute        sliding 60 s window, in process
+#   tokens_per_day           UTC calendar day, in PostgreSQL
+#   cost_per_month_eur       UTC calendar month, in PostgreSQL
+# The first two are Azure OpenAI's own windows: the sum of each over all
+# tenants must fit the smallest chat candidate's rate_limits in models.yaml, so
+# one tenant cannot cause a provider 429 for the rest (T-45); validation
+# refuses a sum that does not fit.
+exchange:
+  usd_per_eur: 1.1355
+  source: ECB euro foreign exchange reference rate
+  checked: 2026-09-30
 tenants:
   - id: claims-triage
     description: The claims workload in production use.
     data_class: personal
     agents: [claims-triage]
+    limits:
+      requests_per_10_seconds: 10
+      tokens_per_minute: 10000
+      tokens_per_day: 300000
+      cost_per_month_eur: 10
   - id: evaluation
     description: Evaluation runs of the claims-triage agent, at the same class.
     data_class: personal
     agents: [claims-triage]
+    limits:
+      requests_per_10_seconds: 6
+      tokens_per_minute: 6000
+      tokens_per_day: 200000
+      cost_per_month_eur: 5
   - id: development
     description: Development and tests on synthetic data only.
     data_class: synthetic
     agents: [claims-triage]
+    limits:
+      requests_per_10_seconds: 4
+      tokens_per_minute: 4000
+      tokens_per_day: 100000
+      cost_per_month_eur: 2

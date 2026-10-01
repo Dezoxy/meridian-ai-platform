@@ -16,6 +16,7 @@ from meridian.platform.registry.loader import RegistryError
 from meridian.platform.registry.models import Deployment, Registry
 
 MISSING = "<missing>"
+TOKENS_PER_MINUTE_PER_CAPACITY = 1000
 
 
 def normalise_region(region: str) -> str:
@@ -59,7 +60,31 @@ def _mismatches(dep: Deployment, entry: Mapping[str, Any]) -> list[str]:
                 f"{MODELS}: deployment {dep.id!r}: {field} is {ours!r} in the "
                 f"registry but {theirs!r} in Terraform (key {dep.terraform_key!r})"
             )
-    return errors
+    return errors + _capacity_mismatches(dep, entry)
+
+
+def _capacity_mismatches(dep: Deployment, entry: Mapping[str, Any]) -> list[str]:
+    """Azure derives a deployment's token limit from its capacity: one capacity
+    unit is 1,000 tokens per minute. An entry without ``capacity`` (a snapshot
+    from before it was recorded) is not compared."""
+    if "capacity" not in entry or dep.rate_limits is None:
+        return []  # a missing rate_limits is reported by check_provider_fields
+    capacity = entry["capacity"]
+    where = f"{MODELS}: deployment {dep.id!r}"
+    if isinstance(capacity, bool) or not isinstance(capacity, int):
+        return [
+            f"{where}: capacity is {capacity!r} in Terraform, not a whole number "
+            f"(key {dep.terraform_key!r})"
+        ]
+    theirs = capacity * TOKENS_PER_MINUTE_PER_CAPACITY
+    ours = dep.rate_limits.tokens_per_minute
+    if ours == theirs:
+        return []
+    return [
+        f"{where}: rate_limits.tokens_per_minute is {ours!r} in the registry but "
+        f"{theirs!r} in Terraform (capacity {capacity} x "
+        f"{TOKENS_PER_MINUTE_PER_CAPACITY}; key {dep.terraform_key!r})"
+    ]
 
 
 def azure_deployments(registry: Registry) -> tuple[Deployment, ...]:

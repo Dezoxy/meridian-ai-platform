@@ -48,8 +48,19 @@ RESIDENCY_CEILING: Mapping[DataClass, frozenset[ResidencyLabel]] = MappingProxyT
         "special": frozenset(),
     }
 )
-AZURE_REQUIRED = ("sku", "region", "deployment_name", "retires", "terraform_key")
-REPLAY_FORBIDDEN = ("sku", "region", "terraform_key")
+AZURE_REQUIRED = (
+    "sku",
+    "region",
+    "deployment_name",
+    "retires",
+    "terraform_key",
+    "rate_limits",
+)
+REPLAY_FORBIDDEN = ("sku", "region", "terraform_key", "rate_limits")
+# What a deployment's rate_limits and a tenant's limits both name, compared by
+# check_tenant_limits.
+SHARED_RATE_FIELDS = ("requests_per_10_seconds", "tokens_per_minute")
+CHAT_PURPOSE = "chat"
 REPLAY_PROVIDER_ID = "replay"
 REPLAY_MODEL_PREFIX = "replay-"
 # T-31, second signal: a word in a tool's id or scope that says it decides.
@@ -493,6 +504,36 @@ def check_tenant_coverage(registry: Registry) -> list[str]:
     return errors
 
 
+def check_tenant_limits(registry: Registry) -> list[str]:
+    """The tenants' rate limits must fit in the chat route's candidates.
+
+    Every tenant may use its whole share at once, so the sum over all tenants
+    of each rate limit must not pass any candidate's own limit at the provider;
+    otherwise one tenant could cause a 429 for the others (T-45).
+    """
+    totals = {
+        field: sum(getattr(t.limits, field) for t in registry.tenants)
+        for field in SHARED_RATE_FIELDS
+    }
+    errors: list[str] = []
+    for i, route in enumerate(registry.routes):
+        if route.purpose != CHAT_PURPOSE:
+            continue
+        for j, name in enumerate(route.candidates):
+            dep = registry.deployment(name)
+            if dep is None or dep.rate_limits is None:
+                continue  # reported by check_references or check_provider_fields
+            for field in SHARED_RATE_FIELDS:
+                limit = getattr(dep.rate_limits, field)
+                if totals[field] > limit:
+                    errors.append(
+                        f"{POLICIES}: routes[{i}].candidates[{j}]: deployment "
+                        f"{name!r} allows {limit} {field} but the tenants' limits "
+                        f"add up to {totals[field]}"
+                    )
+    return errors
+
+
 CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_unique_ids,
     check_deployment_uniqueness,
@@ -507,6 +548,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_routes,
     check_replay,
     check_tenant_coverage,
+    check_tenant_limits,
 )
 
 

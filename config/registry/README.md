@@ -15,11 +15,11 @@ one answers (S042). The design is in the plan's S008 section and in
 | File | Holds |
 |---|---|
 | `providers.yaml` | Provider accounts: Azure OpenAI and the replay provider |
-| `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date |
+| `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema, idempotency |
 | `agents.yaml` | Agents and their tool allowlists |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, and the replay deployment per purpose |
-| `tenants.yaml` | Tenants with their data class and the agents they may run |
+| `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
 | `schemas/` | JSON Schemas generated from the Pydantic models; never edited by hand |
 | `snapshots/` | Terraform's deployment outputs without account names or endpoints |
 
@@ -65,7 +65,16 @@ job. Beyond the schemas, validation refuses:
   route's candidates, and a replay deployment that does not allow some
   tenant's data class or whose residency that class may not reach (replay
   must serve every tenant, or a test run would refuse one);
-- an Azure deployment that differs from Terraform's outputs, and a deployed
+- an Azure deployment without `rate_limits` and a replay deployment with
+  them;
+- tenants whose rate limits do not fit together: for each chat candidate that
+  has `rate_limits`, the sum over all tenants of `requests_per_10_seconds`
+  and of `tokens_per_minute` must not exceed the candidate's own value, or
+  one tenant could use up a deployment's window and cause a provider 429 for
+  the others (T-45);
+- an Azure deployment that differs from Terraform's outputs, a deployment
+  whose `rate_limits.tokens_per_minute` is not Terraform's `capacity` times
+  1,000 (an output without `capacity` is not compared), and a deployed
   model that is not registered (T-12).
 
 Replay is a gateway mode, set per deployment in `policies.yaml`, never a
@@ -73,8 +82,34 @@ route candidate: a real outage must not be answered with canned text.
 
 Every tool call will be audited (T-14, from S013), so a tool has no audit
 flag to switch off. `approval_required` marks a tool whose effect waits for a human; the
-runtime and the MCP servers enforce it (S013, S015). Tenant budgets and
-quotas arrive with S011.
+runtime and the MCP servers enforce it (S013, S015).
+
+## Limits
+
+Each tenant has four limits, each with its own job:
+
+| Limit | Window | Enforced | Job |
+|---|---|---|---|
+| `requests_per_10_seconds` | sliding 10 s | in the gateway process | Azure OpenAI's own request window; keeps one tenant from causing a provider 429 for all (T-45) |
+| `tokens_per_minute` | sliding 60 s | in the gateway process | Azure OpenAI's own token window; same job |
+| `tokens_per_day` | UTC calendar day | PostgreSQL | the token budget (QA-12, T-15) |
+| `cost_per_month_eur` | UTC calendar month | PostgreSQL | the cost quota (C-04) |
+
+An Azure deployment states its own `rate_limits` (`requests_per_10_seconds`
+and `tokens_per_minute`) as Azure reports them for the deployment; replay
+deployments have none. The first two tenant limits are the same windows, so
+the validation above refuses a registry whose tenants could together ask for
+more than the smallest chat candidate allows.
+
+`exchange` in `tenants.yaml` is the planning rate the EUR quota is computed
+with. Prices are in USD, the quota is in EUR, and the gateway converts a
+call's cost with `usd_per_eur`. It is a planning value with a source and a
+date, not a live rate: update it when the figure has moved enough to matter.
+Status: implemented (S011). The gateway holds every chat request to its
+tenant's four limits, in replay mode as in live mode, and answers 429, or 413
+for a request larger than `tokens_per_minute` allows at all. It counts tokens,
+cost and calls in OpenTelemetry metrics, proven with an in-memory reader; a
+dashboard for them is designed (S043).
 
 ## Change it
 

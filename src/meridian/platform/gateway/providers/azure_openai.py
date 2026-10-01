@@ -7,9 +7,10 @@ One gateway attempt is one HTTP request: the SDK's own retries are off
 (``max_retries=0``), so the audit row is true; the next candidate is the
 gateway's walk (S042), never the SDK's.
 The credential is a bearer token from a named source, never an API key: key
-authentication is off on the account (S007). A ``ProviderError`` carries a kind
-and an HTTP status and no cause or context, and tests pin that a provider's
-message, which can echo a prompt, appears in none of them (T-18).
+authentication is off on the account (S007). A ``ProviderError`` carries a kind,
+an HTTP status and whether a request left the gateway, and no cause or context,
+and tests pin that a provider's message, which can echo a prompt, appears in
+none of them (T-18).
 
 IMPLEMENTED against a mocked transport; the opt-in live test is what shows the
 service accepts the request.
@@ -77,7 +78,8 @@ def kind_of_status(status: int) -> ProviderErrorKind:
     return "rejected" if status in CLIENT_ERRORS else "unavailable"
 
 
-Failure = tuple[ProviderErrorKind, int | None]
+# The kind, the status and whether a request left the gateway.
+Failure = tuple[ProviderErrorKind, int | None, bool]
 
 
 def _now() -> float:
@@ -103,7 +105,7 @@ def check_token(token_provider: Callable[[], str]) -> None:
     except AzureError:
         failed = True  # raised below, so the credential's error is no context
     if failed:
-        raise ProviderError("auth")
+        raise ProviderError("auth", sent=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,23 +228,30 @@ class AzureOpenAIProvider:
             )
         # The provider's exception is mapped to (kind, status) and dropped
         # inside the arm. Raising from the arm would leave it in __context__
-        # even with ``from None``, and its message can echo a prompt.
-        except openai.APITimeoutError:  # before APIConnectionError, its base
-            failure = ("timeout", None)
-        except openai.APIConnectionError:
-            failure = ("unavailable", None)
+        # even with ``from None``, and its message can echo a prompt. The SDK
+        # raises its error from the httpx one, which says whether the request
+        # left: a connect timeout or a connect error is a request that never
+        # did, so nothing can have been billed. The cause is read in the arm and
+        # only the answer is kept.
+        except openai.APITimeoutError as error:  # before APIConnectionError
+            sent = not isinstance(error.__cause__, httpx.ConnectTimeout)
+            failure = ("timeout", None, sent)
+        except openai.APIConnectionError as error:
+            sent = not isinstance(error.__cause__, httpx.ConnectError)
+            failure = ("unavailable", None, sent)
         except openai.APIStatusError as error:
             status = error.status_code
-            failure = (kind_of_status(status), status)
+            failure = (kind_of_status(status), status, True)
         except openai.APIResponseValidationError:
-            failure = ("bad-response", None)
+            failure = ("bad-response", None, True)
         except AzureError:  # the token provider failed, before any request
-            failure = ("auth", None)
+            failure = ("auth", None, False)
         except openai.OpenAIError:
-            failure = ("unavailable", None)
+            failure = ("unavailable", None, True)
         else:
             return _reply_from(completion)
-        raise ProviderError(*failure) from None
+        kind, status_code, sent = failure
+        raise ProviderError(kind, status_code, sent=sent) from None
 
 
 def _is_count(value: object) -> bool:

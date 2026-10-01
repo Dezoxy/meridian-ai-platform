@@ -5,8 +5,9 @@
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, the gateway routes a call to Azure OpenAI by data
-  class and residency from a laptop and falls back to a second deployment
-  in the same region, and no service runs in Azure yet.
+  class and residency from a laptop, falls back to a second deployment in
+  the same region and holds each tenant to its rate limits and budgets, and
+  no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -132,14 +133,15 @@ and Pydantic, at the cost of one dependency.
 | S041 | Walking skeleton on kind | One image for the three services, manifests in namespace `meridian`, an HTTPRoute on a `*.localhost` hostname, per-service database roles on the cluster; `make demo` posts a claim and the one trace spanning API, runtime and gateway is found in Tempo; `make smoke` stays green | done | S009 |
 | S010 | Gateway routing ~~and resilience~~ | Registry-driven routing by data class and residency; Azure OpenAI adapter; ~~timeout, retry, circuit breaker and fallback to the second region;~~ a residency mismatch is refused and audited; contract tests pass (split on 2026-10-01: resilience is S042) | done | S004, S007, S009 |
 | S042 | Gateway resilience | Timeout, retry, circuit breaker and fallback across a route's candidates, with a second `gpt-4o` deployment in Sweden Central as the real second candidate and the second region labelled designed until the subscription is upgraded; a fault injected into the first candidate is answered by the second, and every attempt is audited; contract tests pass | done | S010 |
-| S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced; cost metered per tenant, agent, model and provider; one audit record per call; a Grafana cost panel | todo | S010 |
+| S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced, with the cost reserved before the call; cost metered per tenant, agent, model and provider; ~~one audit record per call; a Grafana cost panel~~ a call ID on every audit record of a call (split on 2026-10-01: the Grafana panel is S043) | done | S010 |
+| S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | todo | S011, S041 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set | todo | S003, S009 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited | todo | S008, S009 |
 | S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S012, S013 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043 |
 
 ### M2 — Azure, identity, delivery
 
@@ -1985,6 +1987,210 @@ whose circuit is open, and leaves an audit row for every attempt.
 - No step yet: a `make` target for the secret scan, so it is a gate before
   a push and not only a check in CI.
 
+### S011 — Gateway budgets and cost
+
+**Status:** done · **Started:** 2026-10-01 · **Finished:** 2026-10-01
+**Goal:** a tenant can use the model only inside its limits, the cost of a
+call is reserved before the provider is called, and what each tenant, agent,
+model and provider used is on record.
+**Decisions:**
+
+- Split, as S009 and S010 were: this step keeps the limits, the ledger, the
+  call ID and the metrics, all provable in tests against PostgreSQL. The
+  Grafana dashboard needs the kind cluster and is S043. The metrics stay
+  here, because they are what makes "metered per tenant, agent, model and
+  provider" true and an in-memory reader proves them.
+- Four limits per tenant in `tenants.yaml`, each with its own job:
+
+  | Limit | Window | Enforced | Job |
+  |---|---|---|---|
+  | `requests_per_10_seconds` | sliding 10 s | in process | The provider's own request window, so one tenant cannot cause a 429 for all (T-45) |
+  | `tokens_per_minute` | sliding 60 s | in process | The provider's own token window, same job |
+  | `tokens_per_day` | UTC day | PostgreSQL | The token budget (QA-12, T-15) |
+  | `cost_per_month_eur` | UTC month | PostgreSQL | The cost quota (C-04) |
+
+  The two rate windows are the ones Azure OpenAI enforces on a deployment,
+  read from Azure on 2026-10-01: 20 requests per 10 s and 20,000 tokens per
+  60 s at 20 units. The registry now carries them per deployment, and a
+  check refuses tenant limits whose sum exceeds the smallest chat
+  candidate's. Rejected: requests per minute, the usual shape, which a
+  burst inside ten seconds passes while the provider refuses it.
+- The rate limits live in the process, like the circuit breaker: one
+  replica (C-01), no database round trip to refuse a flood, and the state
+  is worth nothing after a restart. The budgets live in PostgreSQL, because
+  a restart must not hand a tenant its day again.
+- The budget check and the reservation are one conditional `UPDATE` per
+  counter row (`amount + n <= limit`), day before month, in one
+  transaction with the ledger row. Rejected: reading the sum of the ledger
+  and then inserting, which two connections at READ COMMITTED both pass
+  (T-47); an advisory lock per tenant, which serialises as well and hides
+  the rule in a lock number.
+- One ledger row per attempt that is sent, written before the provider
+  call: the estimated input plus the output cap, at the deployment's price.
+  No reservation, no call. The row is then closed one of three ways:
+
+  | The attempt | Row | Charge |
+  |---|---|---|
+  | answered | `settled` | the provider's token counts, at the price |
+  | refused by the provider with a 4xx other than 408, or never sent (no connection, no credential) | `released` | nothing |
+  | anything else: a timeout, a lost connection, a 5xx, an unreadable or filtered reply, a crash | `kept` | the reservation |
+
+  The rule releases only what the gateway knows was not billed. A request
+  the provider finished after the gateway gave up is billed, so its
+  reservation stays as the charge (T-46). A row a dead process left
+  `reserved` stays charged too; nothing expires it, and the tenant gets
+  the room back when the period ends. That is the fail-closed side.
+  First version, corrected after the security review: any error status
+  released, and so did a completion the content filter removed, which the
+  model had produced and Azure bills; a connection that never opened kept
+  its reservation, so an outage would have used up a tenant's day. The
+  adapter now says whether a request left (`ProviderError.sent`).
+- The input is estimated, not counted: a third of the UTF-8 bytes plus a
+  fixed overhead per message. Rejected: `tiktoken`, a dependency that
+  fetches its vocabulary from the network at first use, which neither CI
+  nor kind may do; the byte count itself, a true upper bound that reserves
+  four times what English text uses and would let two requests a minute
+  through the trial's quota. So a call can settle above its reservation,
+  and the ledger records the provider's count even past the limit.
+- Cost is integer micro-EUR, rounded up per attempt, from the registry's
+  USD list prices and one dated planning rate in `tenants.yaml` (the ECB
+  reference rate). It is an estimate from list prices; the invoice is
+  Azure's.
+- A request over a tenant limit is answered 429, with `Retry-After` for
+  the two rate limits, and 413 when its reservation alone exceeds
+  `tokens_per_minute`, which no wait fixes. The audit reasons are the
+  tenant's own (`tenant-request-rate`, `tenant-token-rate`,
+  `tenant-request-too-large`, `tenant-token-budget`, `tenant-cost-budget`),
+  apart from the provider's `rate-limited`.
+- Refusals are audited once per tenant and reason per minute and counted
+  in a metric every time, and the row carries the number of refusals it
+  stands for, so a flood cannot grow the audit table (T-49). The rows of
+  admitted calls are bounded by the rate limit. **This changes what S010
+  shipped:** since S010 every policy refusal (403) left a row, written
+  before any limiter ran, so anyone could fill an insert-only table with
+  unknown tenant names. They go through the same throttle now; an unknown
+  tenant's refusals share one key, because the name is the caller's. A
+  residency mismatch is still refused every time and still audited, once a
+  minute per tenant with its count. Rejected: leaving the 403s as they
+  were and saying so in T-49, which keeps the larger risk for the sake of
+  the smaller record.
+- The database holds the line the code draws: the gateway's role may
+  insert a counter only at zero and update only its amount, may update
+  only the closing columns of a ledger row, and a trigger refuses any
+  change to a closed row. It can still rewrite a counter's amount, because
+  lowering it at settlement is its job.
+- `call_id` is made when the request arrives and is on every audit row,
+  the ledger row and the response, so the rows of one call are found
+  without the run. A failed row carries the provider's HTTP status and a
+  completed one the model string the provider reported.
+- The tenant is still the caller's word (T-08, S021), so a limit binds
+  honest callers and bounds the total, and does not stop a caller that
+  names another tenant (T-48). Not done here: `MAX_OUTPUT_TOKENS`, which
+  stays 4,096 until S014 knows its prompts, so three slow requests in a
+  row still open a circuit (T-45). The owner agreed on 2026-10-01 to solve
+  it in the step where it fits.
+- Reviewed and not done, with reasons: `create_app` split into a handler
+  class (205 lines, 119 before this step; the three services share the
+  closure shape, and the reviewers had read it as it is); a lock timeout
+  and an idle-transaction timeout on the shared connection settings (they
+  apply to three services and the migration runner, and with one replica a
+  partition cuts off the only client); audit columns added with a
+  `NOT VALID` check (the scan takes 55 ms per million rows, by the
+  database reviewer's measurement); a response returned although the
+  ledger's close failed (the audit write right after it would fail the
+  call anyway, QA-05).
+
+**Work log:**
+
+- The owner merged S042 as 077f712; its 37 files on `main` were compared
+  blob by blob with the reviewed branch, and both S042 branches were
+  deleted on the owner's word. The owner agreed to the split.
+- Azure's limits per deployment were read with the CLI (20 requests per
+  10 s, 20,000 tokens per 60 s, the same for all three), and the ECB
+  reference rate of 2026-09-30 (1.1355 USD per EUR) from the ECB's daily
+  file.
+- Contract A (implementer): the limits and the exchange rate in the
+  registry with their schemas, the deployments' `rate_limits`, two checks
+  and the capacity comparison with Terraform; migration `0003` with
+  `gateway.budget_counters`, `gateway.usage` and three audit columns;
+  `gateway/budget.py` (estimate, cost, `Ledger`) and `gateway/ratelimit.py`
+  (`TenantRateLimiter`), neither yet in the request path. The implementer
+  edited some source files through shell scripts, past the edit hooks, and
+  said so; the main session read every changed source file.
+- Contract B (implementer): the request path. The call ID first, then the
+  route, the two rate windows, and per candidate the reservation, the
+  provider call and the closing of the reservation outside the `except`
+  arms; `RefusalAuditThrottle`; `common/metrics.py` and `gateway/meters.py`
+  with three counters; 429 and 413 answers; the cost on the span of the
+  answered call.
+- Reviews: `database-reviewer` on the ledger and the migration, then
+  `security-reviewer`, `python-reviewer` and `platform-boundary-reviewer`
+  on the whole change. No critical finding. High: a completion the content
+  filter removed was billed and released; policy refusals were audited per
+  request before any limiter; a replay refusal row named no deployment; a
+  failed audit write silenced a minute of refusal rows; the limiter's race
+  tests passed without its lock. The database reviewer ran 960 ledger
+  operations on 16 threads against PostgreSQL 17 with no deadlock and no
+  counter that disagreed with its usage rows.
+- Contract C (implementer): the closing rule and `ProviderError.sent`; one
+  throttle for every refusal with a `suppressed` count, marked only after
+  the row was written; the trigger on closed ledger rows, column grants on
+  the counters, a partial index on open reservations; a counter correction
+  that raises when it finds no row; the deadline read again after the
+  reservation; the per-call context and `_call_provider` in `walk.py`; the
+  limits on the route decision; six-decimal cost limits; the tests that
+  could not fail, and the missing cases.
+- `docs-sync`: the threat model (T-02, T-14, T-15, T-45 to T-49), QA-05,
+  QA-07 and QA-12, an amendment to ADR 3, the README and the registry's
+  README.
+
+**Result / verification:**
+
+All run by the main session on the final code.
+
+- `make pytest-db`: `1745 passed, 2 skipped`. `make pytest`: `1330 passed,
+  417 skipped`. `make lint`: `Contracts: 4 kept, 0 broken.` `make
+  registry`: `terraform outputs OK: 3 deployments match`, `schemas OK: up
+  to date`. `make test`: 117 tests, `OK`. `make docs`: `13 checks passed`.
+  `make check`: no ERROR line.
+- `make gateway-live`, two real calls: `deployment: aoai-sdc-gpt-4o`,
+  `tokens: input 15, output 2`, `cost: 62 micro-EUR`, `reservation: 44
+  tokens reserved, 17 charged`; then `first candidate: aoai-sdc-gpt-4o
+  failed`, `answered by: aoai-sdc-gpt-4o-b`; `2 passed`. The estimate (28
+  input tokens) was above Azure's count (15).
+- Mutations, each red and then restored: the conditional update replaced
+  by read-then-write (five race tests); a 5xx that releases
+  (`test_closing_for_follows_the_table`); a failed connection counted as
+  sent (`test_a_transport_failure_says_whether_the_request_left`); the
+  trigger removed (`test_a_closed_row_cannot_be_updated_by_the_gateway_or_the_owner`);
+  policy refusals past the throttle
+  (`test_twenty_unknown_tenant_names_leave_one_row_and_no_key_and_no_label`).
+- Not tested: the gateway on kind, where the cluster does not exist; the
+  metrics reaching a collector (an in-memory reader only); a filtered
+  completion against Azure. Not measured: the cost of a real triage
+  (QA-07), which needs S014's prompts.
+
+**Follow-ups:**
+
+- S043: the Grafana dashboard for the three counters, on kind, with a
+  note that the metrics count answered attempts and the ledger more.
+- S014: `MAX_OUTPUT_TOKENS` from the real prompts (T-45); the request's own
+  data class; a step limit per run (T-15). The runtime answers 502 for any
+  gateway refusal, so a used-up budget reads as an outage upstream.
+- S019: one pod at a time for the gateway (`Recreate`), because each pod
+  has its own rate windows; a lock timeout and an idle-transaction timeout
+  on the connection settings once there is a second client.
+- S021: the tenant from the caller's identity, which closes T-48.
+- S024: the runbook for a used-up budget: a sweep that closes reservations
+  a dead process left open (the index is there) and a way to credit a
+  tenant; a reconciliation query, counter against usage rows.
+- S033: the console reads `gateway.usage` with a role of its own.
+- No step yet: retention for `audit.events` and `gateway.usage`; a
+  connection pool (a request opens about three connections); `create_app`
+  cut into a handler class in all three services (205 lines here);
+  `NOT VALID` checks when a column is added to a large audit table; an
+  ingress rate limit (T-02).
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -2025,3 +2231,7 @@ whose circuit is open, and leaves an audit row for every attempt.
   depends on S042.
 - **v0.10, 2026-10-01:** Part D question 5 added: a dedicated tenant for
   Meridian, to decide by S021 or at the subscription upgrade.
+- **v0.11, 2026-10-01:** S011 split with the owner's agreement: S011 keeps
+  the limits, the ledger, the call ID and the metrics; the new S043 takes
+  the Grafana cost panel, which needs the kind cluster. S018 depends on
+  S043.
