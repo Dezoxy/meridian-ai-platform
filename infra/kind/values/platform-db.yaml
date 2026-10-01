@@ -2,6 +2,12 @@
 # PostgreSQL 17 with pgvector. The image (pinned by digest in pins.env) is set
 # by up.sh with --set cluster.imageName. CloudNativePG generates the "app" role
 # and its Secret platform-db-app; no credential is set here.
+#
+# The walking skeleton (S041) adds the database "meridian" and four roles. Their
+# passwords are in Secrets that up.sh creates before this release installs
+# (CloudNativePG cannot reconcile a role whose Secret is missing); nothing
+# secret is written here. The "app" database, role and Secret are untouched:
+# changing initdb would not converge on an existing cluster.
 # Without this the chart names the Cluster "platform-db-cluster".
 fullnameOverride: platform-db
 
@@ -27,6 +33,44 @@ cluster:
   initdb:
     database: app
     owner: app
+  postgresql:
+    # CloudNativePG puts these before its default catch-all
+    # ("host all all all scram-sha-256"), in this order; its own local,
+    # replication and pooler rules stay first. The server enforces TLS and the
+    # database boundary, whatever a client's connection string says.
+    pg_hba:
+      # Plain-text connections are refused outright, not only by client sslmode.
+      - hostnossl all all all reject
+      # The four Meridian roles log in to the meridian database over TLS.
+      - hostssl meridian meridian_owner,claims_api,agent_runtime,model_gateway all scram-sha-256
+      # ... and reach no other database.
+      - hostssl all meridian_owner,claims_api,agent_runtime,model_gateway all reject
+      # No other role (the app role, for one) reaches meridian.
+      - hostssl meridian all all reject
+  # login is off by default in the operator; no role gets superuser, createdb,
+  # createrole or replication. meridian_owner runs the migrations and owns the
+  # database; the other three are the service roles the migration grants to.
+  roles:
+    - name: meridian_owner
+      ensure: present
+      login: true
+      passwordSecret:
+        name: meridian-owner-db
+    - name: claims_api
+      ensure: present
+      login: true
+      passwordSecret:
+        name: claims-api-db
+    - name: agent_runtime
+      ensure: present
+      login: true
+      passwordSecret:
+        name: agent-runtime-db
+    - name: model_gateway
+      ensure: present
+      login: true
+      passwordSecret:
+        name: model-gateway-db
 
 # Enable pgvector declaratively (CloudNativePG Database resource). The
 # extension ships in the "standard" image.
@@ -35,3 +79,7 @@ databases:
     owner: app
     extensions:
       - name: vector
+  # The Meridian applications' database (migration 0001 creates the schemas in
+  # it). No vector extension: S012 decides where pgvector lives.
+  - name: meridian
+    owner: meridian_owner

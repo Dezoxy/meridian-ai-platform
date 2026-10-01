@@ -51,11 +51,11 @@ check_edge() {
   fi
   after="$(edge_request_count 2>/dev/null || true)"
   if [[ "${status}" != 404 ]]; then
-    fail "edge: expected 404 (no route yet), got ${status}"
+    fail "edge: expected 404 (no route for this host), got ${status}"
   elif [[ -z "${before}" || -z "${after}" ]]; then
     fail "edge: could not read Envoy's request counter"
   elif ((after > before)); then
-    pass "edge: ${EDGE_URL} -> 404, counted by Envoy (${before} -> ${after} requests); no route yet, as expected"
+    pass "edge: ${EDGE_URL} -> 404, counted by Envoy (${before} -> ${after} requests); no route for this host, as expected"
   else
     fail "edge: got 404 but Envoy did not count the request (${before} -> ${after})"
   fi

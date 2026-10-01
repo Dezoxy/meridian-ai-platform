@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by up.sh, smoke.sh, down.sh and grafana.sh. Source it; do not run it.
+# Shared by up.sh, deploy.sh, demo.sh, smoke.sh, down.sh and grafana.sh. Source it; do not run it.
 #
 # Safety rules kept in one place:
 #  - The cluster's credentials live in infra/kind/kubeconfig (gitignored). The
@@ -62,4 +62,22 @@ require_local_docker() {
   fi
   [[ "${host}" == unix://* ]] ||
     die "the Docker engine is not local (${host}); use a unix socket context such as desktop-linux"
+}
+
+# The Meridian database's roles (S041). Each role's Secret is named after it with
+# "_" as "-" and "-db" appended (meridian_owner -> meridian-owner-db).
+readonly DATABASE_ROLES=(meridian_owner claims_api agent_runtime model_gateway)
+
+role_secret_name() { printf '%s-db' "${1//_/-}"; }
+
+# True when CloudNativePG reports every DATABASE_ROLES role reconciled in the
+# platform-db Cluster's status, with none that cannot be reconciled.
+database_roles_reconciled() {
+  local wanted status
+  wanted="$(printf '%s\n' "${DATABASE_ROLES[@]}" | jq -R . | jq -sc .)"
+  status="$(kctl -n meridian get cluster platform-db -o json | jq -c '.status.managedRolesStatus // {}')" ||
+    return 1
+  jq -e --argjson wanted "${wanted}" \
+    '((.byStatus.reconciled // []) as $done | $wanted | all(. as $r | $done | index($r))) and ((.cannotReconcile // {}) == {})' \
+    <<<"${status}" >/dev/null
 }

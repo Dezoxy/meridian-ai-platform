@@ -4,6 +4,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from opentelemetry import propagate, trace
 from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.propagators.composite import CompositePropagator
@@ -18,6 +19,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from meridian.platform.common import telemetry
+from meridian.platform.common.http import create_service_app
 from meridian.platform.common.telemetry import (
     SPAN_ATTRIBUTE_KEYS,
     configure_propagation,
@@ -261,3 +263,26 @@ def test_a_server_error_answer_is_a_span_error_without_its_detail(
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == "HTTPException"
     assert span.events == ()
+
+
+def test_a_caller_cannot_switch_tracing_off_with_an_unsampled_traceparent(
+    no_endpoint: None, restore_propagator: None
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = make_tracer_provider("claims-api", exporter)
+    service = create_service_app(
+        title="t",
+        description="d",
+        service_name="claims-api",
+        tracer_name="t",
+        max_body_bytes=1024,
+        tracer_provider=provider,
+    )
+    unsampled = f"00-{'a' * 32}-{'b' * 16}-00"
+
+    answer = TestClient(service.app).get("/healthz", headers={"traceparent": unsampled})
+
+    assert answer.status_code == 200
+    spans = exporter.get_finished_spans()
+    assert spans, "the unsampled flag of the caller switched tracing off"
+    assert {f"{s.context.trace_id:032x}" for s in spans} == {"a" * 32}

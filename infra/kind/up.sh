@@ -2,7 +2,9 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces, Envoy Gateway and the edge Gateway
-#   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector)
+#   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
+#      the database "meridian" and its four roles; their password Secrets are
+#      created first, only if absent
 #   4. Grafana admin Secret (only if absent), kube-prometheus-stack, Tempo, Loki,
 #      OpenTelemetry Collector
 # Every version is pinned in pins.env.
@@ -12,6 +14,12 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 readonly HELM_TIMEOUT=10m
+readonly ROLES_TIMEOUT=300
+readonly ROLES_INTERVAL=3
+# platform-db-rw is the read-write Service; its name is in the server
+# certificate, so verify-full checks it. The CA reaches each pod at this path.
+readonly DATABASE_HOST=platform-db-rw.meridian.svc
+readonly DATABASE_CA_PATH=/etc/meridian/db-ca/ca.crt
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
 # REPO is empty for an OCI chart. Helm's output is shown only when it fails.
@@ -33,7 +41,7 @@ install_release() {
 
 check_prerequisites() {
   log "checking prerequisites"
-  need_tools docker kind kubectl helm openssl
+  need_tools docker kind kubectl helm openssl jq
   require_local_docker
   docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
   local kind_version
@@ -68,6 +76,39 @@ ensure_grafana_secret() {
     "${password}" | kctl create -f - >/dev/null
 }
 
+# Create one basic-auth Secret per database role, each only if absent. They must
+# exist before platform-db installs: CloudNativePG cannot reconcile a role whose
+# Secret is missing. Each password is generated here (hex, so the URI needs no
+# escaping), goes to kubectl on stdin and is never a command-line argument and
+# never printed. Keys: username, password, uri (the shape of platform-db-app).
+ensure_database_secrets() {
+  { set +x; } 2>/dev/null # a `bash -x` run must not trace a password
+  local role secret password
+  for role in "${DATABASE_ROLES[@]}"; do
+    secret="$(role_secret_name "${role}")"
+    if kctl -n meridian get secret "${secret}" >/dev/null 2>&1; then
+      log "secret ${secret} exists"
+      continue
+    fi
+    log "creating secret ${secret}"
+    password="$(openssl rand -hex 24)"
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: meridian\ntype: kubernetes.io/basic-auth\nstringData:\n  username: %s\n  password: "%s"\n  uri: "postgresql://%s:%s@%s:5432/meridian?sslmode=verify-full&sslrootcert=%s"\n' \
+      "${secret}" "${role}" "${password}" "${role}" "${password}" "${DATABASE_HOST}" "${DATABASE_CA_PATH}" |
+      kctl create -f - >/dev/null
+  done
+}
+
+# Wait until CloudNativePG reports all four roles reconciled (common.sh).
+wait_for_database_roles() {
+  local deadline=$((SECONDS + ROLES_TIMEOUT))
+  while ((SECONDS < deadline)); do
+    database_roles_reconciled && return 0
+    sleep "${ROLES_INTERVAL}"
+  done
+  die "database roles were not reconciled in ${ROLES_TIMEOUT}s: $(kctl -n meridian get cluster platform-db -o json |
+    jq -c '.status.managedRolesStatus.cannotReconcile // {}')"
+}
+
 check_prerequisites
 create_cluster
 
@@ -82,6 +123,7 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yam
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
   "${CNPG_REPO}" cnpg.yaml
+ensure_database_secrets
 log "database: platform-db (PostgreSQL 17, pgvector)"
 install_release platform-db meridian "${CNPG_CLUSTER_CHART}" "${CNPG_CLUSTER_VERSION}" \
   "${CNPG_REPO}" platform-db.yaml --set "cluster.imageName=${POSTGRES_IMAGE}"
@@ -89,7 +131,11 @@ install_release platform-db meridian "${CNPG_CLUSTER_CHART}" "${CNPG_CLUSTER_VER
 kctl -n meridian wait --for=condition=Ready cluster/platform-db --timeout=10m >/dev/null
 kctl -n meridian wait --for=jsonpath='{.status.applied}'=true database/platform-db-app \
   --timeout=5m >/dev/null
-log "platform-db is ready"
+# The roles first: the "meridian" database is owned by one of them.
+wait_for_database_roles
+kctl -n meridian wait --for=jsonpath='{.status.applied}'=true database/platform-db-meridian \
+  --timeout=5m >/dev/null
+log "platform-db is ready (database meridian, roles ${DATABASE_ROLES[*]})"
 
 ensure_grafana_secret
 log "observability: Prometheus and Grafana"

@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
     SpanExporter,
 )
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
@@ -102,7 +103,11 @@ def make_tracer_provider(
     Otherwise, with ``OTEL_EXPORTER_OTLP_ENDPOINT`` set, spans go to it over
     OTLP/HTTP in batches. With neither, spans are created and dropped.
     """
-    provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
+    # ALWAYS_ON, not the default parent-based sampler: a caller's ``traceparent``
+    # with the sampled flag 00 must not switch tracing off for its request.
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": service_name}), sampler=ALWAYS_ON
+    )
     if exporter is not None:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
     elif os.environ.get(OTLP_ENDPOINT_ENV):

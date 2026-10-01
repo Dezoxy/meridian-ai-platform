@@ -5,12 +5,12 @@ LLM agents, with a claims-triage reference workload for a fictional insurer.
 Built and operated by one person as a portfolio project, designed as if a
 platform team had to keep it alive.
 
-**Status on 2026-09-30: bootstrap.** The architecture model, the first three
+**Status on 2026-10-01: bootstrap.** The architecture model, the first three
 decisions, the engineering harness, a local platform on kind, the Azure
 foundation, the platform registry and a walking skeleton of the Claims API,
-the Agent Runtime and the Model Gateway exist; the skeleton runs in tests
-against PostgreSQL and is not deployed yet. Every capability
-below is labelled implemented, simulated or designed; an unlabelled claim is
+the Agent Runtime and the Model Gateway exist; the skeleton runs on the
+local kind cluster with `make demo`, and nothing runs in Azure yet. Every
+capability below is labelled implemented, simulated or designed; an unlabelled claim is
 a documentation defect.
 
 ## Architecture at a glance
@@ -70,7 +70,7 @@ graph LR
 | Local platform on kind: a Gateway API edge (Envoy Gateway), PostgreSQL 17 with pgvector (CloudNativePG), OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts; `make up`, `make smoke`, `make down` | Implemented, laptop only | `infra/kind/` |
 | Azure foundation: Terraform with its state in Azure Storage (Entra ID only), a 60-euro monthly budget with alerts at 50, 80 and 100 %, Key Vault, and Azure OpenAI `gpt-4o` and `text-embedding-3-large` on regional deployments in Sweden Central with key authentication disabled; the West Europe fallback waits for the subscription's upgrade to pay-as-you-go | Implemented, persistent in a free-trial subscription of its own | `infra/terraform/` |
 | Platform registry: models, providers, tools, agents, routing policies and tenants in YAML, with JSON Schemas generated from Pydantic models; `meridian registry validate` checks references, residency labels against SKU and region, personal data on EU labels only, idempotency keys on mutating tools, no decision tool in an allowlist, and the Azure deployments against Terraform's outputs, locally and in CI | Implemented; the gateway and the runtime load it at startup | `config/registry/`, `src/meridian/platform/registry/` |
-| Walking skeleton: a claim posted to the Claims API runs a one-node LangGraph graph in the Agent Runtime, which calls the Model Gateway; the triage proposal is stored, every claim goes to an adjuster, and one trace spans the three services; a schema and a role per service with an insert-only audit table | Implemented, not deployed until S041; the gateway's replay provider is simulated | `src/meridian/`, `tests/meridian/test_walking_skeleton.py` |
+| Walking skeleton: a claim posted to the Claims API runs a one-node LangGraph graph in the Agent Runtime, which calls the Model Gateway; the triage proposal is stored, every claim goes to an adjuster, and one trace spans the three services; a schema and a role per service with an insert-only audit table | Implemented, laptop only: one image on kind, the Claims API at `claims.meridian.localhost:8088`, `make demo` finds the trace in Tempo (S041); the gateway's replay provider is simulated | `src/meridian/`, `tests/meridian/test_walking_skeleton.py`, `Dockerfile`, `infra/kind/manifests/meridian/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Designed, M1; the replay mode, the tenant and data-class check and an audit record per call are implemented | ADR 3, `src/meridian/platform/gateway/` |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1; starting a run and reading its status are implemented, approval and durable checkpoints arrive in S015 | ADR 2, `src/meridian/runtime/` |
 | MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
@@ -104,7 +104,7 @@ data/synthetic/     seeded generator, its committed output and the golden set
 docs/
   README.md         documentation index
   architecture/     Structurizr model, views, ADRs, requirements; README.md is the front door
-infra/kind/         local platform: pinned chart versions, values, up, smoke and down scripts
+infra/kind/         local platform: pinned chart versions, values, the skeleton's manifests; up, deploy, demo, smoke and down scripts
 infra/terraform/    Azure foundation: Terraform root module, state bootstrap, plan, apply and smoke scripts
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
 spikes/             throwaway experiments, each its own uv project; never deployed
@@ -113,11 +113,12 @@ src/meridian/       the one Python package (src layout)
   runtime/          the Agent Runtime, which hosts LangGraph graphs; between workloads and platform
   workloads/        use cases built on the platform contract: the Claims API and its triage graph
 tests/              tests for the scripts and the bash guard
-  meridian/         pytest tests for the package: import contracts, registry, services, database, the walking skeleton
+  meridian/         pytest tests for the package: import contracts, registry, services, database, the walking skeleton, the kind manifests
   synthetic/        pytest tests for the generator: reruns, labels, citations
 pyproject.toml      uv project: Python 3.13, the meridian command, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, pytest-db, registry, synthetic, up, smoke, grafana, down, azure-*
+Dockerfile          one image for the three services and the migrations; .dockerignore allowlists its context
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, pytest-db, registry, synthetic, up, deploy, demo, smoke, grafana, down, azure-*
 ```
 
 Planned, milestone by milestone: `api/`, the Terraform for the ephemeral
@@ -137,6 +138,7 @@ make pytest-db  # the same with a throwaway PostgreSQL container, so the databas
 make registry # validate the registry and its schemas, against the Terraform output snapshot (needs uv)
 make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)
 make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm)
+make demo     # build the image, migrate, deploy the skeleton, post a claim, find its trace in Tempo
 make smoke    # edge, pgvector, and a test trace, log and metric read back through Grafana
 make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password
 make down     # delete the kind cluster; destructive

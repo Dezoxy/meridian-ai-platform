@@ -1,9 +1,13 @@
 # Local platform on kind
 
 `make up` builds the local Meridian platform on a one-node kind cluster from
-pinned Helm charts. `make smoke` proves it works. `make down` removes it.
-Status: **implemented** (S006). Nothing here is deployed anywhere but your
-laptop; the Azure side is S007 onward.
+pinned Helm charts. `make smoke` proves it works. `make deploy` puts the S009
+walking skeleton (Claims API, Agent Runtime, Model Gateway) on it and
+`make demo` runs a claim through it. `make down` removes it.
+Status: **implemented** (S006, and S041 for deploy and demo). Nothing here is
+deployed anywhere but your laptop; the Azure side is S007 onward. The services
+run in replay mode: no model is called, and the draft text is canned and
+simulated.
 
 ## What `make up` creates
 
@@ -32,9 +36,50 @@ instance and 2 Gi of storage. CloudNativePG generates the `app` credentials
 (Secret `platform-db-app` in `meridian`); nothing is set by hand. The `vector`
 extension is enabled declaratively by a `Database` resource.
 
+For the walking skeleton `make up` also declares a second database,
+`meridian`, owned by the role `meridian_owner`, and three more roles:
+`claims_api`, `agent_runtime` and `model_gateway`. All four can log in and
+nothing more (no superuser, createdb or createrole). The `app` database, role
+and Secret are untouched, and `meridian` has no `vector` extension (S012
+decides). Each role's password is in a Secret of type `kubernetes.io/basic-auth`
+in `meridian`, with the keys `username`, `password` and `uri`:
+`meridian-owner-db`, `claims-api-db`, `agent-runtime-db` and
+`model-gateway-db`. `make up` creates a Secret only if it is absent, before the
+`platform-db` release installs (CloudNativePG cannot reconcile a role whose
+Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
+on stdin; it is never an argument, never in a file and never printed. The `uri`
+names `platform-db-rw.meridian.svc`, which is in the server certificate, and
+asks for `sslmode=verify-full`. To read one, which you rarely need:
+
+```sh
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian \
+  -n meridian get secret claims-api-db -o jsonpath='{.data.uri}' | base64 -d
+```
+
+Rotating a password is the owner's call and `make up` never overwrites a
+Secret. Both `password` and `uri` (it embeds the password) must change
+together, CloudNativePG then applies the new password to the role, and the
+three Deployments must restart to read it; the migration Job reads its Secret
+afresh on every `make deploy`:
+
+```sh
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
+  rollout restart deploy/claims-api deploy/agent-runtime deploy/model-gateway
+```
+
+PostgreSQL itself enforces the database boundary, with `pg_hba` rules in
+[`values/platform-db.yaml`](values/platform-db.yaml) that CloudNativePG places
+before its default catch-all, after its own local, replication and pooler
+rules: a connection without TLS is rejected; the four roles may log in to
+`meridian` over TLS with a SCRAM password and to no other database; no other
+role may log in to `meridian`. A client that asks for `sslmode=disable`, or a
+service that is pointed at the `app` or `postgres` database, is refused by the
+server, whatever its connection string says.
+
 The edge is a Gateway API `Gateway` named `edge` (class `envoy`) with one HTTP
-listener. Only routes from the `meridian` namespace may attach. There is no
-route yet, so it answers 404 to everything until S009.
+listener. Only routes from the `meridian` namespace may attach. `make deploy`
+adds one route, for the Claims API only (below); every other host and path
+answers 404.
 
 ## Prerequisites
 
@@ -56,6 +101,8 @@ node image, Kubernetes components and the platform).
 | Command | What it does |
 |---|---|
 | `make up` | Create the cluster if absent and install every release. Safe to rerun; it converges. Took 4 minutes from no cluster (245 s, node image already local), under a minute after. |
+| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration Job, applies the manifests in `manifests/meridian/` and waits for the three Deployments and the route. Safe to rerun. |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from all three services. |
 | `make smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
@@ -76,11 +123,93 @@ node image, Kubernetes components and the platform).
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes.
 
+## The walking skeleton: `make deploy` and `make demo`
+
+One image, built from the [`Dockerfile`](../../Dockerfile) at the repository
+root, runs all three services and the migration command. It is based on
+`python:3.13-slim` and `uv`, both pinned by digest, installs the locked
+dependencies without the dev group and the package non-editable into a venv,
+runs as user 10001 and sets no command of its own (each manifest names it).
+Its build context is an allowlist ([`.dockerignore`](../../.dockerignore)), so
+the kubeconfig, `.env` files and `.context/` can never enter it; key and
+certificate files are excluded even inside the allowed folders. There is no
+registry: `make deploy` tags the image `meridian:<first 12 hex digits of its
+ID>` and loads it into the kind node, so an unchanged tree reuses the same
+tag.
+
+| Service | Reached at | Database role |
+|---|---|---|
+| Claims API | `http://claims.meridian.localhost:8088` (edge) and `claims-api.meridian.svc:8000` | `claims_api` |
+| Agent Runtime | `agent-runtime.meridian.svc:8000`, cluster only | `agent_runtime` |
+| Model Gateway | `model-gateway.meridian.svc:8000`, cluster only | `model_gateway` |
+
+In order, `make deploy`:
+
+1. Refuses with "run 'make up' first" if the `meridian` Database is not
+   applied, a role is not reconciled or a role Secret is missing.
+2. Builds and loads the image.
+3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, as
+   `meridian_owner`. Only this Job reads that Secret. It must finish before
+   anything else is applied; on failure the script prints the Job's log and
+   exits non-zero. The Job runs on every deploy (a Job of the same tag is
+   deleted first; the runner skips what is applied, so a rerun takes seconds)
+   and ends after 300 seconds at most.
+4. Applies every other file in `manifests/meridian/` (found by glob: the
+   ServiceAccounts, Deployments, Services, the HTTPRoute and the
+   BackendTrafficPolicy), and waits for the rollouts and for the route to be
+   `Accepted`. `@IMAGE@` (and `@TAG@` in the Job's name) are the only text it
+   substitutes.
+
+Each pod gets its own role's connection string from its Secret, and the
+cluster CA's public certificate (`ca.crt` only, not the CA's private key that
+shares the Secret `platform-db-ca`) at `/etc/meridian/db-ca/ca.crt`. Spans go
+to the collector's OTLP/HTTP port, `:4318`; the `/healthz` probes are not
+traced. The `*.localhost` name resolves to the loopback address on macOS and
+on current Linux resolvers; the edge listens on `127.0.0.1` only.
+
+The route is the whole boundary: the Claims API is the only service with one,
+on the host `claims.meridian.localhost`. A request with any other `Host`
+header, such as `127.0.0.1:8088` or a page that rebinds its DNS name to
+loopback (threat model T-01), matches no route and gets 404 from Envoy.
+Envoy buffers each request to the Claims API and answers 413 above 64 KiB, the
+app's own limit, before the app sees it. TLS, NetworkPolicy and hardened
+charts are S019.
+
+A `ClusterIP` Service means unrouted, not protected: the Agent Runtime and the
+Model Gateway have no route at the edge, but any pod in the cluster can call
+them until S019's NetworkPolicy lands. The database boundary above does not
+depend on that.
+
+`make demo` posts the claims in `data/synthetic/claims.json` in order to the
+Claims API through the edge, with a W3C `traceparent` header whose trace ID the
+script made up. A claim that already has a triage proposal answers 409 and the
+script moves on to the next one, so each run uses the next claim (40 are
+available); it stops at the first 201. It prints the claim ID, the status, the
+route and the deployment that drafted the proposal (never a claimant field),
+then reads the trace by that ID from Tempo through Grafana's datasource proxy,
+retrying for up to 120 seconds. It prints PASS only if the trace has spans from
+`claims-api`, `agent-runtime` and `model-gateway`, with the span count of each,
+and exits non-zero otherwise. `make grafana` shows it in Explore with the
+TraceQL query `{ trace:id = "<id>" }`.
+
 ## If `make up` was interrupted
 
 Rerunning `make up` is the first thing to try. If a release is stuck in a
 `pending-*` state, or the node was only half created, run `make down` and then
 `make up` again.
+
+If `make up` times out waiting for the Gateway to be programmed and
+`kubectl -n envoy-gateway-system get gateway edge` shows `AddressNotAssigned`,
+Envoy Gateway did not pick up the node's address (seen on 2026-10-01 on a
+cluster that had run for 18 hours; the edge served routes anyway). Restart the
+controller, wait for it, then touch the Gateway:
+
+```sh
+K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n envoy-gateway-system"
+$K rollout restart deploy/envoy-gateway
+$K rollout status deploy/envoy-gateway
+$K annotate gateway edge meridian.local/reconcile-nudge="$(date -u +%FT%TZ)" --overwrite
+```
 
 ## Ports
 
@@ -111,12 +240,14 @@ The laptop this was built on gives Docker Desktop 7.65 GiB. The memory limits
 of the components add up to about 4.4 GiB. Measured with `docker stats` on the
 node container on 2026-09-30, after a `make up` from no cluster, a second
 `make up` and one `make smoke`: 3.6 GiB, which includes the Kubernetes control
-plane, the kubelet and containerd.
+plane, the kubelet and containerd. The three Meridian services add limits of
+192, 256 and 192 MiB (their measured peak was 57 to 87 MB after two demo
+claims); the migration Job adds 192 MiB while it runs.
 
 ## Deliberately not here yet
 
-- TLS on the gateway, NetworkPolicy and hardened security contexts: S019.
-- Application routes: the first HTTPRoute arrives with S009.
+- TLS on the gateway, NetworkPolicy, PodDisruptionBudgets, read-only root
+  filesystems and Helm charts for the Meridian services: S019.
 - Alertmanager: S024. Its Grafana datasource is off too.
 - Persistence beyond the node: PostgreSQL, Loki and Tempo use small volumes on
   the node's disk, Prometheus and Grafana use none. `make down` removes all of

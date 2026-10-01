@@ -508,6 +508,36 @@ def test_a_422_does_not_echo_the_claimant() -> None:
     assert "not-an-email" not in response.text
 
 
+# ── a cross-origin "simple request" (T-01) ──────────────────────────────────
+# A web page can POST text/plain to 127.0.0.1 without a CORS preflight. The
+# Claims API takes JSON only, so such a request must change nothing.
+def test_a_text_plain_post_with_a_json_looking_body_is_refused() -> None:
+    runtime = Runtime()
+
+    response = make_client(runtime=runtime).post(
+        "/claims",
+        content=json.dumps(claim_with_id("CLM-9110")),
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 422
+    assert runtime.requests == []
+
+
+def test_a_text_plain_post_stores_no_claim(fresh_database: DatabaseHandle) -> None:
+    runtime = Runtime()
+
+    response = make_client(claims_dsn(fresh_database), runtime).post(
+        "/claims",
+        content=json.dumps(claim_with_id("CLM-9111")),
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 422
+    assert owner_rows(fresh_database, "SELECT count(*) FROM claims.claims") == [(0,)]
+    assert runtime.requests == []
+
+
 # ── size, health, lifecycle, transport ──────────────────────────────────────
 def test_a_body_over_64_kib_is_413() -> None:
     response = make_client().post(

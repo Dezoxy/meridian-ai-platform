@@ -31,7 +31,7 @@ PYTEST_DB_PORT      ?= 55432
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db synthetic up smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -145,6 +145,14 @@ synthetic:
 ## up              create the kind cluster and install the local platform (needs Docker, kind, kubectl, helm; first run pulls images)
 up:
 	infra/kind/up.sh
+
+## deploy          build the image, run the migrations and put the Claims API, Agent Runtime and Model Gateway on the kind cluster (needs make up)
+deploy:
+	infra/kind/deploy.sh
+
+## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088 and find its one trace across the three services in Tempo
+demo: deploy
+	infra/kind/demo.sh
 
 ## smoke           prove the edge, pgvector and a trace, log and metric reaching Grafana's datasources
 smoke:
