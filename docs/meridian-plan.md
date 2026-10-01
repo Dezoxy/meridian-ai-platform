@@ -1762,10 +1762,12 @@ adapter, and refuses and audits a request no candidate may serve.
   replay-only kind image does not carry them; the pipeline's live
   comparison of endpoint, region and label (T-12, T-43).
 - No step yet: a deployment past its `retires` date still routes.
-- Owner: the Azure CLI session of the trial account expired within a day,
-  and signing in again needs a person. Another account or tenant would not
-  remove that; workload identity (S020) and the pipeline's OIDC federation
-  (S022) do, for everything but a laptop.
+- Owner: the Azure CLI session of the trial account expired within a day
+  (`AADSTS50132`, a session expiry, not a refusal of the account), and
+  signing in again needs a person. Workload identity (S020) and the
+  pipeline's OIDC federation (S022) remove that for everything but a
+  laptop; whether a dedicated tenant should hold Meridian is Part D
+  question 5.
 
 ## Part D — Open questions
 
@@ -1775,6 +1777,7 @@ adapter, and refuses and audits a request no candidate may serve.
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
 | 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | S015 | Keep, recorded as a procedural closure in C-02 |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
+| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 
 ## Part E — Changelog
 
@@ -1804,3 +1807,5 @@ adapter, and refuses and audits a request no candidate may serve.
   and the contract tests; the new S042 takes timeout, retry, circuit
   breaker and fallback, with a second deployment in Sweden Central. S018
   depends on S042.
+- **v0.10, 2026-10-01:** Part D question 5 added: a dedicated tenant for
+  Meridian, to decide by S021 or at the subscription upgrade.
