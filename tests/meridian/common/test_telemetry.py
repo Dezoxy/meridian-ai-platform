@@ -84,6 +84,8 @@ def test_the_allowlist_holds_exactly_the_named_keys() -> None:
                 "meridian.attempt",
                 "meridian.attempts",
                 "meridian.skipped",
+                "meridian.call_id",
+                "meridian.cost_micro_eur",
                 "error.type",
                 "gen_ai.request.model",
                 "gen_ai.response.model",

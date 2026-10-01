@@ -1,21 +1,33 @@
-"""The Model Gateway app: ``POST /v1/chat``, replay and live (S009, S010).
+"""The Model Gateway app: ``POST /v1/chat``, replay and live (S009, S010, S011).
 
-One path for both modes: decide the route, refuse and audit when nothing is
-allowed, then walk the allowed candidates in order under one deadline (S042). A
-candidate whose circuit is open, or that the deadline leaves no time for, is
-skipped; a deployment's own failure moves the walk to the next candidate; a
-rejected request ends it. Every candidate touched leaves one audit row. The
-audit write is part of the answer, so a call that cannot be recorded returns no
-output (QA-05). There is no retry of one deployment: the next candidate is the
-retry.
+One path for both modes. A call gets its ID first, so every audit row of the
+request carries it. Then the route is decided and refused (403) and audited
+when nothing is allowed. The tenant's rate windows come next: a request over
+them is refused (429, or 413 when it alone is larger than the tenant's token
+limit) before any circuit, reservation or provider is touched. Then the allowed
+candidates are walked in order under one deadline (S042), each one reserved in
+the ledger before it is called (QA-12). A candidate whose circuit is open, or
+that the deadline leaves no time for, is skipped; a deployment's own failure
+moves the walk to the next candidate; a rejected request ends it; a reservation
+the tenant's budget refuses ends it too (429, or the earlier attempt's answer).
+Every candidate touched leaves one audit row, except that a refusal, whether
+policy's 403 or a tenant limit's 429 or 413, leaves at most one row per tenant
+and reason per minute, and that row says how many refusals it stands in for, so
+a flood cannot fill the log (T-49). The audit write is part of the answer, so a
+call that cannot be recorded returns no output (QA-05). There is no retry of
+one deployment: the next candidate is the retry. The limits apply in replay
+mode as in live mode: replay simulates the provider, not the gateway's
+controls. The gateway counts tokens, cost and calls in its metrics.
 """
 
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from datetime import date
 from typing import Annotated, NoReturn
 
 from fastapi import FastAPI, Header, HTTPException
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span
 
@@ -23,21 +35,38 @@ from meridian.platform.common.audit import AuditEvent, write_audit
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.http import (
     GATEWAY_BODY_LIMIT_BYTES,
+    HTTP_PAYLOAD_TOO_LARGE,
     REFUSED,
     BoundedEntityId,
     create_service_app,
     error_responses,
 )
+from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import set_span_attributes, start_span
+from meridian.platform.gateway.budget import (
+    BudgetRefusalReason,
+    Caller,
+    Ledger,
+    reservation_tokens,
+    utc_today,
+)
+from meridian.platform.gateway.meters import CallRecord, GatewayMeters
 from meridian.platform.gateway.models import ChatRequest, ChatResponse
 from meridian.platform.gateway.providers.base import ChatProvider, ProviderError
+from meridian.platform.gateway.ratelimit import (
+    RateRefusalReason,
+    RefusalAuditThrottle,
+    TenantRateLimiter,
+)
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.gateway.walk import (
+    BudgetRefused,
     CandidateWalker,
     Unanswered,
+    caller_fields,
     route_attributes,
     route_facts,
 )
@@ -61,10 +90,30 @@ PROVIDER_TIMED_OUT = "the model provider did not answer in time"
 PROVIDER_FAILED = "the model provider failed"
 # No attempt was made: every candidate was skipped.
 PROVIDER_UNAVAILABLE = "the model provider is unavailable"
+# The reason on the calls counter of a request no candidate was called for.
+NOT_CALLED_REASON = "unavailable"
 # The route's own description of 503; the shared one names the database only.
 CHAT_UNAVAILABLE = (
     "The audit log is unavailable, or no model deployment can be tried now."
 )
+HTTP_TOO_MANY_REQUESTS = 429
+# The route's own description of 413: the shared one names the body limit only.
+CHAT_TOO_LARGE = (
+    "The request body is too large, or the request is larger than the tenant's "
+    "token limit."
+)
+# One fixed text per refusal for a tenant limit; the reason is in the audit row.
+TENANT_RATE_LIMIT_REACHED = "the tenant's rate limit is reached"
+TENANT_BUDGET_USED_UP = "the tenant's budget is used up"
+TENANT_REQUEST_TOO_LARGE = "the request is larger than the tenant's token limit"
+LimitRefusalReason = RateRefusalReason | BudgetRefusalReason
+LIMIT_ANSWERS: dict[LimitRefusalReason, tuple[int, str]] = {
+    "tenant-request-rate": (HTTP_TOO_MANY_REQUESTS, TENANT_RATE_LIMIT_REACHED),
+    "tenant-token-rate": (HTTP_TOO_MANY_REQUESTS, TENANT_RATE_LIMIT_REACHED),
+    "tenant-token-budget": (HTTP_TOO_MANY_REQUESTS, TENANT_BUDGET_USED_UP),
+    "tenant-cost-budget": (HTTP_TOO_MANY_REQUESTS, TENANT_BUDGET_USED_UP),
+    "tenant-request-too-large": (HTTP_PAYLOAD_TOO_LARGE, TENANT_REQUEST_TOO_LARGE),
+}
 
 
 def _check_start_allowed(
@@ -204,16 +253,20 @@ def create_app(
     settings: GatewaySettings,
     *,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     providers: Mapping[str, ChatProvider] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    today: Callable[[], date] = utc_today,
 ) -> FastAPI:
     """Build the app; raise when the registry fails to load or the mode,
     environment and providers are not an allowed combination.
 
     ``providers`` is keyed by provider kind (``replay``, ``azure-openai``); a
     test injects fakes. Without it the app builds the replay provider and, in
-    live mode, the Azure one. ``clock`` times the circuit breaker (one per app)
-    and each request's deadline; a test injects a fake.
+    live mode, the Azure one. ``clock`` times the circuit breaker (one per app),
+    the tenants' rate windows and each request's deadline; ``today`` is the UTC
+    day the ledger charges to. A test injects fakes of both. A ``meter_provider``
+    is its caller's to shut down; without one the app builds its own.
     """
     _check_start_allowed(settings, providers)
     registry = load_registry(settings.registry_dir)
@@ -233,6 +286,20 @@ def create_app(
     # In replay mode where the call goes is known before policy decides, so a
     # refusal says it too (T-39).
     replay = considered[0] if settings.mode == "replay" else None
+    owns_meter_provider = meter_provider is None
+    app_meter_provider = (
+        make_meter_provider(SERVICE_NAME) if meter_provider is None else meter_provider
+    )
+
+    def close_all() -> None:
+        """Only what this function built: an injected provider is its caller's."""
+        try:
+            if close is not None:
+                close()
+        finally:
+            if owns_meter_provider:
+                app_meter_provider.shutdown()
+
     service = create_service_app(
         title="Meridian Model Gateway",
         description="Every model call goes through here (ADR 3, hard rule 4).",
@@ -240,10 +307,12 @@ def create_app(
         tracer_name="meridian.gateway",
         max_body_bytes=GATEWAY_BODY_LIMIT_BYTES,
         tracer_provider=tracer_provider,
-        # Only what this function built: an injected provider is its caller's.
-        close=close,
+        close=close_all,
     )
     app, tracer = service.app, service.tracer
+    meters = GatewayMeters(app_meter_provider)
+    limiter = TenantRateLimiter(clock=clock)
+    refusal_throttle = RefusalAuditThrottle(clock=clock)
 
     def audit(event: str, outcome: str, **fields: object) -> None:
         write_audit(
@@ -257,28 +326,77 @@ def create_app(
         kinds=kinds,
         breaker=CircuitBreaker(clock=clock),
         audit=audit,
+        ledger=Ledger(settings.database_url, exchange=registry.exchange, today=today),
+        meters=meters,
         clock=clock,
         mode=settings.mode,
     )
 
-    def refuse(
-        span: Span,
-        who: dict[str, object],
-        data_class: str | None,
-        refusal: RefusalReason,
-    ) -> NoReturn:
-        set_span_attributes(span, {"meridian.refusal": refusal})
+    def audit_refusal(
+        caller: Caller,
+        throttle_tenant: str | None,
+        reason: str,
+        facts: dict[str, str | None],
+    ) -> None:
+        """Write the row of a refusal when the throttle says it is due, with
+        the count of the refusals it stands in for (T-49). The window starts
+        once the row is written, so a write that fails loses nothing: the next
+        refusal is due and counts this one."""
+        suppressed = refusal_throttle.due(throttle_tenant, reason)
+        if suppressed is None:
+            return
         audit(
             "model.call",
             "refused",
-            **who,
-            **route_facts(replay, data_class),
-            reason=refusal,
+            **caller_fields(caller),
+            **facts,
+            reason=reason,
+            suppressed=suppressed,
         )
+        refusal_throttle.mark(throttle_tenant, reason)
+
+    def refuse(
+        span: Span,
+        record: CallRecord,
+        caller: Caller,
+        data_class: str | None,
+        refusal: RefusalReason,
+    ) -> NoReturn:
+        """Answer 403 for a request policy refuses. The throttle key is the
+        reason and, unless the tenant is unknown, the tenant: a header's value
+        is caller-chosen and never becomes a key; never the agent."""
+        set_span_attributes(span, {"meridian.refusal": refusal})
+        record.end("refused", refusal)
+        throttle_tenant = None if refusal == "unknown-tenant" else caller.tenant
+        audit_refusal(caller, throttle_tenant, refusal, route_facts(replay, data_class))
         raise HTTPException(status_code=403, detail=REFUSED)
 
-    chat_responses = error_responses(403, 413, 500, 502, 503, 504)
+    def refuse_limit(
+        span: Span,
+        record: CallRecord,
+        caller: Caller,
+        data_class: str | None,
+        reason: LimitRefusalReason,
+        *,
+        retry_after: int | None = None,
+        candidate: Deployment | None = None,
+    ) -> NoReturn:
+        """Answer a request a tenant limit refuses. Every refusal sets the span
+        attribute and is counted; the audit row is written for the first of its
+        tenant and reason in the window only (T-49). Both parts of that key are
+        registry IDs, because routing passed. In replay mode every row names
+        the replay deployment (T-39)."""
+        status, detail = LIMIT_ANSWERS[reason]
+        set_span_attributes(span, {"meridian.refusal": reason})
+        record.end("refused", reason)
+        facts = route_facts(candidate if candidate is not None else replay, data_class)
+        audit_refusal(caller, caller.tenant, reason, facts)
+        headers = None if retry_after is None else {"Retry-After": str(retry_after)}
+        raise HTTPException(status_code=status, detail=detail, headers=headers)
+
+    chat_responses = error_responses(403, 413, 429, 500, 502, 503, 504)
     chat_responses[HTTP_SERVICE_UNAVAILABLE]["description"] = CHAT_UNAVAILABLE
+    chat_responses[HTTP_PAYLOAD_TOO_LARGE]["description"] = CHAT_TOO_LARGE
 
     @app.post(
         "/v1/chat",
@@ -292,28 +410,75 @@ def create_app(
         agent_id: Annotated[BoundedEntityId, Header(alias="X-Meridian-Agent")],
         run_id: Annotated[uuid.UUID, Header(alias="X-Meridian-Run")],
     ) -> ChatResponse:
-        with start_span(tracer, "gateway.chat") as span:
-            set_span_attributes(
+        # The call ID exists before anything can refuse the request.
+        caller = Caller(uuid.uuid4(), tenant_id, agent_id, run_id)
+        record = meters.call_record()
+        try:
+            with start_span(tracer, "gateway.chat") as span:
+                response = answer(span, record, caller, body)
+        except Exception:
+            record.end("failed")  # a refusal counted itself first and stays one
+            raise
+        record.end("completed")
+        return response
+
+    def describe_call(span: Span, caller: Caller) -> None:
+        set_span_attributes(
+            span,
+            {
+                "meridian.tenant": caller.tenant,
+                "meridian.agent": caller.agent,
+                "meridian.run_id": str(caller.run_id),
+                "meridian.call_id": str(caller.call_id),
+                "meridian.mode": settings.mode,
+            },
+        )
+        if replay is not None:
+            set_span_attributes(span, route_attributes(replay))
+
+    def answer(
+        span: Span, record: CallRecord, caller: Caller, body: ChatRequest
+    ) -> ChatResponse:
+        describe_call(span, caller)
+        decision = decide(registry, considered, caller.tenant, caller.agent)
+        limits = decision.limits  # None exactly for an unknown tenant, refused here
+        if decision.refusal is not None or limits is None:
+            refuse(
                 span,
-                {
-                    "meridian.tenant": tenant_id,
-                    "meridian.agent": agent_id,
-                    "meridian.run_id": str(run_id),
-                    "meridian.mode": settings.mode,
-                },
+                record,
+                caller,
+                decision.data_class,
+                decision.refusal or "unknown-tenant",
             )
-            if replay is not None:
-                set_span_attributes(span, route_attributes(replay))
-            who = {"tenant": tenant_id, "agent": agent_id, "run_id": run_id}
-            decision = decide(registry, considered, tenant_id, agent_id)
-            if decision.refusal is not None:
-                refuse(span, who, decision.data_class, decision.refusal)
-            if decision.data_class is not None:
-                set_span_attributes(span, {"meridian.data_class": decision.data_class})
-            result = walker.run(span, who, body, decision)
-            if isinstance(result, Unanswered):
-                _unanswered(result)
-            return result
+        record.known(caller.tenant, caller.agent)  # registry IDs from here on
+        if decision.data_class is not None:
+            set_span_attributes(span, {"meridian.data_class": decision.data_class})
+        rate_refusal = limiter.admit(caller.tenant, limits, reservation_tokens(body))
+        if rate_refusal is not None:
+            refuse_limit(
+                span,
+                record,
+                caller,
+                decision.data_class,
+                rate_refusal.reason,
+                retry_after=rate_refusal.retry_after_seconds,
+            )
+        result = walker.run(span, caller, limits, body, decision)
+        if isinstance(result, BudgetRefused):
+            refuse_limit(
+                span,
+                record,
+                caller,
+                decision.data_class,
+                result.reason,
+                candidate=result.candidate,
+            )
+        if isinstance(result, Unanswered):
+            # The reason is the last attempt's kind, a fixed word and never the
+            # provider's text; no candidate called is "unavailable".
+            record.end("failed", result.last_attempt_kind or NOT_CALLED_REASON)
+            _unanswered(result)
+        return result
 
     return app
 

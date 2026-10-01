@@ -96,6 +96,21 @@ and count for nothing, or one caller could open the circuit for everyone
 Sweden Central account, so the walk answers a deployment that fails or is
 rate-limited; the fallback to a second region stays designed.
 
+Amended on 2026-10-01 (S011): the flowchart's one box for budget and quota
+is two checks. Before the walk, the tenant's two rate windows, which are
+the provider's own (requests per 10 s, tokens per minute), kept in the
+process. Inside the walk, a reservation per candidate, written to
+PostgreSQL before the provider is called: the estimated input plus the
+output cap, against the tenant's daily token budget and monthly cost quota,
+as one conditional update per counter, so concurrent calls cannot pass the
+same check (T-47). "Record usage and cost" closes that reservation: the
+provider's counts when it answered, nothing when it refused the request
+with a 4xx or nothing was sent, and the reservation itself in every other
+case, because a request the gateway gave up on may still be billed. Cost is
+an estimate from the registry's list prices at a dated planning rate; the
+invoice is the provider's. The tenant is still the caller's word until
+sign-in exists (T-08, T-48).
+
 ## Consequences
 
 Positive:

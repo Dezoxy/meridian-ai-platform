@@ -744,13 +744,13 @@ def test_synthetic_data_does_fall_over_to_the_global_deployment(
 
 # ── the audit write is part of the answer ───────────────────────────────────
 def test_when_the_audit_of_a_failed_attempt_fails_no_other_candidate_is_called(
-    monkeypatch: pytest.MonkeyPatch, two: Path
+    monkeypatch: pytest.MonkeyPatch, fresh_database: DatabaseHandle, two: Path
 ) -> None:
     def fail_connect(*_args: object, **_kwargs: object) -> None:
         raise psycopg.OperationalError("connection refused: password=hunter2")
 
     monkeypatch.setattr(audit, "connect", fail_connect)
-    gateway = build_gateway(two, outcomes={FIRST: failing("unavailable")})
+    gateway = build_gateway(two, fresh_database, {FIRST: failing("unavailable")})
 
     response, _ = gateway.post()
 
@@ -855,9 +855,9 @@ def test_an_exception_before_the_provider_call_does_not_leave_a_probe_held(
 
 
 def test_the_audit_failure_of_a_crashed_attempt_carries_no_provider_exception(
-    two: Path, audit_switch: AuditSwitch
+    fresh_database: DatabaseHandle, two: Path, audit_switch: AuditSwitch
 ) -> None:
-    gateway = build_gateway(two, outcomes={FIRST: Outcome(RuntimeError(CANARY))})
+    gateway = build_gateway(two, fresh_database, {FIRST: Outcome(RuntimeError(CANARY))})
     audit_switch.failing = {"failed"}
 
     response, _ = gateway.post()
@@ -869,10 +869,10 @@ def test_the_audit_failure_of_a_crashed_attempt_carries_no_provider_exception(
 
 
 def test_the_audit_failure_of_a_failed_attempt_carries_no_provider_exception(
-    two: Path, audit_switch: AuditSwitch
+    fresh_database: DatabaseHandle, two: Path, audit_switch: AuditSwitch
 ) -> None:
     gateway = build_gateway(
-        two, outcomes={FIRST: Outcome(provider_error_with_canary())}
+        two, fresh_database, {FIRST: Outcome(provider_error_with_canary())}
     )
     audit_switch.failing = {"failed"}
 

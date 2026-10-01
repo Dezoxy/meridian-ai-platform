@@ -64,6 +64,9 @@ def azure_chat_deployment_yaml(
       source: "a test fixture"
       checked: 2026-09-30
     terraform_key: sdc/{deployment_name}
+    rate_limits:
+      requests_per_10_seconds: 20
+      tokens_per_minute: 20000
 
 """
 
@@ -130,6 +133,10 @@ AUDIT_COLUMNS = (
     "sku",
     "region",
     "residency",
+    "call_id",
+    "http_status",
+    "provider_model",
+    "suppressed",
 )
 
 
@@ -154,7 +161,8 @@ def audit_events(db: DatabaseHandle, run_id: uuid.UUID) -> list[dict]:
         db,
         "SELECT service, event, outcome, tenant, agent, run_id, reference, "
         "deployment, provider, model, input_tokens, output_tokens, "
-        "reason, data_class, sku, region, residency "
+        "reason, data_class, sku, region, residency, "
+        "call_id, http_status, provider_model, suppressed "
         "FROM audit.events WHERE run_id = %s ORDER BY recorded_at, event",
         (run_id,),
     )

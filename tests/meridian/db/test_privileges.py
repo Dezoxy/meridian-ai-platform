@@ -182,6 +182,232 @@ def test_model_gateway_may_use_its_own_schema(
     assert rows == [(True,)]
 
 
+# ── gateway: the budget counters and the usage ledger (0003, S011) ──────────
+COUNTER = ("development", "tokens-day", "2026-10-01")
+INSERT_COUNTER = (
+    "INSERT INTO gateway.budget_counters (tenant, kind, period_start) "
+    "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING"
+)
+INSERT_USAGE = (
+    "INSERT INTO gateway.usage (call_id, tenant, agent, run_id, deployment, "
+    "provider, model, day, month, reserved_tokens, reserved_micro_eur, "
+    "charged_tokens, charged_micro_eur) VALUES (%s, 'development', "
+    "'claims-triage', %s, 'aoai-sdc-gpt-4o', 'azure-openai', 'gpt-4o', "
+    "'2026-10-01', '2026-10-01', 100, 5, 100, 5) RETURNING attempt_id"
+)
+USAGE_CLOSING_UPDATES = [
+    "state = 'settled'",
+    "input_tokens = 60",
+    "output_tokens = 40",
+    "charged_tokens = 90",
+    "charged_micro_eur = 4",
+    "closed_at = now()",
+]
+USAGE_FIXED_UPDATES = [
+    "tenant = 'other'",
+    "agent = 'other'",
+    "call_id = gen_random_uuid()",
+    "run_id = gen_random_uuid()",
+    "attempt_id = gen_random_uuid()",
+    "deployment = 'other'",
+    "day = '2026-10-02'",
+    "month = '2026-11-01'",
+    "reserved_tokens = 1",
+    "reserved_micro_eur = 1",
+    "reserved_at = now()",
+]
+
+
+def insert_usage(db: DatabaseHandle) -> uuid.UUID:
+    ((attempt_id,),) = run(db, "model_gateway", INSERT_USAGE, (uuid.uuid4(), RUN_ID))
+    return attempt_id
+
+
+def test_model_gateway_selects_creates_and_updates_the_counters(
+    migrated_database: DatabaseHandle,
+) -> None:
+    tenant = f"counter-{uuid.uuid4()}"
+
+    run(migrated_database, "model_gateway", INSERT_COUNTER, (tenant, *COUNTER[1:]))
+    run(
+        migrated_database,
+        "model_gateway",
+        "UPDATE gateway.budget_counters SET amount = amount + 5 WHERE tenant = %s",
+        (tenant,),
+    )
+
+    assert run(
+        migrated_database,
+        "model_gateway",
+        "SELECT amount FROM gateway.budget_counters WHERE tenant = %s",
+        (tenant,),
+    ) == [(5,)]
+
+
+@pytest.mark.parametrize("column", ["tenant", "kind", "period_start"])
+def test_model_gateway_cannot_rewrite_the_key_of_a_counter(
+    migrated_database: DatabaseHandle, column: str
+) -> None:
+    tenant = f"key-{uuid.uuid4()}"
+    run(migrated_database, "model_gateway", INSERT_COUNTER, (tenant, *COUNTER[1:]))
+    values = {
+        "tenant": "'other'",
+        "kind": "'cost-month'",
+        "period_start": "'2026-10-02'",
+    }
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(
+            migrated_database,
+            "model_gateway",
+            sql.SQL(
+                "UPDATE gateway.budget_counters SET {} = {} WHERE tenant = %s"
+            ).format(sql.Identifier(column), sql.SQL(values[column])),
+            (tenant,),
+        )
+
+
+def test_model_gateway_cannot_create_a_counter_with_an_amount(
+    migrated_database: DatabaseHandle,
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(
+            migrated_database,
+            "model_gateway",
+            "INSERT INTO gateway.budget_counters (tenant, kind, period_start, amount) "
+            "VALUES (%s, 'tokens-day', '2026-10-01', 5)",
+            (f"amount-{uuid.uuid4()}",),
+        )
+
+
+def test_model_gateway_inserts_and_selects_a_usage_row(
+    migrated_database: DatabaseHandle,
+) -> None:
+    attempt_id = insert_usage(migrated_database)
+
+    rows = run(
+        migrated_database,
+        "model_gateway",
+        "SELECT state, reserved_tokens FROM gateway.usage WHERE attempt_id = %s",
+        (attempt_id,),
+    )
+
+    assert rows == [("reserved", 100)]
+
+
+@pytest.mark.parametrize(
+    "column",
+    [assignment.split(" = ")[0] for assignment in USAGE_CLOSING_UPDATES],
+)
+def test_model_gateway_holds_the_update_grant_on_each_closing_column(
+    migrated_database: DatabaseHandle, column: str
+) -> None:
+    rows = run(
+        migrated_database,
+        "model_gateway",
+        "SELECT has_column_privilege('gateway.usage', %s, 'UPDATE')",
+        (column,),
+    )
+
+    assert rows == [(True,)]
+
+
+def test_model_gateway_closes_a_reserved_row_with_the_six_columns_at_once(
+    migrated_database: DatabaseHandle,
+) -> None:
+    attempt_id = insert_usage(migrated_database)
+
+    run(
+        migrated_database,
+        "model_gateway",
+        sql.SQL("UPDATE gateway.usage SET {} WHERE attempt_id = %s").format(
+            sql.SQL(", ").join(sql.SQL(a) for a in USAGE_CLOSING_UPDATES)
+        ),
+        (attempt_id,),
+    )
+
+    assert run(
+        migrated_database,
+        OWNER,
+        "SELECT state, charged_tokens FROM gateway.usage WHERE attempt_id = %s",
+        (attempt_id,),
+    ) == [("settled", 90)]
+
+
+@pytest.mark.parametrize("assignment", USAGE_FIXED_UPDATES)
+def test_model_gateway_cannot_update_what_identifies_or_reserves(
+    migrated_database: DatabaseHandle, assignment: str
+) -> None:
+    attempt_id = insert_usage(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(
+            migrated_database,
+            "model_gateway",
+            sql.SQL("UPDATE gateway.usage SET {} WHERE attempt_id = %s").format(
+                sql.SQL(assignment)
+            ),
+            (attempt_id,),
+        )
+
+
+@pytest.mark.parametrize("table", ["budget_counters", "usage"])
+def test_model_gateway_cannot_delete_from_the_ledger(
+    migrated_database: DatabaseHandle, table: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(
+            migrated_database,
+            "model_gateway",
+            sql.SQL("DELETE FROM gateway.{}").format(sql.Identifier(table)),
+        )
+
+
+@pytest.mark.parametrize("table", ["budget_counters", "usage"])
+def test_model_gateway_cannot_truncate_the_ledger(
+    migrated_database: DatabaseHandle, table: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(
+            migrated_database,
+            "model_gateway",
+            sql.SQL("TRUNCATE gateway.{}").format(sql.Identifier(table)),
+        )
+
+
+@pytest.mark.parametrize("role", ["claims_api", "agent_runtime"])
+@pytest.mark.parametrize("table", ["budget_counters", "usage"])
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT * FROM {table}",
+        "INSERT INTO {table} DEFAULT VALUES",
+        "UPDATE {table} SET tenant = 'x'",
+        "DELETE FROM {table}",
+    ],
+)
+def test_the_other_service_roles_can_do_nothing_in_the_gateway_schema(
+    migrated_database: DatabaseHandle, role: str, table: str, statement: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(
+            migrated_database,
+            role,
+            sql.SQL(statement).format(table=sql.SQL("gateway." + table)),
+        )
+
+
+@pytest.mark.parametrize("role", ["claims_api", "agent_runtime"])
+def test_the_other_service_roles_have_no_usage_on_the_gateway_schema(
+    migrated_database: DatabaseHandle, role: str
+) -> None:
+    rows = run(
+        migrated_database, role, "SELECT has_schema_privilege('gateway', 'USAGE')"
+    )
+
+    assert rows == [(False,)]
+
+
 # ── audit: insert-only for every role ───────────────────────────────────────
 @pytest.mark.parametrize("role", AUDIT_WRITERS)
 def test_the_runtime_and_the_gateway_append_to_the_audit_log(
@@ -355,6 +581,12 @@ def test_the_audit_log_has_no_content_columns(
         "sku",
         "region",
         "residency",
+        # 0003: the call's identifier, the provider's status and model name, and
+        # the count of refusals a refusal row stands for.
+        "call_id",
+        "http_status",
+        "provider_model",
+        "suppressed",
     }
 
 

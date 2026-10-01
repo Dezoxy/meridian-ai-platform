@@ -379,7 +379,7 @@ def test_anchor_error_names_the_right_line(
 
     errors = load_errors(directory)
 
-    assert errors == ("tenants.yaml: line 5: anchors and aliases are not allowed",)
+    assert errors == ("tenants.yaml: line 18: anchors and aliases are not allowed",)
 
 
 def test_merge_keys_are_refused(plant: Plant, load_errors: LoadErrors) -> None:

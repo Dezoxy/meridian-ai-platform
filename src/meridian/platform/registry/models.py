@@ -64,6 +64,13 @@ class Price(RegistryModel):
     checked: date
 
 
+class RateLimits(RegistryModel):
+    """A deployment's own limits at the provider."""
+
+    requests_per_10_seconds: Annotated[int, Field(ge=1)]
+    tokens_per_minute: Annotated[int, Field(ge=1)]
+
+
 class Deployment(RegistryModel):
     id: EntityId
     provider: EntityId
@@ -80,6 +87,9 @@ class Deployment(RegistryModel):
     retires: date | None = None
     price: Price
     terraform_key: TerraformKey | None = None
+    # The deployment's own limits at the provider; checks.py requires them for
+    # provider kind azure-openai and refuses them on a replay deployment.
+    rate_limits: RateLimits | None = None
 
 
 class ModelsFile(RegistryModel):
@@ -143,14 +153,34 @@ class PoliciesFile(RegistryModel):
     replay: tuple[ReplayRoute, ...]
 
 
+class TenantLimits(RegistryModel):
+    """What a tenant may use. The two rate windows are Azure OpenAI's own."""
+
+    requests_per_10_seconds: Annotated[int, Field(ge=1)]
+    tokens_per_minute: Annotated[int, Field(ge=1)]
+    tokens_per_day: Annotated[int, Field(ge=1)]
+    # Six decimals: the ledger counts micro-EUR, so the limit converts exactly.
+    cost_per_month_eur: Annotated[Decimal, Field(gt=0, decimal_places=6)]
+
+
 class Tenant(RegistryModel):
     id: EntityId
     description: NonEmptyStr
     data_class: DataClass
     agents: tuple[EntityId, ...]
+    limits: TenantLimits
+
+
+class ExchangeRate(RegistryModel):
+    """The planning rate the EUR cost quota is computed with."""
+
+    usd_per_eur: Annotated[Decimal, Field(gt=0)]
+    source: NonEmptyStr
+    checked: date
 
 
 class TenantsFile(RegistryModel):
+    exchange: ExchangeRate
     tenants: tuple[Tenant, ...]
 
 
@@ -179,6 +209,7 @@ class Registry(RegistryModel):
     routes: tuple[Route, ...]
     replay: tuple[ReplayRoute, ...]
     tenants: tuple[Tenant, ...]
+    exchange: ExchangeRate
 
     def provider(self, provider_id: str) -> Provider | None:
         return next((p for p in self.providers if p.id == provider_id), None)

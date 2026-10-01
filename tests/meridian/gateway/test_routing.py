@@ -5,7 +5,7 @@ from servicesupport import REGISTRY_DIR
 
 from meridian.platform.gateway.routing import RouteDecision, decide, deployment_allows
 from meridian.platform.registry import Registry, load_registry
-from meridian.platform.registry.models import Deployment
+from meridian.platform.registry.models import Deployment, TenantLimits
 
 PERSONAL_TENANT = "claims-triage"
 SYNTHETIC_TENANT = "development"
@@ -82,6 +82,24 @@ def test_a_class_with_no_allowed_label_reaches_nothing(
 
 
 # ── decide ───────────────────────────────────────────────────────────────────
+def limits_of(registry: Registry, tenant_id: str) -> TenantLimits:
+    tenant = registry.tenant(tenant_id)
+    assert tenant is not None
+    return tenant.limits
+
+
+def test_every_decision_for_a_known_tenant_carries_its_limits(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    expected = limits_of(registry, PERSONAL_TENANT)
+
+    allowed = decide(registry, (eu_deployment,), PERSONAL_TENANT, AGENT)
+    no_agent = decide(registry, (eu_deployment,), PERSONAL_TENANT, "other-agent")
+    no_route = decide(registry, (), PERSONAL_TENANT, AGENT)
+
+    assert allowed.limits == no_agent.limits == no_route.limits == expected
+
+
 def test_a_personal_tenant_never_gets_a_global_deployment_listed_first(
     registry: Registry, eu_deployment: Deployment, global_deployment: Deployment
 ) -> None:
@@ -134,13 +152,17 @@ def test_an_agent_the_tenant_does_not_list_is_refused(
 ) -> None:
     decision = decide(registry, (eu_deployment,), PERSONAL_TENANT, "other-agent")
 
-    assert decision == RouteDecision("personal", (), "agent-not-allowed")
+    assert decision == RouteDecision(
+        "personal", (), "agent-not-allowed", limits_of(registry, PERSONAL_TENANT)
+    )
 
 
 def test_no_considered_deployment_is_no_route(registry: Registry) -> None:
     decision = decide(registry, (), PERSONAL_TENANT, AGENT)
 
-    assert decision == RouteDecision("personal", (), "no-route")
+    assert decision == RouteDecision(
+        "personal", (), "no-route", limits_of(registry, PERSONAL_TENANT)
+    )
 
 
 def test_a_class_no_label_allows_is_no_allowed_deployment(
@@ -156,7 +178,12 @@ def test_a_class_no_label_allows_is_no_allowed_deployment(
 
     decision = decide(with_special, (listed,), "special-tenant", AGENT)
 
-    assert decision == RouteDecision("special", (), "no-allowed-deployment")
+    assert decision == RouteDecision(
+        "special",
+        (),
+        "no-allowed-deployment",
+        limits_of(with_special, "special-tenant"),
+    )
 
 
 def test_only_global_candidates_for_a_personal_tenant_is_no_allowed_deployment(
@@ -164,7 +191,9 @@ def test_only_global_candidates_for_a_personal_tenant_is_no_allowed_deployment(
 ) -> None:
     decision = decide(registry, (global_deployment,), PERSONAL_TENANT, AGENT)
 
-    assert decision == RouteDecision("personal", (), "no-allowed-deployment")
+    assert decision == RouteDecision(
+        "personal", (), "no-allowed-deployment", limits_of(registry, PERSONAL_TENANT)
+    )
 
 
 @pytest.mark.parametrize(

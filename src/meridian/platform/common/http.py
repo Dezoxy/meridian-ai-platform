@@ -71,6 +71,7 @@ ERROR_DESCRIPTIONS = {
     404: "No such resource.",
     409: "The request conflicts with what is stored.",
     413: BODY_TOO_LARGE.capitalize() + ".",
+    429: "A limit of the tenant is reached.",
     500: "An internal error; the body carries no detail.",
     502: "A service this one calls failed or answered outside its contract.",
     503: "The database or the audit log is unavailable.",

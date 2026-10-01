@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from meridian.platform.registry import Registry
-from meridian.platform.registry.models import Deployment
+from meridian.platform.registry.models import Deployment, TenantLimits
 
 RefusalReason = Literal[
     "unknown-tenant", "agent-not-allowed", "no-route", "no-allowed-deployment"
@@ -23,6 +23,7 @@ class RouteDecision:
     data_class: str | None  # None only for an unknown tenant
     candidates: tuple[Deployment, ...]  # allowed, in the route's order
     refusal: RefusalReason | None  # set exactly when candidates is empty
+    limits: TenantLimits | None = None  # the tenant's, whenever it is known
 
 
 def deployment_allows(
@@ -52,12 +53,12 @@ def decide(
     tenant = registry.tenant(tenant_id)
     if tenant is None:
         return RouteDecision(None, (), "unknown-tenant")
-    data_class = tenant.data_class
+    data_class, limits = tenant.data_class, tenant.limits
     if not registry.tenant_may_run(tenant_id, agent_id):
-        return RouteDecision(data_class, (), "agent-not-allowed")
+        return RouteDecision(data_class, (), "agent-not-allowed", limits)
     if not considered:
-        return RouteDecision(data_class, (), "no-route")
+        return RouteDecision(data_class, (), "no-route", limits)
     kept = tuple(d for d in considered if deployment_allows(registry, d, data_class))
     if not kept:
-        return RouteDecision(data_class, (), "no-allowed-deployment")
-    return RouteDecision(data_class, kept, None)
+        return RouteDecision(data_class, (), "no-allowed-deployment", limits)
+    return RouteDecision(data_class, kept, None, limits)

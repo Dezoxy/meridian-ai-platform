@@ -34,6 +34,7 @@ from meridian.platform.gateway.app import (
     PROVIDER_TIMED_OUT,
     create_app,
 )
+from meridian.platform.gateway.budget import cost_micro_eur
 from meridian.platform.gateway.models import ChatRequest
 from meridian.platform.gateway.providers.azure_openai import (
     PROVIDER_TIMEOUT_SECONDS,
@@ -183,6 +184,10 @@ def test_a_live_call_reaches_the_routed_deployment_and_is_audited_and_traced(
     assert body["output"] == {"text": ANSWER_TEXT, "finish_reason": "length"}
     assert body["usage"] == {"input_tokens": 11, "output_tokens": 7}
     assert provider.called == [EU_DEPLOYMENT]
+    registry = load_registry(REGISTRY_DIR)
+    deployment = registry.deployment(EU_DEPLOYMENT)
+    assert deployment is not None
+    expected_cost = cost_micro_eur(deployment.price, registry.exchange, 11, 7)
     assert audit_events(fresh_database, run_id) == [
         {
             "service": "model-gateway",
@@ -202,12 +207,17 @@ def test_a_live_call_reaches_the_routed_deployment_and_is_audited_and_traced(
             "sku": "Standard",
             "region": "swedencentral",
             "residency": "eu-region",
+            "call_id": uuid.UUID(body["call_id"]),
+            "http_status": None,
+            "provider_model": PROVIDER_MODEL,
+            "suppressed": None,
         }
     ]
     assert dict(chat_span(exporter).attributes) == {
         "meridian.tenant": "claims-triage",
         "meridian.agent": "claims-triage",
         "meridian.run_id": str(run_id),
+        "meridian.call_id": body["call_id"],
         "meridian.mode": "live",
         "meridian.deployment": EU_DEPLOYMENT,
         "meridian.provider": "azure-openai",
@@ -219,6 +229,7 @@ def test_a_live_call_reaches_the_routed_deployment_and_is_audited_and_traced(
         "gen_ai.response.model": PROVIDER_MODEL,
         "gen_ai.usage.input_tokens": 11,
         "gen_ai.usage.output_tokens": 7,
+        "meridian.cost_micro_eur": expected_cost,
         "meridian.attempts": 1,
         "meridian.skipped": 0,
     }
@@ -489,13 +500,19 @@ def test_an_unexpected_provider_exception_is_audited_as_internal_and_answers_500
 
 
 def test_when_the_audit_of_an_unexpected_failure_fails_the_answer_is_503(
-    monkeypatch: pytest.MonkeyPatch, one_candidate_registry: Path
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    one_candidate_registry: Path,
 ) -> None:
     def fail_connect(*_args: object, **_kwargs: object) -> None:
         raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(audit, "connect", fail_connect)
-    client = live_client(CrashingProvider(), registry_dir=one_candidate_registry)
+    client = live_client(
+        CrashingProvider(),
+        fresh_database.dsn("model_gateway"),
+        registry_dir=one_candidate_registry,
+    )
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 
@@ -545,14 +562,20 @@ def test_a_malformed_provider_reply_through_the_real_adapter_is_a_502_and_one_ro
 
 
 def test_when_the_audit_write_of_a_failed_call_fails_the_answer_is_503(
-    monkeypatch: pytest.MonkeyPatch, one_candidate_registry: Path
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    one_candidate_registry: Path,
 ) -> None:
     def fail_connect(*_args: object, **_kwargs: object) -> None:
         raise psycopg.OperationalError("connection refused: password=hunter2")
 
     monkeypatch.setattr(audit, "connect", fail_connect)
     provider = FakeProvider(error=ProviderError("unavailable", 503))
-    client = live_client(provider, registry_dir=one_candidate_registry)
+    client = live_client(
+        provider,
+        fresh_database.dsn("model_gateway"),
+        registry_dir=one_candidate_registry,
+    )
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 
@@ -563,17 +586,19 @@ def test_when_the_audit_write_of_a_failed_call_fails_the_answer_is_503(
 
 
 def test_when_the_audit_write_of_a_completed_call_fails_the_answer_has_no_output(
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fail_connect(*_args: object, **_kwargs: object) -> None:
         raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(audit, "connect", fail_connect)
-    client = live_client(FakeProvider())
+    provider = FakeProvider()
+    client = live_client(provider, fresh_database.dsn("model_gateway"))
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 
     assert response.status_code == 503
+    assert provider.called == [EU_DEPLOYMENT]  # the audit, not the ledger, failed
     assert ANSWER_TEXT not in response.text
 
 

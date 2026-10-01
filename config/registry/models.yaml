@@ -20,6 +20,12 @@ deployments:
       source: "Azure Retail Prices API, meters 'gpt 4o 1120 Inp regnl Tokens' and 'gpt 4o 1120 Outp regnl Tokens'"
       checked: 2026-09-30
     terraform_key: sdc/gpt-4o
+    # Read from Azure on 2026-10-01 (the deployment's properties.rateLimits):
+    # the same 20 requests per 10 s and 20,000 tokens per 60 s at capacity 20
+    # for each of the three Azure deployments.
+    rate_limits:
+      requests_per_10_seconds: 20
+      tokens_per_minute: 20000
 
   # The same model once more in the same account: the chat route's second
   # candidate until a second region has quota (S042). Its own rate limit, the
@@ -42,6 +48,9 @@ deployments:
       source: "Azure Retail Prices API, meters 'gpt 4o 1120 Inp regnl Tokens' and 'gpt 4o 1120 Outp regnl Tokens'"
       checked: 2026-09-30
     terraform_key: sdc/gpt-4o-b
+    rate_limits:
+      requests_per_10_seconds: 20
+      tokens_per_minute: 20000
 
   - id: aoai-sdc-text-embedding-3-large
     provider: azure-openai
@@ -60,6 +69,9 @@ deployments:
       source: "Azure Retail Prices API, meter 'text-embedding-3-large-regional Tokens'"
       checked: 2026-09-30
     terraform_key: sdc/text-embedding-3-large
+    rate_limits:
+      requests_per_10_seconds: 20
+      tokens_per_minute: 20000
 
   - id: replay-chat
     provider: replay

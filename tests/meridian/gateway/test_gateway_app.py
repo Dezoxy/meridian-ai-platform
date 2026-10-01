@@ -99,6 +99,10 @@ def test_a_chat_call_is_answered_audited_and_traced(
             "sku": None,  # a replay deployment has no sku or region
             "region": None,
             "residency": "eu-region",
+            "call_id": uuid.UUID(body["call_id"]),
+            "http_status": None,
+            "provider_model": "replay-chat",
+            "suppressed": None,
         }
     ]
     (chat_span,) = [
@@ -108,6 +112,8 @@ def test_a_chat_call_is_answered_audited_and_traced(
         "meridian.tenant": "claims-triage",
         "meridian.agent": "claims-triage",
         "meridian.run_id": str(run_id),
+        "meridian.call_id": body["call_id"],
+        "meridian.cost_micro_eur": 0,  # a replay deployment costs nothing
         "meridian.deployment": "replay-chat",
         "meridian.provider": "replay",
         "meridian.mode": "replay",
@@ -288,10 +294,11 @@ def fail_connect(*_args: object, **_kwargs: object) -> None:
 
 
 def test_when_the_audit_write_fails_the_call_answers_503_with_no_output(
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A real database, so the ledger works and the audit write is what fails.
     monkeypatch.setattr(audit, "connect", fail_connect)
-    client = make_client()
+    client = make_client(fresh_database.dsn("model_gateway"))
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 
@@ -424,14 +431,14 @@ def test_a_nul_byte_in_a_message_is_a_422_not_an_outage() -> None:
 
 # ── a database error inside the span never reaches the span (T-03) ──────────
 def test_a_database_error_leaves_no_exception_event_and_no_message_in_a_span(
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def refuse(*_a: object, **_k: object) -> None:
         raise database_error(CLAIM_TEXT)
 
     monkeypatch.setattr(audit, "connect", refuse)
     exporter = InMemorySpanExporter()
-    client = make_client(exporter=exporter)
+    client = make_client(fresh_database.dsn("model_gateway"), exporter=exporter)
 
     response = client.post("/v1/chat", json=BODY, headers=headers())
 

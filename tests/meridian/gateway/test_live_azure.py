@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from servicesupport import REGISTRY_DIR, audit_events
+from servicesupport import REGISTRY_DIR, audit_events, owner_rows
 
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
@@ -115,6 +115,24 @@ def test_one_synthetic_prompt_is_answered_by_the_routed_deployment_and_audited(
     )
     assert event["data_class"] == "synthetic"
     assert PROMPT not in str(event)
+    # The ledger holds what Azure counted and what it costs at the registry's
+    # price, and the estimate was not below Azure's own input count.
+    ((state, reserved, counted, charged, input_tokens, output_tokens),) = owner_rows(
+        fresh_database,
+        "SELECT state, reserved_tokens, charged_tokens, charged_micro_eur, "
+        "input_tokens, output_tokens FROM gateway.usage WHERE call_id = %s",
+        (event["call_id"],),
+    )
+    print(f"cost:           {charged} micro-EUR")
+    print(f"reservation:    {reserved} tokens reserved, {counted} charged")
+    assert state == "settled"
+    assert (input_tokens, output_tokens) == (
+        usage["input_tokens"],
+        usage["output_tokens"],
+    )
+    assert counted == input_tokens + output_tokens
+    assert charged > 0
+    assert reserved - body["max_output_tokens"] >= input_tokens
 
 
 class FirstCandidateDown:
@@ -199,6 +217,7 @@ def test_with_the_first_candidate_down_the_second_deployment_answers(
         INJECTED_KIND,
     )
     assert (completed["deployment"], completed["outcome"]) == (second, "completed")
+    assert failed["call_id"] == completed["call_id"] == uuid.UUID(reply["call_id"])
     assert completed["output_tokens"] == usage["output_tokens"]
     attempts = [s for s in exporter.get_finished_spans() if s.name == "gateway.attempt"]
     assert [s.attributes["meridian.deployment"] for s in attempts] == [first, second]
