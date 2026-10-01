@@ -1801,7 +1801,8 @@ whose circuit is open, and leaves an audit row for every attempt.
   reconsidered when a second account has its own role assignment (S020).
   A 404 moves from `rejected` to `unavailable`: Azure answers it for a
   deployment that does not exist, which no prompt can cause, and a deleted
-  or retired deployment is what a fallback is for. A 408 is a `timeout`.
+  or retired deployment is what a fallback is for. A 408 is a `timeout`
+  and counts as one does, under the residual T-45 records.
 - One deadline for the whole call, 25 s, under the runtime's 30 s to the
   gateway. An attempt gets the time left as its budget for connecting and
   answering: at most 5 s, and at most half of it, to connect, and the
@@ -1908,7 +1909,10 @@ whose circuit is open, and leaves an audit row for every attempt.
 - The documents the boundary review listed: T-17, T-44, T-45, T-46, QA-04,
   both READMEs, the registry's README, a dated amendment to ADR 3, and the
   model's description of Azure OpenAI, which called West Europe the
-  fallback as if it existed.
+  fallback as if it existed. The Model Gateway's container description
+  stays as it is: like quotas, budgets and redaction in the same
+  sentence, it states the container's responsibilities in the design, and
+  the README's table says which are built.
 - Seen on the way and left out: the output filter of `foundation.sh` lets
   through the base64 ID of Terraform's client-config data source, which
   encodes the tenant, subscription and object IDs. It reached the terminal
