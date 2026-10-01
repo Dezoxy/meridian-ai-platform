@@ -2343,7 +2343,9 @@ it to the run's own claim, audits it and makes a write happen once.
   cluster; the client under a real `uvicorn` runtime (a stand-in graph
   calls a tool through the runtime's test client, and the client calls a
   server over real HTTP on a loopback port); the triage graph, which
-  calls no tool yet.
+  calls no tool yet. `make gateway-live` was not rerun, because the Azure
+  login had expired: the gateway's own change is the throttle's call
+  site, which the database tests cover.
 
 **Follow-ups:**
 
