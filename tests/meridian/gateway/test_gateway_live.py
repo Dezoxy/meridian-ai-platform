@@ -211,6 +211,7 @@ def test_a_live_call_reaches_the_routed_deployment_and_is_audited_and_traced(
             "http_status": None,
             "provider_model": PROVIDER_MODEL,
             "suppressed": None,
+            "tool": None,
         }
     ]
     assert dict(chat_span(exporter).attributes) == {

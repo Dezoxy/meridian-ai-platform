@@ -74,6 +74,24 @@ BAD_SCHEMAS = [
         id="unbounded-string",
     ),
     pytest.param(
+        (
+            "tools.yaml",
+            QUERY,
+            '        query: {type: string, pattern: "^[a-z]+$", enum: [abc, def]}\n',
+        ),
+        wording(".properties.query", "string with a pattern needs maxLength"),
+        id="pattern-and-enum-without-maxlength",
+    ),
+    pytest.param(
+        (
+            "tools.yaml",
+            QUERY,
+            '        query: {type: string, minLength: 1, pattern: "^[a-z]+$"}\n',
+        ),
+        wording(".properties.query", "string with a pattern needs maxLength"),
+        id="pattern-without-maxlength-or-enum",
+    ),
+    pytest.param(
         ("tools.yaml", TOP_K, "        top_k: {type: integer, minimum: 1}\n"),
         wording(".properties.top_k.maximum", "integer needs a maximum"),
         id="unbounded-integer",
@@ -360,6 +378,19 @@ def test_bounds_at_the_caps_are_accepted(plant: Plant) -> None:
 
     assert tool is not None
     assert tool.input_schema["properties"]["query"]["maxLength"] == 10000
+
+
+def test_a_pattern_with_a_maxlength_is_accepted_beside_an_enum(plant: Plant) -> None:
+    directory = plant(
+        (
+            "tools.yaml",
+            QUERY,
+            "        query: "
+            '{type: string, pattern: "^[a-z]+$", maxLength: 3, enum: [abc, def]}\n',
+        )
+    )
+
+    assert load_registry(directory).tool("wording_search") is not None
 
 
 def test_enum_of_matching_unique_values_is_accepted(plant: Plant) -> None:

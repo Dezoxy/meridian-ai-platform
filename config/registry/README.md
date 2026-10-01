@@ -16,7 +16,7 @@ one answers (S042). The design is in the plan's S008 section and in
 |---|---|
 | `providers.yaml` | Provider accounts: Azure OpenAI and the replay provider |
 | `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits |
-| `tools.yaml` | MCP servers and their tools: effect, scope, input schema, idempotency |
+| `tools.yaml` | MCP servers and their tools: effect, scope, input schema and output schema, idempotency |
 | `agents.yaml` | Agents and their tool allowlists |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, and the replay deployment per purpose |
 | `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
@@ -50,7 +50,9 @@ job. Beyond the schemas, validation refuses:
 - a mutating or decision tool without an idempotency key, and a tool input
   schema that is not closed and bounded at every depth: every object refuses
   extra properties, every string has a maximum length or a fixed set of
-  values, every number a range, and `$ref` is refused (hard rule 6);
+  values, a string with a pattern always has a maximum length, every number
+  a range, and `$ref` is refused (hard rule 6); a tool's output schema,
+  where it has one, is held to the same rules;
 - a decision tool in any agent's allowlist, and an allowlisted tool whose
   name or scope carries a decision word (decide, approve, reject, decline
   or deny, in any inflection): adjusters decide in the Claims Triage App,
@@ -80,9 +82,18 @@ job. Beyond the schemas, validation refuses:
 Replay is a gateway mode, set per deployment in `policies.yaml`, never a
 route candidate: a real outage must not be answered with canned text.
 
-Every tool call will be audited (T-14, from S013), so a tool has no audit
-flag to switch off. `approval_required` marks a tool whose effect waits for a human; the
-runtime and the MCP servers enforce it (S013, S015).
+Every tool call is audited by its tool server (T-14, S013), so a tool has no
+audit flag to switch off. `approval_required` marks a tool whose effect
+waits for a human: a tool server refuses such a tool (S013) until approvals
+exist (S015).
+
+A tool whose server exists also declares its `output_schema`. The server
+checks every result against it before answering, and the runtime checks
+again before the graph sees the result. What each server publishes is
+generated from this registry into [`api/mcp/`](../../api/mcp/README.md), and
+`make registry` fails when the two differ. Status: implemented (S013) for
+`policy-mcp` and `claims-mcp`, proven in-process; `knowledge-mcp` arrives
+with S012, and the servers run on kind in S044.
 
 ## Limits
 

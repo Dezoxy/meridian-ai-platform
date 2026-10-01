@@ -12,7 +12,9 @@ the Agent Runtime and the Model Gateway exist; the skeleton runs on the
 local kind cluster with `make demo`, the gateway routes a call to Azure
 OpenAI by data class and residency from a laptop, falls back to a second
 deployment in the same region when the first fails and holds each tenant
-to its rate limits and budgets, and no service runs in Azure yet. Every
+to its rate limits and budgets, two MCP tool servers and the runtime's
+client for them are proven in tests and not yet deployed, and no service
+runs in Azure yet. Every
 capability below is labelled implemented, simulated or designed; an
 unlabelled claim is a documentation defect.
 
@@ -76,7 +78,7 @@ graph LR
 | Walking skeleton: a claim posted to the Claims API runs a one-node LangGraph graph in the Agent Runtime, which calls the Model Gateway; the triage proposal is stored, every claim goes to an adjuster, and one trace spans the three services; a schema and a role per service with an insert-only audit table | Implemented, laptop only: one image on kind, the Claims API at `claims.meridian.localhost:8088`, `make demo` finds the trace in Tempo (S041); the gateway's replay provider is simulated | `src/meridian/`, `tests/meridian/test_walking_skeleton.py`, `Dockerfile`, `infra/kind/manifests/meridian/` |
 | Model Gateway: provider and region per data class, fallback, quotas, budgets, cost, redaction, audit | Implemented in part: routing by data class and residency label, an Azure OpenAI adapter, an audited refusal and an audit record per call with the deployment's SKU, region and label (S010); a walk over the route's allowed candidates under one deadline, with a circuit breaker per deployment and an audit record per attempt, over two deployments in one region (S042). Per tenant, two rate windows, a daily token budget and a monthly cost quota, with the cost of each attempt reserved in a ledger before the provider is called; a call ID on every record of a call; tokens, cost and calls as OpenTelemetry metrics (S011). Live calls run from a laptop with the developer's Azure login (`make gateway-live`); on kind the gateway answers in replay mode, simulated. Designed: a fallback region (after the subscription's upgrade), a cost dashboard (S043), redaction (S014) | ADR 3, `src/meridian/platform/gateway/` |
 | Agent Runtime with human approval on durable checkpoints | Designed, M1; starting a run and reading its status are implemented, approval and durable checkpoints arrive in S015 | ADR 2, `src/meridian/runtime/` |
-| MCP tool servers for policies, policy wording and claims | Designed, M1 | Architecture overview |
+| MCP tool servers for policies, policy wording and claims | Implemented in part, in tests only (S013): a Policy MCP server (policy lookup, claim history) and a Claims MCP server (claim notes, approval requests) on the official MCP SDK, and the runtime's tool client. A call is bound to its run's own claim, checked against the agent's allowlist and the registry's schemas on both sides, and audited in the transaction of its write; a write happens once per idempotency key. The policy store behind the policy server is simulated: tables seeded from the synthetic data. Not deployed: the servers run on kind in S044, and the triage graph calls them from S014. Designed: the knowledge server (S012), service identity between runtime and servers | `src/meridian/platform/toolserver/`, `src/meridian/platform/policy_mcp/`, `src/meridian/workloads/claims_triage/mcp_server/`, `src/meridian/runtime/tool_client.py`, `api/mcp/` |
 | Evaluation harness with a golden set and a CI gate | Designed, M1 | Architecture overview |
 | SLOs, alerts and dashboards as code, runbooks, game-day incident record | Designed, M2 and M3 | Milestones |
 | Hardened Helm charts for the platform services, Terraform for an ephemeral Azure environment, signed images | Designed, M2 | ADR 1 |
@@ -102,6 +104,7 @@ the [plan](docs/meridian-plan.md).
 .codex/             Codex hooks, prompts, agent twins, config example
 .mcp.json           the chrome-devtools MCP server, pinned
 .github/workflows/  documentation gate; Python gates; architecture PDF release
+api/mcp/            what each MCP tool server publishes, generated from the registry
 config/registry/    platform registry: YAML, generated JSON Schemas, Terraform output snapshot
 data/synthetic/     seeded generator, its committed output and the golden set
 docs/
@@ -112,11 +115,11 @@ infra/terraform/    Azure foundation: Terraform root module, state bootstrap, pl
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator
 spikes/             throwaway experiments, each its own uv project; never deployed
 src/meridian/       the one Python package (src layout)
-  platform/         shared platform services (gateway, registry, migrations) and the meridian CLI; never import the agent framework
+  platform/         shared platform services (gateway, registry, migrations, the tool-server kit, the policy tool server) and the meridian CLI; never import the agent framework
   runtime/          the Agent Runtime, which hosts LangGraph graphs; between workloads and platform
-  workloads/        use cases built on the platform contract: the Claims API and its triage graph
+  workloads/        use cases built on the platform contract: the Claims API, its triage graph and its claims tool server
 tests/              tests for the scripts and the bash guard
-  meridian/         pytest tests for the package: import contracts, registry, services, database, the walking skeleton, the kind manifests
+  meridian/         pytest tests for the package: import contracts, registry, services, tool servers, database, the walking skeleton, the kind manifests
   synthetic/        pytest tests for the generator: reruns, labels, citations
 pyproject.toml      uv project: Python 3.13, the meridian command, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
@@ -124,8 +127,9 @@ Dockerfile          one image for the three services and the migrations; .docker
 Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, pytest-db, registry, synthetic, up, deploy, demo, smoke, grafana, down, azure-*
 ```
 
-Planned, milestone by milestone: `api/`, the Terraform for the ephemeral
-Azure environment and the platform's own Helm charts under `infra/`.
+Planned, milestone by milestone: OpenAPI documents under `api/`, the
+Terraform for the ephemeral Azure environment and the platform's own Helm
+charts under `infra/`.
 
 ## Working in this repository
 
@@ -138,7 +142,7 @@ make pdf      # the Documentation tab and every view as one PDF
 make lint     # ruff, format check, import-linter contracts (needs uv)
 make pytest   # package and generator tests, including the import-contract check (needs uv)
 make pytest-db  # the same with a throwaway PostgreSQL container, so the database tests run too (Docker)
-make registry # validate the registry and its schemas, against the Terraform output snapshot (needs uv)
+make registry # validate the registry, its schemas and the tool-server contracts under api/mcp, against the Terraform output snapshot (needs uv)
 make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)
 make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm, jq)
 make demo     # build the image, migrate, deploy the skeleton, post a claim, find its trace in Tempo

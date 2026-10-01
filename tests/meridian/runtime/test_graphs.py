@@ -32,7 +32,7 @@ class FakeEntryPoint:
         return self.loads()
 
 
-def build(model: object) -> None:
+def build(model: object, tools: object) -> None:
     """Stands in for a workload's factory."""
 
 
@@ -149,6 +149,46 @@ def test_an_entry_point_that_is_not_callable_is_a_load_error(
 
     with pytest.raises(GraphLoadError, match="callable"):
         load_graph_factory("claims-triage", REGISTRY)
+
+
+def build_with_the_old_signature(model: object) -> None:
+    """The factory of a step that gave a graph no tools."""
+
+
+def build_with_a_third_argument(model: object, tools: object, extra: object) -> None:
+    """A factory the runtime would call with two arguments."""
+
+
+def build_with_keyword_only_tools(model: object, *, tools: object) -> None:
+    """A factory the runtime would call with two positional arguments."""
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        build_with_the_old_signature,
+        build_with_a_third_argument,
+        build_with_keyword_only_tools,
+    ],
+)
+def test_a_factory_that_does_not_take_a_model_and_tools_stops_the_start(
+    monkeypatch: pytest.MonkeyPatch, factory: Any
+) -> None:
+    published(monkeypatch, entry(loads=lambda: factory))
+
+    with pytest.raises(GraphLoadError, match="signature"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_factory_with_defaults_or_variadic_arguments_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def build_flexible(model: object, tools: object = None, *rest: object) -> None:
+        """Two positional arguments bind."""
+
+    published(monkeypatch, entry(loads=lambda: build_flexible))
+
+    assert load_graph_factory("claims-triage", REGISTRY) is build_flexible
 
 
 # ── where the factory comes from (T-40) ─────────────────────────────────────

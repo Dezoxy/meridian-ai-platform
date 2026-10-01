@@ -17,13 +17,13 @@ INSERT INTO audit.events (
     service, event, outcome, tenant, agent, run_id, reference,
     deployment, provider, model, input_tokens, output_tokens,
     reason, data_class, sku, region, residency,
-    call_id, http_status, provider_model, suppressed
+    call_id, http_status, provider_model, suppressed, tool
 ) VALUES (
     %(service)s, %(event)s, %(outcome)s, %(tenant)s, %(agent)s, %(run_id)s,
     %(reference)s, %(deployment)s, %(provider)s, %(model)s,
     %(input_tokens)s, %(output_tokens)s,
     %(reason)s, %(data_class)s, %(sku)s, %(region)s, %(residency)s,
-    %(call_id)s, %(http_status)s, %(provider_model)s, %(suppressed)s
+    %(call_id)s, %(http_status)s, %(provider_model)s, %(suppressed)s, %(tool)s
 )
 """
 
@@ -62,6 +62,8 @@ class AuditEvent:
     # On a refusal row only: the refusals of its tenant and reason since the
     # last row that wrote none (T-49).
     suppressed: int | None = None
+    # The tool a tool server ran or refused (S013).
+    tool: str | None = None
 
 
 def record_event(conn: psycopg.Connection, event: AuditEvent) -> None:

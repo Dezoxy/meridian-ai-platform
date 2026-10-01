@@ -9,6 +9,8 @@ DATABASE_URL_ENV = "MERIDIAN_DATABASE_URL"
 
 CONNECT_TIMEOUT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 10_000
+# libpq splits ``options`` on spaces; a backslash keeps the one in the value.
+ISOLATION_LEVEL = r"read\ committed"
 
 
 def connect(dsn: str, application_name: str) -> psycopg.Connection:
@@ -16,11 +18,19 @@ def connect(dsn: str, application_name: str) -> psycopg.Connection:
 
     A dead server fails the connect after 5 seconds and no statement runs
     longer than 10 (this includes the migration runner's lock wait).
+
+    Transactions run at READ COMMITTED whatever the database or the role says:
+    the tool servers' idempotent insert (``INSERT ... ON CONFLICT DO NOTHING``
+    after a read of the run) raises a serialization failure at REPEATABLE READ
+    or SERIALIZABLE, where the second caller should find the first one's row.
     """
     return psycopg.connect(
         dsn,
         autocommit=False,
         application_name=application_name,
         connect_timeout=CONNECT_TIMEOUT_SECONDS,
-        options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+        options=(
+            f"-c statement_timeout={STATEMENT_TIMEOUT_MS} "
+            f"-c default_transaction_isolation={ISOLATION_LEVEL}"
+        ),
     )

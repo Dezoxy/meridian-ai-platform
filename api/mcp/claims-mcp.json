@@ -1,0 +1,112 @@
+{
+  "server": "claims-mcp",
+  "description": "Claim notes and approval requests.",
+  "tools": [
+    {
+      "name": "add_claim_note",
+      "description": "Add a note to a claim.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "pattern": "^CLM-[0-9]{4}$",
+            "maxLength": 8
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "claim_id",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "maxLength": 36
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "note_id",
+          "replayed"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "meridian/scope": "claims:note:write",
+        "meridian/idempotency-key-required": true,
+        "meridian/approval-required": false
+      }
+    },
+    {
+      "name": "request_approval",
+      "description": "Ask an adjuster to approve or decline a claim.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "pattern": "^CLM-[0-9]{4}$",
+            "maxLength": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "claim_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "maxLength": 36
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request_id",
+          "replayed"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "meridian/scope": "claims:approval:request",
+        "meridian/idempotency-key-required": true,
+        "meridian/approval-required": false
+      }
+    }
+  ]
+}

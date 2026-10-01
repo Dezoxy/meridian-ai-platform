@@ -103,6 +103,7 @@ def test_a_chat_call_is_answered_audited_and_traced(
             "http_status": None,
             "provider_model": "replay-chat",
             "suppressed": None,
+            "tool": None,
         }
     ]
     (chat_span,) = [

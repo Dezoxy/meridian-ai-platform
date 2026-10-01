@@ -42,6 +42,10 @@ from servicesupport import (
 
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.common.throttle import (
+    REFUSAL_AUDIT_SECONDS,
+    RefusalAuditThrottle,
+)
 from meridian.platform.gateway import app as gateway_app
 from meridian.platform.gateway import budget
 from meridian.platform.gateway.app import (
@@ -66,11 +70,7 @@ from meridian.platform.gateway.providers.base import (
     ProviderError,
     ProviderReply,
 )
-from meridian.platform.gateway.ratelimit import (
-    REFUSAL_AUDIT_SECONDS,
-    RateRefusalReason,
-    RefusalAuditThrottle,
-)
+from meridian.platform.gateway.ratelimit import RateRefusalReason
 from meridian.platform.gateway.resilience import FAILURE_THRESHOLD, OPEN_SECONDS
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.gateway.walk import closing_for

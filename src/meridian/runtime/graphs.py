@@ -1,6 +1,6 @@
 """Find a workload's graph factory by the registry's agent ID (T-40).
 
-A workload publishes ``build(model) -> StateGraph`` in the entry-point group
+A workload publishes ``build(model, tools) -> StateGraph`` in the entry-point group
 ``meridian.graphs`` under its agent ID. The runtime loads only what the
 registry names, only from the ``meridian`` distribution, only when exactly
 one entry point carries the name, only when the entry point's value names a
@@ -10,6 +10,7 @@ distribution that calls itself ``meridian`` and hides the real one, cannot
 substitute a graph for an agent.
 """
 
+import inspect
 import re
 import sys
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from langgraph.graph import StateGraph
 import meridian
 from meridian.platform.registry import Registry
 from meridian.runtime.model_client import ModelClient
+from meridian.runtime.tool_client import ToolClient
 
 GRAPH_GROUP = "meridian.graphs"
 TRUSTED_DISTRIBUTION = "meridian"
@@ -29,7 +31,7 @@ TRUSTED_VALUE_PREFIX = "meridian.workloads."
 # outside it point this at their own directory.
 TRUSTED_ROOT = Path(meridian.__file__).resolve().parent
 
-GraphFactory = Callable[[ModelClient], StateGraph]
+GraphFactory = Callable[[ModelClient, ToolClient], StateGraph]
 
 
 class GraphLoadError(Exception):
@@ -65,11 +67,25 @@ def load_graph_factory(agent_id: str, registry: Registry) -> GraphFactory:
         raise GraphLoadError(f"graph {agent_id!r} failed to import") from exc
     if not callable(factory):
         raise GraphLoadError(f"graph {agent_id!r} is not callable")
+    if not _takes_model_and_tools(factory):
+        raise GraphLoadError(
+            f"graph {agent_id!r} has a signature that does not take a model and tools"
+        )
     if not _in_trusted_root(factory):
         raise GraphLoadError(
             f"graph {agent_id!r} comes from a file outside the meridian package"
         )
     return factory
+
+
+def _takes_model_and_tools(factory: Callable[..., object]) -> bool:
+    """Whether ``factory(model, tools)`` binds. A factory with the signature of
+    an earlier step would otherwise fail on the first run, not at the start."""
+    try:
+        inspect.signature(factory).bind(None, None)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _in_trusted_root(factory: Callable[..., object]) -> bool:

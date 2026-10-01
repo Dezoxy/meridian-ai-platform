@@ -354,7 +354,7 @@ def test_dockerignore_excludes_everything_and_then_allows_a_short_list() -> None
     assert not any(line.startswith(("!.", "!infra", "!docs")) for line in lines)
 
 
-def test_the_database_declares_the_four_roles_with_login_only() -> None:
+def test_the_database_declares_its_roles_with_login_only() -> None:
     roles = {r["name"]: r for r in PLATFORM_DB["cluster"]["roles"]}
 
     assert set(roles) == {
@@ -362,6 +362,8 @@ def test_the_database_declares_the_four_roles_with_login_only() -> None:
         "claims_api",
         "agent_runtime",
         "model_gateway",
+        "policy_mcp",
+        "claims_mcp",
     }
     for name, role in roles.items():
         assert role["login"] is True

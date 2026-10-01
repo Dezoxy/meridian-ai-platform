@@ -36,7 +36,8 @@ meridian.ingress -> meridian.claimsApp "Routes claim and adjuster requests to" "
 meridian.claimsApp -> identityProvider "Validates user tokens against" "OIDC/JWKS" "Layer Workload"
 meridian.claimsApp -> meridian.runtime "Starts and resumes triage runs on" "HTTPS/JSON, service identity" "Layer Workload"
 meridian.claimsApp -> meridian.platformDb "Stores claims and adjuster decisions in" "PostgreSQL" "Layer Workload"
-meridian.claimsMcp -> meridian.platformDb "Writes notes and approval requests to" "PostgreSQL" "Layer Workload"
+meridian.claimsMcp -> meridian.platformDb "Binds each call to its run and claim in, and writes notes, approval requests and audit events to" "PostgreSQL" "Layer Workload"
+meridian.claimsMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Workload"
 
 // Agent runtime
 meridian.runtime -> meridian.registry "Loads agent definitions and tool allowlists from" "File read at startup" "Layer Services"
@@ -54,7 +55,8 @@ meridian.gateway -> mistralFoundry "Routes EU-resident requests and fallbacks to
 meridian.gateway -> meridian.platformDb "Records usage, cost and policy decisions in" "PostgreSQL" "Layer Services"
 
 // Tools and knowledge
-meridian.policyMcp -> meridian.platformDb "Reads policies and claim history from" "PostgreSQL" "Layer Services"
+meridian.policyMcp -> meridian.platformDb "Binds each call to its run and claim in, reads policies and claim history from, and writes audit events to" "PostgreSQL" "Layer Services"
+meridian.policyMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Services"
 meridian.knowledgeMcp -> meridian.platformDb "Searches policy wording chunks in" "PostgreSQL, pgvector" "Layer Services"
 meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTPS/JSON" "Layer Services"
 
@@ -66,3 +68,5 @@ meridian.evals -> meridian.platformDb "Stores evaluation results in" "PostgreSQL
 meridian.claimsApp -> meridian.observability "Exports traces, metrics and logs to" "OTLP" "Layer Workload"
 meridian.runtime -> meridian.observability "Exports traces, metrics and logs to" "OTLP" "Layer Services"
 meridian.gateway -> meridian.observability "Exports traces, metrics and logs to" "OTLP" "Layer Services"
+meridian.policyMcp -> meridian.observability "Exports traces and logs to" "OTLP" "Layer Services"
+meridian.claimsMcp -> meridian.observability "Exports traces and logs to" "OTLP" "Layer Workload"

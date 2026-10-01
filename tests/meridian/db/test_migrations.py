@@ -17,7 +17,7 @@ from meridian.platform.migrations.runner import (
     migration_files,
 )
 
-SCHEMAS = ("audit", "claims", "gateway", "runtime")
+SCHEMAS = ("audit", "claims", "gateway", "policy", "runtime")
 
 
 def test_migration_files_are_numbered_and_sorted() -> None:

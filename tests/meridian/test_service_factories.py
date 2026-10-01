@@ -1,12 +1,18 @@
 """The ``create_app_from_env`` factories S041 runs under ``uvicorn --factory``."""
 
+from collections.abc import Callable
+
 import pytest
 from servicesupport import REGISTRY_DIR
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.gateway.app import create_app_from_env as gateway_from_env
+from meridian.platform.policy_mcp.app import create_app_from_env as policy_from_env
 from meridian.runtime.app import create_app_from_env as runtime_from_env
 from meridian.workloads.claims_triage.app import create_app_from_env as claims_from_env
+from meridian.workloads.claims_triage.mcp_server.app import (
+    create_app_from_env as claims_mcp_from_env,
+)
 
 DSN = "postgresql://role:pw@db.invalid/meridian"
 VARIABLES = {
@@ -25,6 +31,11 @@ VARIABLES = {
         "MERIDIAN_RUNTIME_URL": "http://runtime.invalid",
         "MERIDIAN_DATABASE_URL": DSN,
     },
+}
+TOOL_SERVER_VARIABLES = {
+    "MERIDIAN_REGISTRY_DIR": str(REGISTRY_DIR),
+    "MERIDIAN_DATABASE_URL": DSN,
+    "MERIDIAN_ALLOWED_HOSTS": "tool-server:8080",
 }
 FACTORIES = {
     "gateway": gateway_from_env,
@@ -53,3 +64,26 @@ def test_each_factory_names_the_database_variable_when_it_is_missing(
 
     with pytest.raises(SettingsError, match="MERIDIAN_DATABASE_URL"):
         FACTORIES[service]()
+
+
+@pytest.mark.parametrize("factory", [policy_from_env, claims_mcp_from_env])
+def test_each_tool_server_factory_builds_its_app_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, factory: Callable[[], object]
+) -> None:
+    for name, value in TOOL_SERVER_VARIABLES.items():
+        monkeypatch.setenv(name, value)
+
+    assert factory() is not None
+
+
+@pytest.mark.parametrize("factory", [policy_from_env, claims_mcp_from_env])
+@pytest.mark.parametrize("missing", ["MERIDIAN_DATABASE_URL", "MERIDIAN_ALLOWED_HOSTS"])
+def test_each_tool_server_factory_names_the_variable_it_misses(
+    monkeypatch: pytest.MonkeyPatch, factory: Callable[[], object], missing: str
+) -> None:
+    for name, value in TOOL_SERVER_VARIABLES.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv(missing)
+
+    with pytest.raises(SettingsError, match=missing):
+        factory()

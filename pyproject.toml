@@ -8,7 +8,10 @@ dependencies = [
     "azure-identity==1.25.3",
     "fastapi==0.142.2",
     "httpx==0.28.1",
+    "httpx2==2.13.1",
+    "jsonschema==4.26.0",
     "langgraph==1.2.12",
+    "mcp==2.2.0",
     "openai==3.22.1",
     "opentelemetry-api==1.45.0",
     "opentelemetry-exporter-otlp-proto-http==1.45.0",
@@ -110,7 +113,9 @@ source_modules = [
     "meridian.platform.cli",
     "meridian.platform.common",
     "meridian.platform.migrations",
+    "meridian.platform.policy_mcp",
     "meridian.platform.registry",
+    "meridian.platform.toolserver",
 ]
 # Indirect imports count: a chain through the gateway's adapter is a violation.
 # Each distribution is listed because wildcards replace whole module names only.

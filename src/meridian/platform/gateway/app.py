@@ -43,6 +43,7 @@ from meridian.platform.common.http import (
 )
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import set_span_attributes, start_span
+from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.gateway.budget import (
     BudgetRefusalReason,
     Caller,
@@ -53,11 +54,7 @@ from meridian.platform.gateway.budget import (
 from meridian.platform.gateway.meters import CallRecord, GatewayMeters
 from meridian.platform.gateway.models import ChatRequest, ChatResponse
 from meridian.platform.gateway.providers.base import ChatProvider, ProviderError
-from meridian.platform.gateway.ratelimit import (
-    RateRefusalReason,
-    RefusalAuditThrottle,
-    TenantRateLimiter,
-)
+from meridian.platform.gateway.ratelimit import RateRefusalReason, TenantRateLimiter
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
@@ -340,20 +337,24 @@ def create_app(
     ) -> None:
         """Write the row of a refusal when the throttle says it is due, with
         the count of the refusals it stands in for (T-49). The window starts
-        once the row is written, so a write that fails loses nothing: the next
-        refusal is due and counts this one."""
-        suppressed = refusal_throttle.due(throttle_tenant, reason)
-        if suppressed is None:
+        when the refusal is due, so overlapping refusals leave one row, and a
+        write that fails releases it and loses nothing: the next refusal is due
+        and counts this one."""
+        carried = refusal_throttle.due(throttle_tenant, reason)
+        if carried is None:
             return
-        audit(
-            "model.call",
-            "refused",
-            **caller_fields(caller),
-            **facts,
-            reason=reason,
-            suppressed=suppressed,
-        )
-        refusal_throttle.mark(throttle_tenant, reason)
+        try:
+            audit(
+                "model.call",
+                "refused",
+                **caller_fields(caller),
+                **facts,
+                reason=reason,
+                suppressed=carried,
+            )
+        except BaseException:
+            refusal_throttle.release(throttle_tenant, reason, carried)
+            raise
 
     def refuse(
         span: Span,
