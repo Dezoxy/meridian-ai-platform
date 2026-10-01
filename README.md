@@ -137,7 +137,7 @@ make pytest   # package and generator tests, including the import-contract check
 make pytest-db  # the same with a throwaway PostgreSQL container, so the database tests run too (Docker)
 make registry # validate the registry and its schemas, against the Terraform output snapshot (needs uv)
 make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)
-make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm)
+make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm, jq)
 make demo     # build the image, migrate, deploy the skeleton, post a claim, find its trace in Tempo
 make smoke    # edge, pgvector, and a test trace, log and metric read back through Grafana
 make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password

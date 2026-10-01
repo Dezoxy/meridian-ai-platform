@@ -1543,6 +1543,10 @@ posts a claim and finds its one trace in Tempo.
   `audit.events`, inserting into `audit.events`, updating `claims.claims`
   and creating a table are refused with `42501`. CLM-0005's audit rows
   carry `db_role` `agent_runtime`, `model_gateway`, `agent_runtime`.
+- Not tested: `make up` from no cluster. Every run in this step converged
+  an existing cluster; the cold path, where the Secrets, then the roles,
+  then the database are created in order, needs `make down`, the owner's
+  call, and is S018's "from a clean checkout".
 - After contract B: `make up` exit 0 in 33 s, the same 24 running pods and
   no restarts (`pg_hba` reloads without one); `make demo` exit 0 in 13 s,
   CLM-0009 `201`, `PASS trace 0293b20f84198e19ba63cf242c8747d7` (6, 5 and
@@ -1577,6 +1581,8 @@ posts a claim and finds its one trace in Tempo.
 - No step yet: `make demo` uses one of the 40 golden-set claims per run
   and fails once all are triaged; old `meridian:*` images pile up on the
   laptop and the node until `make down`.
+- Dependabot now watches the Dockerfile's base images; the kind pins in
+  `pins.env` are still bumped by hand (S006).
 - S012: decide whether pgvector moves to the `meridian` database.
 
 ## Part D — Open questions

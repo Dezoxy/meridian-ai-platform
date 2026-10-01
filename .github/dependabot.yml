@@ -1,6 +1,6 @@
-# Keeps the GitHub Actions used by the workflows and the locked Python
-# dependencies current. Container dependencies are added when they exist (plan
-# step S019).
+# Keeps the GitHub Actions used by the workflows, the locked Python
+# dependencies and the Dockerfile's digest-pinned base images current. The
+# kind charts and images in infra/kind/pins.env are not watched (S006).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -16,4 +16,11 @@ updates:
       interval: monthly
     groups:
       python:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      images:
         patterns: ["*"]

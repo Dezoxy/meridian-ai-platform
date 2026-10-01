@@ -83,8 +83,8 @@ answers 404.
 
 ## Prerequisites
 
-Docker (running), `kind`, `kubectl`, `helm`, `openssl`. `make smoke` also
-needs `curl` and `jq`. Tested with:
+Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`
+and `make demo` also need `curl`. Tested with:
 
 | Tool | Version |
 |---|---|
