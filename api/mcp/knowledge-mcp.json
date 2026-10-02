@@ -4,7 +4,7 @@
   "tools": [
     {
       "name": "wording_search",
-      "description": "Search the wording of the claim's own policy for clauses that match a query.",
+      "description": "Search the wording of the claim's own policy. Returns the clauses nearest to the query, best first; it always returns clauses, also when none is relevant.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -20,7 +20,8 @@
               "HOME-PLUS",
               "MOTOR-COMP",
               "MOTOR-TPL"
-            ]
+            ],
+            "description": "The product of the claim's policy, as policy_lookup returns it; another product is refused."
           },
           "top_k": {
             "type": "integer",
@@ -80,7 +81,8 @@
                   "maxLength": 4000
                 },
                 "keyword_match": {
-                  "type": "boolean"
+                  "type": "boolean",
+                  "description": "Whether the clause shares at least one word stem with the query. False for every clause means the query shares no term with the wording."
                 }
               },
               "required": [

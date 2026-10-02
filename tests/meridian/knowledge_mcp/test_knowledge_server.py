@@ -4,6 +4,7 @@ database role ``knowledge_mcp``. The gateway is the real app in replay mode or a
 stand-in that records what it was asked and answers as the test says."""
 
 import json
+import logging
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
@@ -22,9 +23,11 @@ from knowledgesupport import (
     ingest,
     too_many,
 )
+from mcp.shared.exceptions import MCPError
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import StatusCode
 from retrievalsupport import embed_queries
 from servicesupport import (
     REGISTRY_DIR,
@@ -54,8 +57,8 @@ from toolsupport import (
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
-from meridian.platform.knowledge_mcp.app import create_app
-from meridian.platform.knowledge_mcp.search import hybrid_search
+from meridian.platform.knowledge_mcp.app import create_app, make_http_client
+from meridian.platform.knowledge_mcp.search import corpus_exists, hybrid_search
 from meridian.platform.knowledge_mcp.store import (
     INSERT_CHUNK,
     ChunkRow,
@@ -67,7 +70,7 @@ from meridian.platform.toolserver.binding import RunBinding
 from meridian.platform.toolserver.handlers import ToolCall
 from meridian.platform.toolserver.validation import build_validator, fits
 from meridian.platform.toolserver.wire import META_REFUSAL
-from meridian.runtime.tool_client import ToolClient, ToolRefused
+from meridian.runtime.tool_client import ToolClient, ToolRefused, ToolUnavailable
 
 # POL-0049, the policy of the seeded claim, is a HOME-PLUS policy.
 PRODUCT = "HOME-PLUS"
@@ -204,7 +207,7 @@ def server_connections(db: DatabaseHandle) -> list[tuple[str, str | None]]:
 
 
 # ── 1. the answer ───────────────────────────────────────────────────────────
-@pytest.mark.parametrize(("top_k", "count"), [(None, 5), (1, 1), (10, 10)])
+@pytest.mark.parametrize(("top_k", "count"), [(None, 10), (1, 1), (10, 10)])
 def test_a_search_answers_the_policys_product_and_version_and_that_products_chunks(
     world: World, server: Any, top_k: int | None, count: int
 ) -> None:
@@ -451,6 +454,17 @@ def test_a_binding_without_a_policy_scope_is_a_bug_that_raises_before_any_call()
     assert scripted.requests == []
 
 
+def test_the_tool_tells_a_model_what_it_returns_and_what_its_arguments_mean() -> None:
+    tool = load_registry(REGISTRY_DIR).tool("wording_search")
+    assert tool is not None and tool.output_schema is not None
+
+    assert "always returns clauses, also when none is relevant" in tool.description
+    product = tool.input_schema["properties"]["product"]["description"]
+    assert "as policy_lookup returns it; another product is refused" in product
+    chunk = tool.output_schema["properties"]["chunks"]["items"]["properties"]
+    assert "shares no term with the wording" in chunk["keyword_match"]["description"]
+
+
 def test_the_handler_is_the_registrys_tool_bound_to_the_product() -> None:
     (handler,) = handlers(ScriptedGateway().http())
 
@@ -574,34 +588,42 @@ def a_reply_of_the_wrong_length() -> httpx.Response:
     return httpx.Response(200, json={**embedding_reply(1), "dimensions": 4})
 
 
-GATEWAY_ANSWERS = {
+UNAVAILABLE = "tool unavailable"
+# A gateway that is busy or says no has answered about the call.
+REFUSED_ANSWERS = {
     "429": (answering(too_many("1")), "gateway-busy"),
     "429 without a wait": (answering(too_many()), "gateway-busy"),
     "403": (
         answering(httpx.Response(403, json={"detail": "refused"})),
         "gateway-refused",
     ),
-    "500": (answering(httpx.Response(500, json={})), "gateway-unavailable"),
-    "502": (answering(httpx.Response(502, text="bad gateway")), "gateway-unavailable"),
-    "transport error": (raising(httpx.ConnectError("no route")), "gateway-unavailable"),
-    "timeout": (raising(httpx.ReadTimeout("too slow")), "gateway-unavailable"),
-    "not JSON": (
-        answering(httpx.Response(200, content=b"<html>not json</html>")),
-        "gateway-unavailable",
+}
+# A gateway that gives no vector is a failure of the platform's, not an answer:
+# the status the log line names (0: no usable answer) goes with each.
+FAILED_ANSWERS = {
+    "500": (answering(httpx.Response(500, json={})), 500),
+    "502": (answering(httpx.Response(502, text="bad gateway")), 502),
+    "401": (answering(httpx.Response(401, json={"detail": "no"})), 401),
+    "404": (answering(httpx.Response(404, json={"detail": "no"})), 404),
+    "302": (
+        answering(
+            httpx.Response(302, headers={"Location": "http://elsewhere.invalid/v1"})
+        ),
+        302,
     ),
-    "wrong length": (answering(a_reply_of_the_wrong_length()), "gateway-unavailable"),
-    "two vectors": (
-        answering(httpx.Response(200, json=embedding_reply(2))),
-        "gateway-unavailable",
-    ),
+    "transport error": (raising(httpx.ConnectError("no route")), 0),
+    "timeout": (raising(httpx.ReadTimeout("too slow")), 0),
+    "not JSON": (answering(httpx.Response(200, content=b"<html>not json</html>")), 0),
+    "wrong length": (answering(a_reply_of_the_wrong_length()), 0),
+    "two vectors": (answering(httpx.Response(200, json=embedding_reply(2))), 0),
 }
 
 
-@pytest.mark.parametrize("answer", GATEWAY_ANSWERS)
-def test_each_gateway_answer_has_its_refusal_one_request_and_one_audit_row(
+@pytest.mark.parametrize("answer", REFUSED_ANSWERS)
+def test_a_busy_or_refusing_gateway_is_a_refusal_with_one_request_and_one_audit_row(
     world: World, answer: str
 ) -> None:
-    script, reason = GATEWAY_ANSWERS[answer]
+    script, reason = REFUSED_ANSWERS[answer]
     scripted = ScriptedGateway(script=script)
     server = server_over(world, scripted)
 
@@ -622,6 +644,103 @@ def test_each_gateway_answer_has_its_refusal_one_request_and_one_audit_row(
     )
 
 
+def failed_search(server: Any, world: World) -> None:
+    with pytest.raises(MCPError) as raised:
+        search(server, world)
+    assert raised.value.error.message == UNAVAILABLE
+
+
+@pytest.mark.parametrize("answer", FAILED_ANSWERS)
+def test_a_gateway_that_gives_no_vector_is_a_failed_call_with_one_request(
+    world: World, exporter: InMemorySpanExporter, answer: str
+) -> None:
+    script, status = FAILED_ANSWERS[answer]
+    scripted = ScriptedGateway(script=script)
+    server = server_over(world, scripted, exporter)
+
+    with application_log() as records:
+        failed_search(server, world)
+
+    assert len(scripted.requests) == 1  # no retry
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "gateway-unavailable",
+        "wording_search",
+    )
+    assert (row["tenant"], row["agent"], row["run_id"]) == (
+        world.tenant,
+        world.agent,
+        world.run_id,
+    )
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == "tool.call"]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["meridian.tool_outcome"] == "failed"
+    assert span.attributes["meridian.reason"] == "gateway-unavailable"
+    warnings = [r.getMessage() for r in records if r.levelno == logging.WARNING]
+    assert f"embedding call failed: status {status}" in warnings
+    assert not holds(records, QUERY)
+
+
+def test_two_failed_calls_in_a_row_write_two_audit_rows(world: World) -> None:
+    server = server_over(
+        world, ScriptedGateway(script=answering(httpx.Response(502, text="down")))
+    )
+
+    failed_search(server, world)
+    failed_search(server, world)
+
+    rows = audit_rows(world.db)
+    assert [(row["outcome"], row["reason"]) for row in rows] == [
+        ("failed", "gateway-unavailable")
+    ] * 2
+
+
+def test_a_failed_gateway_call_reaches_the_runtimes_tool_client_as_unavailable(
+    world: World, exporter: InMemorySpanExporter
+) -> None:
+    scripted = ScriptedGateway(script=answering(httpx.Response(502, text="down")))
+    app = create_app(
+        knowledge_settings_for(world.db, hosts=("127.0.0.1:*",)),
+        http=scripted.http(),
+        tracer_provider=make_tracer_provider(APPLICATION, exporter),
+    )
+    with serve(app.app) as base:
+        tools = ToolClient(
+            {APPLICATION: base},
+            registry=load_registry(REGISTRY_DIR),
+            agent=world.agent,
+            run_id=world.run_id,
+            tracer=tracer_of(exporter),
+            on_refusal=lambda tool: None,
+        )
+
+        with pytest.raises(ToolUnavailable):
+            tools.call("wording_search", {"query": QUERY, "product": PRODUCT})
+
+    assert len(scripted.requests) == 1
+
+
+def test_a_redirect_from_the_gateway_is_not_followed_by_the_servers_own_client(
+    world: World,
+) -> None:
+    scripted = ScriptedGateway(
+        script=answering(
+            httpx.Response(302, headers={"Location": "http://elsewhere.invalid/v1"})
+        )
+    )
+    with make_http_client(
+        "http://gateway.invalid", transport=httpx.MockTransport(scripted)
+    ) as http:
+        server = knowledge_server(world, http)
+
+        failed_search(server, world)
+
+    assert len(scripted.requests) == 1
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("failed", "gateway-unavailable")
+
+
 # ── 8. the store ────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("emptied", ["the product", "the whole store"])
 def test_a_store_without_the_products_rows_is_no_corpus(
@@ -633,13 +752,67 @@ def test_a_store_without_the_products_rows_is_no_corpus(
         with connect(world.db.dsn(OWNER), "test-delete") as conn:
             conn.execute("DELETE FROM knowledge.chunks")
             conn.commit()
-    server = server_over(world, ScriptedGateway(script=good_reply))
+    scripted = ScriptedGateway(script=good_reply)
+    server = server_over(world, scripted)
 
-    result = search(server, world)
+    with application_log() as records:
+        result = search(server, world)
 
     assert_refused(result, "no-corpus")
+    # The tenant is not charged for a search that cannot answer.
+    assert scripted.requests == []
     (row,) = audit_rows(world.db)
     assert (row["outcome"], row["reason"]) == ("refused", "no-corpus")
+    assert_refusal_logged(records, "no-corpus")
+
+
+def assert_refusal_logged(records: list[logging.LogRecord], reason: str) -> None:
+    """One WARNING names the reason, the product and the version, as the
+    identifiers they are, and nothing of the query."""
+    (message,) = [
+        r.getMessage()
+        for r in records
+        if r.levelno == logging.WARNING and reason in r.getMessage()
+    ]
+    assert repr(PRODUCT) in message
+    assert repr(VERSION) in message
+    assert not holds(records, QUERY)
+
+
+def test_a_store_emptied_while_the_server_waits_is_still_no_corpus(
+    world: World,
+) -> None:
+    def empty_then_answer(index: int, inputs: list[str]) -> httpx.Response:
+        delete_product(world.db)
+        return good_reply(index, inputs)
+
+    scripted = ScriptedGateway(script=empty_then_answer)
+    server = server_over(world, scripted)
+
+    with application_log() as records:
+        result = search(server, world)
+
+    assert_refused(result, "no-corpus")
+    assert len(scripted.requests) == 1  # the corpus was there when it was asked
+    assert_refusal_logged(records, "no-corpus")
+
+
+@pytest.mark.parametrize(
+    ("product", "version", "exists"),
+    [
+        (PRODUCT, VERSION, True),
+        (OTHER_PRODUCT, VERSION, True),
+        (PRODUCT, "2024-07", False),
+        ("MOTOR-XYZ", VERSION, False),
+    ],
+)
+def test_the_corpus_exists_for_a_product_and_version_that_have_a_row(
+    world: World, product: str, version: str, exists: bool
+) -> None:
+    with connect(world.db.dsn(OWNER), "test-corpus") as conn:
+        found = corpus_exists(conn, product=product, wording_version=version)
+
+    assert found is exists
 
 
 STALE_ANSWERS = {
@@ -659,12 +832,14 @@ def test_rows_of_another_deployment_or_length_than_the_query_are_stale_vectors(
     )
     server = server_over(world, scripted)
 
-    result = search(server, world)
+    with application_log() as records:
+        result = search(server, world)
 
     assert_refused(result, "stale-vectors")
     assert len(scripted.requests) == 1
     (row,) = audit_rows(world.db)
     assert (row["outcome"], row["reason"]) == ("refused", "stale-vectors")
+    assert_refusal_logged(records, "stale-vectors")
 
 
 # ── 9. no transaction while the server waits ────────────────────────────────

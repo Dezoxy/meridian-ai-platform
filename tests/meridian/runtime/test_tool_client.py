@@ -547,7 +547,6 @@ KIT_REASONS = [
     "stale-vectors",
     "gateway-busy",
     "gateway-refused",
-    "gateway-unavailable",
 ]
 
 

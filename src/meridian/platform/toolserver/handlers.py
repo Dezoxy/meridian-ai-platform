@@ -38,6 +38,20 @@ class Refused:
     reason: RefusalReason
 
 
+ToolFailedReason = Literal["gateway-unavailable"]
+
+
+class ToolFailed(Exception):
+    """The platform could not do the tool's work: a failure, not a refusal. The
+    call is audited as ``failed`` with ``reason``, the caller gets the MCP error
+    and the transaction is rolled back. ``reason`` is a fixed word, never
+    content."""
+
+    def __init__(self, reason: ToolFailedReason) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass(frozen=True, slots=True)
 class ToolHandler:
     tool: str

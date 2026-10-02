@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Callable
+from http.cookiejar import DefaultCookiePolicy
 
 import httpx
 from opentelemetry.sdk.trace import TracerProvider
@@ -16,21 +17,32 @@ from meridian.platform.knowledge_mcp.settings import (
 from meridian.platform.knowledge_mcp.tools import handlers
 from meridian.platform.toolserver.server import ToolApp, create_tool_app
 
-# The runtime gives a tool call 10 s in all (TOOL_TIMEOUT_SECONDS), and the
-# search needs the rest: a gateway that is slower than this is unavailable.
+# The runtime gives a tool call 10 s in all (TOOL_TIMEOUT_SECONDS). These limits
+# are per phase (connect, write, read, pool), not for the whole call, so they do
+# not add up to a bound: the usual slow answer, a provider that has not answered,
+# trips the read limit, which is under that time. A body trickled in a piece at a
+# time never trips it and is not bounded here; the runtime's own timeout is what
+# ends such a call for the caller.
 EMBEDDING_TIMEOUT = httpx.Timeout(5.0, connect=2.0)
 
 
-def make_http_client(gateway_url: str) -> httpx.Client:
-    """The client the query is embedded with."""
+def make_http_client(
+    gateway_url: str, *, transport: httpx.BaseTransport | None = None
+) -> httpx.Client:
+    """The client the query is embedded with. ``transport`` is for a test."""
     # trust_env=False: a proxy variable must not reroute a query. No redirect:
     # a redirect would send the query, and the run's identity, elsewhere.
-    return httpx.Client(
+    client = httpx.Client(
         base_url=gateway_url,
         timeout=EMBEDDING_TIMEOUT,
         trust_env=False,
         follow_redirects=False,
+        transport=transport,
     )
+    # No cookie is ever stored or sent: this client is shared by every tenant's
+    # calls, and a cookie the gateway set for one would reach the next.
+    client.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    return client
 
 
 def create_app(

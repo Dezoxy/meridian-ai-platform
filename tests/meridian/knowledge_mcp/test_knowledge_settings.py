@@ -40,6 +40,12 @@ REFUSED_URLS = [
     f"http://{SECRET}:abc",
     f"http://{SECRET}:99999",
     f"http://[{SECRET}",
+    f" http://{SECRET}.invalid",
+    f"http://{SECRET}.invalid ",
+    f"http://{SECRET}.invalid\n",
+    "http://:80",
+    f"http://{SECRET}.invalid/v1?token={SECRET}",
+    f"http://{SECRET}.invalid/v1#{SECRET}",
 ]
 
 
@@ -142,11 +148,31 @@ def test_the_client_is_built_on_the_gateway_without_proxies_or_redirects() -> No
         assert http.timeout == knowledge_app.EMBEDDING_TIMEOUT
 
 
-def test_the_embedding_timeout_leaves_the_tool_call_time_for_the_search() -> None:
+def test_each_embedding_phase_is_limited_below_the_tool_calls_time() -> None:
     timeout = knowledge_app.EMBEDDING_TIMEOUT
 
     assert (timeout.connect, timeout.read) == (2.0, 5.0)
-    assert timeout.read < TOOL_TIMEOUT_SECONDS
+    # Limits per phase, not for the call: none is unbounded, each is shorter
+    # than the runtime's time for the whole tool call.
+    phases = (timeout.connect, timeout.read, timeout.write, timeout.pool)
+    assert all(limit is not None and limit < TOOL_TIMEOUT_SECONDS for limit in phases)
+
+
+def test_the_client_stores_no_cookie_and_sends_none() -> None:
+    cookies: list[str | None] = []
+
+    def gateway(request: httpx.Request) -> httpx.Response:
+        cookies.append(request.headers.get("Cookie"))
+        return httpx.Response(200, headers={"Set-Cookie": "session=tenant-a; Path=/"})
+
+    with knowledge_app.make_http_client(
+        GATEWAY_URL, transport=httpx.MockTransport(gateway)
+    ) as http:
+        http.post("/v1/embeddings", json={})
+        http.post("/v1/embeddings", json={})
+
+        assert len(http.cookies.jar) == 0
+    assert cookies == [None, None]
 
 
 def test_the_client_the_app_builds_is_closed_when_the_lifespan_ends(

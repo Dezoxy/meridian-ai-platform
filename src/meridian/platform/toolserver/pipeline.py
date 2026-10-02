@@ -52,6 +52,8 @@ from meridian.platform.toolserver.handlers import (
     Completed,
     Refused,
     ToolCall,
+    ToolFailed,
+    ToolFailedReason,
     ToolHandler,
 )
 from meridian.platform.toolserver.validation import build_validator, fits, storable
@@ -68,7 +70,12 @@ logger = logging.getLogger(__name__)
 # error is ours.
 UNAVAILABLE_ERRORS = (psycopg.OperationalError, psycopg.InterfaceError)
 
-FailureReason = Literal["invalid-result", "database-unavailable", "unexpected"]
+FailureReason = (
+    Literal["invalid-result", "database-unavailable", "unexpected"] | ToolFailedReason
+)
+# What an exception's ``reason`` must look like to reach a log line: a fixed
+# word of the kit's or a handler's own, never content.
+REASON_WORD = re.compile(r"[a-z]+(-[a-z]+)*")
 Outcome = Literal["completed", "replayed", "refused", "failed"]
 
 
@@ -311,7 +318,7 @@ def _name(exc: BaseException) -> str:
 
 
 def _failure_reason(exc: Exception) -> FailureReason:
-    if isinstance(exc, _CallFailed):
+    if isinstance(exc, _CallFailed | ToolFailed):
         return exc.reason
     cause = exc.__cause__ if isinstance(exc, AuditUnavailable) else exc
     return (
@@ -322,10 +329,20 @@ def _failure_reason(exc: Exception) -> FailureReason:
 
 
 def _log_failure(exc: Exception) -> None:
-    """The class name and the SQLSTATE; the message can quote a value."""
+    """The class name, the SQLSTATE and the reason word when the exception
+    carries one (``ToolFailed``, ``_CallFailed``, a handler's own such as the
+    search's refusal); the message can quote a value."""
     cause = exc.__cause__ if isinstance(exc, AuditUnavailable) else exc
     sqlstate = cause.sqlstate if isinstance(cause, psycopg.Error) else None
-    logger.error("tool call failed: %s (sqlstate %s)", _name(exc), sqlstate or "none")
+    reason = getattr(exc, "reason", None)
+    named = (
+        f", reason {reason}"
+        if isinstance(reason, str) and REASON_WORD.fullmatch(reason)
+        else ""
+    )
+    logger.error(
+        "tool call failed: %s (sqlstate %s%s)", _name(exc), sqlstate or "none", named
+    )
 
 
 def _run_id(meta: Mapping[str, Any]) -> uuid.UUID | None:

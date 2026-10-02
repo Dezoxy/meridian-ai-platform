@@ -39,5 +39,4 @@ RefusalReason = Literal[
     "stale-vectors",
     "gateway-busy",
     "gateway-refused",
-    "gateway-unavailable",
 ]

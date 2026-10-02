@@ -63,6 +63,7 @@ from meridian.platform.toolserver.handlers import (
     Completed,
     Refused,
     ToolCall,
+    ToolFailed,
     ToolHandler,
 )
 from meridian.platform.toolserver.server import (
@@ -822,6 +823,66 @@ def test_a_handler_that_raises_is_answered_with_a_fixed_text_and_audited(
     assert CANARY not in caplog.text
     assert type(error).__name__ in caplog.text
     assert_spans_hold_no_exception_and_no_canary(exporter, CANARY)
+
+
+def test_a_handler_that_raises_tool_failed_fails_the_call_with_its_reason(
+    world: World,
+    exporter: InMemorySpanExporter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def run(conn: psycopg.Connection, call: ToolCall) -> Completed:
+        raise ToolFailed("gateway-unavailable")
+
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", run) + other_handler("policy_lookup"),
+        exporter=exporter,
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(MCPError) as raised:
+        run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert raised.value.error.message == UNAVAILABLE
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("failed", "gateway-unavailable")
+    (record,) = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert "ToolFailed" in record.getMessage()
+    assert "gateway-unavailable" in record.getMessage()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == "tool.call"]
+    assert span.attributes["meridian.reason"] == "gateway-unavailable"
+
+
+@pytest.mark.parametrize(
+    ("reason", "logged"),
+    [("invalid-top-k", True), (f"not a word {CANARY}", False)],
+)
+def test_the_log_names_a_reason_word_an_exception_carries_and_never_other_text(
+    world: World, caplog: pytest.LogCaptureFixture, reason: str, logged: bool
+) -> None:
+    class Refusing(Exception):
+        def __init__(self) -> None:
+            super().__init__(reason)
+            self.reason = reason
+
+    def run(conn: psycopg.Connection, call: ToolCall) -> Completed:
+        raise Refusing
+
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", run) + other_handler("policy_lookup"),
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(MCPError):
+        run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert (f"reason {reason}" in caplog.text) is logged
+    assert CANARY not in caplog.text
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("failed", "unexpected")
 
 
 def test_a_handler_that_returns_neither_answer_fails_the_call(world: World) -> None:

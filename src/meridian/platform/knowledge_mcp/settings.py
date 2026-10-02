@@ -23,18 +23,24 @@ GATEWAY_URL_ENV = "MERIDIAN_GATEWAY_URL"
 
 def gateway_url_problem(value: str) -> str | None:
     """The rule ``value`` breaks as a text that never holds the value, or ``None``
-    when the address is one a client can use: it parses (a bad port is refused),
-    its scheme is http or https with a host, and it names no user or password."""
+    when the address is one a client can use: no space around it, it parses (a
+    bad port is refused), its scheme is http or https with a host name, and it
+    names no user, password, query or fragment."""
+    if value != value.strip():
+        return "is not a usable URL"
     try:
         parts = urlsplit(value)
         parts.port  # noqa: B018 (reading it raises ValueError for a bad port)
     except ValueError:
-        return "is not a URL this command can use"
-    if parts.scheme not in HTTP_SCHEMES or not parts.netloc:
+        return "is not a usable URL"
+    if parts.scheme not in HTTP_SCHEMES or not parts.hostname:
         return "must be an http or https URL"
     if parts.username is not None or parts.password is not None:
         # httpx logs the request URL at INFO, the password with it.
         return "must not carry a user name or a password"
+    if parts.query or parts.fragment:
+        # The same log line would carry a ``?token=`` too.
+        return "must not carry a query or a fragment"
     return None
 
 
