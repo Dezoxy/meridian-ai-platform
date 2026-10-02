@@ -165,7 +165,10 @@ def select_terms(peril: Peril, chunks: Iterable[Mapping[str, Any]]) -> Terms:
             (e.clause for e in naming_peril if e.peril_not_covered), None
         ),
         candidates=tuple(e.clause for e in naming_peril if not e.peril_not_covered),
-        exclusions_complete=len(readable) == len(in_exclusions)
+        # No section-3 clause at all is not complete: a wording without
+        # exclusions is not credible, so the search missed them.
+        exclusions_complete=len(in_exclusions) > 0
+        and len(readable) == len(in_exclusions)
         and _exclusions_are_numbered_without_gap(in_exclusions),
         deductible=_titled(clauses, AMOUNTS_SECTION, "Deductible"),
         limit=_titled(clauses, AMOUNTS_SECTION, "Limit"),

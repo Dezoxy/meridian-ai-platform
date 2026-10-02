@@ -184,19 +184,31 @@ def select(peril: Peril, chunks: Iterable[dict[str, Any]]) -> Terms:
     return select_terms(peril, chunks)
 
 
-def test_no_chunk_gives_no_terms_and_complete_exclusions() -> None:
+def test_no_chunk_gives_no_terms_and_incomplete_exclusions() -> None:
     assert select("fire", []) == Terms(
         cover=None,
         documents=None,
         peril_exclusion=None,
         candidates=(),
-        exclusions_complete=True,
+        exclusions_complete=False,
         deductible=None,
         limit=None,
         reporting=None,
         period=None,
         lapse=None,
     )
+
+
+def test_chunks_without_a_section_three_clause_leave_the_exclusions_incomplete() -> (
+    None
+):
+    chunks = [chunk("2.1", "Fire"), chunk("4.1", "Deductible")]
+
+    assert select("fire", chunks).exclusions_complete is False
+
+
+def test_one_readable_section_three_clause_makes_the_exclusions_complete() -> None:
+    assert select("fire", [circumstance("3.1", "storm")]).exclusions_complete is True
 
 
 def test_a_gap_in_section_three_makes_the_exclusions_incomplete() -> None:
