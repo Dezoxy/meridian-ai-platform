@@ -3082,9 +3082,9 @@ rules decided.
   proposal with its storage; the assessment; the graph; the graph through
   the real services; the probe fix; two contracts of review fixes. Two
   pairs ran at the same time on disjoint files. It broke the rule against
-  editing through scripts twice, on test files (`sed -i` and a heredoc in
-  the seventh contract, a heredoc in the tenth) and said so; the main
-  session read every source diff and ran every gate itself.
+  editing through scripts three times, on test files (`sed -i` and a
+  heredoc in the seventh contract, a heredoc in the tenth) and said so;
+  the main session read every source diff and ran every gate itself.
 - The seventh contract's tests found a defect in the main session's
   design: one probe asked for five headings and the search's ten clauses
   left out clause 4.2 "Limit" in three of the four wordings, so CLM-0024
@@ -3114,11 +3114,13 @@ rules decided.
   code 55 of 55 are caught, one for each review fix among them, and each
   file was restored byte for byte.
 - The `docs-sync` skill: the README, the kind README, the threat model,
-  the ClaimsTriage view (one step's text; `make check` ends with no ERROR
-  line; no derived Mermaid block shows that view) and this plan were what
-  the branch falsified.
+  the ClaimsTriage view (one step's text and its row in the view
+  register; `make check` ends with no ERROR line; no derived Mermaid
+  block shows that view) and this plan were what the branch falsified.
 
-**Result / verification:** run by the main session on the final code.
+**Result / verification:** run by the main session on 48b5343, the last
+commit that changes `src/` or `tests/`; the commits after it change
+documents only, and `make docs` and `make test` ran again after them.
 
 - `make pytest-db` with `GITHUB_ACTIONS=true`: `3844 passed, 3 skipped`
   (the three are the opt-in live Azure tests). `make pytest`:

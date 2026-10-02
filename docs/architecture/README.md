@@ -34,7 +34,7 @@ everywhere: implemented, simulated, designed.
 | SystemContext | Everyone | What does the platform provide, who uses it, which external systems matter? | System, people, external systems | Internal structure | Design of 2026-09-29 | Users, scope or providers change | No |
 | Containers | Engineers, architects | What are the building blocks and how do they connect? | All containers except governance-only ones | Observability, evaluation, registry, Key Vault, second provider | Design of 2026-09-29 | An interface or boundary changes | No |
 | Governance | CTO, operators, security | How are models, policies, budgets and evidence governed? | Gateway, registry, Key Vault, database, evaluation, observability, providers | Workload containers | Design of 2026-09-29 | Policy, provider or evidence flow changes | No |
-| ClaimsTriage | Stakeholders, engineers | What happens from claim submission to a paused proposal? | One runtime scenario, eight steps | Fraud rules tool, guardrail internals | Design of 2026-09-29 | Graph steps or failure handling change | No |
+| ClaimsTriage | Stakeholders, engineers | What happens from claim submission to a paused proposal? | One runtime scenario, eight steps | Fraud rules tool, guardrail internals | Design of 2026-09-29; the policy, retrieval and model steps match the graph of S014, in tests only; the pause is S015 and the redacted prompt S047 | Graph steps or failure handling change | No |
 | ClaimsApproval | Stakeholders, engineers | What happens when an adjuster decides? | One runtime scenario, five steps | Notification of the claimant | Design of 2026-09-29 | Approval semantics change | No |
 
 ## Key decisions
