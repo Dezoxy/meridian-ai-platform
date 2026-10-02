@@ -424,6 +424,17 @@ def check_no_decision_tools(registry: Registry) -> list[str]:
     return errors
 
 
+def check_job_agents(registry: Registry) -> list[str]:
+    """A job has no run row, so no tool server could bind its call."""
+    return [
+        f"{AGENTS}: agents[{i}].tools[{j}]: job agent {agent.id!r} lists tool "
+        f"{name!r}; a job has no run row, so no tool server could bind its call"
+        for i, agent in enumerate(registry.agents)
+        if agent.kind == "job"
+        for j, name in enumerate(agent.tools)
+    ]
+
+
 def check_routes(registry: Registry) -> list[str]:
     errors: list[str] = []
     for i, route in enumerate(registry.routes):
@@ -623,6 +634,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_data_classes_vs_label,
     check_tools,
     check_no_decision_tools,
+    check_job_agents,
     check_routes,
     check_embedding_route,
     check_replay,

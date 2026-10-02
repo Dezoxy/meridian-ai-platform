@@ -17,7 +17,7 @@ tenants:
   - id: claims-triage
     description: The claims workload in production use.
     data_class: personal
-    agents: [claims-triage]
+    agents: [claims-triage, knowledge-ingestion]
     limits:
       requests_per_10_seconds: 10
       tokens_per_minute: 10000

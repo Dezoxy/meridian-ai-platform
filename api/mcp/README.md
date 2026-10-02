@@ -12,7 +12,7 @@ servers run on kind in S044.
 | `policy-mcp.json` | `policy_lookup`, `claim_history` |
 | `claims-mcp.json` | `add_claim_note`, `request_approval` |
 
-`knowledge-mcp` has no file yet: it arrives with S012, and a server is
+`knowledge-mcp` has no file yet: it arrives with S046, and a server is
 published only when every one of its tools has an output schema.
 
 The files are generated from `config/registry/tools.yaml` and never edited by

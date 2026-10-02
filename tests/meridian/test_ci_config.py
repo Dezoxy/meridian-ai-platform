@@ -10,7 +10,9 @@ WORKFLOW_TEXT = (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text(
     encoding="utf-8"
 )
 JOB = yaml.safe_load(WORKFLOW_TEXT)["jobs"]["python"]
-IMAGE = re.compile(r"postgres:\d+(?:\.\d+)*@sha256:[0-9a-f]{64}")
+# PostgreSQL 17 with pgvector (S012): the knowledge store needs the extension.
+# The -trixie suffix is the Debian release of kind's database image.
+IMAGE = re.compile(r"pgvector/pgvector:\d+\.\d+\.\d+-pg17-trixie@sha256:[0-9a-f]{64}")
 
 
 def test_the_postgres_image_is_the_same_string_in_the_workflow_and_the_makefile() -> (
@@ -26,7 +28,9 @@ def test_the_postgres_image_is_the_same_string_in_the_workflow_and_the_makefile(
 def test_the_makefile_pins_the_image_but_lets_a_run_pick_its_own_name_and_port() -> (
     None
 ):
-    assert re.search(r"^PYTEST_DB_IMAGE\s*:=\s*postgres:", MAKEFILE, re.MULTILINE)
+    assert re.search(
+        r"^PYTEST_DB_IMAGE\s*:=\s*pgvector/pgvector:", MAKEFILE, re.MULTILINE
+    )
     assert re.search(r"^PYTEST_DB_CONTAINER\s*\?=", MAKEFILE, re.MULTILINE)
     assert re.search(r"^PYTEST_DB_PORT\s*\?=", MAKEFILE, re.MULTILINE)
 

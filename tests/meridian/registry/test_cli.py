@@ -186,7 +186,17 @@ def test_no_arguments_prints_help() -> None:
 def test_summary_uses_singular_and_plural_correctly(registry_copy: Path) -> None:
     tenants = registry_copy / "tenants.yaml"
     text = tenants.read_text(encoding="utf-8")
-    tenants.write_text(text[: text.index("  - id: evaluation")], encoding="utf-8")
+    tenants.write_text(
+        text[: text.index("  - id: evaluation")].replace(
+            "agents: [claims-triage, knowledge-ingestion]", "agents: [claims-triage]"
+        ),
+        encoding="utf-8",
+    )
+    agents = registry_copy / "agents.yaml"
+    text = agents.read_text(encoding="utf-8")
+    agents.write_text(
+        text[: text.index("  - id: knowledge-ingestion")], encoding="utf-8"
+    )
 
     result = runner.invoke(
         app, ["registry", "validate", "--registry-dir", str(registry_copy)]

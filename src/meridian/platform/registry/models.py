@@ -21,6 +21,7 @@ Purpose = Literal["chat", "embedding"]
 Sku = Literal["Standard", "DataZoneStandard", "GlobalStandard"]
 ProviderKind = Literal["azure-openai", "replay"]
 ToolEffect = Literal["read", "write", "decision"]
+AgentKind = Literal["graph", "job"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 EntityId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
@@ -135,6 +136,11 @@ class ToolsFile(RegistryModel):
 class Agent(RegistryModel):
     id: EntityId
     description: NonEmptyStr
+    # "graph": the Agent Runtime runs the agent's graph. "job": a platform job
+    # that calls the gateway under its own identity: its calls are attributed to
+    # the job and charged to its tenant's windows and budget; it has no graph and
+    # no run row, so checks.py refuses a tool.
+    kind: AgentKind = "graph"
     tools: tuple[ToolId, ...]
 
 

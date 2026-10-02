@@ -34,7 +34,8 @@ Loki's OTLP endpoint. Grafana has three datasources with fixed uids:
 The database is a CloudNativePG `Cluster` named `platform-db` with one
 instance and 2 Gi of storage. CloudNativePG generates the `app` credentials
 (Secret `platform-db-app` in `meridian`); nothing is set by hand. The `vector`
-extension is enabled declaratively by a `Database` resource.
+extension is enabled declaratively by a `Database` resource. The image ships
+PostgreSQL 17.11 with pgvector 0.8.6 (read from the image on 2026-10-02).
 
 For the walking skeleton `make up` also declares a second database,
 `meridian`, owned by the role `meridian_owner`, and five more roles:
@@ -44,7 +45,12 @@ superuser, createdb or createrole). The two tool-server roles are declared
 here because migration 0004 needs them to exist; they have been checked by
 the manifest tests only, never on a cluster. Reconciling them and running
 the tool servers on kind is S044. The `app` database, role and Secret are
-untouched, and `meridian` has no `vector` extension (S012 decides). Each role's
+untouched. The `meridian` database declares the `vector` extension too
+(S012): migration 0005 needs it, and `meridian_owner` cannot create an
+extension PostgreSQL does not trust. This declaration has been checked by
+the manifest tests only, never on a cluster; `make smoke` still looks for
+the extension in `app` alone, and on a cluster older than this change the
+migration can run before the operator has created it (S044). Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db` and
