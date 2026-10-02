@@ -9,12 +9,11 @@
   the same region and holds each tenant to its rate limits and budgets,
   it answers embedding requests under the same controls (in replay mode
   and against a mocked Azure; not yet run against Azure), three MCP tool
-  servers and the runtime's client for them are proven in tests, the policy
-  wordings can be ingested into pgvector and searched through one of those
-  servers (in tests, with a simulated embedding), a triage graph calls the
-  tools in a fixed order and lets rules decide each claim's route (in
-  tests; no real model has answered its one question), and no service
-  runs in Azure yet. `make demo` on kind fails until S044.
+  servers and the runtime's client for them run on kind, where the policy
+  wordings are ingested into pgvector and searched through one of those
+  servers (with a simulated embedding), a triage graph calls the tools in
+  a fixed order and lets rules decide each claim's route (no real model
+  has answered its one question), and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -146,7 +145,7 @@ and Pydantic, at the cost of one dependency.
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; ~~the knowledge MCP server returns cited chunks;~~ retrieval checked against a labelled query set (split on 2026-10-02: the gateway's embedding endpoint is S045, and the knowledge MCP server is S046) | done | S003, S009, S045 |
 | S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | done | S012, S013 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
-| S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | doing | S013, S041 |
+| S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | done | S013, S041 |
 | S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
 | S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
@@ -3210,11 +3209,194 @@ documents only, and `make docs` and `make test` ran again after them.
 
 ### S044 — Tool servers on kind
 
-**Status:** doing · **Started:** 2026-10-02 · **Finished:** —
+**Status:** done · **Started:** 2026-10-02 · **Finished:** 2026-10-02
 **Goal:** the three tool servers run on the local kind platform under their
 own database roles, the policy store is seeded and the wordings ingested
 there, the runtime reaches the servers by their cluster names, and
 `make demo` triages a claim with the real graph again.
+**Decisions:**
+
+- The owner named this step after being told that it needs the cluster,
+  which did not exist; `make up` created it. Five steps in one session by
+  now: Part A says one.
+- Three more Deployments from the one image, each with a ClusterIP
+  Service and no route, in the shape of the runtime's manifest. The
+  runtime gets `MERIDIAN_TOOL_SERVERS`; each server answers `/mcp` only
+  for the Host name in that map (`<name>.meridian.svc:8000`), and a test
+  keeps the two values equal. Plain HTTP and no NetworkPolicy until S019.
+- The seed data is in the image: the policies, the claim history, the four
+  wordings and the generator's manifest, and nothing else of
+  `data/synthetic`. Rejected: a ConfigMap built by `deploy.sh`, more
+  moving parts for the same bytes; a second image for the Jobs, which is
+  the right shape once images are built in CI (S022). The cost: every
+  service's pod holds the policies file, which names each synthetic holder
+  (T-51).
+- Two Jobs under the owner role. The seed runs on every deploy and before
+  the services: a claim that meets an empty policy table gets a stored
+  proposal "policy not found", and a stored proposal is final. The
+  ingestion runs after the gateway's rollout, because it calls it, and at
+  most once per image: its finished Job has no expiry and, with rows in
+  `knowledge.chunks`, is the record. A search before the first ingestion
+  fails its run, which stores nothing, so that order is safe. Rejected:
+  ingesting on every deploy, which would cost every `make demo` a minute.
+- After an ingestion the deploy waits until a minute has passed. Measured
+  from the gateway's ledger on the cluster: the ingestion reserves 7,679
+  of the `claims-triage` tenant's 10,000 tokens a minute in six of its
+  ten requests per 10 s, and a triage that asks the model reserves about
+  1,090 in five. So a claim posted in the first seconds is refused, and
+  only two fit in that minute. The session's first figure, about 9,560,
+  was computed from the wrong text and was wrong. T-60 had named this
+  residual in S012; a budget of its own for the ingestion is a registry
+  decision, left to the owner.
+- `make smoke` calls each tool server through the runtime's own client,
+  from inside the runtime's pod (`python -m meridian.runtime.toolprobe`),
+  so with the addresses the runtime was given and from the pod a network
+  policy will allow. The call names a run that does not exist, and the
+  expected answer is the refusal `unknown-run`. A completed call needs a
+  claim and a running run, which no single database role can make up
+  (T-22, T-25); that is `make demo`'s proof. The check is skipped, in a
+  line of its own, only while no Meridian Deployment exists. Rejected: a
+  Job with its own copy of the addresses, which would test the copy.
+- `make demo` expects spans of five services: the Claims API, the runtime,
+  the policy and knowledge servers and the gateway. The claims server
+  serves the two write tools, which no graph calls before S015.
+- The three tool-server roles hold at most 20 connections each: a server
+  runs at most eight calls at once, one connection each and one more for
+  a failure's audit row, and during a rollout two of its pods run side by
+  side. The other roles have no known bound until they get a pool (S019).
+- FastAPI's own telemetry is switched off, after the first demo's trace
+  showed six spans of a service with no name. FastAPI 0.142 creates
+  global tracer, meter and logger providers when it finds the collector's
+  address, which only the cluster's manifests set; the MCP SDK's client
+  exported its spans through them, and the three services' HTTP metrics
+  arrived under one unnamed job. Each service keeps its own named
+  provider (T-03).
+- Reviewed and not done, with reasons:
+  - a role of its own for the seed and for the ingestion, with rights on
+    the policy and knowledge tables only (two reviewers): S019, with the
+    charts;
+  - a test harness that runs the scripts against a stub `kubectl`: most
+    of the script tests match text; two now run real functions of
+    `deploy.sh`, and every path but one ran on the cluster;
+  - a real read of the stores in `make smoke`: the demo proves both;
+  - the wait after an interrupted deploy that is run again within a
+    minute: it fails loudly and stores nothing.
+
+**Work log:**
+
+- PR 29 (S014) verified landed: 44e988d, the branch's 42 files identical
+  on `main`. Branch from `main`; rebased once, when PR 30 landed.
+- `feature-threat-model`: no new threat. T-03, T-25, T-42, T-50, T-51,
+  T-52 and T-60 and the residual-risk list say what ran on the cluster
+  and what the image now carries.
+- Advisor before the contracts: the probe must live under
+  `meridian.runtime` (the CLI may not import the runtime); check what
+  `unknown-run` proves; check the Claims API's tenant on kind; a
+  connection limit above eight, not at it.
+- `implementer`, four contracts. Two in parallel on disjoint files: the
+  manifests, the Jobs, the image, `deploy.sh` and the role limits; the
+  probe, `smoke.sh` and `demo.sh`. A third after the first demo: the
+  telemetry fix and four small ones. A fourth after the reviews.
+- Four reviewers on the three commits (infrastructure, security, silent
+  failures, Python): no critical and no high finding. Fixed: a finished
+  ingest Job read as proof of a corpus (three reviewers); a `kubectl`
+  warning read as an answer; Job logs printed unfiltered; an ingest Job
+  that retried into the window it had filled and a deadline equal to the
+  command's own wait; a smoke check that skipped when the runtime's
+  Deployment was missing; a connection limit too small for a rollout; a
+  test that depended on global state; wording in T-25 and T-51.
+- The main session edited the `Makefile`'s help lines, a comment in the
+  `Dockerfile`, the measured numbers in `deploy.sh` and in three
+  manifests, and the documents.
+
+**Result / verification:**
+
+Run by the main session. The gates ran on 678686b, the last commit that
+changes code, manifests, scripts or tests; later commits change documents
+only, and `make docs` ran again after them.
+
+- `make up` from no cluster: exit 0 in 304 s, 21 pods running, the seven
+  roles reconciled, `vector` applied in both databases. This is the cold
+  path S041 could not test. Twice more to converge (27 s and 29 s): after
+  the first, every pod had the UID it had before and no restart; after
+  the second, `pg_roles` shows a limit of 20 on the three tool-server
+  roles, and the other four roles have none.
+- `make demo`, five times, each exit 0 with `PASS trace ... has spans
+  from all of: claims-api agent-runtime policy-mcp knowledge-mcp
+  model-gateway`:
+  - a first deploy (108 s, the minute's wait included): migrations 0001
+    to 0007, `policies: 50 claim history: 44`, `documents: 4 chunks: 85`;
+  - the same image again (17 s and 21 s): the ingestion skipped, on the
+    final code with `85 chunks in knowledge.chunks`;
+  - a new image (106 s and 108 s): the old ingest Job deleted, a new one
+    run.
+- The five claims' stored proposals: CLM-0002 to CLM-0005 equal the
+  golden set's route and reason, CLM-0005 an automatic approval by the
+  rules alone. CLM-0001, which the oracle excludes, went to an adjuster
+  with the assessment unavailable (`not-json`): the replay text is no
+  answer. Five runs, all `Completed`.
+- `make smoke`: before any deploy, seven PASS lines and `SKIP tools`;
+  after it, eight PASS lines, among them `tools: each server (policy-mcp,
+  knowledge-mcp, claims-mcp) answered unknown-run through the runtime's
+  client`. The probe left one refused `tool.call` row per server over
+  two runs in one throttle window.
+- The audit rows of a claim carry `policy_mcp`, `knowledge_mcp` and
+  `agent_runtime` as `db_role`; the ingestion's row `meridian_owner`.
+- From its own pod, over TLS, each tool server's role read what its
+  grants name and was refused (`42501`) on the other servers' tables, on
+  all columns of `claims.claims`, on `claims.triage_proposals`, on
+  reading `audit.events`, on a write to the policy and knowledge stores
+  and on `CREATE`.
+- The Host allowlist, from the runtime's pod: `200` for
+  `policy-mcp.meridian.svc:8000`, `421` for the same Service as
+  `...svc.cluster.local`, `policy-mcp.meridian` and `policy-mcp`, `405`
+  for a GET. At the edge: `404` for the three servers' names; one
+  HTTPRoute in the cluster.
+- The unnamed telemetry: the first trace held six spans of
+  `unknown_service:python`, each an MCP client span between the runtime's
+  and the server's; after the fix a trace holds the five services only,
+  each `tool.call` is a child of `runtime.tool`, and Prometheus got no
+  sample from an unnamed job in two minutes. Checked in process before
+  the fix: an unhandled exception's message did not reach the log
+  signal, and a 422 with a marker left no line in Loki.
+- Memory, from cAdvisor: working sets of 54 to 115 MB for the six
+  services (limits 192 and 256 MiB); 4.9 GiB for the node container.
+- `GITHUB_ACTIONS=true make pytest-db`: `3913 passed, 3 skipped` (the
+  three are the opt-in live Azure tests). `make pytest`: `2586 passed,
+  1330 skipped`. `make lint`: `Contracts: 4 kept, 0 broken.`
+  `make registry`: `schemas OK`, `contracts OK`. `make test`: 124 tests,
+  `OK`. `make docs`: `13 checks passed`. `shellcheck infra/kind/*.sh`:
+  exit 0. The model did not change, so `make check` did not run.
+- Not run: the path where a finished ingest Job meets an empty store
+  (emptying the store on the cluster is destructive; a test runs the
+  function against a stub); a failing Job, a failing probe and the edge
+  of the rate window on the cluster; anything against Azure; `make down`.
+  The embeddings and the model are simulated on kind, so this proves the
+  wiring, not retrieval quality or a model's answers.
+
+**Follow-ups:**
+
+- The owner:
+  - the cluster is running and holds five triaged claims; `make down` is
+    the owner's call;
+  - whether the ingestion gets a budget of its own (a tenant or a job
+    quota in the registry), so that it stops spending the claims
+    workload's minute (T-60);
+  - the open decisions of S014 stand.
+- S043: the gateway's cost panel can use this cluster. The HTTP metrics
+  that arrived unnamed are gone; if request metrics are wanted, a
+  service's own named meter provider gives them.
+- S019: NetworkPolicy and TLS between the runtime and the tool servers
+  (any pod can call them today); a role for the seed and one for the
+  ingestion; pools and limits for the three other roles; the tool
+  servers' charts.
+- S022: an image for the Jobs that alone carries the seed data (T-51); a
+  harness that runs the kind scripts against a stub `kubectl`.
+- S015: the claims server's two write tools get their first caller.
+- No step yet: `make demo` still uses one golden claim per run, 35 are
+  left on this cluster; finished migrate and seed Jobs of old images stay
+  for an hour, and old images on the node until `make down`; `make smoke`
+  does not read the stores; the wait after an interrupted deploy.
 
 ## Part D — Open questions
 
