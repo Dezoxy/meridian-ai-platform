@@ -6,7 +6,7 @@ servers' roles may read through column grants (T-25): never ``SELECT *``.
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import psycopg
 
@@ -26,16 +26,28 @@ FROM claims.claims
 WHERE claim_id = %s
 """
 
+SELECT_POLICY_SCOPE = """
+SELECT product, wording_version
+FROM policy.policies
+WHERE policy_number = %s
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class RunBinding:
-    """What a call is allowed to touch: this run's claim and its policy."""
+    """What a call is allowed to touch: this run's claim and its policy.
+
+    ``product`` and ``wording_version`` are the policy's, set only for a tool
+    bound to the product (``with_policy_scope``): the claims role has no grant
+    on ``policy.policies``, so they are not read for any other tool."""
 
     run_id: uuid.UUID
     tenant: str
     agent: str
     claim_id: str
     policy_number: str
+    product: str | None = None
+    wording_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,3 +87,21 @@ def read_binding(
         claim_id=reference,
         policy_number=policy_number,
     )
+
+
+def with_policy_scope(
+    conn: psycopg.Connection, binding: RunBinding
+) -> RunBinding | BindingRefused:
+    """The binding with its policy's product and wording version, or a refusal
+    when the policy has no row. Neither is ever a caller's argument (T-22)."""
+    row = conn.execute(SELECT_POLICY_SCOPE, (binding.policy_number,)).fetchone()
+    if row is None:
+        return BindingRefused(
+            "policy-not-found",
+            binding.run_id,
+            binding.tenant,
+            binding.agent,
+            binding.claim_id,
+        )
+    product, wording_version = row
+    return replace(binding, product=product, wording_version=wording_version)

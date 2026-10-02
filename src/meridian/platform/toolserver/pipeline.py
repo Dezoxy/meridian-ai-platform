@@ -4,8 +4,13 @@ The SDK's low-level ``Server`` validates nothing: an unknown tool, a bad
 argument and an extra property all reach the handler. This module checks them,
 in an order where each step needs only what the steps before it established:
 
-    tool, run, binding, tenant, allowlist, approval, arguments, bound
-    argument, idempotency key, the handler, the result, the audit row.
+    tool, run, binding, tenant, allowlist, approval, arguments, the policy's
+    scope, bound argument, idempotency key, the handler, the result, the audit
+    row.
+
+The policy's scope (its product and wording version) is read only for a tool
+bound to the product, and after every check that decides whether the caller may
+use the tool at all: the claims role has no grant on ``policy.policies``.
 
 Every refusal answers one fixed reason word. No argument value, result value or
 exception message reaches an audit row, a span, a log line or an error text
@@ -41,6 +46,7 @@ from meridian.platform.toolserver.binding import (
     BindingRefused,
     RunBinding,
     read_binding,
+    with_policy_scope,
 )
 from meridian.platform.toolserver.handlers import (
     Completed,
@@ -184,6 +190,13 @@ class Pipeline:
                 )
                 return Refused(binding.reason)
             call.read(binding.run_id, binding.tenant, binding.agent, binding.claim_id)
+            if (reason := self._screen(entry, binding, arguments)) is not None:
+                return Refused(reason)
+            if entry.handler.bound_to == "product":
+                scoped = with_policy_scope(conn, binding)
+                if isinstance(scoped, BindingRefused):
+                    return Refused(scoped.reason)
+                binding = scoped
             if (reason := self._refusal(entry, binding, arguments, meta)) is not None:
                 return Refused(reason)
             key = (
@@ -192,14 +205,12 @@ class Pipeline:
             tool_call = ToolCall(binding, arguments, key, _payload_hash(arguments))
             return self._complete(conn, call, entry, entry.handler.run(conn, tool_call))
 
-    def _refusal(
-        self,
-        entry: _Entry,
-        binding: RunBinding,
-        arguments: Mapping[str, Any],
-        meta: Mapping[str, Any],
+    def _screen(
+        self, entry: _Entry, binding: RunBinding, arguments: Mapping[str, Any]
     ) -> RefusalReason | None:
-        tool, handler = entry.tool, entry.handler
+        """The checks of whether this caller may use this tool with these
+        arguments, before the bound argument is compared."""
+        tool = entry.tool
         if not self.registry.tenant_may_run(binding.tenant, binding.agent):
             return "tenant-not-allowed"
         agent = self.registry.agent(binding.agent)
@@ -210,6 +221,16 @@ class Pipeline:
         # Storable second: it walks the arguments, which the schema has bounded.
         if not fits(entry.arguments, arguments) or not storable(arguments):
             return "invalid-arguments"
+        return None
+
+    def _refusal(
+        self,
+        entry: _Entry,
+        binding: RunBinding,
+        arguments: Mapping[str, Any],
+        meta: Mapping[str, Any],
+    ) -> RefusalReason | None:
+        tool, handler = entry.tool, entry.handler
         if arguments[handler.bound_argument] != getattr(binding, handler.bound_to):
             return "outside-claim"
         if tool.idempotency_key_required and _idempotency_key(meta) is None:

@@ -541,6 +541,13 @@ KIT_REASONS = [
     "outside-claim",
     "idempotency-key-missing",
     "idempotency-key-reused",
+    # A handler's own, answered by the knowledge server.
+    "policy-not-found",
+    "no-corpus",
+    "stale-vectors",
+    "gateway-busy",
+    "gateway-refused",
+    "gateway-unavailable",
 ]
 
 

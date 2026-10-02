@@ -84,6 +84,10 @@ Edit = tuple[str, str, str]
 Known = Literal["nothing", "run", "record"]
 NOTE = {"claim_id": CLAIM, "note": "Phone call with the claimant."}
 LOOKUP = {"policy_number": POLICY}
+# POL-0049 is a HOME-PLUS policy on wording 2026-01; MOTOR-COMP is another's.
+PRODUCT = "HOME-PLUS"
+WORDING_VERSION = "2026-01"
+SEARCH = {"query": "storm damage", "product": PRODUCT}
 TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 INTERNAL_ERROR = -32603
 METHOD_NOT_FOUND = -32601
@@ -120,6 +124,30 @@ TOOLS: dict[str, tuple[str, str, str, str, dict[str, Any]]] = {
         "claim_id",
         {"request_id": UNKNOWN_UUID, "replayed": False},
     ),
+    "wording_search": (
+        "knowledge-mcp",
+        "knowledge_mcp",
+        "knowledge:search",
+        "product",
+        {
+            "product": PRODUCT,
+            "wording_version": WORDING_VERSION,
+            "chunks": [
+                {
+                    "clause": "2.1",
+                    "section": "Cover",
+                    "title": "Storm",
+                    "body": "Damage caused by a storm.",
+                    "keyword_match": True,
+                }
+            ],
+        },
+    ),
+}
+BOUND_TO: dict[str, Literal["policy_number", "claim_id", "product"]] = {
+    "policy_number": "policy_number",
+    "claim_id": "claim_id",
+    "product": "product",
 }
 
 
@@ -140,7 +168,7 @@ class Spy:
                 tool=tool,
                 scope=scope,
                 bound_argument=bound,
-                bound_to="policy_number" if bound == "policy_number" else "claim_id",
+                bound_to=BOUND_TO[bound],
                 run=run,
             )
 
@@ -157,11 +185,14 @@ def build(
     registry_dir: Path = REGISTRY_DIR,
     exporter: InMemorySpanExporter | None = None,
     clock: Callable[[], float] | None = None,
+    on_close: Callable[[], None] | None = None,
 ) -> ToolApp:
     server_id, role, *_ = TOOLS[tool]
     kwargs: dict[str, Any] = {}
     if clock is not None:
         kwargs["clock"] = clock
+    if on_close is not None:
+        kwargs["on_close"] = on_close
     return create_tool_app(
         settings_for(db, role, registry_dir),
         server_id=server_id,
@@ -219,6 +250,11 @@ def claim_without_policy(world: World) -> uuid.UUID:
     return add_run(world.db, "CLM-0003")
 
 
+def claim_on_missing_policy(world: World) -> uuid.UUID:
+    add_claim(world.db, "CLM-0004", policy_number="POL-9999")
+    return add_run(world.db, "CLM-0004")
+
+
 def claim_of_another_tenant(world: World) -> uuid.UUID:
     add_claim(world.db, "CLM-0002", tenant="evaluation")
     return add_run(world.db, "CLM-0002")
@@ -235,6 +271,15 @@ PLANT_APPROVAL = (
     "    scope: claims:note:write\n",
     "    scope: claims:note:write\n    approval_required: true\n",
 )
+PLANT_NO_WORDING = ("agents.yaml", "      - wording_search\n", "")
+# A search of a claim whose policy has no row: what each refusal that comes
+# before the policy is read must still answer.
+UNKNOWN_POLICY = {
+    "server": "knowledge-mcp",
+    "tool": "wording_search",
+    "run": claim_on_missing_policy,
+    "reference": "CLM-0004",
+}
 
 REFUSALS = [
     pytest.param(
@@ -387,6 +432,45 @@ REFUSALS = [
         ),
         id="key-with-trailing-newline",
     ),
+    pytest.param(
+        Refusal(
+            "outside-claim",
+            server="knowledge-mcp",
+            tool="wording_search",
+            arguments={**SEARCH, "product": "MOTOR-COMP"},
+        ),
+        id="another-product",
+    ),
+    pytest.param(
+        Refusal("policy-not-found", arguments=SEARCH, **UNKNOWN_POLICY),
+        id="policy-has-no-row",
+    ),
+    pytest.param(
+        Refusal(
+            "tenant-not-allowed",
+            arguments=SEARCH,
+            edits=(PLANT_NO_AGENTS,),
+            **UNKNOWN_POLICY,
+        ),
+        id="tenant-lacks-agent-and-policy-has-no-row",
+    ),
+    pytest.param(
+        Refusal(
+            "tool-not-allowed",
+            arguments=SEARCH,
+            edits=(PLANT_NO_WORDING,),
+            **UNKNOWN_POLICY,
+        ),
+        id="agent-lacks-search-and-policy-has-no-row",
+    ),
+    pytest.param(
+        Refusal(
+            "invalid-arguments",
+            arguments={"query": "storm damage"},
+            **UNKNOWN_POLICY,
+        ),
+        id="search-without-product-and-policy-has-no-row",
+    ),
 ]
 
 
@@ -500,6 +584,43 @@ def test_a_handler_receives_the_binding_the_arguments_and_the_payload_hash(
     assert dict(call.arguments) == NOTE
     assert call.idempotency_key == KEY
     assert call.payload_hash == payload_hash(NOTE)
+
+
+# ── a tool bound to the product of the run's policy (T-22, T-58) ────────────
+def test_a_search_of_the_policys_own_product_reaches_the_handler_with_its_scope(
+    world: World,
+) -> None:
+    spy = Spy()
+    app = spy_app(world.db, "wording_search", spy)
+
+    result = run_call(app.server, "wording_search", SEARCH, run_id=world.run_id)
+
+    assert result.is_error is False
+    (call,) = spy.calls
+    assert (call.binding.product, call.binding.wording_version) == (
+        PRODUCT,
+        WORDING_VERSION,
+    )
+    assert (call.binding.claim_id, call.binding.policy_number) == (CLAIM, POLICY)
+    assert dict(call.arguments) == SEARCH
+
+
+@pytest.mark.parametrize("tool", ["policy_lookup", "add_claim_note"])
+def test_a_tool_bound_to_a_policy_or_a_claim_gets_no_policy_scope(
+    world: World, tool: str
+) -> None:
+    spy = Spy()
+    app = spy_app(world.db, tool, spy)
+    arguments = LOOKUP if tool == "policy_lookup" else NOTE
+    key = KEY if tool == "add_claim_note" else None
+
+    # The claims role has no grant on policy.policies: a read of it would fail
+    # this call, so the call completing shows the table was not read.
+    result = run_call(app.server, tool, arguments, run_id=world.run_id, key=key)
+
+    assert result.is_error is False
+    (call,) = spy.calls
+    assert (call.binding.product, call.binding.wording_version) == (None, None)
 
 
 # ── no argument value anywhere ──────────────────────────────────────────────
@@ -851,6 +972,39 @@ def start(
         service_name=server_id,
         handlers=handlers,
     )
+
+
+def test_on_close_is_called_once_when_the_lifespan_ends_and_not_before(
+    world: World,
+) -> None:
+    closed: list[str] = []
+    app = spy_app(
+        world.db, "policy_lookup", Spy(), on_close=lambda: closed.append("closed")
+    )
+    seen: list[list[str]] = []
+
+    async def serve_and_stop() -> None:
+        async with app.app.router.lifespan_context(app.app):
+            seen.append(list(closed))
+
+    anyio.run(serve_and_stop)
+
+    assert seen == [[]]
+    assert closed == ["closed"]
+
+
+def test_an_exception_from_on_close_is_not_swallowed(world: World) -> None:
+    def fail() -> None:
+        raise RuntimeError("closing failed")
+
+    app = spy_app(world.db, "policy_lookup", Spy(), on_close=fail)
+
+    async def serve_and_stop() -> None:
+        async with app.app.router.lifespan_context(app.app):
+            pass
+
+    with pytest.raises(RuntimeError, match="closing failed"):
+        anyio.run(serve_and_stop)
 
 
 def test_a_server_that_is_not_in_the_registry_refuses_to_build(world: World) -> None:

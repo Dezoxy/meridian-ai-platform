@@ -142,8 +142,12 @@ def create_tool_app(
     handlers: Sequence[ToolHandler],
     tracer_provider: TracerProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
+    on_close: Callable[[], None] | None = None,
 ) -> ToolApp:
     """The ASGI app and the SDK server of one registry server.
+
+    ``on_close`` is called once when the app's lifespan ends, whether or not
+    the tracer provider is the caller's (the server's own clients close there).
 
     Raises ``SettingsError`` when the handlers and the registry disagree, or a
     schema or the listing is one the server could not serve.
@@ -239,8 +243,12 @@ def create_tool_app(
             async with sessions(inner):
                 yield
         finally:
-            if tracer_provider is None:  # one this function made is its own
-                provider.shutdown()
+            try:
+                if tracer_provider is None:  # one this function made is its own
+                    provider.shutdown()
+            finally:
+                if on_close is not None:
+                    on_close()
 
     app.router.lifespan_context = lifespan
     return ToolApp(app=app, server=server)

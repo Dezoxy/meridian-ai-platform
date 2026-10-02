@@ -45,7 +45,10 @@ class ToolHandler:
     # re-scope a tool without its handler being reviewed.
     scope: str
     # Every tool names the argument that must equal the run's own policy
-    # number or claim ID: there is no unbound tool.
+    # number or claim ID: there is no unbound tool. "product" is the third
+    # kind: the argument must equal the product of the run's own policy, which
+    # the kit reads from the policy's row, and the handler's binding then
+    # carries that product and the policy's wording version.
     bound_argument: str
-    bound_to: Literal["policy_number", "claim_id"]
+    bound_to: Literal["policy_number", "claim_id", "product"]
     run: Callable[[psycopg.Connection, ToolCall], Completed | Refused]
