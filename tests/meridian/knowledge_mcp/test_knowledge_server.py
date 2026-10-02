@@ -275,6 +275,25 @@ def test_keyword_match_is_true_for_a_shared_word_and_false_for_a_vector_only_chu
     assert False in matched.values()
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Milyen károkat fedez a lakásbiztosítás vihar esetén?",
+        "the of and to a is in it",
+    ],
+    ids=["hungarian", "english stop words only"],
+)
+def test_a_query_with_no_term_of_the_wording_is_answered_with_no_keyword_match(
+    world: World, server: Any, query: str
+) -> None:
+    result = search(server, world, query)
+
+    assert result.is_error is False
+    chunks = result.structured_content["chunks"]
+    assert len(chunks) == DEFAULT_TOP_K
+    assert [chunk["keyword_match"] for chunk in chunks] == [False] * DEFAULT_TOP_K
+
+
 # ── 4. the wording version is the policy's ──────────────────────────────────
 def test_chunks_of_the_same_product_under_another_version_are_never_returned(
     world: World, gateway: Gateway, server: Any

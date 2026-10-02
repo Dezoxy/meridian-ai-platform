@@ -486,6 +486,97 @@ def test_the_knowledge_role_inserts_an_audit_row_and_cannot_read_the_log(
             run(fresh_database, ROLE, statement)
 
 
+# ── the exact privileges on the three tables it reads and on the log ────────
+TABLE_PRIVILEGES = (
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "REFERENCES",
+    "TRIGGER",
+)
+COLUMN_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")
+
+
+def privileges_on(db: DatabaseHandle, table: str) -> tuple[list[str], dict[str, set]]:
+    """The privileges the role holds on ``table`` at table level, and for each
+    column privilege the columns it holds it on, over every column of the table
+    as the catalogue lists them (a column privilege includes a table-level one,
+    so with none at table level it is the column grants)."""
+    held = [
+        privilege
+        for privilege in TABLE_PRIVILEGES
+        if run(
+            db,
+            OWNER,
+            "SELECT has_table_privilege(%s, %s::regclass, %s)",
+            (ROLE, table, privilege),
+        )[0][0]
+    ]
+    columns = {
+        privilege: {
+            name
+            for (name,) in run(
+                db,
+                OWNER,
+                "SELECT a.attname FROM pg_attribute a "
+                "WHERE a.attrelid = %s::regclass AND a.attnum > 0 "
+                "AND NOT a.attisdropped "
+                "AND has_column_privilege(%s, a.attrelid, a.attnum, %s)",
+                (table, ROLE, privilege),
+            )
+        }
+        for privilege in COLUMN_PRIVILEGES
+    }
+    return held, columns
+
+
+@pytest.mark.parametrize(
+    ("table", "granted"),
+    [
+        ("policy.policies", {"policy_number", "product", "wording_version"}),
+        ("runtime.runs", {"run_id", "agent", "tenant", "reference", "status"}),
+        ("claims.claims", {"claim_id", "tenant", "policy_number"}),
+    ],
+)
+def test_the_knowledge_role_selects_exactly_the_granted_columns_and_nothing_else(
+    migrated_database: DatabaseHandle, table: str, granted: set[str]
+) -> None:
+    every_column = {
+        name
+        for (name,) in run(
+            migrated_database,
+            OWNER,
+            "SELECT attname FROM pg_attribute "
+            "WHERE attrelid = %s::regclass AND attnum > 0 AND NOT attisdropped",
+            (table,),
+        )
+    }
+    assert granted < every_column, "the table has columns the role must not read"
+
+    held, columns = privileges_on(migrated_database, table)
+
+    assert held == []
+    assert columns == {
+        "SELECT": granted,
+        "INSERT": set(),
+        "UPDATE": set(),
+        "REFERENCES": set(),
+    }
+
+
+def test_the_knowledge_role_inserts_into_the_audit_log_and_does_nothing_else(
+    migrated_database: DatabaseHandle,
+) -> None:
+    held, columns = privileges_on(migrated_database, "audit.events")
+
+    assert held == ["INSERT"]
+    # What a role cannot do to the table it cannot do to a column either.
+    assert columns["SELECT"] == set()
+    assert columns["UPDATE"] == set()
+
+
 # ── what it has no part in ──────────────────────────────────────────────────
 @pytest.mark.parametrize(
     "table",
