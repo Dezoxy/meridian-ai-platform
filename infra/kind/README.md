@@ -38,13 +38,14 @@ extension is enabled declaratively by a `Database` resource. The image ships
 PostgreSQL 17.11 with pgvector 0.8.6 (read from the image on 2026-10-02).
 
 For the walking skeleton `make up` also declares a second database,
-`meridian`, owned by the role `meridian_owner`, and five more roles:
-`claims_api`, `agent_runtime`, `model_gateway`, and, for the tool servers
-(S013), `policy_mcp` and `claims_mcp`. All six can log in and nothing more (no
-superuser, createdb or createrole). The two tool-server roles are declared
-here because migration 0004 needs them to exist; they have been checked by
-the manifest tests only, never on a cluster. Reconciling them and running
-the tool servers on kind is S044. The `app` database, role and Secret are
+`meridian`, owned by the role `meridian_owner`, and six more roles:
+`claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
+`policy_mcp` and `claims_mcp`, and for the knowledge server (S046)
+`knowledge_mcp`. All seven can log in and nothing more (no superuser, createdb
+or createrole). The three tool-server roles are declared here because
+migrations 0004 and 0006 need them to exist; they have been checked by the
+manifest tests only, never on a cluster. Reconciling them and running the
+tool servers on kind is S044. The `app` database, role and Secret are
 untouched. The `meridian` database declares the `vector` extension too
 (S012): migration 0005 needs it, and `meridian_owner` cannot create an
 extension PostgreSQL does not trust. This declaration has been checked by
@@ -53,8 +54,9 @@ the extension in `app` alone, and on a cluster older than this change the
 migration can run before the operator has created it (S044). Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
-`claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db` and
-`claims-mcp-db`. `make up` creates a Secret only if it is absent, before the
+`claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
+`claims-mcp-db` and `knowledge-mcp-db`. `make up` creates a Secret only if
+it is absent, before the
 `platform-db` release installs (CloudNativePG cannot reconcile a role whose
 Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
 on stdin; it is never an argument, never in a file and never printed. The `uri`

@@ -57,8 +57,9 @@ meridian.gateway -> meridian.platformDb "Records usage, cost and policy decision
 // Tools and knowledge
 meridian.policyMcp -> meridian.platformDb "Binds each call to its run and claim in, reads policies and claim history from, and writes audit events to" "PostgreSQL" "Layer Services"
 meridian.policyMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Services"
-meridian.knowledgeMcp -> meridian.platformDb "Searches policy wording chunks in" "PostgreSQL, pgvector" "Layer Services"
-meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTPS/JSON" "Layer Services"
+meridian.knowledgeMcp -> meridian.platformDb "Binds each call to its run, claim and policy in, searches policy wording chunks in, and writes audit events to" "PostgreSQL, pgvector" "Layer Services"
+meridian.knowledgeMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Services"
+meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTPS/JSON, tenant and agent headers" "Layer Services"
 
 // Evaluation
 meridian.evals -> meridian.runtime "Executes golden-set claims on" "HTTPS/JSON" "Layer Services"
@@ -69,4 +70,5 @@ meridian.claimsApp -> meridian.observability "Exports traces, metrics and logs t
 meridian.runtime -> meridian.observability "Exports traces, metrics and logs to" "OTLP" "Layer Services"
 meridian.gateway -> meridian.observability "Exports traces, metrics and logs to" "OTLP" "Layer Services"
 meridian.policyMcp -> meridian.observability "Exports traces and logs to" "OTLP" "Layer Services"
+meridian.knowledgeMcp -> meridian.observability "Exports traces and logs to" "OTLP" "Layer Services"
 meridian.claimsMcp -> meridian.observability "Exports traces and logs to" "OTLP" "Layer Workload"

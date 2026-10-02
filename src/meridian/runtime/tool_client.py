@@ -262,8 +262,9 @@ class ToolClient:
         key = self._idempotency_key(spec, step)
         target = self._servers.get(spec.server)
         if target is None:
-            # Not at start: the triage graph calls no tool that has no server
-            # yet, and ``wording_search`` has none until S012.
+            # Not at start: a server of the registry may have no address
+            # configured (every server publishes a contract, but only a
+            # configured one is reachable), and its tools are unavailable.
             logger.warning(
                 "tool server %s has no address, so %s is unavailable",
                 spec.server,

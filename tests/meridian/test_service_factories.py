@@ -7,6 +7,9 @@ from servicesupport import REGISTRY_DIR
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.gateway.app import create_app_from_env as gateway_from_env
+from meridian.platform.knowledge_mcp.app import (
+    create_app_from_env as knowledge_from_env,
+)
 from meridian.platform.policy_mcp.app import create_app_from_env as policy_from_env
 from meridian.runtime.app import create_app_from_env as runtime_from_env
 from meridian.workloads.claims_triage.app import create_app_from_env as claims_from_env
@@ -36,6 +39,8 @@ TOOL_SERVER_VARIABLES = {
     "MERIDIAN_REGISTRY_DIR": str(REGISTRY_DIR),
     "MERIDIAN_DATABASE_URL": DSN,
     "MERIDIAN_ALLOWED_HOSTS": "tool-server:8080",
+    # Only the knowledge server reads it; the other two ignore it.
+    "MERIDIAN_GATEWAY_URL": "http://gateway.invalid",
 }
 FACTORIES = {
     "gateway": gateway_from_env,
@@ -66,7 +71,10 @@ def test_each_factory_names_the_database_variable_when_it_is_missing(
         FACTORIES[service]()
 
 
-@pytest.mark.parametrize("factory", [policy_from_env, claims_mcp_from_env])
+TOOL_SERVER_FACTORIES = [policy_from_env, claims_mcp_from_env, knowledge_from_env]
+
+
+@pytest.mark.parametrize("factory", TOOL_SERVER_FACTORIES)
 def test_each_tool_server_factory_builds_its_app_from_the_environment(
     monkeypatch: pytest.MonkeyPatch, factory: Callable[[], object]
 ) -> None:
@@ -76,7 +84,7 @@ def test_each_tool_server_factory_builds_its_app_from_the_environment(
     assert factory() is not None
 
 
-@pytest.mark.parametrize("factory", [policy_from_env, claims_mcp_from_env])
+@pytest.mark.parametrize("factory", TOOL_SERVER_FACTORIES)
 @pytest.mark.parametrize("missing", ["MERIDIAN_DATABASE_URL", "MERIDIAN_ALLOWED_HOSTS"])
 def test_each_tool_server_factory_names_the_variable_it_misses(
     monkeypatch: pytest.MonkeyPatch, factory: Callable[[], object], missing: str

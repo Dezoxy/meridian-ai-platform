@@ -10,6 +10,8 @@ from toolsupport import CONTRACTS_DIR, HOSTS, list_tools
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
+from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
+from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
 from meridian.platform.toolserver.contracts import (
@@ -23,8 +25,9 @@ from meridian.workloads.claims_triage.mcp_server.app import (
 )
 
 runner = CliRunner()
-PUBLISHED = ("policy-mcp", "claims-mcp")
+PUBLISHED = ("policy-mcp", "knowledge-mcp", "claims-mcp")
 UNUSED_DSN = "postgresql://role:pw@db.invalid/m"
+UNUSED_GATEWAY_URL = "http://gateway.invalid"
 
 
 @pytest.fixture
@@ -71,7 +74,7 @@ def test_a_server_with_one_tool_lacking_an_output_schema_is_not_published(
 
     reduced = registry.model_copy(update={"tools": tools})
 
-    assert published_servers(reduced) == ("claims-mcp",)
+    assert published_servers(reduced) == ("knowledge-mcp", "claims-mcp")
 
 
 def test_a_listing_names_each_tool_with_its_schemas_and_hints(registry) -> None:
@@ -145,24 +148,49 @@ def test_the_committed_file_is_what_the_registry_renders(
     assert committed == render_contract(registry, server_id)
 
 
-def test_knowledge_mcp_has_no_contract_yet() -> None:
-    assert sorted(p.name for p in CONTRACTS_DIR.glob("*.json")) == [
+def test_every_server_of_the_registry_has_a_contract_file_and_no_other_exists(
+    registry,
+) -> None:
+    files = sorted(p.name for p in CONTRACTS_DIR.glob("*.json"))
+
+    assert files == [
         "claims-mcp.json",
+        "knowledge-mcp.json",
         "policy-mcp.json",
     ]
+    assert files == sorted(f"{server.id}.json" for server in registry.servers)
 
 
-def test_the_listing_of_both_servers_through_the_sdk_client_equals_the_files(
+def test_the_knowledge_contract_lists_wording_search_with_its_output_schema(
+    registry,
+) -> None:
+    contract = json.loads(
+        (CONTRACTS_DIR / "knowledge-mcp.json").read_text(encoding="utf-8")
+    )
+
+    (tool,) = contract["tools"]
+    assert contract["server"] == "knowledge-mcp"
+    assert tool["name"] == "wording_search"
+    assert tool["outputSchema"] == registry.tool("wording_search").output_schema
+    assert tool["outputSchema"]["required"] == ["product", "wording_version", "chunks"]
+
+
+def test_the_listing_of_every_server_through_the_sdk_client_equals_the_files(
     real_registry: Path,
 ) -> None:
     settings = ToolServerSettings(
         registry_dir=real_registry, database_url=UNUSED_DSN, allowed_hosts=HOSTS
     )
+    knowledge_settings = KnowledgeServerSettings(
+        **dict(settings), gateway_url=UNUSED_GATEWAY_URL
+    )
     servers = {
         "policy-mcp": create_policy_app(settings).server,
+        "knowledge-mcp": create_knowledge_app(knowledge_settings).server,
         "claims-mcp": create_claims_app(settings).server,
     }
 
+    assert tuple(servers) == PUBLISHED
     for server_id, server in servers.items():
         contract = json.loads(
             (CONTRACTS_DIR / f"{server_id}.json").read_text(encoding="utf-8")
@@ -208,12 +236,12 @@ def test_check_fails_naming_a_missing_file(
 def test_check_fails_naming_a_file_no_published_server_owns(
     real_registry: Path, contracts_copy: Path
 ) -> None:
-    (contracts_copy / "knowledge-mcp.json").write_text("{}\n", encoding="utf-8")
+    (contracts_copy / "ghost-mcp.json").write_text("{}\n", encoding="utf-8")
 
     code, output = check(real_registry, contracts_copy)
 
     assert code == 1
-    assert "knowledge-mcp.json" in output
+    assert "ghost-mcp.json" in output
     assert "no published server" in output
 
 
@@ -224,6 +252,7 @@ def test_check_fails_when_the_directory_does_not_exist(
 
     assert code == 1
     assert "policy-mcp.json is missing" in output
+    assert "knowledge-mcp.json is missing" in output
     assert "claims-mcp.json is missing" in output
 
 

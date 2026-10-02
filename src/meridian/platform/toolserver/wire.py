@@ -32,4 +32,11 @@ RefusalReason = Literal[
     "outside-claim",
     "idempotency-key-missing",
     "idempotency-key-reused",
+    "policy-not-found",
+    # The reasons of a handler's own (the knowledge server's), not a check of
+    # the kit.
+    "no-corpus",
+    "stale-vectors",
+    "gateway-busy",
+    "gateway-refused",
 ]

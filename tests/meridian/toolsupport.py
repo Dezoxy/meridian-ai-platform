@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+import httpx
 import mcp_types as types
 import psycopg
 import uvicorn
+import yaml
 from dbsupport import OWNER, DatabaseHandle
 from mcp.client import Client
 from mcp.server.lowlevel import Server
@@ -31,6 +33,8 @@ from servicesupport import AUDIT_COLUMNS, REGISTRY_DIR, REPO_ROOT, claim_with_id
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
+from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.policy_mcp.seed import seed_policies
 from meridian.platform.registry import load_registry
@@ -40,6 +44,7 @@ from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
 
+GATEWAY_URL = "http://gateway.invalid"
 STARTUP_SECONDS = 15
 SYNTHETIC_DIR = REPO_ROOT / "data" / "synthetic"
 CONTRACTS_DIR = REPO_ROOT / "api" / "mcp"
@@ -75,6 +80,32 @@ def settings_for(
     return ToolServerSettings(
         registry_dir=registry_dir, database_url=db.dsn(role), allowed_hosts=hosts
     )
+
+
+def knowledge_settings_for(
+    db: DatabaseHandle,
+    registry_dir: Path = REGISTRY_DIR,
+    hosts: tuple[str, ...] = HOSTS,
+    gateway_url: str = GATEWAY_URL,
+) -> KnowledgeServerSettings:
+    return KnowledgeServerSettings(
+        registry_dir=registry_dir,
+        database_url=db.dsn("knowledge_mcp"),
+        allowed_hosts=hosts,
+        gateway_url=gateway_url,
+    )
+
+
+def without_output_schema(registry_dir: Path, tool_id: str) -> Path:
+    """Remove one tool's output schema from a scratch copy of the registry (the
+    ``registry_copy`` fixture) and return the directory, so a test can use a
+    tool that has none: every tool of the real registry has one."""
+    path = registry_dir / "tools.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    (tool,) = [tool for tool in document["tools"] if tool["id"] == tool_id]
+    del tool["output_schema"]
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return registry_dir
 
 
 def add_claim(
@@ -240,6 +271,17 @@ def claims_server(world: World, exporter: InMemorySpanExporter | None = None) ->
     ).server
 
 
+def knowledge_server(
+    world: World, http: httpx.Client, exporter: InMemorySpanExporter | None = None
+) -> Any:
+    """The knowledge tool server's SDK ``Server``, over the world's database,
+    calling the gateway through ``http``."""
+    provider = make_tracer_provider("knowledge-mcp", exporter)
+    return create_knowledge_app(
+        knowledge_settings_for(world.db), http=http, tracer_provider=provider
+    ).server
+
+
 def tracer_of(exporter: InMemorySpanExporter) -> Any:
     """The runtime's tracer, exporting to ``exporter``."""
     return make_tracer_provider("agent-runtime", exporter).get_tracer("test")
@@ -277,6 +319,17 @@ def a_valid_answer(name: str, arguments: Mapping[str, Any]) -> types.CallToolRes
         return structured({key: str(uuid.uuid4()), "replayed": False})
     if name == "claim_history":
         return structured({"entries": [], "truncated": False})
+    if name == "wording_search":
+        clause = {
+            "clause": "2.1",
+            "section": "Cover",
+            "title": "Storm",
+            "body": "Damage caused by a storm.",
+            "keyword_match": True,
+        }
+        return structured(
+            {"product": "HOME-STD", "wording_version": "2026-01", "chunks": [clause]}
+        )
     return structured({"found": False})
 
 

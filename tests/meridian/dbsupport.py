@@ -15,6 +15,7 @@ SERVICE_ROLES = (
     "model_gateway",
     "policy_mcp",
     "claims_mcp",
+    "knowledge_mcp",
 )
 
 

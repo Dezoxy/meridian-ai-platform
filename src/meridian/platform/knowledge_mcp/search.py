@@ -231,6 +231,20 @@ def rank_halves(
     return Candidates(_candidates(lexical), _candidates(vector))
 
 
+def corpus_exists(
+    conn: psycopg.Connection, *, product: str, wording_version: str
+) -> bool:
+    """Whether the store holds a row of the scope: the cheap check a caller makes
+    before it pays to embed a query that could not be answered. The search's own
+    count is still the answer of record. Leaves the read transaction open."""
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM knowledge.chunks "
+        "WHERE product = %s AND wording_version = %s)",
+        (product, wording_version),
+    ).fetchone()
+    return bool(row and row[0])
+
+
 def hybrid_search(
     conn: psycopg.Connection,
     *,

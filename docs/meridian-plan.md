@@ -8,10 +8,11 @@
   class and residency from a laptop, falls back to a second deployment in
   the same region and holds each tenant to its rate limits and budgets,
   it answers embedding requests under the same controls (in replay mode
-  and against a mocked Azure; not yet run against Azure), two MCP tool
+  and against a mocked Azure; not yet run against Azure), three MCP tool
   servers and the runtime's client for them are proven in tests, the policy
-  wordings can be ingested into pgvector and searched (in tests, with a
-  simulated embedding), and no service runs in Azure yet.
+  wordings can be ingested into pgvector and searched through one of those
+  servers (in tests, with a simulated embedding), and no service runs in
+  Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -141,7 +142,7 @@ and Pydantic, at the cost of one dependency.
 | S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | todo | S011, S041 |
 | S045 | Gateway embeddings | `POST /v1/embeddings` on the Model Gateway: the embedding route walked like the chat route, with the same caller headers, residency filter, tenant limits, ledger and audit; a simulated replay embedding; the Azure OpenAI adapter; the registry gives each embedding deployment its dimensions and refuses a route whose candidates differ in model or dimensions; contract tests pass | done | S010, S011, S042 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; ~~the knowledge MCP server returns cited chunks;~~ retrieval checked against a labelled query set (split on 2026-10-02: the gateway's embedding endpoint is S045, and the knowledge MCP server is S046) | done | S003, S009, S045 |
-| S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | todo | S012, S013 |
+| S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | done | S012, S013 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | todo | S013, S041 |
 | S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S013, S046 |
@@ -2727,6 +2728,229 @@ for a query, and a check says how well.
   Dockerfiles only); after a PostgreSQL major upgrade the store must be
   ingested again, because the stored lexemes come from that version's
   dictionary; ingestion tests that run without a database.
+
+### S046 — Knowledge MCP server
+
+**Status:** done · **Started:** 2026-10-02 · **Finished:** 2026-10-02
+**Goal:** an agent's `wording_search` call reaches a tool server that binds
+it to the run's own policy, gets the query's vector through the gateway
+under the run's tenant and agent, and answers cited clauses.
+**Decisions:**
+
+- This is the third step of one session, after `/compact`, because the
+  owner said to go on. Part A asks for a new session. S043 comes first in
+  the table and was passed over: it needs the kind cluster, which does not
+  exist and is not recreated without the owner's word.
+- The kit's `server.py` is split first, in a commit of its own: a move
+  with four renames and no change of behaviour. `pipeline.py` holds the
+  checks, the handler call and the audit row; `server.py` the SDK server
+  and the ASGI wiring (S013's follow-up).
+- Binding, a third kind (T-22, T-58): `wording_search` keeps its `product`
+  argument, which must be the product of the claim's policy; the wording
+  version searched is that policy's and is not an argument. The kit reads
+  both from the policy's row, only for a tool bound to the product (the
+  claims role has no grant on the policy) and only after it has decided
+  that the caller may use the tool, so a caller without the tool learns
+  nothing about which policies exist. A policy without a row is refused
+  `policy-not-found`. Rejected: dropping the argument and searching the
+  policy's product silently; the contract has had it since S008, and a
+  call for another product is then refused and audited, which is a sign
+  that something steered it.
+- The query's vector comes from the gateway under the tenant, the agent
+  and the run ID of the run's own row, one input per call (T-16, T-61).
+  The search is charged to the run's tenant like any call of the run.
+- A refusal is an answer about the call; a failure is the platform not
+  doing its work. Refusals: `gateway-busy` (429), `gateway-refused`
+  (403), `no-corpus` and `stale-vectors`. A failure: `gateway-unavailable`,
+  for anything else from the gateway, through a new `ToolFailed` a handler
+  raises. The first design made all five refusals; three reviewers found
+  that a gateway outage then left one audit row a minute, no log line and
+  no error span, while a database outage is a failure. An empty store and
+  stale vectors stay refusals, like `policy-not-found`: they say what the
+  store holds for this policy, the runtime can act on the word, and their
+  audit rows stay throttled; each leaves a warning in the log with the
+  product and the wording version. Rejected: an empty list for a store
+  without the policy's wording, which reads as "no match" (T-58). The
+  price of the failure: one audit row per call while the gateway gives no
+  vector, because the throttle covers refusals only (T-49).
+- The store is asked for the policy's wording before the gateway is
+  called, so a search that cannot answer costs the tenant nothing.
+- The server does not retry a 429: the runtime gives a tool call 10 s, and
+  waiting is the caller's. The client waits 2 s to connect and 5 s for an
+  answer. These are limits per phase, not for the whole call: a provider
+  that has not answered trips the second, an answer trickled in is not
+  bounded. The gateway's own deadline is 25 s, so a search the runtime
+  gave up on can still complete there and be charged (T-62).
+- No transaction is open while the server waits for the gateway: the
+  handler has only read by then and ends the transaction first (T-62).
+- One HTTP client serves every tenant's calls, so it keeps no cookie,
+  takes no proxy from the environment and follows no redirect (T-61).
+- The answer: the product, the wording version and one to ten clauses,
+  best first, each with its number, section, title, text and
+  `keyword_match`. Ten without `top_k`, not five: S012's own numbers have
+  the fused search returning 3 of 8 labelled exclusion clauses at five
+  and 5 of 8 at ten, an exclusion is what decides a claim, and ten
+  clauses are under 1,000 tokens. No scores or distances: a fused score
+  is a rank, and a number in a tool result invites a prompt to treat it
+  as a measure.
+- No status for "no sufficient match", which S012's follow-up asked of
+  this step. Its distance half needs a threshold, and none can be set
+  against a simulated embedding. Its keyword half needs no calibration
+  and is in the answer: `keyword_match` says per clause whether it shares
+  a word stem with the query, and false for every clause means the query
+  shares no term with the wording. The tool always returns clauses, also
+  when none is relevant, and says so in its description. What a run does
+  then is S014's; the threshold follows the live measurement.
+- Role `knowledge_mcp` (migration 0006): ten columns of the chunks, three
+  of the policy, the run and claim columns of the other tool roles and
+  the audit insert. Column grants, so a column added later is not granted
+  by accident.
+- The gateway's address is checked by one function for the server and the
+  ingestion command: http or https, a host, no user name, password, query
+  string or fragment.
+- The model says what the server does: it binds a call in the database,
+  loads the registry and exports telemetry, like the other two servers.
+- Reviewed and not done:
+  - a limit on the calls that wait for one of the eight worker threads,
+    and stopping a call the runtime has given up on (the kit's, since
+    S013; new here is that such a call is charged; S019);
+  - a deadline for the whole gateway call and a size limit on its reply;
+  - checks in the migration that the role is no superuser and member of
+    no other role, and revoking `TEMPORARY` from `PUBLIC` (all seven
+    roles are created out of band the same way);
+  - an idle-in-transaction timeout and TCP keepalives in `connect()`,
+    which every service shares;
+  - the runtime's client reads an error answer without a reason as a
+    refusal named `unknown` (S013);
+  - requiring https for the gateway's address (plain HTTP inside the
+    cluster until S019);
+  - the reviewers `infra-reviewer` and `fastapi-reviewer` were not run:
+    the infrastructure change is one role in three lists, and the server
+    is the kit's Starlette app.
+
+**Work log:**
+
+- The `feature-threat-model` skill's steps before any code: T-61 (a tool
+  server that makes a call of its own) and T-62 (what a search costs)
+  added as designed, and closed at the end with T-16, T-22, T-58 and T-59.
+- The `implementer` subagent worked in seven short contracts: the split of
+  the kit; the role, migration 0006 and the tool's output schema; the
+  third binding in the kit; the server; tests for three mutations that had
+  survived; the review fixes; three tests the reviewers asked for. It
+  reported no edit through a script this time; the main session read
+  every source diff and ran every gate itself.
+- A first run of 19 mutations caught 16. The three that survived fixed
+  the wording version, the tenant and the agent in the handler: every
+  test ran under the one seeded tenant, agent and version, so a handler
+  that hard-coded them passed. Four tests now run a search under another
+  of each.
+- Reviews by `security-reviewer`, `database-reviewer`,
+  `platform-boundary-reviewer`, `silent-failure-hunter`, `python-reviewer`
+  and `rag-pipeline-reviewer`: no critical finding, three high. Fixed
+  here:
+  - a gateway outage, an empty store and stale vectors left one throttled
+    audit row a minute and nothing an operator would see (high, three
+    reviewers): the first is a failure now, the other two leave a warning;
+  - the check of the gateway's address let a query string, a missing host
+    and a space through (high);
+  - five clauses by default dropped exclusion clauses that ten return, and
+    no test measured retrieval through the tool (high);
+  - the client shared by all tenants kept cookies; a comment and a threat
+    row claimed a time limit the client does not have; the grants on
+    three tables were spot-checked, not pinned; the tool did not say that
+    it always returns clauses or what `keyword_match` means; an empty
+    store was found only after the tenant had paid for the embedding.
+- The advisor was consulted before the design, after the reviews and
+  before closing. On an empty store and stale vectors it found a refusal
+  and a failure both defensible once an operator can see them; a
+  reviewer argued for failures; they stay refusals, with a warning. Its
+  last check found that the test comparing each server's own answer to
+  `tools/list` with its contract file covered two servers; the main
+  session added the third to that test itself.
+- The `docs-sync` skill: the README, the registry README, the tool
+  contract README, the kind README, the threat model, the architecture
+  model and this plan were what the branch falsified. The model gained
+  the knowledge server's relationships to the registry and the
+  observability stack; `make check` ends with no ERROR line and no
+  derived Mermaid block changed.
+
+**Result / verification:** run by the main session on the final code.
+
+- `make pytest-db` with `GITHUB_ACTIONS=true`: `3217 passed, 3 skipped` (the three
+  are the opt-in live Azure tests). `make pytest`: `1952 passed, 1268 skipped`.
+- `make lint`: `Contracts: 4 kept, 0 broken.` `make registry`:
+  `schemas OK: up to date`, `contracts OK: up to date`. `make test`: 117
+  tests, `OK`. `make docs`: `13 checks passed`. `make check`: no ERROR
+  line.
+- Contract tests: `api/mcp/knowledge-mcp.json` equals the registry's
+  rendering, what the running server answers to `tools/list` equals the
+  file, and every result is checked against the output schema by the
+  server and by the runtime's client, in process and over HTTP.
+- 28 mutations on the final code, each caught by a test and then restored
+  byte for byte. The kit: the product not compared with the policy's; the
+  policy read before the caller is known to hold the tool; the policy
+  read for every tool; a handler's failure not known; `on_close` never
+  called. The handler: a fixed wording version, tenant or agent; the
+  transaction left open during the gateway call; a 429 and a 403 not told
+  apart; a gateway without a vector refused, not failed; the store not
+  asked before the gateway; `keyword_match` always true; a blank query
+  sent to the gateway; five clauses by default; no warning for an empty
+  store; the gateway's status not logged. The client and the settings: a
+  proxy from the environment; redirects followed; cookies kept; the
+  client never closed; an address with a password, with a query string
+  and without a host accepted. The grants: every column of the policy,
+  of the chunks and of the run.
+- Retrieval through the tool, in replay mode on PostgreSQL 17.11 with
+  pgvector 0.8.6: the description of each claim as the query, no `top_k`,
+  and the claim's cited clauses as the answer. 23 of 28 labelled clauses
+  are returned, 18 of 20 cover clauses and 5 of 8 exclusions: the
+  library's own numbers at rank 10 (S012). The embedding is simulated, so
+  these are plumbing floors, not a measure of retrieval quality. A
+  Hungarian sentence and a query of stop words are answered with ten
+  clauses, none with a keyword match.
+- Shown by the implementer and not rerun by the main session: the
+  retrieval test fails with a floor of 999 and prints the numbers above.
+- Not run: any call to Azure (the login is still blocked), so no real
+  embedding has been searched; anything on kind (there is no cluster), so
+  the role `knowledge_mcp` is checked by the manifest tests only; the
+  server outside the tests, where it runs in process and under `uvicorn`
+  on a loopback port against the replay gateway.
+
+**Follow-ups:**
+
+- The owner, once the Azure login works: S012's live measurement, and
+  from it a distance threshold for "no sufficient match" and whether ten
+  clauses by default still serve with a real model.
+- S014:
+  - treat a result whose clauses all have `keyword_match` false as no
+    match until there is a threshold;
+  - a citation is the product, the wording version and the clause, and a
+    proposal may cite only clauses the run retrieved;
+  - the deductible, limit, reporting and period clauses are not found
+    from a claim's description: fixed queries of their own, or a tool
+    that fetches a clause by number;
+  - several short queries (the peril, an exclusion probe) find more than
+    one whole description, which must also be cut to 500 characters;
+  - what the graph does with `no-corpus`, `stale-vectors`, `gateway-busy`
+    and `gateway-refused`, and with a tool that is unavailable; a limit
+    on the searches of one run (T-62).
+- S044: the knowledge server on kind with its role, `MERIDIAN_GATEWAY_URL`
+  and its entry in `MERIDIAN_TOOL_SERVERS`; an ingestion before the first
+  search; connection limits per role.
+- S019: a bound on the calls waiting for a worker thread and an end for a
+  call the runtime gave up on; https between the services; a deadline
+  for the whole gateway call and a size limit on its reply; an
+  idle-in-transaction timeout and keepalives in `connect()`; checks of
+  the roles' attributes.
+- S024: alerts on `gateway-unavailable` failures and on the warnings for
+  an empty store and stale vectors; a runbook line that a changed
+  embedding deployment refuses every search as `stale-vectors` until the
+  store is ingested again.
+- No step yet: a fallback for the embedding route needs the store to
+  compare rows by model, not by deployment (T-54); the runtime's client
+  reads an error answer without a reason as the refusal `unknown`; one
+  URL check in `common/env.py` for every service address; the count of a
+  refusal flood's last window is never written (S011).
 
 ## Part D — Open questions
 

@@ -87,16 +87,50 @@ tools:
 
   - id: wording_search
     server: knowledge-mcp
-    description: Search the policy wordings of one product.
+    description: >-
+      Search the wording of the claim's own policy. Returns the clauses nearest
+      to the query, best first; it always returns clauses, also when none is
+      relevant.
     effect: read
     scope: knowledge:search
     input_schema:
       type: object
       properties:
         query: {type: string, minLength: 1, maxLength: 500}
-        product: {type: string, enum: [HOME-STD, HOME-PLUS, MOTOR-COMP, MOTOR-TPL]}
+        product:
+          type: string
+          enum: [HOME-STD, HOME-PLUS, MOTOR-COMP, MOTOR-TPL]
+          description: >-
+            The product of the claim's policy, as policy_lookup returns it;
+            another product is refused.
         top_k: {type: integer, minimum: 1, maximum: 10}
       required: [query, product]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        product: {type: string, enum: [HOME-STD, HOME-PLUS, MOTOR-COMP, MOTOR-TPL]}
+        wording_version: {type: string, pattern: "^[A-Za-z0-9-]+$", minLength: 1, maxLength: 16}
+        chunks:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: object
+            properties:
+              clause: {type: string, pattern: "^[1-9][0-9]?\\.[1-9][0-9]?$", maxLength: 5}
+              section: {type: string, minLength: 1, maxLength: 200}
+              title: {type: string, minLength: 1, maxLength: 200}
+              body: {type: string, minLength: 1, maxLength: 4000}
+              keyword_match:
+                type: boolean
+                description: >-
+                  Whether the clause shares at least one word stem with the
+                  query. False for every clause means the query shares no term
+                  with the wording.
+            required: [clause, section, title, body, keyword_match]
+            additionalProperties: false
+      required: [product, wording_version, chunks]
       additionalProperties: false
 
   - id: add_claim_note

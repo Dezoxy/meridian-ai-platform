@@ -5,7 +5,6 @@ import os
 import uuid
 from pathlib import Path
 from typing import Annotated, NoReturn
-from urllib.parse import urlsplit
 
 import httpx
 import psycopg
@@ -22,19 +21,19 @@ from meridian.platform.knowledge_mcp.ingest import (
     ingest_wordings,
     refusal_event,
 )
+from meridian.platform.knowledge_mcp.settings import (
+    GATEWAY_URL_ENV,
+    gateway_url_problem,
+)
 from meridian.platform.registry import Registry
 from meridian.platform.registry.loader import RegistryError, load_registry
 
-# The Model Gateway's address. The runtime reads the same variable (its own copy
-# of the name: the platform never imports the runtime).
-GATEWAY_URL_ENV = "MERIDIAN_GATEWAY_URL"
 APPLICATION_NAME = "meridian-knowledge-ingest"
 # Relative to the working directory, which is the repository root for `make`.
 DEFAULT_SOURCE = Path("data/synthetic")
 # The gateway gives a provider attempt 20 s, so one embedding call can take a
 # little longer than that; connecting should not.
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
-HTTP_SCHEMES = frozenset({"http", "https"})
 
 app = typer.Typer(no_args_is_help=True, help="Manage the knowledge store.")
 
@@ -60,16 +59,9 @@ def _required(name: str) -> str:
 def _gateway_url() -> str:
     # The value is never echoed: a URL can carry credentials.
     value = _required(GATEWAY_URL_ENV)
-    try:
-        parts = urlsplit(value)
-        parts.port  # noqa: B018 (reading it raises ValueError for a bad port)
-    except ValueError:
-        _fail(f"{GATEWAY_URL_ENV} is not a URL this command can use")
-    if parts.scheme not in HTTP_SCHEMES or not parts.netloc:
-        _fail(f"{GATEWAY_URL_ENV} must be an http or https URL")
-    if parts.username is not None or parts.password is not None:
-        # httpx logs the request URL at INFO, the password with it.
-        _fail(f"{GATEWAY_URL_ENV} must not carry a user name or a password")
+    problem = gateway_url_problem(value)
+    if problem is not None:
+        _fail(f"{GATEWAY_URL_ENV} {problem}")
     return value
 
 

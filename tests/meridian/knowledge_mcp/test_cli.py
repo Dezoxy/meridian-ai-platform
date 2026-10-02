@@ -159,8 +159,34 @@ def test_a_gateway_address_urlsplit_cannot_take_exits_1_without_a_traceback(
     assert result.exit_code == 1
     assert result.output.startswith("ERROR ")
     assert knowledge_cli.GATEWAY_URL_ENV in result.output
+    assert "is not a usable URL" in result.output
     assert value not in result.output
     assert isinstance(result.exception, SystemExit)  # not a ValueError
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        f" http://{SECRET}.invalid",
+        f"http://{SECRET}.invalid ",
+        "http://:80",
+        f"http://{SECRET}.invalid/v1?token={SECRET}",
+        f"http://{SECRET}.invalid/v1#{SECRET}",
+    ],
+)
+def test_a_gateway_address_with_spaces_no_host_a_query_or_a_fragment_exits_1(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
+
+    result = runner.invoke(app, ingest_args())
+
+    assert result.exit_code == 1
+    assert result.output.startswith("ERROR ")
+    assert knowledge_cli.GATEWAY_URL_ENV in result.output
+    assert SECRET not in result.output
+    assert isinstance(result.exception, SystemExit)
 
 
 @pytest.mark.parametrize("value", ["http://gate\x01way:8080", "http://gateway/\x7f"])

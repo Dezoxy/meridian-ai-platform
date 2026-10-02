@@ -382,8 +382,10 @@ def test_the_lexemes_cannot_be_written_by_hand(
 
 
 # ── who may touch it ────────────────────────────────────────────────────────
-@pytest.mark.parametrize("role", SERVICE_ROLES)
-def test_a_service_role_can_neither_read_nor_write_the_chunks(
+@pytest.mark.parametrize(
+    "role", [role for role in SERVICE_ROLES if role != "knowledge_mcp"]
+)
+def test_a_service_role_but_the_knowledge_server_can_neither_read_nor_write_the_chunks(
     migrated_database: DatabaseHandle, role: str
 ) -> None:
     with connect(migrated_database.dsn(role), "test") as conn:
@@ -422,14 +424,23 @@ def test_public_has_no_privilege_on_the_knowledge_schema_or_its_table(
     assert tables == []
 
 
-def test_only_the_owner_holds_any_privilege_on_the_chunks(
+def test_only_the_owner_and_the_knowledge_servers_column_grant_touch_the_chunks(
     migrated_database: DatabaseHandle,
 ) -> None:
-    rows = owner_run(
+    # Migration 0006 (S046) gave knowledge_mcp a SELECT on ten columns; the
+    # table's own ACL still names the owner alone.
+    table_grantees = owner_run(
         migrated_database,
         "SELECT DISTINCT a.grantee::regrole::text "
         "FROM pg_class c, aclexplode(c.relacl) a "
         "WHERE c.oid = 'knowledge.chunks'::regclass",
     )
+    column_grants = owner_run(
+        migrated_database,
+        "SELECT DISTINCT a.grantee::regrole::text, a.privilege_type "
+        "FROM pg_attribute t, aclexplode(t.attacl) a "
+        "WHERE t.attrelid = 'knowledge.chunks'::regclass",
+    )
 
-    assert rows in ([], [(OWNER,)])
+    assert table_grantees in ([], [(OWNER,)])
+    assert column_grants == [("knowledge_mcp", "SELECT")]
