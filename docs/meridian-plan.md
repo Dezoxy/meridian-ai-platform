@@ -3106,7 +3106,13 @@ rules decided.
     audited no reason; an unavailable assessment did not say why;
   - the answer's reason code let a caller probe a policy (T-65);
   - the stored `route` and `reason` could differ from the document.
-- Mutations, in a second worktree so that reviewers never read a mutated file: a first run of 42 caught 40. The two that survived were a citation built with a fixed wording version (every fixture uses one version, the blind spot S046 found for tenants) and a proposal that is an automatic approval after an unavailable assessment; both got tests. On the final code 55 of 55 are caught, one for each review fix among them, and each file was restored byte for byte.
+- Mutations, in a second worktree so that reviewers never read a mutated
+  file: a first run of 42 caught 40. The two that survived were a citation
+  built with a fixed wording version (every fixture uses one version, the
+  blind spot S046 found for tenants) and a proposal that is an automatic
+  approval after an unavailable assessment; both got tests. On the final
+  code 55 of 55 are caught, one for each review fix among them, and each
+  file was restored byte for byte.
 - The `docs-sync` skill: the README, the kind README, the threat model,
   the ClaimsTriage view (one step's text; `make check` ends with no ERROR
   line; no derived Mermaid block shows that view) and this plan were what
