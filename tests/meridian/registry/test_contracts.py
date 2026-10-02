@@ -10,6 +10,8 @@ from toolsupport import CONTRACTS_DIR, HOSTS, list_tools
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
+from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
+from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
 from meridian.platform.toolserver.contracts import (
@@ -25,6 +27,7 @@ from meridian.workloads.claims_triage.mcp_server.app import (
 runner = CliRunner()
 PUBLISHED = ("policy-mcp", "knowledge-mcp", "claims-mcp")
 UNUSED_DSN = "postgresql://role:pw@db.invalid/m"
+UNUSED_GATEWAY_URL = "http://gateway.invalid"
 
 
 @pytest.fixture
@@ -172,17 +175,22 @@ def test_the_knowledge_contract_lists_wording_search_with_its_output_schema(
     assert tool["outputSchema"]["required"] == ["product", "wording_version", "chunks"]
 
 
-def test_the_listing_of_both_servers_through_the_sdk_client_equals_the_files(
+def test_the_listing_of_every_server_through_the_sdk_client_equals_the_files(
     real_registry: Path,
 ) -> None:
     settings = ToolServerSettings(
         registry_dir=real_registry, database_url=UNUSED_DSN, allowed_hosts=HOSTS
     )
+    knowledge_settings = KnowledgeServerSettings(
+        **dict(settings), gateway_url=UNUSED_GATEWAY_URL
+    )
     servers = {
         "policy-mcp": create_policy_app(settings).server,
+        "knowledge-mcp": create_knowledge_app(knowledge_settings).server,
         "claims-mcp": create_claims_app(settings).server,
     }
 
+    assert tuple(servers) == PUBLISHED
     for server_id, server in servers.items():
         contract = json.loads(
             (CONTRACTS_DIR / f"{server_id}.json").read_text(encoding="utf-8")

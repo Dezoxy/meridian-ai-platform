@@ -2860,9 +2860,13 @@ under the run's tenant and agent, and answers cited clauses.
     three tables were spot-checked, not pinned; the tool did not say that
     it always returns clauses or what `keyword_match` means; an empty
     store was found only after the tenant had paid for the embedding.
-- The advisor was consulted before the design, after the reviews (it had
-  advised refusals for an empty store and stale vectors, a reviewer
-  failures; they stay refusals, with a warning) and before closing.
+- The advisor was consulted before the design, after the reviews and
+  before closing. On an empty store and stale vectors it found a refusal
+  and a failure both defensible once an operator can see them; a
+  reviewer argued for failures; they stay refusals, with a warning. Its
+  last check found that the test comparing each server's own answer to
+  `tools/list` with its contract file covered two servers; the main
+  session added the third to that test itself.
 - The `docs-sync` skill: the README, the registry README, the tool
   contract README, the kind README, the threat model, the architecture
   model and this plan were what the branch falsified. The model gained
@@ -2878,6 +2882,10 @@ under the run's tenant and agent, and answers cited clauses.
   `schemas OK: up to date`, `contracts OK: up to date`. `make test`: 117
   tests, `OK`. `make docs`: `13 checks passed`. `make check`: no ERROR
   line.
+- Contract tests: `api/mcp/knowledge-mcp.json` equals the registry's
+  rendering, what the running server answers to `tools/list` equals the
+  file, and every result is checked against the output schema by the
+  server and by the runtime's client, in process and over HTTP.
 - 28 mutations on the final code, each caught by a test and then restored
   byte for byte. The kit: the product not compared with the policy's; the
   policy read before the caller is known to hold the tool; the policy
