@@ -844,6 +844,15 @@ the apply.
   not from the `az` default account. No subscription, tenant or object ID
   is written to a tracked file, and everything the scripts print from `az`
   and Terraform is GUID-redacted, so a plan can be pasted as evidence.
+  Corrected on 2026-10-02: that was not true of one line. Terraform prints
+  the ID of its `azurerm_client_config` data source on every plan and
+  apply, and that ID is the base64 of the client, object, subscription and
+  tenant IDs, which a GUID pattern does not see. `redact` now replaces it
+  with `<client-config-id>`, and `tests/test_terraform_redact.py` checks
+  that nothing left in a plan decodes to a GUID. The line was found in a
+  terminal. No tracked file or commit on any branch held it, and a search
+  of the description, comments and reviews of all 29 pull requests found
+  none.
 - The budget covers the whole subscription at 60 euros, the billing
   currency of the account's billing profile, with alerts on actual spend at
   50, 80 and 100 %. They go to an action group that emails whoever holds

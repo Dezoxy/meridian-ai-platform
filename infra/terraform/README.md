@@ -124,6 +124,10 @@ AZURE_SUBSCRIPTION="<subscription name or ID>" make azure-state
 
 Everything the scripts print from `az` and Terraform, including the plan, is
 GUID-redacted: subscription, tenant, object and role IDs appear as `<guid>`.
+The ID of Terraform's `azurerm_client_config` data source, which is the
+base64 of those same IDs, appears as `<client-config-id>`. The filter is
+`redact` in `common.sh`, tested by `tests/test_terraform_redact.py`; it knows
+these two shapes and no other, so read a plan before pasting it anywhere.
 
 ## Prerequisites
 
