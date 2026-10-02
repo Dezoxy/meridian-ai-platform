@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+import httpx
 import mcp_types as types
 import psycopg
 import uvicorn
@@ -32,6 +33,8 @@ from servicesupport import AUDIT_COLUMNS, REGISTRY_DIR, REPO_ROOT, claim_with_id
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
+from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.policy_mcp.seed import seed_policies
 from meridian.platform.registry import load_registry
@@ -41,6 +44,7 @@ from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
 
+GATEWAY_URL = "http://gateway.invalid"
 STARTUP_SECONDS = 15
 SYNTHETIC_DIR = REPO_ROOT / "data" / "synthetic"
 CONTRACTS_DIR = REPO_ROOT / "api" / "mcp"
@@ -75,6 +79,20 @@ def settings_for(
 ) -> ToolServerSettings:
     return ToolServerSettings(
         registry_dir=registry_dir, database_url=db.dsn(role), allowed_hosts=hosts
+    )
+
+
+def knowledge_settings_for(
+    db: DatabaseHandle,
+    registry_dir: Path = REGISTRY_DIR,
+    hosts: tuple[str, ...] = HOSTS,
+    gateway_url: str = GATEWAY_URL,
+) -> KnowledgeServerSettings:
+    return KnowledgeServerSettings(
+        registry_dir=registry_dir,
+        database_url=db.dsn("knowledge_mcp"),
+        allowed_hosts=hosts,
+        gateway_url=gateway_url,
     )
 
 
@@ -250,6 +268,17 @@ def claims_server(world: World, exporter: InMemorySpanExporter | None = None) ->
     provider = make_tracer_provider("claims-mcp", exporter)
     return create_claims_app(
         settings_for(world.db, "claims_mcp"), tracer_provider=provider
+    ).server
+
+
+def knowledge_server(
+    world: World, http: httpx.Client, exporter: InMemorySpanExporter | None = None
+) -> Any:
+    """The knowledge tool server's SDK ``Server``, over the world's database,
+    calling the gateway through ``http``."""
+    provider = make_tracer_provider("knowledge-mcp", exporter)
+    return create_knowledge_app(
+        knowledge_settings_for(world.db), http=http, tracer_provider=provider
     ).server
 
 
