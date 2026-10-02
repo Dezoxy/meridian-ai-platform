@@ -365,7 +365,7 @@ def test_the_third_claim_in_a_window_fails_when_a_search_is_refused(
         ("policy-mcp", "tool.call", "policy_lookup", "completed", None),
         ("policy-mcp", "tool.call", "claim_history", "completed", None),
         ("knowledge-mcp", "tool.call", "wording_search", "refused", "gateway-busy"),
-        ("agent-runtime", "run.failed", None, "failed", None),
+        ("agent-runtime", "run.failed", "wording_search", "failed", "tool-refused"),
     ]
     # The gateway's rows: one embedding refused for the tenant's request rate,
     # none answered and no chat call.

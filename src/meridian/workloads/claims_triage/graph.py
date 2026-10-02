@@ -11,8 +11,8 @@ no tool or model error is caught here. Only two things become a proposal for a
 person: no such policy, and a model answer that cannot be trusted (that one is
 turned into an assessment by ``assessment.py``). No log line, exception message
 or span attribute of the graph holds claim text, a tool result or model text:
-a tool result that does not fit its model raises an error that says which
-answer, not what it held.
+a tool result that does not fit its model raises a ``GraphFailure`` whose code
+says which answer, not what it held (the graph's own violations all do).
 """
 
 from typing import Any, TypedDict
@@ -20,6 +20,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ValidationError
 
+from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
 
@@ -48,19 +49,20 @@ class ClaimState(TypedDict):
     output: dict[str, Any]
 
 
-def _fitted[M: BaseModel](model: type[M], answer: Any, what: str) -> M:
-    """``answer`` as ``model``. pydantic's own error quotes the value that did
-    not fit, and that value came from a tool."""
+def _fitted[M: BaseModel](model: type[M], answer: Any, code: str) -> M:
+    """``answer`` as ``model``, or a ``GraphFailure`` with ``code``. pydantic's
+    own error quotes the value that did not fit, and that value came from a
+    tool."""
     try:
         return model.model_validate(answer)
     except ValidationError:
-        raise ValueError(f"the {what} does not fit its model") from None
+        raise GraphFailure(code) from None
 
 
 def _policy_of(state: ClaimState) -> PolicyRecord:
     """The policy of a run that went past ``lookup_policy`` with one."""
     if state["policy"] is None:
-        raise ValueError("a node that needs a policy ran without one")
+        raise GraphFailure("missing-policy")
     return PolicyRecord.model_validate(state["policy"])
 
 
@@ -109,14 +111,15 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
         }
         if not found["found"]:
             return empty
-        policy = _fitted(PolicyRecord, found["policy"], "policy record")
+        policy = _fitted(PolicyRecord, found["policy"], "policy-record-unfit")
         return {**empty, "policy": policy.model_dump(mode="json")}
 
     def load_history(state: ClaimState) -> dict[str, Any]:
         claim = ClaimFacts.model_validate(state["claim"])
         found = tools.call("claim_history", {"policy_number": claim.policy_number}).data
         entries = [
-            _fitted(HistoryEntry, entry, "history entry") for entry in found["entries"]
+            _fitted(HistoryEntry, entry, "history-entry-unfit")
+            for entry in found["entries"]
         ]
         return {
             "history": [entry.model_dump(mode="json") for entry in entries],
@@ -138,7 +141,7 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
             ):
                 # The platform contradicts itself: the clauses are not the
                 # policy's. Neither value is repeated: both came from a tool.
-                raise ValueError("the wording search answered for another wording")
+                raise GraphFailure("other-wording")
             chunks.extend(dict(chunk) for chunk in found["chunks"])
         return {"chunks": chunks}
 
@@ -165,7 +168,7 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
         if policy is None:
             assessed = _assessed_to_state(NOT_NEEDED)
         elif state["assessed"] is None:
-            raise ValueError("a proposal was asked for before the assessment ran")
+            raise GraphFailure("missing-assessment")
         else:
             assessed = state["assessed"]
         assessment = Assessment(assessed["status"], assessed["clause"])

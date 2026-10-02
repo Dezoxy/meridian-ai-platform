@@ -52,8 +52,9 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
     assert body["run_status"] == "Completed"
     # In force with a circumstance exclusion to check: the replay gateway's text
     # is no verdict, so the exclusion stays unassessed and a person decides.
+    # The answer carries no reason code: it is in the stored proposal below.
+    assert set(body["proposal"]) == {"route", "drafted_by"}
     assert body["proposal"]["route"] == "adjuster"
-    assert body["proposal"]["reason"] == "over_threshold"
     assert body["proposal"]["drafted_by"] == {
         "deployment": "replay-chat",
         "provider": "replay",
@@ -154,11 +155,15 @@ def test_a_second_post_of_the_same_claim_is_a_conflict_and_adds_no_second_trace(
     }
 
 
-def test_another_synthetic_claim_takes_the_same_path(stack: Stack) -> None:
+def test_another_synthetic_claim_takes_the_same_path(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
     response = stack.post(CLAIMS["CLM-0002"])
 
     assert response.status_code == 201
     # A lapsed policy needs no model: the rules decide from the wording alone.
-    assert response.json()["proposal"]["route"] == "adjuster"
-    assert response.json()["proposal"]["reason"] == "policy_inactive"
-    assert response.json()["proposal"]["drafted_by"] is None
+    assert response.json()["proposal"] == {"route": "adjuster", "drafted_by": None}
+    assert owner_rows(
+        fresh_database,
+        "SELECT route, reason, proposal ->> 'reason' FROM claims.triage_proposals",
+    ) == [("adjuster", "policy_inactive", "policy_inactive")]

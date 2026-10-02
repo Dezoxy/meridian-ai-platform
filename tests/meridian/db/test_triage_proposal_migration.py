@@ -8,6 +8,7 @@ from dbsupport import OWNER, SERVICE_ROLES, DatabaseHandle
 from psycopg.types.json import Jsonb
 
 from meridian.platform.common.db import connect
+from meridian.platform.migrations import runner
 from meridian.platform.migrations.runner import migration_files
 
 ROLE = "claims_api"
@@ -162,6 +163,133 @@ def test_a_row_with_neither_a_proposal_nor_a_draft_is_refused(
             "route, reason) VALUES (%s, %s, %s, 'adjuster', 'unverified')",
             (uuid.uuid4(), CLAIM_ID, RUN_ID),
         )
+
+
+INSERT_ROW = (
+    "INSERT INTO claims.triage_proposals (proposal_id, claim_id, run_id, route, "
+    "reason, proposal) VALUES (%s, %s, %s, %s, %s, %s)"
+)
+
+
+@pytest.mark.parametrize(
+    ("route", "reason", "document"),
+    [
+        ("adjuster", "unverified", {"route": "auto_approve", "reason": "unverified"}),
+        ("adjuster", "unverified", {"route": "adjuster", "reason": "excluded"}),
+        ("adjuster", "unverified", {"route": "adjuster"}),
+        ("adjuster", "unverified", {"reason": "unverified"}),
+        ("adjuster", "unverified", {"route": None, "reason": "unverified"}),
+        ("adjuster", "unverified", {"route": "adjuster", "reason": None}),
+        ("adjuster", "unverified", {"route": "Adjuster", "reason": "unverified"}),
+        ("adjuster", "unverified", {}),
+    ],
+    ids=[
+        "route-differs",
+        "reason-differs",
+        "reason-missing",
+        "route-missing",
+        "route-null",
+        "reason-null",
+        "route-case",
+        "empty-object",
+    ],
+)
+def test_columns_and_document_that_disagree_are_refused(
+    claim: DatabaseHandle, route: str, reason: str, document: dict
+) -> None:
+    # A key the document lacks must be refused too: a comparison with NULL is
+    # NULL, and a CHECK lets NULL through.
+    with pytest.raises(
+        psycopg.errors.CheckViolation, match="triage_proposals_columns_are_document"
+    ):
+        run(
+            claim,
+            ROLE,
+            INSERT_ROW,
+            (uuid.uuid4(), CLAIM_ID, RUN_ID, route, reason, Jsonb(document)),
+        )
+
+
+def test_columns_that_equal_the_document_are_accepted(claim: DatabaseHandle) -> None:
+    document = {"route": "request_documents", "reason": "missing_documents", "x": 1}
+
+    run(
+        claim,
+        ROLE,
+        INSERT_ROW,
+        (
+            uuid.uuid4(),
+            CLAIM_ID,
+            RUN_ID,
+            "request_documents",
+            "missing_documents",
+            Jsonb(document),
+        ),
+    )
+
+    assert run(
+        claim, ROLE, "SELECT route, reason, proposal FROM claims.triage_proposals"
+    ) == [("request_documents", "missing_documents", document)]
+
+
+def test_a_row_without_a_document_is_not_held_to_the_columns(
+    claim: DatabaseHandle,
+) -> None:
+    # The walking skeleton's rows have no document, so nothing to equal.
+    run(claim, ROLE, OLD_INSERT, (uuid.uuid4(), CLAIM_ID, RUN_ID))
+
+    assert run(claim, ROLE, "SELECT proposal FROM claims.triage_proposals") == [(None,)]
+
+
+def test_a_walking_skeleton_row_survives_the_migration_and_is_readable(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = migration_files()
+    assert files[6][0] == "0007_triage_proposal.sql"
+    # Up to 0006: the table as the walking skeleton left it.
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:6])
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        runner.apply_migrations(conn)
+    run(
+        empty_database,
+        ROLE,
+        "INSERT INTO claims.claims (claim_id, tenant, submission) "
+        "VALUES (%s, 'development', '{}')",
+        (CLAIM_ID,),
+    )
+    run(empty_database, ROLE, OLD_INSERT, (uuid.uuid4(), CLAIM_ID, RUN_ID))
+    columns_before = run(
+        empty_database,
+        OWNER,
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'claims' AND table_name = 'triage_proposals'",
+    )
+    assert ("proposal",) not in columns_before
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:7])
+
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        applied = runner.apply_migrations(conn)
+
+    assert applied == ["0007_triage_proposal.sql"]
+    assert run(
+        empty_database,
+        ROLE,
+        "SELECT claim_id, run_id, route, reason, draft, drafted_by_deployment, "
+        "drafted_by_provider, drafted_by_mode, proposal "
+        "FROM claims.triage_proposals",
+    ) == [
+        (
+            CLAIM_ID,
+            RUN_ID,
+            "adjuster",
+            "r",
+            "d",
+            "replay-chat",
+            "replay",
+            "replay",
+            None,
+        )
+    ]
 
 
 @pytest.mark.parametrize(

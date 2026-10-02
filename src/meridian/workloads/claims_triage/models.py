@@ -79,10 +79,12 @@ class DraftedBy(WireModel):
 
 class ProposalSummary(WireModel):
     """The answer's view of the proposal (``TriageProposal`` is in proposal.py);
-    ``reason`` is the reason code, ``drafted_by`` is null when no model ran."""
+    ``drafted_by`` is null when no model ran. It carries no reason code: with a
+    fresh claim ID per probe, the code tells a caller whether a policy number
+    exists, that a policy lapsed and, by bisecting the amount, its deductible and
+    limit. The stored proposal keeps the reason."""
 
     route: Route
-    reason: str
     drafted_by: DraftedBy | None
 
 

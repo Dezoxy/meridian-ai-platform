@@ -40,11 +40,17 @@ from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.runtime import app as runtime_app
 from meridian.runtime import graphs, runs
 from meridian.runtime.app import create_app
+from meridian.runtime.failures import GraphFailure
 from meridian.runtime.graphs import GraphLoadError
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.models import RunState
 from meridian.runtime.settings import RuntimeSettings
-from meridian.runtime.tool_client import ToolClient, ToolNotAllowed, ToolRefused
+from meridian.runtime.tool_client import (
+    ToolClient,
+    ToolNotAllowed,
+    ToolRefused,
+    ToolUnavailable,
+)
 
 CLAIM_TEXT = "claimant-secret-text-42"
 
@@ -196,6 +202,8 @@ def test_a_run_completes_is_stored_audited_and_readable(
     assert {(e["tenant"], e["agent"], e["reference"]) for e in events} == {
         ("claims-triage", "claims-triage", "CLM-0001")
     }
+    # A reason belongs to a failure, not to a run that went well.
+    assert {(e["reason"], e["tool"]) for e in events} == {(None, None)}
     (request,) = gateway.requests
     assert request.headers["X-Meridian-Run"] == str(run_id)
     assert request.headers["X-Meridian-Tenant"] == "claims-triage"
@@ -287,6 +295,63 @@ def test_a_graph_that_raises_answers_502_and_is_marked_failed(
     assert CLAIM_TEXT not in str(audit_events(fresh_database, run_id))
 
 
+def failed_row(db: DatabaseHandle, response: httpx.Response) -> dict:
+    """The ``run.failed`` audit row of the run ``response`` answered for."""
+    events = audit_events(db, uuid.UUID(response.json()["run_id"]))
+    (row,) = [e for e in events if e["event"] == "run.failed"]
+    return row
+
+
+def test_a_failed_run_says_why_in_its_audit_row_and_its_log(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            raise RuntimeError(f"boom {CLAIM_TEXT}")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    row = failed_row(fresh_database, response)
+    assert (row["reason"], row["tool"]) == ("unexpected", None)
+    assert "unexpected" in caplog.text
+    assert response.json()["run_id"] in caplog.text
+    # Not the exception's text: it could hold claim text.
+    assert "boom" not in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+
+
+def test_a_graph_failure_names_its_code_in_the_audit_row_and_the_log(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            raise GraphFailure("some-code")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    assert response.status_code == 502
+    assert response.json()["status"] == "Failed"
+    row = failed_row(fresh_database, response)
+    assert (row["reason"], row["tool"]) == ("some-code", None)
+    assert "some-code" in caplog.text
+    assert response.json()["run_id"] in caplog.text
+    assert "some-code" not in response.text  # the caller is not told
+
+
 def test_a_gateway_refusal_fails_the_run(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -296,6 +361,7 @@ def test_a_gateway_refusal_fails_the_run(
 
     assert response.status_code == 502
     assert response.json()["status"] == "Failed"
+    assert failed_row(fresh_database, response)["reason"] == "model-error"
 
 
 def test_an_output_that_is_not_an_object_fails_the_run(
@@ -378,6 +444,31 @@ def test_a_graph_that_calls_the_model_past_the_limit_ends_failed(
     assert len(gateway.requests) == runs.MAX_MODEL_CALLS_PER_RUN
     ((_, _, _, _, _, status),) = run_rows(fresh_database)
     assert status == "Failed"
+    row = failed_row(fresh_database, response)
+    assert (row["reason"], row["tool"]) == ("model-call-limit", None)
+
+
+def test_a_graph_that_calls_tools_past_the_limit_ends_failed_with_that_reason(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            # No server is configured, so each call is unavailable; the call
+            # past the limit is the one that raises the limit.
+            for _ in range(runs.MAX_TOOL_CALLS_PER_RUN + 1):
+                with contextlib.suppress(ToolUnavailable):
+                    tools.call("policy_lookup", {"policy_number": POLICY})
+            return {"output": {}}
+
+        return graph_of(work)
+
+    register(monkeypatch, factory)
+
+    response = start(make_client(fresh_database))
+
+    assert response.status_code == 502
+    row = failed_row(fresh_database, response)
+    assert (row["reason"], row["tool"]) == ("tool-call-limit", "policy_lookup")
 
 
 # ── authorisation and loading ───────────────────────────────────────────────
@@ -692,11 +783,49 @@ class FlakyFinish:
         self.calls = 0
         self.real = runs.finish_run
 
-    def __call__(self, dsn: str, identity: runs.RunIdentity, status: str) -> None:
+    def __call__(
+        self, dsn: str, identity: runs.RunIdentity, status: str, **why: str | None
+    ) -> None:
         self.calls += 1
         if self.calls <= self.failures:
             raise psycopg.OperationalError(f"down {CLAIM_TEXT}")
-        self.real(dsn, identity, status)
+        self.real(dsn, identity, status, **why)
+
+
+def test_the_retry_of_finish_run_keeps_the_reason_of_a_failed_run(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            raise GraphFailure("a-code")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+    flaky = FlakyFinish(failures=1)
+    monkeypatch.setattr(runs, "finish_run", flaky)
+
+    response = start(make_client(fresh_database))
+
+    assert (response.status_code, flaky.calls) == (502, 2)
+    assert failed_row(fresh_database, response)["reason"] == "a-code"
+
+
+def test_finish_run_takes_a_reason_for_a_failed_run_only() -> None:
+    identity = runs.RunIdentity(
+        run_id=uuid.uuid4(),
+        thread_id=uuid.uuid4(),
+        agent="claims-triage",
+        tenant="claims-triage",
+        reference="CLM-0001",
+    )
+
+    with pytest.raises(ValueError, match="Failed"):
+        runs.finish_run("postgresql://nowhere.invalid/x", identity, "Completed", "r")
+    with pytest.raises(ValueError, match="Failed"):
+        runs.finish_run(
+            "postgresql://nowhere.invalid/x", identity, "Completed", tool="t"
+        )
 
 
 def test_finish_run_is_retried_once(
@@ -749,6 +878,7 @@ def test_a_gateway_timeout_fails_the_run_with_504(
     assert response.status_code == 504
     assert response.json()["status"] == "Failed"
     assert run_rows(fresh_database)[0][5] == "Failed"
+    assert failed_row(fresh_database, response)["reason"] == "model-timeout"
 
 
 def test_the_log_of_a_refused_gateway_call_names_the_status_code(
@@ -763,6 +893,7 @@ def test_the_log_of_a_refused_gateway_call_names_the_status_code(
 
     assert "ModelCallError" in caplog.text
     assert "403" in caplog.text
+    assert "model-error" in caplog.text
 
 
 # ── checkpoints hold claimant data, so they are dropped with the run ────────
@@ -965,8 +1096,29 @@ def test_a_tool_refusal_the_node_does_not_catch_fails_the_run_with_502(
     assert [(e["service"], e["event"], e["outcome"], e["reason"]) for e in events] == [
         ("agent-runtime", "run.started", "started", None),
         ("policy-mcp", "tool.call", "refused", "outside-claim"),
-        ("agent-runtime", "run.failed", "failed", None),
+        ("agent-runtime", "run.failed", "failed", "tool-refused"),
     ]
+    assert failed_row(fresh_database, response)["tool"] == "policy_lookup"
+
+
+def test_the_log_of_a_refused_tool_call_names_the_tool_and_the_refusal(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = seed_world(fresh_database)
+    register(monkeypatch, policy_node("POL-0001"))  # not the claim's policy
+    client = make_client(
+        fresh_database, tool_servers={"policy-mcp": policy_server(world)}
+    )
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        start(client)
+
+    assert "tool-refused" in caplog.text
+    assert "policy_lookup" in caplog.text
+    assert "outside-claim" in caplog.text
+    assert "POL-0001" not in caplog.text
 
 
 def test_a_node_that_catches_the_refusal_completes_the_run(
@@ -1001,7 +1153,7 @@ def test_a_tool_the_agent_may_not_call_is_audited_by_the_runtime_and_fails_the_r
     ] == [
         ("agent-runtime", "run.started", "started", None, None),
         ("agent-runtime", "tool.call", "refused", "tool-not-allowed", None),
-        ("agent-runtime", "run.failed", "failed", None, None),
+        ("agent-runtime", "run.failed", "failed", "tool-not-allowed", None),
     ]
 
 

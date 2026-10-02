@@ -271,9 +271,7 @@ def create_app(
                     None
                     if proposal is None
                     else ProposalSummary(
-                        route=proposal.route,
-                        reason=proposal.reason,
-                        drafted_by=proposal.drafted_by,
+                        route=proposal.route, drafted_by=proposal.drafted_by
                     )
                 ),
             )

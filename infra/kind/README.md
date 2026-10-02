@@ -202,8 +202,8 @@ Claims API through the edge, with a W3C `traceparent` header whose trace ID the
 script made up. A claim that already has a triage proposal answers 409 and the
 script moves on to the next one, so each run uses the next claim (40 are
 available); it stops at the first 201. It prints the claim ID, the status, the
-route, the reason and the deployment the model call went to, or that no model
-was called (never a claimant field),
+route and the deployment the model call went to, or that no model was called
+(never a claimant field, and not the reason: the answer does not carry it),
 then reads the trace by that ID from Tempo through Grafana's datasource proxy,
 retrying for up to 120 seconds. It prints PASS only if the trace has spans from
 `claims-api`, `agent-runtime` and `model-gateway`, with the span count of each,

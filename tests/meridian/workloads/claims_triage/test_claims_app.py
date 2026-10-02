@@ -147,11 +147,7 @@ def test_a_claim_is_stored_triaged_and_answered_201(
         "claim_id": "CLM-9101",
         "run_id": str(runtime.run_id),
         "run_status": "Completed",
-        "proposal": {
-            "route": "adjuster",
-            "reason": "unverified",
-            "drafted_by": DRAFTED_BY,
-        },
+        "proposal": {"route": "adjuster", "drafted_by": DRAFTED_BY},
     }
     ((tenant, submission),) = owner_rows(
         fresh_database, "SELECT tenant, submission FROM claims.claims"
@@ -203,11 +199,13 @@ def test_each_of_the_three_routes_is_stored_and_answered(
     response = client.post("/claims", json=claim_with_id("CLM-9112"))
 
     assert response.status_code == 201
+    # No reason code and no indicator in the answer: with a fresh claim ID per
+    # probe they would tell a caller about a policy or a flag on the claim.
     assert response.json()["proposal"] == {
         "route": route,
-        "reason": output["reason"],
         "drafted_by": output["drafted_by"],
     }
+    assert output["reason"] not in response.text
     assert owner_rows(
         fresh_database,
         "SELECT run_id, route, reason, proposal FROM claims.triage_proposals",

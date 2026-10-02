@@ -92,14 +92,22 @@ def test_a_submission_is_frozen() -> None:
 
 
 DRAFTED_BY = {"deployment": "replay-chat", "provider": "replay", "mode": "replay"}
-SUMMARY = {"route": "adjuster", "reason": "unverified", "drafted_by": DRAFTED_BY}
+SUMMARY = {"route": "adjuster", "drafted_by": DRAFTED_BY}
 
 
-def test_a_proposal_summary_takes_a_reason_code_and_a_drafted_by() -> None:
+def test_a_proposal_summary_takes_a_route_and_a_drafted_by() -> None:
     summary = ProposalSummary.model_validate(SUMMARY)
 
     assert summary.drafted_by is not None
     assert summary.drafted_by.provider == "replay"
+
+
+def test_a_proposal_summary_has_no_reason() -> None:
+    # The reason code would tell a caller whether a policy exists, lapsed, and
+    # (by bisecting the amount) its deductible and limit.
+    assert "reason" not in ProposalSummary.model_fields
+    with pytest.raises(ValidationError):
+        ProposalSummary.model_validate(SUMMARY | {"reason": "unverified"})
 
 
 def test_a_proposal_summary_may_say_that_no_model_was_called() -> None:
@@ -129,7 +137,7 @@ def test_a_summary_with_an_unknown_route_or_field_is_refused(
 
 def test_a_summary_leaves_out_the_drafted_by_field_only_by_saying_null() -> None:
     with pytest.raises(ValidationError):
-        ProposalSummary.model_validate({"route": "adjuster", "reason": "unverified"})
+        ProposalSummary.model_validate({"route": "adjuster"})
 
 
 def test_the_facts_are_the_submission_without_the_claimant() -> None:

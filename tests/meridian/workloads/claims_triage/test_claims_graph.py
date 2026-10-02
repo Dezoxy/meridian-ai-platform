@@ -22,6 +22,7 @@ from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.knowledge_mcp.chunking import parse_wording
 from meridian.platform.registry import load_registry
+from meridian.runtime.failures import GraphFailure, failure_reason
 from meridian.runtime.graphs import load_graph_factory
 from meridian.runtime.model_client import (
     ChatResult,
@@ -498,8 +499,31 @@ def test_a_proposal_without_an_assessment_in_the_state_is_a_failure() -> None:
         "output": {},
     }
 
-    with pytest.raises(ValueError, match="assessment"):
+    with pytest.raises(GraphFailure) as raised:
         graph.nodes["propose"].runnable.invoke(state)
+
+    assert raised.value.code == "missing-assessment"
+
+
+@pytest.mark.parametrize("node", ["retrieve_terms", "assess"])
+def test_a_node_that_needs_a_policy_fails_without_one(node: str) -> None:
+    """``lookup_policy`` routes a claim without a policy to ``propose``, so a
+    state that reaches a later node with none is a bug of the graph."""
+    graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
+    state = {
+        "claim": facts("CLM-0011"),
+        "policy": None,
+        "history": [],
+        "history_truncated": False,
+        "chunks": [],
+        "assessed": None,
+        "output": {},
+    }
+
+    with pytest.raises(GraphFailure) as raised:
+        graph.nodes[node].runnable.invoke(state)
+
+    assert raised.value.code == "missing-policy"
 
 
 @pytest.fixture
@@ -706,9 +730,10 @@ def test_a_search_answer_for_another_wording_version_fails_the_run() -> None:
 
     model = StubModel()
 
-    with pytest.raises(ValueError, match="wording"):
+    with pytest.raises(GraphFailure) as raised:
         triage("CLM-0011", model, StubTools(tamper=other_version))
 
+    assert raised.value.code == "other-wording"
     assert model.calls == []
 
 
@@ -716,8 +741,10 @@ def test_a_search_answer_for_another_product_fails_the_run() -> None:
     def other_product(number: int, answer: dict[str, Any]) -> dict[str, Any]:
         return {**answer, "product": "HOME-STD"}
 
-    with pytest.raises(ValueError, match="wording"):
+    with pytest.raises(GraphFailure) as raised:
         triage("CLM-0011", tools=StubTools(tamper=other_product))
+
+    assert raised.value.code == "other-wording"
 
 
 def test_a_policy_answer_that_does_not_fit_fails_the_run() -> None:
@@ -725,9 +752,10 @@ def test_a_policy_answer_that_does_not_fit_fails_the_run() -> None:
     broken = {"found": True, "policy": {**policy["policy"], "status": CANARY}}
     tools = StubTools(answers={"policy_lookup": broken})
 
-    with pytest.raises(ValueError, match="does not fit") as raised:
+    with pytest.raises(GraphFailure) as raised:
         triage("CLM-0011", tools=tools)
 
+    assert raised.value.code == "policy-record-unfit"
     assert CANARY not in str(raised.value)
     assert tools.names() == ["policy_lookup"]
 
@@ -738,9 +766,10 @@ def test_a_history_entry_that_does_not_fit_fails_the_run() -> None:
         answers={"claim_history": {"entries": [entry], "truncated": False}}
     )
 
-    with pytest.raises(ValueError, match="does not fit") as raised:
+    with pytest.raises(GraphFailure) as raised:
         triage("CLM-0011", tools=tools)
 
+    assert raised.value.code == "history-entry-unfit"
     assert CANARY not in str(raised.value)
     assert tools.names() == ["policy_lookup", "claim_history"]
 
@@ -829,11 +858,12 @@ def test_no_log_line_and_no_error_holds_claim_text_or_a_tool_result(
     def other_version(number: int, answer: dict[str, Any]) -> dict[str, Any]:
         return {**answer, "wording_version": f"{CANARY}-v"}
 
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(GraphFailure) as raised:
         triage(
             "CLM-0011", tools=StubTools(tamper=other_version), description=description
         )
 
+    assert failure_reason(raised.value) == "other-wording"
     assert CANARY not in str(raised.value)
     assert "2026-01" not in str(raised.value)
     assert not any(CANARY in record.getMessage() for record in caplog.records)
