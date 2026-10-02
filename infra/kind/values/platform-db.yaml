@@ -91,6 +91,10 @@ databases:
     extensions:
       - name: vector
   # The Meridian applications' database (migration 0001 creates the schemas in
-  # it). No vector extension: S012 decides where pgvector lives.
+  # it). It carries pgvector too: the knowledge store (migration 0005, S012)
+  # needs it, and meridian_owner cannot create a non-trusted extension, so the
+  # operator does it here and the migration only checks that it is there.
   - name: meridian
     owner: meridian_owner
+    extensions:
+      - name: vector

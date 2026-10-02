@@ -9,8 +9,9 @@
   the same region and holds each tenant to its rate limits and budgets,
   it answers embedding requests under the same controls (in replay mode
   and against a mocked Azure; not yet run against Azure), two MCP tool
-  servers and the runtime's client for them are proven in tests, and no
-  service runs in Azure yet.
+  servers and the runtime's client for them are proven in tests, the policy
+  wordings can be ingested into pgvector and searched (in tests, with a
+  simulated embedding), and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -139,10 +140,11 @@ and Pydantic, at the cost of one dependency.
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced, with the cost reserved before the call; cost metered per tenant, agent, model and provider; ~~one audit record per call; a Grafana cost panel~~ a call ID on every audit record of a call (split on 2026-10-01: the Grafana panel is S043) | done | S010 |
 | S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | todo | S011, S041 |
 | S045 | Gateway embeddings | `POST /v1/embeddings` on the Model Gateway: the embedding route walked like the chat route, with the same caller headers, residency filter, tenant limits, ledger and audit; a simulated replay embedding; the Azure OpenAI adapter; the registry gives each embedding deployment its dimensions and refuses a route whose candidates differ in model or dimensions; contract tests pass | done | S010, S011, S042 |
-| S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set (split on 2026-10-02: the gateway's embedding endpoint is S045) | todo | S003, S009, S045 |
+| S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; ~~the knowledge MCP server returns cited chunks;~~ retrieval checked against a labelled query set (split on 2026-10-02: the gateway's embedding endpoint is S045, and the knowledge MCP server is S046) | done | S003, S009, S045 |
+| S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | todo | S012, S013 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | todo | S013, S041 |
-| S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S012, S013 |
+| S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S013, S046 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
@@ -2513,6 +2515,214 @@ reason to reach a provider itself (hard rule 4).
   8,191 tokens per input, which answers 502, as an oversized chat prompt
   does.
 
+### S012 — Knowledge and retrieval
+
+**Status:** done · **Started:** 2026-10-02 · **Finished:** 2026-10-02
+**Goal:** the policy wordings are in the platform database as clause chunks
+with their vectors, a search finds the clauses of one product and version
+for a query, and a check says how well.
+**Decisions:**
+
+- A second cut, which S045 foresaw, made by the session for the owner to
+  accept or reverse at the pull request: this step is the store, the
+  ingestion, the search and the retrieval check. The knowledge tool server
+  is S046, and S014 depends on it. The server alone needs a third kind of
+  binding, a database role, an output schema, the split of the kit's
+  `server.py` and a gateway client inside a tool server.
+- This step ran in the session that closed S045, after `/compact`, because
+  the owner said to go on. Part A asks for a new session.
+- pgvector lives in the `meridian` database, which answers S041's
+  follow-up. The extension is not one PostgreSQL trusts: a probe showed
+  `permission denied to create extension "vector"` for a database owner who
+  is not a superuser. So it is created out of band, like the roles, and
+  migration 0005 only checks that it is there and that its type can be
+  named.
+- The test database is `pgvector/pgvector:0.8.6-pg17-trixie`, pinned by
+  digest, in CI and `make pytest-db`. The kind image was read: PostgreSQL
+  17.11 with pgvector 0.8.6 on Debian trixie, and the test image is the
+  same three. Rejected: the official `postgres` image, which has no
+  pgvector, and the CloudNativePG image, which has no entry point a CI
+  service container can use.
+- One chunk per clause, keyed by product, wording version and clause: 85
+  chunks from four wordings, the longest 400 characters. A citation in the
+  golden set is a clause, so a clause is what a search must return.
+  Rejected: windows of a fixed size, which would cut a clause or join two.
+  A section's introduction is not stored and is counted.
+- No tenant column: the wordings are the insurer's product documents, class
+  `internal`, shared like the simulated policy store.
+- Each row keeps the deployment, the model and the dimensions of its
+  vector in an untyped `vector` column, and the table refuses a vector of
+  another length than its row says (T-54). A change of the dimensions in
+  the registry then needs a new ingestion, not a migration. No vector
+  index: under a hundred rows are compared exactly. Rejected: `vector(1024)`
+  with an HNSW index, which fixes the registry's number in the schema and
+  trades recall for a speed nothing here needs. No index on the lexemes
+  either: the one query reads through a materialised CTE and could not use
+  it.
+- **This changes what earlier steps shipped:**
+  - S008: a registry agent has a `kind`, `graph` unless it says `job`. A
+    job calls the gateway under its own name and may list no tool.
+  - S009: the runtime resolves a graph for agents of kind `graph` only and
+    refuses a run for a job with the audited reason `not-a-graph-agent`. A
+    graph agent without a published graph still stops the start (T-40).
+  - The reason: the ingestion needs an identity at the gateway, and the
+    runtime loaded a graph for every agent in the registry, so the new
+    agent stopped it from starting (59 tests failed on that one error).
+    Rejected: the ingestion calling as `claims-triage`, which would book
+    its cost and its audit rows under triage; and a graph published for
+    something that is not one.
+- The ingestion has no tenant of its own, because the tenants' limits
+  already add up to the deployment's (10 + 6 + 4 requests, 20,000 tokens),
+  so validation refuses a fourth. It runs as `claims-triage`, the only
+  tenant that lists the agent, and refuses a tenant whose class may reach a
+  residency that `internal` may not (T-60). The gateway records its calls
+  as `personal`, which is stricter than the text.
+- The ingestion follows the policy seed: the owner's connection, the
+  generator's manifest, the hash of every wording. Everything is embedded
+  before anything is written; the corpus is replaced in one transaction
+  with one audit row. A refusal writes its own audit row with a reason
+  word and nothing else.
+- The search is one statement, so both halves see one corpus (T-58). The
+  keyword half is an OR of the lexemes PostgreSQL's parser gives for the
+  query, each quoted, ranked by `ts_rank_cd` with the title above the body
+  (T-59). The vector half is exact cosine distance over the rows of the
+  query's own deployment and length. Reciprocal rank fusion with k = 60
+  joins them. A scope with a row of another deployment, another length or
+  no distance is refused: never an answer from keywords alone.
+- The retrieval check has three query families from the generator's
+  output. Narrative: a claim's description, with its citations in sections
+  2 and 3 as the answer. Documents: "documents needed for a <peril> claim"
+  for a claim that cites a documents clause. Concept: five fixed questions
+  per product. The first design labelled the documents clauses against the
+  description and measured 0 of 8 at rank 1; a description says nothing
+  about documents, so the label was wrong and the family was rebuilt. The
+  phrases of the documents and concept families share words with the
+  clause titles, so those two check the plumbing, not meaning.
+- **What the numbers say, and do not.** The embedding is simulated, a
+  hashed bag of words, so both halves rank by word overlap. In this mode
+  the keyword half alone is as good as or better than the fusion at ranks
+  1, 3 and 5; the fusion is ahead only at rank 10 for narratives. Nothing
+  was tuned to change that. The fusion stays because the vector half is
+  meant to be a real model, and whether it earns its place is what the
+  first live run decides. The floors in the test are plumbing regression
+  floors, not a measurement of retrieval quality.
+- No `meridian knowledge check` command: the test is the check, and no
+  gateway runs outside the tests and kind, so a command could not be run.
+  `meridian knowledge ingest` exists and has been run only in tests.
+- The architecture model is not changed. It has the ingestion pipeline
+  behind the Knowledge MCP Server: the code is in that container's package
+  and is run as a command with the owner's connection, as the policy seed
+  is.
+- `wording_search` lists the fourth product, `MOTOR-TPL`.
+- Reviewed and not done: the residency rule of T-60 in registry
+  validation (the registry does not know what a job sends); comparing the
+  manifest with the committed one; an advisory lock for two ingestions at
+  once (the second fails on the primary key and writes nothing); opening
+  the database connection after the embedding; a statement-timeout check
+  inside the search; queries that have no answer, and a threshold for "no
+  sufficient match" (the search now returns the keyword score and the
+  distance S046 needs for it); the kind scripts (below).
+
+**Work log:**
+
+- The `feature-threat-model` skill before any code: T-57 to T-60 added.
+- Probed before designing: the extension as a non-superuser, the chunks
+  and the golden citations, and both rankings on a scratch database.
+- The `implementer` subagent worked in four contracts: the store and the
+  ingestion; the `job` kind; the search and the retrieval check; the
+  review fixes. In the last one it made most of its edits through scripts
+  and `sed`, against the contract, and said so; the per-edit hooks did not
+  fire on those files. The main session read every changed source file
+  afterwards and ran every gate itself.
+- Reviews by `security-reviewer`, `database-reviewer`,
+  `rag-pipeline-reviewer`, `python-reviewer`, `platform-boundary-reviewer`
+  and `infra-reviewer`: no critical finding, one high. Fixed here: the
+  chunker dropped the rest of a clause after a heading of another level,
+  silently (high, found by three reviewers); a gateway address with a
+  password reached an httpx log line; a refused ingestion left no audit
+  row; a stored vector with no distance was dropped from the answer
+  instead of refusing it; a 429 without `Retry-After` was retried for five
+  minutes; the labels of the retrieval check; the test image was older
+  than the kind image; an index no query could use.
+- The `docs-sync` skill: the README, the registry README, the kind README,
+  the tool-contract README, the threat model and this plan were what the
+  branch falsified.
+
+**Result / verification:** run by the main session on the final code.
+
+- `make pytest-db`: `2974 passed, 3 skipped` (the three are the opt-in
+  live Azure tests). `make pytest`: `1867 passed, 1110 skipped`.
+- `make lint`: `Contracts: 4 kept, 0 broken.` `make registry`:
+  `schemas OK: up to date`, `contracts OK: up to date`. `make test`: 117
+  tests, `OK`. `make docs`: `13 checks passed`.
+- Thirteen mutations, each caught by a test and then restored byte for
+  byte: a wording whose hash is not the manifest's accepted; a tenant
+  whose class may leave the EU accepted; batches of two deployments
+  accepted; the stale-vectors refusal removed; the wording version
+  ignored; a run for a job agent not refused; the job check removed from
+  the registry's checks; the vector-length constraint removed; a heading
+  of another level ending a clause; a refused ingestion writing no row; a
+  gateway address with a password accepted; a 429 without a wait retried
+  without a count; a vector with no distance dropped silently.
+- The retrieval check, in replay mode on PostgreSQL 17.11 with pgvector
+  0.8.6, as hits over labelled clauses at ranks 1, 3, 5 and 10. Chance is
+  what a random ranking of the scope gives.
+
+  | Family | Ranking | @1 | @3 | @5 | @10 |
+  |---|---|---|---|---|---|
+  | Narrative | keyword | 14/28 | 19/28 | 21/28 | 22/28 |
+  | Narrative | vector | 3/28 | 9/28 | 13/28 | 19/28 |
+  | Narrative | fused | 11/28 | 19/28 | 20/28 | 23/28 |
+  | Narrative | chance | 1.3/28 | 4.0/28 | 6.7/28 | 13.3/28 |
+  | Narrative, cover clauses | fused | 10/20 | 17/20 | 17/20 | 18/20 |
+  | Narrative, exclusions | keyword | 3/8 | 4/8 | 5/8 | 5/8 |
+  | Narrative, exclusions | fused | 1/8 | 2/8 | 3/8 | 5/8 |
+  | Documents | all three | 6/6 | 6/6 | 6/6 | 6/6 |
+  | Concept | keyword | 15/20 | 17/20 | 19/20 | 20/20 |
+  | Concept | fused | 7/20 | 10/20 | 13/20 | 19/20 |
+
+  Exclusions are the weak spot: a claimant writes "old and rotten", the
+  clause says "wear and tear", and word overlap cannot join them.
+- Shown by the implementer and not rerun by the main session: pgvector
+  stores a component under 1e-45 as 0, answers NaN for the distance from an
+  all-zero vector and refuses a component over the 4-byte range; the tests
+  in `test_vectors.py` pin it.
+- Not run: any call to Azure (the login is still blocked), so no real
+  embedding has been stored or searched; anything on kind (there is no
+  cluster), so the extension's declaration for the `meridian` database is
+  checked by the manifest tests only; `meridian knowledge ingest` outside
+  the tests.
+
+**Follow-ups:**
+
+- The owner, once the Azure login works: an ingestion and the retrieval
+  check with the real model. Decide by a rule set beforehand whether the
+  vector half stays: fused must beat keyword on queries that share no word
+  with their clause, by per-query wins and losses. Compare 1,024 dimensions
+  with 3,072, and retrieval with sending all clauses of a product (about
+  2,000 tokens).
+- S046: the tool server's role and grants in a new migration (the tests
+  that say only the owner holds a privilege change with it); the product
+  and the wording version bound to the run's own policy; a default
+  `top_k`; a status for "no sufficient match" from the keyword score and
+  the distance; end the read transaction after a search; open the
+  connection through `connect()`, which sets the statement timeout; the
+  deductible, limit, reporting and period clauses could be fetched by
+  number instead of searched.
+- S044: on a cluster, `make smoke` should look for the extension in
+  `meridian`, and `up.sh` and `deploy.sh` should wait until the operator
+  has created it; on a cluster older than this step the migration can run
+  first and fail.
+- S020: on Azure Database for PostgreSQL the extension must be
+  allow-listed and created by an administrator before the migration, and
+  its pgvector version read and compared with the test image's.
+- S014 and S017: a proposal's citations must be clauses the run retrieved;
+  the evaluation harness needs a job identity of its own for a judge model.
+- No step yet: nothing watches the test image's pin (Dependabot reads
+  Dockerfiles only); after a PostgreSQL major upgrade the store must be
+  ingested again, because the stored lexemes come from that version's
+  dictionary; ingestion tests that run without a database.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -2566,3 +2776,8 @@ reason to reach a provider itself (hard rule 4).
   which ingestion and search both need first; S012 keeps the store, the
   ingestion, hybrid search, the knowledge tool server and the labelled
   query set, and depends on S045.
+- **v0.14, 2026-10-02:** S012 cut a second time by the session, for the
+  owner to accept at its pull request: S012 is the knowledge store, the
+  ingestion, hybrid search and the retrieval check; S046, new, is the
+  knowledge MCP server, and S014 depends on it. A registry agent has a
+  kind, and the runtime runs only agents of kind `graph`.

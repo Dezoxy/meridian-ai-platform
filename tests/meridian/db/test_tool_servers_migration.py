@@ -170,7 +170,8 @@ def test_the_generated_policy_number_is_filled_for_claims_that_already_exist(
             "VALUES (%s, 'development', %s)",
             (claim_id, json.dumps(submission)),
         )
-    monkeypatch.setattr(runner, "migration_files", lambda: files)
+    # Up to 0004 only: later migrations are not what this test is about.
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:4])
 
     with connect(empty_database.dsn(OWNER), "test") as conn:
         applied = runner.apply_migrations(conn)

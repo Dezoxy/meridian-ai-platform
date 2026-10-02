@@ -13,6 +13,15 @@
           "title": "Id",
           "type": "string"
         },
+        "kind": {
+          "default": "graph",
+          "enum": [
+            "graph",
+            "job"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
         "tools": {
           "items": {
             "pattern": "^[a-z][a-z0-9_]*$",

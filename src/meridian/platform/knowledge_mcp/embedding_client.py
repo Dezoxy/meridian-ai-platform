@@ -1,0 +1,156 @@
+"""The ingestion's client of the Model Gateway's ``POST /v1/embeddings`` (S012).
+
+Like the runtime's ``ModelClient`` it sets the three ``X-Meridian-*`` headers
+and forwards the trace context, and like it, it does not import the gateway's
+models: the two services share a wire contract, not code. It also refuses an
+answer that is not that contract, because a vector the table would accept but
+the search could not compare is worse than no vector (T-54): a vector the
+database cannot compare (``usable_vector``) is refused before it is stored.
+"""
+
+import math
+import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Annotated
+
+import httpx
+from opentelemetry import propagate
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from meridian.platform.knowledge_mcp.store import usable_vector
+
+EMBEDDINGS_PATH = "/v1/embeddings"
+RETRY_AFTER_HEADER = "Retry-After"
+HTTP_TOO_MANY_REQUESTS = 429
+# The lengths of the columns of knowledge.chunks that name the model.
+NAME_MAX_CHARACTERS = 128
+
+
+class EmbeddingCallError(Exception):
+    """The gateway did not answer an embedding call with a usable 2xx.
+
+    Carries the status code and, for a 429, the wait the gateway asked for. The
+    body is never kept (it could echo an input) and no input text is in the
+    message. ``status_code`` is 0 when there was no usable answer: the call
+    failed in transit or the answer was not the contract.
+    """
+
+    def __init__(
+        self, status_code: int, retry_after_seconds: float | None = None
+    ) -> None:
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(
+            f"model gateway answered {status_code}"
+            if status_code
+            else "model gateway gave no usable answer"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingBatch:
+    """One vector per text, in the order the texts were sent, and the registry's
+    name for what made them: only vectors of one deployment are comparable."""
+
+    deployment: str
+    model: str
+    dimensions: int
+    vectors: tuple[tuple[float, ...], ...]
+    input_tokens: int
+
+
+Name = Annotated[str, Field(min_length=1, max_length=NAME_MAX_CHARACTERS)]
+
+
+class _Reply(BaseModel):
+    """Only the fields of the gateway's reply that ``EmbeddingBatch`` needs.
+
+    Unknown fields are ignored, so a newer gateway never breaks the client. The
+    types are strict: a boolean is not a vector component, and NaN or infinity
+    is no component either.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    class Usage(BaseModel):
+        model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+        input_tokens: Annotated[int, Field(ge=0)]
+
+    deployment: Name
+    model: Name
+    dimensions: Annotated[int, Field(ge=1)]
+    embeddings: tuple[tuple[Annotated[float, Field(allow_inf_nan=False)], ...], ...]
+    usage: Usage
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """The wait a 429 asked for, when it is a finite number of seconds that is
+    not negative; an HTTP date or anything else is no wait at all."""
+    if response.status_code != HTTP_TOO_MANY_REQUESTS:
+        return None
+    try:
+        seconds = float(response.headers.get(RETRY_AFTER_HEADER, ""))
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+class EmbeddingClient:
+    """Built per ingestion, over an injected client whose base URL is the
+    gateway. ``run_id`` is the one every call of the ingestion carries; the
+    tenant and the agent are the ones the calls go out under, readable so that
+    a caller checks the registry for the very values the gateway will see."""
+
+    def __init__(
+        self, http: httpx.Client, *, tenant: str, agent: str, run_id: uuid.UUID
+    ) -> None:
+        self._http = http
+        self._tenant = tenant
+        self._agent = agent
+        self.run_id = run_id
+        self._headers = {
+            "X-Meridian-Tenant": tenant,
+            "X-Meridian-Agent": agent,
+            "X-Meridian-Run": str(run_id),
+        }
+
+    @property
+    def tenant(self) -> str:
+        return self._tenant
+
+    @property
+    def agent(self) -> str:
+        return self._agent
+
+    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+        headers = dict(self._headers)
+        propagate.inject(headers)
+        try:
+            response = self._http.post(
+                EMBEDDINGS_PATH, json={"inputs": list(texts)}, headers=headers
+            )
+        except httpx.HTTPError:
+            # Neither the transport's message nor its cause is kept.
+            raise EmbeddingCallError(0) from None
+        if not 200 <= response.status_code < 300:
+            raise EmbeddingCallError(response.status_code, _retry_after(response))
+        try:
+            reply = _Reply.model_validate_json(response.content)
+        except ValidationError:
+            raise EmbeddingCallError(0) from None
+        vectors = reply.embeddings
+        if (
+            len(vectors) != len(texts)
+            or any(len(vector) != reply.dimensions for vector in vectors)
+            or not all(usable_vector(vector) for vector in vectors)
+        ):
+            raise EmbeddingCallError(0)
+        return EmbeddingBatch(
+            deployment=reply.deployment,
+            model=reply.model,
+            dimensions=reply.dimensions,
+            vectors=vectors,
+            input_tokens=reply.usage.input_tokens,
+        )

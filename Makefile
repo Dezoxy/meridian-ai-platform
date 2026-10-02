@@ -23,9 +23,12 @@ PORT      ?= 8080
 REGISTRY_SNAPSHOT := config/registry/snapshots/terraform-openai-deployments.json
 # The throwaway PostgreSQL of `make pytest-db`; the image is the one the python
 # workflow runs as its service container (a test compares the two strings), so
-# it is pinned with := and a command line does not override it. A run that
+# it is pinned with := and a command line does not override it. It is
+# PostgreSQL 17.11 with pgvector 0.8.6 on Debian trixie (the knowledge store,
+# S012): the same PostgreSQL, pgvector and OS release as the CloudNativePG
+# image kind runs, so the tests see what the cluster will. A run that
 # overlaps another needs its own name and port.
-PYTEST_DB_IMAGE     := postgres:17.11@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+PYTEST_DB_IMAGE     := pgvector/pgvector:0.8.6-pg17-trixie@sha256:724a4041afdb1750446e3f6b5cfa8f3b0ac5a2cf538ddfa6bfee4f94c2fa85c6
 PYTEST_DB_CONTAINER ?= meridian-pytest-db
 PYTEST_DB_PORT      ?= 55432
 # Extra pytest arguments for `make pytest-db`, e.g. one test file.

@@ -223,7 +223,11 @@ def claim_of_another_tenant(world: World) -> uuid.UUID:
     return add_run(world.db, "CLM-0002")
 
 
-PLANT_NO_AGENTS = ("tenants.yaml", "agents: [claims-triage]", "agents: []")
+PLANT_NO_AGENTS = (
+    "tenants.yaml",
+    "agents: [claims-triage, knowledge-ingestion]",
+    "agents: []",
+)
 PLANT_NO_HISTORY = ("agents.yaml", "      - claim_history\n", "")
 PLANT_APPROVAL = (
     "tools.yaml",

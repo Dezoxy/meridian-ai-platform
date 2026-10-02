@@ -50,6 +50,8 @@ GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
 # The audit reason of a call the runtime's own allowlist refuses.
 REFUSAL_REASON = "tool-not-allowed"
+# The audit reason of a run request for a job agent, which has no graph.
+JOB_REFUSAL_REASON = "not-a-graph-agent"
 HTTP_BAD_GATEWAY = 502
 HTTP_GATEWAY_TIMEOUT = 504
 
@@ -184,10 +186,13 @@ def create_app(
     for server_id in servers:
         if not registry.has_server(server_id):
             raise SettingsError(f"tool server {server_id!r} is not in the registry")
-    # Every agent's graph is resolved now, so a bad entry point stops the
-    # start instead of failing a request; the handler uses this cache.
+    # Every graph agent's graph is resolved now, so a bad entry point stops the
+    # start instead of failing a request; the handler uses this cache. A job
+    # agent has no graph and so no entry here.
     factories = {
-        agent.id: load_graph_factory(agent.id, registry) for agent in registry.agents
+        agent.id: load_graph_factory(agent.id, registry)
+        for agent in registry.agents
+        if agent.kind == "graph"
     }
     # trust_env=False: a proxy variable must not reroute claimant data.
     http = http_client or httpx.Client(
@@ -209,13 +214,14 @@ def create_app(
     )
     app, tracer = service.app, service.tracer
 
-    def refuse(body: RunRequest) -> HTTPException:
+    def refuse(body: RunRequest, reason: str | None = None) -> HTTPException:
         write_audit(
             dsn,
             AuditEvent(
                 service=SERVICE_NAME,
                 event="run.refused",
                 outcome="refused",
+                reason=reason,
                 tenant=body.tenant,
                 agent=body.agent,
                 reference=body.reference,
@@ -237,6 +243,10 @@ def create_app(
     def create_run(body: RunRequest, response: Response) -> RunResponse | JSONResponse:
         if not registry.tenant_may_run(body.tenant, body.agent):
             raise refuse(body)
+        factory = factories.get(body.agent)
+        if factory is None:
+            # A job agent: a tenant may list it, but it has no graph to run.
+            raise refuse(body, JOB_REFUSAL_REASON)
         identity = RunIdentity(
             run_id=uuid.uuid4(),
             thread_id=uuid.uuid4(),
@@ -265,7 +275,7 @@ def create_app(
                     throttle=refusal_throttle,
                 )
                 outcome = runs.execute(
-                    factories[body.agent],
+                    factory,
                     saver,
                     http,
                     tools,

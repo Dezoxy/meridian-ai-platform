@@ -35,8 +35,11 @@ jobs:
     services:
       postgres:
         # Throwaway and unreachable from outside the job, so trust auth keeps
-        # a password out of the file. Same image as `make pytest-db`.
-        image: postgres:17.11@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+        # a password out of the file. Same image as `make pytest-db`:
+        # PostgreSQL 17.11 with pgvector 0.8.6 on Debian trixie (the knowledge
+        # store, S012): the same PostgreSQL, pgvector and OS release as the
+        # CloudNativePG image kind runs.
+        image: pgvector/pgvector:0.8.6-pg17-trixie@sha256:724a4041afdb1750446e3f6b5cfa8f3b0ac5a2cf538ddfa6bfee4f94c2fa85c6
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:

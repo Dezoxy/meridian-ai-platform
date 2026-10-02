@@ -17,7 +17,7 @@ one answers (S042). The design is in the plan's S008 section and in
 | `providers.yaml` | Provider accounts: Azure OpenAI and the replay provider |
 | `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits, the vector length of an embedding deployment |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema and output schema, idempotency |
-| `agents.yaml` | Agents and their tool allowlists |
+| `agents.yaml` | Agents, their kind (`graph` or `job`) and their tool allowlists |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, and the replay deployment per purpose |
 | `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
 | `schemas/` | JSON Schemas generated from the Pydantic models; never edited by hand |
@@ -57,6 +57,8 @@ job. Beyond the schemas, validation refuses:
   name or scope carries a decision word (decide, approve, reject, decline
   or deny, in any inflection): adjusters decide in the Claims Triage App,
   never through a tool (T-31);
+- a `job` agent that lists a tool: a job has no run, and a tool server
+  binds every call to a run (T-22);
 - a purpose without exactly one route, a route candidate of the wrong
   purpose, and a tenant that no route can serve;
 - a replay provider other than `replay`, or a replay deployment of a real
@@ -102,7 +104,16 @@ again before the graph sees the result. What each server publishes is
 generated from this registry into [`api/mcp/`](../../api/mcp/README.md), and
 `make registry` fails when the two differ. Status: implemented (S013) for
 `policy-mcp` and `claims-mcp`, proven in-process; `knowledge-mcp` arrives
-with S012, and the servers run on kind in S044.
+with S046, and the servers run on kind in S044.
+
+An agent is of kind `graph` unless it says otherwise: the Agent Runtime
+runs its graph, and refuses to start when a graph agent has no published
+graph (T-40). An agent of kind `job` is a platform job that calls the Model
+Gateway under its own name: its calls are attributed to it in the audit
+log and the cost metrics, and charged to the tenant's windows and budget.
+The runtime loads no graph for it and refuses a run that names it. The one job
+is `knowledge-ingestion` (S012), which embeds the policy wordings for the
+knowledge store and may run for the tenant `claims-triage` only.
 
 ## Limits
 

@@ -385,7 +385,8 @@ def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> Non
     databases = {d["name"]: d for d in PLATFORM_DB["databases"]}
 
     assert databases["meridian"]["owner"] == "meridian_owner"
-    assert "extensions" not in databases["meridian"]  # S012 decides on vector
+    # pgvector for the knowledge store (S012): the owner cannot create it.
+    assert databases["meridian"]["extensions"] == [{"name": "vector"}]
     assert databases["app"] == {
         "name": "app",
         "owner": "app",

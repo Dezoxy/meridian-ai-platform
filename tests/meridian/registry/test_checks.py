@@ -40,7 +40,13 @@ REFERENCE_CASES = [
         id="agent-tool",
     ),
     pytest.param(
-        [("tenants.yaml", "agents: [claims-triage]", "agents: [ghost]")],
+        [
+            (
+                "tenants.yaml",
+                "agents: [claims-triage, knowledge-ingestion]",
+                "agents: [ghost]",
+            )
+        ],
         "tenants.yaml: tenants[0].agents[0]: unknown agent 'ghost'",
         id="tenant-agent",
     ),
@@ -1018,3 +1024,49 @@ def test_a_tenant_may_run_only_an_agent_it_lists(real_registry: Path) -> None:
     assert registry.tenant_may_run("claims-triage", "claims-triage")
     assert not registry.tenant_may_run("claims-triage", "rogue-agent")
     assert not registry.tenant_may_run("no-such-tenant", "claims-triage")
+
+
+# ── an agent is a graph or a job (S012) ─────────────────────────────────────
+def test_an_agent_without_a_kind_is_a_graph_agent(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    triage = registry.agent("claims-triage")
+
+    assert triage is not None
+    assert triage.kind == "graph"
+    # claims-triage stays as it was written: the default does the work.
+    assert "kind:" not in (real_registry / "agents.yaml").read_text().split("- id:")[1]
+
+
+def test_the_real_registry_has_exactly_one_job_agent(real_registry: Path) -> None:
+    registry = load_registry(real_registry)
+
+    jobs = [agent.id for agent in registry.agents if agent.kind == "job"]
+
+    assert jobs == ["knowledge-ingestion"]
+
+
+def test_an_unknown_agent_kind_is_a_load_error(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    directory = plant(("agents.yaml", "    kind: job\n", "    kind: service\n"))
+
+    errors = load_errors(directory)
+
+    assert errors == ("agents.yaml: agents[1].kind: Input should be 'graph' or 'job'",)
+
+
+def test_a_job_agent_that_lists_a_tool_is_reported(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    directory = plant(
+        ("agents.yaml", "    tools: []\n", "    tools:\n      - policy_lookup\n")
+    )
+
+    errors = load_errors(directory)
+
+    assert errors == (
+        "agents.yaml: agents[1].tools[0]: job agent 'knowledge-ingestion' lists "
+        "tool 'policy_lookup'; a job has no run row, so no tool server could "
+        "bind its call",
+    )

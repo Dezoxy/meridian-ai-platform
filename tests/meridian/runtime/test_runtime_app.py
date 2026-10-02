@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any, TypedDict, get_args
 
 import httpx
@@ -124,10 +125,11 @@ def make_client(
     tool_servers: Mapping[str, Any] | None = None,
     settings_servers: Mapping[str, str] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    registry_dir: Path = REGISTRY_DIR,
 ) -> TestClient:
     dsn = db.dsn("agent_runtime") if db else "postgresql://agent_runtime@db.invalid/x"
     settings = RuntimeSettings(
-        registry_dir=REGISTRY_DIR,
+        registry_dir=registry_dir,
         gateway_url="http://gateway.invalid",
         database_url=dsn,
         tool_servers=settings_servers or {},
@@ -361,6 +363,81 @@ def test_a_graph_that_cannot_be_loaded_stops_the_start(
 
     with pytest.raises(GraphLoadError, match="no graph"):
         make_client(None)
+
+
+def test_the_runtime_starts_with_the_real_registry_and_loads_graph_agents_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    register(monkeypatch, ok_factory)
+    loaded: list[str] = []
+    real = runtime_app.load_graph_factory
+
+    def recording(agent_id: str, registry: Any) -> Any:
+        loaded.append(agent_id)
+        return real(agent_id, registry)
+
+    monkeypatch.setattr(runtime_app, "load_graph_factory", recording)
+
+    make_client(None)
+
+    # knowledge-ingestion is in the registry as a job: it has no graph to find.
+    assert loaded == ["claims-triage"]
+
+
+def test_a_graph_agent_without_a_published_graph_still_stops_the_start(
+    plant: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, ok_factory)  # publishes claims-triage only
+    directory = plant(
+        (
+            "agents.yaml",
+            "  - id: knowledge-ingestion\n",
+            "  - id: ghost-graph\n    description: Has no graph.\n    tools: []\n"
+            "  - id: knowledge-ingestion\n",
+        )
+    )
+
+    with pytest.raises(GraphLoadError, match=r"no graph is published.*ghost-graph"):
+        make_client(None, registry_dir=directory)
+
+
+def test_a_run_for_a_job_agent_is_refused_audited_and_runs_no_graph(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node_calls: list[str] = []
+
+    def counting(model: ModelClient, tools: ToolClient) -> StateGraph:
+        return graph_of(lambda state: node_calls.append("ran") or {"output": {}})
+
+    register(monkeypatch, counting)
+    gateway = Gateway()
+    client = make_client(fresh_database, gateway)
+
+    # The tenant lists the job agent, so the tenant check passes; the kind is
+    # what stops the run.
+    response = start(client, agent="knowledge-ingestion")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "request refused"}
+    assert node_calls == []
+    assert gateway.requests == []
+    assert run_rows(fresh_database) == []
+    assert owner_rows(
+        fresh_database,
+        "SELECT service, event, outcome, reason, tenant, agent, run_id, reference "
+        "FROM audit.events",
+    ) == [
+        (
+            "agent-runtime",
+            "run.refused",
+            "refused",
+            "not-a-graph-agent",
+            "claims-triage",
+            "knowledge-ingestion",
+            None,
+            "CLM-0001",
+        )
+    ]
 
 
 def test_the_graph_factory_is_resolved_once_at_start(

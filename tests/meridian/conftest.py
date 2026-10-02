@@ -29,6 +29,7 @@ from dbsupport import (
     require_loopback,
 )
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from meridian.platform.common.db import connect
 from meridian.platform.migrations.runner import apply_migrations
@@ -85,6 +86,13 @@ def _create_database(admin_dsn: str, passwords: dict[str, str]) -> DatabaseHandl
                 sql.Identifier(name), sql.Identifier(OWNER)
             )
         )
+    # pgvector is not a trusted extension: the owner cannot create it, so a
+    # superuser does, in the new database, as the platform does out of band
+    # (migration 0005 only checks that it is there).
+    with psycopg.connect(
+        make_conninfo(admin_dsn, dbname=name), autocommit=True
+    ) as in_database:
+        in_database.execute("CREATE EXTENSION IF NOT EXISTS vector")
     return DatabaseHandle(name=name, admin_dsn=admin_dsn, passwords=passwords)
 
 
