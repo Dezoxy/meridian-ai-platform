@@ -3,7 +3,8 @@
 Free of the MCP SDK: the registry alone says what a server publishes, and the
 snapshot files under ``api/mcp`` are rendered from it (the CLI writes and
 checks them). A server is published once it has a tool and every tool has an
-output schema; ``knowledge-mcp`` has none until S012.
+output schema; every server of the registry has them now, so each publishes a
+contract.
 """
 
 import copy

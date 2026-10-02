@@ -45,6 +45,7 @@ from toolsupport import (
     table_rows,
     tracer_of,
     unused_port,
+    without_output_schema,
 )
 
 from meridian.platform.common.throttle import RefusalAuditThrottle
@@ -651,13 +652,15 @@ def test_a_tool_whose_server_has_no_target_is_unavailable_and_leaves_a_warning(
 
 
 def test_a_tool_without_an_output_schema_is_unavailable_and_nothing_is_sent(
-    registry: Registry,
+    registry_copy: Path,
     exporter: InMemorySpanExporter,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     Unused.used = False
+    # Every tool of the real registry has an output schema: take one away.
+    registry = load_registry(without_output_schema(registry_copy, "wording_search"))
     (spec,) = [t for t in registry.tools if t.id == "wording_search"]
-    assert spec.output_schema is None  # the premise: no server, so no schema yet
+    assert spec.output_schema is None  # the premise
     tools = direct({"knowledge-mcp": Unused()}, registry, exporter)
 
     with caplog.at_level(logging.WARNING), pytest.raises(ToolUnavailable) as raised:

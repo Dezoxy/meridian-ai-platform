@@ -364,6 +364,7 @@ def test_the_database_declares_its_roles_with_login_only() -> None:
         "model_gateway",
         "policy_mcp",
         "claims_mcp",
+        "knowledge_mcp",
     }
     for name, role in roles.items():
         assert role["login"] is True

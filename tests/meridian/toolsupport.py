@@ -19,6 +19,7 @@ import anyio
 import mcp_types as types
 import psycopg
 import uvicorn
+import yaml
 from dbsupport import OWNER, DatabaseHandle
 from mcp.client import Client
 from mcp.server.lowlevel import Server
@@ -75,6 +76,18 @@ def settings_for(
     return ToolServerSettings(
         registry_dir=registry_dir, database_url=db.dsn(role), allowed_hosts=hosts
     )
+
+
+def without_output_schema(registry_dir: Path, tool_id: str) -> Path:
+    """Remove one tool's output schema from a scratch copy of the registry (the
+    ``registry_copy`` fixture) and return the directory, so a test can use a
+    tool that has none: every tool of the real registry has one."""
+    path = registry_dir / "tools.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    (tool,) = [tool for tool in document["tools"] if tool["id"] == tool_id]
+    del tool["output_schema"]
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return registry_dir
 
 
 def add_claim(
@@ -277,6 +290,17 @@ def a_valid_answer(name: str, arguments: Mapping[str, Any]) -> types.CallToolRes
         return structured({key: str(uuid.uuid4()), "replayed": False})
     if name == "claim_history":
         return structured({"entries": [], "truncated": False})
+    if name == "wording_search":
+        clause = {
+            "clause": "2.1",
+            "section": "Cover",
+            "title": "Storm",
+            "body": "Damage caused by a storm.",
+            "keyword_match": True,
+        }
+        return structured(
+            {"product": "HOME-STD", "wording_version": "2026-01", "chunks": [clause]}
+        )
     return structured({"found": False})
 
 

@@ -51,6 +51,7 @@ from toolsupport import (
     table_rows,
     text_of,
     with_client,
+    without_output_schema,
 )
 
 from meridian.platform.common.env import SettingsError
@@ -894,7 +895,11 @@ def test_a_scope_that_differs_from_the_registrys_refuses_to_build(
         start(world, [wrong, second])
 
 
-def test_a_tool_without_an_output_schema_refuses_to_build(world: World) -> None:
+def test_a_tool_without_an_output_schema_refuses_to_build(
+    world: World, registry_copy: Path
+) -> None:
+    # Every tool of the real registry has an output schema: take one away.
+    registry_dir = without_output_schema(registry_copy, "wording_search")
     handler = ToolHandler(
         tool="wording_search",
         scope="knowledge:search",
@@ -904,7 +909,7 @@ def test_a_tool_without_an_output_schema_refuses_to_build(world: World) -> None:
     )
 
     with pytest.raises(SettingsError, match="output schema"):
-        start(world, [handler], server_id="knowledge-mcp")
+        start(world, [handler], server_id="knowledge-mcp", registry_dir=registry_dir)
 
 
 def claims_handlers(bound_argument: str) -> list[ToolHandler]:

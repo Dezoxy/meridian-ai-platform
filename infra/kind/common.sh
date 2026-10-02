@@ -66,7 +66,7 @@ require_local_docker() {
 
 # The Meridian database's roles (S041). Each role's Secret is named after it with
 # "_" as "-" and "-db" appended (meridian_owner -> meridian-owner-db).
-readonly DATABASE_ROLES=(meridian_owner claims_api agent_runtime model_gateway policy_mcp claims_mcp)
+readonly DATABASE_ROLES=(meridian_owner claims_api agent_runtime model_gateway policy_mcp claims_mcp knowledge_mcp)
 
 role_secret_name() { printf '%s-db' "${1//_/-}"; }
 

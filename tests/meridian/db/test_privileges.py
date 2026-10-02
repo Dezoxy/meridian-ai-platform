@@ -11,7 +11,13 @@ from meridian.platform.common.db import connect
 
 SCHEMAS = ("audit", "claims", "gateway", "knowledge", "policy", "runtime")
 # The services that append to the audit log; claims_api writes no audit event.
-AUDIT_WRITERS = ("agent_runtime", "model_gateway", "policy_mcp", "claims_mcp")
+AUDIT_WRITERS = (
+    "agent_runtime",
+    "model_gateway",
+    "policy_mcp",
+    "claims_mcp",
+    "knowledge_mcp",
+)
 CLAIM_ID = "CLM-0001"
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 THREAD_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")

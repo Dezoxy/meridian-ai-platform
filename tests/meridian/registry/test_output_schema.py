@@ -5,6 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from meridian.platform.knowledge_mcp.chunking import (
+    BODY_MAX_CHARACTERS,
+    TITLE_MAX_CHARACTERS,
+    VERSION_MAX_CHARACTERS,
+)
+from meridian.platform.knowledge_mcp.search import MAX_QUERY_CHARACTERS, MAX_TOP_K
 from meridian.platform.registry import load_registry
 
 Plant = Callable[..., Path]
@@ -149,13 +155,37 @@ def test_the_four_tools_with_a_server_publish_a_clean_output_schema(
         assert tool.output_schema["additionalProperties"] is False, tool_id
 
 
-def test_wording_search_has_no_output_schema_until_its_server_exists(
+def test_every_tool_of_the_registry_has_a_closed_object_output_schema(
+    real_registry: Path,
+) -> None:
+    registry = load_registry(real_registry)
+
+    assert {tool.id for tool in registry.tools} >= {"wording_search"}
+    for tool in registry.tools:
+        assert tool.output_schema is not None, tool.id
+        assert tool.output_schema["type"] == "object", tool.id
+        assert tool.output_schema["additionalProperties"] is False, tool.id
+
+
+def test_the_bounds_of_wording_search_equal_the_store_and_the_search_limits(
     real_registry: Path,
 ) -> None:
     tool = load_registry(real_registry).tool("wording_search")
-
     assert tool is not None
-    assert tool.output_schema is None
+    assert tool.output_schema is not None
+    arguments = tool.input_schema["properties"]
+    answer = tool.output_schema["properties"]
+    chunks = answer["chunks"]
+    chunk = chunks["items"]["properties"]
+
+    assert arguments["query"]["maxLength"] == MAX_QUERY_CHARACTERS
+    assert arguments["top_k"]["maximum"] == MAX_TOP_K
+    assert chunks["maxItems"] == MAX_TOP_K
+    assert answer["wording_version"]["maxLength"] == VERSION_MAX_CHARACTERS
+    assert chunk["body"]["maxLength"] == BODY_MAX_CHARACTERS
+    assert chunk["title"]["maxLength"] == TITLE_MAX_CHARACTERS
+    # A section's title is held to the same limit as a clause's.
+    assert chunk["section"]["maxLength"] == TITLE_MAX_CHARACTERS
 
 
 def test_the_output_schemas_name_the_agreed_fields(real_registry: Path) -> None:
