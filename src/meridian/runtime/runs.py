@@ -20,6 +20,7 @@ from meridian.runtime import SERVICE_NAME
 from meridian.runtime.graphs import GraphFactory
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.models import RunState, RunStatus
+from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.tracing import NodeSpans
 
 RECURSION_LIMIT = 10
@@ -52,18 +53,20 @@ def execute(
     factory: GraphFactory,
     saver: BaseCheckpointSaver,
     http: httpx.Client,
+    tools: ToolClient,
     tracer: Tracer,
     identity: RunIdentity,
     run_input: dict[str, Any],
 ) -> RunOutcome:
     """Compile the workload's graph with the runtime's checkpointer and run it.
 
+    ``tools`` is this run's tool client, built by the caller for the run.
     Raises whatever the graph raises; the caller records the failure.
     """
     model = ModelClient(
         http, tenant=identity.tenant, agent=identity.agent, run_id=identity.run_id
     )
-    graph = factory(model).compile(checkpointer=saver)
+    graph = factory(model, tools).compile(checkpointer=saver)
     config = {
         "recursion_limit": RECURSION_LIMIT,
         "configurable": {"thread_id": str(identity.thread_id)},

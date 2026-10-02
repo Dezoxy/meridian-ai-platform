@@ -113,6 +113,9 @@ class Tool(RegistryModel):
     # A JSON Schema object; the runtime injects the idempotency key, so it is
     # not a model-facing argument and does not appear here.
     input_schema: dict[str, Any]
+    # What the tool returns as structured content: the same closed and bounded
+    # subset as the input. Optional until the tool's server exists.
+    output_schema: dict[str, Any] | None = None
 
 
 class ToolsFile(RegistryModel):

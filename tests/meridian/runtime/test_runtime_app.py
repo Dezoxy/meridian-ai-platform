@@ -1,9 +1,11 @@
 """POST /runs and GET /runs/{id} with stub graphs (no workload needed)."""
 
+import contextlib
 import json
 import logging
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TypedDict, get_args
 
 import httpx
@@ -27,11 +29,13 @@ from servicesupport import (
     database_error,
     owner_rows,
 )
+from toolsupport import POLICY, policy_server, seed_world
 
 import meridian.runtime as meridian_runtime
 from meridian.platform.common import audit
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.runtime import app as runtime_app
 from meridian.runtime import graphs, runs
 from meridian.runtime.app import create_app
@@ -39,6 +43,7 @@ from meridian.runtime.graphs import GraphLoadError
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.models import RunState
 from meridian.runtime.settings import RuntimeSettings
+from meridian.runtime.tool_client import ToolClient, ToolNotAllowed, ToolRefused
 
 CLAIM_TEXT = "claimant-secret-text-42"
 
@@ -55,10 +60,12 @@ class FakeEntryPoint:
     class dist:
         name = "meridian"
 
-    def __init__(self, factory: Callable[[ModelClient], StateGraph]) -> None:
+    def __init__(
+        self, factory: Callable[[ModelClient, ToolClient], StateGraph]
+    ) -> None:
         self.factory = factory
 
-    def load(self) -> Callable[[ModelClient], StateGraph]:
+    def load(self) -> Callable[[ModelClient, ToolClient], StateGraph]:
         return self.factory
 
 
@@ -70,7 +77,7 @@ def graph_of(node: Callable[[State], State]) -> StateGraph:
     return graph
 
 
-def ok_factory(model: ModelClient) -> StateGraph:
+def ok_factory(model: ModelClient, tools: ToolClient) -> StateGraph:
     def work(state: State) -> State:
         reply = model.chat([{"role": "user", "content": "hi"}])
         return {"output": {"text": reply.text, "echo": state["claim"]["n"]}}
@@ -114,18 +121,24 @@ def make_client(
     gateway: Gateway | None = None,
     exporter: InMemorySpanExporter | None = None,
     checkpointer: MemorySaver | None = None,
+    tool_servers: Mapping[str, Any] | None = None,
+    settings_servers: Mapping[str, str] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> TestClient:
     dsn = db.dsn("agent_runtime") if db else "postgresql://agent_runtime@db.invalid/x"
     settings = RuntimeSettings(
         registry_dir=REGISTRY_DIR,
         gateway_url="http://gateway.invalid",
         database_url=dsn,
+        tool_servers=settings_servers or {},
     )
     app = create_app(
         settings,
         tracer_provider=make_tracer_provider("agent-runtime", exporter),
         http_client=(gateway or Gateway()).client,
         checkpointer=checkpointer,
+        tool_servers=tool_servers,
+        clock=clock,
     )
     return TestClient(app, raise_server_exceptions=False)
 
@@ -229,7 +242,7 @@ def test_no_audit_row_and_no_run_row_holds_the_input(
 def test_a_graph_that_pauses_leaves_the_run_awaiting_approval(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def pausing(model: ModelClient) -> StateGraph:
+    def pausing(model: ModelClient, tools: ToolClient) -> StateGraph:
         return graph_of(lambda state: {"output": {"answer": interrupt("approve?")}})
 
     register(monkeypatch, pausing)
@@ -250,7 +263,7 @@ def test_a_graph_that_pauses_leaves_the_run_awaiting_approval(
 def test_a_graph_that_raises_answers_502_and_is_marked_failed(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing(model: ModelClient) -> StateGraph:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
         def work(state: State) -> State:
             raise RuntimeError(f"boom {CLAIM_TEXT}")
 
@@ -286,7 +299,9 @@ def test_a_gateway_refusal_fails_the_run(
 def test_an_output_that_is_not_an_object_fails_the_run(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    register(monkeypatch, lambda model: graph_of(lambda s: {"output": "a string"}))
+    register(
+        monkeypatch, lambda model, tools: graph_of(lambda s: {"output": "a string"})
+    )
 
     response = start(make_client(fresh_database))
 
@@ -296,7 +311,7 @@ def test_an_output_that_is_not_an_object_fails_the_run(
 def test_a_graph_that_writes_no_output_completes_with_null(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    register(monkeypatch, lambda model: graph_of(lambda s: {}))
+    register(monkeypatch, lambda model, tools: graph_of(lambda s: {}))
 
     response = start(make_client(fresh_database))
 
@@ -306,7 +321,7 @@ def test_a_graph_that_writes_no_output_completes_with_null(
 def test_the_recursion_limit_stops_a_looping_graph(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def looping(model: ModelClient) -> StateGraph:
+    def looping(model: ModelClient, tools: ToolClient) -> StateGraph:
         graph = StateGraph(State)
         graph.add_node("spin", lambda s: {})
         graph.add_edge(START, "spin")
@@ -409,7 +424,7 @@ def test_when_the_run_row_cannot_be_written_no_graph_runs(
 ) -> None:
     node_calls: list[str] = []
 
-    def counting(model: ModelClient) -> StateGraph:
+    def counting(model: ModelClient, tools: ToolClient) -> StateGraph:
         return graph_of(lambda state: node_calls.append("ran") or {"output": {}})
 
     def no_database(*_a: object, **_k: object) -> None:
@@ -472,7 +487,7 @@ def test_an_invalid_run_request_is_422_and_echoes_nothing(
 def test_an_input_of_exactly_32_kib_is_accepted(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    register(monkeypatch, lambda model: graph_of(lambda s: {"output": {}}))
+    register(monkeypatch, lambda model, tools: graph_of(lambda s: {"output": {}}))
 
     response = start(make_client(fresh_database), input=input_of_size(32 * 1024))
 
@@ -488,7 +503,7 @@ def test_the_input_size_counts_utf8_bytes_not_escapes(
     text: str,
     unit_bytes: int,
 ) -> None:
-    register(monkeypatch, lambda model: graph_of(lambda s: {"output": {}}))
+    register(monkeypatch, lambda model, tools: graph_of(lambda s: {"output": {}}))
     overhead = len(json.dumps({"k": ""}, separators=(",", ":")))
     exact = {"k": text * ((32 * 1024 - overhead) // unit_bytes)}
     padding = 32 * 1024 - overhead - len(exact["k"].encode("utf-8"))
@@ -531,7 +546,7 @@ def test_a_database_error_in_the_run_span_leaves_no_message_in_any_span(
 def test_a_failed_run_marks_its_span_as_an_error_with_the_class_name_only(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing(model: ModelClient) -> StateGraph:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
         def work(state: State) -> State:
             raise RuntimeError(f"boom {CLAIM_TEXT}")
 
@@ -647,7 +662,7 @@ def test_the_checkpoint_is_deleted_when_a_run_completes(
 def test_the_checkpoint_is_deleted_when_a_run_fails(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing(model: ModelClient) -> StateGraph:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
         def work(state: State) -> State:
             raise RuntimeError("boom")
 
@@ -667,7 +682,9 @@ def test_the_checkpoint_is_kept_while_the_run_awaits_approval(
 ) -> None:
     register(
         monkeypatch,
-        lambda model: graph_of(lambda s: {"output": {"a": interrupt("approve?")}}),
+        lambda model, tools: graph_of(
+            lambda s: {"output": {"a": interrupt("approve?")}}
+        ),
     )
     saver = MemorySaver()
 
@@ -763,3 +780,252 @@ def test_the_gateway_client_ignores_proxy_variables(
     (kwargs,) = built
     assert kwargs["trust_env"] is False
     assert kwargs["base_url"] == "http://gateway.invalid"
+
+
+# ── tools (S013) ────────────────────────────────────────────────────────────
+def policy_node(policy_number: str, *, catch: bool = False) -> Callable:
+    """A factory whose one node asks the policy server for a policy."""
+
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            try:
+                found = tools.call("policy_lookup", {"policy_number": policy_number})
+            except ToolRefused as refusal:
+                if not catch:
+                    raise
+                return {"output": {"refused": refusal.reason}}
+            return {"output": {"policy": found.data["policy"]["policy_number"]}}
+
+        return graph_of(work)
+
+    return factory
+
+
+def test_a_node_calls_a_tool_and_the_run_is_audited_end_to_end(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = seed_world(fresh_database)
+    register(monkeypatch, policy_node(POLICY))
+    # The injected target replaces the settings' address for the same server.
+    client = make_client(
+        fresh_database,
+        tool_servers={"policy-mcp": policy_server(world)},
+        settings_servers={"policy-mcp": "http://nowhere.invalid"},
+    )
+
+    response = start(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "Completed"
+    assert body["output"] == {"policy": POLICY}
+    events = audit_events(fresh_database, uuid.UUID(body["run_id"]))
+    assert [(e["service"], e["event"], e["outcome"]) for e in events] == [
+        ("agent-runtime", "run.started", "started"),
+        ("policy-mcp", "tool.call", "completed"),
+        ("agent-runtime", "run.completed", "completed"),
+    ]
+    assert events[1]["tool"] == "policy_lookup"
+
+
+def test_a_tool_refusal_the_node_does_not_catch_fails_the_run_with_502(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = seed_world(fresh_database)
+    register(monkeypatch, policy_node("POL-0001"))  # not the claim's policy
+    client = make_client(
+        fresh_database, tool_servers={"policy-mcp": policy_server(world)}
+    )
+
+    response = start(client)
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body == {"run_id": body["run_id"], "status": "Failed", "output": None}
+    events = audit_events(fresh_database, uuid.UUID(body["run_id"]))
+    assert [(e["service"], e["event"], e["outcome"], e["reason"]) for e in events] == [
+        ("agent-runtime", "run.started", "started", None),
+        ("policy-mcp", "tool.call", "refused", "outside-claim"),
+        ("agent-runtime", "run.failed", "failed", None),
+    ]
+
+
+def test_a_node_that_catches_the_refusal_completes_the_run(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = seed_world(fresh_database)
+    register(monkeypatch, policy_node("POL-0001", catch=True))
+    client = make_client(
+        fresh_database, tool_servers={"policy-mcp": policy_server(world)}
+    )
+
+    response = start(client)
+
+    assert response.status_code == 200
+    assert response.json()["output"] == {"refused": "outside-claim"}
+
+
+def test_a_tool_the_agent_may_not_call_is_audited_by_the_runtime_and_fails_the_run(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        return graph_of(lambda state: {"output": tools.call("no_such_tool", {}).data})
+
+    register(monkeypatch, factory)
+
+    response = start(make_client(fresh_database))
+
+    assert response.status_code == 502
+    events = audit_events(fresh_database, uuid.UUID(response.json()["run_id"]))
+    assert [
+        (e["service"], e["event"], e["outcome"], e["reason"], e["tool"]) for e in events
+    ] == [
+        ("agent-runtime", "run.started", "started", None, None),
+        ("agent-runtime", "tool.call", "refused", "tool-not-allowed", None),
+        ("agent-runtime", "run.failed", "failed", None, None),
+    ]
+
+
+def test_a_failed_audit_write_of_a_tool_refusal_fails_the_run(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            try:
+                tools.call("no_such_tool", {})
+            except ToolNotAllowed:
+                return {"output": {"swallowed": True}}  # must not be reached
+            return {}
+
+        return graph_of(work)
+
+    register(monkeypatch, factory)
+    real = audit.write_audit
+
+    def no_tool_rows(dsn: str, event: audit.AuditEvent) -> None:
+        if event.event == "tool.call":
+            raise audit.AuditUnavailable("down")
+        real(dsn, event)
+
+    monkeypatch.setattr(runtime_app, "write_audit", no_tool_rows)
+
+    response = start(make_client(fresh_database))
+
+    assert response.status_code == 502
+    assert response.json()["output"] is None
+
+
+# ── the runtime's own refusals are throttled (T-49) ─────────────────────────
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def refusing(times: int) -> Callable:
+    """A factory whose node asks for a tool the registry does not have, ``times``
+    times, and carries on after each refusal."""
+
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            for _ in range(times):
+                with contextlib.suppress(ToolNotAllowed):
+                    tools.call("no_such_tool", {})
+            return {"output": {"asked": times}}
+
+        return graph_of(work)
+
+    return factory
+
+
+def tool_rows(db: DatabaseHandle, response: httpx.Response) -> list[dict]:
+    events = audit_events(db, uuid.UUID(response.json()["run_id"]))
+    return [e for e in events if e["event"] == "tool.call"]
+
+
+def test_twenty_refused_calls_in_one_run_leave_one_row(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, refusing(20))
+
+    response = start(make_client(fresh_database, clock=Clock()))
+
+    assert response.json()["status"] == "Completed"
+    (row,) = tool_rows(fresh_database, response)
+    assert (row["outcome"], row["reason"], row["suppressed"]) == (
+        "refused",
+        "tool-not-allowed",
+        0,
+    )
+
+
+def test_after_the_window_the_next_row_counts_the_refusals_it_stands_for(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, refusing(20))
+    clock = Clock()
+    client = make_client(fresh_database, clock=clock)
+    start(client)
+    clock.now += REFUSAL_AUDIT_SECONDS
+    register(monkeypatch, refusing(1))  # the same app: its throttle lives on
+
+    second = start(client)
+
+    (row,) = tool_rows(fresh_database, second)
+    assert row["suppressed"] == 19
+
+
+def test_inside_the_window_a_later_run_leaves_no_row(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, refusing(20))
+    clock = Clock()
+    client = make_client(fresh_database, clock=clock)
+    start(client)
+    clock.now += REFUSAL_AUDIT_SECONDS - 0.5
+    register(monkeypatch, refusing(1))
+
+    second = start(client)
+
+    assert second.json()["status"] == "Completed"  # the refusal still raised
+    assert tool_rows(fresh_database, second) == []
+
+
+def test_a_failed_audit_write_fails_the_run_and_the_next_refusal_is_due(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, refusing(1))
+    real = audit.write_audit
+    down = [True]
+
+    def flaky(dsn: str, event: audit.AuditEvent) -> None:
+        if event.event == "tool.call" and down[0]:
+            raise audit.AuditUnavailable("down")
+        real(dsn, event)
+
+    monkeypatch.setattr(runtime_app, "write_audit", flaky)
+    client = make_client(fresh_database, clock=Clock())  # the clock never moves
+
+    failed = start(client)
+    down[0] = False
+    next_run = start(client)
+
+    assert failed.status_code == 502
+    assert tool_rows(fresh_database, failed) == []
+    assert next_run.json()["status"] == "Completed"
+    (row,) = tool_rows(fresh_database, next_run)
+    assert row["suppressed"] == 1  # the refusal whose row could not be written
+
+
+# ── SDK setup happens at start (S013) ───────────────────────────────────────
+def test_the_app_prepares_the_sdk_when_it_is_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(runtime_app, "prepare_sdk", lambda: calls.append("prepared"))
+
+    make_client(None)
+
+    assert calls == ["prepared"]

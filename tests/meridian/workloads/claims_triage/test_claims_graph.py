@@ -41,8 +41,12 @@ class StubModel:
         )
 
 
+class StubTools:
+    """Stands in for ToolClient; the graph calls no tool before S014."""
+
+
 def run_graph(model: StubModel, claim: dict[str, Any] = FACTS) -> dict[str, Any]:
-    return build(model).compile().invoke({"claim": claim})
+    return build(model, StubTools()).compile().invoke({"claim": claim})
 
 
 def test_the_graph_drafts_a_proposal_routed_to_an_adjuster() -> None:
@@ -118,7 +122,7 @@ def test_a_draft_the_proposal_model_would_refuse_fails_inside_the_graph() -> Non
 
 
 def test_the_graph_is_returned_uncompiled() -> None:
-    assert not hasattr(build(StubModel()), "invoke")
+    assert not hasattr(build(StubModel(), StubTools()), "invoke")
 
 
 def test_the_entry_point_is_installed_from_the_meridian_distribution() -> None:

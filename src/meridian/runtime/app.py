@@ -6,7 +6,9 @@ runs; if they cannot be, nothing runs (503).
 """
 
 import logging
+import time
 import uuid
+from collections.abc import Callable, Mapping
 
 import httpx
 import psycopg
@@ -16,6 +18,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde import _msgpack
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import Tracer
 
 import meridian.runtime
 from meridian.platform.common.audit import AuditEvent, write_audit
@@ -33,16 +36,20 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
-from meridian.platform.registry import load_registry
+from meridian.platform.common.throttle import RefusalAuditThrottle
+from meridian.platform.registry import Registry, load_registry
 from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.graphs import load_graph_factory
 from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
 from meridian.runtime.models import RunErrorBody, RunRequest, RunResponse, RunStatus
 from meridian.runtime.runs import RunIdentity, RunOutcome
 from meridian.runtime.settings import RuntimeSettings
+from meridian.runtime.tool_client import ToolClient, ToolTarget, prepare_sdk
 
 GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
+# The audit reason of a call the runtime's own allowlist refuses.
+REFUSAL_REASON = "tool-not-allowed"
 HTTP_BAD_GATEWAY = 502
 HTTP_GATEWAY_TIMEOUT = 504
 
@@ -99,18 +106,84 @@ def _finish(dsn: str, identity: RunIdentity, status: str) -> psycopg.Error | Non
     return last
 
 
+def tool_client_for(
+    servers: Mapping[str, ToolTarget],
+    *,
+    registry: Registry,
+    dsn: str,
+    tracer: Tracer,
+    identity: RunIdentity,
+    throttle: RefusalAuditThrottle,
+) -> ToolClient:
+    """The run's tool client. A call its allowlist refuses is audited here,
+    with the tool's registry ID or none, at most one row per tenant and tool per
+    window (T-49; from S014 a model may choose the tool); a failed audit write
+    propagates and fails the run (QA-05). ``ToolNotAllowed`` is raised either
+    way. The tenant is a key because ``create_run`` has checked it against the
+    registry, so the throttle's map is bounded."""
+
+    def audit_refusal(tool: str | None) -> None:
+        key = f"{tool or '-'}/{REFUSAL_REASON}"
+        carried = throttle.due(identity.tenant, key)
+        if carried is None:
+            return
+        try:
+            write_audit(
+                dsn,
+                AuditEvent(
+                    service=SERVICE_NAME,
+                    event="tool.call",
+                    outcome="refused",
+                    reason=REFUSAL_REASON,
+                    tool=tool,
+                    tenant=identity.tenant,
+                    agent=identity.agent,
+                    run_id=identity.run_id,
+                    reference=identity.reference,
+                    suppressed=carried,
+                ),
+            )
+        except BaseException:
+            throttle.release(identity.tenant, key, carried)
+            raise
+
+    return ToolClient(
+        servers,
+        registry=registry,
+        agent=identity.agent,
+        run_id=identity.run_id,
+        tracer=tracer,
+        on_refusal=audit_refusal,
+    )
+
+
 def create_app(
     settings: RuntimeSettings,
     *,
     tracer_provider: TracerProvider | None = None,
     http_client: httpx.Client | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    tool_servers: Mapping[str, ToolTarget] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     """Build the app; raise when it must not start: a registry that fails to
-    load, a graph that cannot be loaded, LangSmith requested or LangGraph not in
-    strict msgpack mode."""
+    load, a graph that cannot be loaded, a tool server the registry does not
+    have, LangSmith requested or LangGraph not in strict msgpack mode.
+
+    ``tool_servers`` (tests) replaces the settings' addresses with targets the
+    SDK's client accepts, such as an in-process server. ``clock`` times the
+    audit throttle of the runtime's own tool refusals."""
     _refuse_to_start_if_unsafe()
+    # At start, not on the first run: the SDK's log routing and its models.
+    prepare_sdk()
     registry = load_registry(settings.registry_dir)
+    servers: Mapping[str, ToolTarget] = (
+        settings.tool_servers if tool_servers is None else tool_servers
+    )
+    refusal_throttle = RefusalAuditThrottle(clock)
+    for server_id in servers:
+        if not registry.has_server(server_id):
+            raise SettingsError(f"tool server {server_id!r} is not in the registry")
     # Every agent's graph is resolved now, so a bad entry point stops the
     # start instead of failing a request; the handler uses this cache.
     factories = {
@@ -183,8 +256,22 @@ def create_app(
             runs.start_run(dsn, identity)
             failure: Exception | None = None
             try:
+                tools = tool_client_for(
+                    servers,
+                    registry=registry,
+                    dsn=dsn,
+                    tracer=tracer,
+                    identity=identity,
+                    throttle=refusal_throttle,
+                )
                 outcome = runs.execute(
-                    factories[body.agent], saver, http, tracer, identity, body.input
+                    factories[body.agent],
+                    saver,
+                    http,
+                    tools,
+                    tracer,
+                    identity,
+                    body.input,
                 )
             except Exception as exc:
                 _log_failure(identity.run_id, exc)

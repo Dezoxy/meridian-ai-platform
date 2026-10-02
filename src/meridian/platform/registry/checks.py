@@ -356,6 +356,13 @@ def check_tools(registry: Registry) -> list[str]:
             f"{where}.{message} {suffix}"
             for message in input_schema_errors(tool.input_schema)
         ]
+        if tool.output_schema is not None:
+            errors += [
+                f"{where}.{message} {suffix}"
+                for message in input_schema_errors(
+                    tool.output_schema, root="output_schema"
+                )
+            ]
     return errors
 
 

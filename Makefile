@@ -131,10 +131,11 @@ pytest-db:
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
 	MERIDIAN_REQUIRE_DB=1 uv run pytest $(PYTEST_ARGS)
 
-## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas
+## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas and the tool-server contracts under api/mcp
 registry:
 	uv run meridian registry validate --terraform-outputs $(REGISTRY_SNAPSHOT)
 	uv run meridian registry schemas --check
+	uv run meridian registry contracts --check
 
 ## synthetic       regenerate the synthetic data and golden set under data/synthetic (seeded; reruns are identical)
 synthetic:

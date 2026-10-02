@@ -3,7 +3,7 @@
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces, Envoy Gateway and the edge Gateway
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
-#      the database "meridian" and its four roles; their password Secrets are
+#      the database "meridian" and its six roles; their password Secrets are
 #      created first, only if absent
 #   4. Grafana admin Secret (only if absent), kube-prometheus-stack, Tempo, Loki,
 #      OpenTelemetry Collector
@@ -98,7 +98,7 @@ ensure_database_secrets() {
   done
 }
 
-# Wait until CloudNativePG reports all four roles reconciled (common.sh).
+# Wait until CloudNativePG reports every role reconciled (common.sh).
 wait_for_database_roles() {
   local deadline=$((SECONDS + ROLES_TIMEOUT))
   while ((SECONDS < deadline)); do

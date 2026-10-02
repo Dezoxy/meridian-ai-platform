@@ -51,7 +51,8 @@ which for this project is always in the EU.
 
 | Data | Class | Stored in | Notes |
 |---|---|---|---|
-| Claims, policies and claim history | `personal` | Platform Database, claims schema | Synthetic in every environment of this project |
+| Claims | `personal` | Platform Database, claims schema | Synthetic in every environment of this project |
+| Policies and claim history | `personal` (pseudonymous) | Platform Database, policy schema | Cover, dates and amounts by policy number, loaded from the synthetic data; no holder, address or insured object (T-51), but a policy number still points at a person |
 | Claim free text | `personal`, or `special` when detected | Platform Database | The field where a claimant can volunteer special-category data |
 | Uploaded documents | Not designed | Not designed | Metadata only until a step designs uploads (T-38) |
 | Prompts and completions | Class of the request | Not stored on their own; inside checkpoints | Redacted before leaving the gateway |

@@ -9,7 +9,13 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 ALLOW_REMOTE_ENV = "MERIDIAN_TEST_DATABASE_ALLOW_REMOTE"
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 OWNER = "meridian_owner"
-SERVICE_ROLES = ("claims_api", "agent_runtime", "model_gateway")
+SERVICE_ROLES = (
+    "claims_api",
+    "agent_runtime",
+    "model_gateway",
+    "policy_mcp",
+    "claims_mcp",
+)
 
 
 @dataclass(frozen=True)

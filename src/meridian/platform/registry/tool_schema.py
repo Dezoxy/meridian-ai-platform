@@ -3,9 +3,11 @@
 A small, closed subset of JSON Schema, checked without a schema library: the
 model sees the schema, so every field must be typed and really bounded, every
 object closed, and nothing may pull in another schema (``$ref``, ``anyOf`` ...).
+A tool's ``output_schema`` is held to the same rules.
 
 There is no ReDoS analysis of ``pattern``: S013 validates arguments with the
-length caps first, so a pattern only ever sees a bounded string.
+length caps first, so a pattern only ever sees a bounded string. That holds only
+if a string with a ``pattern`` has a ``maxLength``, which is checked.
 """
 
 import json
@@ -141,9 +143,12 @@ def _array_errors(node: Mapping[str, Any], path: str, depth: int) -> list[str]:
 
 def _string_errors(node: Mapping[str, Any], path: str) -> list[str]:
     errors = _size_errors(node, path, "minLength", "maxLength", MAX_STRING_LENGTH)
-    if "maxLength" not in node and "enum" not in node:
-        errors.append(f"{path}: string needs maxLength or enum")
     pattern = node.get("pattern")
+    if pattern is not None and "maxLength" not in node:
+        # An enum bounds the values, not the string a pattern is run on.
+        errors.append(f"{path}: string with a pattern needs maxLength")
+    elif "maxLength" not in node and "enum" not in node:
+        errors.append(f"{path}: string needs maxLength or enum")
     if pattern is not None:
         try:
             re.compile(pattern)

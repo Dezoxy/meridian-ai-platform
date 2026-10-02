@@ -24,7 +24,6 @@ from meridian.platform.registry.models import TenantLimits
 REQUEST_WINDOW_SECONDS = 10.0
 TOKEN_WINDOW_SECONDS = 60.0
 MIN_RETRY_SECONDS = 1
-REFUSAL_AUDIT_SECONDS = 60.0
 
 RateRefusalReason = Literal[
     "tenant-request-rate", "tenant-token-rate", "tenant-request-too-large"
@@ -100,50 +99,3 @@ class TenantRateLimiter:
                 wait = t + TOKEN_WINDOW_SECONDS - now
                 return RateRefusal("tenant-token-rate", _retry_after(wait))
         raise AssertionError("unreachable: tokens fits an empty window")
-
-
-@dataclass(slots=True)
-class _RefusalWindow:
-    last_audited_at: float | None = None
-    suppressed: int = 0  # refusals since the last row that left no row
-
-
-class RefusalAuditThrottle:
-    """Says whether a refusal is due a row in the audit log, so a flood leaves
-    one row per window and not one per request (T-49), and how many refusals
-    the row stands in for.
-
-    The key is a tenant and a reason. The tenant is a registry ID, or ``None``
-    for a request whose tenant is unknown: the header's value is caller-chosen
-    and is never a key, so the map is bounded by tenants times reasons. A
-    refusal inside the window records nothing but its count, so a flood cannot
-    keep its own row away.
-    """
-
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self._clock = clock
-        self._lock = threading.Lock()
-        self._windows: dict[tuple[str | None, str], _RefusalWindow] = {}
-
-    def due(self, tenant: str | None, reason: str) -> int | None:
-        """``None``: a row was written for this key inside the window, and this
-        refusal is counted as suppressed. Otherwise the number suppressed since
-        the last row, to be written on the row. The window is not started
-        yet, and this refusal is counted as suppressed until ``mark`` says its
-        row was written, so a write that fails loses nothing: the next refusal
-        is due again and its row carries this one."""
-        with self._lock:
-            window = self._windows.setdefault((tenant, reason), _RefusalWindow())
-            now = self._clock()
-            last = window.last_audited_at
-            inside = last is not None and now - last < REFUSAL_AUDIT_SECONDS
-            carried = window.suppressed
-            window.suppressed += 1
-            return None if inside else carried
-
-    def mark(self, tenant: str | None, reason: str) -> None:
-        """The row was written: the window starts now and the count is zero."""
-        with self._lock:
-            window = self._windows.setdefault((tenant, reason), _RefusalWindow())
-            window.last_audited_at = self._clock()
-            window.suppressed = 0

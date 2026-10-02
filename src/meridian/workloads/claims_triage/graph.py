@@ -9,6 +9,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from meridian.runtime.model_client import ModelClient
+from meridian.runtime.tool_client import ToolClient
 from meridian.workloads.claims_triage.models import (
     MAX_DRAFT_CHARS,
     ClaimFacts,
@@ -56,9 +57,10 @@ def _user_message(claim: ClaimFacts) -> str:
     )
 
 
-def build(model: ModelClient) -> StateGraph:
+def build(model: ModelClient, tools: ToolClient) -> StateGraph:
     """The workload's graph factory, published as the ``claims-triage`` entry
     point. Returned uncompiled: the runtime compiles it with its checkpointer."""
+    # The triage nodes call ``tools`` from S014; this graph calls no tool yet.
 
     def draft_proposal(state: ClaimState) -> dict[str, Any]:
         claim = ClaimFacts.model_validate(state["claim"])

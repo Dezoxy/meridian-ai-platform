@@ -58,6 +58,19 @@
           "title": "Input Schema",
           "type": "object"
         },
+        "output_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Schema"
+        },
         "scope": {
           "pattern": "^[a-z]+(:[a-z]+)+$",
           "title": "Scope",

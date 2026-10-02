@@ -165,6 +165,12 @@ def add_probe_in(project: Path, package: str, source: str) -> str:
         pytest.param("meridian.platform.common", "openai", id="common-imports-openai"),
         pytest.param("meridian.platform.cli", "openai", id="cli-imports-openai"),
         pytest.param(
+            "meridian.platform.policy_mcp", "openai", id="policy-mcp-imports-openai"
+        ),
+        pytest.param(
+            "meridian.platform.toolserver", "openai", id="toolserver-imports-openai"
+        ),
+        pytest.param(
             "meridian.platform.migrations", "openai", id="migrations-import-openai"
         ),
         pytest.param("meridian.runtime", "anthropic", id="runtime-imports-anthropic"),
@@ -435,6 +441,8 @@ def test_importing_the_services_loads_no_provider_sdk_or_credential_library() ->
         "import meridian.platform.gateway.app\n"
         "import meridian.runtime.app\n"
         "import meridian.workloads.claims_triage.app\n"
+        "import meridian.platform.policy_mcp.app\n"
+        "import meridian.workloads.claims_triage.mcp_server.app\n"
         "from meridian.platform.gateway.settings import GatewaySettings\n"
         "app = meridian.platform.gateway.app.create_app(GatewaySettings(\n"
         "    registry_dir=Path('config/registry'), mode='replay',\n"

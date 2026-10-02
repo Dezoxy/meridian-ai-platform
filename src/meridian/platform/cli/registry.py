@@ -12,8 +12,10 @@ from meridian.platform.registry.terraform import (
     compare_with_terraform,
     read_terraform_outputs,
 )
+from meridian.platform.toolserver.contracts import contract_problems, write_contracts
 
 DEFAULT_REGISTRY_DIR = Path("config/registry")
+DEFAULT_CONTRACTS_DIR = Path("api/mcp")
 
 app = typer.Typer(no_args_is_help=True, help="Validate the platform registry.")
 
@@ -101,3 +103,33 @@ def schemas(
         return
     changed = write_schemas(registry_dir)
     typer.echo(f"schemas written: {len(changed)} changed")
+
+
+@app.command()
+def contracts(
+    registry_dir: RegistryDirOption = DEFAULT_REGISTRY_DIR,
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            file_okay=False,
+            help="Directory of the tool-server contract files.",
+        ),
+    ] = DEFAULT_CONTRACTS_DIR,
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Write nothing; exit 1 if a file is stale."),
+    ] = False,
+) -> None:
+    """Write what each tool server answers to tools/list, from the registry."""
+    try:
+        registry = load_registry(registry_dir)
+    except RegistryError as exc:
+        _fail(exc.errors)
+    if check:
+        if problems := contract_problems(registry, out):
+            _fail(problems)
+        typer.echo("contracts OK: up to date")
+        return
+    changed = write_contracts(registry, out)
+    typer.echo(f"contracts written: {len(changed)} changed")

@@ -6,8 +6,9 @@
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, the gateway routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
-  the same region and holds each tenant to its rate limits and budgets, and
-  no service runs in Azure yet.
+  the same region and holds each tenant to its rate limits and budgets,
+  two MCP tool servers and the runtime's client for them are proven in
+  tests, and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -136,12 +137,13 @@ and Pydantic, at the cost of one dependency.
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced, with the cost reserved before the call; cost metered per tenant, agent, model and provider; ~~one audit record per call; a Grafana cost panel~~ a call ID on every audit record of a call (split on 2026-10-01: the Grafana panel is S043) | done | S010 |
 | S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | todo | S011, S041 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; the knowledge MCP server returns cited chunks; retrieval checked against a labelled query set | todo | S003, S009 |
-| S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited | todo | S008, S009 |
+| S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
+| S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | todo | S013, S041 |
 | S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S012, S013 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044 |
 
 ### M2 — Azure, identity, delivery
 
@@ -2191,6 +2193,186 @@ All run by the main session on the final code.
   `NOT VALID` checks when a column is added to a large audit table; an
   ingress rate limit (T-02).
 
+### S013 — Policy and claims MCP servers
+
+**Status:** done · **Started:** 2026-10-01 · **Finished:** 2026-10-01
+**Goal:** an agent's tool call reaches a tool server that checks it, binds
+it to the run's own claim, audits it and makes a write happen once.
+**Decisions:**
+
+- Split with the owner's agreement, as S009 was: this step proves the two
+  servers and the runtime's client in-process, against PostgreSQL. The
+  servers on kind are S044, because there is no cluster to run them on.
+  The two new database roles are added to the kind configuration here,
+  untested on a cluster, because migration 0004 refuses to run without
+  them.
+- The official MCP SDK, `mcp` 2.2.0, on both sides, over stateless
+  Streamable HTTP with JSON answers. Rejected: the 1.x line, which is the
+  API most examples show but an old major for new code; and a client of
+  our own over `httpx`, which a probe showed working but only in the
+  protocol's older handshake era. With `jsonschema` it adds 10
+  distributions to the lock file and changes no existing version
+  (`httpx2`, `cryptography` and `pyjwt` were already there through the
+  OpenAI and Azure packages).
+- The SDK's low-level `Server`, not its high-level one. The high-level
+  server derives each tool's schema from a Python signature; the low-level
+  one publishes the schema it is given, so the servers publish exactly the
+  registry's schemas (S008's follow-up). A probe showed the price: the
+  low-level server checks neither the tool's name nor its arguments, so
+  the shared kit (`platform/toolserver/`) does both, with size limits
+  before patterns, which S008's checker had promised.
+- One order of checks for every call, in the kit: the tool is this
+  server's, the run exists and is `Running`, the tenant may run the agent,
+  the tool is in the agent's allowlist, it needs no approval, the
+  arguments fit the schema and can be stored, the bound argument is the
+  run's own, the key is there for a write; then the handler, the result
+  against its output schema, and the audit row in the handler's own
+  transaction. A refusal answers one fixed reason word.
+- Binding (T-22), decided by the owner: the caller sends only the run ID.
+  The server reads tenant, agent and claim from the runtime's own run row
+  and refuses unless the run is `Running`. Rejected: tenant, agent and
+  claim as fields the caller sends, which anything able to reach the
+  server could set. ~~The price is two narrow read-only views that cross
+  a schema boundary.~~ Built as column grants, not views (2026-10-01):
+  five columns of `runtime.runs` and three of `claims.claims`, one of
+  them a generated column holding the claim's policy number, so neither
+  role can read the claimant's submission or the run's thread ID (T-25).
+- Every tool names the argument that must equal the run's claim ID or the
+  policy number on that claim, and a server does not start with a tool
+  that names none. The price falls on S012: `wording_search` has no such
+  argument.
+- The run ID and the idempotency key travel in the request's `_meta`
+  field, not in HTTP headers: `_meta` reaches the handler in-process and
+  over HTTP alike, and the registry already says the key is not a tool
+  argument.
+- Idempotency (T-23): the runtime derives the key from the run, the tool
+  and a label the graph's code gives the call site, so a model cannot mint
+  or reuse one. The key is unique per run; the insert is one statement
+  with `ON CONFLICT DO NOTHING`; the same payload again answers the
+  stored ID, and another payload under the key is refused. `connect()`
+  now pins READ COMMITTED, because at a stricter level the conflict
+  raises instead of finding the row.
+- Output schemas live in the registry, next to the input schemas, held to
+  the same closed and bounded rules. The server checks a result before it
+  answers and the runtime before the graph sees it. `api/mcp/*.json` is
+  what each server answers to `tools/list`, generated from the registry
+  with the scope and the idempotency and approval flags, and `make
+  registry` fails when file and registry differ.
+- `policy_lookup` returns no holder name, email or street, and the policy
+  tables do not store them: a tool result enters a prompt (TB-7), and
+  triage needs none of them. The policy store is simulated: tables the
+  owner role seeds from `data/synthetic/` with `meridian db
+  seed-policies`, which refuses data without the generator's manifest and
+  mirrors its source. The claims server's role can insert a note and
+  cannot read its text back.
+- The runtime's client pins the newest protocol version from the SDK's
+  constant, so there is no probe and no fallback, and sends each call as
+  one request; the SDK's own `call_tool` would fetch the tool list after
+  every call, and after a write had committed.
+- **This changes what S011 shipped:** the refusal throttle moved to
+  `platform/common` and its window now starts when a refusal is found
+  due, not after its row was written. Under the old order, refusals that
+  overlapped at the start of a window each wrote a row (eight of eight in
+  the test). A failed write reopens the window, so S011's property (a
+  failed write loses nothing) still holds and is still tested. The
+  gateway, the tool servers and the runtime's client use it.
+- The SDK's log records stop at one handler that re-logs a line without
+  content: at DEBUG it logs whole messages, at WARNING the refused Host
+  header, at ERROR an exception that quotes the response body. Its own
+  telemetry middleware is removed, because it names a span after the raw
+  tool name; the kit's span carries registry IDs only.
+- Reviewed and not done: a cap on the writes of one run (T-50; approval
+  requests in S015); a connection pool and role connection limits (S044,
+  S019); checking the seed's manifest against the committed one (only the
+  owner's connection can seed); `server.py` split into a pipeline module
+  (when the third server arrives, S012); a lock on the run row while a
+  call commits.
+
+**Work log:**
+
+- Probed `mcp` 2.2.0 in a scratch environment before designing: the
+  low-level server over stateless HTTP, what reaches a handler, what the
+  SDK validates (nothing), the client's connect modes. Resolved the lock
+  file in a scratch copy first.
+- The `implementer` subagent built five contracts: the data layer
+  (migration 0004, roles, seed, output schemas); the kit and the two
+  servers; the runtime's client and its wiring; and two rounds of fixes.
+  It edited some source files through shell scripts in the second
+  contract, against the contract, and said so; the main session read
+  every changed source file after each contract and ran every gate
+  itself.
+- Reviews by `database-reviewer`, `security-reviewer`, `python-reviewer`
+  and `platform-boundary-reviewer`: no critical finding. Fixed here, among
+  others: a NUL character or a broken Unicode character in a note ended
+  as a failure with an unthrottled audit row (high); the SDK logged a
+  response body at ERROR (high); the isolation level was not pinned;
+  the claims role could read every note; every call was two requests;
+  overlapping refusals each wrote a row; `GET /mcp` opened a stream that
+  never ends; a failure outside the pipeline left no audit row; keys were
+  unique across runs, which told a caller that a key existed elsewhere.
+  The security reviewer replaced 13 guards with no-ops; each was caught
+  by a test.
+- Model: both tool servers now load the registry, export telemetry and
+  read the run and the claim in the database. Threat model: T-14, T-21 to
+  T-25, T-27, T-36 and T-49 rewritten; T-50 to T-53 added.
+
+**Result / verification:** run by the main session on the final code.
+
+- `make pytest-db`: `2315 passed, 2 skipped` (the two are the opt-in live
+  Azure tests). `make pytest`: `1509 passed, 808 skipped`.
+- `make lint`: `Contracts: 4 kept, 0 broken.` `make registry`:
+  `schemas OK: up to date`, `contracts OK: up to date`. `make test`: 117
+  tests, `OK`. `make docs`: `13 checks passed`. `make check`: no ERROR
+  line.
+- Six mutations, each caught and then restored byte for byte: the
+  server's allowlist check removed (`agent-lacks-tool`); the bound
+  argument unchecked (`another-policy`, `another-claim`); the audit row
+  written after the commit
+  (`test_a_failed_audit_insert_leaves_no_note_behind`); a run that is not
+  `Running` accepted (`run-completed`, `run-failed`,
+  `run-awaiting-approval`); the payload not compared
+  (`test_the_same_key_with_another_text_is_refused_and_stores_nothing`);
+  the client's allowlist check removed
+  (`test_a_tool_outside_the_agents_allowlist_is_refused_audited_and_not_sent`).
+- Shown by the implementer and not rerun by the main session: the race
+  test fails with read-then-insert in place of `ON CONFLICT`; the
+  size-before-pattern test takes 8.7 s without the reordering; twenty
+  concurrent calls peak at eight handlers with the limit and at twenty
+  without.
+- Not tested: the servers on kind (no cluster; S044); the two roles on a
+  cluster; the client under a real `uvicorn` runtime (a stand-in graph
+  calls a tool through the runtime's test client, and the client calls a
+  server over real HTTP on a loopback port); the triage graph, which
+  calls no tool yet. `make gateway-live` was not rerun, because the Azure
+  login had expired: the gateway's own change is the throttle's call
+  site, which the database tests cover.
+
+**Follow-ups:**
+
+- S012: `wording_search` has no argument bound to the claim or its
+  policy, so the kit's binding rule needs a third kind (the claim's
+  product); the knowledge server needs a role and grants; an output
+  schema; split `server.py` into a pipeline module then.
+- S014: keep graph nodes synchronous (`ToolClient.call` runs its own event
+  loop); pass tool results into a prompt as quoted data with their source
+  (T-27); the model's `reason` returns to the claimant, so it must not
+  restate another policy's history (T-22).
+- S015: a resumed run must be `Running` again before it calls a tool; a
+  write repeated after a pause must send the same payload, so its text
+  comes from checkpointed state or the write has its own node; the
+  decision store, the Claims API's access to notes and requests, and one
+  approval request per run; `approval_required` tools are refused until
+  then.
+- S044: the tool servers on kind with their roles, a seed job,
+  `MERIDIAN_ALLOWED_HOSTS` and `MERIDIAN_TOOL_SERVERS`, migration 0004
+  before the services (the audit insert names the new column); role
+  connection limits; plain `http://` between services until S019.
+- S016 and S021 (T-01): claimant identity, without which a claim may name
+  any policy number.
+- No step yet: a client that lives longer than one call; an OpenAPI or
+  health entry for the tool servers in `test_openapi.py`; length checks
+  on `runtime.runs` text columns.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -2235,3 +2417,7 @@ All run by the main session on the final code.
   the limits, the ledger, the call ID and the metrics; the new S043 takes
   the Grafana cost panel, which needs the kind cluster. S018 depends on
   S043.
+- **v0.12, 2026-10-01:** S013 split with the owner's agreement: S013 keeps
+  the two tool servers, the runtime's tool client and the contracts,
+  proven in-process; the new S044 runs the tool servers on kind. S018
+  depends on S044.

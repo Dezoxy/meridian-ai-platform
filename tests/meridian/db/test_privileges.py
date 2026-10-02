@@ -9,9 +9,9 @@ from psycopg import sql
 
 from meridian.platform.common.db import connect
 
-SCHEMAS = ("audit", "claims", "gateway", "runtime")
+SCHEMAS = ("audit", "claims", "gateway", "policy", "runtime")
 # The services that append to the audit log; claims_api writes no audit event.
-AUDIT_WRITERS = ("agent_runtime", "model_gateway")
+AUDIT_WRITERS = ("agent_runtime", "model_gateway", "policy_mcp", "claims_mcp")
 CLAIM_ID = "CLM-0001"
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 THREAD_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
@@ -587,11 +587,13 @@ def test_the_audit_log_has_no_content_columns(
         "http_status",
         "provider_model",
         "suppressed",
+        # 0004: the tool a tool server ran or refused.
+        "tool",
     }
 
 
 # ── PUBLIC ──────────────────────────────────────────────────────────────────
-def test_public_has_no_privilege_on_the_four_schemas(
+def test_public_has_no_privilege_on_the_schemas(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(
@@ -719,3 +721,469 @@ def test_the_lookup_columns_are_indexed(
     )
 
     assert rows
+
+
+# ── policy_mcp and claims_mcp (0004, S013) ──────────────────────────────────
+TOOL_ROLES = ("policy_mcp", "claims_mcp")
+POLICY_NUMBER = "POL-0001"
+HISTORY_ID = "HIST-0001"
+RUN_COLUMNS = "run_id, agent, tenant, reference, status"
+CLAIM_COLUMNS = "claim_id, tenant, policy_number"
+
+
+def seed_policy_rows(db: DatabaseHandle) -> None:
+    """One policy and one history row, written by the owner (nobody else may)."""
+    run(
+        db,
+        OWNER,
+        "INSERT INTO policy.policies (policy_number, product, wording_version, "
+        "start_date, end_date, status, deductible, cover_limit) "
+        "VALUES (%s, 'HOME-STD', '2026-01', '2026-01-01', '2026-12-31', "
+        "'active', 250, 1000) ON CONFLICT DO NOTHING",
+        (POLICY_NUMBER,),
+    )
+    run(
+        db,
+        OWNER,
+        "INSERT INTO policy.claim_history (history_id, policy_number, loss_date, "
+        "peril, paid_amount, status) "
+        "VALUES (%s, %s, '2026-02-01', 'storm', 100, 'closed') "
+        "ON CONFLICT DO NOTHING",
+        (HISTORY_ID, POLICY_NUMBER),
+    )
+
+
+def insert_tool_run(db: DatabaseHandle) -> uuid.UUID:
+    run_id = uuid.uuid4()
+    run(
+        db,
+        "agent_runtime",
+        "INSERT INTO runtime.runs (run_id, thread_id, agent, tenant, reference, "
+        "status) VALUES (%s, %s, 'claims-triage', 'development', %s, 'Running')",
+        (run_id, uuid.uuid4(), CLAIM_ID),
+    )
+    return run_id
+
+
+def insert_note(db: DatabaseHandle, role: str = "claims_mcp") -> str:
+    """A note on CLM-0001; returns its idempotency key."""
+    insert_claim(db)
+    key = uuid.uuid4().hex + uuid.uuid4().hex
+    run(
+        db,
+        role,
+        "INSERT INTO claims.notes (claim_id, run_id, agent, note, idempotency_key, "
+        "payload_hash) VALUES (%s, %s, 'claims-triage', 'n', %s, %s)",
+        (CLAIM_ID, RUN_ID, key, "b" * 64),
+    )
+    return key
+
+
+def insert_approval_request(db: DatabaseHandle) -> str:
+    insert_claim(db)
+    key = uuid.uuid4().hex + uuid.uuid4().hex
+    run(
+        db,
+        "claims_mcp",
+        "INSERT INTO claims.approval_requests (claim_id, run_id, agent, reason, "
+        "idempotency_key, payload_hash) "
+        "VALUES (%s, %s, 'claims-triage', 'r', %s, %s)",
+        (CLAIM_ID, RUN_ID, key, "b" * 64),
+    )
+    return key
+
+
+def test_policy_mcp_reads_the_policy_and_its_history(
+    migrated_database: DatabaseHandle,
+) -> None:
+    seed_policy_rows(migrated_database)
+
+    policies = run(
+        migrated_database,
+        "policy_mcp",
+        "SELECT policy_number, cover_limit FROM policy.policies",
+    )
+    history = run(
+        migrated_database,
+        "policy_mcp",
+        "SELECT history_id, paid_amount FROM policy.claim_history",
+    )
+
+    assert (POLICY_NUMBER, 1000) in policies
+    assert (HISTORY_ID, 100) in history
+
+
+@pytest.mark.parametrize("table", ["policies", "claim_history"])
+def test_policy_mcp_may_select_everything_in_the_policy_tables(
+    migrated_database: DatabaseHandle, table: str
+) -> None:
+    rows = run(migrated_database, "policy_mcp", f"SELECT * FROM policy.{table}")  # noqa: S608
+
+    assert isinstance(rows, list)
+
+
+def test_policy_mcp_has_usage_on_the_policy_schema(
+    migrated_database: DatabaseHandle,
+) -> None:
+    rows = run(
+        migrated_database,
+        "policy_mcp",
+        "SELECT has_schema_privilege('policy', 'USAGE')",
+    )
+
+    assert rows == [(True,)]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO policy.policies (policy_number, product, wording_version, "
+        "start_date, end_date, status, deductible, cover_limit) "
+        "VALUES ('POL-7001', 'p', 'v', '2026-01-01', '2026-12-31', 'active', 0, 0)",
+        "UPDATE policy.policies SET deductible = 0",
+        "DELETE FROM policy.policies",
+        "INSERT INTO policy.claim_history (history_id, policy_number, loss_date, "
+        "peril, paid_amount, status) "
+        "VALUES ('HIST-7001', 'POL-0001', '2026-01-01', 'p', 0, 's')",
+        "UPDATE policy.claim_history SET paid_amount = 0",
+        "DELETE FROM policy.claim_history",
+        "TRUNCATE policy.policies, policy.claim_history",
+    ],
+)
+def test_policy_mcp_cannot_write_the_policy_tables(
+    migrated_database: DatabaseHandle, statement: str
+) -> None:
+    seed_policy_rows(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, "policy_mcp", statement)
+
+
+@pytest.mark.parametrize("role", TOOL_ROLES)
+def test_a_tool_server_reads_the_five_run_columns(
+    migrated_database: DatabaseHandle, role: str
+) -> None:
+    run_id = insert_tool_run(migrated_database)
+
+    rows = run(
+        migrated_database,
+        role,
+        f"SELECT {RUN_COLUMNS} FROM runtime.runs WHERE run_id = %s",  # noqa: S608
+        (run_id,),
+    )
+
+    assert rows == [(run_id, "claims-triage", "development", CLAIM_ID, "Running")]
+
+
+@pytest.mark.parametrize("role", TOOL_ROLES)
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT thread_id FROM runtime.runs",
+        "SELECT * FROM runtime.runs",
+        "SELECT run_id FROM runtime.runs WHERE thread_id IS NOT NULL",
+        "SELECT created_at FROM runtime.runs",
+        "SELECT updated_at FROM runtime.runs",
+        "INSERT INTO runtime.runs (run_id, thread_id, agent, tenant, reference, "
+        "status) VALUES (gen_random_uuid(), gen_random_uuid(), 'a', 't', 'r', "
+        "'Running')",
+        "UPDATE runtime.runs SET status = 'Failed'",
+        "DELETE FROM runtime.runs",
+    ],
+)
+def test_a_tool_server_cannot_go_beyond_its_run_columns(
+    migrated_database: DatabaseHandle, role: str, statement: str
+) -> None:
+    insert_tool_run(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, role, statement)
+
+
+@pytest.mark.parametrize("role", TOOL_ROLES)
+def test_a_tool_server_reads_the_three_claim_columns(
+    migrated_database: DatabaseHandle, role: str
+) -> None:
+    insert_claim(migrated_database)
+
+    rows = run(
+        migrated_database,
+        role,
+        f"SELECT {CLAIM_COLUMNS} FROM claims.claims WHERE claim_id = %s",  # noqa: S608
+        (CLAIM_ID,),
+    )
+
+    assert rows == [(CLAIM_ID, "development", None)]
+
+
+@pytest.mark.parametrize("role", TOOL_ROLES)
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT submission FROM claims.claims",
+        "SELECT * FROM claims.claims",
+        "SELECT received_at FROM claims.claims",
+        "INSERT INTO claims.claims (claim_id, tenant, submission) "
+        "VALUES ('CLM-7002', 't', '{}')",
+        "UPDATE claims.claims SET tenant = 'x'",
+        "DELETE FROM claims.claims",
+        "SELECT * FROM claims.triage_proposals",
+        "INSERT INTO claims.triage_proposals (proposal_id, claim_id, run_id, route, "
+        "reason, draft, drafted_by_deployment, drafted_by_provider, drafted_by_mode) "
+        "VALUES (gen_random_uuid(), 'CLM-0001', gen_random_uuid(), 'adjuster', 'r', "
+        "'d', 'x', 'y', 'replay')",
+    ],
+)
+def test_a_tool_server_cannot_go_beyond_its_claim_columns(
+    migrated_database: DatabaseHandle, role: str, statement: str
+) -> None:
+    insert_claim(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, role, statement)
+
+
+def test_claims_mcp_inserts_a_note_and_reads_its_replay_columns(
+    migrated_database: DatabaseHandle,
+) -> None:
+    key = insert_note(migrated_database)
+
+    rows = run(
+        migrated_database,
+        "claims_mcp",
+        "SELECT claim_id, run_id, payload_hash FROM claims.notes "
+        "WHERE run_id = %s AND idempotency_key = %s",
+        (RUN_ID, key),
+    )
+
+    assert rows == [(CLAIM_ID, RUN_ID, "b" * 64)]
+
+
+def test_claims_mcp_inserts_a_request_and_reads_its_replay_columns(
+    migrated_database: DatabaseHandle,
+) -> None:
+    key = insert_approval_request(migrated_database)
+
+    rows = run(
+        migrated_database,
+        "claims_mcp",
+        "SELECT claim_id, run_id, payload_hash FROM claims.approval_requests "
+        "WHERE run_id = %s AND idempotency_key = %s",
+        (RUN_ID, key),
+    )
+
+    assert rows == [(CLAIM_ID, RUN_ID, "b" * 64)]
+
+
+@pytest.mark.parametrize(
+    ("table", "id_column"),
+    [("notes", "note_id"), ("approval_requests", "request_id")],
+)
+def test_claims_mcp_reads_exactly_the_five_replay_columns(
+    migrated_database: DatabaseHandle, table: str, id_column: str
+) -> None:
+    insert_note(migrated_database)
+    insert_approval_request(migrated_database)
+    columns = f"{id_column}, claim_id, run_id, idempotency_key, payload_hash"
+
+    rows = run(
+        migrated_database,
+        "claims_mcp",
+        f"SELECT {columns} FROM claims.{table}",  # noqa: S608
+    )
+
+    assert rows
+
+
+@pytest.mark.parametrize("table", ["notes", "approval_requests"])
+@pytest.mark.parametrize(
+    "select",
+    [
+        "SELECT {text} FROM claims.{table}",
+        "SELECT * FROM claims.{table}",
+        "SELECT agent FROM claims.{table}",
+        "SELECT created_at FROM claims.{table}",
+        # a column in a WHERE clause is read too: an oracle on the text
+        "SELECT claim_id FROM claims.{table} WHERE {text} = 'n'",
+        "SELECT claim_id FROM claims.{table} ORDER BY {text}",
+    ],
+)
+def test_claims_mcp_cannot_read_the_text_or_the_rest_of_a_note_or_a_request(
+    migrated_database: DatabaseHandle, table: str, select: str
+) -> None:
+    insert_note(migrated_database)
+    insert_approval_request(migrated_database)
+    text = "note" if table == "notes" else "reason"
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, "claims_mcp", select.format(table=table, text=text))
+
+
+@pytest.mark.parametrize(
+    ("table", "text_column"), [("notes", "note"), ("approval_requests", "reason")]
+)
+def test_the_owner_reads_the_text_the_tool_server_stored(
+    migrated_database: DatabaseHandle, table: str, text_column: str
+) -> None:
+    key = (
+        insert_note(migrated_database)
+        if table == "notes"
+        else insert_approval_request(migrated_database)
+    )
+
+    rows = run(
+        migrated_database,
+        OWNER,
+        f"SELECT claim_id, {text_column} FROM claims.{table} "  # noqa: S608
+        "WHERE idempotency_key = %s",
+        (key,),
+    )
+
+    assert rows == [(CLAIM_ID, "n" if table == "notes" else "r")]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE claims.notes SET note = 'changed'",
+        "DELETE FROM claims.notes",
+        "TRUNCATE claims.notes",
+        "UPDATE claims.approval_requests SET reason = 'changed'",
+        "DELETE FROM claims.approval_requests",
+        "TRUNCATE claims.approval_requests",
+    ],
+)
+def test_claims_mcp_cannot_change_or_remove_a_note_or_a_request(
+    migrated_database: DatabaseHandle, statement: str
+) -> None:
+    insert_note(migrated_database)
+    insert_approval_request(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, "claims_mcp", statement)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT * FROM claims.notes",
+        "INSERT INTO claims.notes (claim_id, run_id, agent, note, idempotency_key, "
+        "payload_hash) VALUES ('CLM-0001', gen_random_uuid(), 'a', 'n', "
+        "repeat('c', 64), repeat('c', 64))",
+        "UPDATE claims.notes SET note = 'x'",
+        "DELETE FROM claims.notes",
+        "SELECT * FROM claims.approval_requests",
+        "INSERT INTO claims.approval_requests (claim_id, run_id, agent, reason, "
+        "idempotency_key, payload_hash) VALUES ('CLM-0001', gen_random_uuid(), "
+        "'a', 'r', repeat('c', 64), repeat('c', 64))",
+    ],
+)
+def test_policy_mcp_cannot_read_or_write_notes_or_requests(
+    migrated_database: DatabaseHandle, statement: str
+) -> None:
+    insert_note(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, "policy_mcp", statement)
+
+
+@pytest.mark.parametrize("table", ["notes", "approval_requests"])
+def test_claims_api_cannot_read_notes_or_requests(
+    migrated_database: DatabaseHandle, table: str
+) -> None:
+    insert_note(migrated_database)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, "claims_api", f"SELECT * FROM claims.{table}")  # noqa: S608
+
+
+@pytest.mark.parametrize("role", TOOL_ROLES)
+def test_a_tool_server_appends_to_the_audit_log(
+    migrated_database: DatabaseHandle, role: str
+) -> None:
+    insert_event(migrated_database, role)
+
+    assert audit_rows(migrated_database, "db_role", role)
+
+
+@pytest.mark.parametrize("role", TOOL_ROLES)
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT count(*) FROM audit.events",
+        "UPDATE audit.events SET outcome = 'x'",
+        "DELETE FROM audit.events",
+    ],
+)
+def test_a_tool_server_cannot_read_or_change_the_audit_log(
+    migrated_database: DatabaseHandle, role: str, statement: str
+) -> None:
+    insert_event(migrated_database, role)
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, role, statement)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT * FROM policy.policies",
+        "SELECT * FROM policy.claim_history",
+        "INSERT INTO policy.policies (policy_number) VALUES ('POL-7003')",
+    ],
+)
+def test_claims_mcp_cannot_reach_the_policy_tables(
+    migrated_database: DatabaseHandle, statement: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, "claims_mcp", statement)
+
+
+def test_claims_mcp_has_no_usage_on_the_policy_schema(
+    migrated_database: DatabaseHandle,
+) -> None:
+    rows = run(
+        migrated_database,
+        "claims_mcp",
+        "SELECT has_schema_privilege('policy', 'USAGE')",
+    )
+
+    assert rows == [(False,)]
+
+
+@pytest.mark.parametrize("role", ["claims_api", "agent_runtime", "model_gateway"])
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT * FROM policy.policies",
+        "SELECT * FROM policy.claim_history",
+        "INSERT INTO policy.policies (policy_number) VALUES ('POL-7004')",
+        "UPDATE policy.policies SET deductible = 0",
+        "DELETE FROM policy.claim_history",
+    ],
+)
+def test_the_older_roles_cannot_read_or_write_the_policy_tables(
+    migrated_database: DatabaseHandle, role: str, statement: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, role, statement)
+
+
+@pytest.mark.parametrize("role", ["claims_api", "agent_runtime", "model_gateway"])
+def test_the_older_roles_have_no_usage_on_the_policy_schema(
+    migrated_database: DatabaseHandle, role: str
+) -> None:
+    rows = run(
+        migrated_database, role, "SELECT has_schema_privilege('policy', 'USAGE')"
+    )
+
+    assert rows == [(False,)]
+
+
+@pytest.mark.parametrize("role", ["agent_runtime", "model_gateway"])
+@pytest.mark.parametrize("table", ["notes", "approval_requests"])
+def test_the_older_runtime_roles_cannot_touch_notes_or_requests(
+    migrated_database: DatabaseHandle, role: str, table: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        run(migrated_database, role, f"SELECT * FROM claims.{table}")  # noqa: S608
