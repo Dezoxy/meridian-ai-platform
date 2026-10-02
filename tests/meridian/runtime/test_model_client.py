@@ -21,6 +21,7 @@ from meridian.platform.gateway.models import ChatOutput, ChatResponse, Usage
 from meridian.runtime.model_client import (
     ChatResult,
     ModelCallError,
+    ModelCallLimitError,
     ModelCallTimeoutError,
     ModelClient,
 )
@@ -44,9 +45,13 @@ def client_for(
     return http, seen
 
 
-def model(http: httpx.Client) -> ModelClient:
+def model(http: httpx.Client, max_calls: int = 10) -> ModelClient:
     return ModelClient(
-        http, tenant="claims-triage", agent="claims-triage", run_id=RUN_ID
+        http,
+        tenant="claims-triage",
+        agent="claims-triage",
+        run_id=RUN_ID,
+        max_calls=max_calls,
     )
 
 
@@ -71,7 +76,79 @@ def test_chat_posts_the_messages_with_the_three_identity_headers() -> None:
         mode="replay",
         input_tokens=1,
         output_tokens=1,
+        finish_reason="stop",
     )
+
+
+def test_max_output_tokens_is_sent_when_given_and_left_out_when_not() -> None:
+    http, seen = client_for()
+    client = model(http)
+
+    client.chat([{"role": "user", "content": "hi"}], max_output_tokens=256)
+    client.chat([{"role": "user", "content": "hi"}])
+
+    given, omitted = (json.loads(request.content) for request in seen)
+    assert given == {
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_output_tokens": 256,
+    }
+    assert omitted == {"messages": [{"role": "user", "content": "hi"}]}
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_the_finish_reason_of_the_reply_is_in_the_result(finish_reason: str) -> None:
+    reply = {**GATEWAY_REPLY, "output": {"text": "t", "finish_reason": finish_reason}}
+
+    result = model(reply_client(reply)).chat([{"role": "user", "content": "hi"}])
+
+    assert result.finish_reason == finish_reason
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"text": "t"},
+        {"text": "t", "finish_reason": "content_filter"},
+        {"text": "t", "finish_reason": None},
+    ],
+)
+def test_a_reply_without_a_known_finish_reason_is_no_usable_answer(
+    output: dict,
+) -> None:
+    reply = {**GATEWAY_REPLY, "output": output}
+
+    with pytest.raises(ModelCallError) as raised:
+        model(reply_client(reply)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 0
+    assert not isinstance(raised.value, ModelCallLimitError)
+
+
+def test_the_call_after_the_limit_sends_nothing_and_raises() -> None:
+    http, seen = client_for()
+    client = model(http, max_calls=2)
+    client.chat([{"role": "user", "content": "one"}])
+    client.chat([{"role": "user", "content": "two"}])
+
+    with pytest.raises(ModelCallLimitError) as raised:
+        client.chat([{"role": "user", "content": "secret claimant text"}])
+
+    assert len(seen) == 2
+    assert isinstance(raised.value, ModelCallError)
+    assert raised.value.status_code == 0
+    assert str(raised.value) == "model call limit of the run reached"
+
+
+def test_a_call_that_fails_counts_toward_the_limit() -> None:
+    http, seen = client_for(status=500)
+    client = model(http, max_calls=1)
+    with pytest.raises(ModelCallError):
+        client.chat([{"role": "user", "content": "one"}])
+
+    with pytest.raises(ModelCallLimitError):
+        client.chat([{"role": "user", "content": "two"}])
+
+    assert len(seen) == 1
 
 
 def test_a_non_2xx_answer_raises_with_the_status_code_only() -> None:
@@ -113,6 +190,7 @@ def test_a_live_reply_with_a_finish_reason_and_an_unknown_field_parses() -> None
         mode="live",
         input_tokens=1,
         output_tokens=1,
+        finish_reason="length",
     )
 
 
@@ -151,6 +229,7 @@ def test_what_the_gateway_answers_is_what_the_runtime_parses(mode: str) -> None:
         mode=mode,
         input_tokens=7,
         output_tokens=3,
+        finish_reason="stop",
     )
 
 

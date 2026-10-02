@@ -338,6 +338,48 @@ def test_the_recursion_limit_stops_a_looping_graph(
     assert response.json()["status"] == "Failed"
 
 
+def calling_factory(calls: int) -> Callable[[ModelClient, ToolClient], StateGraph]:
+    """A graph whose one node calls the model ``calls`` times: the recursion
+    limit counts steps, so it does not bound these."""
+
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            for _ in range(calls):
+                model.chat([{"role": "user", "content": "hi"}])
+            return {"output": {"calls": calls}}
+
+        return graph_of(work)
+
+    return factory
+
+
+def test_a_run_may_call_the_model_as_often_as_the_limit_allows(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, calling_factory(runs.MAX_MODEL_CALLS_PER_RUN))
+    gateway = Gateway()
+
+    response = start(make_client(fresh_database, gateway))
+
+    assert response.json()["status"] == "Completed"
+    assert len(gateway.requests) == runs.MAX_MODEL_CALLS_PER_RUN
+
+
+def test_a_graph_that_calls_the_model_past_the_limit_ends_failed(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, calling_factory(runs.MAX_MODEL_CALLS_PER_RUN + 1))
+    gateway = Gateway()
+
+    response = start(make_client(fresh_database, gateway))
+
+    assert response.status_code == 502
+    assert response.json()["status"] == "Failed"
+    assert len(gateway.requests) == runs.MAX_MODEL_CALLS_PER_RUN
+    ((_, _, _, _, _, status),) = run_rows(fresh_database)
+    assert status == "Failed"
+
+
 # ── authorisation and loading ───────────────────────────────────────────────
 @pytest.mark.parametrize(
     "overrides",
@@ -1022,10 +1064,14 @@ def tool_rows(db: DatabaseHandle, response: httpx.Response) -> list[dict]:
     return [e for e in events if e["event"] == "tool.call"]
 
 
-def test_twenty_refused_calls_in_one_run_leave_one_row(
+# The most tool calls a run may make: a refused call counts toward the limit.
+MANY_REFUSALS = runs.MAX_TOOL_CALLS_PER_RUN
+
+
+def test_all_the_refused_calls_a_run_may_make_leave_one_row(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    register(monkeypatch, refusing(20))
+    register(monkeypatch, refusing(MANY_REFUSALS))
 
     response = start(make_client(fresh_database, clock=Clock()))
 
@@ -1041,7 +1087,7 @@ def test_twenty_refused_calls_in_one_run_leave_one_row(
 def test_after_the_window_the_next_row_counts_the_refusals_it_stands_for(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    register(monkeypatch, refusing(20))
+    register(monkeypatch, refusing(MANY_REFUSALS))
     clock = Clock()
     client = make_client(fresh_database, clock=clock)
     start(client)
@@ -1051,13 +1097,13 @@ def test_after_the_window_the_next_row_counts_the_refusals_it_stands_for(
     second = start(client)
 
     (row,) = tool_rows(fresh_database, second)
-    assert row["suppressed"] == 19
+    assert row["suppressed"] == MANY_REFUSALS - 1
 
 
 def test_inside_the_window_a_later_run_leaves_no_row(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    register(monkeypatch, refusing(20))
+    register(monkeypatch, refusing(MANY_REFUSALS))
     clock = Clock()
     client = make_client(fresh_database, clock=clock)
     start(client)

@@ -134,6 +134,13 @@ class ToolNotAllowed(ToolError):
         super().__init__(tool, "tool not allowed")
 
 
+class ToolCallLimit(ToolError):
+    """The run has made its allowed number of tool calls; nothing was sent."""
+
+    def __init__(self, tool: str | None) -> None:
+        super().__init__(tool, "tool call limit of the run reached")
+
+
 class ToolRefused(ToolError):
     """The server refused the call; ``reason`` is one of ``RefusalReason``, else
     ``"unknown"``."""
@@ -226,7 +233,9 @@ class ToolClient:
     ``Client`` accepts: a base URL (``/mcp`` is appended) or, in tests, a
     connected in-process server. ``on_refusal`` is called with the tool's
     registry ID, or ``None``, before a call the allowlist refuses; it writes the
-    runtime's audit row, and an exception from it propagates."""
+    runtime's audit row, and an exception from it propagates. ``max_calls``
+    bounds the calls of this client, so of one run: every call counts, a refused
+    one too, and the one past it raises ``ToolCallLimit`` before the allowlist."""
 
     def __init__(
         self,
@@ -237,8 +246,12 @@ class ToolClient:
         run_id: uuid.UUID,
         tracer: Tracer,
         on_refusal: Callable[[str | None], None],
+        max_calls: int,
     ) -> None:
         prepare_sdk()
+        self._max_calls = max_calls
+        self._calls = 0
+        self._lock = threading.Lock()
         self._servers = dict(servers)
         self._registry = registry
         self._agent = agent
@@ -255,9 +268,10 @@ class ToolClient:
         ``step`` is the graph's own name for the call site (never from a model);
         a tool that needs an idempotency key requires one, any other tool
         refuses one. Raises ``ValueError`` for a ``step`` that does not fit
-        (a bug in the graph, before anything is sent), ``ToolNotAllowed``,
-        ``ToolRefused`` or ``ToolUnavailable``.
+        (a bug in the graph, before anything is sent), ``ToolCallLimit``,
+        ``ToolNotAllowed``, ``ToolRefused`` or ``ToolUnavailable``.
         """
+        self._count(tool)
         spec = self._allowed(tool)
         key = self._idempotency_key(spec, step)
         target = self._servers.get(spec.server)
@@ -297,6 +311,14 @@ class ToolClient:
         if isinstance(outcome, ToolRefused):
             raise outcome
         return outcome
+
+    def _count(self, tool: str) -> None:
+        with self._lock:  # a graph's parallel nodes share this client
+            if self._calls >= self._max_calls:
+                # The ID of a registry tool only: a made-up name is never kept.
+                spec = self._registry.tool(tool)
+                raise ToolCallLimit(spec.id if spec is not None else None)
+            self._calls += 1
 
     def _allowed(self, tool: str) -> Tool:
         spec = self._registry.tool(tool)

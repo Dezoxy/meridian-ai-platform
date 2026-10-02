@@ -145,11 +145,12 @@ and Pydantic, at the cost of one dependency.
 | S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | done | S012, S013 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | todo | S013, S041 |
-| S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S013, S046 |
+| S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | doing | S011, S013, S046 |
+| S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047 |
 
 ### M2 — Azure, identity, delivery
 
@@ -173,7 +174,7 @@ and Pydantic, at the cost of one dependency.
 | S029 | Backup and restore drill | PostgreSQL restored into a scratch environment; restore time measured and recorded | todo | S020 |
 | S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023 |
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
-| S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017 |
+| S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
 | S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | todo | S024 |
 | S035 | M3 exit | Architecture PDF released; demo script v2; every capability labelled | todo | S028, S033, S034 |
@@ -2952,6 +2953,27 @@ under the run's tenant and agent, and answers cited clauses.
   URL check in `common/env.py` for every service address; the count of a
   refusal flood's last window is never written (S011).
 
+### S014 — Triage graph
+
+**Status:** doing · **Started:** 2026-10-02 · **Finished:** —
+**Goal:** a claim is triaged by a graph that checks the policy, screens the
+claim with rules, retrieves the wording's terms, asks the model for the one
+fact rules cannot read, and stores a validated proposal whose route the
+rules decided.
+**Decisions:**
+
+- Split by the session on 2026-10-02, for the owner to accept at the pull
+  request: this step is the graph, its rules, the proposal and its storage;
+  S047, new, takes PII redaction, injection detection and the data class
+  per request. From this step until S047 the model call reads claimant
+  text with no redaction and no injection check.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -3010,3 +3032,7 @@ under the run's tenant and agent, and answers cited clauses.
   ingestion, hybrid search and the retrieval check; S046, new, is the
   knowledge MCP server, and S014 depends on it. A registry agent has a
   kind, and the runtime runs only agents of kind `graph`.
+- **v0.15, 2026-10-02:** S014 split by the session, for the owner to
+  accept at its pull request: S014 keeps the triage graph, its rules, the
+  proposal and its storage; S047, new, takes PII redaction, injection
+  detection and the data class per request. S018 and S032 depend on S047.

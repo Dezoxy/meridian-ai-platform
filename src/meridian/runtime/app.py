@@ -156,6 +156,7 @@ def tool_client_for(
         run_id=identity.run_id,
         tracer=tracer,
         on_refusal=audit_refusal,
+        max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
     )
 
 

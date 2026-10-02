@@ -24,6 +24,10 @@ from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.tracing import NodeSpans
 
 RECURSION_LIMIT = 10
+# What one run may spend (T-15, T-62). The recursion limit bounds the graph's
+# steps, not the calls inside a step, so the two clients count their own.
+MAX_MODEL_CALLS_PER_RUN = 4
+MAX_TOOL_CALLS_PER_RUN = 16
 # Audit vocabulary: event and outcome, by the state a run is moved to. Every
 # state has one, so no caller can make finish_run fail on a lookup.
 AUDIT_FOR_STATE: dict[RunState, tuple[str, str]] = {
@@ -64,7 +68,11 @@ def execute(
     Raises whatever the graph raises; the caller records the failure.
     """
     model = ModelClient(
-        http, tenant=identity.tenant, agent=identity.agent, run_id=identity.run_id
+        http,
+        tenant=identity.tenant,
+        agent=identity.agent,
+        run_id=identity.run_id,
+        max_calls=MAX_MODEL_CALLS_PER_RUN,
     )
     graph = factory(model, tools).compile(checkpointer=saver)
     config = {

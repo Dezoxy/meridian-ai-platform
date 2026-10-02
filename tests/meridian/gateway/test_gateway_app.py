@@ -377,7 +377,7 @@ def message(role: str = "user", content: str = "hello") -> dict[str, str]:
         {"messages": [message(content="")]},
         {"messages": [message(content="x" * 20_001)]},
         {"messages": [message()], "max_output_tokens": 0},
-        {"messages": [message()], "max_output_tokens": 4097},
+        {"messages": [message()], "max_output_tokens": 1025},
         {"messages": [message()], "temperature": 0.2},
         {"messages": [{**message(), "name": "extra"}]},
         {},
@@ -392,7 +392,7 @@ def test_an_invalid_body_is_a_422(body: dict) -> None:
 @pytest.mark.parametrize(
     "body",
     [
-        {"messages": [message()] * 50, "max_output_tokens": 4096},
+        {"messages": [message()] * 50, "max_output_tokens": 1024},
         {"messages": [message(content="x" * 20_000)]},
     ],
 )

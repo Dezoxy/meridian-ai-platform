@@ -38,6 +38,7 @@ class StubModel:
             mode="replay",
             input_tokens=1,
             output_tokens=1,
+            finish_reason="stop",
         )
 
 

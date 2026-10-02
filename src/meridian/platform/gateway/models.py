@@ -10,7 +10,10 @@ from meridian.platform.common.wire import NoNul, WireModel
 MAX_MESSAGES = 50
 MAX_CONTENT_CHARS = 20_000
 DEFAULT_OUTPUT_TOKENS = 1024
-MAX_OUTPUT_TOKENS = 4096
+# 4,096 tokens cannot be generated inside the adapter's 20 s read limit, so the
+# contract promised more than a call could serve; 1,024 needs about 52 tokens a
+# second, which is not yet measured against Azure.
+MAX_OUTPUT_TOKENS = 1024
 # A request is at most this much text (T-55): an embedding is cheap per token,
 # so the bound is on inputs and characters, not on a reply.
 MAX_EMBEDDING_INPUTS = 16
