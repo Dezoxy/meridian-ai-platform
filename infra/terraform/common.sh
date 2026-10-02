@@ -14,7 +14,8 @@
 #    account.
 #  - Subscription, tenant and object IDs are never printed: the subscription is
 #    logged by name, and every error string passes through redact, which
-#    turns any GUID into <guid>.
+#    turns any GUID into <guid> and the base64 ID that holds them into
+#    <client-config-id>.
 #  - No secret exists here. Authentication is the owner's az login; the state
 #    account has shared keys off.
 
@@ -31,9 +32,17 @@ readonly STATE_CONTAINER=tfstate
 export AZURE_CORE_ONLY_SHOW_ERRORS=true
 
 # redact: stdin to stdout with every GUID (subscription, tenant, object and
-# role IDs, in either case) replaced by <guid>.
+# role IDs, in either case) replaced by <guid>, and the ID of Terraform's
+# azurerm_client_config data source by <client-config-id>. That ID is the
+# base64 of "clientConfigs/clientId=...;objectId=...;subscriptionId=...;
+# tenantId=...", so it holds the same IDs where no GUID pattern sees them, and
+# Terraform prints it on every plan and apply ("Read complete ... [id=...]").
+# The second pattern starts with the base64 of "clientConfigs/c", which is the
+# same whatever follows, and takes the rest of the base64 run.
 redact() {
-  sed -E 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<guid>/g'
+  sed -E \
+    -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<guid>/g' \
+    -e 's#Y2xpZW50Q29uZmlncy9j[A-Za-z0-9+/]*={0,2}#<client-config-id>#g'
 }
 
 log() { printf '==> %s\n' "$*"; }
