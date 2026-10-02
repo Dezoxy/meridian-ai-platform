@@ -18,9 +18,11 @@ import openai
 import pytest
 from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import CredentialUnavailableError
+from openai.types import CreateEmbeddingResponse, Embedding
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
 from servicesupport import REGISTRY_DIR
 
-from meridian.platform.gateway.models import ChatRequest, Message
+from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest, Message
 from meridian.platform.gateway.providers import azure_openai
 from meridian.platform.gateway.providers.azure_openai import (
     API_VERSION,
@@ -32,7 +34,11 @@ from meridian.platform.gateway.providers.azure_openai import (
     check_token,
     refuse_sdk_environment,
 )
-from meridian.platform.gateway.providers.base import ProviderError, ProviderReply
+from meridian.platform.gateway.providers.base import (
+    EmbeddingReply,
+    ProviderError,
+    ProviderReply,
+)
 from meridian.platform.registry import load_registry
 from meridian.platform.registry.models import Deployment
 from meridian.runtime.app import GATEWAY_TIMEOUT_SECONDS
@@ -624,6 +630,27 @@ def test_a_reply_that_is_not_json_is_a_bad_response(deployment: Deployment) -> N
     assert CANARY not in repr(error) + str(error)
 
 
+def test_a_json_answer_with_an_unparseable_body_is_a_bad_response_for_chat(
+    deployment: Deployment,
+) -> None:
+    # With a JSON content type the SDK parses the body itself and raises on it,
+    # where the test above gets the text back as a plain string.
+    provider = make_provider(
+        lambda _request: httpx.Response(
+            200,
+            content=f"<html>{CANARY}</html>".encode(),
+            headers={"content-type": "application/json"},
+        )
+    )
+
+    error = error_of(provider, deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("bad-response", None, True)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert CANARY not in repr(error) + str(error)
+
+
 # ── the errors ───────────────────────────────────────────────────────────────
 @pytest.mark.parametrize(
     ("status", "kind"),
@@ -1140,3 +1167,540 @@ def test_check_token_lets_anything_else_through() -> None:
 
     with pytest.raises(RuntimeError):
         check_token(failing)
+
+
+# ── embeddings (S045) ────────────────────────────────────────────────────────
+# One call to the embeddings endpoint with the registry's dimensions, and an
+# answer that is trusted only when its count, its indexes, its sizes and its
+# numbers are right (T-54).
+DIMENSIONS = 8
+EMBED_INPUTS = ("Storm damage.", "Water in the cellar.")
+EMBED_REQUEST = EmbeddingRequest(inputs=EMBED_INPUTS)
+EMBED_PATH = "/openai/deployments/embed-deploy/embeddings"
+JSON_HEADERS = {"content-type": "application/json"}
+
+
+def vector(seed: int, size: int = DIMENSIONS) -> list[float]:
+    return [seed + n / 8 for n in range(size)]  # exact in binary, so == is safe
+
+
+def embedding_data(count: int = 2, **overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "object": "list",
+        "model": "text-embedding-3-large",
+        "data": [
+            {"object": "embedding", "index": n, "embedding": vector(n)}
+            for n in range(count)
+        ],
+        "usage": {"prompt_tokens": 9, "total_tokens": 9},
+    }
+    return body | overrides
+
+
+def embed_answer(**overrides: Any) -> Handler:
+    """A 200 with a JSON body. ``json.dumps`` rather than httpx's ``json=``,
+    which refuses NaN and infinity: the point is to send them."""
+    content = json.dumps(embedding_data(**overrides)).encode()
+    return lambda _request: httpx.Response(200, content=content, headers=JSON_HEADERS)
+
+
+@pytest.fixture(scope="module")
+def embedding_deployment() -> Deployment:
+    found = load_registry(REGISTRY_DIR).deployment("aoai-sdc-text-embedding-3-large")
+    assert found is not None
+    return found.model_copy(update={"deployment_name": "embed-deploy", "dimensions": 8})
+
+
+def embed_error_of(
+    provider: AzureOpenAIProvider, deployment: Deployment
+) -> ProviderError:
+    with pytest.raises(ProviderError) as raised:
+        provider.embed(
+            deployment, EMBED_REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS
+        )
+    return raised.value
+
+
+def embed(provider: AzureOpenAIProvider, deployment: Deployment) -> EmbeddingReply:
+    return provider.embed(
+        deployment, EMBED_REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS
+    )
+
+
+def test_the_embedding_request_goes_to_the_deployments_embeddings_path(
+    embedding_deployment: Deployment,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(embed_answer(), requests)
+
+    embed(provider, embedding_deployment)
+
+    (request,) = requests
+    assert request.method == "POST"
+    assert request.url.host == "oai-meridian-sdc-a1b2c3.openai.azure.com"
+    assert request.url.path == EMBED_PATH
+    assert request.url.params["api-version"] == API_VERSION
+    assert request.headers["authorization"] == f"Bearer {FAKE_TOKEN}"
+    assert "api-key" not in request.headers
+
+
+def test_the_embedding_body_carries_the_inputs_the_dimensions_and_float_format(
+    embedding_deployment: Deployment,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(embed_answer(), requests)
+
+    embed(provider, embedding_deployment)
+
+    body = json.loads(requests[0].content)
+    assert body["input"] == list(EMBED_INPUTS)
+    assert body["dimensions"] == 8  # the deployment's, never the caller's
+    assert body["encoding_format"] == "float"
+    assert body["model"] == "embed-deploy"
+    assert "user" not in body
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "connect", "rest"),
+    [(25.0, 5.0, 20.0), (12.0, 5.0, 7.0), (3.0, 1.5, 1.5)],
+)
+def test_the_embedding_budget_is_split_like_the_chat_budget(
+    embedding_deployment: Deployment,
+    timeout_seconds: float,
+    connect: float,
+    rest: float,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(embed_answer(), requests)
+
+    provider.embed(embedding_deployment, EMBED_REQUEST, timeout_seconds=timeout_seconds)
+
+    assert requests[0].extensions["timeout"] == {
+        "connect": connect,
+        "read": rest,
+        "write": rest,
+        "pool": rest,
+    }
+
+
+def test_a_good_answer_is_an_embedding_reply_of_floats_in_input_order(
+    embedding_deployment: Deployment,
+) -> None:
+    provider = make_provider(embed_answer())
+
+    reply = embed(provider, embedding_deployment)
+
+    assert reply == EmbeddingReply(
+        embeddings=(tuple(vector(0)), tuple(vector(1))),
+        model="text-embedding-3-large",
+        input_tokens=9,
+    )
+    assert reply.output_tokens == 0
+    assert all(type(x) is float for v in reply.embeddings for x in v)
+
+
+def test_items_out_of_order_are_returned_in_index_order(
+    embedding_deployment: Deployment,
+) -> None:
+    swapped = list(reversed(embedding_data()["data"]))
+    provider = make_provider(embed_answer(data=swapped))
+
+    reply = embed(provider, embedding_deployment)
+
+    assert reply.embeddings == (tuple(vector(0)), tuple(vector(1)))
+
+
+def test_whole_numbers_in_a_vector_are_returned_as_floats(
+    embedding_deployment: Deployment,
+) -> None:
+    whole = [{"object": "embedding", "index": 0, "embedding": [1] * DIMENSIONS}]
+    provider = make_provider(embed_answer(data=whole))
+
+    reply = provider.embed(
+        embedding_deployment,
+        EmbeddingRequest(inputs=("one",)),
+        timeout_seconds=PROVIDER_TIMEOUT_SECONDS,
+    )
+
+    assert reply.embeddings == ((1.0,) * DIMENSIONS,)
+    assert all(type(x) is float for x in reply.embeddings[0])
+
+
+def test_sixteen_inputs_come_back_as_sixteen_vectors(
+    embedding_deployment: Deployment,
+) -> None:
+    provider = make_provider(embed_answer(**embedding_data(16)))
+
+    reply = provider.embed(
+        embedding_deployment,
+        EmbeddingRequest(inputs=tuple(f"text {n}" for n in range(16))),
+        timeout_seconds=PROVIDER_TIMEOUT_SECONDS,
+    )
+
+    assert [v[0] for v in reply.embeddings] == [float(n) for n in range(16)]
+
+
+def item(index: object = 0, embedding: object = None, **changes: Any) -> dict[str, Any]:
+    found = {
+        "object": "embedding",
+        "index": index,
+        "embedding": vector(0) if embedding is None else embedding,
+    }
+    return found | changes
+
+
+def usage(**changes: Any) -> dict[str, Any]:
+    return {"prompt_tokens": 9, "total_tokens": 9} | changes
+
+
+def two(first: dict[str, Any], second: dict[str, Any] | None = None) -> list[Any]:
+    return [first, item(1) if second is None else second]
+
+
+BAD_ANSWERS = [
+    pytest.param({"data": [item(0)]}, id="one-item-for-two-inputs"),
+    pytest.param(
+        {"data": [item(0), item(1), item(2)]}, id="three-items-for-two-inputs"
+    ),
+    pytest.param({"data": []}, id="no-items"),
+    pytest.param({"data": two(item(0), item(0))}, id="duplicated-index"),
+    # The indexes collapse to exactly 0 and 1, so only the count says no.
+    pytest.param(
+        {"data": [item(0), item(1), item(1, vector(2))]},
+        id="more-items-than-inputs-whose-indexes-collapse-to-the-right-ones",
+    ),
+    pytest.param({"data": two(item(0), item(2))}, id="index-out-of-range"),
+    pytest.param({"data": two(item(1), item(2))}, id="indexes-from-one"),
+    pytest.param({"data": two(item(0), item(-1))}, id="negative-index"),
+    pytest.param({"data": two(item(0), item(None))}, id="index-null"),
+    pytest.param({"data": two(item(0), item("1"))}, id="index-string"),
+    pytest.param({"data": two(item(0), item(1.0))}, id="index-float"),
+    pytest.param({"data": two(item(0), item(True))}, id="index-bool"),
+    pytest.param(
+        {"data": two(item(0), {"object": "embedding", "embedding": vector(1)})},
+        id="index-missing",
+    ),
+    pytest.param({"data": two(item(0), item(1, vector(1, 7)))}, id="vector-too-short"),
+    pytest.param({"data": two(item(0), item(1, vector(1, 9)))}, id="vector-too-long"),
+    pytest.param({"data": two(item(0), item(1, []))}, id="vector-empty"),
+    pytest.param({"data": two(item(0), item(1, "abcdefgh"))}, id="vector-string"),
+    pytest.param({"data": two(item(0), item(1, {"a": 1}))}, id="vector-object"),
+    pytest.param(
+        {"data": two(item(0), {"object": "embedding", "index": 1})},
+        id="vector-missing",
+    ),
+    pytest.param({"data": two(item(0), item(1, [None] * DIMENSIONS))}, id="null-parts"),
+    pytest.param(
+        {"data": two(item(0), item(1, ["0.5"] * DIMENSIONS))}, id="string-parts"
+    ),
+    pytest.param({"data": two(item(0), item(1, [[0.5]] * DIMENSIONS))}, id="nested"),
+    pytest.param({"data": None}, id="data-null"),
+    pytest.param({"data": {"0": 1}}, id="data-object"),
+    pytest.param({"data": "x"}, id="data-string"),
+    pytest.param({"data": [None, None]}, id="items-null"),
+    pytest.param({"data": [3, 4]}, id="items-number"),
+    pytest.param({"usage": None}, id="usage-null"),
+    pytest.param({"usage": "x"}, id="usage-string"),
+    pytest.param({"usage": usage(prompt_tokens=None)}, id="prompt-tokens-null"),
+    pytest.param({"usage": usage(prompt_tokens=-1)}, id="prompt-tokens-negative"),
+    pytest.param({"usage": usage(prompt_tokens=True)}, id="prompt-tokens-bool"),
+    pytest.param({"usage": usage(prompt_tokens=1.5)}, id="prompt-tokens-float"),
+    pytest.param({"usage": usage(prompt_tokens="9")}, id="prompt-tokens-string"),
+    pytest.param({"usage": {"total_tokens": 9}}, id="prompt-tokens-missing"),
+    pytest.param({"model": "gpt 4o"}, id="model-with-a-space"),
+    pytest.param({"model": "m" * 129}, id="model-over-128-characters"),
+    pytest.param({"model": "model\n"}, id="model-with-a-newline"),
+    pytest.param({"model": ""}, id="model-empty"),
+    pytest.param({"model": None}, id="model-null"),
+    pytest.param({"model": 4}, id="model-number"),
+]
+
+
+@pytest.mark.parametrize("overrides", BAD_ANSWERS)
+def test_an_answer_that_cannot_be_trusted_is_a_bad_response_and_not_a_crash(
+    embedding_deployment: Deployment, overrides: dict[str, Any]
+) -> None:
+    provider = make_provider(embed_answer(**overrides))
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("bad-response", None, True)
+    assert error.__context__ is None
+    assert error.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    "bad", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+)
+def test_a_vector_with_a_number_that_is_not_finite_is_a_bad_response(
+    embedding_deployment: Deployment, bad: float
+) -> None:
+    broken = vector(1)
+    broken[3] = bad
+    provider = make_provider(embed_answer(data=two(item(0), item(1, broken))))
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("bad-response", None, True)
+    assert error.__context__ is None
+
+
+def test_a_number_too_large_for_a_float_is_a_bad_response(
+    embedding_deployment: Deployment,
+) -> None:
+    # The SDK turns whole numbers in a vector into floats and raises
+    # OverflowError for one that does not fit; that is the answer being wrong,
+    # not the gateway.
+    body = json.dumps(embedding_data()).replace("1.0,", "1" + "0" * 400 + ",", 1)
+    provider = make_provider(
+        lambda _request: httpx.Response(
+            200, content=body.encode(), headers=JSON_HEADERS
+        )
+    )
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("bad-response", None, True)
+    assert error.__context__ is None
+    assert error.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"[1, 2, 3]", b'"text"', b"null", b"{}"],
+    ids=["json-list", "json-string", "json-null", "json-empty-object"],
+)
+def test_a_json_answer_that_is_not_an_embeddings_response_is_a_bad_response(
+    embedding_deployment: Deployment, content: bytes
+) -> None:
+    provider = make_provider(
+        lambda _request: httpx.Response(200, content=content, headers=JSON_HEADERS)
+    )
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert (error.kind, error.sent) == ("bad-response", True)
+
+
+def test_an_answer_that_is_not_json_is_a_bad_response_and_keeps_no_text(
+    embedding_deployment: Deployment,
+) -> None:
+    provider = make_provider(
+        lambda _request: httpx.Response(
+            200, content=f"<html>{CANARY}</html>".encode(), headers={"x": "y"}
+        )
+    )
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert error.kind == "bad-response"
+    assert CANARY not in repr(error) + str(error)
+
+
+def test_a_json_answer_with_an_unparseable_body_is_a_bad_response_for_embeddings(
+    embedding_deployment: Deployment,
+) -> None:
+    provider = make_provider(
+        lambda _request: httpx.Response(
+            200, content=f"<html>{CANARY}</html>".encode(), headers=JSON_HEADERS
+        )
+    )
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("bad-response", None, True)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert CANARY not in repr(error) + str(error)
+
+
+def test_an_embedding_model_name_of_128_characters_is_the_longest_accepted(
+    embedding_deployment: Deployment,
+) -> None:
+    provider = make_provider(embed_answer(model="m" * 128))
+
+    assert embed(provider, embedding_deployment).model == "m" * 128
+
+
+def test_zero_tokens_and_zero_components_are_accepted(
+    embedding_deployment: Deployment,
+) -> None:
+    zeros = [{"object": "embedding", "index": 0, "embedding": [0.0] * DIMENSIONS}]
+    provider = make_provider(embed_answer(data=zeros, usage=usage(prompt_tokens=0)))
+
+    reply = provider.embed(
+        embedding_deployment,
+        EmbeddingRequest(inputs=("x",)),
+        timeout_seconds=PROVIDER_TIMEOUT_SECONDS,
+    )
+
+    assert (reply.embeddings, reply.input_tokens) == (((0.0,) * DIMENSIONS,), 0)
+
+
+def embeddings_response(*vectors: object, **changes: Any) -> CreateEmbeddingResponse:
+    """What the SDK hands over for a 200: built without validation."""
+    fields: dict[str, Any] = {
+        "object": "list",
+        "model": "text-embedding-3-large",
+        "data": [
+            Embedding.construct(object="embedding", index=n, embedding=v)
+            for n, v in enumerate(vectors)
+        ],
+        "usage": EmbeddingUsage.construct(prompt_tokens=9, total_tokens=9),
+    }
+    return CreateEmbeddingResponse.construct(**(fields | changes))
+
+
+@pytest.mark.parametrize(
+    "component",
+    [True, False, "0.5", None, [0.5], b"0"],
+    ids=["true", "false", "string", "null", "list", "bytes"],
+)
+def test_a_component_that_is_not_an_int_or_a_float_is_refused_before_it_is_a_float(
+    component: object,
+) -> None:
+    # The SDK turns a JSON true into 1.0 before the adapter sees it (and does the
+    # same in ``construct``), so a bool cannot come through the transport; it is
+    # put into the vector afterwards, and the reader is called with it.
+    response = embeddings_response(vector(0), [0.5] * DIMENSIONS)
+    response.data[1].embedding[0] = component  # type: ignore[index]
+
+    with pytest.raises(ProviderError) as raised:
+        azure_openai._embedding_reply(response, inputs=2, dimensions=DIMENSIONS)
+
+    assert (raised.value.kind, raised.value.sent) == ("bad-response", True)
+    assert raised.value.__context__ is None
+
+
+def test_the_reader_accepts_ints_and_floats_and_nothing_else_and_returns_floats() -> (
+    None
+):
+    response = embeddings_response([0, 1, -2, 3] + [0.25] * (DIMENSIONS - 4))
+
+    reply = azure_openai._embedding_reply(response, inputs=1, dimensions=DIMENSIONS)
+
+    assert reply.embeddings == ((0.0, 1.0, -2.0, 3.0) + (0.25,) * (DIMENSIONS - 4),)
+    assert all(type(x) is float for x in reply.embeddings[0])
+
+
+def test_the_reader_refuses_a_response_that_is_not_the_sdks_type() -> None:
+    with pytest.raises(ProviderError) as raised:
+        azure_openai._embedding_reply(
+            embedding_data(),  # type: ignore[arg-type]
+            inputs=2,
+            dimensions=DIMENSIONS,
+        )
+
+    assert raised.value.kind == "bad-response"
+
+
+# ── the errors map as chat's do ──────────────────────────────────────────────
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [
+        (400, "rejected"),
+        (401, "auth"),
+        (403, "auth"),
+        (404, "unavailable"),
+        (408, "timeout"),
+        (422, "rejected"),
+        (429, "rate-limited"),
+        (500, "unavailable"),
+        (503, "unavailable"),
+    ],
+)
+def test_an_embedding_status_maps_to_its_kind_and_keeps_the_status(
+    embedding_deployment: Deployment, status: int, kind: str
+) -> None:
+    error = embed_error_of(make_provider(raise_status(status)), embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == (kind, status, True)
+
+
+@pytest.mark.parametrize(
+    ("failure", "kind", "sent"),
+    [
+        (httpx.ConnectTimeout, "timeout", False),
+        (httpx.ReadTimeout, "timeout", True),
+        (httpx.ConnectError, "unavailable", False),
+        (httpx.ReadError, "unavailable", True),
+    ],
+)
+def test_an_embedding_transport_failure_says_whether_the_request_left(
+    embedding_deployment: Deployment,
+    failure: type[httpx.TransportError],
+    kind: str,
+    sent: bool,
+) -> None:
+    error = embed_error_of(make_provider(raising(failure)), embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == (kind, None, sent)
+
+
+@pytest.mark.parametrize("handler", CANARY_CASES)
+def test_a_canary_in_an_embedding_failure_appears_nowhere_in_the_raised_error(
+    embedding_deployment: Deployment, handler: Handler
+) -> None:
+    error = embed_error_of(make_provider(handler), embedding_deployment)
+
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert CANARY not in str(error) + repr(error) + repr(error.args)
+
+
+def test_a_failing_token_provider_is_an_auth_error_and_no_embedding_request_is_sent(
+    embedding_deployment: Deployment,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(embed_answer(), requests, token_provider=fail_token)
+
+    error = embed_error_of(provider, embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("auth", None, False)
+    assert error.__context__ is None
+    assert requests == []
+
+
+@pytest.mark.parametrize("status", [500, 429])
+def test_a_failing_embedding_causes_exactly_one_request(
+    embedding_deployment: Deployment, status: int
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(raise_status(status), requests)
+
+    embed_error_of(provider, embedding_deployment)
+
+    assert len(requests) == 1
+
+
+def test_an_embedding_reply_in_error_is_a_sent_request(
+    embedding_deployment: Deployment,
+) -> None:
+    error = embed_error_of(
+        make_provider(embed_answer(data=[item(0)])), embedding_deployment
+    )
+
+    assert error.sent is True
+
+
+# ── configuration errors, before any request ────────────────────────────────
+@pytest.mark.parametrize(
+    ("update", "word"),
+    [
+        ({"dimensions": None}, "dimensions"),
+        ({"deployment_name": None}, "deployment_name"),
+        ({"terraform_key": None}, "terraform_key"),
+        ({"terraform_key": "gwc/text-embedding-3-large"}, "gwc"),
+    ],
+    ids=["dimensions", "deployment-name", "terraform-key", "location"],
+)
+def test_an_embedding_deployment_the_adapter_cannot_call_raises_before_any_request(
+    embedding_deployment: Deployment, update: dict[str, Any], word: str
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(embed_answer(), requests)
+
+    with pytest.raises(ValueError, match=word):
+        embed(provider, embedding_deployment.model_copy(update=update))
+
+    assert requests == []

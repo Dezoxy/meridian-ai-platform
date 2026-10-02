@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
 
@@ -21,7 +22,7 @@ from meridian.platform.gateway.settings import (
     ACCOUNT_NAME_PREFIX,
     GatewaySettings,
 )
-from meridian.platform.registry import RegistryError, load_registry
+from meridian.platform.registry import Registry, RegistryError, load_registry
 
 DSN = "postgresql://model_gateway:s3cret-value@db.invalid/meridian"
 
@@ -522,6 +523,144 @@ def test_a_chat_route_candidate_of_provider_kind_replay_is_refused_in_live_mode(
         create_app(settings(**live), providers=providers)
 
     assert token_source.fetches == 0
+
+
+@pytest.mark.parametrize("injected", [False, True], ids=["built", "injected"])
+def test_an_embedding_route_candidate_of_provider_kind_replay_is_refused_in_live_mode(
+    monkeypatch: pytest.MonkeyPatch, token_source: TokenSource, injected: bool
+) -> None:
+    # The registry checks refuse it, so the registry is changed in memory.
+    registry = load_registry(REGISTRY_DIR)
+    replay_route = tuple(
+        route.model_copy(
+            update={
+                "candidates": ("aoai-sdc-text-embedding-3-large", "replay-embedding")
+            }
+        )
+        if route.purpose == "embedding"
+        else route
+        for route in registry.routes
+    )
+    monkeypatch.setattr(
+        gateway_app,
+        "load_registry",
+        lambda _: registry.model_copy(update={"routes": replay_route}),
+    )
+    providers = (
+        {"azure-openai": FakeProvider(), "replay": FakeProvider()} if injected else None
+    )
+    live = LOCAL_LIVE if not injected else {"mode": "live", "environment": "test"}
+
+    with pytest.raises(SettingsError, match="the embedding route has a replay"):
+        create_app(settings(**live), providers=providers)
+
+    assert token_source.fetches == 0
+
+
+def narrowed_registry(update: Callable[[Registry], dict]) -> Registry:
+    """The real registry changed in memory, as the registry checks would refuse."""
+    registry = load_registry(REGISTRY_DIR)
+    return registry.model_copy(update=update(registry))
+
+
+def with_deployment_changed(deployment_id: str, **changes: object) -> Registry:
+    return narrowed_registry(
+        lambda r: {
+            "deployments": tuple(
+                d.model_copy(update=changes) if d.id == deployment_id else d
+                for d in r.deployments
+            )
+        }
+    )
+
+
+def test_a_routed_embedding_deployment_without_an_endpoint_is_refused_before_a_token(
+    monkeypatch: pytest.MonkeyPatch, token_source: TokenSource
+) -> None:
+    # Chat is in the one configured location; the embedding deployment is not.
+    elsewhere = with_deployment_changed(
+        "aoai-sdc-text-embedding-3-large", terraform_key="gwc/text-embedding-3-large"
+    )
+    monkeypatch.setattr(gateway_app, "load_registry", lambda _: elsewhere)
+
+    with pytest.raises(
+        SettingsError, match="aoai-sdc-text-embedding-3-large"
+    ) as raised:
+        create_app(settings(**LOCAL_LIVE))
+
+    assert "ENDPOINTS" in str(raised.value)
+    assert "oai-meridian" not in str(raised.value)
+    assert token_source.fetches == 0
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [
+        ("terraform_key", "terraform_key or deployment_name"),
+        ("deployment_name", "terraform_key or deployment_name"),
+        ("dimensions", "no dimensions"),
+    ],
+)
+def test_a_routed_embedding_deployment_missing_a_field_is_refused_at_the_start(
+    monkeypatch: pytest.MonkeyPatch,
+    token_source: TokenSource,
+    missing: str,
+    message: str,
+) -> None:
+    broken = with_deployment_changed(
+        "aoai-sdc-text-embedding-3-large", **{missing: None}
+    )
+    monkeypatch.setattr(gateway_app, "load_registry", lambda _: broken)
+
+    with pytest.raises(SettingsError, match=message):
+        create_app(settings(**LOCAL_LIVE))
+
+    assert token_source.fetches == 0
+
+
+def test_an_embedding_route_naming_a_deployment_the_registry_lacks_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ghost = narrowed_registry(
+        lambda r: {
+            "routes": tuple(
+                route.model_copy(update={"candidates": ("ghost-deployment",)})
+                if route.purpose == "embedding"
+                else route
+                for route in r.routes
+            )
+        }
+    )
+    monkeypatch.setattr(gateway_app, "load_registry", lambda _: ghost)
+
+    with pytest.raises(SettingsError, match="the embedding route names a deployment"):
+        create_app(
+            settings(mode="live", environment="test"),
+            providers={"azure-openai": FakeProvider()},
+        )
+
+
+def test_replay_mode_without_a_replay_embedding_deployment_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    without = narrowed_registry(
+        lambda r: {"replay": tuple(x for x in r.replay if x.purpose != "embedding")}
+    )
+    monkeypatch.setattr(gateway_app, "load_registry", lambda _: without)
+
+    with pytest.raises(SettingsError, match="no replay deployment for embedding"):
+        create_app(settings())
+
+
+def test_a_live_start_asks_nothing_of_a_provider_that_only_chats() -> None:
+    # No method of the injected provider is called, or looked for, at the start:
+    # a fake with ``chat`` alone is a valid provider until an embedding arrives.
+    app = create_app(
+        settings(mode="live", environment="test"),
+        providers={"azure-openai": FakeProvider()},
+    )
+
+    assert "/v1/embeddings" in app.openapi()["paths"]
 
 
 def test_the_providers_the_app_built_are_closed_when_it_stops(

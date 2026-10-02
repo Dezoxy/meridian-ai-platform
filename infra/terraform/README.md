@@ -155,7 +155,7 @@ az cognitiveservices usage list -l swedencentral --subscription "<pinned subscri
 | `make azure-apply` | Apply exactly the saved plan, then remove the plan file. Refuses to run without a plan. | Yes |
 | `make azure-smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. | No, apart from one tiny model call per deployment |
 | `make registry-snapshot` | `foundation.sh outputs`: the `openai_deployments` output as JSON without account names and endpoints, written to `config/registry/snapshots/`. | No |
-| `make gateway-live` | Two real chat calls through the Model Gateway in live mode on this laptop, one with the first candidate made to fail: this `az login`, a synthetic prompt and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from two tiny model calls |
+| `make gateway-live` | Two real chat calls and one embedding call through the Model Gateway in live mode on this laptop, one chat call with the first candidate made to fail: this `az login`, synthetic text and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from three tiny model calls |
 
 The order is `azure-state` once, then `azure-plan`, review, `azure-apply`,
 `azure-smoke`. The hooks ask for confirmation before `azure-state` and
@@ -205,6 +205,13 @@ the real second deployment answers; the test asserts a `failed` audit row
 for the first candidate, a `completed` row for the second and one span
 per attempt. The fault is injected, so this proves the walk and the
 second deployment, not how Azure fails.
+
+A third request embeds two synthetic texts through the embedding route
+(S045). The test asserts two vectors of the registry's 1,024 dimensions,
+the `completed` audit row and a settled ledger row at the embedding price,
+and prints the deployment ID, the provider's model string, the vector
+length and the token count, never a vector or a text. This third request
+has not been run yet: the Azure login was blocked when S045 was built.
 
 The gateway on kind stays in replay mode: a pod there has no Azure identity
 until workload identity arrives with S020.

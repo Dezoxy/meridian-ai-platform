@@ -2,11 +2,12 @@
 
 A tenant has a token budget per UTC day and a cost quota per UTC month. Before
 a provider call the gateway reserves the most the call can use: the estimated
-input plus the largest reply it allows. The reservation is written to
-PostgreSQL before the call because a process that crashes mid-call must not
-leave a call that was sent and never counted (T-14), and because the check and
-the increment must be one statement, or two concurrent calls both pass the same
-check (QA-12). The reservation is then closed in one of three ways:
+input plus the largest reply it allows (none for an embedding, whose estimate
+is its input alone). The reservation is written to PostgreSQL before the call
+because a process that crashes mid-call must not leave a call that was sent and
+never counted (T-14), and because the check and the increment must be one
+statement, or two concurrent calls both pass the same check (QA-12). The
+reservation is then closed in one of three ways:
 
 - ``settle``: the provider answered; the charge is its own count of tokens and
   the cost of that count.
@@ -33,7 +34,7 @@ from typing import Literal
 import psycopg
 
 from meridian.platform.common.db import connect
-from meridian.platform.gateway.models import ChatRequest
+from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
 from meridian.platform.registry.models import (
     Deployment,
     ExchangeRate,
@@ -104,20 +105,43 @@ def utc_today() -> date:
     return datetime.now(UTC).date()
 
 
+@dataclass(frozen=True, slots=True)
+class TokenEstimate:
+    """What a call may use, as both purposes estimate it: the input tokens and
+    the largest reply. The rate limiter admits ``tokens`` and the ledger
+    reserves it, so a request is held to one number."""
+
+    input_tokens: int
+    max_output_tokens: int
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.max_output_tokens
+
+
+def _utf8_tokens(text: str) -> int:
+    """The UTF-8 bytes over three, rounded up."""
+    return -(-len(text.encode("utf-8")) // BYTES_PER_TOKEN)
+
+
 def estimate_input_tokens(request: ChatRequest) -> int:
     """An estimate of the input tokens: per message the UTF-8 bytes over three,
     rounded up, plus the message overhead; plus the reply's priming."""
     return REPLY_OVERHEAD_TOKENS + sum(
-        -(-len(message.content.encode("utf-8")) // BYTES_PER_TOKEN)
-        + MESSAGE_OVERHEAD_TOKENS
+        _utf8_tokens(message.content) + MESSAGE_OVERHEAD_TOKENS
         for message in request.messages
     )
 
 
-def reservation_tokens(request: ChatRequest) -> int:
-    """An estimate of the most the call can use: the estimated input and the
-    largest reply."""
-    return estimate_input_tokens(request) + request.max_output_tokens
+def chat_estimate(request: ChatRequest) -> TokenEstimate:
+    """The estimated input and the largest reply the request allows."""
+    return TokenEstimate(estimate_input_tokens(request), request.max_output_tokens)
+
+
+def embedding_estimate(request: EmbeddingRequest) -> TokenEstimate:
+    """Per input the UTF-8 bytes over three, rounded up, summed; no overhead
+    and no reply, because an embedding has no output."""
+    return TokenEstimate(sum(_utf8_tokens(text) for text in request.inputs), 0)
 
 
 def cost_micro_eur(
@@ -234,19 +258,19 @@ class Ledger:
         caller: Caller,
         deployment: Deployment,
         limits: TenantLimits,
-        request: ChatRequest,
+        estimate: TokenEstimate,
     ) -> Reservation | BudgetRefusal:
         """Charge the most the call can cost, or refuse it: the day's tokens
         first, then the month's cost, always in that order so two calls cannot
         deadlock. A refusal leaves nothing behind."""
         day = self._today()
         month = day.replace(day=1)
-        tokens = reservation_tokens(request)
+        tokens = estimate.tokens
         micro_eur = cost_micro_eur(
             deployment.price,
             self._exchange,
-            estimate_input_tokens(request),
-            request.max_output_tokens,
+            estimate.input_tokens,
+            estimate.max_output_tokens,
         )
         with connect(self._dsn, APPLICATION_NAME) as conn:
             for kind, period in ((TOKENS_KIND, day), (COST_KIND, month)):

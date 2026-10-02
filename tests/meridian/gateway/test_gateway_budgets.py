@@ -60,9 +60,9 @@ from meridian.platform.gateway.app import (
 from meridian.platform.gateway.budget import (
     MICRO,
     BudgetRefusalReason,
+    chat_estimate,
     cost_micro_eur,
     estimate_input_tokens,
-    reservation_tokens,
 )
 from meridian.platform.gateway.models import ChatRequest
 from meridian.platform.gateway.providers.base import (
@@ -87,7 +87,7 @@ INPUT_TOKENS, OUTPUT_TOKENS = 11, 7
 SETTLED_TOKENS = INPUT_TOKENS + OUTPUT_TOKENS
 BODY = {"messages": [{"role": "user", "content": CLAIM_TEXT}]}
 REQUEST = ChatRequest.model_validate(BODY)
-RESERVED_TOKENS = reservation_tokens(REQUEST)
+RESERVED_TOKENS = chat_estimate(REQUEST).tokens
 FIRST = "aoai-sdc-gpt-4o"
 SECOND = "aoai-sdc-gpt-4o-second"
 OCTOBER_FIRST = date(2026, 10, 1)

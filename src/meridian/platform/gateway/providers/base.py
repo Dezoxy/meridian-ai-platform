@@ -1,9 +1,9 @@
-"""The provider protocol and its error: no SDK is imported here."""
+"""The provider protocols and their error: no SDK is imported here."""
 
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from meridian.platform.gateway.models import ChatRequest
+from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
 from meridian.platform.registry.models import Deployment
 
 ProviderErrorKind = Literal[
@@ -36,6 +36,20 @@ class ProviderError(Exception):
         return f"provider call failed: {self.kind}{suffix}"
 
 
+class Reply(Protocol):
+    """What the walk reads off any provider's answer, for the ledger, the span
+    and the audit row; each purpose's reply adds its own content."""
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def input_tokens(self) -> int: ...
+
+    @property
+    def output_tokens(self) -> int: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderReply:
     text: str
@@ -45,6 +59,18 @@ class ProviderReply:
     output_tokens: int
 
 
+@dataclass(frozen=True, slots=True)
+class EmbeddingReply:
+    embeddings: tuple[tuple[float, ...], ...]  # one vector per input, in order
+    model: str  # what the provider says it ran, e.g. text-embedding-3-large
+    input_tokens: int
+
+    @property
+    def output_tokens(self) -> int:
+        """An embedding has no output."""
+        return 0
+
+
 class ChatProvider(Protocol):
     """``timeout_seconds`` is the budget of the whole attempt, connecting and
     answering."""
@@ -52,3 +78,21 @@ class ChatProvider(Protocol):
     def chat(
         self, deployment: Deployment, request: ChatRequest, *, timeout_seconds: float
     ) -> ProviderReply: ...
+
+
+class EmbeddingProvider(Protocol):
+    """The same budget as ``ChatProvider``. A reply holds one vector of exactly
+    the deployment's ``dimensions`` per input, in input order, or the call
+    raises ``ProviderError`` (T-54)."""
+
+    def embed(
+        self,
+        deployment: Deployment,
+        request: EmbeddingRequest,
+        *,
+        timeout_seconds: float,
+    ) -> EmbeddingReply: ...
+
+
+class ModelProvider(ChatProvider, EmbeddingProvider, Protocol):
+    """What the gateway holds for one provider kind: both purposes."""

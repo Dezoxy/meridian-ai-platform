@@ -11,9 +11,10 @@
 #   outputs print the model deployments from Terraform's outputs as JSON, only
 #          the fields the registry compares (no account names or endpoints):
 #          the snapshot the registry is checked against (T-12). Read-only.
-#   gateway-live  two real chat calls through the Model Gateway in live mode on
-#          this laptop, one of them with the first candidate made to fail, with
-#          this az login and a throwaway PostgreSQL (needs Docker). Read-only
+#   gateway-live  two real chat calls and one embedding call through the Model
+#          Gateway in live mode on this laptop, one chat call with the first
+#          candidate made to fail, with this az login and a throwaway
+#          PostgreSQL (needs Docker). Read-only
 #          in Azure apart from those calls (well under EUR 0.01).
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
@@ -297,9 +298,10 @@ cmd_outputs() {
 }
 
 # ── gateway-live ─────────────────────────────────────────────────────────────
-# Real chat calls through the Model Gateway on this laptop (S010, S042). The
-# endpoints come from Terraform's outputs and the token from this az login, so
-# nothing is stored; both reach the test through the environment only. An
+# Real chat and embedding calls through the Model Gateway on this laptop (S010,
+# S042, S045). The endpoints come from Terraform's outputs and the token from
+# this az login, so nothing is stored; both reach the test through the
+# environment only. An
 # endpoint holds the account name and a failed login can name the signed-in
 # user, so the test's output is filtered for any Azure OpenAI host, the account
 # name and anything shaped like an email address, as well as for GUIDs.
@@ -319,7 +321,7 @@ cmd_gateway_live() {
   endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
     <<<"${deployments}" 2>/dev/null)" ||
     die "the openai_deployments output has no endpoints"
-  log "two chat calls through the gateway as tenant development (synthetic prompt)"
+  log "two chat calls and one embedding call through the gateway as tenant development (synthetic text)"
   MERIDIAN_LIVE_AZURE=1 \
     MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
     MERIDIAN_AZURE_TENANT_ID="${ARM_TENANT_ID}" \

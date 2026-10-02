@@ -52,6 +52,16 @@ ERRORS = {
         "503",
         "504",
     },
+    ("gateway", "post", "/v1/embeddings"): {
+        "403",
+        "413",
+        "422",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
     ("runtime", "post", "/runs"): {"403", "413", "422", "500", "502", "503", "504"},
     ("runtime", "get", "/runs/{run_id}"): {"404", "422", "500", "503"},
     ("claims", "post", "/claims"): {"409", "413", "422", "500", "502", "503", "504"},
@@ -97,6 +107,82 @@ def test_every_service_declares_healthz() -> None:
 def schema_ref(spec: dict[str, Any], path: str, method: str, status: str) -> str:
     response = spec["paths"][path][method]["responses"][status]
     return response["content"]["application/json"]["schema"]["$ref"]
+
+
+def gateway_schema(name: str) -> dict[str, Any]:
+    return SPECS["gateway"]["components"]["schemas"][name]
+
+
+def test_both_gateway_routes_take_the_same_three_caller_headers() -> None:
+    paths = SPECS["gateway"]["paths"]
+
+    declared = {
+        path: {
+            (p["in"], p["name"], p["required"])
+            for p in paths[path]["post"]["parameters"]
+        }
+        for path in ("/v1/chat", "/v1/embeddings")
+    }
+
+    assert declared["/v1/embeddings"] == declared["/v1/chat"]
+    assert declared["/v1/chat"] == {
+        ("header", "X-Meridian-Tenant", True),
+        ("header", "X-Meridian-Agent", True),
+        ("header", "X-Meridian-Run", True),
+    }
+
+
+def test_the_embeddings_route_describes_503_and_413_as_chat_does() -> None:
+    paths = SPECS["gateway"]["paths"]
+
+    for status in ("503", "413"):
+        assert (
+            paths["/v1/embeddings"]["post"]["responses"][status]["description"]
+            == paths["/v1/chat"]["post"]["responses"][status]["description"]
+        )
+    assert (
+        "audit log"
+        in paths["/v1/embeddings"]["post"]["responses"]["503"]["description"]
+    )
+
+
+def test_the_embedding_request_is_the_inputs_alone_and_bounded() -> None:
+    schema = gateway_schema("EmbeddingRequest")
+
+    # The caller never chooses the model or the dimensions (T-54).
+    assert set(schema["properties"]) == {"inputs"}
+    assert schema["required"] == ["inputs"]
+    assert schema["additionalProperties"] is False
+    inputs = schema["properties"]["inputs"]
+    assert (inputs["minItems"], inputs["maxItems"]) == (1, 16)
+    assert (inputs["items"]["minLength"], inputs["items"]["maxLength"]) == (1, 8000)
+
+
+def test_the_embedding_response_names_what_made_the_vectors_and_counts_input_only() -> (
+    None
+):
+    response = gateway_schema("EmbeddingResponse")
+    usage = gateway_schema("EmbeddingUsage")
+
+    assert set(response["required"]) == {
+        "call_id",
+        "mode",
+        "deployment",
+        "provider",
+        "model",
+        "dimensions",
+        "embeddings",
+        "usage",
+    }
+    assert response["additionalProperties"] is False
+    assert set(usage["properties"]) == {"input_tokens"}
+    assert response["properties"]["call_id"]["format"] == "uuid"
+
+
+def test_the_embeddings_route_answers_its_success_with_the_embedding_response() -> None:
+    assert schema_ref(SPECS["gateway"], "/v1/embeddings", "post", "200").endswith(
+        "/EmbeddingResponse"
+    )
 
 
 def test_post_runs_declares_run_response_as_its_success_and_error_model() -> None:

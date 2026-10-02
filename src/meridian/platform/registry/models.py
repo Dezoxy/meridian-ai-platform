@@ -34,6 +34,11 @@ TerraformKey = Annotated[str, StringConstraints(pattern=r"^[a-z0-9-]+/[a-z0-9.-]
 # "resource:action" words; no wildcard and no empty part.
 Scope = Annotated[str, StringConstraints(pattern=r"^[a-z]+(:[a-z]+)+$")]
 Candidates = Annotated[tuple[EntityId, ...], Field(min_length=1)]
+# The longest vector pgvector can index in its ``vector`` type (HNSW and
+# IVFFlat stop at 2,000 dimensions; its ``halfvec`` type indexes up to 4,000),
+# so a deployment that returns more could not be searched through an index on
+# that type.
+MAX_EMBEDDING_DIMENSIONS = 2000
 
 
 class RegistryModel(BaseModel):
@@ -90,6 +95,10 @@ class Deployment(RegistryModel):
     # The deployment's own limits at the provider; checks.py requires them for
     # provider kind azure-openai and refuses them on a replay deployment.
     rate_limits: RateLimits | None = None
+    # The length of the vectors an embedding deployment returns, asked of the
+    # provider and checked on every answer (T-54); checks.py requires it for
+    # purpose embedding and refuses it for chat.
+    dimensions: Annotated[int, Field(ge=1, le=MAX_EMBEDDING_DIMENSIONS)] | None = None
 
 
 class ModelsFile(RegistryModel):

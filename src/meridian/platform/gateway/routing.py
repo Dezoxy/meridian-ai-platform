@@ -47,8 +47,9 @@ def decide(
 ) -> RouteDecision:
     """Keep, in order, the considered deployments the tenant's class may reach.
 
-    Replay passes its one deployment, live mode the chat route's candidates;
-    an empty ``considered`` means the registry has no route.
+    Replay passes its one deployment of the request's purpose, live mode that
+    purpose's route candidates; an empty ``considered`` means the registry has
+    no route.
     """
     tenant = registry.tenant(tenant_id)
     if tenant is None:

@@ -72,8 +72,8 @@ class GatewayMeters:
             "meridian.gateway.calls",
             unit="{call}",
             description=(
-                "Requests that reached the handler of POST /v1/chat, once each, "
-                "by outcome."
+                "Requests that reached the handler of POST /v1/chat or POST "
+                "/v1/embeddings, once each, by outcome."
             ),
         )
 

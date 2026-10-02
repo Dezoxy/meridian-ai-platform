@@ -231,7 +231,8 @@ def test_a_deployment_rate_limit_of_zero_fails_to_load(
     assert errors[0].startswith(f"models.yaml: deployments[0].rate_limits.{field}: ")
 
 
-# ── the tenants' rate limits must fit the smallest chat candidate ───────────
+# ── the tenants' rate limits must fit the smallest candidate of every route ─
+# (S045, T-55: the embedding route's candidate is compared like the chat ones)
 def test_tenant_sums_exactly_at_the_candidates_limits_give_no_message(
     registry: Registry,
 ) -> None:
@@ -250,6 +251,9 @@ def test_tenant_requests_one_above_the_candidate_are_one_message(
         "allows 20 requests_per_10_seconds but the tenants' limits add up to 21",
         "policies.yaml: routes[0].candidates[1]: deployment 'aoai-sdc-gpt-4o-b' "
         "allows 20 requests_per_10_seconds but the tenants' limits add up to 21",
+        "policies.yaml: routes[1].candidates[0]: deployment "
+        "'aoai-sdc-text-embedding-3-large' allows 20 requests_per_10_seconds but "
+        "the tenants' limits add up to 21",
     )
 
 
@@ -263,6 +267,9 @@ def test_tenant_tokens_one_above_the_candidate_are_one_message_per_candidate(
         "allows 20000 tokens_per_minute but the tenants' limits add up to 20001",
         "policies.yaml: routes[0].candidates[1]: deployment 'aoai-sdc-gpt-4o-b' "
         "allows 20000 tokens_per_minute but the tenants' limits add up to 20001",
+        "policies.yaml: routes[1].candidates[0]: deployment "
+        "'aoai-sdc-text-embedding-3-large' allows 20000 tokens_per_minute but "
+        "the tenants' limits add up to 20001",
     )
 
 
@@ -276,7 +283,7 @@ def test_both_fields_over_give_one_message_per_field_and_candidate(
         )
     )
 
-    assert len(errors) == 4
+    assert len(errors) == 6  # two chat candidates and one embedding candidate
 
 
 def test_only_the_candidate_with_the_smaller_limit_is_named(
@@ -309,9 +316,12 @@ def test_a_candidate_without_rate_limits_is_not_compared(
 
     assert [e for e in errors if "add up to" in e] == [
         "policies.yaml: routes[0].candidates[1]: deployment 'aoai-sdc-gpt-4o-b' "
-        "allows 20 requests_per_10_seconds but the tenants' limits add up to 21"
+        "allows 20 requests_per_10_seconds but the tenants' limits add up to 21",
+        "policies.yaml: routes[1].candidates[0]: deployment "
+        "'aoai-sdc-text-embedding-3-large' allows 20 requests_per_10_seconds but "
+        "the tenants' limits add up to 21",
     ]
-    assert len(errors) == 2
+    assert len(errors) == 3
 
 
 def test_the_sum_covers_every_tenant_not_only_those_that_use_the_route(
@@ -328,7 +338,7 @@ def test_the_sum_covers_every_tenant_not_only_those_that_use_the_route(
         )
     )
 
-    assert len(errors) == 2
+    assert len(errors) == 3  # both chat candidates and the embedding one
     assert all("add up to 21" in e for e in errors)
 
 

@@ -1,15 +1,17 @@
-"""The Model Gateway app: ``POST /v1/chat``, replay and live (S009, S010, S011).
+"""The Model Gateway app: ``POST /v1/chat`` and ``POST /v1/embeddings``, replay
+and live (S009, S010, S011, S045).
 
-One path for both modes. A call gets its ID first, so every audit row of the
-request carries it. Then the route is decided and refused (403) and audited
-when nothing is allowed. The tenant's rate windows come next: a request over
-them is refused (429, or 413 when it alone is larger than the tenant's token
-limit) before any circuit, reservation or provider is touched. Then the allowed
-candidates are walked in order under one deadline (S042), each one reserved in
-the ledger before it is called (QA-12). A candidate whose circuit is open, or
-that the deadline leaves no time for, is skipped; a deployment's own failure
-moves the walk to the next candidate; a rejected request ends it; a reservation
-the tenant's budget refuses ends it too (429, or the earlier attempt's answer).
+One path for both modes and both purposes. A call gets its ID first, so every
+audit row of the request carries it. Then the route of its purpose is decided
+and refused (403) and audited when nothing is allowed. The tenant's rate windows
+come next, one set for both purposes: a request over them is refused (429, or
+413 when it alone is larger than the tenant's token limit) before any circuit,
+reservation or provider is touched. Then the allowed candidates are walked in
+order under one deadline (S042), each one reserved in the ledger before it is
+called (QA-12). A candidate whose circuit is open, or that the deadline leaves
+no time for, is skipped; a deployment's own failure moves the walk to the next
+candidate; a rejected request ends it; a reservation the tenant's budget
+refuses ends it too (429, or the earlier attempt's answer).
 Every candidate touched leaves one audit row, except that a refusal, whether
 policy's 403 or a tenant limit's 429 or 413, leaves at most one row per tenant
 and reason per minute, and that row says how many refusals it stands in for, so
@@ -17,14 +19,17 @@ a flood cannot fill the log (T-49). The audit write is part of the answer, so a
 call that cannot be recorded returns no output (QA-05). There is no retry of
 one deployment: the next candidate is the retry. The limits apply in replay
 mode as in live mode: replay simulates the provider, not the gateway's
-controls. The gateway counts tokens, cost and calls in its metrics.
+controls. The gateway counts tokens, cost and calls in its metrics. No text a
+caller sends and no vector it gets back is in an audit row, a span, a metric or
+a log line (T-56).
 """
 
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, NoReturn
+from typing import Annotated, Any, NoReturn
 
 from fastapi import FastAPI, Header, HTTPException
 from opentelemetry.sdk.metrics import MeterProvider
@@ -48,12 +53,17 @@ from meridian.platform.gateway.budget import (
     BudgetRefusalReason,
     Caller,
     Ledger,
-    reservation_tokens,
     utc_today,
 )
 from meridian.platform.gateway.meters import CallRecord, GatewayMeters
-from meridian.platform.gateway.models import ChatRequest, ChatResponse
-from meridian.platform.gateway.providers.base import ChatProvider, ProviderError
+from meridian.platform.gateway.models import (
+    ChatRequest,
+    ChatResponse,
+    EmbeddingRequest,
+    EmbeddingResponse,
+)
+from meridian.platform.gateway.operations import chat_operation, embedding_operation
+from meridian.platform.gateway.providers.base import ModelProvider, ProviderError
 from meridian.platform.gateway.ratelimit import RateRefusalReason, TenantRateLimiter
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
@@ -62,6 +72,7 @@ from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.gateway.walk import (
     BudgetRefused,
     CandidateWalker,
+    Operation,
     Unanswered,
     caller_fields,
     route_attributes,
@@ -72,6 +83,7 @@ from meridian.platform.registry.models import Deployment
 
 SERVICE_NAME = "model-gateway"
 CHAT_PURPOSE = "chat"
+EMBEDDING_PURPOSE = "embedding"
 REPLAY_ENVIRONMENTS = frozenset({"test", "ci", "kind"})
 # The Azure CLI credential is a developer's login, so a gateway that builds its
 # own live providers starts on a laptop only.
@@ -99,6 +111,13 @@ CHAT_TOO_LARGE = (
     "The request body is too large, or the request is larger than the tenant's "
     "token limit."
 )
+# The embeddings route says the same of both.
+EMBEDDINGS_UNAVAILABLE = CHAT_UNAVAILABLE
+EMBEDDINGS_TOO_LARGE = CHAT_TOO_LARGE
+# The three headers of a call, the same for both routes.
+TenantHeader = Annotated[BoundedEntityId, Header(alias="X-Meridian-Tenant")]
+AgentHeader = Annotated[BoundedEntityId, Header(alias="X-Meridian-Agent")]
+RunHeader = Annotated[uuid.UUID, Header(alias="X-Meridian-Run")]
 # One fixed text per refusal for a tenant limit; the reason is in the audit row.
 TENANT_RATE_LIMIT_REACHED = "the tenant's rate limit is reached"
 TENANT_BUDGET_USED_UP = "the tenant's budget is used up"
@@ -114,7 +133,7 @@ LIMIT_ANSWERS: dict[LimitRefusalReason, tuple[int, str]] = {
 
 
 def _check_start_allowed(
-    settings: GatewaySettings, providers: Mapping[str, ChatProvider] | None
+    settings: GatewaySettings, providers: Mapping[str, ModelProvider] | None
 ) -> None:
     if settings.mode == "replay":
         if settings.environment not in REPLAY_ENVIRONMENTS:
@@ -137,23 +156,33 @@ def _check_start_allowed(
         )
 
 
-def _considered(
-    settings: GatewaySettings, registry: Registry
-) -> tuple[Deployment, ...]:
-    """The deployments a request may use before policy narrows them: replay's
-    one deployment, or the chat route's candidates in order."""
+@dataclass(frozen=True, slots=True)
+class _Route:
+    """What one purpose may use: the deployments a request may use before policy
+    narrows them (in replay mode its one replay deployment, in live mode the
+    route's candidates in order), and, in replay mode only, that deployment: where
+    the call goes is known before policy decides, so a refusal says it too
+    (T-39)."""
+
+    considered: tuple[Deployment, ...]
+    replay: Deployment | None
+
+
+def _route(settings: GatewaySettings, registry: Registry, purpose: str) -> _Route:
     if settings.mode == "replay":
-        deployment = registry.replay_deployment(CHAT_PURPOSE)
+        deployment = registry.replay_deployment(purpose)
         if deployment is None:
-            raise SettingsError("the registry has no replay deployment for chat")
-        return (deployment,)
-    route = registry.route(CHAT_PURPOSE)
+            raise SettingsError(f"the registry has no replay deployment for {purpose}")
+        return _Route((deployment,), deployment)
+    route = registry.route(purpose)
     if route is None:
-        return ()
+        return _Route((), None)
     found = tuple(registry.deployment(name) for name in route.candidates)
     if any(d is None for d in found):
-        raise SettingsError("the chat route names a deployment the registry lacks")
-    return tuple(d for d in found if d is not None)
+        raise SettingsError(
+            f"the {purpose} route names a deployment the registry lacks"
+        )
+    return _Route(tuple(d for d in found if d is not None), None)
 
 
 def _provider_kinds(
@@ -174,8 +203,8 @@ def _check_azure_candidates(
     considered: Sequence[Deployment],
     kinds: Mapping[str, str],
 ) -> None:
-    """What ``AzureOpenAIProvider.chat`` would otherwise raise a ``ValueError``
-    for at the first request."""
+    """What ``AzureOpenAIProvider.chat`` and ``embed`` would otherwise raise a
+    ``ValueError`` for at the first request."""
     for deployment in considered:
         if kinds[deployment.id] != AZURE_KIND:
             continue
@@ -183,6 +212,8 @@ def _check_azure_candidates(
             raise SettingsError(
                 f"deployment {deployment.id} has no terraform_key or deployment_name"
             )
+        if deployment.purpose == EMBEDDING_PURPOSE and deployment.dimensions is None:
+            raise SettingsError(f"deployment {deployment.id} has no dimensions")
         location = deployment.terraform_key.partition("/")[0]
         if location not in settings.azure_openai_endpoints:
             raise SettingsError(
@@ -195,7 +226,7 @@ def _live_providers(
     settings: GatewaySettings,
     considered: Sequence[Deployment],
     kinds: Mapping[str, str],
-) -> tuple[dict[str, ChatProvider], Callable[[], None]]:
+) -> tuple[dict[str, ModelProvider], Callable[[], None]]:
     """The Azure provider and the call that closes it, with one token fetched
     now so a missing ``az login`` stops the start and not the first request.
 
@@ -251,7 +282,7 @@ def create_app(
     *,
     tracer_provider: TracerProvider | None = None,
     meter_provider: MeterProvider | None = None,
-    providers: Mapping[str, ChatProvider] | None = None,
+    providers: Mapping[str, ModelProvider] | None = None,
     clock: Callable[[], float] = time.monotonic,
     today: Callable[[], date] = utc_today,
 ) -> FastAPI:
@@ -260,18 +291,29 @@ def create_app(
 
     ``providers`` is keyed by provider kind (``replay``, ``azure-openai``); a
     test injects fakes. Without it the app builds the replay provider and, in
-    live mode, the Azure one. ``clock`` times the circuit breaker (one per app),
-    the tenants' rate windows and each request's deadline; ``today`` is the UTC
-    day the ledger charges to. A test injects fakes of both. A ``meter_provider``
-    is its caller's to shut down; without one the app builds its own.
+    live mode, the Azure one. A provider is asked for the method of the purpose
+    of the request only, so a fake with ``chat`` alone serves chat, and nothing
+    checks at the start that it has ``embed``. ``clock`` times the circuit
+    breaker (one per app), the tenants' rate windows and each request's
+    deadline; ``today`` is the UTC day the ledger charges to. A test injects
+    fakes of both. A ``meter_provider`` is its caller's to shut down; without
+    one the app builds its own.
     """
     _check_start_allowed(settings, providers)
     registry = load_registry(settings.registry_dir)
-    considered = _considered(settings, registry)
+    routes = {
+        purpose: _route(settings, registry, purpose)
+        for purpose in (CHAT_PURPOSE, EMBEDDING_PURPOSE)
+    }
+    considered = tuple(d for route in routes.values() for d in route.considered)
     kinds = _provider_kinds(registry, considered)
-    if settings.mode == "live" and REPLAY_KIND in kinds.values():
-        # The registry checks refuse it too; this is the second line.
-        raise SettingsError("the chat route has a replay candidate in live mode")
+    if settings.mode == "live":
+        for purpose, route in routes.items():
+            if any(kinds[d.id] == REPLAY_KIND for d in route.considered):
+                # The registry checks refuse it too; this is the second line.
+                raise SettingsError(
+                    f"the {purpose} route has a replay candidate in live mode"
+                )
     close: Callable[[], None] | None = None
     if providers is None:
         if settings.mode == "replay":
@@ -280,9 +322,6 @@ def create_app(
             providers, close = _live_providers(settings, considered, kinds)
     if not set(kinds.values()) <= providers.keys():
         raise SettingsError("a deployment is routed to a provider kind with no adapter")
-    # In replay mode where the call goes is known before policy decides, so a
-    # refusal says it too (T-39).
-    replay = considered[0] if settings.mode == "replay" else None
     owns_meter_provider = meter_provider is None
     app_meter_provider = (
         make_meter_provider(SERVICE_NAME) if meter_provider is None else meter_provider
@@ -360,6 +399,7 @@ def create_app(
         span: Span,
         record: CallRecord,
         caller: Caller,
+        route: _Route,
         data_class: str | None,
         refusal: RefusalReason,
     ) -> NoReturn:
@@ -369,13 +409,15 @@ def create_app(
         set_span_attributes(span, {"meridian.refusal": refusal})
         record.end("refused", refusal)
         throttle_tenant = None if refusal == "unknown-tenant" else caller.tenant
-        audit_refusal(caller, throttle_tenant, refusal, route_facts(replay, data_class))
+        facts = route_facts(route.replay, data_class)
+        audit_refusal(caller, throttle_tenant, refusal, facts)
         raise HTTPException(status_code=403, detail=REFUSED)
 
     def refuse_limit(
         span: Span,
         record: CallRecord,
         caller: Caller,
+        route: _Route,
         data_class: str | None,
         reason: LimitRefusalReason,
         *,
@@ -386,44 +428,80 @@ def create_app(
         attribute and is counted; the audit row is written for the first of its
         tenant and reason in the window only (T-49). Both parts of that key are
         registry IDs, because routing passed. In replay mode every row names
-        the replay deployment (T-39)."""
+        the replay deployment of the request's purpose (T-39)."""
         status, detail = LIMIT_ANSWERS[reason]
         set_span_attributes(span, {"meridian.refusal": reason})
         record.end("refused", reason)
-        facts = route_facts(candidate if candidate is not None else replay, data_class)
+        facts = route_facts(
+            candidate if candidate is not None else route.replay, data_class
+        )
         audit_refusal(caller, caller.tenant, reason, facts)
         headers = None if retry_after is None else {"Retry-After": str(retry_after)}
         raise HTTPException(status_code=status, detail=detail, headers=headers)
 
-    chat_responses = error_responses(403, 413, 429, 500, 502, 503, 504)
-    chat_responses[HTTP_SERVICE_UNAVAILABLE]["description"] = CHAT_UNAVAILABLE
-    chat_responses[HTTP_PAYLOAD_TOO_LARGE]["description"] = CHAT_TOO_LARGE
+    def route_responses(unavailable: str, too_large: str) -> dict[int | str, Any]:
+        responses = error_responses(403, 413, 429, 500, 502, 503, 504)
+        responses[HTTP_SERVICE_UNAVAILABLE]["description"] = unavailable
+        responses[HTTP_PAYLOAD_TOO_LARGE]["description"] = too_large
+        return responses
 
     @app.post(
         "/v1/chat",
         tags=["chat"],
         summary="Answer a chat request (replay simulates, live calls a model).",
-        responses=chat_responses,
+        responses=route_responses(CHAT_UNAVAILABLE, CHAT_TOO_LARGE),
     )
     def chat(
         body: ChatRequest,
-        tenant_id: Annotated[BoundedEntityId, Header(alias="X-Meridian-Tenant")],
-        agent_id: Annotated[BoundedEntityId, Header(alias="X-Meridian-Agent")],
-        run_id: Annotated[uuid.UUID, Header(alias="X-Meridian-Run")],
+        tenant_id: TenantHeader,
+        agent_id: AgentHeader,
+        run_id: RunHeader,
     ) -> ChatResponse:
         # The call ID exists before anything can refuse the request.
         caller = Caller(uuid.uuid4(), tenant_id, agent_id, run_id)
+        return handle(
+            "gateway.chat", routes[CHAT_PURPOSE], caller, chat_operation(body)
+        )
+
+    @app.post(
+        "/v1/embeddings",
+        tags=["embeddings"],
+        summary="Embed texts (replay simulates, live calls a model).",
+        responses=route_responses(EMBEDDINGS_UNAVAILABLE, EMBEDDINGS_TOO_LARGE),
+    )
+    def embeddings(
+        body: EmbeddingRequest,
+        tenant_id: TenantHeader,
+        agent_id: AgentHeader,
+        run_id: RunHeader,
+    ) -> EmbeddingResponse:
+        caller = Caller(uuid.uuid4(), tenant_id, agent_id, run_id)
+        return handle(
+            "gateway.embeddings",
+            routes[EMBEDDING_PURPOSE],
+            caller,
+            embedding_operation(body),
+        )
+
+    def handle[ResponseT](
+        span_name: str,
+        route: _Route,
+        caller: Caller,
+        operation: Operation[Any, ResponseT],
+    ) -> ResponseT:
+        """One request of either purpose: a span of its own, counted once by its
+        outcome."""
         record = meters.call_record()
         try:
-            with start_span(tracer, "gateway.chat") as span:
-                response = answer(span, record, caller, body)
+            with start_span(tracer, span_name) as span:
+                response = answer(span, record, caller, route, operation)
         except Exception:
             record.end("failed")  # a refusal counted itself first and stays one
             raise
         record.end("completed")
         return response
 
-    def describe_call(span: Span, caller: Caller) -> None:
+    def describe_call(span: Span, caller: Caller, route: _Route) -> None:
         set_span_attributes(
             span,
             {
@@ -434,42 +512,50 @@ def create_app(
                 "meridian.mode": settings.mode,
             },
         )
-        if replay is not None:
-            set_span_attributes(span, route_attributes(replay))
+        if route.replay is not None:
+            set_span_attributes(span, route_attributes(route.replay))
 
-    def answer(
-        span: Span, record: CallRecord, caller: Caller, body: ChatRequest
-    ) -> ChatResponse:
-        describe_call(span, caller)
-        decision = decide(registry, considered, caller.tenant, caller.agent)
+    def answer[ResponseT](
+        span: Span,
+        record: CallRecord,
+        caller: Caller,
+        route: _Route,
+        operation: Operation[Any, ResponseT],
+    ) -> ResponseT:
+        describe_call(span, caller, route)
+        decision = decide(registry, route.considered, caller.tenant, caller.agent)
         limits = decision.limits  # None exactly for an unknown tenant, refused here
         if decision.refusal is not None or limits is None:
             refuse(
                 span,
                 record,
                 caller,
+                route,
                 decision.data_class,
                 decision.refusal or "unknown-tenant",
             )
         record.known(caller.tenant, caller.agent)  # registry IDs from here on
         if decision.data_class is not None:
             set_span_attributes(span, {"meridian.data_class": decision.data_class})
-        rate_refusal = limiter.admit(caller.tenant, limits, reservation_tokens(body))
+        # The same number the ledger reserves, for either purpose.
+        rate_refusal = limiter.admit(caller.tenant, limits, operation.estimate.tokens)
         if rate_refusal is not None:
             refuse_limit(
                 span,
                 record,
                 caller,
+                route,
                 decision.data_class,
                 rate_refusal.reason,
                 retry_after=rate_refusal.retry_after_seconds,
             )
-        result = walker.run(span, caller, limits, body, decision)
+        result = walker.run(span, caller, limits, operation, decision)
         if isinstance(result, BudgetRefused):
             refuse_limit(
                 span,
                 record,
                 caller,
+                route,
                 decision.data_class,
                 result.reason,
                 candidate=result.candidate,

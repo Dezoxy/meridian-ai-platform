@@ -1,9 +1,11 @@
-"""One pass over the allowed candidates of a model call (S042, S011).
+"""One pass over the allowed candidates of a model call (S042, S011, S045).
 
 Routing keeps the candidates the data class may reach (T-44); this walk goes
 through them in order under one deadline. A candidate the deadline leaves no
 time for, or whose circuit is open, is skipped and reserves nothing. Before each
 call the walk reserves the most the call can cost in the ledger (QA-12, T-14).
+The one walk serves both purposes: an ``Operation`` says what to reserve, how to
+call the provider and what the answer is, and nothing else differs.
 A reservation the tenant's budget refuses ends the walk, because the token
 reservation is the same for every candidate (the cost differs with the price;
 both candidates have one price today). A deployment's own failure moves the
@@ -25,6 +27,7 @@ the provider's exception, which can hold prompt text, in its ``__context__``. A
 ``BaseException`` leaves the reservation open, which stays charged.
 """
 
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -41,19 +44,14 @@ from meridian.platform.gateway.budget import (
     BudgetRefusalReason,
     Caller,
     Reservation,
+    TokenEstimate,
 )
 from meridian.platform.gateway.meters import GatewayMeters
-from meridian.platform.gateway.models import (
-    ChatOutput,
-    ChatRequest,
-    ChatResponse,
-    Usage,
-)
 from meridian.platform.gateway.providers.base import (
-    ChatProvider,
+    ModelProvider,
     ProviderError,
     ProviderErrorKind,
-    ProviderReply,
+    Reply,
 )
 from meridian.platform.gateway.resilience import (
     CALL_DEADLINE_SECONDS,
@@ -94,7 +92,7 @@ class ReservationLedger(Protocol):
         caller: Caller,
         deployment: Deployment,
         limits: TenantLimits,
-        request: ChatRequest,
+        estimate: TokenEstimate,
     ) -> Reservation | BudgetRefusal: ...
 
     def settle(
@@ -197,20 +195,32 @@ class BudgetRefused:
 
 
 @dataclass(frozen=True, slots=True)
-class _Call:
+class Operation[ReplyT: Reply, ResponseT]:
+    """What one request asks of the walk, built once and never changed: what to
+    reserve (the number the rate limiter admitted too), how to call a provider
+    within a budget of seconds, and how to turn the reply of the candidate that
+    answered into the wire response."""
+
+    estimate: TokenEstimate
+    call: Callable[[ModelProvider, Deployment, float], ReplyT]
+    respond: Callable[[uuid.UUID, GatewayMode, Deployment, ReplyT], ResponseT]
+
+
+@dataclass(frozen=True, slots=True)
+class _Call[ReplyT: Reply, ResponseT]:
     """What one request brings to the walk, built once and never changed."""
 
     caller: Caller
     limits: TenantLimits
-    body: ChatRequest
+    operation: Operation[ReplyT, ResponseT]
     decision: RouteDecision
 
 
 @dataclass(frozen=True, slots=True)
-class _Answered:
+class _Answered[ReplyT: Reply]:
     """An attempt the provider answered, and what the ledger charged for it."""
 
-    reply: ProviderReply
+    reply: ReplyT
     charged_micro_eur: int
 
 
@@ -232,7 +242,7 @@ class CandidateWalker:
         self,
         *,
         tracer: Tracer,
-        providers: Mapping[str, ChatProvider],
+        providers: Mapping[str, ModelProvider],
         kinds: Mapping[str, str],
         breaker: CircuitBreaker,
         audit: AuditWriter,
@@ -251,16 +261,16 @@ class CandidateWalker:
         self._clock = clock
         self._mode = mode
 
-    def run(
+    def run[ReplyT: Reply, ResponseT](
         self,
         span: Span,
         caller: Caller,
         limits: TenantLimits,
-        body: ChatRequest,
+        operation: Operation[ReplyT, ResponseT],
         decision: RouteDecision,
-    ) -> ChatResponse | Unanswered | BudgetRefused:
+    ) -> ResponseT | Unanswered | BudgetRefused:
         """Walk ``decision.candidates``; the response of the first to answer."""
-        call = _Call(caller, limits, body, decision)
+        call = _Call(caller, limits, operation, decision)
         deadline = Deadline(CALL_DEADLINE_SECONDS, self._clock)
         progress = _Progress()
         try:
@@ -319,14 +329,14 @@ class CandidateWalker:
         self._skip(call, progress, deployment, refusal.reason)
         return Unanswered(progress.attempts, progress.last_attempt_kind)
 
-    def _attempt(
+    def _attempt[ReplyT: Reply](
         self,
-        call: _Call,
+        call: _Call[ReplyT, object],
         progress: _Progress,
         deployment: Deployment,
         permit: Permit,
         deadline: Deadline,
-    ) -> _Answered | BudgetRefusal | ProviderErrorKind | None:
+    ) -> _Answered[ReplyT] | BudgetRefusal | ProviderErrorKind | None:
         """One call to one deployment, in its own span: the answer, the
         refusal of its reservation (the candidate was not called), the kind of
         the ``ProviderError`` it raised, or ``None`` when the reservation took
@@ -336,7 +346,7 @@ class CandidateWalker:
         try:
             provider = self._providers[self._kinds[deployment.id]]
             reservation = self._ledger.reserve(
-                call.caller, deployment, call.limits, call.body
+                call.caller, deployment, call.limits, call.operation.estimate
             )
             if isinstance(reservation, BudgetRefusal):
                 return reservation  # not called: the finally frees the permit
@@ -354,10 +364,10 @@ class CandidateWalker:
                     | {"meridian.attempt": progress.attempts},
                 )
                 result = self._call_provider(
-                    provider, deployment, call.body, permit, remaining
+                    provider, deployment, call.operation.call, permit, remaining
                 )
                 charged = self._close(call.caller, reservation, deployment, result)
-                if isinstance(result, ProviderReply):
+                if not isinstance(result, Exception):
                     return _Answered(result, charged)
                 return self._failed(span, call, progress, deployment, result)
         finally:
@@ -365,20 +375,20 @@ class CandidateWalker:
             # (an exception before the call, a BaseException) it frees the probe.
             self._breaker.release(permit)
 
-    def _call_provider(
+    def _call_provider[ReplyT: Reply](
         self,
-        provider: ChatProvider,
+        provider: ModelProvider,
         deployment: Deployment,
-        body: ChatRequest,
+        call: Callable[[ModelProvider, Deployment, float], ReplyT],
         permit: Permit,
         timeout_seconds: float,
-    ) -> ProviderReply | Exception:
+    ) -> ReplyT | Exception:
         """The provider's reply, or the exception it raised, with the circuit
         settled. This method writes nothing to the ledger or the audit log: the
         arms below hold no database write."""
-        result: ProviderReply | Exception
+        result: ReplyT | Exception
         try:
-            result = provider.chat(deployment, body, timeout_seconds=timeout_seconds)
+            result = call(provider, deployment, timeout_seconds)
         except ProviderError as error:
             if error.kind in DEPLOYMENT_FAILURES:
                 self._breaker.failure(permit)
@@ -401,12 +411,12 @@ class CandidateWalker:
         caller: Caller,
         reservation: Reservation,
         deployment: Deployment,
-        result: ProviderReply | Exception,
+        result: Reply | Exception,
     ) -> int:
         """Close the reservation outside the arms; the micro-EUR charged to an
         answer, and nothing for a failure. A failing write propagates and the
         row stays reserved, so the charge stands."""
-        if isinstance(result, ProviderReply):
+        if not isinstance(result, Exception):
             charged = self._ledger.settle(
                 reservation, deployment, result.input_tokens, result.output_tokens
             )
@@ -455,24 +465,16 @@ class CandidateWalker:
             return failure.kind
         raise failure
 
-    def _answer(
+    def _answer[ReplyT: Reply, ResponseT](
         self,
         span: Span,
-        call: _Call,
+        call: _Call[ReplyT, ResponseT],
         deployment: Deployment,
-        answered: _Answered,
-    ) -> ChatResponse:
+        answered: _Answered[ReplyT],
+    ) -> ResponseT:
         reply = answered.reply
-        response = ChatResponse(
-            call_id=call.caller.call_id,
-            mode=self._mode,
-            deployment=deployment.id,
-            provider=deployment.provider,
-            model=deployment.model,
-            output=ChatOutput(text=reply.text, finish_reason=reply.finish_reason),
-            usage=Usage(
-                input_tokens=reply.input_tokens, output_tokens=reply.output_tokens
-            ),
+        response = call.operation.respond(
+            call.caller.call_id, self._mode, deployment, reply
         )
         data_class = call.decision.data_class
         set_span_attributes(
