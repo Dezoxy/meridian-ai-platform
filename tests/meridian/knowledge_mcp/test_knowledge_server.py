@@ -5,8 +5,9 @@ stand-in that records what it was asked and answers as the test says."""
 
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -34,6 +35,7 @@ from servicesupport import (
 from toolsupport import (
     AGENT,
     CLAIM,
+    POLICY,
     TENANT,
     World,
     add_claim,
@@ -325,6 +327,66 @@ def hybrid_search_scope_count(db: DatabaseHandle, word: str) -> int:
     return count
 
 
+def set_wording_version(db: DatabaseHandle, version: str) -> None:
+    """Move the seeded policy to another wording version of its product."""
+    with connect(db.dsn(OWNER), "test-policy") as conn:
+        conn.execute(
+            "UPDATE policy.policies SET wording_version = %s WHERE policy_number = %s",
+            (version, POLICY),
+        )
+        conn.commit()
+
+
+def test_the_version_searched_is_the_policys_when_it_is_not_the_common_one(
+    world: World, gateway: Gateway, server: Any
+) -> None:
+    older = "2025-01"
+    set_wording_version(world.db, older)
+    (as_query,) = embed_queries(gateway, [QUERY])
+    planted = [
+        ChunkRow(
+            product=PRODUCT,
+            wording_version=older,
+            clause=f"9.{number}",
+            section="An older wording",
+            title=f"Old clause {number}",
+            body=f"Storm damage, the older wording, clause {number}.",
+            source_sha256="0" * 64,
+            deployment=DEPLOYMENT,
+            model=DEPLOYMENT,
+            dimensions=DIMENSIONS,
+            embedding=as_query.vector,
+        )
+        for number in (1, 2, 3)
+    ]
+    with connect(world.db.dsn(OWNER), "test-plant") as conn:
+        conn.cursor().executemany(
+            INSERT_CHUNK,
+            [asdict(r) | {"embedding": vector_literal(r.embedding)} for r in planted],
+        )
+        conn.commit()
+
+    result = search(server, world, top_k=10)
+
+    assert result.is_error is False
+    answer = result.structured_content
+    assert (answer["product"], answer["wording_version"]) == (PRODUCT, older)
+    # The store holds many 2026-01 clauses of the product: only the three
+    # planted ones may come back.
+    assert {chunk["clause"] for chunk in answer["chunks"]} == {"9.1", "9.2", "9.3"}
+
+
+def test_a_policy_whose_version_has_no_chunk_is_no_corpus_although_its_product_has_some(
+    world: World, server: Any
+) -> None:
+    set_wording_version(world.db, "2024-07")
+    assert stored_chunks(world.db, PRODUCT), "the product has chunks under 2026-01"
+
+    result = search(server, world)
+
+    assert_refused(result, "no-corpus")
+
+
 # ── 5. refusals that call nothing ───────────────────────────────────────────
 def test_another_product_is_outside_the_claim_and_the_gateway_is_not_called(
     world: World,
@@ -411,6 +473,66 @@ def test_the_gateway_call_carries_the_run_rows_identity_and_only_the_query(
     assert headers["X-Meridian-Tenant"] == world.tenant
     assert headers["X-Meridian-Agent"] == world.agent
     assert headers["X-Meridian-Run"] == str(world.run_id)
+
+
+def test_the_gateway_call_goes_out_under_the_runs_tenant_when_it_is_not_the_seeded_one(
+    world: World,
+) -> None:
+    add_claim(world.db, "CLM-0004", tenant="evaluation")
+    run_id = add_run(world.db, "CLM-0004", tenant="evaluation")
+    scripted = ScriptedGateway(script=good_reply)
+    server = server_over(world, scripted)
+
+    result = search(server, world, run_id=run_id)
+
+    assert result.is_error is False
+    (headers,) = scripted.headers
+    assert headers["X-Meridian-Tenant"] == "evaluation"
+    (row,) = audit_rows(world.db)
+    assert (row["tenant"], row["agent"], row["run_id"]) == (
+        "evaluation",
+        AGENT,
+        run_id,
+    )
+
+
+def test_the_gateway_call_goes_out_under_the_runs_agent_when_it_is_not_the_seeded_one(
+    world: World, plant: Callable[..., Path]
+) -> None:
+    other = "claims-triage-b"
+    # A second graph agent that lists the tool, and a tenant that may run it.
+    registry_dir = plant(
+        (
+            "agents.yaml",
+            "  - id: knowledge-ingestion\n",
+            f"  - id: {other}\n"
+            "    description: A second claims agent.\n"
+            "    kind: graph\n"
+            "    tools:\n"
+            "      - wording_search\n"
+            "  - id: knowledge-ingestion\n",
+        ),
+        (
+            "tenants.yaml",
+            "agents: [claims-triage, knowledge-ingestion]",
+            f"agents: [claims-triage, {other}, knowledge-ingestion]",
+        ),
+    )
+    add_claim(world.db, "CLM-0004")
+    run_id = add_run(world.db, "CLM-0004", agent=other)
+    scripted = ScriptedGateway(script=good_reply)
+    server = create_app(
+        knowledge_settings_for(world.db, registry_dir=registry_dir),
+        http=scripted.http(),
+        tracer_provider=make_tracer_provider(APPLICATION, None),
+    ).server
+
+    result = search(server, world, run_id=run_id)
+
+    assert result.is_error is False
+    (headers,) = scripted.headers
+    assert headers["X-Meridian-Agent"] == other
+    assert headers["X-Meridian-Run"] == str(run_id)
 
 
 def test_the_gateway_call_carries_the_trace_of_the_tool_calls_span(
