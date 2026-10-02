@@ -102,9 +102,9 @@ A tool whose server exists also declares its `output_schema`. The server
 checks every result against it before answering, and the runtime checks
 again before the graph sees the result. What each server publishes is
 generated from this registry into [`api/mcp/`](../../api/mcp/README.md), and
-`make registry` fails when the two differ. Status: implemented (S013) for
-`policy-mcp` and `claims-mcp`, proven in-process; `knowledge-mcp` arrives
-with S046, and the servers run on kind in S044.
+`make registry` fails when the two differ. Status: implemented (S013,
+S046) for `policy-mcp`, `claims-mcp` and `knowledge-mcp`, proven
+in-process; the servers run on kind in S044.
 
 An agent is of kind `graph` unless it says otherwise: the Agent Runtime
 runs its graph, and refuses to start when a graph agent has no published

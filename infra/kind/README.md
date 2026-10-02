@@ -55,7 +55,8 @@ migration can run before the operator has created it (S044). Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
-`claims-mcp-db` and `knowledge-mcp-db`. `make up` creates a Secret only if it is absent, before the
+`claims-mcp-db` and `knowledge-mcp-db`. `make up` creates a Secret only if
+it is absent, before the
 `platform-db` release installs (CloudNativePG cannot reconcile a role whose
 Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
 on stdin; it is never an argument, never in a file and never printed. The `uri`
