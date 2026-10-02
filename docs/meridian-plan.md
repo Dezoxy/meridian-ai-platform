@@ -11,8 +11,10 @@
   and against a mocked Azure; not yet run against Azure), three MCP tool
   servers and the runtime's client for them are proven in tests, the policy
   wordings can be ingested into pgvector and searched through one of those
-  servers (in tests, with a simulated embedding), and no service runs in
-  Azure yet.
+  servers (in tests, with a simulated embedding), a triage graph calls the
+  tools in a fixed order and lets rules decide each claim's route (in
+  tests; no real model has answered its one question), and no service
+  runs in Azure yet. `make demo` on kind fails until S044.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -145,11 +147,12 @@ and Pydantic, at the cost of one dependency.
 | S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | done | S012, S013 |
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | todo | S013, S041 |
-| S014 | Triage graph and guardrails | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; PII redaction and injection detection in place; threat model updated | todo | S011, S013, S046 |
+| S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
+| S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047 |
 
 ### M2 — Azure, identity, delivery
 
@@ -173,7 +176,7 @@ and Pydantic, at the cost of one dependency.
 | S029 | Backup and restore drill | PostgreSQL restored into a scratch environment; restore time measured and recorded | todo | S020 |
 | S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023 |
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
-| S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017 |
+| S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
 | S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | todo | S024 |
 | S035 | M3 exit | Architecture PDF released; demo script v2; every capability labelled | todo | S028, S033, S034 |
@@ -2952,6 +2955,250 @@ under the run's tenant and agent, and answers cited clauses.
   URL check in `common/env.py` for every service address; the count of a
   refusal flood's last window is never written (S011).
 
+### S014 — Triage graph
+
+**Status:** done · **Started:** 2026-10-02 · **Finished:** 2026-10-02
+**Goal:** a claim is triaged by a graph that checks the policy, screens the
+claim with rules, retrieves the wording's terms, asks the model for the one
+fact rules cannot read, and stores a validated proposal whose route the
+rules decided.
+**Decisions:**
+
+- Split by the session on 2026-10-02, for the owner to accept at the pull
+  request: this step is the graph, its rules, the proposal and its storage;
+  S047, new, takes PII redaction, injection detection and the data class
+  per request. From this step until S047 the model call reads claimant
+  text with no redaction and no injection check.
+- A fixed pipeline, not a loop in which a model chooses tools. The graph's
+  own code calls the three read tools in a fixed order: `lookup_policy`,
+  `load_history`, `retrieve_terms`, `assess`, `propose`. The model chooses
+  no tool and no argument, and the graph writes nothing (the two write
+  tools are S015's). Rejected: a tool-choosing agent, which triage does
+  not need, which the replay provider cannot exercise, and which would
+  widen T-22 and T-26. S031 splits the graph into a supervisor and
+  workers.
+- The model supplies one fact and the rules decide the route (C-02, T-30).
+  The fact: whether a circumstance exclusion of the wording applies to
+  what the claimant describes. The model is asked only when its answer
+  can matter: the policy is in force, the peril is covered and an
+  exclusion names the peril. That is 15 of the 40 golden claims. Its
+  answer can do two things: name an exclusion, which sends the claim to
+  an adjuster with a recommendation to reject, or say that none applies.
+- A missing or uncertain fact can only stop an automatic approval. The
+  facts that can be missing are gaps on the proposal: the cover clause,
+  the deductible clause, the limit clause when the limit caps the amount,
+  exclusion clauses that are not complete, an assessment that is
+  unavailable, a truncated claim history, and any clause a decision cites
+  that the search did not return. With a gap the rules recommend nothing.
+  A request for documents and a route to the adjuster never wait for a
+  fact.
+- Refusal or failure, the line S046 drew: a platform that cannot answer
+  fails the run, and the claim can be triaged again; a condition of the
+  claim's own data becomes a proposal for a person. So a refused or
+  unavailable tool, a gateway error and a call limit fail the run, every
+  refusal word of `wording_search` included (`no-corpus` too: an empty
+  store is a deployment's condition, and a stored "no wording" proposal
+  on every claim would hide it). Only two things become a proposal: no
+  such policy, and a model answer that cannot be trusted. Rejected:
+  proposing "adjuster" on any failure, which stores a poor proposal for
+  good, because a claim with a proposal is not triaged again.
+- The rules are the workload's own (`rules.py`), with their constants.
+  The generator's oracle and catalogue are the tests' reference and are
+  never imported: tests keep the constants equal and all 40 golden
+  outcomes equal. This closes S003's and S008's follow-up. Precedence
+  follows the oracle: not in force, excluded, documents missing, fraud
+  indicator, over the threshold, within it. The lapse date decides, not
+  the status alone (S005's follow-up, CLM-0010). So the model is asked
+  before documents are requested, which costs a call on a claim that
+  will be asked for documents.
+- Retrieval by four fixed probes built from the claim's peril, never from
+  claimant text: the peril's title, the sentence that closes every
+  exclusion, "Deductible. Limit." and the three timing headings. No
+  claimant text reaches the embedding model or a search query (T-16,
+  T-59). `wording.py` picks the terms from the returned clauses by
+  section number, exact title and the closing sentence of an exclusion,
+  and is the only module that knows the wordings' layout. Rejected: the
+  description as a query, which S012 measured at 5 of 8 exclusions; a
+  tool that fetches a clause by number, a new tool contract.
+- The exclusion clauses are complete only when there are as many as
+  `wording.EXCLUSION_CLAUSES` records for the product and wording
+  version, numbered without a gap and each readable. The count is the
+  workload's own table, kept equal to the wordings by a test. A wording
+  version that is not in the table sends its claims to an adjuster.
+- The model's question is one JSON document (the peril, the description,
+  the candidate clauses with their numbers) under a system message that
+  calls it data: JSON encoding is the delimiter (T-26, T-27). The model
+  gets nothing else of the claim. Its answer is one JSON object of three
+  fields with the verdict `applies`, `none` or `unsure`, read strictly;
+  anything else, a cut-off answer and `unsure` leave the assessment
+  unavailable, with the word that says why on the proposal. Not used:
+  the provider's structured outputs, a gateway contract change that
+  cannot be tried while the Azure login is blocked (S047).
+- The proposal is one validated document (`proposal.py`), which refuses a
+  proposal that contradicts itself, in the graph and again in the Claims
+  API (T-28). Migration 0007 stores it as `jsonb` beside `route` and
+  `reason`, which a check keeps equal to the document; the walking
+  skeleton's columns become nullable and nothing is dropped.
+- The answer to a submission carries the route and the deployment that
+  was asked, not the reason: the reason told a caller that a claim was
+  flagged and let it probe a policy (T-65).
+- The runtime: `ModelClient.chat` sends `max_output_tokens` and returns
+  the finish reason (S010's follow-up); a run makes at most four model
+  calls and sixteen tool calls (T-15, T-62; the limit of ten graph steps
+  exists since S009); a failed run names its reason, one word from a
+  closed set, in the log and in its audit row, and a graph raises
+  `GraphFailure` with a code for a failure of its own.
+- The gateway's cap on a reply is 1,024 tokens, down from 4,096, and the
+  triage call asks for 400 (T-45, which the owner left to this step on
+  2026-10-01). Not closed: 1,024 tokens need about 52 tokens a second
+  inside the 20 s read limit, and that is not measured against Azure.
+- `make demo` on kind fails from this step until S044: the graph calls
+  tool servers that are not deployed there. The cluster does not exist
+  today. The plan's rule that the demo always works is broken until
+  S044, which should come next.
+- Reviewed and not done, with reasons:
+  - one proposal per claim, by a unique index (two reviewers): S015
+    triages a claim again when documents arrive, so the number of
+    proposals per claim and the serialising of triage are its design;
+  - a more lenient reader of the model's answer (a preamble, an extra
+    field, a verdict in capitals): what a real model sends is not known,
+    and every misread goes to a person;
+  - stamping the report date in the Claims API (T-66): the golden
+    claims carry the dataset's own clock, so a stamp of today would mark
+    all of them late; it is due with S015, when an approval can complete;
+  - the call limits per agent in the registry: one agent exists.
+
+**Work log:**
+
+- Fourth step of one session, after `/compact`, on the owner's word
+  ("S014", then "Do it" to the design). Pull request 28 (S046) was first
+  confirmed on `main`: its 40 files are identical there.
+- The advisor before the design asked for the split in the plan first,
+  for every item earlier steps had left to S014 to be done or named, and
+  for a count of the excluded golden claims a wrong "none" would approve:
+  four (CLM-0026, CLM-0031, CLM-0037, CLM-0038), which T-26 names.
+- The `implementer` subagent worked in ten short contracts: the wording's
+  terms; the runtime's limits and the gateway's cap; the rules; the
+  proposal with its storage; the assessment; the graph; the graph through
+  the real services; the probe fix; two contracts of review fixes. Two
+  pairs ran at the same time on disjoint files. It broke the rule against
+  editing through scripts three times, on test files (`sed -i` and a
+  heredoc in the seventh contract, a heredoc in the tenth) and said so;
+  the main session read every source diff and ran every gate itself.
+- The seventh contract's tests found a defect in the main session's
+  design: one probe asked for five headings and the search's ten clauses
+  left out clause 4.2 "Limit" in three of the four wordings, so CLM-0024
+  lost its citation and its recommendation. The probe became two.
+- Reviews by `security-reviewer`, `database-reviewer`,
+  `platform-boundary-reviewer`, `silent-failure-hunter`, `python-reviewer`
+  and `rag-pipeline-reviewer`: no critical finding, one high. Fixed here:
+  - a missing last exclusion clause could not be seen from the numbering,
+    and the claim could be approved automatically (high, three reviewers;
+    the first draft of T-64 had accepted it): the count per wording
+    version;
+  - a clause a decision cites and the search missed left a rejection
+    with no citation and no gap;
+  - a long description in a non-Latin script grew six-fold in the prompt,
+    passed the gateway's limit and failed the run on every attempt;
+  - a rationale holding a lone surrogate failed the run inside the
+    proposal's model, with an error that quotes model text;
+  - a failed run logged a class name ("ValueError" for six causes) and
+    audited no reason; an unavailable assessment did not say why;
+  - the answer's reason code let a caller probe a policy (T-65);
+  - the stored `route` and `reason` could differ from the document.
+- Mutations, in a second worktree so that reviewers never read a mutated
+  file: a first run of 42 caught 40. The two that survived were a citation
+  built with a fixed wording version (every fixture uses one version, the
+  blind spot S046 found for tenants) and a proposal that is an automatic
+  approval after an unavailable assessment; both got tests. On the final
+  code 55 of 55 are caught, one for each review fix among them, and each
+  file was restored byte for byte.
+- The `docs-sync` skill: the README, the kind README, the threat model,
+  the ClaimsTriage view (one step's text and its row in the view
+  register; `make check` ends with no ERROR line; no derived Mermaid
+  block shows that view) and this plan were what the branch falsified.
+
+**Result / verification:** run by the main session on 48b5343, the last
+commit that changes `src/` or `tests/`; the commits after it change
+documents only, and `make docs` and `make test` ran again after them.
+
+- `make pytest-db` with `GITHUB_ACTIONS=true`: `3844 passed, 3 skipped`
+  (the three are the opt-in live Azure tests). `make pytest`:
+  `2519 passed, 1328 skipped`. `make lint`: `Contracts: 4 kept, 0
+  broken.` `make registry`: `schemas OK: up to date`, `contracts OK: up
+  to date`. `make test`: 117 tests, `OK`. `make docs`: `13 checks
+  passed`. `make check`: no ERROR line.
+- The golden set through the real services in one process (Claims API,
+  runtime, the graph through its entry point, three tool servers,
+  PostgreSQL 17.11 with pgvector 0.8.6, the gateway in replay mode), in
+  `tests/meridian/test_triage_stack.py`:
+  - with a scripted model that answers from the golden labels, all 40
+    proposals equal the oracle's in route, reason, recommendation,
+    payable amount, fraud indicators, missing documents, exclusion
+    clause and citations;
+  - with the gateway's replay text, which is simulated and is no answer,
+    the 15 runs that ask the model get an unavailable assessment and go
+    to a person; the other 25 equal the oracle. Routes: 29 adjuster, 6
+    request documents, 5 automatic approval (CLM-0005, CLM-0010,
+    CLM-0016, CLM-0019, CLM-0021, whose perils no circumstance exclusion
+    names). CLM-0011, CLM-0015 and CLM-0023 are approved only with a
+    model;
+  - with a model that answers "none" to everything, exactly CLM-0026,
+    CLM-0031, CLM-0037 and CLM-0038 change from the adjuster to an
+    automatic approval;
+  - one run in force leaves six `tool.call` audit rows, four embedding
+    rows and one chat row, all with its run ID, and one trace across the
+    Claims API, the runtime, the gateway and the two tool servers it
+    called;
+  - a triage that asks the model costs five gateway requests of the
+    tenant's ten per 10 s: with no time between claims the third fails at
+    its first search (`gateway-busy`), answers 502, stays stored without
+    a proposal, and is triaged when posted again after the window;
+  - no claimant text in spans, audit rows, run rows or log records, with
+    canaries.
+- Retrieval, in replay mode: for each of the 24 pairs of a product and a
+  peril of its line, the four probes through the real search give the
+  same terms as the whole wording. The embedding is simulated, so this
+  says the probes work by keyword, not what a model's vectors would do.
+- Not run: any call to Azure (the login is still blocked), so no real
+  model has answered the question and no real embedding has ranked a
+  probe; anything on kind (there is no cluster), where migration 0007
+  has never run and `make demo` now fails; the services outside tests.
+
+**Follow-ups:**
+
+- The owner:
+  - whether a peril whose exclusions rest on what the claimant chose to
+    write (collision: racing, drink, licence) may be approved
+    automatically at all; today "none" means the description is silent;
+  - S044 next, so that the demo on kind works again (it needs the
+    cluster, which must not be recreated without asking);
+  - once the Azure login works: the model's answers on the 40 claims
+    against the oracle; the probes against a real embedding, with a floor
+    of 24 of 24; how many tokens a second a reply gets (T-45).
+- S047: the guardrails; the gateway tells a request the provider's filter
+  rejected from an outage, so the graph can send that claim to an
+  adjuster (T-67); the provider's structured outputs for the answer; the
+  stored rationale is unredacted model text.
+- S015: how many proposals a claim may have and one triage per claim at
+  a time; a claim without a proposal in a state an adjuster sees (T-67);
+  the report date stamped by the API, a document counted when uploaded
+  and a decided claim written to the claim history (T-66); the PostgreSQL
+  checkpointer and who may write it (T-63); the two write tools.
+- S016: the claimant-facing answer (T-65); an index for the adjuster's
+  queue on route and creation time.
+- S017: in replay three of the eight automatic approvals cannot be
+  confirmed, so the harness needs a scripted or recorded model, or
+  `--live`; the evaluation tenant's 6,000 tokens a minute.
+- S019 and S027: two triages per 10 s per tenant; a wait on
+  `gateway-busy` for the time the gateway names, or a queue.
+- S044: the tool servers on kind, and `make demo` green again.
+- No step yet: `policy_lookup`'s output schema does not require `policy`
+  when `found` is true; a new wording version needs its count in
+  `wording.EXCLUSION_CLAUSES`; the call limits are the same for every
+  agent; pydantic's error for a claim that is not valid facts quotes the
+  claim, and only its class name is logged.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -3010,3 +3257,7 @@ under the run's tenant and agent, and answers cited clauses.
   ingestion, hybrid search and the retrieval check; S046, new, is the
   knowledge MCP server, and S014 depends on it. A registry agent has a
   kind, and the runtime runs only agents of kind `graph`.
+- **v0.15, 2026-10-02:** S014 split by the session, for the owner to
+  accept at its pull request: S014 keeps the triage graph, its rules, the
+  proposal and its storage; S047, new, takes PII redaction, injection
+  detection and the data class per request. S018 and S032 depend on S047.

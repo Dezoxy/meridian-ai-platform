@@ -1,4 +1,4 @@
-"""The claim submission (mirrors data/synthetic/claims.json) and the proposal."""
+"""The claim submission (mirrors data/synthetic/claims.json) and the answer."""
 
 from datetime import date
 from typing import Annotated, Literal, Self
@@ -27,7 +27,6 @@ Route = Literal["adjuster", "auto_approve", "request_documents"]
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=100), NoNul]
 MAX_DOCUMENTS = 20
-MAX_DRAFT_CHARS = 2000
 
 
 class LossLocation(WireModel):
@@ -73,24 +72,20 @@ class ClaimSubmission(ClaimFacts):
 
 
 class DraftedBy(WireModel):
-    deployment: str
-    provider: str
-    mode: str
-
-
-class TriageProposal(WireModel):
-    """What the graph writes to ``output`` and the Claims API stores."""
-
-    route: Route
-    reason: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
-    draft: Annotated[str, StringConstraints(min_length=1, max_length=MAX_DRAFT_CHARS)]
-    drafted_by: DraftedBy
+    deployment: Annotated[str, NoNul]
+    provider: Annotated[str, NoNul]
+    mode: Annotated[str, NoNul]
 
 
 class ProposalSummary(WireModel):
+    """The answer's view of the proposal (``TriageProposal`` is in proposal.py);
+    ``drafted_by`` is null when no model ran. It carries no reason code: with a
+    fresh claim ID per probe, the code tells a caller whether a policy number
+    exists, that a policy lapsed and, by bisecting the amount, its deductible and
+    limit. The stored proposal keeps the reason."""
+
     route: Route
-    reason: str
-    drafted_by: DraftedBy
+    drafted_by: DraftedBy | None
 
 
 class ClaimResponse(WireModel):

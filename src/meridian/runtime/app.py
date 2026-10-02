@@ -39,12 +39,25 @@ from meridian.platform.common.telemetry import (
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
 from meridian.runtime import SERVICE_NAME, runs
+from meridian.runtime.failures import failure_reason
 from meridian.runtime.graphs import load_graph_factory
 from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
-from meridian.runtime.models import RunErrorBody, RunRequest, RunResponse, RunStatus
+from meridian.runtime.models import (
+    RunErrorBody,
+    RunRequest,
+    RunResponse,
+    RunState,
+    RunStatus,
+)
 from meridian.runtime.runs import RunIdentity, RunOutcome
 from meridian.runtime.settings import RuntimeSettings
-from meridian.runtime.tool_client import ToolClient, ToolTarget, prepare_sdk
+from meridian.runtime.tool_client import (
+    ToolClient,
+    ToolError,
+    ToolRefused,
+    ToolTarget,
+    prepare_sdk,
+)
 
 GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
@@ -86,21 +99,40 @@ def _failure_status(error: Exception) -> int:
     )
 
 
+def _tool_of(error: Exception) -> str | None:
+    """The registry ID of the tool a tool error is about, else none."""
+    return error.tool if isinstance(error, ToolError) else None
+
+
 def _log_failure(run_id: uuid.UUID, error: Exception) -> None:
-    # Only the class and, for a gateway call, its status code: a message could
-    # hold claim text.
-    code = error.status_code if isinstance(error, ModelCallError) else None
+    # The reason word and the class; for a gateway call its status code; for a
+    # tool error its tool (a registry ID or none) and, for a refusal, the
+    # refusal word. Nothing else: a message could hold claim text.
+    status = error.status_code if isinstance(error, ModelCallError) else None
+    refusal = error.reason if isinstance(error, ToolRefused) else None
     logger.error(
-        "run %s failed: %s (gateway status %s)", run_id, type(error).__name__, code
+        "run %s failed: %s (%s; gateway status %s; tool %s; refusal %s)",
+        run_id,
+        failure_reason(error),
+        type(error).__name__,
+        status,
+        _tool_of(error),
+        refusal,
     )
 
 
-def _finish(dsn: str, identity: RunIdentity, status: str) -> psycopg.Error | None:
+def _finish(
+    dsn: str,
+    identity: RunIdentity,
+    status: RunState,
+    reason: str | None = None,
+    tool: str | None = None,
+) -> psycopg.Error | None:
     """Record the final status; try twice, return the last error if both fail."""
     last: psycopg.Error | None = None
     for _ in range(FINISH_ATTEMPTS):
         try:
-            runs.finish_run(dsn, identity, status)
+            runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
         except psycopg.Error as exc:
             last = exc
         else:
@@ -156,6 +188,7 @@ def tool_client_for(
         run_id=identity.run_id,
         tracer=tracer,
         on_refusal=audit_refusal,
+        max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
     )
 
 
@@ -290,7 +323,13 @@ def create_app(
             if outcome.status != "AwaitingApproval":
                 # The checkpoint holds the claim; a finished run needs none.
                 saver.delete_thread(str(identity.thread_id))
-            unsaved = _finish(dsn, identity, outcome.status)
+            unsaved = _finish(
+                dsn,
+                identity,
+                outcome.status,
+                reason=None if failure is None else failure_reason(failure),
+                tool=None if failure is None else _tool_of(failure),
+            )
             set_span_attributes(span, {"meridian.run_status": outcome.status})
             if unsaved is not None:
                 logger.error(

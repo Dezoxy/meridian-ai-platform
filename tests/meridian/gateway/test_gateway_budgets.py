@@ -91,7 +91,12 @@ RESERVED_TOKENS = chat_estimate(REQUEST).tokens
 FIRST = "aoai-sdc-gpt-4o"
 SECOND = "aoai-sdc-gpt-4o-second"
 OCTOBER_FIRST = date(2026, 10, 1)
-TOO_LARGE_BODY = BODY | {"max_output_tokens": 4096}
+# The largest reply the contract allows (1024) and the longest message: their
+# reservation exceeds the 2000-token window the one test that uses this plants.
+TOO_LARGE_BODY = {
+    "messages": [{"role": "user", "content": "x" * 20_000}],
+    "max_output_tokens": 1024,
+}
 RETRY_AFTER = "Retry-After"
 HTTP_TOO_MANY = 429
 HTTP_TOO_LARGE = 413

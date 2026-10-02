@@ -2,8 +2,9 @@
 
 The runtime issues random run IDs and keeps them apart from LangGraph's thread
 IDs, which callers never see. Rows and audit events hold identifiers and
-statuses only, never the run's input or output (T-03, T-25). Statements use
-psycopg placeholders only (T-07).
+statuses only, and for a failed run a reason word and a tool's registry ID,
+never the run's input or output (T-03, T-25). Statements use psycopg
+placeholders only (T-07).
 """
 
 import uuid
@@ -24,6 +25,10 @@ from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.tracing import NodeSpans
 
 RECURSION_LIMIT = 10
+# What one run may spend (T-15, T-62). The recursion limit bounds the graph's
+# steps, not the calls inside a step, so the two clients count their own.
+MAX_MODEL_CALLS_PER_RUN = 4
+MAX_TOOL_CALLS_PER_RUN = 16
 # Audit vocabulary: event and outcome, by the state a run is moved to. Every
 # state has one, so no caller can make finish_run fail on a lookup.
 AUDIT_FOR_STATE: dict[RunState, tuple[str, str]] = {
@@ -64,7 +69,11 @@ def execute(
     Raises whatever the graph raises; the caller records the failure.
     """
     model = ModelClient(
-        http, tenant=identity.tenant, agent=identity.agent, run_id=identity.run_id
+        http,
+        tenant=identity.tenant,
+        agent=identity.agent,
+        run_id=identity.run_id,
+        max_calls=MAX_MODEL_CALLS_PER_RUN,
     )
     graph = factory(model, tools).compile(checkpointer=saver)
     config = {
@@ -82,7 +91,13 @@ def execute(
     return RunOutcome("Completed", output)
 
 
-def _audit(identity: RunIdentity, event: str, outcome: str) -> AuditEvent:
+def _audit(
+    identity: RunIdentity,
+    event: str,
+    outcome: str,
+    reason: str | None = None,
+    tool: str | None = None,
+) -> AuditEvent:
     return AuditEvent(
         service=SERVICE_NAME,
         event=event,
@@ -91,6 +106,8 @@ def _audit(identity: RunIdentity, event: str, outcome: str) -> AuditEvent:
         agent=identity.agent,
         run_id=identity.run_id,
         reference=identity.reference,
+        reason=reason,
+        tool=tool,
     )
 
 
@@ -112,15 +129,27 @@ def start_run(dsn: str, identity: RunIdentity) -> None:
         record_event(conn, _audit(identity, "run.started", "started"))
 
 
-def finish_run(dsn: str, identity: RunIdentity, status: RunState) -> None:
-    """Move the row to its new status and write the matching event, atomically."""
+def finish_run(
+    dsn: str,
+    identity: RunIdentity,
+    status: RunState,
+    reason: str | None = None,
+    tool: str | None = None,
+) -> None:
+    """Move the row to its new status and write the matching event, atomically.
+
+    ``reason`` (a ``failure_reason`` word) and ``tool`` (a registry ID) go into
+    the event of a ``Failed`` run, and of no other state.
+    """
+    if status != "Failed" and (reason is not None or tool is not None):
+        raise ValueError("only a Failed run has a reason or a tool")
     event, outcome = AUDIT_FOR_STATE[status]
     with connect(dsn, SERVICE_NAME) as conn:
         conn.execute(
             "UPDATE runtime.runs SET status = %s, updated_at = now() WHERE run_id = %s",
             (status, identity.run_id),
         )
-        record_event(conn, _audit(identity, event, outcome))
+        record_event(conn, _audit(identity, event, outcome, reason, tool))
 
 
 def fetch_run(dsn: str, run_id: uuid.UUID) -> RunStatus | None:

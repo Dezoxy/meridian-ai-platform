@@ -27,7 +27,7 @@ dynamic meridian "ClaimsTriage" "What happens between a claim being submitted an
     meridian.claimsApp -> meridian.runtime "Starts a triage run"
     meridian.runtime -> meridian.policyMcp "Validates the policy"
     meridian.runtime -> meridian.knowledgeMcp "Retrieves coverage terms with citations"
-    meridian.runtime -> meridian.gateway "Drafts the structured triage decision"
+    meridian.runtime -> meridian.gateway "Asks whether an exclusion applies; rules then decide the route"
     meridian.gateway -> azureOpenAI "Sends the redacted prompt to an EU deployment"
     meridian.runtime -> meridian.platformDb "Checkpoints the run and pauses for approval"
     autoLayout lr

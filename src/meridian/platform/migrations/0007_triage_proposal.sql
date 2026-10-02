@@ -1,0 +1,57 @@
+-- 0007: the triage proposal stored as one document (S014).
+--
+-- Run by the owner role (meridian_owner). It adds a column, relaxes four
+-- constraints and adds three checks; it deletes no data and drops no column.
+--
+-- claims.triage_proposals kept three things per row until now: the route, a
+-- reason text and the model's draft with the deployment that wrote it. The
+-- triage rules decide more than that (the reason code, the recommendation, the
+-- payable amount, the fraud indicators, the missing documents, the citations,
+-- the gaps and the model's assessment), so the whole proposal is stored as the
+-- JSON document the Claims API validated, and that document is the one source
+-- of truth. route and reason stay as columns, because they are what a query
+-- filters by.
+--
+-- proposal is nullable: the rows the walking skeleton (S009) wrote have none,
+-- and they keep their draft. draft and the three drafted_by_* columns lose
+-- NOT NULL: a new row leaves them NULL, because the document carries
+-- drafted_by and no draft is written any more. The three checks keep a row from
+-- being empty or contradicting itself: proposal is NULL or a JSON object (a
+-- JSON null, an array or a scalar is refused); a row has a proposal or a draft;
+-- and when there is a proposal, route and reason equal the document's own
+-- "route" and "reason". The columns are what a query filters by, so a row whose
+-- columns say one thing and whose document says another would be answered
+-- wrongly by one of the two. The third check compares with IS NOT DISTINCT
+-- FROM: a document that lacks a key, or holds null for it, gives NULL for ->>,
+-- and a CHECK lets NULL through, so a plain = would accept it. A row from the
+-- walking skeleton has no proposal and is not held to the check; adding it
+-- validates the rows already there, and all of those pass.
+--
+-- No grant changes. The grants of 0001 are table-level, GRANT SELECT, INSERT
+-- ON claims.triage_proposals TO claims_api, so the role has the new column
+-- the moment it exists, and no other role has any privilege on the table. A
+-- column-level grant to another role is not made here, and a test proves both
+-- (tests/meridian/db/test_triage_proposal_migration.py).
+
+ALTER TABLE claims.triage_proposals
+    ADD COLUMN proposal jsonb;
+
+ALTER TABLE claims.triage_proposals
+    ALTER COLUMN draft DROP NOT NULL,
+    ALTER COLUMN drafted_by_deployment DROP NOT NULL,
+    ALTER COLUMN drafted_by_provider DROP NOT NULL,
+    ALTER COLUMN drafted_by_mode DROP NOT NULL;
+
+ALTER TABLE claims.triage_proposals
+    ADD CONSTRAINT triage_proposals_proposal_is_object
+        CHECK (proposal IS NULL OR jsonb_typeof(proposal) = 'object'),
+    ADD CONSTRAINT triage_proposals_has_proposal_or_draft
+        CHECK (proposal IS NOT NULL OR draft IS NOT NULL),
+    ADD CONSTRAINT triage_proposals_columns_are_document
+        CHECK (
+            proposal IS NULL
+            OR (
+                proposal ->> 'route' IS NOT DISTINCT FROM route
+                AND proposal ->> 'reason' IS NOT DISTINCT FROM reason
+            )
+        );

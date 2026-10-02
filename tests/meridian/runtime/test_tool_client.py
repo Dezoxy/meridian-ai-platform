@@ -54,7 +54,9 @@ from meridian.runtime import tool_client
 from meridian.runtime.app import tool_client_for
 from meridian.runtime.runs import RunIdentity
 from meridian.runtime.tool_client import (
+    ToolCallLimit,
     ToolClient,
+    ToolError,
     ToolNotAllowed,
     ToolRefused,
     ToolUnavailable,
@@ -93,6 +95,7 @@ def direct(
     run_id: uuid.UUID | None = None,
     refusals: Refusals | None = None,
     agent: str = AGENT,
+    max_calls: int = 100,
 ) -> ToolClient:
     """A client with no database behind its refusal callback."""
     return ToolClient(
@@ -102,6 +105,7 @@ def direct(
         run_id=run_id or uuid.uuid4(),
         tracer=tracer_of(exporter),
         on_refusal=refusals or Refusals(),
+        max_calls=max_calls,
     )
 
 
@@ -277,6 +281,71 @@ def test_a_name_that_is_no_registry_tool_is_never_stored(
     assert exporter.get_finished_spans() == ()
 
 
+def test_the_call_after_the_limit_sends_nothing_and_raises(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    refusals = Refusals()
+    tools = direct(
+        {"policy-mcp": Unused()}, registry, exporter, refusals=refusals, max_calls=1
+    )
+    with pytest.raises(ToolUnavailable):  # the one call, which Unused fails
+        tools.call("policy_lookup", {"policy_number": POLICY})
+    Unused.used = False
+    exporter.clear()
+
+    with pytest.raises(ToolCallLimit) as raised:
+        tools.call("policy_lookup", {"policy_number": CANARY})
+
+    assert isinstance(raised.value, ToolError)
+    assert raised.value.tool == "policy_lookup"
+    assert str(raised.value) == "tool call limit of the run reached"
+    assert CANARY not in str(raised.value)
+    assert Unused.used is False
+    assert refusals.tools == []
+    assert exporter.get_finished_spans() == ()
+
+
+def test_the_limit_comes_before_the_allowlist_and_a_made_up_name_has_no_id(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    refusals = Refusals()
+    tools = direct(
+        {}, registry, exporter, refusals=refusals, agent="rogue", max_calls=0
+    )
+
+    with pytest.raises(ToolCallLimit) as known:
+        tools.call("policy_lookup", {})
+    with pytest.raises(ToolCallLimit) as made_up:
+        tools.call(f"made_up_{CANARY}", {})
+
+    assert known.value.tool == "policy_lookup"
+    assert made_up.value.tool is None
+    assert CANARY not in str(made_up.value)
+    assert refusals.tools == []
+
+
+def test_a_call_the_allowlist_refuses_counts_toward_the_limit(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    refusals = Refusals()
+    tools = direct(
+        {"policy-mcp": Unused()},
+        registry,
+        exporter,
+        refusals=refusals,
+        agent="rogue",
+        max_calls=2,
+    )
+    for _ in range(2):
+        with pytest.raises(ToolNotAllowed):
+            tools.call("policy_lookup", {"policy_number": POLICY})
+
+    with pytest.raises(ToolCallLimit):
+        tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert refusals.tools == ["policy_lookup", "policy_lookup"]
+
+
 def test_an_agent_the_registry_does_not_know_may_call_nothing(
     registry: Registry, exporter: InMemorySpanExporter
 ) -> None:
@@ -304,6 +373,7 @@ def test_a_failed_refusal_audit_propagates(
         run_id=uuid.uuid4(),
         tracer=tracer_of(exporter),
         on_refusal=failing,
+        max_calls=4,
     )
 
     with pytest.raises(RuntimeError, match="audit down"):
@@ -841,6 +911,7 @@ def work():
             run_id=uuid.uuid4(),
             tracer=tracer,
             on_refusal=lambda tool: None,
+            max_calls=4,
         )
         outcomes.append(
             "ok" if tools.call("policy_lookup", {"policy_number": "POL-0049"}).data

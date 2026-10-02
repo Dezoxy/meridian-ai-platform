@@ -93,6 +93,7 @@ def tools_for(live: Live, base: str) -> ToolClient:
         run_id=live.world.run_id,
         tracer=tracer_of(live.exporter),
         on_refusal=lambda tool: None,
+        max_calls=4,
     )
 
 
@@ -176,6 +177,7 @@ def test_an_answer_that_is_no_json_rpc_response_is_unavailable_and_logs_nothing_
             run_id=uuid.uuid4(),
             tracer=tracer_of(exporter),
             on_refusal=lambda tool: None,
+            max_calls=4,
         )
 
         with pytest.raises(ToolUnavailable) as raised:

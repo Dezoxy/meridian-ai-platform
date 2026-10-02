@@ -4,9 +4,10 @@ It sets the three ``X-Meridian-*`` headers and forwards the trace context, so
 graph code neither sets headers nor knows the gateway's address (T-08).
 """
 
+import threading
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from opentelemetry import propagate
@@ -40,6 +41,14 @@ class ModelCallTimeoutError(ModelCallError):
         self.args = ("model gateway did not answer in time",)
 
 
+class ModelCallLimitError(ModelCallError):
+    """The run has made its allowed number of model calls; nothing was sent."""
+
+    def __init__(self) -> None:
+        super().__init__(0)
+        self.args = ("model call limit of the run reached",)
+
+
 @dataclass(frozen=True, slots=True)
 class ChatResult:
     text: str
@@ -49,14 +58,16 @@ class ChatResult:
     mode: str
     input_tokens: int
     output_tokens: int
+    finish_reason: Literal["stop", "length"]
 
 
 class _Reply(BaseModel):
     """Only the fields of the gateway's reply that ``ChatResult`` needs.
 
-    Unknown fields are ignored, so a newer gateway (a finish reason, a field
-    added later) never breaks the runtime. An unknown mode is refused: the
-    stored proposal records it as provenance (T-39). The runtime does not
+    Unknown fields are ignored, so a newer gateway (a field added later) never
+    breaks the runtime. An unknown mode is refused: the stored proposal records
+    it as provenance (T-39). So is a missing or unknown finish reason: a graph
+    must know whether a reply was cut short. The runtime does not
     import the gateway's models: the two services share a wire contract, not
     code.
     """
@@ -67,6 +78,7 @@ class _Reply(BaseModel):
         model_config = ConfigDict(extra="ignore", frozen=True)
 
         text: str
+        finish_reason: Literal["stop", "length"]
 
     class Usage(BaseModel):
         model_config = ConfigDict(extra="ignore", frozen=True)
@@ -83,25 +95,45 @@ class _Reply(BaseModel):
 
 
 class ModelClient:
-    """Built per run, over an injected client whose base URL is the gateway."""
+    """Built per run, over an injected client whose base URL is the gateway.
+
+    ``max_calls`` bounds the calls of this client, so of one run; an attempt
+    counts whether or not the gateway answers it."""
 
     def __init__(
-        self, http: httpx.Client, *, tenant: str, agent: str, run_id: uuid.UUID
+        self,
+        http: httpx.Client,
+        *,
+        tenant: str,
+        agent: str,
+        run_id: uuid.UUID,
+        max_calls: int,
     ) -> None:
         self._http = http
+        self._max_calls = max_calls
+        self._calls = 0
+        self._lock = threading.Lock()
         self._headers = {
             "X-Meridian-Tenant": tenant,
             "X-Meridian-Agent": agent,
             "X-Meridian-Run": str(run_id),
         }
 
-    def chat(self, messages: list[dict[str, str]]) -> ChatResult:
+    def chat(
+        self, messages: list[dict[str, str]], *, max_output_tokens: int | None = None
+    ) -> ChatResult:
+        """Raises ``ModelCallLimitError`` past ``max_calls``, before any send."""
+        with self._lock:  # a graph's parallel nodes share this client
+            if self._calls >= self._max_calls:
+                raise ModelCallLimitError
+            self._calls += 1
+        body: dict[str, Any] = {"messages": messages}
+        if max_output_tokens is not None:
+            body["max_output_tokens"] = max_output_tokens
         headers = dict(self._headers)
         propagate.inject(headers)
         try:
-            response = self._http.post(
-                CHAT_PATH, json={"messages": messages}, headers=headers
-            )
+            response = self._http.post(CHAT_PATH, json=body, headers=headers)
         except httpx.TimeoutException:
             # Neither the transport's message nor its cause is kept.
             raise ModelCallTimeoutError from None
@@ -121,4 +153,5 @@ class ModelClient:
             mode=reply.mode,
             input_tokens=reply.usage.input_tokens,
             output_tokens=reply.usage.output_tokens,
+            finish_reason=reply.output.finish_reason,
         )

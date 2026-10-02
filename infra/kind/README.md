@@ -6,8 +6,13 @@ walking skeleton (Claims API, Agent Runtime, Model Gateway) on it and
 `make demo` runs a claim through it. `make down` removes it.
 Status: **implemented** (S006, and S041 for deploy and demo). Nothing here is
 deployed anywhere but your laptop; the Azure side is S007 onward. The services
-run in replay mode: no model is called, and the draft text is canned and
+run in replay mode: no model is called, and the model's text is canned and
 simulated.
+
+**`make demo` fails since S014 and until S044.** The triage graph now calls
+the policy and knowledge tool servers first, and they are not deployed on
+kind yet: the run fails, the Claims API answers 502 and the demo stops. The
+claim stays stored and can be posted again once the servers run here.
 
 ## What `make up` creates
 
@@ -114,7 +119,7 @@ node image, Kubernetes components and the platform).
 |---|---|
 | `make up` | Create the cluster if absent and install every release. Safe to rerun; it converges. Took 4 minutes from no cluster (245 s, node image already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration Job, applies the manifests in `manifests/meridian/` and waits for the three Deployments and the route. Safe to rerun. |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from all three services. |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from all three services. Fails until S044 (see above). |
 | `make smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
@@ -197,7 +202,8 @@ Claims API through the edge, with a W3C `traceparent` header whose trace ID the
 script made up. A claim that already has a triage proposal answers 409 and the
 script moves on to the next one, so each run uses the next claim (40 are
 available); it stops at the first 201. It prints the claim ID, the status, the
-route and the deployment that drafted the proposal (never a claimant field),
+route and the deployment the model call went to, or that no model was called
+(never a claimant field, and not the reason: the answer does not carry it),
 then reads the trace by that ID from Tempo through Grafana's datasource proxy,
 retrying for up to 120 seconds. It prints PASS only if the trace has spans from
 `claims-api`, `agent-runtime` and `model-gateway`, with the span count of each,
