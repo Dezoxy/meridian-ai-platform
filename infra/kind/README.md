@@ -46,10 +46,11 @@ For the walking skeleton `make up` also declares a second database,
 `claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
 `policy_mcp` and `claims_mcp`, and for the knowledge server (S046)
 `knowledge_mcp`. All seven can log in and nothing more (no superuser, createdb
-or createrole). The three tool-server roles may each hold at most 12
+or createrole). The three tool-server roles may each hold at most 20
 connections: a tool server runs at most eight calls at once, one connection
-each, so a runaway server cannot use up PostgreSQL's 100. The other roles
-have no such bound until they get a connection pool (S019). The `app`
+each and one more for a failure's audit row, and during a rollout two of its
+pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
+other roles have no such bound until they get a connection pool (S019). The `app`
 database, role and Secret are untouched. The `meridian` database declares the
 `vector` extension too (S012): migration 0005 needs it, and `meridian_owner`
 cannot create an extension PostgreSQL does not trust. `make up` waits until
@@ -158,8 +159,11 @@ root, runs all six services and the three commands of the Jobs. It is based on
 dependencies without the dev group and the package non-editable into a venv,
 runs as user 10001 and sets no command of its own (each manifest names it).
 It carries the registry and the seed data the Jobs load: the synthetic
-policies, their claim history and the four policy wordings, and nothing else
-of `data/synthetic` (not the claims, not the golden labels).
+policies, their claim history, the four policy wordings and the generator's
+manifest (file hashes and counts), and nothing else of `data/synthetic`: not
+the claims, not the expected outcomes. Every service's pod therefore holds
+the policies file, with each synthetic holder's name and address, although
+only the seed Job reads it (threat model T-51).
 Its build context is an allowlist ([`.dockerignore`](../../.dockerignore)), so
 the kubeconfig, `.env` files and `.context/` can never enter it; key and
 certificate files are excluded even inside the allowed folders. There is no
@@ -207,8 +211,11 @@ In order, `make deploy`:
    wordings through the gateway and replaces the knowledge store in one
    transaction. Once per image: the finished Job has no expiry and is the
    record that this image's corpus is in the store, so the next deploy of
-   the same image skips it. A search before the first ingestion fails its
-   run (`no-corpus`), and that claim can simply be posted again.
+   the same image skips it, after checking that the store is not empty. The
+   Job is a record of what was done, not of what the store holds now: after
+   an ingestion by hand from other files, delete the Job to ingest again. A
+   search before the first ingestion fails its run (`no-corpus`), and that
+   claim can simply be posted again.
 6. Waits for the other rollouts and for the route to be `Accepted`.
 7. After an ingestion, waits until a minute has passed since it finished.
    The ingestion's embedding calls go out under the `claims-triage` tenant,
@@ -217,8 +224,10 @@ In order, `make deploy`:
    kind, 2026-10-02). A triage that asks the model reserves about 1,090
    tokens in five requests, so a claim posted in the first seconds would be
    refused, and only two would fit in that minute. The wait makes a deploy
-   end with the limits clear. Whether ingestion should spend a workload's
-   budget at all is an open registry decision (threat model T-60).
+   end with the limits clear. A deploy that is interrupted after the
+   ingestion and run again within that minute does not wait. Whether
+   ingestion should spend a workload's budget at all is an open registry
+   decision (threat model T-60).
 
 Each pod gets its own role's connection string from its Secret, and the
 cluster CA's public certificate (`ca.crt` only, not the CA's private key that
