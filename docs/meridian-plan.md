@@ -2455,6 +2455,14 @@ reason to reach a provider itself (hard rule 4).
   replay embedding simulated.
 - Not changed: the architecture model, which already has the Knowledge MCP
   Server asking the gateway for embeddings.
+- The `docs-sync` skill before the pull request: the plan, the README,
+  the registry README, the Terraform README, `make help`, the threat
+  model and the data classification were what the branch falsified, and
+  ADR 3 names no purpose, so it stays. The main session made its
+  documentation edits through scripts, so the per-edit documentation and
+  infrastructure hooks did not fire; `make docs` ran on the result.
+  `infra-reviewer` was not run: the change under `infra/` is two comments
+  and one log line in `foundation.sh`, checked with `bash -n`.
 
 **Result / verification:** run by the main session on the final code.
 
