@@ -152,15 +152,15 @@ synthetic:
 up:
 	infra/kind/up.sh
 
-## deploy          build the image, run the migrations and put the Claims API, Agent Runtime and Model Gateway on the kind cluster (needs make up)
+## deploy          build the image, run the migrations, seed the policy store, put the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion)
 deploy:
 	infra/kind/deploy.sh
 
-## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088 and find its one trace across the three services in Tempo
+## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088 and find its one trace across the five services that triage it in Tempo
 demo: deploy
 	infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector and a trace, log and metric reaching Grafana's datasources
+## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources and, once deployed, one call per tool server through the runtime's client
 smoke:
 	infra/kind/smoke.sh
 

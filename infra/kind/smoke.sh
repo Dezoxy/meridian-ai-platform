@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# Prove the local platform works end to end: `make smoke`. Read-only apart from
-# three short-lived Jobs (unique names, removed by ttlSecondsAfterFinished).
+# Prove the local platform works end to end: `make smoke`. Changes nothing apart
+# from three short-lived Jobs (unique names, removed by ttlSecondsAfterFinished)
+# and, at most once per throttle window per tool server, the refusal's audit row
+# that the tool check below causes.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
-#   2. database:  pgvector is installed in platform-db
-#   3. telemetry: telemetrygen sends one trace, one log and one metric over OTLP
+#   2. database:  pgvector is installed in platform-db, in the `app` database and
+#                 in the `meridian` database
+#   3. tools:     one call per MCP tool server through the runtime's own client,
+#                 run in the agent-runtime pod (so with the addresses the runtime
+#                 was given), with a run ID that does not exist: each server must
+#                 refuse it as `unknown-run`. Skipped, not failed, while the
+#                 Meridian services are not deployed (`make deploy`).
+#   4. telemetry: telemetrygen sends one trace, one log and one metric over OTLP
 #                 to the collector; each is then read back through Grafana's
 #                 datasource proxy (Tempo, Loki, Prometheus), the way an owner
 #                 would see it.
-# Prints one PASS or FAIL line per check and exits non-zero on any FAIL.
+# Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -21,8 +29,16 @@ readonly POLL_INTERVAL=3
 readonly JOB_TIMEOUT=120s
 
 failures=0
+skips=0
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
+skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
+
+# clean_lines TEXT: TEXT on one line, its lines joined with ";", without any byte
+# that is not printable ASCII (see `clean` in demo.sh). Whatever this script
+# prints that came out of a pod goes through it, so a hostile answer cannot
+# inject terminal escape sequences or extra lines.
+clean_lines() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ';' -; }
 
 need_tools docker kubectl curl jq base64
 require_local_docker
@@ -62,8 +78,9 @@ check_edge() {
 }
 
 # ── 2. database ──────────────────────────────────────────────────────────────
+# One line per database: `app` (the platform's own) and `meridian` (the services').
 check_database() {
-  local primary version
+  local primary database version
   primary="$(kctl -n meridian get pod \
     -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
@@ -71,17 +88,53 @@ check_database() {
     fail "database: no primary pod found for platform-db"
     return
   fi
-  version="$(kctl -n meridian exec "${primary}" -c postgres -- \
-    psql -d app -tAc "SELECT extversion FROM pg_extension WHERE extname='vector'" \
-    2>/dev/null || true)"
-  if [[ -n "${version}" ]]; then
-    pass "database: pgvector ${version} installed in ${primary}"
-  else
-    fail "database: extension vector is not installed in ${primary}"
-  fi
+  for database in app meridian; do
+    version="$(kctl -n meridian exec "${primary}" -c postgres -- \
+      psql -d "${database}" -tAc "SELECT extversion FROM pg_extension WHERE extname='vector'" \
+      2>/dev/null || true)"
+    version="$(clean_lines "${version}")"
+    if [[ -n "${version}" ]]; then
+      pass "database: pgvector ${version} installed in ${primary}, database ${database}"
+    else
+      fail "database: extension vector is not installed in ${primary}, database ${database}"
+    fi
+  done
 }
 
-# ── 3. telemetry ─────────────────────────────────────────────────────────────
+# ── 3. tools ─────────────────────────────────────────────────────────────────
+# The probe runs in the runtime's own pod, so it uses the addresses the runtime
+# was given. Its stdout is one "<server> <tool> <answer>" line per tool server;
+# it exits 0 only when every answer is unknown-run (the refusal of a run that
+# does not exist, which the servers check before anything else of the caller's).
+check_tools() {
+  local found out err_file servers
+  # Skipped only when no Meridian Deployment exists. When any does, the probe is
+  # required: a missing or renamed agent-runtime fails its exec below. Stderr is
+  # not part of the answer (a warning there is not a Deployment); it goes to the
+  # terminal.
+  if ! found="$(kctl -n meridian get deployment \
+    -l app.kubernetes.io/part-of=meridian -o name --ignore-not-found)"; then
+    fail "tools: could not look for the Meridian deployments (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "tools: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+  # The names come from stdout alone: a warning on stderr is not a server. A
+  # failure shows both.
+  err_file="$(mktemp)"
+  if out="$(kctl -n meridian exec deploy/agent-runtime -- \
+    python -m meridian.runtime.toolprobe 2>"${err_file}")"; then
+    servers="$(clean_lines "$(awk '{ print $1 }' <<<"${out}")")"
+    pass "tools: each server (${servers//;/, }) answered unknown-run through the runtime's client"
+  else
+    fail "tools: the probe in deployment/agent-runtime failed: stdout: $(clean_lines "${out}"); stderr: $(clean_lines "$(<"${err_file}")")"
+  fi
+  rm -f "${err_file}"
+}
+
+# ── 4. telemetry ─────────────────────────────────────────────────────────────
 # start_job SIGNAL COUNT_FLAG: one Job that sends one item of SIGNAL (traces,
 # logs or metrics) for service ${service}. Named uniquely, so reruns never clash.
 start_job() {
@@ -235,13 +288,18 @@ check_telemetry() {
 trap cleanup EXIT
 check_edge
 check_database
+check_tools
 check_telemetry
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"
   exit 1
 fi
-printf '\nAll checks passed.\n'
+if ((skips > 0)); then
+  printf '\nAll checks that ran passed; %s skipped.\n' "${skips}"
+else
+  printf '\nAll checks passed.\n'
+fi
 printf 'See it yourself: make grafana (user admin; password: make grafana-password), then Explore:\n'
 printf '  Tempo       TraceQL    { resource.service.name = "%s" }\n' "${service}"
 printf '  Loki        LogQL      {service_name="%s"}\n' "${service}"

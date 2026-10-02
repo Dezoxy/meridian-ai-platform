@@ -1,26 +1,28 @@
-# Applies the SQL migrations as the database owner role: `meridian db migrate`.
-# deploy.sh replaces @IMAGE@ and @TAG@ (the first 12 hex digits of the image ID),
-# so each image runs the migrations once and the services start after it. Only
-# the three Jobs (migrate, seed, ingest) read the owner's credentials (Secret
-# meridian-owner-db); the six services get a role that can neither create nor
-# alter anything (T-25).
+# Loads the simulated policy store from the synthetic data the image carries:
+# `meridian db seed-policies`, as the database owner role. deploy.sh replaces
+# @IMAGE@ and @TAG@ (the first 12 hex digits of the image ID) and runs it on
+# every deploy, after the migrations and before the services start: the load
+# mirrors its source, so a rerun changes nothing, and a claim that met an empty
+# policy table would get a stored proposal "policy not found", which is final.
+# Only the owner's Secret (meridian-owner-db) can write the store; the tool
+# servers' roles cannot.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: meridian-migrate
+  name: meridian-seed
   namespace: meridian
   labels:
-    app.kubernetes.io/name: meridian-migrate
+    app.kubernetes.io/name: meridian-seed
     app.kubernetes.io/part-of: meridian
 automountServiceAccountToken: false
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: meridian-migrate-@TAG@
+  name: meridian-seed-@TAG@
   namespace: meridian
   labels:
-    app.kubernetes.io/name: meridian-migrate
+    app.kubernetes.io/name: meridian-seed
     app.kubernetes.io/part-of: meridian
 spec:
   backoffLimit: 1
@@ -30,17 +32,22 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: meridian-migrate
+        app.kubernetes.io/name: meridian-seed
         app.kubernetes.io/part-of: meridian
     spec:
       restartPolicy: Never
-      serviceAccountName: meridian-migrate
+      serviceAccountName: meridian-seed
       automountServiceAccountToken: false
       containers:
-        - name: migrate
+        - name: seed
           image: "@IMAGE@"
           imagePullPolicy: IfNotPresent
-          command: [meridian, db, migrate]
+          command:
+            - meridian
+            - db
+            - seed-policies
+            - --from
+            - /opt/meridian/synthetic
           env:
             - name: MERIDIAN_MIGRATIONS_DATABASE_URL
               valueFrom:

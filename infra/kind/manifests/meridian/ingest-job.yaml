@@ -1,0 +1,92 @@
+# Embeds the policy wordings the image carries and replaces the knowledge store
+# with them: `meridian knowledge ingest`, as the database owner role, with the
+# embedding calls going through the Model Gateway under the claims-triage
+# tenant's limits. deploy.sh replaces @IMAGE@ and @TAG@ (the first 12 hex digits
+# of the image ID) and runs it after the gateway has rolled out, at most once
+# per image.
+#
+# No ttlSecondsAfterFinished, unlike the other two Jobs: the finished Job is the
+# record that this image's corpus is in the store. deploy.sh finds it and skips
+# the ingestion, which spends most of the tenant's tokens for a minute; a Job
+# that expired would make every deploy ingest again.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meridian-ingest
+  namespace: meridian
+  labels:
+    app.kubernetes.io/name: meridian-ingest
+    app.kubernetes.io/part-of: meridian
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meridian-ingest-@TAG@
+  namespace: meridian
+  labels:
+    app.kubernetes.io/name: meridian-ingest
+    app.kubernetes.io/part-of: meridian
+spec:
+  # No retry: a second pod straight after a failure would meet the token window
+  # the first one filled. The next deploy is the retry.
+  backoffLimit: 0
+  # A hung database or gateway connection ends the Job instead of blocking the
+  # deploy. Above ingest.MAX_TOTAL_WAIT_SECONDS (300), the longest the command
+  # waits for the gateway, so it can end by itself and audit its refusal.
+  activeDeadlineSeconds: 360
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: meridian-ingest
+        app.kubernetes.io/part-of: meridian
+    spec:
+      restartPolicy: Never
+      serviceAccountName: meridian-ingest
+      automountServiceAccountToken: false
+      containers:
+        - name: ingest
+          image: "@IMAGE@"
+          imagePullPolicy: IfNotPresent
+          command:
+            - meridian
+            - knowledge
+            - ingest
+            - --tenant
+            - claims-triage
+            - --from
+            - /opt/meridian/synthetic
+          env:
+            - name: MERIDIAN_MIGRATIONS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: meridian-owner-db
+                  key: uri
+            - name: MERIDIAN_GATEWAY_URL
+              value: http://model-gateway.meridian.svc:8000
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 192Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: db-ca
+              mountPath: /etc/meridian/db-ca
+              readOnly: true
+      volumes:
+        # Only the public certificate: the Secret also holds the CA's private key.
+        - name: db-ca
+          secret:
+            secretName: platform-db-ca
+            items:
+              - key: ca.crt
+                path: ca.crt

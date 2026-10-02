@@ -4,7 +4,12 @@
 #      Claims API through the edge, with a W3C traceparent the script generated
 #   2. reads that trace back from Tempo through Grafana's datasource proxy, the
 #      way an owner would see it, and PASSes only when it has spans from all
-#      three services: claims-api, agent-runtime and model-gateway
+#      five services: claims-api, agent-runtime, policy-mcp, knowledge-mcp and
+#      model-gateway. The graph calls policy_lookup and claim_history on the
+#      policy server and wording_search on the knowledge server, which embeds
+#      the query through the gateway, so every triage of a claim whose policy
+#      exists leaves spans of the five. (claims-mcp serves the two write tools,
+#      which no graph calls before S015, so it is not expected.)
 # Each run uses the next claim in data/synthetic/claims.json; a claim that was
 # triaged before answers 409 and is skipped. Prints identifiers and the route,
 # never a claimant field. Exits non-zero on any failure.
@@ -20,7 +25,7 @@ readonly HEALTH_URL=http://claims.meridian.localhost:8088/healthz
 readonly EDGE_TIMEOUT=60
 readonly ALREADY_TRIAGED="the claim already has a triage proposal"
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
-readonly EXPECTED_SERVICES=(claims-api agent-runtime model-gateway)
+readonly EXPECTED_SERVICES=(claims-api agent-runtime policy-mcp knowledge-mcp model-gateway)
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
 readonly POST_TIMEOUT=60
@@ -148,7 +153,7 @@ has_every_service() {
 
 # Wait until Tempo has spans of every expected service for the trace. Leaves the
 # per-service counts in ${counts}. Tempo answers 404 until it has the trace, and
-# the three services flush their spans separately, so the answer can be partial.
+# the five services flush their spans separately, so the answer can be partial.
 wait_for_trace() {
   local deadline=$((SECONDS + POLL_TIMEOUT)) out http body
   counts=""

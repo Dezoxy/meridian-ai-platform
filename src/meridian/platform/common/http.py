@@ -234,7 +234,21 @@ def create_service_app(
         if owns_provider:
             provider.shutdown()
 
-    app = FastAPI(title=title, description=description, lifespan=lifespan)
+    # FastAPI's own telemetry, with OTEL_EXPORTER_OTLP_ENDPOINT set, creates the
+    # global tracer, meter and logger providers with the default resource. The
+    # MCP client's spans and the HTTP metrics would then leave under
+    # unknown_service:python. The service's own provider does the tracing.
+    app = FastAPI(
+        title=title,
+        description=description,
+        lifespan=lifespan,
+        telemetry={
+            "auto_configure": False,
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+        },
+    )
     install_error_handlers(app)
     # The last one added is the outermost: the limit answers 413 before the
     # app runs, and this one sits closest to the routes.

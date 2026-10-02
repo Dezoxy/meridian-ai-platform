@@ -3,12 +3,22 @@
 # again; it converges. Needs `make up` first.
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
-#   2. the migration Job, as the database owner role, run to completion (every
-#      time: the runner skips what is applied, so a rerun takes seconds)
-#   3. every manifest in manifests/meridian/ but the Job: the Claims API, Agent
-#      Runtime and Model Gateway Deployments and Services, and the one route
+#   2. the migration Job, then the policy seed Job, each as the database owner
+#      role and run to completion (every time: the runner skips what is
+#      applied and the seed mirrors its source, so a rerun takes seconds). The
+#      seed comes before the services: a claim that met an empty policy table
+#      would get a stored proposal "policy not found", which is final.
+#   3. every manifest in manifests/meridian/ but the three Jobs: the six
+#      Deployments and Services (Claims API, Agent Runtime, Model Gateway and
+#      the policy, claims and knowledge tool servers), and the one route
 #      (Claims API only) with its request-size limit
-# The only text replaced in the manifests is @IMAGE@ (and @TAG@ in the Job name).
+#   4. the Model Gateway's rollout, then the ingestion Job (it embeds the
+#      wordings through the gateway), at most once per image: a finished Job of
+#      this image's tag, and rows in knowledge.chunks, are the record that its
+#      corpus is in the store
+#   5. the other rollouts and the route, then, when an ingestion ran, a wait
+#      until its token reservation has left the tenant's one-minute window
+# The only text replaced in the manifests is @IMAGE@ (and @TAG@ in a Job's name).
 # Nothing here prints a Secret's value.
 set -euo pipefail
 
@@ -22,14 +32,31 @@ readonly IMAGE_REPOSITORY=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
 readonly MIGRATE_MANIFEST=migrate-job.yaml
+readonly SEED_MANIFEST=seed-job.yaml
+readonly INGEST_MANIFEST=ingest-job.yaml
 # One list: each service is a Deployment of the same name, and each has a
 # Secret <service>-db (tests/meridian/test_kind_manifests.py checks the
 # manifests against it). The role Secrets come from DATABASE_ROLES (common.sh).
-readonly SERVICES=(claims-api agent-runtime model-gateway)
-readonly JOB_TIMEOUT=300
+readonly SERVICES=(claims-api agent-runtime model-gateway policy-mcp claims-mcp knowledge-mcp)
+# The ingestion calls this one, so it is waited for before the ingestion runs.
+readonly GATEWAY_SERVICE=model-gateway
+# Above the ingestion Job's activeDeadlineSeconds (360), which is above the 300 s
+# the ingestion may wait for the gateway: the Job then needs time to write its
+# refusal, and the deadline ends it before this script gives up on it.
+readonly JOB_TIMEOUT=420
 readonly JOB_INTERVAL=3
 readonly ROLLOUT_TIMEOUT=300s
 readonly ROUTE_TIMEOUT=120s
+# The gateway counts a tenant's tokens over a sliding 60 s window and its
+# requests over 10 s. Measured on kind (2026-10-02): the ingestion reserves
+# 7,679 of the claims-triage tenant's 10,000 tokens in six of its ten requests,
+# and a triage that asks the model reserves about 1,090 in five. So a claim
+# posted in the first seconds is refused, and only two fit in that minute.
+# The wait counts from the moment this script saw the Job complete, which is
+# never earlier than the last reservation; two seconds are margin on top.
+readonly TOKEN_WINDOW_SECONDS=62
+# SECONDS at which this deploy saw its ingestion complete; empty when none ran.
+ingested_at=""
 
 need_tools docker kind kubectl jq sed
 require_local_docker
@@ -87,52 +114,112 @@ job_state() {
            else "running" end'
 }
 
-# The migration Job of this image tag, run to completion every time. A Job of
-# the same tag from an earlier deploy (finished, or failed and not yet removed)
-# is deleted first: a Job's spec cannot change, and the runner is idempotent.
-run_migrations() {
-  local job="meridian-migrate-${tag}" state deadline
+# printable_ascii: stdin without any byte that is not printable ASCII or a
+# newline. A Job's log can quote data of a checkout (a manifest key, a database
+# message), and an escape sequence in it must not reach the terminal.
+printable_ascii() {
+  LC_ALL=C tr -cd '[:print:]\n'
+}
+
+# run_job NAME MANIFEST: the Job NAME, from MANIFEST, run to completion; its log
+# is printed (through printable_ascii) when it ends, however it ends. A Job of
+# the same name from an earlier deploy (finished, or failed and not yet removed)
+# is deleted first: a Job's spec cannot change, and what the Jobs run is
+# idempotent.
+run_job() {
+  local job="$1" manifest="$2" state deadline
   kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait >/dev/null
-  log "migrations: job ${job}"
-  render "${MANIFEST_DIR}/${MIGRATE_MANIFEST}" | kctl apply --server-side --force-conflicts -f - >/dev/null
+  log "job ${job}"
+  render "${MANIFEST_DIR}/${manifest}" | kctl apply --server-side --force-conflicts -f - >/dev/null
   deadline=$((SECONDS + JOB_TIMEOUT))
   while ((SECONDS < deadline)); do
     # A transient kubectl error is not a verdict: ask again.
     state="$(job_state "${job}" 2>/dev/null)" || state=unknown
     case "${state}" in
       succeeded)
-        log "migrations done: $(kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | tr '\n' ' ')"
+        log "job ${job} done: $(kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii | tr '\n' ' ')"
         return 0
         ;;
       failed)
-        kctl -n "${NAMESPACE}" logs "job/${job}" >&2 || true
-        die "the migration job ${job} failed (logs above)"
+        kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii >&2 || true
+        die "the job ${job} failed (logs above)"
         ;;
     esac
     sleep "${JOB_INTERVAL}"
   done
-  kctl -n "${NAMESPACE}" logs "job/${job}" >&2 || true
-  die "the migration job ${job} did not finish in ${JOB_TIMEOUT}s"
+  kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii >&2 || true
+  die "the job ${job} did not finish in ${JOB_TIMEOUT}s"
 }
 
-# Every manifest but the Job, found by glob: a new file is applied without
-# editing this script.
+# Every manifest but the three Jobs, found by glob: a new file is applied
+# without editing this script.
 apply_manifests() {
   local file
   for file in "${MANIFEST_DIR}"/*.yaml; do
-    [[ "$(basename "${file}")" == "${MIGRATE_MANIFEST}" ]] && continue
+    case "$(basename "${file}")" in
+      "${MIGRATE_MANIFEST}" | "${SEED_MANIFEST}" | "${INGEST_MANIFEST}") continue ;;
+    esac
     log "applying $(basename "${file}" .yaml)"
     render "${file}" | kctl apply --server-side --force-conflicts -f - >/dev/null
   done
 }
 
-wait_for_rollout() {
+# stored_chunk_count: the number of rows in knowledge.chunks, read in the
+# database's primary pod the way smoke.sh reaches psql. Fails when it cannot be
+# read.
+stored_chunk_count() {
+  local primary
+  primary="$(kctl -n "${NAMESPACE}" get pod \
+    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
+  [[ -n "${primary}" ]] || return 1
+  kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
+    psql -d meridian -tAc 'SELECT count(*) FROM knowledge.chunks' 2>/dev/null
+}
+
+# The ingestion of this image's corpus, at most once per image. Its Job is kept
+# when it finishes (no TTL), so a succeeded Job of this tag means the corpus of
+# this image was stored; the rows are counted too, because a finished Job is not
+# proof that the store still holds them (a database that was recreated). Any
+# other ingestion Job (another tag, or a failed one) is deleted first. Sets
+# ${ingested_at} when it ran.
+ingest_corpus() {
+  local job="meridian-ingest-${tag}" found state chunks
+  # An error is not "no such Job" (that would ingest again): it stops the
+  # deploy. An empty answer means there is no such Job. Stderr is not part of
+  # the answer: a warning there is not a Job.
+  found="$(kctl -n "${NAMESPACE}" get job "${job}" -o name --ignore-not-found)" ||
+    die "could not look for job/${job} (kubectl's error is above)"
+  state=absent
+  if [[ -n "${found}" ]]; then
+    state="$(job_state "${job}")" || die "could not read the state of job/${job}"
+  fi
+  if [[ "${state}" == succeeded ]]; then
+    if chunks="$(stored_chunk_count)" && [[ "${chunks}" =~ ^[0-9]+$ ]] && ((10#${chunks} > 0)); then
+      log "the corpus of image ${image} is already in the store (job ${job} succeeded, ${chunks} chunks in knowledge.chunks); not ingesting again"
+      return 0
+    fi
+    log "job ${job} succeeded, but knowledge.chunks holds no rows or could not be read; ingesting again"
+  fi
+  kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait >/dev/null
+  run_job "${job}" "${INGEST_MANIFEST}"
+  ingested_at=${SECONDS}
+}
+
+wait_for_deployment() {
+  kctl -n "${NAMESPACE}" rollout status "deployment/$1" --timeout="${ROLLOUT_TIMEOUT}" >/dev/null ||
+    die "deployment $1 did not roll out (kubectl -n ${NAMESPACE} logs deploy/$1)"
+  log "deployment $1 is ready"
+}
+
+wait_for_other_rollouts() {
   local name
   for name in "${SERVICES[@]}"; do
-    kctl -n "${NAMESPACE}" rollout status "deployment/${name}" --timeout="${ROLLOUT_TIMEOUT}" >/dev/null ||
-      die "deployment ${name} did not roll out (kubectl -n ${NAMESPACE} logs deploy/${name})"
-    log "deployment ${name} is ready"
+    [[ "${name}" == "${GATEWAY_SERVICE}" ]] || wait_for_deployment "${name}"
   done
+}
+
+wait_for_route() {
   kctl -n "${NAMESPACE}" wait \
     --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True \
     httproute/claims-api --timeout="${ROUTE_TIMEOUT}" >/dev/null ||
@@ -140,9 +227,26 @@ wait_for_rollout() {
   log "route claims.meridian.localhost accepted"
 }
 
+# When an ingestion ran in this deploy, wait until its token reservation has
+# left the window. The time is the script's own clock (SECONDS): the node's
+# clock is not the laptop's, so no Kubernetes timestamp is compared with it.
+wait_for_token_window() {
+  local remaining
+  [[ -n "${ingested_at}" ]] || return 0
+  remaining=$((ingested_at + TOKEN_WINDOW_SECONDS - SECONDS))
+  ((remaining > 0)) || return 0
+  log "waiting ${remaining}s: the ingestion reserved about 7,700 of the claims-triage tenant's 10,000 tokens a minute, so until that minute has passed a triage that asks the model can be refused"
+  sleep "${remaining}"
+}
+
 require_database
 build_image
-run_migrations
+run_job "meridian-migrate-${tag}" "${MIGRATE_MANIFEST}"
+run_job "meridian-seed-${tag}" "${SEED_MANIFEST}"
 apply_manifests
-wait_for_rollout
+wait_for_deployment "${GATEWAY_SERVICE}"
+ingest_corpus
+wait_for_other_rollouts
+wait_for_route
+wait_for_token_window
 log "done. Next: make demo"
