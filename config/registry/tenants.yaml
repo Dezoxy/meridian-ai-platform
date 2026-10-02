@@ -6,9 +6,9 @@
 #   tokens_per_day           UTC calendar day, in PostgreSQL
 #   cost_per_month_eur       UTC calendar month, in PostgreSQL
 # The first two are Azure OpenAI's own windows: the sum of each over all
-# tenants must fit the smallest chat candidate's rate_limits in models.yaml, so
-# one tenant cannot cause a provider 429 for the rest (T-45); validation
-# refuses a sum that does not fit.
+# tenants must fit the smallest rate_limits of any route's candidates in
+# models.yaml, so one tenant cannot cause a provider 429 for the rest (T-45,
+# T-55); validation refuses a sum that does not fit.
 exchange:
   usd_per_eur: 1.1355
   source: ECB euro foreign exchange reference rate

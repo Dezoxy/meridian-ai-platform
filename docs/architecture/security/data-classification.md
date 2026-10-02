@@ -63,6 +63,7 @@ which for this project is always in the EU.
 | Usage and cost records | `personal` (pseudonymous) | Platform Database | Per tenant, agent, model and claim ID |
 | Traces, metrics and logs | `personal` (pseudonymous) | Observability Stack | Claim IDs allowed, content not (T-03) |
 | Policy wordings and their chunks | `internal` | Git as generator output; pgvector | Product documents, not about a person |
+| Embedding vectors | The class of their text | Wording vectors in pgvector (S012); a query's vector is not stored | A vector can be turned back into an approximation of its text, so it is never in a span, a metric, a log or an audit row (T-56) |
 | Evaluation results | `personal` (pseudonymous) | Platform Database | Scores, routes and amounts per case, and the tool names and arguments of each run; no prompt text |
 | Registry | `internal` | Git | Changed only by pull request (T-35) |
 | Provider credentials, signing keys, the pipeline's cloud identity | Secret, outside the classes | Key Vault; Kubernetes Secrets on kind | Never in a prompt, a log or the repository (T-18, T-34, T-37) |

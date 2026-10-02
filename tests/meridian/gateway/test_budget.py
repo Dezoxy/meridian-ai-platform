@@ -22,11 +22,13 @@ from meridian.platform.gateway.budget import (
     Ledger,
     LedgerInconsistent,
     Reservation,
+    TokenEstimate,
+    chat_estimate,
     cost_micro_eur,
+    embedding_estimate,
     estimate_input_tokens,
-    reservation_tokens,
 )
-from meridian.platform.gateway.models import ChatRequest, Message
+from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest, Message
 from meridian.platform.registry import load_registry
 from meridian.platform.registry.models import (
     Deployment,
@@ -109,7 +111,7 @@ def make_ledger(db: DatabaseHandle, today: Today) -> Ledger:
 
 
 def reserved_tokens(request: ChatRequest | None = None) -> int:
-    return reservation_tokens(request or text_request())
+    return chat_estimate(request or text_request()).tokens
 
 
 def reserved_micro(deployment: Deployment, request: ChatRequest | None = None) -> int:
@@ -131,7 +133,10 @@ def reserve(
     request: ChatRequest | None = None,
 ) -> Reservation | BudgetRefusal:
     return ledger.reserve(
-        who or caller(), deployment, window or limits(), request or text_request()
+        who or caller(),
+        deployment,
+        window or limits(),
+        chat_estimate(request or text_request()),
     )
 
 
@@ -221,7 +226,42 @@ def test_the_reservation_adds_the_largest_reply(deployment: Deployment) -> None:
     request = text_request("x" * 30, max_output=250)
 
     assert estimate_input_tokens(request) == 10 + 8 + 8
-    assert reservation_tokens(request) == 26 + 250
+    assert chat_estimate(request).tokens == 26 + 250
+
+
+def test_the_chat_estimate_is_the_input_estimate_and_the_largest_reply() -> None:
+    request = text_request("x" * 30, max_output=250)
+
+    estimate = chat_estimate(request)
+
+    assert estimate == TokenEstimate(input_tokens=26, max_output_tokens=250)
+    assert estimate.tokens == 276
+
+
+def embedding_request(*inputs: str) -> EmbeddingRequest:
+    return EmbeddingRequest(inputs=inputs)
+
+
+@pytest.mark.parametrize(
+    ("inputs", "expected"),
+    [
+        pytest.param(["abc"], 1, id="three-bytes-is-one-token"),
+        pytest.param(["abcd"], 2, id="four-bytes-round-up-to-two"),
+        pytest.param(["é" * 10], 7, id="twenty-bytes-not-ten-characters"),
+        # Each input rounds up on its own, then the tokens add up: pooling the
+        # bytes first would make this 5 bytes -> 2.
+        pytest.param(["abcd", "x"], 3, id="each-input-rounds-up-on-its-own"),
+        # No overhead per input and none for a reply, as chat has.
+        pytest.param(["abc"] * 16, 16, id="no-overhead-per-input"),
+    ],
+)
+def test_the_embedding_estimate_counts_bytes_per_input_and_no_output(
+    inputs: list[str], expected: int
+) -> None:
+    estimate = embedding_estimate(embedding_request(*inputs))
+
+    assert estimate == TokenEstimate(input_tokens=expected, max_output_tokens=0)
+    assert estimate.tokens == expected
 
 
 def test_the_cost_of_gpt_4o_is_rounded_up_to_a_whole_micro_euro() -> None:
@@ -293,6 +333,66 @@ def test_reserve_writes_one_reserved_row_and_raises_both_counters(
     assert attempt_id == reservation.attempt_id
     assert (state, r_tokens, r_micro) == ("reserved", tokens, micro)
     assert (c_tokens, c_micro, i_tok, o_tok) == (tokens, micro, None, None)
+
+
+@pytest.fixture(scope="module")
+def embedding_deployment() -> Deployment:
+    found = load_registry(REGISTRY_DIR).deployment("aoai-sdc-text-embedding-3-large")
+    assert found is not None
+    return found
+
+
+def test_an_embedding_reservation_is_the_estimated_input_alone(
+    ledger: Ledger, fresh_database: DatabaseHandle, embedding_deployment: Deployment
+) -> None:
+    estimate = embedding_estimate(embedding_request("x" * 30, "y" * 9))  # 10 + 3
+
+    outcome = ledger.reserve(caller(), embedding_deployment, limits(), estimate)
+
+    assert isinstance(outcome, Reservation)
+    micro = cost_micro_eur(embedding_deployment.price, EXCHANGE, 13, 0)
+    assert micro > 0
+    assert (outcome.tokens, outcome.micro_eur) == (13, micro)
+    assert counters(fresh_database) == {
+        ("tokens-day", OCTOBER_FIRST): 13,
+        ("cost-month", OCTOBER_FIRST): micro,
+    }
+
+
+def test_settling_an_embedding_charges_its_input_tokens_at_the_embedding_price(
+    ledger: Ledger, fresh_database: DatabaseHandle, embedding_deployment: Deployment
+) -> None:
+    estimate = embedding_estimate(embedding_request("x" * 30))
+    reservation = ledger.reserve(caller(), embedding_deployment, limits(), estimate)
+    assert isinstance(reservation, Reservation)
+
+    charged = ledger.settle(reservation, embedding_deployment, 8, 0)
+
+    micro = cost_micro_eur(embedding_deployment.price, EXCHANGE, 8, 0)
+    assert charged == micro > 0
+    ((_, state, r_tokens, _, c_tokens, c_micro, i_tok, o_tok),) = usage_rows(
+        fresh_database
+    )
+    assert (state, r_tokens, c_tokens, c_micro) == ("settled", 10, 8, micro)
+    assert (i_tok, o_tok) == (8, 0)
+    assert counters(fresh_database) == {
+        ("tokens-day", OCTOBER_FIRST): 8,
+        ("cost-month", OCTOBER_FIRST): micro,
+    }
+    assert_counters_equal_charges(fresh_database)
+
+
+def test_an_embedding_over_the_daily_budget_is_refused_like_a_chat_call(
+    ledger: Ledger, fresh_database: DatabaseHandle, embedding_deployment: Deployment
+) -> None:
+    estimate = embedding_estimate(embedding_request("x" * 30))  # 10 tokens
+
+    fits = ledger.reserve(caller(), embedding_deployment, limits(day=10), estimate)
+    over = ledger.reserve(caller(), embedding_deployment, limits(day=10), estimate)
+
+    assert isinstance(fits, Reservation)
+    assert over == BudgetRefusal("tenant-token-budget")
+    assert len(usage_rows(fresh_database)) == 1
 
 
 def test_the_usage_row_names_the_call_and_what_served_it(

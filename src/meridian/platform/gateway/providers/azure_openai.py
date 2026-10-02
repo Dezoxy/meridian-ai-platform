@@ -1,4 +1,4 @@
-"""The Azure OpenAI chat adapter (hard rule 4, T-19).
+"""The Azure OpenAI chat and embeddings adapter (hard rule 4, T-19).
 
 The import contracts in ``pyproject.toml`` make this the only module in
 ``src/`` that imports ``openai`` or any ``azure`` package.
@@ -10,13 +10,20 @@ The credential is a bearer token from a named source, never an API key: key
 authentication is off on the account (S007). A ``ProviderError`` carries a kind,
 an HTTP status and whether a request left the gateway, and no cause or context,
 and tests pin that a provider's message, which can echo a prompt, appears in
-none of them (T-18).
+none of them (T-18). Chat and embeddings share the one mapping from the SDK's
+exceptions to that error.
+
+An embeddings answer is trusted only when it holds exactly one vector of the
+registry's length per input, in index order, of finite numbers (T-54); anything
+else is a bad response.
 
 IMPLEMENTED against a mocked transport; the opt-in live test is what shows the
 service accepts the request.
 """
 
+import json
 import logging
+import math
 import os
 import re
 import threading
@@ -29,12 +36,14 @@ import openai
 from azure.core.exceptions import AzureError
 from azure.identity import AzureCliCredential
 from openai import AzureOpenAI
-from openai.types import CompletionUsage
+from openai.types import CompletionUsage, CreateEmbeddingResponse, Embedding
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
 
-from meridian.platform.gateway.models import ChatRequest
+from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
 from meridian.platform.gateway.providers.base import (
+    EmbeddingReply,
     ProviderError,
     ProviderErrorKind,
     ProviderReply,
@@ -202,21 +211,14 @@ class AzureOpenAIProvider:
         """One chat completion within ``timeout_seconds``, the budget of the whole
         attempt; raise ``ProviderError`` (kind and status only) for anything the
         provider does wrong."""
-        if deployment.deployment_name is None:
+        name = deployment.deployment_name
+        if name is None:
             raise ValueError(f"deployment {deployment.id} has no deployment_name")
         client = self._client_for(deployment)
-        # Connect gets at most half the budget and the other phases the rest, so
-        # connect plus the answer stay inside it: 25 s gives 5 s and 20 s, 12 s
-        # gives 5 s and 7 s, 3 s gives 1.5 s and 1.5 s. Writing the request and
-        # waiting for a pooled connection are phases of their own, the read
-        # limit is between bytes, and the token source runs before the request:
-        # none is inside the budget, so the runtime's own 30 s is the last line.
-        connect = min(CONNECT_TIMEOUT_SECONDS, timeout_seconds / 2)
-        rest = min(PROVIDER_TIMEOUT_SECONDS, timeout_seconds - connect)
-        failure: Failure
-        try:
-            completion = client.chat.completions.create(
-                model=deployment.deployment_name,
+        timeout = _attempt_timeout(timeout_seconds)
+        completion = _call_sdk(
+            lambda: client.chat.completions.create(
+                model=name,
                 messages=[
                     {"role": m.role, "content": m.content} for m in request.messages
                 ],
@@ -224,34 +226,97 @@ class AzureOpenAIProvider:
                 # opt-in live test is the arbiter.
                 max_tokens=request.max_output_tokens,
                 n=1,
-                timeout=openai.Timeout(rest, connect=connect),
+                timeout=timeout,
             )
-        # The provider's exception is mapped to (kind, status) and dropped
-        # inside the arm. Raising from the arm would leave it in __context__
-        # even with ``from None``, and its message can echo a prompt. The SDK
-        # raises its error from the httpx one, which says whether the request
-        # left: a connect timeout or a connect error is a request that never
-        # did, so nothing can have been billed. The cause is read in the arm and
-        # only the answer is kept.
-        except openai.APITimeoutError as error:  # before APIConnectionError
-            sent = not isinstance(error.__cause__, httpx.ConnectTimeout)
-            failure = ("timeout", None, sent)
-        except openai.APIConnectionError as error:
-            sent = not isinstance(error.__cause__, httpx.ConnectError)
-            failure = ("unavailable", None, sent)
-        except openai.APIStatusError as error:
-            status = error.status_code
-            failure = (kind_of_status(status), status, True)
-        except openai.APIResponseValidationError:
-            failure = ("bad-response", None, True)
-        except AzureError:  # the token provider failed, before any request
-            failure = ("auth", None, False)
-        except openai.OpenAIError:
-            failure = ("unavailable", None, True)
-        else:
-            return _reply_from(completion)
-        kind, status_code, sent = failure
-        raise ProviderError(kind, status_code, sent=sent) from None
+        )
+        return _reply_from(completion)
+
+    def embed(
+        self,
+        deployment: Deployment,
+        request: EmbeddingRequest,
+        *,
+        timeout_seconds: float,
+    ) -> EmbeddingReply:
+        """One embeddings call within ``timeout_seconds``, with the deployment's
+        ``dimensions`` (never the caller's) and plain floats back, so the answer
+        needs no decoding; raise ``ProviderError`` for anything the provider
+        does wrong, including an answer whose count, size or numbers are off."""
+        name, dimensions = deployment.deployment_name, deployment.dimensions
+        if name is None:
+            raise ValueError(f"deployment {deployment.id} has no deployment_name")
+        if dimensions is None:
+            raise ValueError(f"deployment {deployment.id} has no dimensions")
+        client = self._client_for(deployment)
+        timeout = _attempt_timeout(timeout_seconds)
+        response = _call_sdk(
+            lambda: client.embeddings.create(
+                model=name,
+                input=list(request.inputs),
+                dimensions=dimensions,
+                encoding_format="float",
+                timeout=timeout,
+            )
+        )
+        return _embedding_reply(
+            response, inputs=len(request.inputs), dimensions=dimensions
+        )
+
+
+def _attempt_timeout(timeout_seconds: float) -> openai.Timeout:
+    """The SDK's timeouts for one attempt of ``timeout_seconds``.
+
+    Connect gets at most half the budget and the other phases the rest, so
+    connect plus the answer stay inside it: 25 s gives 5 s and 20 s, 12 s gives
+    5 s and 7 s, 3 s gives 1.5 s and 1.5 s. Writing the request and waiting for
+    a pooled connection are phases of their own, the read limit is between
+    bytes, and the token source runs before the request: none is inside the
+    budget, so the runtime's own 30 s is the last line.
+    """
+    connect = min(CONNECT_TIMEOUT_SECONDS, timeout_seconds / 2)
+    rest = min(PROVIDER_TIMEOUT_SECONDS, timeout_seconds - connect)
+    return openai.Timeout(rest, connect=connect)
+
+
+def _call_sdk[T](create: Callable[[], T]) -> T:
+    """Run one SDK request: its result, or a ``ProviderError`` (kind, status and
+    whether the request left, nothing else) for anything the provider or the
+    credential does wrong. Chat and embeddings map their failures here, once."""
+    failure: Failure
+    try:
+        return create()
+    # The provider's exception is mapped to (kind, status) and dropped inside the
+    # arm. Raising from the arm would leave it in __context__ even with ``from
+    # None``, and its message can echo a prompt. The SDK raises its error from
+    # the httpx one, which says whether the request left: a connect timeout or a
+    # connect error is a request that never did, so nothing can have been
+    # billed. The cause is read in the arm and only the answer is kept.
+    except openai.APITimeoutError as error:  # before APIConnectionError
+        sent = not isinstance(error.__cause__, httpx.ConnectTimeout)
+        failure = ("timeout", None, sent)
+    except openai.APIConnectionError as error:
+        sent = not isinstance(error.__cause__, httpx.ConnectError)
+        failure = ("unavailable", None, sent)
+    except openai.APIStatusError as error:
+        status = error.status_code
+        failure = (kind_of_status(status), status, True)
+    except openai.APIResponseValidationError:
+        failure = ("bad-response", None, True)
+    except json.JSONDecodeError:
+        # A 200 that says it is JSON and is not: the answer is wrong.
+        failure = ("bad-response", None, True)
+    except OverflowError:
+        # The arm covers the whole SDK call, so any OverflowError raised inside
+        # it is reported as the provider's bad response, whatever raised it. The
+        # one expected: the SDK turns a whole number in a vector into a float
+        # and raises for one that does not fit.
+        failure = ("bad-response", None, True)
+    except AzureError:  # the token provider failed, before any request
+        failure = ("auth", None, False)
+    except openai.OpenAIError:
+        failure = ("unavailable", None, True)
+    kind, status_code, sent = failure
+    raise ProviderError(kind, status_code, sent=sent) from None
 
 
 def _is_count(value: object) -> bool:
@@ -313,4 +378,70 @@ def _read(completion: ChatCompletion) -> ProviderReply:
         model=model,
         input_tokens=usage.prompt_tokens,
         output_tokens=usage.completion_tokens,
+    )
+
+
+def _embedding_reply(
+    response: CreateEmbeddingResponse, *, inputs: int, dimensions: int
+) -> EmbeddingReply:
+    """Read the vectors; anything missing, miscounted, mis-sized or of the wrong
+    type is a bad response (T-54).
+
+    As for chat, the SDK builds the response without validating it, so every
+    member read is checked; the net is for one that slips through, and for an
+    int too large to be a float, which a reader called past the SDK can meet.
+    """
+    reply: EmbeddingReply | None = None
+    try:
+        reply = _read_embeddings(response, inputs, dimensions)
+    except (AttributeError, TypeError, OverflowError):
+        reply = None  # raised below, so the failure is no context
+    if reply is None:
+        raise ProviderError("bad-response")
+    return reply
+
+
+def _is_number(value: object) -> bool:
+    """An int or a float, never a bool, and finite."""
+    return (type(value) is int or type(value) is float) and math.isfinite(value)
+
+
+def _indexed_vector(item: object, dimensions: int) -> tuple[int, tuple[float, ...]]:
+    """The index of one item and its vector as floats, or a bad response."""
+    if not isinstance(item, Embedding) or type(item.index) is not int:
+        raise ProviderError("bad-response")
+    vector = item.embedding
+    if (
+        not isinstance(vector, list)
+        or len(vector) != dimensions
+        or not all(_is_number(x) for x in vector)
+    ):
+        raise ProviderError("bad-response")
+    return item.index, tuple(float(x) for x in vector)
+
+
+def _read_embeddings(
+    response: CreateEmbeddingResponse, inputs: int, dimensions: int
+) -> EmbeddingReply:
+    # A 200 whose body is not JSON comes back from the SDK as a plain string.
+    if not isinstance(response, CreateEmbeddingResponse):
+        raise ProviderError("bad-response")
+    data, usage, model = response.data, response.usage, response.model
+    if (
+        not isinstance(data, list)
+        or len(data) != inputs
+        or not isinstance(usage, EmbeddingUsage)
+        or not _is_count(usage.prompt_tokens)
+        or not isinstance(model, str)
+        or MODEL_NAME.fullmatch(model) is None
+    ):
+        raise ProviderError("bad-response")
+    by_index = dict(_indexed_vector(item, dimensions) for item in data)
+    # A repeated index collapses in the dict, so only 0..n-1 passes the count.
+    if sorted(by_index) != list(range(inputs)):
+        raise ProviderError("bad-response")
+    return EmbeddingReply(
+        embeddings=tuple(by_index[n] for n in range(inputs)),
+        model=model,
+        input_tokens=usage.prompt_tokens,
     )

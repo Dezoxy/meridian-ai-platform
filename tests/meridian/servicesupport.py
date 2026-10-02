@@ -33,6 +33,7 @@ GATEWAY_REPLY = {
 # The deployment after the Azure ones: where a planted deployment goes.
 REPLAY_ENTRY = "  - id: replay-chat\n"
 CHAT_ROUTE = re.compile(r"(- purpose: chat\n\s+candidates: )\[[^\]]*\]")
+EMBEDDING_ROUTE = re.compile(r"(- purpose: embedding\n\s+candidates: )\[[^\]]*\]")
 
 
 def azure_chat_deployment_yaml(
@@ -71,6 +72,46 @@ def azure_chat_deployment_yaml(
 """
 
 
+def azure_embedding_deployment_yaml(
+    deployment_id: str,
+    deployment_name: str,
+    *,
+    sku: str = "Standard",
+    residency: str = "eu-region",
+    data_classes: str = "[synthetic, internal, personal]",
+    model: str = "text-embedding-3-large",
+    version: str = "1",
+    dimensions: int = 1024,
+) -> str:
+    """An embedding deployment for ``models.yaml`` that passes the registry
+    checks (same model, version and dimensions as the real one unless a test
+    changes them), ending in the blank line that separates entries."""
+    return f"""\
+  - id: {deployment_id}
+    provider: azure-openai
+    purpose: embedding
+    model: {model}
+    version: "{version}"
+    dimensions: {dimensions}
+    deployment_name: {deployment_name}
+    sku: {sku}
+    region: swedencentral
+    residency: {residency}
+    data_classes: {data_classes}
+    retires: 2028-02-09
+    price:
+      currency: USD
+      input_per_million_tokens: 0.158
+      source: "a test fixture"
+      checked: 2026-09-30
+    terraform_key: sdc/{deployment_name}
+    rate_limits:
+      requests_per_10_seconds: 20
+      tokens_per_minute: 20000
+
+"""
+
+
 # A test-only global deployment: synthetic data only.
 GLOBAL_DEPLOYMENT_YAML = azure_chat_deployment_yaml(
     "aoai-sdc-gpt-4o-global",
@@ -87,19 +128,44 @@ SECOND_DEPLOYMENT_YAML = azure_chat_deployment_yaml(
     residency="eu-region",
     data_classes="[synthetic, internal, personal]",
 )
+# The same two for the embedding route.
+GLOBAL_EMBEDDING_YAML = azure_embedding_deployment_yaml(
+    "aoai-sdc-text-embedding-3-large-global",
+    "text-embedding-3-large-global",
+    sku="GlobalStandard",
+    residency="global",
+    data_classes="[synthetic]",
+)
+SECOND_EMBEDDING_YAML = azure_embedding_deployment_yaml(
+    "aoai-sdc-text-embedding-3-large-second", "text-embedding-3-large-second"
+)
+
+
+def _pin_route(
+    registry_dir: Path,
+    route: re.Pattern[str],
+    purpose: str,
+    candidates: tuple[str, ...],
+) -> Path:
+    path = registry_dir / "policies.yaml"
+    pinned, count = route.subn(
+        lambda m: f"{m[1]}[{', '.join(candidates)}]",
+        path.read_text(encoding="utf-8"),
+    )
+    assert count == 1, f"policies.yaml has {count} {purpose} routes, not one"
+    path.write_text(pinned, encoding="utf-8")
+    return registry_dir
 
 
 def pin_chat_route(registry_dir: Path, *candidates: str) -> Path:
     """Rewrite the chat route's ``candidates:`` line in a planted registry, so a
     test does not depend on how many deployments the real route lists."""
-    path = registry_dir / "policies.yaml"
-    pinned, count = CHAT_ROUTE.subn(
-        lambda m: f"{m[1]}[{', '.join(candidates)}]",
-        path.read_text(encoding="utf-8"),
-    )
-    assert count == 1, f"policies.yaml has {count} chat routes, not one"
-    path.write_text(pinned, encoding="utf-8")
-    return registry_dir
+    return _pin_route(registry_dir, CHAT_ROUTE, "chat", candidates)
+
+
+def pin_embedding_route(registry_dir: Path, *candidates: str) -> Path:
+    """The same for the embedding route."""
+    return _pin_route(registry_dir, EMBEDDING_ROUTE, "embedding", candidates)
 
 
 class FakeClock:

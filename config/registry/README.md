@@ -15,7 +15,7 @@ one answers (S042). The design is in the plan's S008 section and in
 | File | Holds |
 |---|---|
 | `providers.yaml` | Provider accounts: Azure OpenAI and the replay provider |
-| `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits |
+| `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits, the vector length of an embedding deployment |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema and output schema, idempotency |
 | `agents.yaml` | Agents and their tool allowlists |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, and the replay deployment per purpose |
@@ -69,18 +69,27 @@ job. Beyond the schemas, validation refuses:
   must serve every tenant, or a test run would refuse one);
 - an Azure deployment without `rate_limits` and a replay deployment with
   them;
-- tenants whose rate limits do not fit together: for each chat candidate that
+- an embedding deployment without `dimensions` (the length of the vectors it
+  returns, 1 to 2000, the most pgvector can index in its `vector` type; its
+  `halfvec` type indexes up to 4000) and a chat deployment with it;
+- an embedding route whose candidates differ from the first in model, version
+  or `dimensions`, and a replay embedding deployment whose `dimensions`
+  differ from a candidate's: vectors of different models or sizes are not
+  comparable, and nothing would fail when one met another (T-54);
+- tenants whose rate limits do not fit together: for each route candidate that
   has `rate_limits`, the sum over all tenants of `requests_per_10_seconds`
   and of `tokens_per_minute` must not exceed the candidate's own value, or
   one tenant could use up a deployment's window and cause a provider 429 for
-  the others (T-45);
+  the others (T-45, and T-55 for the embedding route);
 - an Azure deployment that differs from Terraform's outputs, a deployment
   whose `rate_limits.tokens_per_minute` is not Terraform's `capacity` times
   1,000 (an output without `capacity` is not compared), and a deployed
   model that is not registered (T-12).
 
 Replay is a gateway mode, set per deployment in `policies.yaml`, never a
-route candidate: a real outage must not be answered with canned text.
+route candidate: a real outage must not be answered with canned text (chat) or
+a simulated vector (embeddings). The replay embedding is simulated: a hashed
+bag-of-words vector, no model called, and no meaning of the text.
 
 Every tool call is audited by its tool server (T-14, S013), so a tool has no
 audit flag to switch off. `approval_required` marks a tool whose effect
@@ -110,17 +119,17 @@ An Azure deployment states its own `rate_limits` (`requests_per_10_seconds`
 and `tokens_per_minute`) as Azure reports them for the deployment; replay
 deployments have none. The first two tenant limits are the same windows, so
 the validation above refuses a registry whose tenants could together ask for
-more than the smallest chat candidate allows.
+more than the smallest candidate of any route allows.
 
 `exchange` in `tenants.yaml` is the planning rate the EUR quota is computed
 with. Prices are in USD, the quota is in EUR, and the gateway converts a
 call's cost with `usd_per_eur`. It is a planning value with a source and a
 date, not a live rate: update it when the figure has moved enough to matter.
-Status: implemented (S011). The gateway holds every chat request to its
-tenant's four limits, in replay mode as in live mode, and answers 429, or 413
-for a request larger than `tokens_per_minute` allows at all. It counts tokens,
-cost and calls in OpenTelemetry metrics, proven with an in-memory reader; a
-dashboard for them is designed (S043).
+Status: implemented (S011, S045). The gateway holds every chat and embedding
+request to its tenant's four limits, in replay mode as in live mode, and
+answers 429, or 413 for a request larger than `tokens_per_minute` allows at
+all. It counts tokens, cost and calls in OpenTelemetry metrics, proven with
+an in-memory reader; a dashboard for them is designed (S043).
 
 ## Change it
 

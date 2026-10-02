@@ -57,6 +57,7 @@ deployments:
     purpose: embedding
     model: text-embedding-3-large
     version: "1"
+    dimensions: 1024
     deployment_name: text-embedding-3-large
     sku: Standard
     region: swedencentral
@@ -92,6 +93,7 @@ deployments:
     purpose: embedding
     model: replay-embedding
     version: "1"
+    dimensions: 1024
     residency: eu-region
     data_classes: [synthetic, internal, personal]
     price:

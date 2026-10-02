@@ -1,4 +1,5 @@
-"""Real chat calls through the gateway in live mode (S010, S042). Opt-in.
+"""Real chat and embedding calls through the gateway in live mode (S010, S042,
+S045). Opt-in.
 
 Skipped unless ``MERIDIAN_LIVE_AZURE=1``, so neither CI nor a plain ``make
 pytest`` ever reaches Azure. ``make gateway-live`` sets the three variables
@@ -9,7 +10,9 @@ token counts; never the endpoint, the tenant ID or any text.
 
 The second test proves the fallback against Azure (S042): the first chat
 candidate is made to fail in this process, before any request leaves, and the
-real second deployment answers.
+real second deployment answers. The third embeds two synthetic texts (S045) and
+prints the deployment, the model string, the vector length and the token counts;
+never a vector or a text.
 """
 
 import os
@@ -224,3 +227,83 @@ def test_with_the_first_candidate_down_the_second_deployment_answers(
     (chat,) = [s for s in exporter.get_finished_spans() if s.name == "gateway.chat"]
     assert chat.attributes["meridian.attempts"] == 2
     assert PROMPT not in str(failed) + str(completed)
+
+
+def test_synthetic_texts_are_embedded_by_the_routed_deployment_and_audited(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """The embedding route against Azure (S045): the vectors have the
+    registry's length, the count and the order the request had, and the ledger
+    holds what Azure counted at the embedding price. The output names the
+    deployment, the model string, the length and the token counts; never a
+    vector or a text."""
+    settings = GatewaySettings.from_env(
+        {
+            MODE_ENV: "live",
+            ENVIRONMENT_ENV: "local",
+            DATABASE_URL_ENV: fresh_database.dsn("model_gateway"),
+            REGISTRY_DIR_ENV: str(REGISTRY_DIR),
+            CREDENTIAL_ENV: "azure-cli",
+            ENDPOINTS_ENV: os.environ[ENDPOINTS_ENV],
+            TENANT_ID_ENV: os.environ[TENANT_ID_ENV],
+        }
+    )
+    exporter = InMemorySpanExporter()
+    client = TestClient(
+        create_app(settings, tracer_provider=make_tracer_provider("gw", exporter))
+    )
+    run_id = uuid.uuid4()
+    headers = {
+        "X-Meridian-Tenant": "development",
+        "X-Meridian-Agent": "claims-triage",
+        "X-Meridian-Run": str(run_id),
+    }
+    body = {"inputs": [PROMPT, "Storm damage to the roof of a synthetic house."]}
+
+    response = client.post("/v1/embeddings", json=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    reply = response.json()
+    (span,) = [
+        s for s in exporter.get_finished_spans() if s.name == "gateway.embeddings"
+    ]
+    provider_model = span.attributes["gen_ai.response.model"]
+    usage = reply["usage"]
+    print(f"\ndeployment:     {reply['deployment']}")
+    print(f"provider model: {provider_model}")
+    print(f"dimensions:     {reply['dimensions']}, vectors {len(reply['embeddings'])}")
+    print(f"tokens:         input {usage['input_tokens']}")
+    deployment = load_registry(REGISTRY_DIR).deployment(reply["deployment"])
+    assert deployment is not None
+    assert reply["mode"] == "live"
+    assert reply["dimensions"] == deployment.dimensions == 1024
+    assert len(reply["embeddings"]) == len(body["inputs"])
+    assert all(len(v) == reply["dimensions"] for v in reply["embeddings"])
+    assert reply["embeddings"][0] != reply["embeddings"][1]
+    assert usage["input_tokens"] > 0
+    (event,) = audit_events(fresh_database, run_id)
+    assert (event["event"], event["outcome"], event["tenant"]) == (
+        "model.call",
+        "completed",
+        "development",
+    )
+    assert event["deployment"] == reply["deployment"]
+    assert (event["input_tokens"], event["output_tokens"]) == (
+        usage["input_tokens"],
+        0,
+    )
+    assert event["data_class"] == "synthetic"
+    assert PROMPT not in str(event)
+    ((state, reserved, counted, charged, input_tokens, output_tokens),) = owner_rows(
+        fresh_database,
+        "SELECT state, reserved_tokens, charged_tokens, charged_micro_eur, "
+        "input_tokens, output_tokens FROM gateway.usage WHERE call_id = %s",
+        (event["call_id"],),
+    )
+    print(f"cost:           {charged} micro-EUR")
+    print(f"reservation:    {reserved} tokens reserved, {counted} charged")
+    assert state == "settled"
+    assert (input_tokens, output_tokens) == (usage["input_tokens"], 0)
+    assert counted == input_tokens
+    assert charged > 0
+    assert reserved >= input_tokens  # the estimate was not below Azure's own count

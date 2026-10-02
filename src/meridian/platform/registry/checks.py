@@ -60,7 +60,9 @@ REPLAY_FORBIDDEN = ("sku", "region", "terraform_key", "rate_limits")
 # What a deployment's rate_limits and a tenant's limits both name, compared by
 # check_tenant_limits.
 SHARED_RATE_FIELDS = ("requests_per_10_seconds", "tokens_per_minute")
-CHAT_PURPOSE = "chat"
+EMBEDDING_PURPOSE = "embedding"
+# What must be equal for two vectors to be comparable (T-54).
+VECTOR_FIELDS = ("model", "version", "dimensions")
 REPLAY_PROVIDER_ID = "replay"
 REPLAY_MODEL_PREFIX = "replay-"
 # T-31, second signal: a word in a tool's id or scope that says it decides.
@@ -282,6 +284,24 @@ def check_provider_fields(registry: Registry) -> list[str]:
     return errors
 
 
+def check_dimensions(registry: Registry) -> list[str]:
+    """An embedding deployment states the length of its vectors, and a chat one
+    has none (T-54)."""
+    errors: list[str] = []
+    for i, dep in enumerate(registry.deployments):
+        where = f"{MODELS}: deployments[{i}].dimensions"
+        if dep.purpose == EMBEDDING_PURPOSE and dep.dimensions is None:
+            errors.append(
+                f"{where}: required for purpose {dep.purpose!r} (deployment {dep.id!r})"
+            )
+        elif dep.purpose != EMBEDDING_PURPOSE and dep.dimensions is not None:
+            errors.append(
+                f"{where}: must not be set for purpose {dep.purpose!r} "
+                f"(deployment {dep.id!r})"
+            )
+    return errors
+
+
 def _allowed_labels(sku: str, region: str) -> tuple[str, ...]:
     """The residency labels an Azure SKU in a region supports."""
     if sku == "GlobalStandard" or region not in EU_AZURE_REGIONS:
@@ -424,6 +444,34 @@ def check_routes(registry: Registry) -> list[str]:
     return errors
 
 
+def check_embedding_route(registry: Registry) -> list[str]:
+    """Vectors of different models, versions or sizes are not comparable, and a
+    fallback inside the route would mix them without any error (T-54): every
+    candidate of the embedding route matches the first one."""
+    errors: list[str] = []
+    for i, route in enumerate(registry.routes):
+        if route.purpose != EMBEDDING_PURPOSE:
+            continue
+        first = registry.deployment(route.candidates[0])
+        if first is None:
+            continue  # an unknown candidate is reported by check_references
+        for j, name in enumerate(route.candidates[1:], start=1):
+            dep = registry.deployment(name)
+            if dep is None:
+                continue
+            for field in VECTOR_FIELDS:
+                value, expected = getattr(dep, field), getattr(first, field)
+                if value is None or expected is None or value == expected:
+                    continue  # a missing size is reported by check_dimensions
+                errors.append(
+                    f"{POLICIES}: routes[{i}].candidates[{j}]: deployment {name!r} "
+                    f"has {field} {value!r}, but the route's first candidate "
+                    f"{first.id!r} has {expected!r}; vectors of different models "
+                    "or sizes are not comparable (T-54)"
+                )
+    return errors
+
+
 def _is_replay(registry: Registry, deployment: Deployment) -> bool:
     provider = registry.provider(deployment.provider)
     return provider is not None and provider.kind == "replay"
@@ -470,6 +518,29 @@ def check_replay(registry: Registry) -> list[str]:
     return errors
 
 
+def check_replay_dimensions(registry: Registry) -> list[str]:
+    """Simulated vectors have the length of the real route's, or a store that
+    holds both would compare unlike vectors (T-54)."""
+    route = registry.route(EMBEDDING_PURPOSE)
+    errors: list[str] = []
+    for i, entry in enumerate(registry.replay):
+        dep = registry.deployment(entry.deployment)
+        if entry.purpose != EMBEDDING_PURPOSE or route is None or dep is None:
+            continue
+        for name in route.candidates:
+            candidate = registry.deployment(name)
+            if candidate is None or None in (candidate.dimensions, dep.dimensions):
+                continue  # reported by check_references or check_dimensions
+            if candidate.dimensions != dep.dimensions:
+                errors.append(
+                    f"{POLICIES}: replay[{i}].deployment: deployment {dep.id!r} "
+                    f"has dimensions {dep.dimensions}, but route candidate "
+                    f"{name!r} has {candidate.dimensions}; simulated vectors must "
+                    "be the size of the route's (T-54)"
+                )
+    return errors
+
+
 def _replay_tenant_errors(registry: Registry) -> list[str]:
     """Replay stands in for the route of a purpose, so it must serve every
     tenant the route serves: its classes must include the tenant's class and
@@ -512,11 +583,12 @@ def check_tenant_coverage(registry: Registry) -> list[str]:
 
 
 def check_tenant_limits(registry: Registry) -> list[str]:
-    """The tenants' rate limits must fit in the chat route's candidates.
+    """The tenants' rate limits must fit in every route's candidates.
 
     Every tenant may use its whole share at once, so the sum over all tenants
     of each rate limit must not pass any candidate's own limit at the provider;
-    otherwise one tenant could cause a 429 for the others (T-45).
+    otherwise one tenant could cause a 429 for the others (T-45, and T-55 for
+    the embedding route, whose requests count against the same windows).
     """
     totals = {
         field: sum(getattr(t.limits, field) for t in registry.tenants)
@@ -524,8 +596,6 @@ def check_tenant_limits(registry: Registry) -> list[str]:
     }
     errors: list[str] = []
     for i, route in enumerate(registry.routes):
-        if route.purpose != CHAT_PURPOSE:
-            continue
         for j, name in enumerate(route.candidates):
             dep = registry.deployment(name)
             if dep is None or dep.rate_limits is None:
@@ -548,12 +618,15 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_policy_ceiling,
     check_providers,
     check_provider_fields,
+    check_dimensions,
     check_residency_labels,
     check_data_classes_vs_label,
     check_tools,
     check_no_decision_tools,
     check_routes,
+    check_embedding_route,
     check_replay,
+    check_replay_dimensions,
     check_tenant_coverage,
     check_tenant_limits,
 )
