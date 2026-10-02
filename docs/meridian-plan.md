@@ -3276,8 +3276,9 @@ there, the runtime reaches the servers by their cluster names, and
     the policy and knowledge tables only (two reviewers): S019, with the
     charts;
   - a test harness that runs the scripts against a stub `kubectl`: most
-    of the script tests match text; two now run real functions of
-    `deploy.sh`, and every path but one ran on the cluster;
+    of the script tests match text, and two now run real functions of
+    `deploy.sh`. What ran on the cluster is listed below, and what did
+    not is under "Not run";
   - a real read of the stores in `make smoke`: the demo proves both;
   - the wait after an interrupted deploy that is run again within a
     minute: it fails loudly and stores nothing.
@@ -3367,10 +3368,13 @@ only, and `make docs` ran again after them.
   `make registry`: `schemas OK`, `contracts OK`. `make test`: 124 tests,
   `OK`. `make docs`: `13 checks passed`. `shellcheck infra/kind/*.sh`:
   exit 0. The model did not change, so `make check` did not run.
-- Not run: the path where a finished ingest Job meets an empty store
-  (emptying the store on the cluster is destructive; a test runs the
-  function against a stub); a failing Job, a failing probe and the edge
-  of the rate window on the cluster; anything against Azure; `make down`.
+- Not run on the cluster: the path where a finished ingest Job meets an
+  empty store (emptying the store is destructive; a test runs the
+  function against a stub); the smoke check's SKIP as it is now, by the
+  Deployments' label (the SKIP that ran looked for the runtime's
+  Deployment alone); a failing Job; a failing probe; a claim posted
+  inside the minute after an ingestion. Not run at all: anything against
+  Azure; `make down`.
   The embeddings and the model are simulated on kind, so this proves the
   wiring, not retrieval quality or a model's answers.
 
@@ -3396,7 +3400,10 @@ only, and `make docs` ran again after them.
 - No step yet: `make demo` still uses one golden claim per run, 35 are
   left on this cluster; finished migrate and seed Jobs of old images stay
   for an hour, and old images on the node until `make down`; `make smoke`
-  does not read the stores; the wait after an interrupted deploy.
+  does not read the stores; the wait after an interrupted deploy;
+  `make demo` passes as soon as each expected service has one span in
+  Tempo, so it can pass on a trace that is not complete yet (one run
+  showed one Claims API span where the others showed five).
 
 ## Part D — Open questions
 
