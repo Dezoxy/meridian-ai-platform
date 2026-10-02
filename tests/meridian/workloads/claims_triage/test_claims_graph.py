@@ -13,6 +13,7 @@ import logging
 from collections.abc import Callable
 from functools import cache
 from importlib.metadata import entry_points
+from types import MappingProxyType
 from typing import Any, cast
 
 import pytest
@@ -36,6 +37,8 @@ from meridian.runtime.tool_client import (
     ToolResult,
     ToolUnavailable,
 )
+from meridian.workloads.claims_triage import assessment as assessment_module
+from meridian.workloads.claims_triage import wording as wording_module
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
 from meridian.workloads.claims_triage.graph import build
 from meridian.workloads.claims_triage.proposal import TriageProposal
@@ -288,6 +291,7 @@ def expected_proposal(**changes: Any) -> dict[str, Any]:
         "citations": [],
         "gaps": [],
         "assessment": "not_needed",
+        "unavailable_because": None,
         "rationale": None,
         "drafted_by": None,
         **changes,
@@ -437,18 +441,127 @@ def test_unverified_when_the_models_answer_is_not_json() -> None:
         citations=cited("MOTOR-TPL", "2.1", "4.1"),
         gaps=["exclusion_assessment"],
         assessment="unavailable",
+        unavailable_because="not-json",
         drafted_by=DRAFTED_BY,
     )
     assert output["route"] != "auto_approve"
 
 
 def test_a_model_answer_that_cannot_be_trusted_never_auto_approves() -> None:
-    for text in ("", "[]", '{"verdict": "none"}', model_answer("applies", "9.9")):
+    cases = (
+        ("", "not-json"),
+        ("[]", "not-json"),
+        ('{"verdict": "none"}', "not-the-format"),
+        (model_answer("applies", "9.9"), "unknown-clause"),
+        (model_answer("unsure"), "unsure"),
+    )
+    for text, because in cases:
         output, _, _ = triage("CLM-0011", StubModel(text))
 
         assert (output["route"], output["reason"]) == ("adjuster", "unverified")
         assert output["assessment"] == "unavailable"
+        assert output["unavailable_because"] == because
         assert output["gaps"] == ["exclusion_assessment"]
+
+
+def test_a_user_message_over_the_gateways_limit_makes_no_call_and_is_too_long(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(assessment_module, "MAX_USER_MESSAGE_CHARS", 100)
+
+    output, model, _ = triage("CLM-0011")
+
+    assert model.calls == []
+    assert output == expected_proposal(
+        reason="unverified",
+        payable_amount=460,
+        citations=cited("MOTOR-TPL", "2.1", "4.1"),
+        gaps=["exclusion_assessment"],
+        assessment="unavailable",
+        unavailable_because="too-long",
+    )
+
+
+def test_a_proposal_without_an_assessment_in_the_state_is_a_failure() -> None:
+    """The node ``propose`` of a claim with a policy: a state that lacks the
+    assessment is a bug of the graph, and the proposal is not defaulted."""
+    graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
+    state = {
+        "claim": facts("CLM-0011"),
+        "policy": StubTools._policy(
+            {"policy_number": CLAIMS["CLM-0011"]["policy_number"]}
+        )["policy"],
+        "history": [],
+        "history_truncated": False,
+        "chunks": wording("MOTOR-TPL")[1],
+        "assessed": None,
+        "output": {},
+    }
+
+    with pytest.raises(ValueError, match="assessment"):
+        graph.nodes["propose"].runnable.invoke(state)
+
+
+@pytest.fixture
+def other_wording_version(monkeypatch: pytest.MonkeyPatch) -> str:
+    """A wording version that is not the one every other test uses: the table
+    of exclusion clauses knows it for MOTOR-TPL, which has two."""
+    version = "2031-07"
+    table = {**wording_module.EXCLUSION_CLAUSES, ("MOTOR-TPL", version): 2}
+    monkeypatch.setattr(wording_module, "EXCLUSION_CLAUSES", MappingProxyType(table))
+    return version
+
+
+def tools_for_version(version: str) -> StubTools:
+    """Tools whose policy and search answers carry ``version``."""
+    policy = StubTools._policy({"policy_number": CLAIMS["CLM-0011"]["policy_number"]})
+    policy["policy"]["wording_version"] = version
+
+    def versioned(_: int, answer: dict[str, Any]) -> dict[str, Any]:
+        return {**answer, "wording_version": version}
+
+    return StubTools(answers={"policy_lookup": policy}, tamper=versioned)
+
+
+def test_the_citations_carry_the_policys_wording_version(
+    other_wording_version: str,
+) -> None:
+    tools = tools_for_version(other_wording_version)
+
+    output, model, _ = triage("CLM-0011", tools=tools)
+
+    assert output["citations"] == [
+        {"product": "MOTOR-TPL", "wording_version": other_wording_version, "clause": c}
+        for c in ("2.1", "4.1")
+    ]
+    assert (output["route"], output["gaps"]) == ("auto_approve", [])
+    document = json.loads(model.calls[0][0][1]["content"])
+    assert document["wording"] == {"product": "MOTOR-TPL", "version": "2031-07"}
+
+
+def test_the_citation_of_an_excluding_clause_carries_the_policys_version(
+    other_wording_version: str,
+) -> None:
+    tools = tools_for_version(other_wording_version)
+    answer = model_answer("applies", "3.2", "Racing.")
+
+    output, _, _ = triage("CLM-0037", StubModel(answer), tools=tools)
+
+    assert output["citations"] == [
+        {
+            "product": "MOTOR-TPL",
+            "wording_version": other_wording_version,
+            "clause": "3.2",
+        }
+    ]
+
+
+def test_a_wording_version_that_the_table_does_not_know_is_never_complete() -> None:
+    output, _, _ = triage("CLM-0011", tools=tools_for_version("2031-07"))
+
+    assert output["gaps"] == ["exclusion_clauses"]
+    assert (output["route"], output["reason"]) == ("adjuster", "unverified")
+    assert output["recommendation"] is None
 
 
 # -- the calls ----------------------------------------------------------------

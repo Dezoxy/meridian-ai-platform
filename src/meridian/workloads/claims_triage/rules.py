@@ -49,6 +49,12 @@ Gap = Literal[
     "limit_clause",
     "exclusion_assessment",
     "claim_history",
+    # A clause the decision cites and the search did not return: the decision
+    # stands, and the citation is not invented.
+    "period_clause",
+    "lapse_clause",
+    "documents_clause",
+    "reporting_clause",
 ]
 PolicyState = Literal["in_force", "lapsed", "outside_period"]
 
@@ -243,15 +249,12 @@ def _decision(
 
 def _applying_exclusion(assessment: Assessment, terms: Terms) -> str | None:
     """The clause the assessment says applies; a clause that is not one of the
-    candidates is a bug in the caller."""
+    candidates is a bug in the caller. The message holds no value: the clause
+    came from the model."""
     if assessment.status != "applies":
         return None
-    candidates = [c.clause for c in terms.candidates]
-    if assessment.clause not in candidates:
-        raise ValueError(
-            f"the assessed clause {assessment.clause} is not one of the "
-            f"candidate exclusions {candidates}"
-        )
+    if assessment.clause not in [c.clause for c in terms.candidates]:
+        raise ValueError("the assessed clause is not one of the candidate exclusions")
     return assessment.clause
 
 
@@ -266,13 +269,18 @@ def decide(facts: Facts) -> Decision:
 
     state = policy_state(policy, claim.loss_date)
     if state != "in_force":
-        clause = terms.lapse if state == "lapsed" else terms.period
+        clause, gap = (
+            (terms.lapse, "lapse_clause")
+            if state == "lapsed"
+            else (terms.period, "period_clause")
+        )
         return _decision(
             "adjuster",
             "policy_inactive",
             indicators,
             recommendation="reject",
             citations=_cite(clause),
+            gaps=() if clause is not None else (gap,),
         )
     peril_exclusion = terms.peril_exclusion
     if peril_exclusion is not None:
@@ -307,7 +315,7 @@ def decide(facts: Facts) -> Decision:
             indicators,
             missing=missing,
             citations=_cite(terms.documents),
-            gaps=gaps,
+            gaps=gaps if terms.documents is not None else (*gaps, "documents_clause"),
         )
     payable = payable_amount(claim, policy)
     if payable <= 0:
@@ -332,6 +340,8 @@ def _payable_decision(
     """Step 8: a covered claim with a positive payable amount. The rules
     recommend approving only when nothing is missing: a claim whose exclusions
     nobody checked keeps its route and reason but has no recommendation."""
+    if "late_report" in indicators and terms.reporting is None:
+        gaps = (*gaps, "reporting_clause")
     citations = _cite(
         terms.cover,
         terms.deductible,

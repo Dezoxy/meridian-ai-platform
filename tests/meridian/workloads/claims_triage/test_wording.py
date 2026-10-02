@@ -7,15 +7,19 @@ real wording never breaks.
 """
 
 from collections.abc import Iterable
+from types import MappingProxyType
 from typing import Any, get_args
+from unittest.mock import patch
 
 import pytest
 from generator import catalogue
 from servicesupport import REPO_ROOT
 
 from meridian.platform.knowledge_mcp.chunking import parse_wording
+from meridian.workloads.claims_triage import wording
 from meridian.workloads.claims_triage.models import Peril
 from meridian.workloads.claims_triage.wording import (
+    EXCLUSION_CLAUSES,
     PERIL_TITLES,
     Clause,
     Terms,
@@ -74,7 +78,12 @@ def test_terms_of_the_real_wording_match_the_catalogue(code: str, peril: str) ->
         if e.kind == catalogue.KIND_CIRCUMSTANCE and peril in e.perils
     ]
 
-    terms = select_terms(peril, real_chunks(product))  # type: ignore[arg-type]
+    terms = select_terms(
+        peril,  # type: ignore[arg-type]
+        real_chunks(product),
+        product=code,
+        wording_version=catalogue.WORDING_VERSION,
+    )
 
     assert numbers(terms.cover) == (
         catalogue.cover_clause(product, peril) if covered else None,
@@ -102,7 +111,12 @@ def test_clauses_carry_the_title_and_body_of_their_chunk() -> None:
     product = catalogue.PRODUCTS["HOME-STD"]
     chunks = real_chunks(product)
 
-    terms = select_terms("burst_pipe", chunks)
+    terms = select_terms(
+        "burst_pipe",
+        chunks,
+        product="HOME-STD",
+        wording_version=catalogue.WORDING_VERSION,
+    )
 
     assert terms.cover == Clause(
         "2.3", "Burst pipe", next(c["body"] for c in chunks if c["clause"] == "2.3")
@@ -116,11 +130,77 @@ def test_clauses_carry_the_title_and_body_of_their_chunk() -> None:
 
 def test_terms_do_not_depend_on_chunk_order_or_repeats() -> None:
     chunks = real_chunks(catalogue.PRODUCTS["HOME-STD"])
+    which = {"product": "HOME-STD", "wording_version": catalogue.WORDING_VERSION}
 
-    forward = select_terms("storm", chunks)
-    shuffled = select_terms("storm", [*reversed(chunks), *chunks[::2]])
+    forward = select_terms("storm", chunks, **which)
+    shuffled = select_terms("storm", [*reversed(chunks), *chunks[::2]], **which)
 
     assert shuffled == forward
+    assert forward.exclusions_complete is True
+
+
+# -- the number of exclusion clauses ------------------------------------------
+
+
+def test_the_exclusion_counts_are_the_real_wordings_and_the_catalogues() -> None:
+    assert set(EXCLUSION_CLAUSES) == {
+        (code, catalogue.WORDING_VERSION) for code in catalogue.PRODUCTS
+    }
+    for code, product in catalogue.PRODUCTS.items():
+        document = parse_wording((WORDINGS / f"{code}.md").read_text(encoding="utf-8"))
+        in_section_three = [
+            c for c in document.chunks if c.clause.partition(".")[0] == "3"
+        ]
+        assert document.wording_version == catalogue.WORDING_VERSION
+        count = EXCLUSION_CLAUSES[(code, document.wording_version)]
+        assert count == len(in_section_three) == len(product.exclusions), code
+
+
+def test_the_counts_cannot_be_changed_by_a_caller() -> None:
+    with pytest.raises(TypeError):
+        EXCLUSION_CLAUSES[("HOME-STD", "2026-01")] = 1  # type: ignore[index]
+
+
+def test_a_missing_last_exclusion_clause_leaves_the_exclusions_incomplete() -> None:
+    chunks = [
+        c for c in real_chunks(catalogue.PRODUCTS["HOME-STD"]) if c["clause"] != "3.4"
+    ]
+
+    terms = select_terms(
+        "burst_pipe", chunks, product="HOME-STD", wording_version="2026-01"
+    )
+
+    assert [c.clause for c in terms.candidates] == ["3.3"]
+    assert terms.exclusions_complete is False
+
+
+def test_every_last_exclusion_clause_missing_is_incomplete_in_every_wording() -> None:
+    for code, product in catalogue.PRODUCTS.items():
+        last = f"3.{len(product.exclusions)}"
+        chunks = [c for c in real_chunks(product) if c["clause"] != last]
+
+        terms = select_terms("storm", chunks, product=code, wording_version="2026-01")
+
+        assert terms.exclusions_complete is False, code
+
+
+@pytest.mark.parametrize(
+    ("product", "version"),
+    [
+        ("HOME-STD", "2026-02"),
+        ("HOME-STD", ""),
+        ("HOME-OLD", "2026-01"),
+        ("home-std", "2026-01"),
+    ],
+)
+def test_a_pair_that_is_not_in_the_table_is_never_complete(
+    product: str, version: str
+) -> None:
+    chunks = real_chunks(catalogue.PRODUCTS["HOME-STD"])
+
+    terms = select_terms("burst_pipe", chunks, product=product, wording_version=version)
+
+    assert terms.exclusions_complete is False
 
 
 def test_probes_of_a_policy_in_force_ask_for_the_peril_its_exclusions_and_terms() -> (
@@ -181,8 +261,17 @@ def peril_excluded(clause: str, names: str, title: str = "Flood") -> dict[str, A
     )
 
 
-def select(peril: Peril, chunks: Iterable[dict[str, Any]]) -> Terms:
-    return select_terms(peril, chunks)
+TEST_PRODUCT, TEST_VERSION = "TEST-PRODUCT", "test-1"
+
+
+def select(peril: Peril, chunks: Iterable[dict[str, Any]], *, of: int = 1) -> Terms:
+    """``select_terms`` for a wording of ``of`` exclusion clauses, which the
+    table holds only inside this call."""
+    table = MappingProxyType({(TEST_PRODUCT, TEST_VERSION): of})
+    with patch.object(wording, "EXCLUSION_CLAUSES", table):
+        return select_terms(
+            peril, chunks, product=TEST_PRODUCT, wording_version=TEST_VERSION
+        )
 
 
 def test_no_chunk_gives_no_terms_and_incomplete_exclusions() -> None:
@@ -214,11 +303,32 @@ def test_one_readable_section_three_clause_makes_the_exclusions_complete() -> No
 
 def test_a_gap_in_section_three_makes_the_exclusions_incomplete() -> None:
     terms = select(
-        "storm", [circumstance("3.1", "storm"), circumstance("3.3", "storm")]
+        "storm",
+        [circumstance("3.1", "storm"), circumstance("3.3", "storm")],
+        of=3,
     )
 
     assert terms.exclusions_complete is False
     assert [c.clause for c in terms.candidates] == ["3.1", "3.3"]
+
+
+def test_a_gap_is_incomplete_though_the_count_of_clauses_is_the_tables() -> None:
+    chunks = [circumstance("3.1", "storm"), circumstance("3.3", "storm")]
+
+    assert select("storm", chunks, of=2).exclusions_complete is False
+
+
+def test_fewer_clauses_than_the_table_has_is_incomplete_and_equal_is_complete() -> None:
+    chunks = [circumstance("3.1", "storm"), circumstance("3.2", "storm")]
+
+    assert select("storm", chunks, of=3).exclusions_complete is False
+    assert select("storm", chunks, of=2).exclusions_complete is True
+
+
+def test_more_clauses_than_the_table_has_is_incomplete() -> None:
+    chunks = [circumstance(f"3.{n}", "storm") for n in (1, 2, 3)]
+
+    assert select("storm", chunks, of=2).exclusions_complete is False
 
 
 def test_section_three_that_does_not_start_at_one_is_incomplete() -> None:
@@ -228,7 +338,7 @@ def test_section_three_that_does_not_start_at_one_is_incomplete() -> None:
 def test_consecutive_section_three_clauses_are_complete() -> None:
     chunks = [circumstance("3.2", "storm"), circumstance("3.1", "burst pipe")]
 
-    assert select("storm", chunks).exclusions_complete is True
+    assert select("storm", chunks, of=2).exclusions_complete is True
 
 
 def test_a_missing_applies_to_sentence_leaves_the_clause_out_and_incomplete() -> None:
@@ -319,7 +429,7 @@ def test_duplicated_chunks_are_taken_once() -> None:
 def test_clause_3_10_sorts_after_3_9() -> None:
     chunks = [circumstance(f"3.{n}", "storm") for n in (10, 2, 9, 1, 3, 4, 5, 6, 7, 8)]
 
-    terms = select("storm", chunks)
+    terms = select("storm", chunks, of=10)
 
     assert [c.clause for c in terms.candidates] == [f"3.{n}" for n in range(1, 11)]
     assert terms.exclusions_complete is True

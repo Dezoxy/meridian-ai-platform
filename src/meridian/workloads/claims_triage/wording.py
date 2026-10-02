@@ -40,6 +40,20 @@ PERIL_TITLES: Mapping[Peril, str] = MappingProxyType(
 AMOUNTS_PROBE = "Deductible. Limit."
 TIMING_PROBE = "Reporting a claim. Period of cover. Lapse for non-payment."
 
+# The number of section-3 clauses of each wording, by (product, wording
+# version). Clauses 3.1 to 3.k that are all retrieved are not the whole section
+# when the search missed the last one, and nothing in the clauses shows it, so
+# the count is known. A pair that is not here is never complete. A test keeps
+# the table equal to the wordings under data/synthetic/wordings/.
+EXCLUSION_CLAUSES: Mapping[tuple[str, str], int] = MappingProxyType(
+    {
+        ("HOME-STD", "2026-01"): 4,
+        ("HOME-PLUS", "2026-01"): 2,
+        ("MOTOR-COMP", "2026-01"): 3,
+        ("MOTOR-TPL", "2026-01"): 2,
+    }
+)
+
 COVER_SECTION = "2"
 EXCLUSION_SECTION = "3"
 AMOUNTS_SECTION = "4"
@@ -147,11 +161,20 @@ def _titled(clauses: list[Clause], section: str, title: str) -> Clause | None:
     )
 
 
-def select_terms(peril: Peril, chunks: Iterable[Mapping[str, Any]]) -> Terms:
-    """The terms that bear on a claim for ``peril``, from the clauses retrieved.
+def select_terms(
+    peril: Peril,
+    chunks: Iterable[Mapping[str, Any]],
+    *,
+    product: str,
+    wording_version: str,
+) -> Terms:
+    """The terms that bear on a claim for ``peril``, from the clauses retrieved
+    of the wording ``product`` at ``wording_version``.
 
-    Chunks may repeat a clause and come in any order. Raises ``ValueError`` for
-    a chunk whose clause number is not of the form ``n.m``."""
+    Chunks may repeat a clause and come in any order. The exclusions are
+    complete only when every section-3 clause is readable, numbered without a
+    gap, and as many as ``EXCLUSION_CLAUSES`` says. Raises ``ValueError`` for a
+    chunk whose clause number is not of the form ``n.m``."""
     clauses = _unique_clauses(chunks)
     label = _label(peril)
     in_exclusions = [c for c in clauses if _section(c.clause) == EXCLUSION_SECTION]
@@ -171,6 +194,7 @@ def select_terms(peril: Peril, chunks: Iterable[Mapping[str, Any]]) -> Terms:
         # No section-3 clause at all is not complete: a wording without
         # exclusions is not credible, so the search missed them.
         exclusions_complete=len(in_exclusions) > 0
+        and len(in_exclusions) == EXCLUSION_CLAUSES.get((product, wording_version))
         and len(readable) == len(in_exclusions)
         and _exclusions_are_numbered_without_gap(in_exclusions),
         deductible=_titled(clauses, AMOUNTS_SECTION, "Deductible"),

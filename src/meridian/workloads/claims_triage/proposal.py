@@ -28,6 +28,10 @@ Rationale = Annotated[
     str, StringConstraints(min_length=1, max_length=MAX_RATIONALE_CHARS), NoNul
 ]
 AssessmentStatus = Literal["not_needed", "none_applies", "applies", "unavailable"]
+# Why the assessment is unavailable: one word, never the model's text.
+UnavailableBecause = Literal[
+    "truncated", "not-json", "not-the-format", "unknown-clause", "unsure", "too-long"
+]
 # The model said something about the exclusions, in its own words.
 ASSESSED = ("none_applies", "applies")
 
@@ -35,8 +39,10 @@ ASSESSED = ("none_applies", "applies")
 class Citation(WireModel):
     """A clause of the policy's wording that the decision rests on."""
 
-    product: Annotated[str, StringConstraints(min_length=1, max_length=32)]
-    wording_version: Annotated[str, StringConstraints(min_length=1, max_length=16)]
+    product: Annotated[str, StringConstraints(min_length=1, max_length=32), NoNul]
+    wording_version: Annotated[
+        str, StringConstraints(min_length=1, max_length=16), NoNul
+    ]
     clause: Clause
 
 
@@ -59,6 +65,7 @@ class TriageProposal(WireModel):
     citations: tuple[Citation, ...] = Field(max_length=MAX_CITATIONS)
     gaps: tuple[Gap, ...]
     assessment: AssessmentStatus
+    unavailable_because: UnavailableBecause | None
     rationale: Rationale | None
     drafted_by: DraftedBy | None
 
@@ -99,9 +106,15 @@ class TriageProposal(WireModel):
             raise ValueError(f"an automatic approval needs {', '.join(unmet)}")
 
     def _check_model_call(self) -> None:
-        if (self.drafted_by is None) != (self.assessment == "not_needed"):
+        # An unavailable assessment may follow a call or not: a user message
+        # over the gateway's limit is never sent.
+        if self.assessment == "not_needed" and self.drafted_by is not None:
+            raise ValueError("drafted_by is empty when no assessment was needed")
+        if self.assessment in ASSESSED and self.drafted_by is None:
+            raise ValueError("an assessment the model answered needs a drafted_by")
+        if (self.unavailable_because is not None) != (self.assessment == "unavailable"):
             raise ValueError(
-                "drafted_by is empty exactly when no assessment was needed"
+                "unavailable_because is set exactly when the assessment is unavailable"
             )
         if self.rationale is not None and self.assessment not in ASSESSED:
             raise ValueError("a rationale needs an assessment the model answered")

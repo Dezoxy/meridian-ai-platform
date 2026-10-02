@@ -41,6 +41,7 @@ OUTPUT = {
     "citations": [],
     "gaps": ["exclusion_assessment"],
     "assessment": "unavailable",
+    "unavailable_because": "not-json",
     "rationale": None,
     "drafted_by": DRAFTED_BY,
 }
@@ -52,6 +53,7 @@ AUTO_APPROVE_OUTPUT = OUTPUT | {
     "citations": [CITATION],
     "gaps": [],
     "assessment": "not_needed",
+    "unavailable_because": None,
     "drafted_by": None,
 }
 REQUEST_DOCUMENTS_OUTPUT = OUTPUT | {
@@ -61,6 +63,7 @@ REQUEST_DOCUMENTS_OUTPUT = OUTPUT | {
     "citations": [CITATION],
     "gaps": [],
     "assessment": "none_applies",
+    "unavailable_because": None,
     "rationale": "No circumstance exclusion applies.",
 }
 OUTPUT_BY_ROUTE = {

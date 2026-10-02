@@ -91,11 +91,8 @@ def test_a_submission_is_frozen() -> None:
         submission.claimed_amount = 1
 
 
-SUMMARY = {
-    "route": "adjuster",
-    "reason": "unverified",
-    "drafted_by": {"deployment": "replay-chat", "provider": "replay", "mode": "replay"},
-}
+DRAFTED_BY = {"deployment": "replay-chat", "provider": "replay", "mode": "replay"}
+SUMMARY = {"route": "adjuster", "reason": "unverified", "drafted_by": DRAFTED_BY}
 
 
 def test_a_proposal_summary_takes_a_reason_code_and_a_drafted_by() -> None:
@@ -117,6 +114,10 @@ def test_a_proposal_summary_may_say_that_no_model_was_called() -> None:
         {"route": "auto_reject"},
         {"extra": 1},
         {"drafted_by": {"deployment": "d", "provider": "p"}},
+        # PostgreSQL text cannot hold NUL: a DraftedBy is written to a column.
+        {"drafted_by": DRAFTED_BY | {"deployment": "eu\x00chat"}},
+        {"drafted_by": DRAFTED_BY | {"provider": "re\x00play"}},
+        {"drafted_by": DRAFTED_BY | {"mode": "re\x00play"}},
     ],
 )
 def test_a_summary_with_an_unknown_route_or_field_is_refused(

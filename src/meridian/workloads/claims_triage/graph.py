@@ -23,7 +23,7 @@ from pydantic import BaseModel, ValidationError
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
 
-from .assessment import assess
+from .assessment import Assessed, assess
 from .models import ClaimFacts, DraftedBy
 from .proposal import Citation, TriageProposal
 from .rules import (
@@ -64,18 +64,26 @@ def _policy_of(state: ClaimState) -> PolicyRecord:
     return PolicyRecord.model_validate(state["policy"])
 
 
-def _terms_of(claim: ClaimFacts, state: ClaimState) -> Terms:
-    return select_terms(claim.peril, state["chunks"])
+def _terms_of(claim: ClaimFacts, policy: PolicyRecord, state: ClaimState) -> Terms:
+    return select_terms(
+        claim.peril,
+        state["chunks"],
+        product=policy.product,
+        wording_version=policy.wording_version,
+    )
 
 
-def _assessed_to_state(
-    assessment: Assessment, rationale: str | None, drafted_by: DraftedBy | None
-) -> dict[str, Any]:
+NOT_NEEDED = Assessed(Assessment("not_needed"), None, None, None)
+
+
+def _assessed_to_state(assessed: Assessed) -> dict[str, Any]:
+    drafted_by = assessed.drafted_by
     return {
-        "status": assessment.status,
-        "clause": assessment.clause,
-        "rationale": rationale,
+        "status": assessed.assessment.status,
+        "clause": assessed.assessment.clause,
+        "rationale": assessed.rationale,
         "drafted_by": drafted_by.model_dump(mode="json") if drafted_by else None,
+        "unavailable_because": assessed.unavailable_because,
     }
 
 
@@ -137,18 +145,13 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
     def assess_exclusions(state: ClaimState) -> dict[str, Any]:
         claim = ClaimFacts.model_validate(state["claim"])
         policy = _policy_of(state)
-        terms = _terms_of(claim, state)
+        terms = _terms_of(claim, policy, state)
         if not needs_assessment(claim, policy, terms):
-            not_needed = _assessed_to_state(Assessment("not_needed"), None, None)
-            return {"assessed": not_needed}
+            return {"assessed": _assessed_to_state(NOT_NEEDED)}
         assessed = assess(
             model, claim, policy.product, policy.wording_version, terms.candidates
         )
-        return {
-            "assessed": _assessed_to_state(
-                assessed.assessment, assessed.rationale, assessed.drafted_by
-            )
-        }
+        return {"assessed": _assessed_to_state(assessed)}
 
     def propose(state: ClaimState) -> dict[str, Any]:
         claim = ClaimFacts.model_validate(state["claim"])
@@ -157,9 +160,14 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
             if state["policy"] is not None
             else None
         )
-        assessed = state["assessed"] or _assessed_to_state(
-            Assessment("not_needed"), None, None
-        )
+        # With no policy no node assessed anything. With one, ``assess`` always
+        # ran: a state without its assessment is a bug, not a default.
+        if policy is None:
+            assessed = _assessed_to_state(NOT_NEEDED)
+        elif state["assessed"] is None:
+            raise ValueError("a proposal was asked for before the assessment ran")
+        else:
+            assessed = state["assessed"]
         assessment = Assessment(assessed["status"], assessed["clause"])
         decision = decide(
             Facts(
@@ -167,7 +175,7 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
                 policy=policy,
                 history=tuple(HistoryEntry.model_validate(e) for e in state["history"]),
                 history_truncated=state["history_truncated"],
-                terms=_terms_of(claim, state) if policy is not None else None,
+                terms=_terms_of(claim, policy, state) if policy is not None else None,
                 assessment=assessment,
             )
         )
@@ -195,6 +203,7 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
             citations=citations,
             gaps=decision.gaps,
             assessment=assessment.status,
+            unavailable_because=assessed["unavailable_because"],
             rationale=assessed["rationale"],
             drafted_by=DraftedBy.model_validate(drafted_by) if drafted_by else None,
         )

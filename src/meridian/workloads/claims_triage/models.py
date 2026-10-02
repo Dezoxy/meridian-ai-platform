@@ -72,9 +72,9 @@ class ClaimSubmission(ClaimFacts):
 
 
 class DraftedBy(WireModel):
-    deployment: str
-    provider: str
-    mode: str
+    deployment: Annotated[str, NoNul]
+    provider: Annotated[str, NoNul]
+    mode: Annotated[str, NoNul]
 
 
 class ProposalSummary(WireModel):

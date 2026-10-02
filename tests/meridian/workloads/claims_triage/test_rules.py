@@ -89,7 +89,12 @@ def golden_facts(claim_id: str) -> tuple[Facts, dict[str, Any]]:
         for entry in HISTORY
         if entry["policy_number"] == policy.policy_number
     )
-    terms = select_terms(claim.peril, wording_chunks(policy.product))
+    terms = select_terms(
+        claim.peril,
+        wording_chunks(policy.product),
+        product=policy.product,
+        wording_version=policy.wording_version,
+    )
     facts = Facts(claim, policy, history, False, terms, Assessment("not_needed"))
     return facts, record
 
@@ -584,12 +589,42 @@ def test_step_2_a_lapse_after_the_loss_does_not_stop_the_claim() -> None:
     assert (decision.route, decision.reason) == ("auto_approve", "within_threshold")
 
 
-def test_step_2_leaves_out_a_clause_that_was_not_retrieved() -> None:
+def test_step_2_leaves_out_a_clause_that_was_not_retrieved_and_says_so() -> None:
     policy = make_policy(status="lapsed", lapsed_on=LOSS)
 
     decision = decide(make_facts(policy=policy, terms=make_terms(lapse=None)))
 
     assert decision.citations == ()
+    assert decision.gaps == ("lapse_clause",)
+    assert (decision.reason, decision.recommendation) == ("policy_inactive", "reject")
+
+
+def test_step_2_a_missing_period_clause_is_a_gap_when_the_period_is_cited() -> None:
+    policy = make_policy(start_date=LOSS + timedelta(days=1))
+
+    decision = decide(make_facts(policy=policy, terms=make_terms(period=None)))
+
+    assert decision.citations == ()
+    assert decision.gaps == ("period_clause",)
+
+
+def test_step_2_a_clause_it_does_not_cite_is_not_a_gap() -> None:
+    lapsed = make_policy(status="lapsed", lapsed_on=LOSS)
+    outside = make_policy(start_date=LOSS + timedelta(days=1))
+
+    by_lapse = decide(make_facts(policy=lapsed, terms=make_terms(period=None)))
+    by_period = decide(make_facts(policy=outside, terms=make_terms(lapse=None)))
+
+    assert (by_lapse.citations, by_lapse.gaps) == (("6.2",), ())
+    assert (by_period.citations, by_period.gaps) == (("6.1",), ())
+
+
+def test_step_2_a_retrieved_clause_is_cited_and_leaves_no_gap() -> None:
+    policy = make_policy(status="lapsed", lapsed_on=LOSS)
+
+    decision = decide(make_facts(policy=policy))
+
+    assert (decision.citations, decision.gaps) == (("6.2",), ())
 
 
 def test_step_2_fills_the_fraud_indicators_and_lists_no_gaps() -> None:
@@ -690,15 +725,20 @@ def test_step_5_a_clause_outside_the_candidates_is_a_value_error() -> None:
         assessment=Assessment("applies", "3.4"),
     )
 
-    with pytest.raises(ValueError, match=r"3\.4"):
+    with pytest.raises(ValueError, match="candidate") as raised:
         decide(facts)
+
+    assert "3.4" not in str(raised.value)
+    assert "3.3" not in str(raised.value)
 
 
 def test_step_5_an_applying_clause_without_any_candidate_is_a_value_error() -> None:
     facts = make_facts(assessment=Assessment("applies", "3.3"))
 
-    with pytest.raises(ValueError, match=r"3\.3"):
+    with pytest.raises(ValueError, match="candidate") as raised:
         decide(facts)
+
+    assert "3.3" not in str(raised.value)
 
 
 def test_step_5_lists_the_gaps_of_the_decision() -> None:
@@ -746,12 +786,22 @@ def test_step_6_missing_documents_request_them_citing_the_documents_clause() -> 
     )
 
 
-def test_step_6_leaves_out_a_documents_clause_that_was_not_retrieved() -> None:
+def test_step_6_leaves_out_a_documents_clause_that_was_not_retrieved_and_says_so() -> (
+    None
+):
     claim = make_claim(documents=())
 
     decision = decide(make_facts(claim=claim, terms=make_terms(documents=None)))
 
     assert (decision.reason, decision.citations) == ("missing_documents", ())
+    assert decision.gaps == ("documents_clause",)
+
+
+def test_a_documents_clause_that_nothing_cites_is_not_a_gap() -> None:
+    decision = decide(make_facts(terms=make_terms(documents=None)))
+
+    assert decision.gaps == ()
+    assert (decision.route, decision.reason) == ("auto_approve", "within_threshold")
 
 
 def test_step_6_still_requests_documents_when_facts_are_missing() -> None:
@@ -770,6 +820,20 @@ def test_step_6_still_requests_documents_when_facts_are_missing() -> None:
         "exclusion_clauses",
         "exclusion_assessment",
         "claim_history",
+    )
+
+
+def test_step_6_lists_a_missing_documents_clause_after_the_other_gaps() -> None:
+    facts = make_facts(
+        claim=make_claim(documents=()),
+        terms=make_terms(documents=None, exclusions_complete=False),
+        history_truncated=True,
+    )
+
+    assert decide(facts).gaps == (
+        "exclusion_clauses",
+        "claim_history",
+        "documents_clause",
     )
 
 
@@ -893,6 +957,38 @@ def test_step_8_leaves_out_clauses_that_were_not_retrieved() -> None:
     assert decision.citations == ("2.2",)
 
 
+def test_step_8_a_late_report_without_the_reporting_clause_has_a_gap() -> None:
+    claim = make_claim(reported_on=LOSS + timedelta(days=31))
+
+    decision = decide(make_facts(claim=claim, terms=make_terms(reporting=None)))
+
+    assert decision.citations == ("2.2", "4.1")
+    assert decision.gaps == ("reporting_clause",)
+    assert (decision.reason, decision.recommendation) == ("fraud_indicator", None)
+
+
+def test_step_8_a_report_in_time_does_not_need_the_reporting_clause() -> None:
+    decision = decide(make_facts(terms=make_terms(reporting=None)))
+
+    assert decision.gaps == ()
+    assert decision.route == "auto_approve"
+
+
+def test_step_8_lists_the_reporting_clause_gap_after_the_other_gaps() -> None:
+    claim = make_claim(reported_on=LOSS + timedelta(days=31))
+    facts = make_facts(
+        claim=claim,
+        terms=make_terms(reporting=None, deductible=None),
+        history_truncated=True,
+    )
+
+    assert decide(facts).gaps == (
+        "deductible_clause",
+        "claim_history",
+        "reporting_clause",
+    )
+
+
 def test_step_8_over_threshold_still_lists_the_gaps() -> None:
     facts = make_facts(claim=make_claim(claimed_amount=9000), history_truncated=True)
 
@@ -993,12 +1089,53 @@ def test_gap_exclusion_clauses_when_no_section_three_clause_was_retrieved() -> N
         {"clause": "4.1", "section": "Amounts", "title": "Deductible", "body": "EUR."},
         {"clause": "4.2", "section": "Amounts", "title": "Limit", "body": "EUR."},
     ]
-    terms = select_terms("storm", chunks)
+    terms = select_terms("storm", chunks, product="HOME-STD", wording_version="2026-01")
 
     decision = decide(make_facts(terms=terms))
 
     assert_unverified(decision, "exclusion_clauses")
     assert decision.citations == ("2.2", "4.1")
+
+
+def test_gap_exclusion_clauses_when_the_last_clause_of_the_wording_is_missing() -> None:
+    """The search missed HOME-STD's clause 3.4, which the claim's peril names:
+    clauses 3.1 to 3.3 are retrieved without a gap, and the one candidate is
+    assessed as not applying. Without the count of the wording's clauses this
+    claim is approved automatically with "Gradual leaks" never looked at."""
+    whole = wording_chunks("HOME-STD")
+    claim = make_claim(
+        peril="burst_pipe", documents=("photos", "repair_estimate"), claimed_amount=1000
+    )
+    policy = make_policy()
+
+    def decision_for(chunks: list[dict[str, Any]]) -> Decision:
+        terms = select_terms(
+            "burst_pipe",
+            chunks,
+            product=policy.product,
+            wording_version=policy.wording_version,
+        )
+        return decide(
+            make_facts(
+                claim=claim,
+                policy=policy,
+                terms=terms,
+                assessment=Assessment("none_applies"),
+            )
+        )
+
+    complete = decision_for(whole)
+    missed = decision_for([c for c in whole if c["clause"] != "3.4"])
+
+    assert (complete.route, complete.reason) == ("auto_approve", "within_threshold")
+    assert complete.gaps == ()
+    assert missed.route != "auto_approve"
+    assert (missed.route, missed.reason, missed.recommendation) == (
+        "adjuster",
+        "unverified",
+        None,
+    )
+    assert missed.gaps == ("exclusion_clauses",)
 
 
 def test_gap_deductible_clause_when_it_was_not_retrieved() -> None:
@@ -1086,6 +1223,21 @@ def test_all_gaps_are_listed_in_order() -> None:
         "claim_history",
     )
     assert decision.reason == "unverified"
+
+
+def test_the_gaps_are_the_vocabulary_of_the_rules() -> None:
+    assert set(get_args(rules.Gap)) == {
+        "cover_clause",
+        "exclusion_clauses",
+        "deductible_clause",
+        "limit_clause",
+        "exclusion_assessment",
+        "claim_history",
+        "period_clause",
+        "lapse_clause",
+        "documents_clause",
+        "reporting_clause",
+    }
 
 
 def test_a_decision_is_frozen() -> None:

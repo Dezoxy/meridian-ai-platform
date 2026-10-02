@@ -26,6 +26,7 @@ def proposal(**overrides: Any) -> dict[str, Any]:
         "citations": [CITATION],
         "gaps": [],
         "assessment": "none_applies",
+        "unavailable_because": None,
         "rationale": "No circumstance exclusion applies to a burst pipe.",
         "drafted_by": DRAFTED_BY,
     } | overrides
@@ -90,6 +91,7 @@ VALID_BY_REASON: dict[str, dict[str, Any]] = {
         "recommendation": None,
         "gaps": ["exclusion_assessment"],
         "assessment": "unavailable",
+        "unavailable_because": "not-json",
         "rationale": None,
     },
 }
@@ -174,7 +176,6 @@ def test_a_route_the_reason_does_not_give_is_refused(reason: str, route: str) ->
         {"gaps": ["claim_history"]},
         {"exclusion_clause": "5.2"},
         {"assessment": "applies"},
-        {"assessment": "unavailable"},
         {"citations": []},
     ],
     ids=[
@@ -187,7 +188,6 @@ def test_a_route_the_reason_does_not_give_is_refused(reason: str, route: str) ->
         "gap",
         "exclusion",
         "assessment-applies",
-        "assessment-unavailable",
         "no-citation",
     ],
 )
@@ -196,6 +196,36 @@ def test_an_auto_approval_that_breaks_a_condition_is_refused(
 ) -> None:
     with pytest.raises(ValidationError):
         TriageProposal.model_validate(proposal(**change))
+
+
+@pytest.mark.parametrize("drafted_by", [DRAFTED_BY, None], ids=["called", "too-long"])
+@pytest.mark.parametrize(
+    "because", ["truncated", "not-json", "not-the-format", "unknown-clause", "unsure"]
+)
+def test_an_unavailable_assessment_alone_refuses_an_auto_approval(
+    because: str, drafted_by: dict[str, str] | None
+) -> None:
+    """Everything else of the proposal is valid: no rationale, no gap, a
+    recommendation to approve, a citation. Only the assessment is wrong."""
+    document = proposal(
+        assessment="unavailable",
+        unavailable_because=because,
+        rationale=None,
+        drafted_by=drafted_by,
+    )
+
+    with pytest.raises(ValidationError, match="assessment that found no exclusion"):
+        TriageProposal.model_validate(document)
+
+
+def test_an_auto_approval_needs_only_that_assessment_of_the_two_it_accepts() -> None:
+    for assessment, rationale, drafted_by in (
+        ("none_applies", "Nothing applies.", DRAFTED_BY),
+        ("not_needed", None, None),
+    ):
+        TriageProposal.model_validate(
+            proposal(assessment=assessment, rationale=rationale, drafted_by=drafted_by)
+        )
 
 
 def test_an_auto_approval_at_the_limit_is_accepted_and_one_above_is_refused() -> None:
@@ -262,22 +292,81 @@ def test_unverified_needs_a_gap() -> None:
         {"drafted_by": None},  # the model was asked
         {"assessment": "not_needed"},  # no call, yet a drafted_by and a rationale
         {"assessment": "not_needed", "rationale": None},  # no call, yet a drafted_by
-        {"assessment": "unavailable", "drafted_by": None},
         {"assessment": "applies", "drafted_by": None, "exclusion_clause": "5.2"},
     ],
     ids=[
         "answered-without-model-call",
         "not-needed-with-both",
         "not-needed-with-drafted-by",
-        "unavailable-without-call",
         "applies-without-call",
     ],
 )
-def test_drafted_by_is_none_exactly_when_the_assessment_is_not_needed(
+def test_drafted_by_is_none_when_no_assessment_was_needed_and_set_when_answered(
     change: dict[str, Any],
 ) -> None:
     with pytest.raises(ValidationError):
         TriageProposal.model_validate(proposal(**change))
+
+
+@pytest.mark.parametrize("drafted_by", [DRAFTED_BY, None], ids=["called", "too-long"])
+def test_an_unavailable_assessment_has_a_drafted_by_or_none_when_no_call_was_made(
+    drafted_by: dict[str, str] | None,
+) -> None:
+    accepted = TriageProposal.model_validate(
+        proposal(
+            **VALID_BY_REASON["unverified"]
+            | {
+                "unavailable_because": "too-long" if drafted_by is None else "unsure",
+                "drafted_by": drafted_by,
+            }
+        )
+    )
+
+    assert (accepted.drafted_by is None) == (drafted_by is None)
+
+
+@pytest.mark.parametrize(
+    "because",
+    ["truncated", "not-json", "not-the-format", "unknown-clause", "unsure", "too-long"],
+)
+def test_an_unavailable_assessment_carries_one_of_the_six_reason_words(
+    because: str,
+) -> None:
+    document = proposal(
+        **VALID_BY_REASON["unverified"] | {"unavailable_because": because}
+    )
+
+    accepted = TriageProposal.model_validate(document)
+
+    assert accepted.model_dump(mode="json")["unavailable_because"] == because
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"unavailable_because": None},  # unavailable, and no word for it
+        {"unavailable_because": "because"},
+        {"unavailable_because": ""},
+        {"assessment": "none_applies"},  # a word, yet the model answered
+        {"assessment": "applies", "exclusion_clause": "5.2", "rationale": "Racing."},
+        {"assessment": "not_needed", "drafted_by": None},
+    ],
+    ids=[
+        "unavailable-without-a-word",
+        "unknown-word",
+        "empty-word",
+        "word-with-none-applies",
+        "word-with-applies",
+        "word-with-not-needed",
+    ],
+)
+def test_the_reason_word_is_set_exactly_when_the_assessment_is_unavailable(
+    change: dict[str, Any],
+) -> None:
+    document = proposal(**VALID_BY_REASON["unverified"]) | change
+
+    with pytest.raises(ValidationError):
+        TriageProposal.model_validate(document)
 
 
 @pytest.mark.parametrize("assessment", ["not_needed", "unavailable"])
@@ -291,6 +380,7 @@ def test_a_rationale_without_an_answer_from_the_model_is_refused(
         "recommendation": None,
         "gaps": ["claim_history"],
         "assessment": assessment,
+        "unavailable_because": "unsure" if assessment == "unavailable" else None,
         "drafted_by": drafted_by,
     }
     TriageProposal.model_validate(proposal(**base, rationale=None))
@@ -327,6 +417,12 @@ def test_a_rationale_without_an_answer_from_the_model_is_refused(
         {"citations": [{**CITATION, "clause": "2.1\n"}]},
         {"citations": [{**CITATION, "extra": 1}]},
         {"drafted_by": {"deployment": "d", "provider": "p"}},
+        {"citations": [{**CITATION, "product": "HOME\x00STD"}]},
+        {"citations": [{**CITATION, "wording_version": "2026\x00-01"}]},
+        {"drafted_by": {**DRAFTED_BY, "deployment": "eu\x00chat"}},
+        {"drafted_by": {**DRAFTED_BY, "provider": "azure\x00openai"}},
+        {"drafted_by": {**DRAFTED_BY, "mode": "li\x00ve"}},
+        {"unavailable_because": "because"},
         {"extra": 1},
     ],
 )

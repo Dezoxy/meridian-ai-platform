@@ -221,7 +221,12 @@ def claims_that_ask_the_model() -> set[str]:
         facts = ClaimFacts.model_validate(
             {k: v for k, v in claim.items() if k != "claimant"}
         )
-        terms = select_terms(facts.peril, whole_wording(policy["product"]))
+        terms = select_terms(
+            facts.peril,
+            whole_wording(policy["product"]),
+            product=record.product,
+            wording_version=record.wording_version,
+        )
         if needs_assessment(facts, record, terms):
             asking.add(claim_id)
     return asking

@@ -132,13 +132,14 @@ def found(fresh_database: DatabaseHandle) -> list[Pair]:
             ]
             for in_force in (True, False)
         }
+        which = {"product": product, "wording_version": catalogue.WORDING_VERSION}
         pairs.append(
             Pair(
                 product,
                 peril,  # type: ignore[arg-type]
-                select_terms(peril, flat(answers[True])),  # type: ignore[arg-type]
-                select_terms(peril, flat(answers[False])),  # type: ignore[arg-type]
-                select_terms(peril, whole_wording(product)),  # type: ignore[arg-type]
+                select_terms(peril, flat(answers[True]), **which),  # type: ignore[arg-type]
+                select_terms(peril, flat(answers[False]), **which),  # type: ignore[arg-type]
+                select_terms(peril, whole_wording(product), **which),  # type: ignore[arg-type]
                 [chunk["clause"] for chunk in answers[True][-2]],
                 [chunk["clause"] for chunk in answers[True][-1]],
             )

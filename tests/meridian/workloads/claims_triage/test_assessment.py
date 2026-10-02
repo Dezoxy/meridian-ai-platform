@@ -11,16 +11,20 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from pydantic import TypeAdapter
 
+from meridian.platform.gateway.models import MAX_CONTENT_CHARS
 from meridian.runtime.model_client import ChatResult, ModelClient
 from meridian.workloads.claims_triage.assessment import (
     ASSESSMENT_OUTPUT_TOKENS,
+    MAX_USER_MESSAGE_CHARS,
     Assessed,
     assess,
     build_messages,
     read_answer,
 )
 from meridian.workloads.claims_triage.models import ClaimFacts, DraftedBy
+from meridian.workloads.claims_triage.proposal import MAX_RATIONALE_CHARS, Rationale
 from meridian.workloads.claims_triage.rules import Assessment
 from meridian.workloads.claims_triage.wording import Clause
 
@@ -129,6 +133,21 @@ def test_a_description_cannot_close_its_own_string() -> None:
     assert set(document) == {"peril", "description", "wording", "clauses"}
 
 
+def test_non_ascii_text_is_sent_as_it_is_and_not_as_escapes() -> None:
+    description = "ő" * 5000
+
+    messages = build_messages(make_claim(description), "motor", "2026.1", CANDIDATES)
+    content = messages[1]["content"]
+
+    assert description in content
+    assert len(content) < 6000  # six characters each as an escape: over 30,000
+    assert json.loads(content)["description"] == description
+
+
+def test_the_limit_of_the_user_message_is_the_gateways() -> None:
+    assert MAX_USER_MESSAGE_CHARS == MAX_CONTENT_CHARS == 20_000
+
+
 def test_nothing_of_the_claim_but_peril_and_description_is_sent() -> None:
     messages = build_messages(make_claim(), "motor", "2026.1", CANDIDATES)
 
@@ -151,6 +170,12 @@ def test_the_system_message_names_the_verdicts_and_the_data_rule() -> None:
         assert word in system
 
 
+def test_the_system_message_names_the_rationale_limit_of_the_proposal() -> None:
+    system = build_messages(make_claim(), "motor", "2026.1", CANDIDATES)[0]["content"]
+
+    assert f"<at most {MAX_RATIONALE_CHARS} characters>" in system
+
+
 # --- reading the answer -----------------------------------------------------
 
 
@@ -160,13 +185,14 @@ def test_none_is_none_applies_with_its_rationale() -> None:
     assert result == (
         Assessment("none_applies"),
         "The description states no excluded fact.",
+        None,
     )
 
 
 def test_applies_names_a_candidate_clause() -> None:
     result = read_answer(answer("applies", "3.4", "It was a race."), "stop", CANDIDATES)
 
-    assert result == (Assessment("applies", "3.4"), "It was a race.")
+    assert result == (Assessment("applies", "3.4"), "It was a race.", None)
 
 
 def test_a_fenced_answer_is_read() -> None:
@@ -189,7 +215,60 @@ def test_surrounding_whitespace_is_ignored() -> None:
 def test_a_rationale_of_exactly_600_characters_is_accepted() -> None:
     result = read_answer(answer(rationale="r" * 600), "stop", CANDIDATES)
 
-    assert result == (Assessment("none_applies"), "r" * 600)
+    assert result == (Assessment("none_applies"), "r" * 600, None)
+
+
+@pytest.mark.parametrize("verdict", ["none", "applies"])
+def test_a_rationale_over_the_limit_is_cut_and_the_verdict_kept(verdict: str) -> None:
+    clause = "3.1" if verdict == "applies" else None
+    long = "a" * 600 + "b" * 400
+
+    assessment, rationale, because = read_answer(
+        answer(verdict, clause, long), "stop", CANDIDATES
+    )
+
+    assert assessment.status == ("applies" if clause else "none_applies")
+    assert assessment.clause == clause
+    assert rationale == "a" * MAX_RATIONALE_CHARS
+    assert because is None
+
+
+def test_a_rationale_one_over_the_limit_loses_its_last_character() -> None:
+    _, rationale, _ = read_answer(
+        answer(rationale="r" * 599 + "xy"), "stop", CANDIDATES
+    )
+
+    assert rationale == "r" * 599 + "x"
+
+
+def test_a_cut_rationale_still_fits_the_proposals_limit() -> None:
+    _, rationale, _ = read_answer(answer(rationale="é" * 5000), "stop", CANDIDATES)
+
+    assert rationale is not None
+    TypeAdapter(Rationale).validate_python(rationale)
+
+
+def test_a_rationale_that_is_not_text_is_not_the_format_whatever_its_length() -> None:
+    # A lone surrogate is the model's text that cannot be written as UTF-8.
+    for rationale in ("\ud800", "fine" + "\udfff" + "x" * 700):
+        result = read_answer(answer(rationale=rationale), "stop", CANDIDATES)
+
+        assert result == (Assessment("unavailable"), None, "not-the-format")
+
+
+def test_a_rationale_of_only_blanks_is_not_the_format_even_when_long() -> None:
+    result = read_answer(answer(rationale=" " * 900), "stop", CANDIDATES)
+
+    assert result == (Assessment("unavailable"), None, "not-the-format")
+
+
+@pytest.mark.parametrize(
+    "text", ["[" * 200_000, '{"a":' * 200_000], ids=["list", "object"]
+)
+def test_an_answer_nested_too_deep_to_parse_is_not_json(text: str) -> None:
+    result = read_answer(text, "stop", CANDIDATES)
+
+    assert result == (Assessment("unavailable"), None, "not-json")
 
 
 def unavailable_cases() -> list[tuple[str, str, str]]:
@@ -231,8 +310,8 @@ def unavailable_cases() -> list[tuple[str, str, str]]:
         ),
         ("empty-rationale", varied(rationale=""), "not-the-format"),
         ("blank-rationale", varied(rationale="  \n "), "not-the-format"),
-        ("long-rationale", varied(rationale=CANARY + "r" * 600), "not-the-format"),
         ("nul-in-rationale", varied(rationale=f"{CANARY}\x00"), "not-the-format"),
+        ("lone-surrogate", varied(rationale=f"{CANARY}\ud800"), "not-the-format"),
         (
             "applies-unknown-clause",
             varied(verdict="applies", clause="3.9"),
@@ -259,7 +338,7 @@ def test_an_untrustworthy_answer_is_unavailable_and_logs_one_word(
     with caplog.at_level(logging.DEBUG, logger=LOGGER):
         result = read_answer(text, "stop", CANDIDATES)
 
-    assert result == (Assessment("unavailable"), None)
+    assert result == (Assessment("unavailable"), None, word)
     records = [r for r in caplog.records if r.name == LOGGER]
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
@@ -274,7 +353,7 @@ def test_a_truncated_answer_is_unavailable_even_when_it_is_complete(
     with caplog.at_level(logging.DEBUG, logger=LOGGER):
         result = read_answer(answer("none"), "length", CANDIDATES)
 
-    assert result == (Assessment("unavailable"), None)
+    assert result == (Assessment("unavailable"), None, "truncated")
     assert [r.getMessage() for r in caplog.records if r.name == LOGGER] == [
         "exclusion assessment unavailable: truncated"
     ]
@@ -293,7 +372,7 @@ def test_the_gateways_replay_text_is_unavailable(
     with caplog.at_level(logging.DEBUG, logger=LOGGER):
         result = read_answer(REPLAY_TEXT, "stop", CANDIDATES)
 
-    assert result == (Assessment("unavailable"), None)
+    assert result == (Assessment("unavailable"), None, "not-json")
     assert "not-json" in caplog.text
 
 
@@ -323,6 +402,7 @@ def test_assess_returns_the_assessment_and_who_drafted_it() -> None:
         drafted_by=DraftedBy(
             deployment="eu-chat", provider="azure-openai", mode="live"
         ),
+        unavailable_because=None,
     )
 
 
@@ -333,6 +413,7 @@ def test_assess_of_an_untrustworthy_answer_still_records_who_drafted_it() -> Non
 
     assert result.assessment == Assessment("unavailable")
     assert result.rationale is None
+    assert result.unavailable_because == "not-json"
     assert result.drafted_by == DraftedBy(
         deployment="eu-chat", provider="azure-openai", mode="live"
     )
@@ -345,6 +426,75 @@ def test_assess_of_a_truncated_answer_is_unavailable() -> None:
 
     assert result.assessment == Assessment("unavailable")
     assert result.rationale is None
+    assert result.unavailable_because == "truncated"
+
+
+def test_assess_keeps_the_reason_word_of_each_answer_it_cannot_use() -> None:
+    for text, word in (
+        (answer("unsure"), "unsure"),
+        (answer("applies", "9.9"), "unknown-clause"),
+        ('{"verdict": "none"}', "not-the-format"),
+    ):
+        stub = StubModel(chat_result(text))
+
+        result = assess(as_client(stub), make_claim(), "motor", "2026.1", CANDIDATES)
+
+        assert result.unavailable_because == word
+
+
+def user_message_of(length: int) -> str:
+    """A description that makes the user message exactly ``length`` characters,
+    through the text of the one clause: the description is capped at 5,000."""
+    empty = (Clause("3.1", "Racing", ""),)
+    base = len(build_messages(make_claim(), "motor", "2026.1", empty)[1]["content"])
+    return "x" * (length - base)
+
+
+def test_a_user_message_of_exactly_the_gateways_limit_is_sent() -> None:
+    body = user_message_of(MAX_USER_MESSAGE_CHARS)
+    candidates = (Clause("3.1", "Racing", body),)
+    stub = StubModel(chat_result(answer("none")))
+
+    result = assess(as_client(stub), make_claim(), "motor", "2026.1", candidates)
+
+    assert len(stub.calls) == 1
+    assert len(stub.calls[0][0][1]["content"]) == MAX_CONTENT_CHARS
+    assert result.assessment == Assessment("none_applies")
+
+
+def test_a_user_message_one_over_the_limit_makes_no_call_and_is_too_long(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    body = user_message_of(MAX_USER_MESSAGE_CHARS + 1)
+    candidates = (Clause("3.1", "Racing", body),)
+    stub = StubModel(chat_result(answer("none")))
+
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        result = assess(as_client(stub), make_claim(), "motor", "2026.1", candidates)
+
+    assert stub.calls == []
+    assert result == Assessed(
+        assessment=Assessment("unavailable"),
+        rationale=None,
+        drafted_by=None,
+        unavailable_because="too-long",
+    )
+    assert [r.getMessage() for r in caplog.records if r.name == LOGGER] == [
+        "exclusion assessment unavailable: too-long"
+    ]
+
+
+def test_a_long_description_of_non_ascii_text_still_reaches_the_model() -> None:
+    """Escaped, 5,000 of these are 30,000 characters and over the gateway's
+    limit on every retry; as they are, they are well under it."""
+    stub = StubModel(chat_result(answer("none")))
+
+    result = assess(
+        as_client(stub), make_claim("ő" * 5000), "motor", "2026.1", CANDIDATES
+    )
+
+    assert len(stub.calls) == 1
+    assert result.assessment == Assessment("none_applies")
 
 
 def test_a_model_error_propagates() -> None:
