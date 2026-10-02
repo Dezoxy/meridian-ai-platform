@@ -1,5 +1,6 @@
-# Agent Runtime: runs the triage graph and calls the Model Gateway.
-# Cluster-internal: no route.
+# Claims tool server: add_claim_note and request_approval, the claims workload's
+# own mutating tools (MCP over HTTP at /mcp). Cluster-internal: no route; the
+# Agent Runtime calls it at the address in its MERIDIAN_TOOL_SERVERS.
 # Plain YAML, server-side applied by infra/kind/deploy.sh (`make deploy`), which
 # replaces @IMAGE@ with the locally built image. S019 turns the manifests of the
 # skeleton into hardened Helm charts: no NetworkPolicy, PodDisruptionBudget or
@@ -8,42 +9,42 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: agent-runtime
+  name: claims-mcp
   namespace: meridian
   labels:
-    app.kubernetes.io/name: agent-runtime
+    app.kubernetes.io/name: claims-mcp
     app.kubernetes.io/part-of: meridian
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agent-runtime
+  name: claims-mcp
   namespace: meridian
   labels:
-    app.kubernetes.io/name: agent-runtime
+    app.kubernetes.io/name: claims-mcp
     app.kubernetes.io/part-of: meridian
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: agent-runtime
+      app.kubernetes.io/name: claims-mcp
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: agent-runtime
+        app.kubernetes.io/name: claims-mcp
         app.kubernetes.io/part-of: meridian
     spec:
-      serviceAccountName: agent-runtime
+      serviceAccountName: claims-mcp
       automountServiceAccountToken: false
       containers:
-        - name: agent-runtime
+        - name: claims-mcp
           image: "@IMAGE@"
           imagePullPolicy: IfNotPresent
           command:
             - uvicorn
             - --factory
-            - meridian.runtime.app:create_app_from_env
+            - meridian.workloads.claims_triage.mcp_server.app:create_app_from_env
             - --host
             - 0.0.0.0
             - --port
@@ -55,20 +56,11 @@ spec:
             - name: MERIDIAN_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: agent-runtime-db
+                  name: claims-mcp-db
                   key: uri
-            - name: MERIDIAN_GATEWAY_URL
-              value: http://model-gateway.meridian.svc:8000
-            # The registry's server IDs and where each is served (base URLs; the
-            # client appends /mcp). Each server's MERIDIAN_ALLOWED_HOSTS is the
-            # host and port of its address here.
-            - name: MERIDIAN_TOOL_SERVERS
-              value: |-
-                {
-                  "policy-mcp": "http://policy-mcp.meridian.svc:8000",
-                  "claims-mcp": "http://claims-mcp.meridian.svc:8000",
-                  "knowledge-mcp": "http://knowledge-mcp.meridian.svc:8000"
-                }
+            # The Host header the Agent Runtime sends (DNS rebinding protection).
+            - name: MERIDIAN_ALLOWED_HOSTS
+              value: claims-mcp.meridian.svc:8000
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector.observability.svc.cluster.local:4318
           readinessProbe:
@@ -85,8 +77,8 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 6
-          # Sized from cAdvisor on kind (2026-10-01): peak working set 87 MB
-          # after two demo claims; the limit leaves about three times that.
+          # The Agent Runtime's numbers. Measured from cAdvisor on kind
+          # (2026-10-02) after demo claims and smoke runs: working set 72 to 86 MB.
           resources:
             requests:
               cpu: 50m
@@ -117,15 +109,15 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: agent-runtime
+  name: claims-mcp
   namespace: meridian
   labels:
-    app.kubernetes.io/name: agent-runtime
+    app.kubernetes.io/name: claims-mcp
     app.kubernetes.io/part-of: meridian
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: agent-runtime
+    app.kubernetes.io/name: claims-mcp
   ports:
     - name: http
       port: 8000

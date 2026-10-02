@@ -1,6 +1,8 @@
-# One image for the three services (Claims API, Agent Runtime, Model Gateway)
-# and for `meridian db migrate`. This file sets no CMD or ENTRYPOINT (the base
-# image's own CMD, `python3`, is inherited); each manifest names its command.
+# One image for the six services (Claims API, Agent Runtime, Model Gateway and
+# the policy, claims and knowledge tool servers) and for `meridian db migrate`,
+# `meridian db seed-policies` and `meridian knowledge ingest`. This file sets no
+# CMD or ENTRYPOINT (the base image's own CMD, `python3`, is inherited); each
+# manifest names its command.
 # Built by infra/kind/deploy.sh (`make deploy`); S019/S021 take over the build.
 #
 # Base images are pinned by their multi-arch index digest. Looked up
@@ -33,6 +35,11 @@ RUN groupadd --gid 10001 meridian \
 # link and scripts keep working.
 COPY --from=build /opt/venv /opt/venv
 COPY config/registry /opt/meridian/registry
+# The seed data `meridian db seed-policies` and `meridian knowledge ingest` read,
+# and nothing else of data/synthetic: not the claims, the golden labels or the
+# generator. .dockerignore lets the same files into the build context.
+COPY data/synthetic/manifest.json data/synthetic/policies.json data/synthetic/claim-history.json /opt/meridian/synthetic/
+COPY data/synthetic/wordings/*.md /opt/meridian/synthetic/wordings/
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

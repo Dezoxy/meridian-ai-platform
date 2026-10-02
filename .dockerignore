@@ -5,6 +5,11 @@
 !uv.lock
 !src/
 !config/registry/
+# The seed data the image carries (the claims and the golden labels stay out).
+!data/synthetic/manifest.json
+!data/synthetic/policies.json
+!data/synthetic/claim-history.json
+!data/synthetic/wordings/*.md
 # Re-exclude what the allowed folders can hold.
 **/__pycache__
 **/*.pyc

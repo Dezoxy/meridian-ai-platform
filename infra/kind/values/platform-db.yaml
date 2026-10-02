@@ -4,11 +4,11 @@
 # and its Secret platform-db-app; no credential is set here.
 #
 # The walking skeleton (S041) adds the database "meridian" and four roles; the
-# tool servers (S013) add two more. Their passwords are in Secrets that up.sh
-# creates before this release installs (CloudNativePG cannot reconcile a role
-# whose Secret is missing); nothing secret is written here. The "app"
-# database, role and Secret are untouched: changing initdb would not converge
-# on an existing cluster.
+# three tool servers (S013, S046) add three more. Their passwords are in
+# Secrets that up.sh creates before this release installs (CloudNativePG cannot
+# reconcile a role whose Secret is missing); nothing secret is written here.
+# The "app" database, role and Secret are untouched: changing initdb would not
+# converge on an existing cluster.
 # Without this the chart names the Cluster "platform-db-cluster".
 fullnameOverride: platform-db
 
@@ -72,19 +72,26 @@ cluster:
       login: true
       passwordSecret:
         name: model-gateway-db
+    # A tool server runs at most MAX_CONCURRENT_CALLS (8) calls in worker
+    # threads, one connection each, and writes a failure's audit row on one
+    # more, so 12 is a bound it never reaches and a runaway cannot pass. The
+    # other roles have no such bound until they get a pool (S019).
     - name: policy_mcp
       ensure: present
       login: true
+      connectionLimit: 12
       passwordSecret:
         name: policy-mcp-db
     - name: claims_mcp
       ensure: present
       login: true
+      connectionLimit: 12
       passwordSecret:
         name: claims-mcp-db
     - name: knowledge_mcp
       ensure: present
       login: true
+      connectionLimit: 12
       passwordSecret:
         name: knowledge-mcp-db
 

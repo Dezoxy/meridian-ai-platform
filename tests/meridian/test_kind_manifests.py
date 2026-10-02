@@ -7,14 +7,17 @@ not on the owner's laptop (S041).
 """
 
 import importlib
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+import typer.main
 import yaml
-from servicesupport import REPO_ROOT
+from servicesupport import REGISTRY_DIR, REPO_ROOT
 
+from meridian.platform.cli import app as meridian_cli
 from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
@@ -25,27 +28,62 @@ from meridian.platform.gateway.settings import (
     MODE_ENV,
     GatewaySettings,
 )
-from meridian.runtime.settings import GATEWAY_URL_ENV, RuntimeSettings
+from meridian.platform.knowledge_mcp import INGESTION_AGENT
+from meridian.platform.knowledge_mcp import SERVICE_NAME as KNOWLEDGE_SERVER
+from meridian.platform.knowledge_mcp.ingest import MANIFEST_FILE as WORDINGS_MANIFEST
+from meridian.platform.knowledge_mcp.ingest import WORDINGS_DIR
+from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
+from meridian.platform.policy_mcp import SERVICE_NAME as POLICY_SERVER
+from meridian.platform.policy_mcp.seed import HISTORY_FILE, MANIFEST_FILE, POLICIES_FILE
+from meridian.platform.registry import load_registry
+from meridian.platform.toolserver.server import MAX_CONCURRENT_CALLS
+from meridian.platform.toolserver.settings import (
+    ALLOWED_HOSTS_ENV,
+    ToolServerSettings,
+)
+from meridian.runtime.settings import (
+    GATEWAY_URL_ENV,
+    TOOL_SERVERS_ENV,
+    RuntimeSettings,
+)
+from meridian.workloads.claims_triage.mcp_server import SERVICE_NAME as CLAIMS_SERVER
 from meridian.workloads.claims_triage.settings import RUNTIME_URL_ENV, ClaimsSettings
 
 KIND_DIR = REPO_ROOT / "infra" / "kind"
 MANIFESTS = KIND_DIR / "manifests" / "meridian"
 MIGRATE_JOB_FILE = MANIFESTS / "migrate-job.yaml"
+SEED_JOB_FILE = MANIFESTS / "seed-job.yaml"
+INGEST_JOB_FILE = MANIFESTS / "ingest-job.yaml"
+JOB_FILES = (MIGRATE_JOB_FILE, SEED_JOB_FILE, INGEST_JOB_FILE)
+TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
+SERVER_PORT = 8000
+# The tenant whose limits the ingestion's embedding calls count against.
+INGEST_TENANT = "claims-triage"
 DOCKERFILE = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
 DOCKERIGNORE = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
 UP_SH = (KIND_DIR / "up.sh").read_text(encoding="utf-8")
 COMMON_SH = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (KIND_DIR / "deploy.sh").read_text(encoding="utf-8")
+SMOKE_SH = (KIND_DIR / "smoke.sh").read_text(encoding="utf-8")
 PLATFORM_DB = yaml.safe_load((KIND_DIR / "values" / "platform-db.yaml").read_text())
 
 OWNER_SECRET = "meridian-owner-db"  # noqa: S105 (a Secret name, not a password)
-SERVICES = ("claims-api", "agent-runtime", "model-gateway")
+SERVICES = (
+    "claims-api",
+    "agent-runtime",
+    "model-gateway",
+    POLICY_SERVER,
+    CLAIMS_SERVER,
+    KNOWLEDGE_SERVER,
+)
 # Every variable a manifest may set is one the code reads, named by its constant.
 KNOWN_ENV = {
     DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
     RUNTIME_URL_ENV,
     GATEWAY_URL_ENV,
+    TOOL_SERVERS_ENV,
+    ALLOWED_HOSTS_ENV,
     MODE_ENV,
     ENVIRONMENT_ENV,
     OTLP_ENDPOINT_ENV,
@@ -54,11 +92,19 @@ FACTORIES = {
     "claims-api": "meridian.workloads.claims_triage.app:create_app_from_env",
     "agent-runtime": "meridian.runtime.app:create_app_from_env",
     "model-gateway": "meridian.platform.gateway.app:create_app_from_env",
+    POLICY_SERVER: "meridian.platform.policy_mcp.app:create_app_from_env",
+    CLAIMS_SERVER: (
+        "meridian.workloads.claims_triage.mcp_server.app:create_app_from_env"
+    ),
+    KNOWLEDGE_SERVER: "meridian.platform.knowledge_mcp.app:create_app_from_env",
 }
 SETTINGS = {
     "claims-api": ClaimsSettings,
     "agent-runtime": RuntimeSettings,
     "model-gateway": GatewaySettings,
+    POLICY_SERVER: ToolServerSettings,
+    CLAIMS_SERVER: ToolServerSettings,
+    KNOWLEDGE_SERVER: KnowledgeServerSettings,
 }
 QUANTITY_SUFFIXES = {"Ki": 1024, "Mi": 1024**2}
 
@@ -82,6 +128,16 @@ def deployment(name: str) -> dict:
     return found
 
 
+def job_named(name: str) -> dict:
+    """The Job ``meridian-<name>-@TAG@``; deploy.sh fills the tag in."""
+    (found,) = [
+        d
+        for d in documents_of("Job")
+        if d["metadata"]["name"] == f"meridian-{name}-@TAG@"
+    ]
+    return found
+
+
 def containers(document: dict) -> list[dict]:
     return document["spec"]["template"]["spec"]["containers"]
 
@@ -100,6 +156,29 @@ def dockerfile_instructions(name: str) -> list[str]:
     return re.findall(rf"^{name}\s+(.*)$", DOCKERFILE, re.MULTILINE)
 
 
+def synthetic_copies() -> list[tuple[list[str], str]]:
+    """``(sources, destination)`` of each COPY of the build context's
+    ``data/synthetic`` into the final image (not the ``--from`` ones)."""
+    copies: list[tuple[list[str], str]] = []
+    for instruction in dockerfile_instructions("COPY"):
+        words = [w for w in instruction.split() if not w.startswith("--")]
+        *sources, destination = words
+        if any(s.startswith("data/synthetic/") for s in sources):
+            copies.append((sources, destination))
+    return copies
+
+
+def synthetic_destination() -> str:
+    """The folder the image keeps the seed data in: where the copy of the
+    manifest goes."""
+    (destination,) = {
+        destination.rstrip("/")
+        for sources, destination in synthetic_copies()
+        if f"data/synthetic/{MANIFEST_FILE}" in sources
+    }
+    return destination
+
+
 def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
     for name in SERVICES:
         deployment(name)
@@ -109,7 +188,7 @@ def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
         assert service["spec"]["type"] == "ClusterIP"
         assert name in {d["metadata"]["name"] for d in documents_of("ServiceAccount")}
     accounts = documents_of("ServiceAccount")
-    assert len(accounts) == len(SERVICES) + 1  # the migration Job has its own
+    assert len(accounts) == len(SERVICES) + len(JOB_FILES)  # each Job has its own
     assert all(a["automountServiceAccountToken"] is False for a in accounts)
 
 
@@ -185,6 +264,52 @@ def test_the_services_find_each_other_by_the_names_of_the_cluster_services() -> 
         assert url.port in services[target]
 
 
+def runtime_tool_servers() -> dict[str, str]:
+    runtime = env_of(containers(deployment("agent-runtime"))[0])
+    return json.loads(runtime[TOOL_SERVERS_ENV]["value"])
+
+
+def test_the_runtime_reaches_each_registry_server_at_its_cluster_service() -> None:
+    servers = runtime_tool_servers()
+    registry = load_registry(REGISTRY_DIR)
+    ports = {
+        d["metadata"]["name"]: {p["port"] for p in d["spec"]["ports"]}
+        for d in documents_of("Service")
+    }
+
+    assert set(servers) == {server.id for server in registry.servers}
+    assert set(servers) == set(TOOL_SERVERS)  # the server IDs are the names
+    for server_id, address in servers.items():
+        url = urlsplit(address)
+        assert url.scheme == "http"
+        assert url.hostname == f"{server_id}.meridian.svc"
+        assert url.port == SERVER_PORT
+        assert url.port in ports[server_id]
+        assert url.path in ("", "/")
+
+
+@pytest.mark.parametrize("name", TOOL_SERVERS)
+def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
+    name: str,
+) -> None:
+    env = env_of(containers(deployment(name))[0])
+    expected = {DATABASE_URL_ENV, ALLOWED_HOSTS_ENV, OTLP_ENDPOINT_ENV}
+    if name == KNOWLEDGE_SERVER:
+        expected.add(GATEWAY_URL_ENV)
+
+    address = urlsplit(runtime_tool_servers()[name])
+    # DNS rebinding protection compares the Host header, byte for byte.
+    assert env[ALLOWED_HOSTS_ENV]["value"] == address.netloc
+    assert set(env) == expected
+
+
+def test_the_knowledge_server_embeds_through_the_gateway_the_runtime_uses() -> None:
+    knowledge = env_of(containers(deployment(KNOWLEDGE_SERVER))[0])
+    runtime = env_of(containers(deployment("agent-runtime"))[0])
+
+    assert knowledge[GATEWAY_URL_ENV] == runtime[GATEWAY_URL_ENV]
+
+
 @pytest.mark.parametrize("name", SERVICES)
 def test_a_service_takes_its_own_roles_connection_string_and_the_ca_certificate(
     name: str,
@@ -215,9 +340,58 @@ def test_the_image_keeps_probe_requests_out_of_the_traces() -> None:
     assert dockerfile_env("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS") == HEALTH_PATH
 
 
+def seed_data_sources() -> set[str]:
+    """The paths, relative to ``data/synthetic``, the two commands read."""
+    return {
+        MANIFEST_FILE,
+        POLICIES_FILE,
+        HISTORY_FILE,
+        f"{WORDINGS_DIR}/*.md",
+    }
+
+
+def test_the_image_carries_exactly_the_seed_data_the_two_commands_read() -> None:
+    root = synthetic_destination()
+    copies = synthetic_copies()
+    kept: set[str] = set()
+    for sources, destination in copies:
+        assert destination.endswith("/"), destination
+        kept |= {f"{destination}{Path(source).name}" for source in sources}
+    sources = {s for copied, _ in copies for s in copied}
+
+    assert WORDINGS_MANIFEST == MANIFEST_FILE  # one manifest for both commands
+    assert kept == {f"{root}/{path}" for path in seed_data_sources()}
+    assert sources == {f"data/synthetic/{path}" for path in seed_data_sources()}
+    for source in sources:
+        assert list(REPO_ROOT.glob(source)), f"{source} matches no file"
+
+
+def test_the_image_does_not_carry_the_claims_the_golden_labels_or_the_generator() -> (
+    None
+):
+    copied = [s for sources, _ in synthetic_copies() for s in sources]
+
+    for withheld in ("claims.json", "expected-outcomes", "generator", "README"):
+        assert not [s for s in copied if withheld in s], withheld
+    # Never the whole folder, which holds all of them.
+    assert not [s.rstrip("/") for s in copied if s.rstrip("/") == "data/synthetic"]
+    for instruction in dockerfile_instructions("COPY"):
+        assert not re.match(r"(--\S+\s+)*data/?(\s|$)", instruction), instruction
+
+
+def test_dockerignore_allows_the_seed_data_and_nothing_more_of_that_folder() -> None:
+    allowed = {
+        line.strip()
+        for line in DOCKERIGNORE.splitlines()
+        if line.strip().startswith("!data")
+    }
+
+    assert allowed == {f"!data/synthetic/{path}" for path in seed_data_sources()}
+
+
 def test_every_container_runs_non_root_without_privileges() -> None:
     workloads = documents_of("Deployment") + documents_of("Job")
-    assert len(workloads) == len(SERVICES) + 1
+    assert len(workloads) == len(SERVICES) + len(JOB_FILES)
 
     for workload in workloads:
         pod = workload["spec"]["template"]["spec"]
@@ -236,15 +410,18 @@ def test_every_container_uses_the_image_placeholder_and_never_pulls() -> None:
             assert container["imagePullPolicy"] == "IfNotPresent"
 
 
-def test_the_only_placeholders_are_the_image_and_the_tag_of_the_migration_job() -> None:
+def test_the_only_placeholders_are_the_image_and_the_tag_of_the_job_names() -> None:
     found = {
         path.name: set(re.findall(r"@[A-Z_]+@", path.read_text(encoding="utf-8")))
         for path in MANIFESTS.glob("*.yaml")
     }
+    job_file_names = {path.name for path in JOB_FILES}
 
     for name, placeholders in found.items():
-        allowed = {"@IMAGE@", "@TAG@"} if name == MIGRATE_JOB_FILE.name else {"@IMAGE@"}
+        allowed = {"@IMAGE@", "@TAG@"} if name in job_file_names else {"@IMAGE@"}
         assert placeholders <= allowed, name
+    for name in ("migrate", "seed", "ingest"):
+        assert job_named(name)["metadata"]["name"].endswith("@TAG@")
 
 
 def test_there_is_one_http_route_for_the_claims_api_on_a_localhost_name() -> None:
@@ -261,11 +438,12 @@ def test_there_is_one_http_route_for_the_claims_api_on_a_localhost_name() -> Non
     assert backends == {"claims-api"}
 
 
-def test_the_runtime_and_the_gateway_are_cluster_internal() -> None:
+def test_everything_but_the_claims_api_is_cluster_internal() -> None:
     mentioned = yaml.dump(documents_of("HTTPRoute"))
 
-    assert "agent-runtime" not in mentioned
-    assert "model-gateway" not in mentioned
+    for name in SERVICES:
+        if name != "claims-api":
+            assert name not in mentioned, name
     for kind in ("Service",):
         for service in documents_of(kind):
             assert service["spec"]["type"] == "ClusterIP"
@@ -300,26 +478,106 @@ def test_traces_go_to_the_collectors_http_port() -> None:
         assert url.path in ("", "/")
 
 
-def test_only_the_migration_job_references_the_owner_credentials() -> None:
+def test_only_the_three_jobs_reference_the_owner_credentials() -> None:
     for path in MANIFESTS.glob("*.yaml"):
         text = path.read_text(encoding="utf-8")
-        assert (OWNER_SECRET in text) == (path == MIGRATE_JOB_FILE), path.name
+        assert (OWNER_SECRET in text) == (path in JOB_FILES), path.name
 
 
-def test_the_migration_job_runs_the_migrate_command_once_per_image() -> None:
-    (job,) = documents_of("Job")
+def only_container(job: dict) -> dict:
     (container,) = job["spec"]["template"]["spec"]["containers"]
-    reference = env_of(container)[MIGRATIONS_DATABASE_URL_ENV]["valueFrom"][
+    return container
+
+
+@pytest.mark.parametrize("name", ["migrate", "seed", "ingest"])
+def test_each_job_runs_once_with_the_owner_credentials_and_its_own_account(
+    name: str,
+) -> None:
+    job = job_named(name)
+    reference = env_of(only_container(job))[MIGRATIONS_DATABASE_URL_ENV]["valueFrom"][
         "secretKeyRef"
     ]
+    accounts = {
+        d["metadata"]["name"]: d
+        for d in load_documents(MANIFESTS / f"{name}-job.yaml")
+        if d["kind"] == "ServiceAccount"
+    }
 
-    assert container["command"] == ["meridian", "db", "migrate"]
     assert reference == {"name": OWNER_SECRET, "key": "uri"}
-    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV}
-    assert job["metadata"]["name"].endswith("@TAG@")
     assert job["spec"]["template"]["spec"]["restartPolicy"] == "Never"
     assert job["spec"]["backoffLimit"] <= 3
+    assert job["spec"]["activeDeadlineSeconds"] > 0
+    assert set(accounts) == {f"meridian-{name}"}
+    assert job["spec"]["template"]["spec"]["serviceAccountName"] == f"meridian-{name}"
+    assert job["metadata"]["labels"]["app.kubernetes.io/name"] == f"meridian-{name}"
+
+
+def cli_command_words(words: list[str]) -> list[str]:
+    """The leading words of ``words`` that name commands of the ``meridian`` CLI,
+    resolved through the Typer tree (a renamed command stops matching)."""
+    command = typer.main.get_command(meridian_cli)
+    found: list[str] = []
+    for word in words:
+        subcommands = getattr(command, "commands", None)
+        if not subcommands or word not in subcommands:
+            break
+        found.append(word)
+        command = subcommands[word]
+    return found
+
+
+def test_the_migration_job_runs_the_migrate_command() -> None:
+    job = job_named("migrate")
+    container = only_container(job)
+
+    assert container["command"] == ["meridian", "db", "migrate"]
+    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV}
     assert job["spec"]["ttlSecondsAfterFinished"] > 0
+
+
+def test_the_seed_job_loads_the_policies_from_the_images_synthetic_data() -> None:
+    job = job_named("seed")
+    container = only_container(job)
+
+    assert container["command"] == [
+        "meridian",
+        "db",
+        "seed-policies",
+        "--from",
+        synthetic_destination(),
+    ]
+    assert cli_command_words(container["command"][1:]) == ["db", "seed-policies"]
+    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV}
+    assert job["spec"]["ttlSecondsAfterFinished"] > 0
+
+
+def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() -> None:
+    job = job_named("ingest")
+    container = only_container(job)
+    gateway = env_of(containers(deployment("agent-runtime"))[0])[GATEWAY_URL_ENV]
+
+    assert container["command"] == [
+        "meridian",
+        "knowledge",
+        "ingest",
+        "--tenant",
+        INGEST_TENANT,
+        "--from",
+        synthetic_destination(),
+    ]
+    assert cli_command_words(container["command"][1:]) == ["knowledge", "ingest"]
+    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV, GATEWAY_URL_ENV}
+    assert env_of(container)[GATEWAY_URL_ENV] == gateway
+    # The finished Job is the record that this image's corpus is in the store:
+    # deploy.sh skips the ingestion when it finds it, so it must not expire.
+    assert "ttlSecondsAfterFinished" not in job["spec"]
+    assert "ttlSecondsAfterFinished" in INGEST_JOB_FILE.read_text(encoding="utf-8")
+
+
+def test_the_ingestions_tenant_may_run_the_ingestion_agent() -> None:
+    registry = load_registry(REGISTRY_DIR)
+
+    assert registry.tenant_may_run(INGEST_TENANT, INGESTION_AGENT)
 
 
 def test_every_from_line_of_the_dockerfile_is_pinned_by_digest() -> None:
@@ -380,6 +638,20 @@ def test_the_database_declares_its_roles_with_login_only() -> None:
     )
     assert set(listed.split()) == set(roles)
     assert """printf '%s-db' "${1//_/-}\"""" in COMMON_SH  # role_secret_name
+
+
+def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -> None:
+    limits = {
+        r["name"]: r["connectionLimit"]
+        for r in PLATFORM_DB["cluster"]["roles"]
+        if "connectionLimit" in r
+    }
+
+    # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one
+    # connection each, and writes a failure's audit row on one more.
+    assert set(limits) == {name.replace("-", "_") for name in TOOL_SERVERS}
+    for name, limit in limits.items():
+        assert limit > MAX_CONCURRENT_CALLS + 1, name
 
 
 def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> None:
@@ -482,13 +754,24 @@ def test_up_creates_a_secret_from_stdin_and_never_overwrites_one() -> None:
     assert "set +x" in body  # a `bash -x` run must not trace a password
 
 
-def test_deploy_applies_every_manifest_but_the_job_and_knows_the_services() -> None:
+def test_deploy_applies_every_manifest_but_the_jobs_and_knows_the_services() -> None:
     body = function_body(DEPLOY_SH, "apply_manifests")
     (services,) = re.findall(r"^readonly SERVICES=\((.*)\)$", DEPLOY_SH, re.MULTILINE)
+    declared = dict(
+        re.findall(r"^readonly (\w+_MANIFEST)=(\S+\.yaml)$", DEPLOY_SH, re.MULTILINE)
+    )
+    job_files = {
+        path.name
+        for path in MANIFESTS.glob("*.yaml")
+        if any(d["kind"] == "Job" for d in load_documents(path))
+    }
 
     assert '"${MANIFEST_DIR}"/*.yaml' in body
-    assert "readonly MIGRATE_MANIFEST=migrate-job.yaml" in DEPLOY_SH
-    assert MIGRATE_JOB_FILE.name in DEPLOY_SH
+    assert job_files == {path.name for path in JOB_FILES}
+    assert set(declared.values()) == job_files
+    for variable in declared:
+        assert f"${{{variable}}}" in body, variable  # each one is skipped
+    assert "continue" in body
     assert set(services.split()) == set(SERVICES)
     assert {d["metadata"]["name"] for d in documents_of("Deployment")} == set(SERVICES)
     # Each service's database role, and so its Secret, is one deploy.sh checks.
@@ -496,6 +779,116 @@ def test_deploy_applies_every_manifest_but_the_job_and_knows_the_services() -> N
         r"^readonly DATABASE_ROLES=\((.*)\)$", COMMON_SH, re.MULTILINE
     )
     assert {s.replace("-", "_") for s in SERVICES} <= set(roles.split())
+
+
+def main_sequence() -> list[str]:
+    """The calls ``deploy.sh`` makes at its top level, from the first one."""
+    lines = DEPLOY_SH.splitlines()
+    return [
+        line
+        for line in lines[lines.index("require_database") :]
+        if line and not line.startswith("log ")
+    ]
+
+
+def test_deploy_migrates_seeds_applies_ingests_and_then_waits_in_that_order() -> None:
+    # The seed runs before the services start: a claim that met an empty policy
+    # table would get a stored proposal "policy not found", which is final. The
+    # ingestion calls the gateway, so it follows the gateway's rollout.
+    assert main_sequence() == [
+        "require_database",
+        "build_image",
+        'run_job "meridian-migrate-${tag}" "${MIGRATE_MANIFEST}"',
+        'run_job "meridian-seed-${tag}" "${SEED_MANIFEST}"',
+        "apply_manifests",
+        'wait_for_deployment "${GATEWAY_SERVICE}"',
+        "ingest_corpus",
+        "wait_for_other_rollouts",
+        "wait_for_route",
+        "wait_for_token_window",
+    ]
+    assert "run_migrations" not in DEPLOY_SH
+
+
+def test_deploy_names_each_job_as_its_manifest_does() -> None:
+    for name in ("migrate", "seed", "ingest"):
+        manifest_name = job_named(name)["metadata"]["name"]
+        assert manifest_name.replace("@TAG@", "${tag}") in DEPLOY_SH
+
+
+def test_deploy_runs_a_job_from_a_clean_slate_to_completion_and_shows_its_log() -> None:
+    body = function_body(DEPLOY_SH, "run_job")
+
+    positions = [
+        body.index(part)
+        for part in (
+            'delete "job/${job}" --ignore-not-found --wait',
+            "kctl apply --server-side",
+            'job_state "${job}"',
+            'logs "job/${job}"',
+        )
+    ]
+    assert positions == sorted(positions)
+    assert "failed)" in body
+    assert "JOB_TIMEOUT" in body
+
+
+def test_deploy_ingests_at_most_once_per_image_and_removes_the_other_ingestions() -> (
+    None
+):
+    body = function_body(DEPLOY_SH, "ingest_corpus")
+    label = job_named("ingest")["metadata"]["labels"]["app.kubernetes.io/name"]
+
+    positions = [
+        body.index(part)
+        for part in (
+            'job_state "${job}"',
+            "already in the store",
+            f"-l app.kubernetes.io/name={label}",
+            'run_job "${job}" "${INGEST_MANIFEST}"',
+            "ingested_at=${SECONDS}",
+        )
+    ]
+    assert positions == sorted(positions)
+    assert "succeeded" in body
+
+
+def test_deploy_stops_on_a_failed_job_lookup_instead_of_ingesting_again() -> None:
+    body = function_body(DEPLOY_SH, "ingest_corpus")
+
+    # An error is not "no such Job": the lookup asks for an empty answer when
+    # the Job is absent, and a failure of it ends the deploy.
+    assert re.search(r'get job "\$\{job\}".*--ignore-not-found', body)
+    assert "|| state=absent" not in body
+    assert "die " in body
+
+
+def test_the_smoke_probe_reads_server_names_from_stdout_only() -> None:
+    body = function_body(SMOKE_SH, "check_tools")
+    (probe_call,) = re.findall(r"^.*toolprobe.*$", body, re.MULTILINE)
+
+    # Stderr stays out of the names (a warning is not a server) but is shown
+    # when the probe fails.
+    assert "2>&1" not in probe_call
+    assert '2>"${err_file}"' in probe_call
+    (failure,) = re.findall(r"^\s*fail .*probe in deployment.*$", body, re.MULTILINE)
+    assert '"${err_file}"' in failure
+
+
+def test_deploy_waits_out_the_token_window_the_ingestion_opens() -> None:
+    (window,) = re.findall(
+        r"^readonly TOKEN_WINDOW_SECONDS=(\d+)$", DEPLOY_SH, re.MULTILINE
+    )
+    body = function_body(DEPLOY_SH, "wait_for_token_window")
+
+    assert int(window) == 62  # the gateway's 60 s window, and two seconds of margin
+    assert "TOKEN_WINDOW_SECONDS" in body
+    assert "- SECONDS" in body  # the script's own clock
+    assert "${ingested_at}" in body  # no ingestion in this deploy: no wait
+    assert "claims-triage" in body
+    # The node's clock is not the laptop's: no Kubernetes timestamp is read.
+    assert "Timestamp" not in DEPLOY_SH
+    assert "completionTime" not in DEPLOY_SH
 
 
 def test_the_dockerfile_declares_no_secret_looking_variable() -> None:
