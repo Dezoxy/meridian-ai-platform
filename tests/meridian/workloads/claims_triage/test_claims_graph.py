@@ -39,7 +39,7 @@ from meridian.runtime.tool_client import (
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
 from meridian.workloads.claims_triage.graph import build
 from meridian.workloads.claims_triage.proposal import TriageProposal
-from meridian.workloads.claims_triage.wording import TERMS_PROBE
+from meridian.workloads.claims_triage.wording import AMOUNTS_PROBE, TIMING_PROBE
 
 SYNTHETIC = REPO_ROOT / "data" / "synthetic"
 CANARY = "CANARY-7f3a91"
@@ -469,7 +469,8 @@ def test_the_tools_are_called_in_a_fixed_order_with_the_policys_product() -> Non
                 "product": "MOTOR-TPL",
             },
         ),
-        ("wording_search", {"query": TERMS_PROBE, "product": "MOTOR-TPL"}),
+        ("wording_search", {"query": AMOUNTS_PROBE, "product": "MOTOR-TPL"}),
+        ("wording_search", {"query": TIMING_PROBE, "product": "MOTOR-TPL"}),
     ]
 
 
@@ -480,7 +481,7 @@ def test_a_policy_not_in_force_is_searched_once() -> None:
     assert tools.calls == [
         ("policy_lookup", {"policy_number": number}),
         ("claim_history", {"policy_number": number}),
-        ("wording_search", {"query": TERMS_PROBE, "product": "HOME-PLUS"}),
+        ("wording_search", {"query": TIMING_PROBE, "product": "HOME-PLUS"}),
     ]
 
 

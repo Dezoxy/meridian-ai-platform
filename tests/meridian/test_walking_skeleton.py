@@ -89,8 +89,8 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
         ("agent-runtime", "run.started", "started"): 1,
         ("agent-runtime", "run.completed", "completed"): 1,
         ("policy-mcp", "tool.call", "completed"): 2,
-        ("knowledge-mcp", "tool.call", "completed"): 3,
-        ("model-gateway", "model.call", "completed"): 4,
+        ("knowledge-mcp", "tool.call", "completed"): 4,
+        ("model-gateway", "model.call", "completed"): 5,
     }
 
     # ── one trace across the five services ──────────────────────────────────

@@ -35,9 +35,10 @@ PERIL_TITLES: Mapping[Peril, str] = MappingProxyType(
     }
 )
 
-TERMS_PROBE = (
-    "Deductible. Limit. Reporting a claim. Period of cover. Lapse for non-payment."
-)
+# Two probes, not one: a probe of five topics returns ten clauses and the Limit
+# clause, which matches by its title only, was not among them.
+AMOUNTS_PROBE = "Deductible. Limit."
+TIMING_PROBE = "Reporting a claim. Period of cover. Lapse for non-payment."
 
 COVER_SECTION = "2"
 EXCLUSION_SECTION = "3"
@@ -89,14 +90,16 @@ def _label(peril: Peril) -> str:
 
 
 def probes(peril: Peril, *, in_force: bool) -> tuple[str, ...]:
-    """The fixed search queries for ``peril``. The two that look for the peril's
-    cover and exclusions are asked only when the policy was in force."""
+    """The fixed search queries for ``peril``. The three that look for the peril's
+    cover, its exclusions and the amounts (deductible and limit) are asked only
+    when the policy was in force; the timing probe is always asked."""
     if not in_force:
-        return (TERMS_PROBE,)
+        return (TIMING_PROBE,)
     return (
         PERIL_TITLES[peril],
         f"This exclusion applies to claims for {_label(peril)}.",
-        TERMS_PROBE,
+        AMOUNTS_PROBE,
+        TIMING_PROBE,
     )
 
 

@@ -24,9 +24,8 @@ from meridian.workloads.claims_triage.wording import (
 )
 
 WORDINGS = REPO_ROOT / "data" / "synthetic" / "wordings"
-TERMS_PROBE = (
-    "Deductible. Limit. Reporting a claim. Period of cover. Lapse for non-payment."
-)
+AMOUNTS_PROBE = "Deductible. Limit."
+TIMING_PROBE = "Reporting a claim. Period of cover. Lapse for non-payment."
 
 
 def real_chunks(product: catalogue.Product) -> list[dict[str, Any]]:
@@ -130,17 +129,19 @@ def test_probes_of_a_policy_in_force_ask_for_the_peril_its_exclusions_and_terms(
     assert probes("third_party_liability", in_force=True) == (
         "Third-party liability",
         "This exclusion applies to claims for third-party liability.",
-        TERMS_PROBE,
+        AMOUNTS_PROBE,
+        TIMING_PROBE,
     )
     assert probes("burst_pipe", in_force=True) == (
         "Burst pipe",
         "This exclusion applies to claims for burst pipe.",
-        TERMS_PROBE,
+        AMOUNTS_PROBE,
+        TIMING_PROBE,
     )
 
 
-def test_probes_of_a_policy_not_in_force_ask_for_the_terms_only() -> None:
-    assert probes("burst_pipe", in_force=False) == (TERMS_PROBE,)
+def test_probes_of_a_policy_not_in_force_ask_for_the_timing_terms_only() -> None:
+    assert probes("burst_pipe", in_force=False) == (TIMING_PROBE,)
 
 
 @pytest.mark.parametrize("peril", get_args(Peril))

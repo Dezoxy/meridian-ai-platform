@@ -10,11 +10,9 @@ for every claim. The rest read one run's audit rows and trace, what happens when
 the gateway's window is not cleared between claims, and that no claimant text
 leaves the Claims API.
 
-FINDING (see ``test_triage_retrieval.py``): the probes lose the Limit clause of
-three of the four wordings, so CLM-0024 (claimed above the policy's limit) does
-not get the oracle's citation of 4.2 nor its recommendation. Where a test
-compares with the oracle it pins that one difference, and one test states the
-whole claim (every proposal equals the oracle) as a strict expected failure.
+With the scripted model every one of the 40 proposals equals the oracle,
+CLM-0024 (claimed above the policy's limit) included: the probes lose no clause
+(see ``test_triage_retrieval.py``).
 """
 
 import uuid
@@ -49,12 +47,8 @@ from meridian.workloads.claims_triage.proposal import TriageProposal
 
 STEP_8_REASONS = ("fraud_indicator", "over_threshold", "unverified")
 ABOVE_THE_LIMIT = "CLM-0024"
-LIMIT_FINDING = (
-    "the probes lose the Limit clause 4.2 of MOTOR-COMP, so a claim above the "
-    "policy's limit has no citation of it and a gap (see test_triage_retrieval.py)"
-)
 # One claim in force with a candidate exclusion (MOTOR-TPL, third-party
-# liability, racing): the run searches three times and asks the model once.
+# liability, racing): the run searches four times and asks the model once.
 IN_FORCE_WITH_CANDIDATE = "CLM-0011"
 CIRCUMSTANCE_EXCLUDED = sorted(c for c in CLAIMS if circumstance_clause(c))
 
@@ -119,21 +113,6 @@ def unequal(proposals: dict[str, TriageProposal]) -> dict[str, dict[str, Any]]:
     return {claim_id: diff for claim_id, diff in found.items() if diff}
 
 
-def assert_only_the_limit_finding(
-    proposals: dict[str, TriageProposal], differing: dict[str, dict[str, Any]]
-) -> None:
-    """CLM-0024's difference is exactly the lost limit clause: no recommendation
-    (a proposal with a gap recommends nothing), the citation of 4.2 missing and
-    the gap ``limit_clause``."""
-    diff = differing[ABOVE_THE_LIMIT]
-    assert set(diff) == {"recommendation", "citations"}, LIMIT_FINDING
-    assert diff["recommendation"] == (None, "approve")
-    got, wanted = diff["citations"]
-    assert [c["clause"] for c in got] == ["2.2", "4.1"]
-    assert [c["clause"] for c in wanted] == ["2.2", "4.1", "4.2"]
-    assert proposals[ABOVE_THE_LIMIT].gaps == ("limit_clause",)
-
-
 def routes_and_reasons(
     proposals: dict[str, TriageProposal],
 ) -> tuple[Counter[str], Counter[str]]:
@@ -158,10 +137,10 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
     assert set(proposals) == set(CLAIMS)
     assert asked == claims_that_ask_the_model()
     assert len(asked) == 15
-    # A run that needed no model equals the oracle, but for the finding.
+    # A run that needed no model equals the oracle.
     unasked = {c: p for c, p in proposals.items() if c not in asked}
-    assert set(unequal(unasked)) == {ABOVE_THE_LIMIT}
-    assert_only_the_limit_finding(proposals, unequal(unasked))
+    assert ABOVE_THE_LIMIT in unasked
+    assert unequal(unasked) == {}
     # A run that asked the model got replay text, which is no verdict.
     for claim_id in asked:
         proposal = proposals[claim_id]
@@ -200,18 +179,7 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
 
 
 # ── 2. a scripted model ─────────────────────────────────────────────────────
-@pytest.mark.xfail(strict=True, reason=LIMIT_FINDING)
-def test_every_proposal_equals_the_oracle_with_a_scripted_model(
-    fresh_database: DatabaseHandle,
-) -> None:
-    stack = scripted_stack(fresh_database, ScriptedModel(golden_answer))
-
-    post_all(stack)
-
-    assert unequal(stored_proposals(fresh_database)) == {}
-
-
-def test_a_scripted_model_gives_the_oracle_s_proposals_but_for_the_limit_finding(
+def test_a_scripted_model_gives_the_oracle_s_proposals(
     fresh_database: DatabaseHandle,
 ) -> None:
     model = ScriptedModel(golden_answer)
@@ -220,14 +188,19 @@ def test_a_scripted_model_gives_the_oracle_s_proposals_but_for_the_limit_finding
     post_all(stack)
 
     proposals = stored_proposals(fresh_database)
-    assert set(proposals) == set(CLAIMS)
+    assert len(proposals) == len(CLAIMS) == 40
     # The model was asked exactly where the rules need it, once per claim.
     assert model.requests == sorted(claims_that_ask_the_model())
-    differing = unequal(proposals)
-    assert set(differing) == {ABOVE_THE_LIMIT}
-    assert_only_the_limit_finding(proposals, differing)
-    # Every claim that does not exceed its limit equals the oracle in all eight
-    # fields; the counts are the golden set's own.
+    # Every one of the 40 equals the oracle in all eight fields, CLM-0024 (above
+    # the policy's limit) included; the counts are the golden set's own.
+    assert unequal(proposals) == {}
+    # CLM-0024 cites the limit clause 4.2 the amounts probe found.
+    assert [c.clause for c in proposals[ABOVE_THE_LIMIT].citations] == [
+        "2.2",
+        "4.1",
+        "4.2",
+    ]
+    assert proposals[ABOVE_THE_LIMIT].recommendation == "approve"
     routes, reasons = routes_and_reasons(proposals)
     assert routes == Counter(e["route"] for e in EXPECTED.values())
     assert reasons == Counter(e["reason"] for e in EXPECTED.values())
@@ -235,7 +208,7 @@ def test_a_scripted_model_gives_the_oracle_s_proposals_but_for_the_limit_finding
         c for c, e in EXPECTED.items() if e["route"] == "auto_approve"
     )
     for proposal in proposals.values():
-        assert proposal.gaps in ((), ("limit_clause",))
+        assert proposal.gaps == ()
         assert proposal.assessment != "unavailable"
 
 
@@ -262,7 +235,7 @@ def test_a_model_that_finds_no_exclusion_costs_four_wrong_approvals(
     }
     assert all(proposals[c].reason == "within_threshold" for c in changed_route)
     # The fifth, CLM-0001, stays with the adjuster: over the threshold, not
-    # excluded. Besides the finding, these five are the only claims that differ.
+    # excluded. These five are the only claims that differ.
     assert CIRCUMSTANCE_EXCLUDED == [
         "CLM-0001",
         "CLM-0026",
@@ -272,7 +245,7 @@ def test_a_model_that_finds_no_exclusion_costs_four_wrong_approvals(
     ]
     assert proposals["CLM-0001"].route == "adjuster"
     assert proposals["CLM-0001"].reason == "over_threshold"
-    assert set(unequal(proposals)) == {*CIRCUMSTANCE_EXCLUDED, ABOVE_THE_LIMIT}
+    assert set(unequal(proposals)) == set(CIRCUMSTANCE_EXCLUDED)
 
 
 # ── 4. one run's audit rows and its trace ───────────────────────────────────
@@ -297,6 +270,7 @@ def test_one_run_leaves_its_audit_rows_and_one_trace_across_five_services(
         ("knowledge-mcp", "wording_search", "completed"),
         ("knowledge-mcp", "wording_search", "completed"),
         ("knowledge-mcp", "wording_search", "completed"),
+        ("knowledge-mcp", "wording_search", "completed"),
     ]
     model_calls = Counter(
         (e["service"], e["deployment"], e["outcome"])
@@ -304,11 +278,11 @@ def test_one_run_leaves_its_audit_rows_and_one_trace_across_five_services(
         if e["event"] == "model.call"
     )
     assert model_calls == {
-        ("model-gateway", "replay-embedding", "completed"): 3,
+        ("model-gateway", "replay-embedding", "completed"): 4,
         ("model-gateway", "replay-chat", "completed"): 1,
     }
     assert sorted(e["event"] for e in events) == sorted(
-        ["run.started", "run.completed"] + ["tool.call"] * 5 + ["model.call"] * 4
+        ["run.started", "run.completed"] + ["tool.call"] * 6 + ["model.call"] * 5
     )
     assert {e["tenant"] for e in events} == {"claims-triage"}
     assert {e["agent"] for e in events} == {"claims-triage"}
@@ -325,8 +299,8 @@ def test_one_run_leaves_its_audit_rows_and_one_trace_across_five_services(
     assert len({s.context.trace_id for s in spans}) == 1
     names = Counter((service_of(s), s.name) for s in spans)
     assert names[("policy-mcp", "tool.call")] == 2
-    assert names[("knowledge-mcp", "tool.call")] == 3
-    assert names[("model-gateway", "gateway.embeddings")] == 3
+    assert names[("knowledge-mcp", "tool.call")] == 4
+    assert names[("model-gateway", "gateway.embeddings")] == 4
     assert names[("model-gateway", "gateway.chat")] == 1
     # The trace is a chain, not a bag: a search's embedding descends from the
     # tool server's span, the runtime's tool span, the node, the run, the claim.
@@ -353,10 +327,10 @@ def test_the_third_claim_in_a_window_fails_when_a_search_is_refused(
     stack: Stack, fresh_database: DatabaseHandle
 ) -> None:
     """The window is 10 requests per 10 seconds for chat and embeddings
-    together, and a claim whose run asks the model costs four (three searches,
-    one chat). Two claims with no clock advance in between fit (8), so the
-    second does not fail; the third makes its ninth and tenth requests with its
-    first two searches and is refused at its third (the eleventh)."""
+    together, and a claim whose run asks the model costs five (four searches,
+    one chat). Two claims with no clock advance in between fit exactly (10), so
+    the second does not fail; the third makes its first request, the eleventh,
+    with its first search and is refused there."""
     first, second, third = sorted(claims_that_ask_the_model())[:3]
 
     assert stack.post(CLAIMS[first], advance=False).status_code == 201
@@ -379,8 +353,8 @@ def test_the_third_claim_in_a_window_fails_when_a_search_is_refused(
         "SELECT status FROM runtime.runs WHERE run_id = %s",
         (failed_run,),
     ) == [("Failed",)]
-    # The run searched twice and was refused at the third search: the tool
-    # server says why, and the run failed.
+    # The run was refused at its first search: the tool server says why, and the
+    # run failed.
     events = audit_events(fresh_database, failed_run)
     assert [
         (e["service"], e["event"], e["tool"], e["outcome"], e["reason"])
@@ -390,21 +364,16 @@ def test_the_third_claim_in_a_window_fails_when_a_search_is_refused(
         ("agent-runtime", "run.started", None, "started", None),
         ("policy-mcp", "tool.call", "policy_lookup", "completed", None),
         ("policy-mcp", "tool.call", "claim_history", "completed", None),
-        ("knowledge-mcp", "tool.call", "wording_search", "completed", None),
-        ("knowledge-mcp", "tool.call", "wording_search", "completed", None),
         ("knowledge-mcp", "tool.call", "wording_search", "refused", "gateway-busy"),
         ("agent-runtime", "run.failed", None, "failed", None),
     ]
-    # The gateway's rows: two embeddings answered, one refused for the tenant's
-    # request rate, and no chat call.
+    # The gateway's rows: one embedding refused for the tenant's request rate,
+    # none answered and no chat call.
     assert Counter(
         (e["deployment"], e["outcome"], e["reason"])
         for e in events
         if e["event"] == "model.call"
-    ) == {
-        ("replay-embedding", "completed", None): 2,
-        ("replay-embedding", "refused", "tenant-request-rate"): 1,
-    }
+    ) == {("replay-embedding", "refused", "tenant-request-rate"): 1}
 
     # Posted again after the window, the same claim is triaged and succeeds.
     stack.clock.advance(61)

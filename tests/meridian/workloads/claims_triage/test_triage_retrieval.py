@@ -44,8 +44,10 @@ class Pair:
     in_force: Terms
     lapsed: Terms
     whole: Terms
-    # The clauses the last in-force probe (the terms probe) returned, best first.
-    terms_probe: list[str]
+    # The clauses the amounts probe and the timing probe (the last two in-force
+    # probes) returned, best first.
+    amounts_probe: list[str]
+    timing_probe: list[str]
 
     def lost(self) -> list[str]:
         """The terms the probes get wrong against the whole wording: the fields
@@ -137,40 +139,18 @@ def found(fresh_database: DatabaseHandle) -> list[Pair]:
                 select_terms(peril, flat(answers[True])),  # type: ignore[arg-type]
                 select_terms(peril, flat(answers[False])),  # type: ignore[arg-type]
                 select_terms(peril, whole_wording(product)),  # type: ignore[arg-type]
+                [chunk["clause"] for chunk in answers[True][-2]],
                 [chunk["clause"] for chunk in answers[True][-1]],
             )
         )
     return pairs
 
 
-def test_the_probes_find_every_term_but_the_limit_of_the_whole_wording(
+def test_the_probes_find_every_term_of_the_whole_wording(
     found: list[Pair],
 ) -> None:
     """Every field of the terms, in force and not in force, in all 24 pairs,
-    except the limit clause: see the finding below."""
-    assert len(found) == len(PAIRS) == 24
-    assert {(p.product, p.peril) for p in found} == set(PAIRS)
-    assert [
-        (p.product, p.peril, [name for name in p.lost() if name != "limit"])
-        for p in found
-    ] == [(p.product, p.peril, []) for p in found]
-
-
-# FINDING (S014, 2026-10-02), pinned as it is today and not as it should be: the
-# probes lose the Limit clause (4.2) of every wording but MOTOR-TPL's. The terms
-# probe ("Deductible. Limit. Reporting a claim. Period of cover. Lapse for
-# non-payment.") returns ten clauses and 4.2 is not among them for MOTOR-COMP,
-# HOME-STD and HOME-PLUS (it is, last, for MOTOR-TPL), so ``terms.limit`` is
-# None in 18 of the 24 pairs while the whole wording has it. The graph reads
-# ``terms.limit`` for a claim above the policy's limit only: it then cites no
-# limit clause and the proposal carries the gap ``limit_clause``. When the probes
-# are fixed this test fails and is replaced by one that asserts 24 of 24.
-LIMIT_FOUND_FOR = frozenset({"MOTOR-TPL"})
-
-
-def test_finding_the_limit_clause_is_lost_for_three_of_four_wordings(
-    found: list[Pair],
-) -> None:
+    the limit clause included."""
     agree = [pair for pair in found if not pair.lost()]
     differ = [pair for pair in found if pair.lost()]
     print()
@@ -179,17 +159,19 @@ def test_finding_the_limit_clause_is_lost_for_three_of_four_wordings(
     for pair in differ:
         print(f"  {pair.product} {pair.peril}: {pair.describe()}")
     for product in catalogue.PRODUCTS:
-        probed = next(p.terms_probe for p in found if p.product == product)
-        print(f"  {product} terms probe returned {probed}")
+        pair = next(p for p in found if p.product == product)
+        print(f"  {product} amounts probe returned {pair.amounts_probe}")
+        print(f"  {product} timing probe returned {pair.timing_probe}")
 
-    assert len(agree) == 6
-    assert {p.product for p in agree} == LIMIT_FOUND_FOR
-    assert len(differ) == 18
-    assert all(pair.lost() == ["limit"] for pair in differ)
-    assert all(pair.in_force.limit is None for pair in differ)
-    assert all(pair.whole.limit is not None for pair in differ)
-    for pair in found:
-        assert ("4.2" in pair.terms_probe) == (pair.product in LIMIT_FOUND_FOR)
+    assert len(found) == len(PAIRS) == 24
+    assert {(p.product, p.peril) for p in found} == set(PAIRS)
+    assert [(p.product, p.peril, p.lost()) for p in found] == [
+        (p.product, p.peril, []) for p in found
+    ]
+    # The limit is no longer a clause the probe finds by luck: the amounts probe
+    # returns it, in every wording.
+    assert all("4.2" in pair.amounts_probe for pair in found)
+    assert all(pair.in_force.limit is not None for pair in found)
 
 
 def test_the_whole_wording_has_what_the_comparison_needs(found: list[Pair]) -> None:
