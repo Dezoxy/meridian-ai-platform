@@ -7,6 +7,9 @@ import psycopg
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from opentelemetry import _logs, metrics, trace
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -163,6 +166,21 @@ def test_healthz_answers_ok_without_touching_anything() -> None:
     response = build().get("/healthz")
 
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_fastapis_own_telemetry_sets_no_global_provider_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With this variable FastAPI would create the global tracer, meter and
+    # logger providers (default resource) at startup. Nothing listens here.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+
+    with build() as client:
+        assert client.get("/healthz").status_code == 200
+
+    assert not isinstance(trace.get_tracer_provider(), TracerProvider)
+    assert not isinstance(metrics.get_meter_provider(), MeterProvider)
+    assert not isinstance(_logs.get_logger_provider(), LoggerProvider)
 
 
 class SpyProvider(TracerProvider):
