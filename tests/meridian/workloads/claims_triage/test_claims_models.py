@@ -9,7 +9,7 @@ from servicesupport import claim_with_id, synthetic_claims
 from meridian.workloads.claims_triage.models import (
     ClaimFacts,
     ClaimSubmission,
-    TriageProposal,
+    ProposalSummary,
 )
 
 
@@ -91,34 +91,44 @@ def test_a_submission_is_frozen() -> None:
         submission.claimed_amount = 1
 
 
-PROPOSAL = {
+SUMMARY = {
     "route": "adjuster",
-    "reason": "because",
-    "draft": "text",
+    "reason": "unverified",
     "drafted_by": {"deployment": "replay-chat", "provider": "replay", "mode": "replay"},
 }
 
 
-def test_a_triage_proposal_takes_the_graph_output() -> None:
-    assert TriageProposal.model_validate(PROPOSAL).drafted_by.provider == "replay"
+def test_a_proposal_summary_takes_a_reason_code_and_a_drafted_by() -> None:
+    summary = ProposalSummary.model_validate(SUMMARY)
+
+    assert summary.drafted_by is not None
+    assert summary.drafted_by.provider == "replay"
+
+
+def test_a_proposal_summary_may_say_that_no_model_was_called() -> None:
+    summary = ProposalSummary.model_validate(SUMMARY | {"drafted_by": None})
+
+    assert summary.drafted_by is None
 
 
 @pytest.mark.parametrize(
     "broken",
     [
         {"route": "auto_reject"},
-        {"reason": ""},
-        {"draft": ""},
-        {"draft": "x" * 2001},
         {"extra": 1},
         {"drafted_by": {"deployment": "d", "provider": "p"}},
     ],
 )
-def test_a_proposal_the_graph_should_not_produce_is_refused(
+def test_a_summary_with_an_unknown_route_or_field_is_refused(
     broken: dict[str, Any],
 ) -> None:
     with pytest.raises(ValidationError):
-        TriageProposal.model_validate(PROPOSAL | broken)
+        ProposalSummary.model_validate(SUMMARY | broken)
+
+
+def test_a_summary_leaves_out_the_drafted_by_field_only_by_saying_null() -> None:
+    with pytest.raises(ValidationError):
+        ProposalSummary.model_validate({"route": "adjuster", "reason": "unverified"})
 
 
 def test_the_facts_are_the_submission_without_the_claimant() -> None:

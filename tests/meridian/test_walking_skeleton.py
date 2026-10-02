@@ -96,6 +96,7 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
     assert body["claim_id"] == "CLM-0001"
     assert body["run_status"] == "Completed"
     assert body["proposal"]["route"] == "adjuster"
+    assert body["proposal"]["reason"] == "unverified"
     assert body["proposal"]["drafted_by"] == {
         "deployment": "replay-chat",
         "provider": "replay",
@@ -108,9 +109,11 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
     ]
     assert owner_rows(
         fresh_database,
-        "SELECT claim_id, run_id, route, drafted_by_deployment, drafted_by_provider "
+        "SELECT claim_id, run_id, route, reason, "
+        "proposal -> 'drafted_by' ->> 'deployment', "
+        "proposal -> 'drafted_by' ->> 'provider', draft "
         "FROM claims.triage_proposals",
-    ) == [("CLM-0001", run_id, "adjuster", "replay-chat", "replay")]
+    ) == [("CLM-0001", run_id, "adjuster", "unverified", "replay-chat", "replay", None)]
     assert owner_rows(
         fresh_database, "SELECT run_id, status, reference FROM runtime.runs"
     ) == [(run_id, "Completed", "CLM-0001")]

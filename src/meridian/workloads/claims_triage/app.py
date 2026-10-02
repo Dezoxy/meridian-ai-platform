@@ -39,8 +39,8 @@ from meridian.workloads.claims_triage.models import (
     ClaimResponse,
     ClaimSubmission,
     ProposalSummary,
-    TriageProposal,
 )
+from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 SERVICE_NAME = "claims-api"
@@ -50,10 +50,6 @@ RUN_FAILED_DETAIL = "the triage run did not complete; the claim is stored"
 RUN_TIMEOUT_DETAIL = "the triage run timed out; the claim is stored"
 PROPOSAL_LOST_DETAIL = "the proposal could not be stored; the claim is stored"
 HTTP_GATEWAY_TIMEOUT = 504
-# Until S014's deterministic rules exist, the graph can only say "adjuster".
-# S014 widens this once its rule check exists; a route the rules have not
-# vouched for is a contract violation, not a proposal.
-ROUTES_ACCEPTED_UNTIL_S014 = frozenset({"adjuster"})
 
 ClaimStanding = Literal["new", "retry", "has_proposal", "differs"]
 
@@ -132,10 +128,6 @@ def _accepted_proposal(run: RunResponse) -> TriageProposal | None:
         raise RuntimeCallError(
             "the runtime's output is not a triage proposal", run_id=run.run_id
         ) from None
-    if proposal.route not in ROUTES_ACCEPTED_UNTIL_S014:
-        raise RuntimeCallError(
-            "the runtime proposed a route not accepted yet", run_id=run.run_id
-        )
     return proposal
 
 
@@ -166,19 +158,15 @@ def _insert_proposal(
     with connect(dsn, SERVICE_NAME) as conn:
         conn.execute(
             "INSERT INTO claims.triage_proposals "
-            "(proposal_id, claim_id, run_id, route, reason, draft, "
-            "drafted_by_deployment, drafted_by_provider, drafted_by_mode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "(proposal_id, claim_id, run_id, route, reason, proposal) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
             (
                 uuid4(),
                 claim_id,
                 run_id,
                 proposal.route,
                 proposal.reason,
-                proposal.draft,
-                proposal.drafted_by.deployment,
-                proposal.drafted_by.provider,
-                proposal.drafted_by.mode,
+                Jsonb(proposal.model_dump(mode="json")),
             ),
         )
 

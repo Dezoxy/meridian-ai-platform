@@ -201,10 +201,12 @@ trap cleanup EXIT
 wait_for_edge
 submit_next_claim
 route="$(jq -r '.proposal.route' "${response}")"
-drafted_by="$(jq -r '.proposal.drafted_by | "\(.deployment) (provider \(.provider), mode \(.mode))"' "${response}")"
+reason="$(jq -r '.proposal.reason' "${response}")"
+drafted_by="$(jq -r '.proposal.drafted_by | if . == null then "none (the rules decided; no model was called)" else "\(.deployment) (provider \(.provider), mode \(.mode))" end' "${response}")"
 printf 'claim       %s\n' "${claim_id}"
 printf 'status      %s\n' "${status}"
 printf 'route       %s\n' "$(clean "${route}")"
+printf 'reason      %s\n' "$(clean "${reason}")"
 printf 'drafted by  %s\n' "$(clean "${drafted_by}")"
 printf 'trace       %s\n' "${trace_id}"
 

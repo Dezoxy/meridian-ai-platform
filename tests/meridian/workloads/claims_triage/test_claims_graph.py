@@ -1,4 +1,4 @@
-"""The one-node triage graph (S009 placeholder routing)."""
+"""The one-node triage graph (a placeholder until the S014 rewrite)."""
 
 from importlib.metadata import entry_points
 from typing import Any
@@ -10,15 +10,12 @@ from servicesupport import REGISTRY_DIR, claim_with_id, synthetic_claims
 from meridian.platform.registry import load_registry
 from meridian.runtime.graphs import load_graph_factory
 from meridian.runtime.model_client import ChatResult
-from meridian.workloads.claims_triage.graph import build, route_for
+from meridian.workloads.claims_triage.graph import build
+from meridian.workloads.claims_triage.proposal import TriageProposal
 
 CLAIM = synthetic_claims()[0]  # CLM-0001
 # What the runtime is sent: the claimant's name and email stay in the Claims API.
 FACTS = {k: v for k, v in CLAIM.items() if k != "claimant"}
-REASON = (
-    "S009 walking skeleton: every claim goes to an adjuster until the triage "
-    "rules exist (S014)."
-)
 
 
 class StubModel:
@@ -50,15 +47,23 @@ def run_graph(model: StubModel, claim: dict[str, Any] = FACTS) -> dict[str, Any]
     return build(model, StubTools()).compile().invoke({"claim": claim})
 
 
-def test_the_graph_drafts_a_proposal_routed_to_an_adjuster() -> None:
+def test_the_graph_proposes_an_adjuster_review_with_the_exclusion_unassessed() -> None:
     model = StubModel("a draft")
 
     result = run_graph(model)
 
     assert result["output"] == {
         "route": "adjuster",
-        "reason": REASON,
-        "draft": "a draft",
+        "reason": "unverified",
+        "recommendation": None,
+        "payable_amount": None,
+        "exclusion_clause": None,
+        "fraud_indicators": [],
+        "missing_documents": [],
+        "citations": [],
+        "gaps": ["exclusion_assessment"],
+        "assessment": "unavailable",
+        "rationale": None,
         "drafted_by": {
             "deployment": "replay-chat",
             "provider": "replay",
@@ -66,6 +71,18 @@ def test_the_graph_drafts_a_proposal_routed_to_an_adjuster() -> None:
         },
     }
     assert len(model.calls) == 1
+
+
+def test_the_graphs_output_is_a_proposal_the_claims_api_accepts() -> None:
+    result = run_graph(StubModel())
+
+    assert TriageProposal.model_validate(result["output"]).route == "adjuster"
+
+
+def test_the_models_words_are_not_kept_in_the_proposal() -> None:
+    result = run_graph(StubModel("a draft the proposal has no field for"))
+
+    assert "a draft" not in str(result["output"])
 
 
 def test_the_prompt_leaves_out_the_claimants_name_and_email() -> None:
@@ -90,15 +107,11 @@ def test_the_prompt_leaves_out_the_claimants_name_and_email() -> None:
         assert needed in user["content"]
 
 
-def test_a_long_draft_is_cut_to_2000_characters() -> None:
-    result = run_graph(StubModel("d" * 2500))
-
-    assert len(result["output"]["draft"]) == 2000
-
-
 @pytest.mark.parametrize("claim", synthetic_claims(), ids=lambda c: c["claim_id"])
 def test_every_claim_goes_to_an_adjuster(claim: dict[str, Any]) -> None:
-    assert route_for(claim) == "adjuster"
+    facts = {k: v for k, v in claim.items() if k != "claimant"}
+
+    assert run_graph(StubModel(), facts)["output"]["route"] == "adjuster"
 
 
 def test_a_claim_that_is_not_valid_facts_fails_the_run() -> None:
@@ -115,11 +128,6 @@ def test_a_claim_that_still_carries_the_claimant_is_refused_by_the_graph() -> No
         run_graph(model, CLAIM)
 
     assert model.calls == []
-
-
-def test_a_draft_the_proposal_model_would_refuse_fails_inside_the_graph() -> None:
-    with pytest.raises(ValidationError):
-        run_graph(StubModel(""))  # an empty draft is not a TriageProposal
 
 
 def test_the_graph_is_returned_uncompiled() -> None:

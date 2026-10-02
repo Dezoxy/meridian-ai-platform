@@ -690,22 +690,6 @@ def test_an_unknown_run_status_is_refused(migrated_database: DatabaseHandle) -> 
         )
 
 
-def test_a_proposal_must_say_in_which_mode_it_was_drafted(
-    migrated_database: DatabaseHandle,
-) -> None:
-    insert_claim(migrated_database)
-
-    with pytest.raises(psycopg.errors.NotNullViolation):
-        run(
-            migrated_database,
-            "claims_api",
-            "INSERT INTO claims.triage_proposals (proposal_id, claim_id, run_id, "
-            "route, reason, draft, drafted_by_deployment, drafted_by_provider) "
-            "VALUES (%s, %s, %s, 'adjuster', 'r', 'd', 'x', 'y')",
-            (uuid.uuid4(), CLAIM_ID, RUN_ID),
-        )
-
-
 @pytest.mark.parametrize(
     "index",
     [

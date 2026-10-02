@@ -1,7 +1,8 @@
 """The S009 triage graph: one node that drafts a summary for an adjuster.
 
 The graph never sets headers and never names a provider; it asks the model
-client it is given. Routing is a placeholder until S014 (deterministic rules).
+client it is given. Its proposal is a placeholder until the S014 rewrite
+(deterministic rules).
 """
 
 from typing import Any, TypedDict
@@ -10,37 +11,19 @@ from langgraph.graph import END, START, StateGraph
 
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
-from meridian.workloads.claims_triage.models import (
-    MAX_DRAFT_CHARS,
-    ClaimFacts,
-    DraftedBy,
-    Route,
-    TriageProposal,
-)
+from meridian.workloads.claims_triage.models import ClaimFacts, DraftedBy
+from meridian.workloads.claims_triage.proposal import TriageProposal
 
 SYSTEM_PROMPT = (
     "You assist an insurance claims adjuster. Write a short triage summary of "
     "the claim below for the adjuster: what happened, what is claimed and "
     "anything that needs checking. Do not decide the claim."
 )
-REASON = (
-    "S009 walking skeleton: every claim goes to an adjuster until the triage "
-    "rules exist (S014)."
-)
 
 
 class ClaimState(TypedDict):
     claim: dict[str, Any]
     output: dict[str, Any]
-
-
-def route_for(claim: dict[str, Any]) -> Route:
-    """The S009 placeholder: every claim goes to an adjuster.
-
-    S014's deterministic rules replace this (C-02, T-30): a claim the rules do
-    not support always goes to a person, so "adjuster" is the safe default.
-    """
-    return "adjuster"
 
 
 def _user_message(claim: ClaimFacts) -> str:
@@ -70,12 +53,22 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
                 {"role": "user", "content": _user_message(claim)},
             ]
         )
-        # Built through the model the Claims API validates against, so a
+        # Until the S014 rewrite the rules do not run: the claim goes to an
+        # adjuster with its exclusion unassessed, and the model's text is not
+        # kept. Built through the model the Claims API validates against, so a
         # change to one without the other fails here, inside the graph.
         proposal = TriageProposal(
-            route=route_for(state["claim"]),
-            reason=REASON,
-            draft=result.text[:MAX_DRAFT_CHARS],
+            route="adjuster",
+            reason="unverified",
+            recommendation=None,
+            payable_amount=None,
+            exclusion_clause=None,
+            fraud_indicators=(),
+            missing_documents=(),
+            citations=(),
+            gaps=("exclusion_assessment",),
+            assessment="unavailable",
+            rationale=None,
             drafted_by=DraftedBy(
                 deployment=result.deployment,
                 provider=result.provider,

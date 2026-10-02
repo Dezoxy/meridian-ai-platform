@@ -28,11 +28,45 @@ from meridian.workloads.claims_triage.settings import ClaimsSettings
 UNUSED_DSN = "postgresql://claims_api@db.invalid/meridian"
 CANARY = "claimant-secret-text-42"
 DRAFTED_BY = {"deployment": "replay-chat", "provider": "replay", "mode": "replay"}
+CITATION = {"product": "HOME-STD", "wording_version": "2026-01", "clause": "2.1"}
+# A valid proposal for each of the three routes, as the graph writes it.
 OUTPUT = {
     "route": "adjuster",
-    "reason": "a reason",
-    "draft": "a draft",
+    "reason": "unverified",
+    "recommendation": None,
+    "payable_amount": None,
+    "exclusion_clause": None,
+    "fraud_indicators": [],
+    "missing_documents": [],
+    "citations": [],
+    "gaps": ["exclusion_assessment"],
+    "assessment": "unavailable",
+    "rationale": None,
     "drafted_by": DRAFTED_BY,
+}
+AUTO_APPROVE_OUTPUT = OUTPUT | {
+    "route": "auto_approve",
+    "reason": "within_threshold",
+    "recommendation": "approve",
+    "payable_amount": 1800,
+    "citations": [CITATION],
+    "gaps": [],
+    "assessment": "not_needed",
+    "drafted_by": None,
+}
+REQUEST_DOCUMENTS_OUTPUT = OUTPUT | {
+    "route": "request_documents",
+    "reason": "missing_documents",
+    "missing_documents": ["photos"],
+    "citations": [CITATION],
+    "gaps": [],
+    "assessment": "none_applies",
+    "rationale": "No circumstance exclusion applies.",
+}
+OUTPUT_BY_ROUTE = {
+    "adjuster": OUTPUT,
+    "auto_approve": AUTO_APPROVE_OUTPUT,
+    "request_documents": REQUEST_DOCUMENTS_OUTPUT,
 }
 
 
@@ -112,7 +146,7 @@ def test_a_claim_is_stored_triaged_and_answered_201(
         "run_status": "Completed",
         "proposal": {
             "route": "adjuster",
-            "reason": "a reason",
+            "reason": "unverified",
             "drafted_by": DRAFTED_BY,
         },
     }
@@ -120,23 +154,19 @@ def test_a_claim_is_stored_triaged_and_answered_201(
         fresh_database, "SELECT tenant, submission FROM claims.claims"
     )
     assert (tenant, submission) == ("claims-triage", claim)
-    ((claim_id, run_id, route, reason, draft, deployment, provider, mode),) = (
-        owner_rows(
-            fresh_database,
-            "SELECT claim_id, run_id, route, reason, draft, drafted_by_deployment, "
-            "drafted_by_provider, drafted_by_mode FROM claims.triage_proposals",
-        )
+    ((claim_id, run_id, route, reason, proposal, draft, deployment),) = owner_rows(
+        fresh_database,
+        "SELECT claim_id, run_id, route, reason, proposal, draft, "
+        "drafted_by_deployment FROM claims.triage_proposals",
     )
-    assert (claim_id, run_id, route, reason, draft, deployment, provider, mode) == (
+    assert (claim_id, run_id, route, reason) == (
         "CLM-9101",
         runtime.run_id,
         "adjuster",
-        "a reason",
-        "a draft",
-        "replay-chat",
-        "replay",
-        "replay",
+        "unverified",
     )
+    assert proposal == OUTPUT  # the whole document, not a few columns of it
+    assert (draft, deployment) == (None, None)  # the document is the one source
     (request,) = runtime.requests
     assert (request.method, request.url.path) == ("POST", "/runs")
     assert json.loads(request.content) == {
@@ -154,6 +184,31 @@ def test_a_claim_is_stored_triaged_and_answered_201(
         "meridian.tenant": "claims-triage",
         "meridian.run_id": str(runtime.run_id),
     }
+
+
+@pytest.mark.parametrize("route", OUTPUT_BY_ROUTE)
+def test_each_of_the_three_routes_is_stored_and_answered(
+    fresh_database: DatabaseHandle, route: str
+) -> None:
+    output = OUTPUT_BY_ROUTE[route]
+    run_id = uuid.uuid4()
+    runtime = Runtime(
+        body={"run_id": str(run_id), "status": "Completed", "output": output}
+    )
+    client = make_client(claims_dsn(fresh_database), runtime)
+
+    response = client.post("/claims", json=claim_with_id("CLM-9112"))
+
+    assert response.status_code == 201
+    assert response.json()["proposal"] == {
+        "route": route,
+        "reason": output["reason"],
+        "drafted_by": output["drafted_by"],
+    }
+    assert owner_rows(
+        fresh_database,
+        "SELECT run_id, route, reason, proposal FROM claims.triage_proposals",
+    ) == [(run_id, route, output["reason"], output)]
 
 
 def test_a_run_that_is_awaiting_approval_answers_201_without_a_proposal(
@@ -298,7 +353,60 @@ FAILURES = [
         ),
         502,
         True,
-        id="route-not-yet-allowed",
+        id="route-the-reason-does-not-give",
+    ),
+    pytest.param(
+        Runtime(
+            body={
+                "run_id": str(uuid.uuid4()),
+                "status": "Completed",
+                "output": {**AUTO_APPROVE_OUTPUT, "payable_amount": 2501},
+            }
+        ),
+        502,
+        True,
+        id="auto-approval-over-the-limit",
+    ),
+    pytest.param(
+        Runtime(
+            body={
+                "run_id": str(uuid.uuid4()),
+                "status": "Completed",
+                "output": {**AUTO_APPROVE_OUTPUT, "fraud_indicators": ["late_report"]},
+            }
+        ),
+        502,
+        True,
+        id="auto-approval-with-a-fraud-indicator",
+    ),
+    pytest.param(
+        Runtime(
+            body={
+                "run_id": str(uuid.uuid4()),
+                "status": "Completed",
+                "output": {**OUTPUT, "gaps": []},
+            }
+        ),
+        502,
+        True,
+        id="unverified-without-a-gap",
+    ),
+    pytest.param(
+        Runtime(
+            body={
+                "run_id": str(uuid.uuid4()),
+                "status": "Completed",
+                "output": {
+                    "route": "adjuster",
+                    "reason": "a reason",
+                    "draft": "a draft",
+                    "drafted_by": DRAFTED_BY,
+                },
+            }
+        ),
+        502,
+        True,
+        id="the-old-proposal-shape",
     ),
     pytest.param(
         Runtime(
