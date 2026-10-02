@@ -1,6 +1,7 @@
 """``meridian knowledge ingest`` through Typer's test runner (S012)."""
 
 import functools
+import re
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,9 @@ from meridian.platform.knowledge_mcp.ingest import ingest_wordings
 
 GATEWAY_URL = "http://gateway.invalid:8080"
 SECRET = "s3cret-value"  # noqa: S105 (a test password, not a credential)
+# Typer styles a usage error when it thinks a terminal is there, as it does in
+# GitHub Actions, and the escape codes then split an option's name.
+ANSI_STYLE = re.compile(r"\x1b\[[0-9;]*m")
 runner = CliRunner()
 
 
@@ -73,7 +77,7 @@ def test_the_tenant_option_is_required() -> None:
     result = runner.invoke(app, ["knowledge", "ingest"])
 
     assert result.exit_code == 2
-    assert "--tenant" in result.output
+    assert "--tenant" in ANSI_STYLE.sub("", result.output)
 
 
 def test_a_missing_database_variable_exits_1_and_names_it(

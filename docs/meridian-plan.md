@@ -2647,6 +2647,11 @@ for a query, and a check says how well.
 - The `docs-sync` skill: the README, the registry README, the kind README,
   the tool-contract README, the threat model and this plan were what the
   branch falsified.
+- CI failed once on the pull request, where every local gate had passed:
+  a test read Typer's usage error, which Typer styles in GitHub Actions,
+  and the escape codes split the option's name. The test now strips the
+  styling, and the database suite was run once more with
+  `GITHUB_ACTIONS=true` set: `2974 passed, 3 skipped`.
 
 **Result / verification:** run by the main session on the final code.
 
