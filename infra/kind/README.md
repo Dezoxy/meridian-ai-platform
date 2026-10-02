@@ -1,18 +1,17 @@
 # Local platform on kind
 
 `make up` builds the local Meridian platform on a one-node kind cluster from
-pinned Helm charts. `make smoke` proves it works. `make deploy` puts the S009
-walking skeleton (Claims API, Agent Runtime, Model Gateway) on it and
-`make demo` runs a claim through it. `make down` removes it.
-Status: **implemented** (S006, and S041 for deploy and demo). Nothing here is
-deployed anywhere but your laptop; the Azure side is S007 onward. The services
-run in replay mode: no model is called, and the model's text is canned and
-simulated.
-
-**`make demo` fails since S014 and until S044.** The triage graph now calls
-the policy and knowledge tool servers first, and they are not deployed on
-kind yet: the run fails, the Claims API answers 502 and the demo stops. The
-claim stays stored and can be posted again once the servers run here.
+pinned Helm charts. `make smoke` proves it works. `make deploy` puts the six
+Meridian services on it (Claims API, Agent Runtime, Model Gateway and the
+policy, claims and knowledge tool servers), seeds the policy store and ingests
+the policy wordings; `make demo` runs a claim through them. `make down`
+removes it.
+Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
+servers). Nothing here is deployed anywhere but your laptop; the Azure side is
+S007 onward. The services run in replay mode: no model is called, the model's
+text is canned and simulated, and so are the embeddings. A triage that asks
+the model its one question therefore gets no usable answer and goes to an
+adjuster; the rules decide every other claim.
 
 ## What `make up` creates
 
@@ -47,16 +46,16 @@ For the walking skeleton `make up` also declares a second database,
 `claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
 `policy_mcp` and `claims_mcp`, and for the knowledge server (S046)
 `knowledge_mcp`. All seven can log in and nothing more (no superuser, createdb
-or createrole). The three tool-server roles are declared here because
-migrations 0004 and 0006 need them to exist; they have been checked by the
-manifest tests only, never on a cluster. Reconciling them and running the
-tool servers on kind is S044. The `app` database, role and Secret are
-untouched. The `meridian` database declares the `vector` extension too
-(S012): migration 0005 needs it, and `meridian_owner` cannot create an
-extension PostgreSQL does not trust. This declaration has been checked by
-the manifest tests only, never on a cluster; `make smoke` still looks for
-the extension in `app` alone, and on a cluster older than this change the
-migration can run before the operator has created it (S044). Each role's
+or createrole). The three tool-server roles may each hold at most 12
+connections: a tool server runs at most eight calls at once, one connection
+each, so a runaway server cannot use up PostgreSQL's 100. The other roles
+have no such bound until they get a connection pool (S019). The `app`
+database, role and Secret are untouched. The `meridian` database declares the
+`vector` extension too (S012): migration 0005 needs it, and `meridian_owner`
+cannot create an extension PostgreSQL does not trust. `make up` waits until
+the operator reports the database applied, which includes the extension, and
+`make deploy` refuses to start before that, so the migration never runs
+first; `make smoke` looks for the extension in both databases. Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
@@ -76,18 +75,19 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian \
 Rotating a password is the owner's call and `make up` never overwrites a
 Secret. Both `password` and `uri` (it embeds the password) must change
 together, CloudNativePG then applies the new password to the role, and the
-three Deployments must restart to read it; the migration Job reads its Secret
-afresh on every `make deploy`:
+Deployment that uses the role must restart to read it; the Jobs read the
+owner's Secret afresh on every `make deploy`:
 
 ```sh
 kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
-  rollout restart deploy/claims-api deploy/agent-runtime deploy/model-gateway
+  rollout restart deploy/claims-api deploy/agent-runtime deploy/model-gateway \
+  deploy/policy-mcp deploy/claims-mcp deploy/knowledge-mcp
 ```
 
 PostgreSQL itself enforces the database boundary, with `pg_hba` rules in
 [`values/platform-db.yaml`](values/platform-db.yaml) that CloudNativePG places
 before its default catch-all, after its own local, replication and pooler
-rules: a connection without TLS is rejected; the six roles may log in to
+rules: a connection without TLS is rejected; the seven roles may log in to
 `meridian` over TLS with a SCRAM password and to no other database; no other
 role may log in to `meridian`. A client that asks for `sslmode=disable`, or a
 service that is pointed at the `app` or `postgres` database, is refused by the
@@ -117,36 +117,49 @@ node image, Kubernetes components and the platform).
 
 | Command | What it does |
 |---|---|
-| `make up` | Create the cluster if absent and install every release. Safe to rerun; it converges. Took 4 minutes from no cluster (245 s, node image already local), under a minute after. |
-| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration Job, applies the manifests in `manifests/meridian/` and waits for the three Deployments and the route. Safe to rerun. |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from all three services. Fails until S044 (see above). |
-| `make smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. |
+| `make up` | Create the cluster if absent and install every release. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
+| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/`, ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from the five services that triage a claim. |
+| `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks three things:
+`make smoke` checks four things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
    and Envoy.
-2. **Database.** `pg_extension` in `platform-db` lists `vector`.
-3. **Telemetry.** Three short Jobs run `telemetrygen` and send one trace, one
+2. **Database.** `pg_extension` lists `vector` in the `app` database and in
+   the `meridian` database.
+3. **Tools.** One call per tool server through the runtime's own client, run
+   inside the Agent Runtime's pod (`python -m meridian.runtime.toolprobe`), so
+   with the addresses the runtime itself was given. The call names a run that
+   does not exist, and every server must refuse it as `unknown-run`. That
+   proves the address, the name lookup, the server's Host allowlist, the MCP
+   handshake and the server's database role reading `runtime.runs`. It does
+   not prove a completed call: no single role can make up a claim and a run,
+   so that is `make demo`'s proof. Before `make deploy` this check prints SKIP.
+4. **Telemetry.** Three short Jobs run `telemetrygen` and send one trace, one
    log and one metric for a fresh service name (`meridian-smoke-<epoch>`)
    through the collector. The script then reads each back through Grafana's
    datasource proxy from Tempo, Loki and Prometheus, waiting up to 120 seconds
    each. It prints the trace ID and how to find the data in Grafana Explore.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
-15 minutes after it finishes.
+15 minutes after it finishes. The tool check leaves at most one refused
+`tool.call` row per server in the audit log per throttle window.
 
-## The walking skeleton: `make deploy` and `make demo`
+## The services: `make deploy` and `make demo`
 
 One image, built from the [`Dockerfile`](../../Dockerfile) at the repository
-root, runs all three services and the migration command. It is based on
+root, runs all six services and the three commands of the Jobs. It is based on
 `python:3.13-slim` and `uv`, both pinned by digest, installs the locked
 dependencies without the dev group and the package non-editable into a venv,
 runs as user 10001 and sets no command of its own (each manifest names it).
+It carries the registry and the seed data the Jobs load: the synthetic
+policies, their claim history and the four policy wordings, and nothing else
+of `data/synthetic` (not the claims, not the golden labels).
 Its build context is an allowlist ([`.dockerignore`](../../.dockerignore)), so
 the kubeconfig, `.env` files and `.context/` can never enter it; key and
 certificate files are excluded even inside the allowed folders. There is no
@@ -159,23 +172,53 @@ tag.
 | Claims API | `http://claims.meridian.localhost:8088` (edge) and `claims-api.meridian.svc:8000` | `claims_api` |
 | Agent Runtime | `agent-runtime.meridian.svc:8000`, cluster only | `agent_runtime` |
 | Model Gateway | `model-gateway.meridian.svc:8000`, cluster only | `model_gateway` |
+| Policy tool server (`policy_lookup`, `claim_history`) | `policy-mcp.meridian.svc:8000/mcp`, cluster only | `policy_mcp` |
+| Knowledge tool server (`wording_search`) | `knowledge-mcp.meridian.svc:8000/mcp`, cluster only | `knowledge_mcp` |
+| Claims tool server (`add_claim_note`, `request_approval`; no graph calls them before S015) | `claims-mcp.meridian.svc:8000/mcp`, cluster only | `claims_mcp` |
+
+The runtime finds the tool servers through `MERIDIAN_TOOL_SERVERS`, a map of
+the registry's server IDs to those addresses. A tool server answers `/mcp`
+only for the one Host name in its `MERIDIAN_ALLOWED_HOSTS`, which is the name
+in the runtime's map: the same Service called as
+`policy-mcp.meridian.svc.cluster.local`, `policy-mcp.meridian` or `policy-mcp`
+gets 421. A test keeps the two values equal.
 
 In order, `make deploy`:
 
 1. Refuses with "run 'make up' first" if the `meridian` Database is not
    applied, a role is not reconciled or a role Secret is missing.
 2. Builds and loads the image.
-3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, as
-   `meridian_owner`. Only this Job reads that Secret. It must finish before
-   anything else is applied; on failure the script prints the Job's log and
-   exits non-zero. The Job runs on every deploy (a Job of the same tag is
-   deleted first; the runner skips what is applied, so a rerun takes seconds)
-   and ends after 300 seconds at most.
+3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
+   `meridian-seed-<tag>` with `meridian db seed-policies`, both as
+   `meridian_owner`. Only the three Jobs read that Secret. Both must finish
+   before anything else is applied; on failure the script prints the Job's
+   log and exits non-zero. They run on every deploy (a Job of the same tag is
+   deleted first; the runner skips what is applied and the seed mirrors its
+   source, so a rerun takes seconds) and end after 300 seconds at most. The
+   seed comes before the services because a claim that meets an empty policy
+   table gets a stored proposal "policy not found", and a stored proposal is
+   final.
 4. Applies every other file in `manifests/meridian/` (found by glob: the
    ServiceAccounts, Deployments, Services, the HTTPRoute and the
-   BackendTrafficPolicy), and waits for the rollouts and for the route to be
-   `Accepted`. `@IMAGE@` (and `@TAG@` in the Job's name) are the only text it
-   substitutes.
+   BackendTrafficPolicy). `@IMAGE@` (and `@TAG@` in a Job's name) are the
+   only text it substitutes.
+5. Waits for the Model Gateway, then runs a Job `meridian-ingest-<tag>` with
+   `meridian knowledge ingest`, which embeds the 85 clauses of the four
+   wordings through the gateway and replaces the knowledge store in one
+   transaction. Once per image: the finished Job has no expiry and is the
+   record that this image's corpus is in the store, so the next deploy of
+   the same image skips it. A search before the first ingestion fails its
+   run (`no-corpus`), and that claim can simply be posted again.
+6. Waits for the other rollouts and for the route to be `Accepted`.
+7. After an ingestion, waits until a minute has passed since it finished.
+   The ingestion's embedding calls go out under the `claims-triage` tenant,
+   whose limits the registry sets: it reserved 7,679 of the tenant's 10,000
+   tokens a minute and six of its ten requests per 10 seconds (measured on
+   kind, 2026-10-02). A triage that asks the model reserves about 1,090
+   tokens in five requests, so a claim posted in the first seconds would be
+   refused, and only two would fit in that minute. The wait makes a deploy
+   end with the limits clear. Whether ingestion should spend a workload's
+   budget at all is an open registry decision (threat model T-60).
 
 Each pod gets its own role's connection string from its Secret, and the
 cluster CA's public certificate (`ca.crt` only, not the CA's private key that
@@ -192,10 +235,12 @@ Envoy buffers each request to the Claims API and answers 413 above 64 KiB, the
 app's own limit, before the app sees it. TLS, NetworkPolicy and hardened
 charts are S019.
 
-A `ClusterIP` Service means unrouted, not protected: the Agent Runtime and the
-Model Gateway have no route at the edge, but any pod in the cluster can call
-them until S019's NetworkPolicy lands. The database boundary above does not
-depend on that.
+A `ClusterIP` Service means unrouted, not protected: the Agent Runtime, the
+Model Gateway and the tool servers have no route at the edge, but any pod in
+the cluster can call them, over plain HTTP, until S019's NetworkPolicy lands.
+A tool server gives such a caller less than the others do: it answers only
+for the run ID of a running run and only with that run's claim (T-50). The
+database boundary above does not depend on any of that.
 
 `make demo` posts the claims in `data/synthetic/claims.json` in order to the
 Claims API through the edge, with a W3C `traceparent` header whose trace ID the
@@ -206,8 +251,12 @@ route and the deployment the model call went to, or that no model was called
 (never a claimant field, and not the reason: the answer does not carry it),
 then reads the trace by that ID from Tempo through Grafana's datasource proxy,
 retrying for up to 120 seconds. It prints PASS only if the trace has spans from
-`claims-api`, `agent-runtime` and `model-gateway`, with the span count of each,
-and exits non-zero otherwise. `make grafana` shows it in Explore with the
+`claims-api`, `agent-runtime`, `policy-mcp`, `knowledge-mcp` and
+`model-gateway`, with the span count of each, and exits non-zero otherwise.
+Every triage of a claim whose policy exists touches the five: the graph looks
+up the policy and its claim history, then searches the wording, and each
+search embeds its query through the gateway even when the rules decide and
+the model is never asked. `make grafana` shows the trace in Explore with the
 TraceQL query `{ trace:id = "<id>" }`.
 
 ## If `make up` was interrupted
@@ -258,9 +307,12 @@ The laptop this was built on gives Docker Desktop 7.65 GiB. The memory limits
 of the components add up to about 4.4 GiB. Measured with `docker stats` on the
 node container on 2026-09-30, after a `make up` from no cluster, a second
 `make up` and one `make smoke`: 3.6 GiB, which includes the Kubernetes control
-plane, the kubelet and containerd. The three Meridian services add limits of
-192, 256 and 192 MiB (their measured peak was 57 to 87 MB after two demo
-claims); the migration Job adds 192 MiB while it runs.
+plane, the kubelet and containerd. The six Meridian services add limits of
+192 MiB (Claims API, Model Gateway) and 256 MiB (Agent Runtime and each tool
+server), 1.4 GiB in all; a Job adds 192 MiB while it runs. Measured from
+cAdvisor on 2026-10-02, twice, after demo claims and smoke runs: the working
+sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
+87 MB), and `docker stats` showed 4.9 GiB for the node container.
 
 ## Deliberately not here yet
 
