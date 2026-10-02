@@ -23,13 +23,13 @@ from typing import Any, Literal
 from meridian.runtime.model_client import ModelClient
 
 from .models import ClaimFacts, DraftedBy
+from .proposal import MAX_RATIONALE_CHARS
 from .rules import Assessment
 from .wording import Clause
 
 logger = logging.getLogger(__name__)
 
 ASSESSMENT_OUTPUT_TOKENS = 400
-MAX_RATIONALE_CHARS = 600
 
 Reason = Literal["truncated", "not-json", "not-the-format", "unknown-clause", "unsure"]
 ANSWER_FIELDS = frozenset({"verdict", "clause", "rationale"})

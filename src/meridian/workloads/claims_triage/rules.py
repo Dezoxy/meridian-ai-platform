@@ -329,7 +329,9 @@ def _payable_decision(
     payable: int,
     gaps: tuple[Gap, ...],
 ) -> Decision:
-    """Step 8: a covered, complete claim with a positive payable amount."""
+    """Step 8: a covered claim with a positive payable amount. The rules
+    recommend approving only when nothing is missing: a claim whose exclusions
+    nobody checked keeps its route and reason but has no recommendation."""
     citations = _cite(
         terms.cover,
         terms.deductible,
@@ -337,21 +339,21 @@ def _payable_decision(
         terms.reporting if "late_report" in indicators else None,
     )
 
-    def decision(route: Route, reason: Reason, *, approve: bool) -> Decision:
+    def decision(route: Route, reason: Reason) -> Decision:
         return _decision(
             route,
             reason,
             indicators,
-            recommendation="approve" if approve else None,
+            recommendation=None if gaps else "approve",
             payable=payable,
             citations=citations,
             gaps=gaps,
         )
 
     if indicators:
-        return decision("adjuster", "fraud_indicator", approve=True)
+        return decision("adjuster", "fraud_indicator")
     if payable > AUTO_APPROVAL_LIMIT:
-        return decision("adjuster", "over_threshold", approve=True)
+        return decision("adjuster", "over_threshold")
     if gaps:
-        return decision("adjuster", "unverified", approve=False)
-    return decision("auto_approve", "within_threshold", approve=True)
+        return decision("adjuster", "unverified")
+    return decision("auto_approve", "within_threshold")

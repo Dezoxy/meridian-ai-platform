@@ -909,6 +909,65 @@ def test_step_8_a_fraud_indicator_still_lists_the_gaps() -> None:
     assert (decision.reason, decision.gaps) == ("fraud_indicator", ("claim_history",))
 
 
+def test_step_8_over_threshold_with_a_gap_keeps_its_route_and_has_no_approval() -> None:
+    facts = make_facts(claim=make_claim(claimed_amount=9000), history_truncated=True)
+
+    decision = decide(facts)
+
+    assert (
+        decision.route,
+        decision.reason,
+        decision.recommendation,
+        decision.payable_amount,
+        decision.gaps,
+    ) == ("adjuster", "over_threshold", None, 8750, ("claim_history",))
+
+
+def test_step_8_a_fraud_indicator_with_a_gap_keeps_its_route_and_has_no_approval() -> (
+    None
+):
+    claim = make_claim(reported_on=LOSS + timedelta(days=31))
+
+    decision = decide(make_facts(claim=claim, history_truncated=True))
+
+    assert (
+        decision.route,
+        decision.reason,
+        decision.recommendation,
+        decision.payable_amount,
+        decision.fraud_indicators,
+    ) == ("adjuster", "fraud_indicator", None, 1750, ("late_report",))
+
+
+@pytest.mark.parametrize(
+    ("claim", "reason"),
+    [
+        (make_claim(reported_on=LOSS + timedelta(days=31)), "fraud_indicator"),
+        (make_claim(claimed_amount=9000), "over_threshold"),
+    ],
+    ids=["fraud_indicator", "over_threshold"],
+)
+def test_step_8_an_unavailable_assessment_takes_the_approval_away_not_the_route(
+    claim: ClaimFacts, reason: str
+) -> None:
+    terms = make_terms(candidates=(clause("3.1", "Wear and tear"),))
+
+    unavailable = decide(
+        make_facts(claim=claim, terms=terms, assessment=Assessment("unavailable"))
+    )
+    answered = decide(
+        make_facts(claim=claim, terms=terms, assessment=Assessment("none_applies"))
+    )
+
+    assert (unavailable.route, unavailable.reason) == ("adjuster", reason)
+    assert unavailable.recommendation is None
+    assert unavailable.gaps == ("exclusion_assessment",)
+    assert unavailable.payable_amount == answered.payable_amount
+    assert (answered.route, answered.reason) == ("adjuster", reason)
+    assert answered.recommendation == "approve"
+    assert answered.gaps == ()
+
+
 # -- decide: one test per gap -------------------------------------------------------
 
 

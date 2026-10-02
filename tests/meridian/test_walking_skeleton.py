@@ -3,31 +3,109 @@
 Three apps run in one process, each with its own tracer provider exporting to
 one in-memory exporter. The gateway sits behind a Starlette ``TestClient``, the
 runtime's HTTP client is that client, and the claims app's HTTP client is a
-``TestClient`` of the runtime, so the real HTTP contracts, the real graph (found
-through its entry point), the real SQL and the real grants are exercised.
+``TestClient`` of the runtime, so the real HTTP contracts, the real SQL and the
+real grants are exercised.
+
+The workload's triage graph (S014) calls the policy and knowledge tool servers,
+which this test does not run, so a one-node stand-in graph with the S009
+placeholder's behaviour is published in its place (the entry-point lookup is
+patched; the runtime's loader checks and runs it as it would the real one). It
+makes one model call through the gateway and proposes an adjuster review. The
+next contract runs the real graph here through the real tool servers.
 """
 
 import uuid
+from typing import Any, TypedDict
 
 import pytest
 from dbsupport import DatabaseHandle
 from fastapi.testclient import TestClient
+from langgraph.graph import END, START, StateGraph
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from servicesupport import REGISTRY_DIR, claim_with_id, owner_rows, synthetic_claims
+from servicesupport import (
+    REGISTRY_DIR,
+    TESTS_ROOT,
+    claim_with_id,
+    owner_rows,
+    synthetic_claims,
+)
 
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.gateway.app import create_app as create_gateway
 from meridian.platform.gateway.settings import GatewaySettings
+from meridian.runtime import graphs
 from meridian.runtime.app import create_app as create_runtime
+from meridian.runtime.model_client import ModelClient
 from meridian.runtime.settings import RuntimeSettings
+from meridian.runtime.tool_client import ToolClient
 from meridian.workloads.claims_triage.app import create_app as create_claims_api
+from meridian.workloads.claims_triage.models import ClaimFacts, DraftedBy
+from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 CLAIM = synthetic_claims()[0]  # CLM-0001
 SERVICES = {"claims-api", "agent-runtime", "model-gateway"}
+
+
+class DraftState(TypedDict):
+    claim: dict[str, Any]
+    output: dict[str, Any]
+
+
+def draft_graph(model: ModelClient, tools: ToolClient) -> StateGraph:
+    """Stands in for the claims-triage graph: one node, one model call, and a
+    proposal for an adjuster with the exclusion unassessed."""
+
+    def draft_proposal(state: DraftState) -> dict[str, Any]:
+        claim = ClaimFacts.model_validate(state["claim"])
+        result = model.chat(
+            [
+                {"role": "system", "content": "Write a short summary of the claim."},
+                {"role": "user", "content": claim.description},
+            ]
+        )
+        proposal = TriageProposal(
+            route="adjuster",
+            reason="unverified",
+            recommendation=None,
+            payable_amount=None,
+            exclusion_clause=None,
+            fraud_indicators=(),
+            missing_documents=(),
+            citations=(),
+            gaps=("exclusion_assessment",),
+            assessment="unavailable",
+            rationale=None,
+            drafted_by=DraftedBy(
+                deployment=result.deployment,
+                provider=result.provider,
+                mode=result.mode,
+            ),
+        )
+        return {"output": proposal.model_dump(mode="json")}
+
+    graph = StateGraph(DraftState)
+    graph.add_node("draft_proposal", draft_proposal)
+    graph.add_edge(START, "draft_proposal")
+    graph.add_edge("draft_proposal", END)
+    return graph
+
+
+class DraftEntryPoint:
+    """The entry point of the stand-in, published under the workload's name."""
+
+    name = "claims-triage"
+    value = "meridian.workloads.claims_triage.graph:build"
+
+    class dist:
+        name = "meridian"
+
+    @staticmethod
+    def load() -> Any:
+        return draft_graph
 
 
 @pytest.fixture
@@ -37,8 +115,15 @@ def exporter() -> InMemorySpanExporter:
 
 @pytest.fixture
 def claims_client(
-    fresh_database: DatabaseHandle, exporter: InMemorySpanExporter
+    fresh_database: DatabaseHandle,
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> TestClient:
+    # The stand-in lives under tests/, outside the meridian package, so the
+    # loader's package-directory check is pointed there (test_graphs.py tests
+    # the check itself).
+    monkeypatch.setattr(graphs, "entry_points", lambda *, group: [DraftEntryPoint()])
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", TESTS_ROOT)
     gateway = create_gateway(
         GatewaySettings(
             registry_dir=REGISTRY_DIR,
