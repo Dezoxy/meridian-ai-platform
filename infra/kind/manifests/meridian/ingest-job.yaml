@@ -28,10 +28,13 @@ metadata:
     app.kubernetes.io/name: meridian-ingest
     app.kubernetes.io/part-of: meridian
 spec:
-  backoffLimit: 1
+  # No retry: a second pod straight after a failure would meet the token window
+  # the first one filled. The next deploy is the retry.
+  backoffLimit: 0
   # A hung database or gateway connection ends the Job instead of blocking the
-  # deploy.
-  activeDeadlineSeconds: 300
+  # deploy. Above ingest.MAX_TOTAL_WAIT_SECONDS (300), the longest the command
+  # waits for the gateway, so it can end by itself and audit its refusal.
+  activeDeadlineSeconds: 360
   template:
     metadata:
       labels:

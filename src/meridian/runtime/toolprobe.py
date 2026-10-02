@@ -70,8 +70,10 @@ def call_once(
         agent=agent,
         run_id=uuid.uuid4(),
         tracer=NoOpTracer(),
+        # The probe picks the tool from the agent's own allowlist, so the
+        # allowlist never refuses and there is nothing to audit here.
         on_refusal=lambda _tool: None,
-        max_calls=len(registry.servers),
+        max_calls=1,  # the client makes one call
     )
     step = STEP if tool.idempotency_key_required else None
     try:
@@ -84,7 +86,7 @@ def call_once(
     return Answer(server, tool.id, COMPLETED)
 
 
-def probe(registry: Registry, servers: Mapping[str, ToolTarget]) -> list[Answer]:
+def probe(registry: Registry, addresses: Mapping[str, ToolTarget]) -> list[Answer]:
     """One answer per server of the registry, in registry order."""
     answers: list[Answer] = []
     for server in registry.servers:
@@ -93,7 +95,7 @@ def probe(registry: Registry, servers: Mapping[str, ToolTarget]) -> list[Answer]
             answers.append(Answer(server.id, NO_TOOL_NAME, NO_TOOL))
             continue
         agent, tool = chosen
-        target = servers.get(server.id)
+        target = addresses.get(server.id)
         if target is None:
             answers.append(Answer(server.id, tool.id, NO_ADDRESS))
             continue

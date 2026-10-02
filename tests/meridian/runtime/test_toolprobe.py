@@ -1,7 +1,9 @@
 """The tool probe (S044): one call per tool server through the runtime's client.
 
-The three real servers answer over HTTP on loopback ports (``make pytest-db``);
-the other cases need no database.
+Two tests reach the three real servers over HTTP, on loopback ports and each on
+its own database role (they need a database: ``make pytest-db``). Every other
+test needs none: it uses the in-process stand-in (``StandIn``) through the
+probe's ``targets`` argument, or addresses nobody listens on.
 """
 
 import json
@@ -38,6 +40,7 @@ from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
+from meridian.platform.toolserver.wire import META_IDEMPOTENCY_KEY, META_RUN
 from meridian.runtime.toolprobe import Answer, main, succeeded
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
@@ -158,12 +161,11 @@ def test_a_server_with_no_address_is_no_address_and_is_not_called(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     stand_in = StandIn()
-    servers = {"policy-mcp": "http://127.0.0.1:1"}
 
     with application_log() as records:
         status, lines, _ = probe(
             capsys,
-            environ_for(servers),
+            environ_for({}),
             targets={
                 "knowledge-mcp": stand_in.server,
                 "claims-mcp": stand_in.server,
@@ -301,16 +303,14 @@ def test_the_probe_sends_a_fresh_run_and_a_key_only_where_the_tool_needs_one(
     probe(capsys, environ_for({}), targets=targets)
     probe(capsys, environ_for({}), targets=targets)
 
-    runs = [seen.meta["meridian/run"] for seen in stand_in.calls]
+    runs = [seen.meta[META_RUN] for seen in stand_in.calls]
     assert len(runs) == 6
     assert len(set(runs)) == 6
     for run in runs:
         uuid.UUID(run)
     for seen in stand_in.calls:
         assert seen.arguments == {}
-        assert ("meridian/idempotency-key" in seen.meta) == (
-            seen.name == "add_claim_note"
-        )
+        assert (META_IDEMPOTENCY_KEY in seen.meta) == (seen.name == "add_claim_note")
 
 
 # ── the exit status ─────────────────────────────────────────────────────────

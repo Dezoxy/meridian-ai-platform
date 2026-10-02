@@ -8,7 +8,9 @@ not on the owner's laptop (S041).
 
 import importlib
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -23,6 +25,9 @@ from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
 from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
+from meridian.platform.gateway.ratelimit import (
+    TOKEN_WINDOW_SECONDS as GATEWAY_TOKEN_WINDOW_SECONDS,
+)
 from meridian.platform.gateway.settings import (
     ENVIRONMENT_ENV,
     MODE_ENV,
@@ -31,7 +36,7 @@ from meridian.platform.gateway.settings import (
 from meridian.platform.knowledge_mcp import INGESTION_AGENT
 from meridian.platform.knowledge_mcp import SERVICE_NAME as KNOWLEDGE_SERVER
 from meridian.platform.knowledge_mcp.ingest import MANIFEST_FILE as WORDINGS_MANIFEST
-from meridian.platform.knowledge_mcp.ingest import WORDINGS_DIR
+from meridian.platform.knowledge_mcp.ingest import MAX_TOTAL_WAIT_SECONDS, WORDINGS_DIR
 from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp import SERVICE_NAME as POLICY_SERVER
 from meridian.platform.policy_mcp.seed import HISTORY_FILE, MANIFEST_FILE, POLICIES_FILE
@@ -648,10 +653,11 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     }
 
     # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one
-    # connection each, and writes a failure's audit row on one more.
+    # connection each, and writes a failure's audit row on one more. During a
+    # rollout two pods of a server run side by side.
     assert set(limits) == {name.replace("-", "_") for name in TOOL_SERVERS}
     for name, limit in limits.items():
-        assert limit > MAX_CONCURRENT_CALLS + 1, name
+        assert limit >= 2 * (MAX_CONCURRENT_CALLS + 1), name
 
 
 def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> None:
@@ -690,6 +696,11 @@ def function_body(script: str, name: str) -> str:
     match = re.search(rf"^{name}\(\) \{{\n(.*?)^\}}", script, re.MULTILINE | re.DOTALL)
     assert match, f"no function {name}"
     return match.group(1)
+
+
+def function_definition(script: str, name: str) -> str:
+    """The whole function ``name`` of ``script``, to run it in bash."""
+    return f"{name}() {{\n{function_body(script, name)}}}\n"
 
 
 @pytest.mark.parametrize("name", SERVICES)
@@ -855,12 +866,121 @@ def test_deploy_ingests_at_most_once_per_image_and_removes_the_other_ingestions(
 
 def test_deploy_stops_on_a_failed_job_lookup_instead_of_ingesting_again() -> None:
     body = function_body(DEPLOY_SH, "ingest_corpus")
+    (lookup,) = re.findall(r'^.*get job "\$\{job\}".*$', body, re.MULTILINE)
+    (die_line,) = re.findall(r"^.*die .*could not look for.*$", body, re.MULTILINE)
 
     # An error is not "no such Job": the lookup asks for an empty answer when
     # the Job is absent, and a failure of it ends the deploy.
-    assert re.search(r'get job "\$\{job\}".*--ignore-not-found', body)
+    assert "--ignore-not-found" in lookup
     assert "|| state=absent" not in body
-    assert "die " in body
+    # A warning on stderr is not an answer: it must not read as "the Job
+    # exists". kubectl's own stderr goes to the terminal, and the message does
+    # not quote the answer.
+    assert "2>&1" not in body
+    assert "${found}" not in die_line
+
+
+def test_deploy_skips_the_ingestion_only_when_the_store_holds_chunks() -> None:
+    body = function_body(DEPLOY_SH, "ingest_corpus")
+    reader = function_body(DEPLOY_SH, "stored_chunk_count")
+    lines = [line.strip() for line in body.splitlines()]
+
+    # A finished Job is not proof that the store holds a corpus: the rows are
+    # counted in the database's primary pod, the way smoke.sh reaches psql.
+    assert body.index("stored_chunk_count") < body.index("already in the store")
+    assert "cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary" in reader
+    assert "-c postgres" in reader
+    assert "psql -d meridian" in reader
+    assert "FROM knowledge.chunks" in reader
+    # The skip is the branch that counted more than zero, and it returns.
+    assert "> 0" in body
+    skip = next(i for i, line in enumerate(lines) if "already in the store" in line)
+    assert lines[skip + 1] == "return 0"
+
+
+def run_ingest_corpus(count: str) -> tuple[list[str], str]:
+    """``ingest_corpus`` from deploy.sh in bash, with the Job of this tag
+    succeeded and ``count`` as the answer of the row count (``FAIL`` makes the
+    query fail). The stdout lines and the final ``ingested_at``."""
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
+            "INGEST_MANIFEST=ingest-job.yaml",
+            'log() { echo "LOG $*"; }',
+            'die() { echo "DIE $*"; exit 1; }',
+            "job_state() { echo succeeded; }",
+            'run_job() { echo "RUN $*"; }',
+            "kctl() {",
+            '  case "$*" in',
+            '    *"delete jobs"*) echo DELETE ;;',
+            '    *" exec "*) [[ "${COUNT}" != FAIL ]] || return 1; echo "${COUNT}" ;;',
+            '    *"get pod"*) echo platform-db-1 ;;',
+            '    *"get job"*) echo job.batch/meridian-ingest-abc ;;',
+            "  esac",
+            "}",
+            function_definition(DEPLOY_SH, "stored_chunk_count"),
+            function_definition(DEPLOY_SH, "ingest_corpus"),
+            "ingest_corpus",
+            'echo "ingested_at=${ingested_at}"',
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "COUNT": count},
+        check=True,
+    )
+    *lines, last = done.stdout.splitlines()
+    return lines, last
+
+
+def test_a_succeeded_job_with_chunks_in_the_store_is_not_ingested_again() -> None:
+    lines, ingested_at = run_ingest_corpus("12")
+
+    assert [line for line in lines if "already in the store" in line]
+    assert not [line for line in lines if line.startswith(("RUN", "DELETE"))]
+    assert ingested_at == "ingested_at="
+
+
+@pytest.mark.parametrize("count", ["0", "FAIL", "", "not-a-number"])
+def test_a_succeeded_job_with_no_chunks_or_no_answer_ingests_again(count: str) -> None:
+    lines, ingested_at = run_ingest_corpus(count)
+
+    assert not [line for line in lines if "already in the store" in line]
+    (reason,) = [line for line in lines if "ingesting again" in line]
+    assert "not-a-number" not in reason  # an answer is never quoted
+    assert [line for line in lines if line.startswith("RUN")]
+    assert re.fullmatch(r"ingested_at=\d+", ingested_at)  # the wait is armed
+
+
+def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
+    body = function_body(DEPLOY_SH, "run_job")
+    filter_body = function_body(DEPLOY_SH, "printable_ascii")
+    log_reads = re.findall(r"^.*logs \"job/\$\{job\}\".*$", body, re.MULTILINE)
+
+    # The success line and both failure paths (a verdict and the timeout): a
+    # Job's log can quote data of a checkout, and an escape sequence must not
+    # reach the terminal.
+    assert len(log_reads) == 3
+    for line in log_reads:
+        assert "| printable_ascii" in line
+    assert "tr -cd" in filter_body
+
+
+def test_the_printable_ascii_filter_drops_escapes_and_other_bytes() -> None:
+    hostile = "ok \\033[31mred\\033[0m\\tcaf\\303\\251\\r\\nnext\\n"
+    script = (
+        function_definition(DEPLOY_SH, "printable_ascii")
+        + f"printf '{hostile}' | printable_ascii"
+    )
+
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True
+    )
+
+    assert done.stdout == "ok [31mred[0mcaf\nnext\n"
 
 
 def test_the_smoke_probe_reads_server_names_from_stdout_only() -> None:
@@ -881,14 +1001,60 @@ def test_deploy_waits_out_the_token_window_the_ingestion_opens() -> None:
     )
     body = function_body(DEPLOY_SH, "wait_for_token_window")
 
-    assert int(window) == 62  # the gateway's 60 s window, and two seconds of margin
+    # Longer than the gateway's sliding window, or the wait ends with part of
+    # the ingestion's reservation still counted.
+    assert int(window) > GATEWAY_TOKEN_WINDOW_SECONDS
     assert "TOKEN_WINDOW_SECONDS" in body
+    assert 'sleep "${remaining}"' in body  # and it does wait
     assert "- SECONDS" in body  # the script's own clock
     assert "${ingested_at}" in body  # no ingestion in this deploy: no wait
     assert "claims-triage" in body
     # The node's clock is not the laptop's: no Kubernetes timestamp is read.
     assert "Timestamp" not in DEPLOY_SH
     assert "completionTime" not in DEPLOY_SH
+
+
+def test_the_ingest_job_is_not_retried_and_ends_after_the_ingestions_longest_wait() -> (
+    None
+):
+    job = job_named("ingest")
+    (timeout,) = re.findall(r"^readonly JOB_TIMEOUT=(\d+)$", DEPLOY_SH, re.MULTILINE)
+
+    # A second pod straight after a failure would meet the token window the
+    # first one filled; the next deploy is the retry.
+    assert job["spec"]["backoffLimit"] == 0
+    # The command waits up to MAX_TOTAL_WAIT_SECONDS for the gateway and then
+    # needs time to audit its refusal: the deadline must not cut it short, and
+    # deploy.sh must not give up on the Job before the deadline ends it.
+    assert job["spec"]["activeDeadlineSeconds"] > MAX_TOTAL_WAIT_SECONDS
+    assert int(timeout) > job["spec"]["activeDeadlineSeconds"]
+
+
+def test_smoke_runs_the_tool_check_after_the_database_check() -> None:
+    lines = SMOKE_SH.splitlines()
+    calls = [line for line in lines[lines.index("check_edge") :] if line]
+
+    assert calls[:3] == ["check_edge", "check_database", "check_tools"]
+
+
+def test_the_tool_check_skips_only_when_no_meridian_deployment_exists() -> None:
+    body = function_body(SMOKE_SH, "check_tools")
+    found = re.search(r"get deployment.*?--ignore-not-found", body, re.DOTALL)
+    assert found, "no lookup of the Deployments"
+    lookup = found.group(0)
+    skips = re.findall(r"^\s*skip .*$", body, re.MULTILINE)
+
+    # Any Meridian Deployment makes the probe required: a missing or renamed
+    # agent-runtime fails the probe's exec instead of skipping the check.
+    assert "-l app.kubernetes.io/part-of=meridian" in lookup
+    assert "agent-runtime" not in lookup
+    assert "--ignore-not-found" in lookup
+    assert len(skips) == 1
+    assert "not deployed" in skips[0]
+    assert "deploy/agent-runtime" in body  # the probe still runs there
+    # A warning on stderr is not an answer (the probe's own call is checked by
+    # test_the_smoke_probe_reads_server_names_from_stdout_only).
+    assert "2>&1" not in lookup
 
 
 def test_the_dockerfile_declares_no_secret_looking_variable() -> None:

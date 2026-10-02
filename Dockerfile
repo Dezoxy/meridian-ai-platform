@@ -36,8 +36,10 @@ RUN groupadd --gid 10001 meridian \
 COPY --from=build /opt/venv /opt/venv
 COPY config/registry /opt/meridian/registry
 # The seed data `meridian db seed-policies` and `meridian knowledge ingest` read,
-# and nothing else of data/synthetic: not the claims, the golden labels or the
-# generator. .dockerignore lets the same files into the build context.
+# and nothing else of data/synthetic: not the claims, the expected outcomes or
+# the generator (the manifest holds their hashes and counts). The policies file
+# names each synthetic holder; only the seed Job reads it (T-51).
+# .dockerignore lets the same files into the build context.
 COPY data/synthetic/manifest.json data/synthetic/policies.json data/synthetic/claim-history.json /opt/meridian/synthetic/
 COPY data/synthetic/wordings/*.md /opt/meridian/synthetic/wordings/
 ENV PATH=/opt/venv/bin:$PATH \

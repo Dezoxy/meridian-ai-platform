@@ -108,9 +108,13 @@ check_database() {
 # does not exist, which the servers check before anything else of the caller's).
 check_tools() {
   local found out err_file servers
-  if ! found="$(kctl -n meridian get deployment agent-runtime -o name \
-    --ignore-not-found 2>&1)"; then
-    fail "tools: could not look for deployment/agent-runtime: $(clean_lines "${found}")"
+  # Skipped only when no Meridian Deployment exists. When any does, the probe is
+  # required: a missing or renamed agent-runtime fails its exec below. Stderr is
+  # not part of the answer (a warning there is not a Deployment); it goes to the
+  # terminal.
+  if ! found="$(kctl -n meridian get deployment \
+    -l app.kubernetes.io/part-of=meridian -o name --ignore-not-found)"; then
+    fail "tools: could not look for the Meridian deployments (kubectl's error is above)"
     return
   fi
   if [[ -z "${found}" ]]; then

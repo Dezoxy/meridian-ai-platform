@@ -8,12 +8,13 @@ import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from opentelemetry import _logs, metrics, trace
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry._logs._internal import ProxyLoggerProvider
+from opentelemetry.metrics._internal import _ProxyMeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import ProxyTracerProvider
 from psycopg import errors
 
 from meridian.platform.common import http
@@ -26,6 +27,7 @@ from meridian.platform.common.telemetry import make_tracer_provider, start_span
 
 CANARY = "canary-claimant@example.invalid"
 LIMIT = 100
+SIGNALS = ("TRACES", "METRICS", "LOGS")
 
 
 def build(
@@ -173,14 +175,34 @@ def test_fastapis_own_telemetry_sets_no_global_provider_from_the_environment(
 ) -> None:
     # With this variable FastAPI would create the global tracer, meter and
     # logger providers (default resource) at startup. Nothing listens here.
+    # The test touches no process-global state, so it does not depend on the
+    # tests before it and a red run leaves nothing behind: FastAPI looks the
+    # setters and getters up on these modules at startup, so recorders stand in
+    # for the setters, and fresh deferred providers for the getters (a provider
+    # an earlier test installed would hide the call).
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+    for name in ("OTEL_SDK_DISABLED", *(f"OTEL_{s}_EXPORTER" for s in SIGNALS)):
+        monkeypatch.delenv(name, raising=False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        trace, "set_tracer_provider", lambda provider: calls.append("tracer")
+    )
+    monkeypatch.setattr(
+        metrics, "set_meter_provider", lambda provider: calls.append("meter")
+    )
+    monkeypatch.setattr(
+        _logs, "set_logger_provider", lambda provider: calls.append("logger")
+    )
+    monkeypatch.setattr(trace, "get_tracer_provider", ProxyTracerProvider)
+    monkeypatch.setattr(metrics, "get_meter_provider", _ProxyMeterProvider)
+    monkeypatch.setattr(_logs, "get_logger_provider", ProxyLoggerProvider)
 
-    with build() as client:
+    # The service's own provider is injected: made from this environment it would
+    # export to the dead endpoint and its shutdown would wait out the retries.
+    with build(provider=TracerProvider()) as client:
         assert client.get("/healthz").status_code == 200
 
-    assert not isinstance(trace.get_tracer_provider(), TracerProvider)
-    assert not isinstance(metrics.get_meter_provider(), MeterProvider)
-    assert not isinstance(_logs.get_logger_provider(), LoggerProvider)
+    assert calls == []
 
 
 class SpyProvider(TracerProvider):

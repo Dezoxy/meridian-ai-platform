@@ -14,7 +14,8 @@
 #      (Claims API only) with its request-size limit
 #   4. the Model Gateway's rollout, then the ingestion Job (it embeds the
 #      wordings through the gateway), at most once per image: a finished Job of
-#      this image's tag is the record that its corpus is in the store
+#      this image's tag, and rows in knowledge.chunks, are the record that its
+#      corpus is in the store
 #   5. the other rollouts and the route, then, when an ingestion ran, a wait
 #      until its token reservation has left the tenant's one-minute window
 # The only text replaced in the manifests is @IMAGE@ (and @TAG@ in a Job's name).
@@ -39,7 +40,10 @@ readonly INGEST_MANIFEST=ingest-job.yaml
 readonly SERVICES=(claims-api agent-runtime model-gateway policy-mcp claims-mcp knowledge-mcp)
 # The ingestion calls this one, so it is waited for before the ingestion runs.
 readonly GATEWAY_SERVICE=model-gateway
-readonly JOB_TIMEOUT=300
+# Above the ingestion Job's activeDeadlineSeconds (360), which is above the 300 s
+# the ingestion may wait for the gateway: the Job then needs time to write its
+# refusal, and the deadline ends it before this script gives up on it.
+readonly JOB_TIMEOUT=420
 readonly JOB_INTERVAL=3
 readonly ROLLOUT_TIMEOUT=300s
 readonly ROUTE_TIMEOUT=120s
@@ -110,10 +114,18 @@ job_state() {
            else "running" end'
 }
 
+# printable_ascii: stdin without any byte that is not printable ASCII or a
+# newline. A Job's log can quote data of a checkout (a manifest key, a database
+# message), and an escape sequence in it must not reach the terminal.
+printable_ascii() {
+  LC_ALL=C tr -cd '[:print:]\n'
+}
+
 # run_job NAME MANIFEST: the Job NAME, from MANIFEST, run to completion; its log
-# is printed when it succeeds. A Job of the same name from an earlier deploy
-# (finished, or failed and not yet removed) is deleted first: a Job's spec cannot
-# change, and what the Jobs run is idempotent.
+# is printed (through printable_ascii) when it ends, however it ends. A Job of
+# the same name from an earlier deploy (finished, or failed and not yet removed)
+# is deleted first: a Job's spec cannot change, and what the Jobs run is
+# idempotent.
 run_job() {
   local job="$1" manifest="$2" state deadline
   kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait >/dev/null
@@ -125,17 +137,17 @@ run_job() {
     state="$(job_state "${job}" 2>/dev/null)" || state=unknown
     case "${state}" in
       succeeded)
-        log "job ${job} done: $(kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | tr '\n' ' ')"
+        log "job ${job} done: $(kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii | tr '\n' ' ')"
         return 0
         ;;
       failed)
-        kctl -n "${NAMESPACE}" logs "job/${job}" >&2 || true
+        kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii >&2 || true
         die "the job ${job} failed (logs above)"
         ;;
     esac
     sleep "${JOB_INTERVAL}"
   done
-  kctl -n "${NAMESPACE}" logs "job/${job}" >&2 || true
+  kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii >&2 || true
   die "the job ${job} did not finish in ${JOB_TIMEOUT}s"
 }
 
@@ -152,23 +164,42 @@ apply_manifests() {
   done
 }
 
+# stored_chunk_count: the number of rows in knowledge.chunks, read in the
+# database's primary pod the way smoke.sh reaches psql. Fails when it cannot be
+# read.
+stored_chunk_count() {
+  local primary
+  primary="$(kctl -n "${NAMESPACE}" get pod \
+    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
+  [[ -n "${primary}" ]] || return 1
+  kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
+    psql -d meridian -tAc 'SELECT count(*) FROM knowledge.chunks' 2>/dev/null
+}
+
 # The ingestion of this image's corpus, at most once per image. Its Job is kept
 # when it finishes (no TTL), so a succeeded Job of this tag means the corpus of
-# this image is in the store. Any other ingestion Job (another tag, or a failed
-# one) is deleted first. Sets ${ingested_at} when it ran.
+# this image was stored; the rows are counted too, because a finished Job is not
+# proof that the store still holds them (a database that was recreated). Any
+# other ingestion Job (another tag, or a failed one) is deleted first. Sets
+# ${ingested_at} when it ran.
 ingest_corpus() {
-  local job="meridian-ingest-${tag}" found state
+  local job="meridian-ingest-${tag}" found state chunks
   # An error is not "no such Job" (that would ingest again): it stops the
-  # deploy. An empty answer means there is no such Job.
-  found="$(kctl -n "${NAMESPACE}" get job "${job}" -o name --ignore-not-found 2>&1)" ||
-    die "could not look for job/${job}: ${found}"
+  # deploy. An empty answer means there is no such Job. Stderr is not part of
+  # the answer: a warning there is not a Job.
+  found="$(kctl -n "${NAMESPACE}" get job "${job}" -o name --ignore-not-found)" ||
+    die "could not look for job/${job} (kubectl's error is above)"
   state=absent
   if [[ -n "${found}" ]]; then
     state="$(job_state "${job}")" || die "could not read the state of job/${job}"
   fi
   if [[ "${state}" == succeeded ]]; then
-    log "the corpus of image ${image} is already in the store (job ${job} succeeded); not ingesting again"
-    return 0
+    if chunks="$(stored_chunk_count)" && [[ "${chunks}" =~ ^[0-9]+$ ]] && ((10#${chunks} > 0)); then
+      log "the corpus of image ${image} is already in the store (job ${job} succeeded, ${chunks} chunks in knowledge.chunks); not ingesting again"
+      return 0
+    fi
+    log "job ${job} succeeded, but knowledge.chunks holds no rows or could not be read; ingesting again"
   fi
   kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait >/dev/null
   run_job "${job}" "${INGEST_MANIFEST}"

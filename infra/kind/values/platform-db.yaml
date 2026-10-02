@@ -74,24 +74,26 @@ cluster:
         name: model-gateway-db
     # A tool server runs at most MAX_CONCURRENT_CALLS (8) calls in worker
     # threads, one connection each, and writes a failure's audit row on one
-    # more, so 12 is a bound it never reaches and a runaway cannot pass. The
-    # other roles have no such bound until they get a pool (S019).
+    # more. During a rollout two pods of a server run side by side, so 2 * (8 +
+    # 1) = 18 is the most it can need; 20 is a bound it never reaches and a
+    # runaway cannot pass. The other roles have no such bound until they get a
+    # pool (S019).
     - name: policy_mcp
       ensure: present
       login: true
-      connectionLimit: 12
+      connectionLimit: 20
       passwordSecret:
         name: policy-mcp-db
     - name: claims_mcp
       ensure: present
       login: true
-      connectionLimit: 12
+      connectionLimit: 20
       passwordSecret:
         name: claims-mcp-db
     - name: knowledge_mcp
       ensure: present
       login: true
-      connectionLimit: 12
+      connectionLimit: 20
       passwordSecret:
         name: knowledge-mcp-db
 
