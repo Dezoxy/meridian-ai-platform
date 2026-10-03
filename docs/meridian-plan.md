@@ -280,8 +280,8 @@ that day; the rest stand as their step recorded them.
 | A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | open; not seen in S054's parallel runs | none |
 | The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
 | Running the tests in parallel | S049 | done in S054 | none |
-| HTML pages for the shared JSON answers under `/claimant/` | S049 | moved to S053 | S053 |
-| The server span's `http.url` keeps a query string | S049 | moved to S053 | S053 |
+| HTML pages for the shared JSON answers under `/claimant/` | S049 | closed by S053 (422, 404, 405, 413, 400) | none |
+| The server span's `http.url` keeps a query string | S049 | closed by S053 | none |
 | A documents failure whose cause races with another move | S049 | moved to S052 | S052 |
 | Two resume-race tests in `test_runtime_app.py` rest on a 0.3 s sleep for their overlap | S054 | open | none |
 | One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | open | none |
@@ -292,6 +292,15 @@ that day; the rest stand as their step recorded them.
 | Template databases, so a test database is copied and not migrated | S054 | open | none |
 | The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | open | none |
 | Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | none |
+| S053 on kind: the stamped report date, the error pages, migration 0013 and the history view, and no query string on a span in Tempo (the cluster was held by S052 while S053 ran) | S053 | open | S018 |
+| The JSON route `POST /claims` takes its caller's report date until callers are identified (T-66) | S053 | open, the owner's accepted residual | S021 |
+| The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | none |
+| `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-75) | S053 | open | S021 |
+| Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-75) | S053 | open | none |
+| A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | open | none |
+| The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | open | S019 |
+| The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | open | none |
+| The claimant's status page picks the latest proposal by `created_at` with no tie-break; the decided-claims view and 0009 break a tie by `proposal_id` | S053 | open | none |
 
 ## Part C — Step details
 

@@ -14,6 +14,8 @@ the view carries no word of the claimant, so neither does an entry. The Claims
 API writes nothing to the policy store (the owner's decision, T-66, T-75).
 """
 
+import logging
+
 import psycopg
 
 from meridian.platform.toolserver.handlers import (
@@ -22,6 +24,8 @@ from meridian.platform.toolserver.handlers import (
     ToolCall,
     ToolHandler,
 )
+
+logger = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 100
 
@@ -35,8 +39,11 @@ WHERE policy_number = %s
 # Both sources in one order and one cut: %s are the policy number, the policy
 # number, the run's tenant, the run's claim and the limit, in that order. One
 # row more than the limit, to know whether the answer was cut. A decided claim
-# whose submission held no usable loss date or peril is not an entry: the view
-# gives NULL there, and an entry needs both.
+# whose submission held no usable loss date or peril comes with a NULL there:
+# it is not an entry, and the answer is `truncated` (see claim_history).
+# The query's conditions on the view must stay plain comparisons of the view's
+# columns (leakproof operators), or PostgreSQL evaluates them above the
+# security_barrier and scans every decided claim.
 SELECT_HISTORY = """
 SELECT history_id, loss_date, peril, paid_amount, status
 FROM (
@@ -49,8 +56,6 @@ FROM (
     WHERE policy_number = %s
         AND tenant = %s
         AND claim_id <> %s
-        AND loss_date IS NOT NULL
-        AND peril IS NOT NULL
 ) AS entries
 ORDER BY loss_date DESC, history_id
 LIMIT %s
@@ -102,6 +107,21 @@ def claim_history(conn: psycopg.Connection, call: ToolCall) -> Completed | Refus
             HISTORY_LIMIT + 1,
         ),
     ).fetchall()
+    kept = rows[:HISTORY_LIMIT]
+    # A decided claim the view could not read (a NULL date or peril) is no
+    # entry, and the rules must know they count less than there is. A NULL date
+    # sorts first under DESC, so such a row is always inside the rows read. A
+    # row with a date and a NULL peril sorts by its date and may be behind the
+    # cut, where it is neither counted nor logged; then the rows read are more
+    # than the limit and the answer is `truncated` all the same.
+    unreadable = sum(1 for row in rows if row[1] is None or row[2] is None)
+    if unreadable:
+        logger.warning(
+            "claim_history for run %s left out %d decided claims that could not "
+            "be read",
+            call.binding.run_id,
+            unreadable,
+        )
     entries = [
         {
             "history_id": history_id,
@@ -110,9 +130,12 @@ def claim_history(conn: psycopg.Connection, call: ToolCall) -> Completed | Refus
             "paid_amount": paid_amount,
             "status": status,
         }
-        for history_id, loss_date, peril, paid_amount, status in rows[:HISTORY_LIMIT]
+        for history_id, loss_date, peril, paid_amount, status in kept
+        if loss_date is not None and peril is not None
     ]
-    return Completed({"entries": entries, "truncated": len(rows) > HISTORY_LIMIT})
+    return Completed(
+        {"entries": entries, "truncated": len(rows) > HISTORY_LIMIT or unreadable > 0}
+    )
 
 
 HANDLERS = (

@@ -34,8 +34,18 @@
 -- loss_date is the submission's date only when it is written yyyy-mm-dd and is
 -- a real date (pg_input_is_valid), and NULL otherwise, for the same reason: a
 -- row the cast cannot read must not make every query on the view fail, and the
--- error text of a cast would carry the claimant's value. The tool leaves such
--- a row out of its answer, since a history entry without a date is not one.
+-- error text of a cast would carry the claimant's value.
+--
+-- peril is the submission's value only when it is a JSON string of 1 to 64
+-- characters, the bound of the tools' output schemas, and NULL otherwise (the
+-- same nested CASE: the length is not asked of a value that is not a string).
+-- An over-long or non-string peril would otherwise fail the tool's output
+-- check for every policy the claim is on.
+--
+-- A row with a NULL loss_date or peril stays in the view. The tool leaves it
+-- out of its entries and answers that the history is truncated, so the rules
+-- that count the history know it holds more than they were told, and send it to
+-- a person.
 --
 -- The view is security_barrier, so a condition a caller adds is not evaluated
 -- ahead of the view's own condition. It runs with the owner's rights, which is
@@ -72,7 +82,13 @@ SELECT
                     THEN (c.submission ->> 'loss_date')::date
             END
     END AS loss_date,
-    c.submission ->> 'peril' AS peril,
+    CASE
+        WHEN jsonb_typeof(c.submission -> 'peril') = 'string'
+            THEN CASE
+                WHEN char_length(c.submission ->> 'peril') BETWEEN 1 AND 64
+                    THEN c.submission ->> 'peril'
+            END
+    END AS peril,
     COALESCE(latest.payable_amount, 0) AS paid_amount,
     c.state
 FROM claims.claims AS c

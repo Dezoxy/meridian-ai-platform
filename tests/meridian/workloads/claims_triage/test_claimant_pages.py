@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from html.parser import HTMLParser
 from typing import Any
 
@@ -54,7 +54,6 @@ from workloads.claims_triage.test_claims_app import (
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.workloads.claims_triage import claimant, triaging
-from meridian.workloads.claims_triage.claimant import REPORT_TIME_ZONE
 from meridian.workloads.claims_triage.lifecycle import TRIAGE_FAILED
 from meridian.workloads.claims_triage.models import MAX_DOCUMENTS, DecisionFailure
 from meridian.workloads.claims_triage.moves import (
@@ -524,21 +523,70 @@ def test_the_form_sent_again_a_day_later_with_another_field_changed_is_still_409
     assert runtime.requests == []
 
 
-def test_the_default_clock_is_the_date_in_the_insurers_time_zone(
+def test_a_claim_stored_through_the_page_then_posted_as_json_with_another_date_is_409(
     fresh_database: DatabaseHandle,
 ) -> None:
-    client = make_client(claims_dsn(fresh_database), Runtime())
+    db = fresh_database
+    claim = claim_with_id("CLM-9501")
+    runtime = failing_runtime()
+    assert (
+        post_claim(
+            dated_client(db, runtime, date(2026, 7, 20)), form_of(claim)
+        ).status_code
+        == 303
+    )
 
-    before = datetime.now(REPORT_TIME_ZONE).date()
-    response = post_claim(client, form_of(claim_with_id("CLM-9501")))
-    after = datetime.now(REPORT_TIME_ZONE).date()
+    second = make_client(claims_dsn(db), runtime).post(
+        "/claims", json=claim | {"reported_on": "2026-08-30"}
+    )
+
+    assert second.status_code == 409
+    assert stored_report_date(db, "CLM-9501") == "2026-07-20"
+    assert len(runtime.requests) == 1
+
+
+def test_a_claim_stored_as_json_then_sent_through_the_page_keeps_the_callers_date(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    claim = claim_with_id("CLM-9501")
+    # The first triage failed: the claim is stored and its triage must run again.
+    first = make_client(claims_dsn(db), failing_runtime()).post("/claims", json=claim)
+    assert first.status_code == 502
+    runtime = Runtime()
+
+    response = post_claim(dated_client(db, runtime, date(2026, 7, 20)), form_of(claim))
 
     assert response.status_code == 303
-    assert str(REPORT_TIME_ZONE) == "Europe/Vienna"
-    assert stored_report_date(fresh_database, "CLM-9501") in {
-        before.isoformat(),
-        after.isoformat(),
-    }
+    assert response.headers["location"] == status_url("CLM-9501")
+    assert stored_report_date(db, "CLM-9501") == claim["reported_on"] != "2026-07-20"
+    (request,) = runtime.requests
+    sent = json.loads(request.content)["input"]["claim"]["reported_on"]
+    assert sent == claim["reported_on"]
+    assert claim_state(db, "CLM-9501") == ("awaiting_adjuster", runtime.run_id)
+
+
+class PinnedDatetime:
+    """``datetime`` with the clock stopped at 23:30 UTC on 13 July 2026, when
+    it is already the 14th in Vienna (CEST, UTC+2)."""
+
+    @staticmethod
+    def now(tz: tzinfo) -> datetime:
+        return datetime(2026, 7, 13, 23, 30, tzinfo=UTC).astimezone(tz)
+
+
+def test_the_default_clock_is_the_date_in_the_insurers_time_zone(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(claimant, "datetime", PinnedDatetime)
+    client = make_client(claims_dsn(fresh_database), Runtime())
+
+    response = post_claim(client, form_of(claim_with_id("CLM-9501")))
+
+    # A clock in UTC would give the 13th.
+    assert claimant.today_in_vienna() == date(2026, 7, 14)
+    assert response.status_code == 303
+    assert stored_report_date(fresh_database, "CLM-9501") == "2026-07-14"
 
 
 def test_the_triage_runs_in_a_span_with_the_claim_and_the_tenant_only(
@@ -1942,9 +1990,9 @@ def test_another_method_on_a_claimant_route_is_the_405_claimant_page_with_allow(
 
     page = assert_claimant_error_page(response, 405, METHOD_TEXT)
     assert "Method Not Allowed" not in page.text
-    # The header the JSON answer carried (the router names the first route that
-    # matched the path).
-    assert response.headers["allow"] == "GET"
+    # The header the JSON answer carried. Which methods it lists is the
+    # router's (the first route that matched the path): only GET is pinned.
+    assert "GET" in response.headers["allow"]
 
 
 def test_a_declared_length_over_the_limit_is_the_413_claimant_page() -> None:

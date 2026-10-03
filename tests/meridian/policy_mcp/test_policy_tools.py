@@ -2,6 +2,7 @@
 against the seeded policy store, through the SDK's in-process client."""
 
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -26,6 +27,7 @@ from toolsupport import (
 )
 
 from meridian.platform.common.db import connect
+from meridian.platform.policy_mcp import tools
 from meridian.platform.policy_mcp.app import create_app
 from meridian.platform.toolserver.wire import META_CALL_ID
 
@@ -441,15 +443,48 @@ def test_an_entry_of_a_decided_claim_holds_no_word_of_the_claimant(
         assert canary not in carried
 
 
-def test_a_decided_claim_without_a_loss_date_is_left_out_not_a_failed_call(
-    world: World, server: Any
+def test_a_decided_claim_without_a_loss_date_is_left_out_and_the_history_truncated(
+    world: World, server: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     add_decided(world, "CLM-0002", "approved", loss_date="not a date")
     add_decided(world, "CLM-0003", "approved", paid=7)
 
-    entries = history(server, world.run_id, POLICY)["entries"]
+    with caplog.at_level(logging.WARNING, logger=tools.__name__):
+        answer = history(server, world.run_id, POLICY)
 
-    assert [entry["history_id"] for entry in entries] == ["CLM-0003"]
+    assert [entry["history_id"] for entry in answer["entries"]] == ["CLM-0003"]
+    assert answer["truncated"] is True
+    # One warning: the run and the count, nothing of the row (T-03).
+    (record,) = [r for r in caplog.records if r.name == tools.__name__]
+    assert f"run {world.run_id}" in record.getMessage()
+    assert "left out 1 decided claim" in record.getMessage()
+    assert "CLM-0002" not in caplog.text
+    assert "not a date" not in caplog.text
+
+
+def test_a_decided_claim_with_an_over_long_peril_is_left_out_and_the_history_truncated(
+    world: World, server: Any
+) -> None:
+    add_decided(world, "CLM-0002", "approved", peril="x" * 65)
+    add_decided(world, "CLM-0003", "approved", paid=7)
+
+    answer = history(server, world.run_id, POLICY)
+
+    assert [entry["history_id"] for entry in answer["entries"]] == ["CLM-0003"]
+    assert answer["truncated"] is True
+
+
+def test_a_history_whose_decided_claims_can_all_be_read_is_not_truncated(
+    world: World, server: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    add_decided(world, "CLM-0002", "approved", peril="x" * 64, paid=7)
+
+    with caplog.at_level(logging.WARNING, logger=tools.__name__):
+        answer = history(server, world.run_id, POLICY)
+
+    assert [entry["history_id"] for entry in answer["entries"]] == ["CLM-0002"]
+    assert answer["truncated"] is False
+    assert caplog.records == []
 
 
 def test_a_completed_call_is_audited_with_the_tool_the_run_and_the_call_id(

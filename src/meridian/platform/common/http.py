@@ -164,6 +164,19 @@ class BodyLimitMiddleware:
         self.max_bytes = max_bytes
         self.too_large = too_large
 
+    def _answer_too_large(self, scope: Scope) -> Response:
+        """The caller's answer, or the JSON 413 when making it raises. This runs
+        outside ``UnexpectedErrorMiddleware``, so an exception left to
+        propagate would reach the span with its message (T-03); only its class
+        is logged."""
+        try:
+            return self.too_large(scope)
+        except Exception as exc:
+            logger.error(
+                "unexpected %s making the body-too-large answer", type(exc).__name__
+            )
+            return body_too_large(scope)
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -174,7 +187,7 @@ class BodyLimitMiddleware:
             and declared.isdigit()
             and int(declared) > self.max_bytes
         ):
-            await self.too_large(scope)(scope, receive, send)
+            await self._answer_too_large(scope)(scope, receive, send)
             return
         received = 0
 

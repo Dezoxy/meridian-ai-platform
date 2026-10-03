@@ -358,3 +358,45 @@ def test_a_declared_length_over_the_limit_is_answered_as_the_caller_gives_it() -
     assert (response.status_code, response.text) == (413, "too big")
     assert seen == ["/echo"]
     assert client.post("/echo", content=b"x" * LIMIT).json() == {"bytes": LIMIT}
+
+
+def test_a_413_answer_that_raises_is_the_json_413_and_leaks_no_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = make_tracer_provider("test-service", exporter)
+
+    def too_large(scope: dict) -> PlainTextResponse:
+        raise RuntimeError(CANARY)
+
+    service = create_service_app(
+        title="Test",
+        description="A test service.",
+        service_name="test-service",
+        tracer_name="meridian.test",
+        max_body_bytes=LIMIT,
+        tracer_provider=provider,
+        too_large=too_large,
+    )
+
+    @service.app.post("/echo")
+    async def echo(request: Request) -> dict[str, int]:
+        return {"bytes": len(await request.body())}
+
+    client = TestClient(service.app, raise_server_exceptions=False)
+    with caplog.at_level(logging.ERROR, logger=http.__name__):
+        response = client.post("/echo", content=b"x" * (LIMIT + 1))
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "the request body is too large"}
+    assert CANARY not in response.text
+    assert "RuntimeError" in caplog.text
+    assert CANARY not in caplog.text
+    # The server span's events and status would carry the message if it reached
+    # the instrumentation.
+    spans = exporter.get_finished_spans()
+    assert spans
+    for span in spans:
+        assert [e.name for e in span.events] == [], span.name
+        assert CANARY not in (span.status.description or "")
+        assert CANARY not in " ".join(str(v) for v in (span.attributes or {}).values())

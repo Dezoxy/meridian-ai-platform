@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 
 from meridian.platform.common.db import connect
 from meridian.platform.migrations.runner import migration_files
+from meridian.platform.policy_mcp.tools import SELECT_HISTORY
 
 ROLE = "policy_mcp"
 OTHER_ROLES = tuple(role for role in SERVICE_ROLES if role != ROLE)
@@ -293,6 +294,165 @@ def test_a_submission_without_a_usable_loss_date_does_not_break_the_view(
     assert [claim_id for claim_id, _ in rows] == ["CLM-0001", "CLM-0002"]
     assert rows[0][1] is None
     assert rows[1][1] is not None
+
+
+@pytest.mark.parametrize(
+    ("peril", "kept"),
+    [
+        ("storm", True),
+        ("x", True),
+        ("x" * 64, True),
+        ("", False),
+        ("x" * 65, False),
+        (["storm"], False),
+        (7, False),
+        (None, False),
+    ],
+    ids=[
+        "word",
+        "one-char",
+        "at-bound",
+        "empty",
+        "over-bound",
+        "array",
+        "number",
+        "null",
+    ],
+)
+def test_peril_is_null_unless_the_submission_has_a_string_of_1_to_64_characters(
+    fresh_database: DatabaseHandle, peril: object, kept: bool
+) -> None:
+    add_claim(fresh_database, CLAIM, "approved", body=submission(peril=peril))
+
+    rows = run(fresh_database, ROLE, "SELECT peril FROM claims.decided_claims")
+
+    assert rows == [(peril if kept else None,)]
+
+
+def test_a_submission_without_a_peril_does_not_break_the_view(
+    fresh_database: DatabaseHandle,
+) -> None:
+    add_claim(fresh_database, "CLM-0001", "approved", body=Jsonb({}))
+    add_claim(fresh_database, "CLM-0002", "approved")
+
+    rows = run(
+        fresh_database,
+        ROLE,
+        "SELECT claim_id, peril FROM claims.decided_claims ORDER BY claim_id",
+    )
+
+    assert rows == [("CLM-0001", None), ("CLM-0002", "storm")]
+
+
+SENTINEL_CLAIM = "CLM-6666"
+LEAKY_FUNCTION = """
+CREATE FUNCTION claims.leaky(text) RETURNS boolean LANGUAGE plpgsql COST 0.0001 AS $$
+BEGIN
+    IF $1 = 'CLM-6666' THEN
+        RAISE EXCEPTION 'leaked';
+    END IF;
+    RETURN true;
+END
+$$
+"""
+
+
+def test_a_condition_a_caller_adds_is_not_evaluated_on_a_row_the_view_leaves_out(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # A function that is cheap and not leakproof: without the security barrier
+    # PostgreSQL would run it on every claim, the undecided one included, ahead
+    # of the view's own condition, and it would raise. It takes the claim ID
+    # and not the peril: the view's CASE on the peril costs more than the view's
+    # condition, so a condition on the peril would run after it either way. The
+    # scan is a sequential one: through the partial index the undecided claim is
+    # never read, barrier or not.
+    run(fresh_database, OWNER, LEAKY_FUNCTION)
+    run(
+        fresh_database,
+        OWNER,
+        f"GRANT EXECUTE ON FUNCTION claims.leaky(text) TO {ROLE}",
+    )
+    add_claim(fresh_database, SENTINEL_CLAIM, "submitted")
+    add_claim(fresh_database, "CLM-0002", "approved")
+
+    with connect(fresh_database.dsn(ROLE), "test") as conn:
+        conn.execute("SET LOCAL enable_indexscan = off")
+        conn.execute("SET LOCAL enable_bitmapscan = off")
+        rows = conn.execute(
+            "SELECT claim_id FROM claims.decided_claims WHERE claims.leaky(claim_id)"
+        ).fetchall()
+
+    assert rows == [("CLM-0002",)]
+
+
+def test_the_tool_s_query_reads_the_view_through_the_partial_index(
+    fresh_database: DatabaseHandle,
+) -> None:
+    for number in range(1, 6):
+        add_claim(fresh_database, f"CLM-{number:04d}", "approved")
+    with connect(fresh_database.dsn(ROLE), "test") as conn:
+        # Whatever the planner's costs at this size, an index it may use is used.
+        conn.execute("SET LOCAL enable_seqscan = off")
+        plan = "\n".join(
+            line
+            for (line,) in conn.execute(
+                "EXPLAIN " + SELECT_HISTORY,
+                ("POL-0001", "POL-0001", TENANT, "CLM-9999", 101),
+            ).fetchall()
+        )
+
+    assert "claims_decided_idx" in plan
+    conditions = [line for line in plan.splitlines() if "Index Cond" in line]
+    assert any("tenant" in c and "policy_number" in c for c in conditions), plan
+
+
+def test_the_partial_index_predicate_is_exactly_the_two_decided_states(
+    migrated_database: DatabaseHandle,
+) -> None:
+    rows = run(
+        migrated_database,
+        OWNER,
+        "SELECT pg_get_expr(indpred, indrelid) FROM pg_index "
+        "WHERE indexrelid = 'claims.claims_decided_idx'::regclass",
+    )
+
+    assert rows == [("(state = ANY (ARRAY['approved'::text, 'rejected'::text]))",)]
+
+
+def test_two_proposals_of_one_claim_created_together_the_lower_proposal_id_wins(
+    fresh_database: DatabaseHandle,
+) -> None:
+    add_claim(fresh_database, CLAIM, "approved")
+    created_at = "2026-09-02T10:00:00Z"
+    lower, higher = uuid.UUID(int=1), uuid.UUID(int=2)
+    # The higher ID is inserted first, so neither insertion order nor an ID
+    # order the wrong way round gives the lower one's amount.
+    for proposal_id, amount in ((higher, 222), (lower, 111)):
+        run(
+            fresh_database,
+            OWNER,
+            INSERT_PROPOSAL,
+            (
+                proposal_id,
+                CLAIM,
+                uuid.uuid4(),
+                Jsonb({"route": "adjuster", "reason": "r", "payable_amount": amount}),
+                created_at,
+            ),
+        )
+
+    taken = run(
+        fresh_database,
+        OWNER,
+        "SELECT proposal_id FROM claims.triage_proposals WHERE claim_id = %s "
+        "ORDER BY created_at DESC, proposal_id LIMIT 1",
+        (CLAIM,),
+    )
+    paid = run(fresh_database, ROLE, "SELECT paid_amount FROM claims.decided_claims")
+
+    assert taken == [(lower,)]
+    assert paid == [(111,)]
 
 
 def test_policy_mcp_may_select_the_view_and_still_not_read_the_submission(
