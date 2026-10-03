@@ -161,7 +161,7 @@ and Pydantic, at the cost of one dependency.
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
-| S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | doing | S003, S014 |
+| S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
@@ -3971,7 +3971,7 @@ the same code as the JSON decision.
 
 ### S017 — Evaluation harness
 
-**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
 **Goal:** every change replays the 40 golden claims through the real
 services, grades each proposal against the oracle with rules, and fails CI
 when a grade regresses or when the prompt, the tools or the golden set
@@ -4016,14 +4016,97 @@ changed without a reviewed new baseline.
   prompt's hash, so a proposal on the adjuster's page and a report can be
   tied to one prompt.
 
+- The prompt's version is the SHA-256 of the messages `build_messages`
+  makes for a fixed, fictional probe claim, with the output budget and the
+  length limit, so a change to the user message's format moves it as well
+  as a change to the system message. Rejected: a hash of the system
+  message alone, which misses the user message; a hand-bumped version
+  number, which someone forgets.
+- `drafted_by.prompt` is optional: the adjuster's page validates stored
+  proposals, and those stored before S017 on a running cluster have none.
+  Every new proposal carries it.
+- The golden set's fingerprint is checked, not trusted: the report hashes
+  the whole manifest and every file it lists, and refuses a file whose
+  bytes differ from the manifest's hash.
+
 **Work log:**
 
 - Opened from `main` at 19cd45b, after S016 merged (pull request 35,
   its 25 files identical on `main`). The ninth step in one session, on
   the owner's word.
+- An Explore sweep found what the step had to work around: no prompt
+  version anywhere, no tool arguments recorded, a scripted model that
+  exists only inside pytest, and every tool call bound to a claim row.
+  The advisor set the order: split first, then the deterministic half.
+- Four contracts to `implementer`, the first two in parallel:
+  - A: `meridian.platform.evaluation` (the report, its canonical dump,
+    `compare`, the fingerprints) and `meridian eval compare`;
+  - B1: `PROMPT_VERSION` in `assessment.py`, `drafted_by.prompt`, the
+    prompt on the adjuster's page;
+  - C: the workload's ten rule graders, the report from the stack test,
+    `data/evaluation/`, `make eval`, `eval-compare` and `eval-baseline`,
+    and the CI gate;
+  - A2: the python reviewer's findings (below).
+- The `python-reviewer` found no way to make `compare` pass a regressed
+  grade, a changed fingerprint, a lost case or a broken absolute grader,
+  but blocked on two holes in the loader, both fixed in A2: a duplicate
+  JSON key was read last-wins, so a report could say `false` to a reader
+  and `true` to the gate; and an error message echoed the file's own keys,
+  so a report could print a forged `eval compare: passed` or a GitHub
+  `::` workflow command into the CI log. A2 also took its six smaller
+  points (sorted `absolute`, the manifest's files checked against their
+  bytes, strict numbers, a bounded read that refuses a FIFO, no traceback
+  locals, an atomic write). Its re-review closed all of them and found two
+  inputs that crashed instead of being refused (a NUL in a file name, a
+  lone surrogate in the manifest), fixed by the session.
+- The session fixed C's `.PHONY` line, which had joined `synthetic` and
+  `up` into one word.
+- The implementers broke the no-heredoc rule again: contract B1 once,
+  contract C three times (one appended two tests to
+  `test_ci_config.py`), A2 twice with empty heredocs; contract A wrote one
+  ruff output file to `/tmp/x`. Each reported it; the files pass the
+  gates.
 
-**Result / verification:** —
-**Follow-ups:** —
+**Result / verification:** done when met, with a scripted model:
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4725 passed, 3 skipped in
+  378.64s` (the three are the opt-in live Azure tests); the report that
+  run wrote compares clean with the baseline.
+- `make eval`: ten graders, 40 of 40 each, `eval compare: passed`.
+- The gate, negatively, with the session's own hands:
+  - one word of `SYSTEM_MESSAGE` changed ("check" to "verify"): the stack
+    test failed with "the prompt changed: regenerate the baseline in this
+    change (make eval-baseline)", and `meridian eval compare` exited 1
+    with every grade still 40 of 40; reverted, no diff, `make eval`
+    passed again;
+  - copies of the baseline with a changed prompt hash, one grade turned
+    false, one absolute grade turned false and one case removed each
+    exited 1 with the matching message, and one with a duplicate key
+    exited 2 with `duplicate key`.
+- `make lint`: `Contracts: 4 kept, 0 broken.`; `make test`: `OK`;
+  `make registry`: `schemas OK`, `contracts OK`; `make docs`: `13 checks
+  passed`; `make check`: no ERROR line; `make mermaid-views`: no derived
+  block changed (the relationship that moved is in the Governance view,
+  which has none).
+- Not run: anything with a real model (the Azure login is blocked), so
+  QA-06 is measured for the pipeline only; nothing on kind, which this
+  step does not change.
+
+**Follow-ups:**
+
+- The owner: accept the split (S050); accept that the gate rests on the
+  review of `data/evaluation/` (a pull request may regenerate its own
+  baseline, T-72's residual).
+- S050: a recorded model through the gateway, so a prompt change moves
+  grades; the LLM judge with its own agent identity and the model's
+  `evals -> gateway` relationship; latency and cost from the ledger; the
+  tool arguments of each run; `eval run` against a deployed stack, with a
+  read path for proposals; a report comparing two prompt versions; the
+  database store for results; golden-set cases on the fraud indicators'
+  boundaries and an unknown policy number (S003's follow-up).
+- No step yet: `make eval-compare` alone reads whatever report `.eval/`
+  holds, which may be stale; a file in the golden set's directory that the
+  manifest does not list is not noticed.
 
 ## Part D — Open questions
 
