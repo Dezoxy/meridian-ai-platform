@@ -61,10 +61,15 @@ blurs what the step was for.
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
 6. **Close.** Fill in the work log and verification, set `done`, commit, open
-   the PR, merge after CI is green, and confirm the content landed on `main`.
-   Start the next step in a new session. A follow-up that no step's "done
-   when" covers goes into Part B's follow-up backlog, with a proposed home,
-   not only into the step's own section.
+   the PR, and confirm the content landed on `main` once it is merged. The
+   owner merges. The session may set a pull request to merge itself when
+   its checks pass (`gh pr merge --auto --squash`) only if both hold: every
+   file it changes is under `docs/` or `tests/` or is another Markdown
+   file, and its description asks the owner to accept nothing (no "Merging
+   this accepts" list: no new dependency, changed behaviour, accepted risk
+   or changed rule). Start the next step in a new session. A follow-up
+   that no step's "done when" covers goes into Part B's follow-up backlog,
+   with a proposed home, not only into the step's own section.
 
 Cost rules:
 
@@ -4894,3 +4899,8 @@ commit that changes `src/` or `tests/`.
   depending on S049, and S050 now depends on S054 so it runs first. S052
   takes S049's documents failure that races another move; S053 takes the
   claimant's error pages and the query string on the server span.
+- **v0.22, 2026-10-03:** by the owner: Part A's close says who merges. The
+  owner merges; the session may set auto-merge on a pull request that
+  changes only documentation or tests and asks the owner to accept nothing.
+  The ruleset's five required checks stay the gate, with no approval
+  required, as before.
