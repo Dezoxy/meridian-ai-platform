@@ -22,6 +22,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from psycopg.types.json import Jsonb
 from servicesupport import claim_with_id, owner_rows
+from workloads.claims_triage.test_claim_moves import (
+    MoveRuntime,
+    put_arrived,
+    triages_of,
+)
 from workloads.claims_triage.test_claims_app import (
     CITATION,
     DECISION_ID,
@@ -50,8 +55,10 @@ from meridian.workloads.claims_triage.app import (
     NOT_WAITING_DETAIL,
     RESUME_FAILED_DETAIL,
 )
+from meridian.workloads.claims_triage.lifecycle import MAX_TRIAGES_PER_CLAIM
 from meridian.workloads.claims_triage.models import DraftedBy
 from meridian.workloads.claims_triage.proposal import TriageProposal
+from meridian.workloads.claims_triage.triaging import TRIAGE_CAP_DETAIL
 
 TENANT = "claims-triage"
 QUEUE_URL = "/adjuster/claims"
@@ -163,13 +170,14 @@ def put_claim(
     changed_at: datetime = LONG_AGO,
     tenant: str = TENANT,
     run_id: uuid.UUID | None = None,
+    triages: int = 0,
     **submission: Any,
 ) -> None:
     owner_rows(
         db,
         "INSERT INTO claims.claims "
-        "(claim_id, tenant, submission, state, state_changed_at, run_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING 1",
+        "(claim_id, tenant, submission, state, state_changed_at, run_id, triages) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING 1",
         (
             claim_id,
             tenant,
@@ -177,6 +185,7 @@ def put_claim(
             state,
             changed_at,
             run_id,
+            triages,
         ),
     )
 
@@ -234,12 +243,15 @@ def put_trail(db: DatabaseHandle, claim_id: str, events: list[str]) -> None:
         put_event(db, run_id, event)
 
 
-def put_decision(db: DatabaseHandle, claim_id: str, word: str) -> None:
+def put_decision(
+    db: DatabaseHandle, claim_id: str, word: str, run_id: uuid.UUID | None
+) -> None:
+    """A recorded word for ``run_id``; ``None`` is a decision with no run."""
     owner_rows(
         db,
         "INSERT INTO claims.decisions (claim_id, run_id, decision) "
         "VALUES (%s, %s, %s) RETURNING 1",
-        (claim_id, uuid.uuid4(), word),
+        (claim_id, run_id, word),
     )
 
 
@@ -504,8 +516,9 @@ def test_a_claim_without_a_proposal_says_none_is_stored(
 def test_the_claim_page_shows_the_recorded_decision(
     fresh_database: DatabaseHandle,
 ) -> None:
-    put_claim(fresh_database, "CLM-9301", "approved")
-    put_decision(fresh_database, "CLM-9301", "approve")
+    run_id = uuid.uuid4()
+    put_claim(fresh_database, "CLM-9301", "approved", run_id=run_id)
+    put_decision(fresh_database, "CLM-9301", "approve", run_id)
 
     response = client_for(fresh_database).get(url_of("CLM-9301"))
 
@@ -567,7 +580,6 @@ def test_a_waiting_claim_has_three_unselected_buttons_below_the_proposal(
     [
         "submitted",
         "triaging",
-        "triage_failed",
         "documents_requested",
         "approved",
         "rejected",
@@ -587,16 +599,514 @@ def test_a_claim_that_does_not_wait_has_no_decision_form(
     assert not page.attributes("form")
 
 
-def test_a_failed_triage_says_posting_again_triages_it_and_deciding_is_not_built(
+# ── send back, triage again, and a claim with no paused run (S048) ──────────
+SEND_BACK_BUTTON = "Send back to triage"
+TRIAGE_AGAIN_BUTTON = "Triage again"
+SEND_BACK_LINE = "ends the paused run and triages the claim again"
+CAP_LINE = "The claim has been triaged five times"
+NO_RUN_LINE = "There is no paused run and no new proposal"
+FAILED_LINE = "The triage failed and there is no proposal to read"
+ARRIVED_LABEL = "Documents that arrived later"
+NOT_TRIAGEABLE = "the claim cannot be triaged again in its state"
+THREE_DECISIONS = ["approve", "reject", "request_documents"]
+CAP = MAX_TRIAGES_PER_CLAIM
+CLAIM = "CLM-9301"
+
+
+def triage_url(claim_id: str) -> str:
+    return f"{url_of(claim_id)}/triage"
+
+
+def post_triage(
+    client: TestClient, claim_id: str, headers: dict[str, str] | None = None
+) -> httpx.Response:
+    return client.post(triage_url(claim_id), headers=headers, follow_redirects=False)
+
+
+def moves_client(db: DatabaseHandle, runtime: MoveRuntime) -> TestClient:
+    # make_client wants a ``Runtime``; it only uses the ``client`` it holds.
+    return make_client(claims_dsn(db), runtime)  # type: ignore[arg-type]
+
+
+def form_actions(page: Page) -> list[str]:
+    return [str(f["action"]) for f in page.attributes("form")]
+
+
+def button_fields(page: Page) -> list[tuple[str | None, str | None, str | None]]:
+    """Each button's type, name and value, in page order."""
+    return [
+        (b.get("type"), b.get("name"), b.get("value"))
+        for b in page.attributes("button")
+    ]
+
+
+def assert_nothing_is_preselected(page: Page) -> None:
+    for _, attrs in page.tags:
+        assert not {"checked", "selected", "autofocus"} & set(attrs)
+    assert not page.attributes("input")
+
+
+def test_a_paused_claim_offers_send_back_in_a_form_of_its_own_after_the_decisions(
     fresh_database: DatabaseHandle,
 ) -> None:
-    put_claim(fresh_database, "CLM-9301", "triage_failed")
+    db = fresh_database
+    put_claim(db, CLAIM, run_id=uuid.uuid4(), triages=1)
+    put_proposal(db, CLAIM, RICH_PROPOSAL)
 
-    response = client_for(fresh_database).get(url_of("CLM-9301"))
+    response = client_for(db).get(url_of(CLAIM))
 
-    text = Page(response.text).text
-    assert "posting the claim again triages it" in text
-    assert "S048" in text
+    page = Page(response.text)
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert form_actions(page) == [decision_url(CLAIM), triage_url(CLAIM)]
+    assert [f["method"] for f in page.attributes("form")] == ["post", "post"]
+    # Every button is its own submit; send-back carries no field and no value.
+    assert button_fields(page) == [
+        ("submit", "decision", "approve"),
+        ("submit", "decision", "reject"),
+        ("submit", "decision", "request_documents"),
+        ("submit", None, None),
+    ]
+    assert_nothing_is_preselected(page)
+    assert SEND_BACK_BUTTON in page.text
+    assert SEND_BACK_LINE in page.text
+    assert CAP_LINE not in page.text
+    assert NO_RUN_LINE not in page.text
+    assert response.text.index('value="request_documents"') < response.text.index(
+        SEND_BACK_BUTTON
+    )
+
+
+def test_sending_a_paused_claim_back_redirects_and_triages_it_again(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    old = uuid.uuid4()
+    put_claim(db, CLAIM, run_id=old, triages=1)
+    put_proposal(db, CLAIM, RICH_PROPOSAL)
+    runtime = MoveRuntime()
+    client = moves_client(db, runtime)
+
+    response = post_triage(client, CLAIM, SAME_ORIGIN)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == url_of(CLAIM)
+    # The old run is ended once, then one new run starts.
+    assert runtime.calls == ["resume", "start"]
+    (resume,) = runtime.resumes
+    assert resume.url.path == f"/runs/{old}/resume"
+    assert decisions(db) == [(CLAIM, old, "send_back")]
+    assert claim_state(db, CLAIM) == ("awaiting_adjuster", runtime.run_id)
+    assert triages_of(db, CLAIM) == 2
+    page = Page(client.get(url_of(CLAIM)).text)
+    # The page shows the new state: the move to triaging and the move back to
+    # the adjuster are in the trail, the claim waits on the new run, and the
+    # send-back is not shown as a decision.
+    assert "claim.triaging" in page.text
+    assert "claim.awaiting_adjuster" in page.text
+    assert "Decision recorded" not in page.text
+    assert RESEND_TEXT not in page.text
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert SEND_BACK_BUTTON in page.text
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({"Origin": "http://evil.example"}, id="another-origin"),
+        pytest.param({"Sec-Fetch-Site": "cross-site"}, id="cross-site"),
+    ],
+)
+def test_a_cross_site_post_of_the_send_back_form_is_403_and_nothing_moves(
+    fresh_database: DatabaseHandle, headers: dict[str, str]
+) -> None:
+    db = fresh_database
+    old = uuid.uuid4()
+    put_claim(db, CLAIM, run_id=old, triages=1)
+    runtime = MoveRuntime()
+
+    response = post_triage(moves_client(db, runtime), CLAIM, headers)
+
+    assert response.status_code == 403
+    assert FOREIGN_SITE in Page(response.text).text
+    assert runtime.calls == []
+    assert claim_state(db, CLAIM) == ("awaiting_adjuster", old)
+    assert triages_of(db, CLAIM) == 1
+    assert decisions(db) == []
+    assert claim_audit(db, CLAIM) == []
+
+
+@pytest.mark.parametrize(("triages", "offered"), [(CAP - 1, True), (CAP, False)])
+def test_send_back_is_offered_below_the_cap_and_hidden_at_it(
+    fresh_database: DatabaseHandle, triages: int, offered: bool
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, run_id=uuid.uuid4(), triages=triages)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert (triage_url(CLAIM) in form_actions(page)) is offered
+    assert (SEND_BACK_BUTTON in page.text) is offered
+    assert (SEND_BACK_LINE in page.text) is offered
+    # At the cap the page says why there is no button.
+    assert (CAP_LINE in page.text) is not offered
+
+
+def test_a_send_back_at_the_cap_renders_409_with_the_caps_text_and_moves_nothing(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    old = uuid.uuid4()
+    put_claim(db, CLAIM, run_id=old, triages=CAP)
+    runtime = MoveRuntime()
+
+    response = post_triage(moves_client(db, runtime), CLAIM, SAME_ORIGIN)
+
+    assert response.status_code == 409
+    page = Page(response.text)
+    assert f"409: {TRIAGE_CAP_DETAIL}" in page.text
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert runtime.calls == []
+    assert decisions(db) == []
+    assert claim_state(db, CLAIM) == ("awaiting_adjuster", old)
+
+
+def test_a_triage_post_for_a_claim_in_another_state_renders_409(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, CLAIM, "approved")
+    runtime = MoveRuntime()
+
+    response = post_triage(moves_client(fresh_database, runtime), CLAIM, SAME_ORIGIN)
+
+    assert response.status_code == 409
+    assert f"409: {NOT_TRIAGEABLE}" in Page(response.text).text
+    assert runtime.calls == []
+    assert claim_state(fresh_database, CLAIM) == ("approved", None)
+
+
+def test_a_triage_post_for_an_unknown_claim_renders_the_404_page(
+    fresh_database: DatabaseHandle,
+) -> None:
+    runtime = MoveRuntime()
+
+    response = post_triage(moves_client(fresh_database, runtime), "CLM-9999")
+
+    assert response.status_code == 404
+    assert NO_SUCH_CLAIM in Page(response.text).text
+    assert runtime.calls == []
+
+
+def test_a_triage_post_with_the_database_down_renders_the_503_page() -> None:
+    runtime = MoveRuntime()
+
+    response = post_triage(make_client(runtime=runtime), CLAIM)  # type: ignore[arg-type]
+
+    assert response.status_code == 503
+    assert DATABASE_DOWN in Page(response.text).text
+    assert runtime.calls == []
+
+
+def test_a_send_back_whose_new_triage_fails_renders_the_failed_claim_with_the_notice(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    old, failed = uuid.uuid4(), uuid.uuid4()
+    put_claim(db, CLAIM, run_id=old, triages=1)
+    runtime = MoveRuntime(
+        start_http=502, start_body={"run_id": str(failed), "status": "Failed"}
+    )
+
+    response = post_triage(moves_client(db, runtime), CLAIM, SAME_ORIGIN)
+
+    assert response.status_code == 502
+    page = Page(response.text)
+    assert "502: the triage run did not complete; the claim is stored" in page.text
+    assert FAILED_LINE in page.text
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert TRIAGE_AGAIN_BUTTON in page.text
+    assert "Decision recorded" not in page.text
+    assert claim_state(db, CLAIM) == ("triage_failed", failed)
+    assert decisions(db) == [(CLAIM, old, "send_back")]
+
+
+@pytest.mark.parametrize("failed_run", [None, uuid.uuid4()], ids=["no-run", "run"])
+def test_a_failed_triage_offers_the_three_decisions_and_triage_again(
+    fresh_database: DatabaseHandle, failed_run: uuid.UUID | None
+) -> None:
+    put_claim(fresh_database, CLAIM, "triage_failed", run_id=failed_run, triages=1)
+
+    response = client_for(fresh_database).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert FAILED_LINE in page.text
+    assert "a decision refers the claim to you and records it" in page.text
+    assert "S048" not in page.text
+    assert NO_PROPOSAL in page.text
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert form_actions(page) == [decision_url(CLAIM), triage_url(CLAIM)]
+    assert button_fields(page)[-1] == ("submit", None, None)
+    assert len(page.attributes("button")) == 4
+    assert_nothing_is_preselected(page)
+    assert TRIAGE_AGAIN_BUTTON in page.text
+    assert SEND_BACK_BUTTON not in page.text
+    assert NO_RUN_LINE not in page.text
+    assert CAP_LINE not in page.text
+
+
+def test_a_failed_triage_at_the_cap_has_the_decisions_and_no_triage_again(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, CLAIM, "triage_failed", triages=CAP)
+
+    response = client_for(fresh_database).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert form_actions(page) == [decision_url(CLAIM)]
+    assert TRIAGE_AGAIN_BUTTON not in page.text
+    assert FAILED_LINE in page.text
+    assert CAP_LINE in page.text
+
+
+@pytest.mark.parametrize("word", DECISION_OUTCOMES)
+def test_a_decision_on_a_failed_triage_redirects_and_the_page_shows_it_decided(
+    fresh_database: DatabaseHandle, word: str
+) -> None:
+    db = fresh_database
+    state, _ = DECISION_OUTCOMES[word]
+    put_claim(db, CLAIM, "triage_failed", run_id=uuid.uuid4(), triages=1)
+    runtime = MoveRuntime()
+    client = moves_client(db, runtime)
+
+    response = post_form(client, CLAIM, word, SAME_ORIGIN)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == url_of(CLAIM)
+    assert runtime.calls == []
+    assert decisions(db) == [(CLAIM, None, word)]
+    assert claim_state(db, CLAIM) == (state, None)
+    page = Page(client.get(url_of(CLAIM)).text)
+    assert f"Decision recorded: {word}" in page.text
+    # A decision with no run has nothing to resume, so nothing to send again.
+    assert RESEND_TEXT not in page.text
+    assert not page.attributes("form")
+    assert not page.attributes("input")
+
+
+def test_triage_again_from_the_page_triages_a_failed_claim(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, "triage_failed", run_id=uuid.uuid4(), triages=1)
+    runtime = MoveRuntime()
+    client = moves_client(db, runtime)
+
+    response = post_triage(client, CLAIM, SAME_ORIGIN)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == url_of(CLAIM)
+    # A failed run is not paused: nothing is resumed, and no word is recorded.
+    assert runtime.calls == ["start"]
+    assert decisions(db) == []
+    assert claim_state(db, CLAIM) == ("awaiting_adjuster", runtime.run_id)
+    assert triages_of(db, CLAIM) == 2
+    page = Page(client.get(url_of(CLAIM)).text)
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert SEND_BACK_BUTTON in page.text
+    assert FAILED_LINE not in page.text
+
+
+def test_a_claim_referred_at_the_cap_says_it_has_no_run_and_offers_no_send_back(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, "awaiting_adjuster", triages=CAP)
+    put_proposal(db, CLAIM, RICH_PROPOSAL)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert NO_RUN_LINE in page.text
+    assert "triaged five times" in page.text
+    assert "predates the documents" in page.text
+    assert page.decision_buttons() == THREE_DECISIONS
+    assert form_actions(page) == [decision_url(CLAIM)]
+    assert SEND_BACK_BUTTON not in page.text
+    assert TRIAGE_AGAIN_BUTTON not in page.text
+    assert FAILED_LINE not in page.text
+    # The line comes above the buttons.
+    assert response.text.index(NO_RUN_LINE) < response.text.index('name="decision"')
+
+
+@pytest.mark.parametrize("word", DECISION_OUTCOMES)
+def test_a_decision_on_a_claim_referred_at_the_cap_is_shown_and_not_sent_again(
+    fresh_database: DatabaseHandle, word: str
+) -> None:
+    db = fresh_database
+    state, _ = DECISION_OUTCOMES[word]
+    put_claim(db, CLAIM, "awaiting_adjuster", triages=CAP)
+    runtime = MoveRuntime()
+    client = moves_client(db, runtime)
+
+    response = post_form(client, CLAIM, word, SAME_ORIGIN)
+
+    assert response.status_code == 303
+    assert runtime.calls == []
+    assert decisions(db) == [(CLAIM, None, word)]
+    assert claim_state(db, CLAIM) == (state, None)
+    page = Page(client.get(url_of(CLAIM)).text)
+    assert f"Decision recorded: {word}" in page.text
+    assert RESEND_TEXT not in page.text
+    assert not page.attributes("form")
+
+
+@pytest.mark.parametrize("state", ["awaiting_adjuster", "triage_failed", "withdrawn"])
+def test_a_state_no_decision_leads_to_shows_none_even_with_a_row_for_the_run(
+    fresh_database: DatabaseHandle, state: str
+) -> None:
+    run_id = uuid.uuid4()
+    put_claim(fresh_database, CLAIM, state, run_id=run_id, triages=1)
+    put_decision(fresh_database, CLAIM, "approve", run_id)
+
+    response = client_for(fresh_database).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert "Decision recorded" not in page.text
+    assert RESEND_TEXT not in page.text
+    assert not page.attributes("input")
+
+
+@pytest.mark.parametrize(
+    ("state", "claims_run_is_the_old_one"),
+    [
+        pytest.param("triaging", True, id="triaging"),
+        pytest.param("approved", False, id="decided-on-a-newer-run"),
+        pytest.param("approved", True, id="word-is-not-a-decision"),
+        pytest.param("documents_requested", False, id="asked-on-a-newer-run"),
+    ],
+)
+def test_a_claim_sent_back_shows_no_decision_and_no_send_again_form(
+    fresh_database: DatabaseHandle, state: str, claims_run_is_the_old_one: bool
+) -> None:
+    db = fresh_database
+    old, newer = uuid.uuid4(), uuid.uuid4()
+    put_claim(db, CLAIM, state, run_id=old if claims_run_is_the_old_one else newer)
+    put_decision(db, CLAIM, "send_back", old)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert response.status_code == 200
+    assert "Decision recorded" not in page.text
+    assert "send_back" not in page.text
+    assert RESEND_TEXT not in page.text
+    assert not page.attributes("input")
+    assert not page.attributes("form")
+
+
+@pytest.mark.parametrize("claims_run_is_the_old_one", [True, False])
+def test_a_withdrawn_claim_shows_no_decision_and_no_send_again_form(
+    fresh_database: DatabaseHandle, claims_run_is_the_old_one: bool
+) -> None:
+    db = fresh_database
+    old = uuid.uuid4()
+    put_claim(db, CLAIM, "withdrawn", run_id=old if claims_run_is_the_old_one else None)
+    put_decision(db, CLAIM, "withdrawn", old)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    page = Page(response.text)
+    assert response.status_code == 200
+    assert "Decision recorded" not in page.text
+    assert RESEND_TEXT not in page.text
+    assert not page.attributes("form")
+    assert not page.attributes("input")
+
+
+def test_a_decision_of_another_run_than_the_claims_is_not_the_one_shown(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    old, newer = uuid.uuid4(), uuid.uuid4()
+    put_claim(db, CLAIM, "approved", run_id=newer)
+    put_decision(db, CLAIM, "reject", old)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    assert "Decision recorded" not in Page(response.text).text
+
+
+def test_documents_that_arrived_are_listed_after_the_submissions_and_labelled(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, run_id=uuid.uuid4(), documents=["photos"])
+    put_arrived(db, CLAIM, "invoice", timedelta(days=2))
+    put_arrived(db, CLAIM, "estimate", timedelta(days=1))
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    # In the order of arrival, in a row of their own, after the submission's.
+    assert (
+        f"Documents named photos {ARRIVED_LABEL} invoice, estimate Description"
+        in Page(response.text).text
+    )
+
+
+def test_a_claim_with_no_documents_that_arrived_has_no_row_for_them(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, CLAIM)
+
+    response = client_for(fresh_database).get(url_of(CLAIM))
+
+    assert ARRIVED_LABEL not in Page(response.text).text
+
+
+def test_markup_in_the_name_of_an_arrived_document_is_escaped(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM)
+    put_arrived(db, CLAIM, MARKUP + MARKUP_IN_ATTRIBUTE)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    assert response.status_code == 200
+    html = response.text
+    assert MARKUP not in html
+    assert "<img" not in html
+    assert ESCAPED_MARKUP in html
+    assert not [t for t, _ in Page(html).tags if t in ("script", "img")]
+
+
+def test_every_answer_of_the_triage_route_carries_the_security_headers(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9301", run_id=uuid.uuid4(), triages=1)
+    put_claim(db, "CLM-9302", run_id=uuid.uuid4(), triages=CAP)
+    client = moves_client(db, MoveRuntime())
+    responses = {
+        "403 page": post_triage(client, "CLM-9301", {"Origin": "http://x.y"}),
+        "404 page": post_triage(client, "CLM-9999"),
+        "409 page": post_triage(client, "CLM-9302"),
+        "422": post_triage(client, "nonsense"),
+        "303": post_triage(client, "CLM-9301", SAME_ORIGIN),
+    }
+
+    assert {n: r.status_code for n, r in responses.items()} == {
+        "403 page": 403,
+        "404 page": 404,
+        "409 page": 409,
+        "422": 422,
+        "303": 303,
+    }
+    for name, response in responses.items():
+        for header, value in SECURITY_HEADERS.items():
+            assert response.headers.get(header) == value, (name, header)
 
 
 # ── T-07: markup is text ────────────────────────────────────────────────────
@@ -932,9 +1442,10 @@ def test_a_decision_with_no_completed_run_after_it_shows_the_resend_button(
     fresh_database: DatabaseHandle,
 ) -> None:
     db = fresh_database
-    put_claim(db, "CLM-9301", "approved")
+    run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
     put_trail(db, "CLM-9301", ["run.started", "run.completed"])  # before the decision
-    put_decision(db, "CLM-9301", "approve")
+    put_decision(db, "CLM-9301", "approve", run_id)
 
     response = client_for(db).get(url_of("CLM-9301"))
 
@@ -955,8 +1466,9 @@ def test_a_decision_with_no_completed_run_after_it_shows_the_resend_button(
 def test_the_resend_button_carries_the_recorded_word(
     fresh_database: DatabaseHandle,
 ) -> None:
-    put_claim(fresh_database, "CLM-9301", "rejected")
-    put_decision(fresh_database, "CLM-9301", "reject")
+    run_id = uuid.uuid4()
+    put_claim(fresh_database, "CLM-9301", "rejected", run_id=run_id)
+    put_decision(fresh_database, "CLM-9301", "reject", run_id)
 
     response = client_for(fresh_database).get(url_of("CLM-9301"))
 
@@ -967,8 +1479,9 @@ def test_a_run_completed_after_the_decision_leaves_no_resend_button(
     fresh_database: DatabaseHandle,
 ) -> None:
     db = fresh_database
-    put_claim(db, "CLM-9301", "approved")
-    put_decision(db, "CLM-9301", "approve")
+    run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
+    put_decision(db, "CLM-9301", "approve", run_id)
     put_trail(db, "CLM-9301", ["run.resumed", "run.completed"])
 
     response = client_for(db).get(url_of("CLM-9301"))
@@ -999,9 +1512,9 @@ def test_a_run_completed_beyond_the_trail_limit_still_counts(
     """The page shows 200 trail rows at most; whether the run completed is not
     read off those."""
     db = fresh_database
-    put_claim(db, "CLM-9301", "approved")
-    put_decision(db, "CLM-9301", "approve")
     run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
+    put_decision(db, "CLM-9301", "approve", run_id)
     owner_rows(
         db,
         "INSERT INTO runtime.runs (run_id, thread_id, agent, tenant, reference, "
@@ -1225,7 +1738,7 @@ def adjuster_responses(db: DatabaseHandle) -> dict[str, httpx.Response]:
     responses = {
         "queue": client.get(QUEUE_URL),
         "claim": client.get(url_of("CLM-9301")),
-        "claim without a form": client.get(url_of("CLM-9302")),
+        "claim whose triage failed": client.get(url_of("CLM-9302")),
         "404 page": client.get(url_of("CLM-9999")),
         "422": client.get(url_of("nonsense")),
         "403 page": post_form(client, "CLM-9301", "approve", {"Origin": "http://x.y"}),

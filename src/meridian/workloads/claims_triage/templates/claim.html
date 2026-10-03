@@ -64,17 +64,33 @@
 <p>Decision recorded: {{ decision[0] }} ({{ decision[1] }})</p>
 {% endif %}
 
-{% if waiting %}
+{% if waiting or failed %}
 <h2>Decide</h2>
+{% if failed %}
+<p>The triage failed and there is no proposal to read; a decision refers the claim to you and records it.</p>
+{% elif no_run %}
+<p>There is no paused run and no new proposal: the claim was triaged {{ cap_words }} times, and the latest proposal, if any, predates the documents that arrived.</p>
+{% endif %}
 <form method="post" action="/adjuster/claims/{{ view.claim_id }}/decision">
 <p>Each button records its own decision. None is a default.</p>
 <button type="submit" name="decision" value="approve">Approve</button>
 <button type="submit" name="decision" value="reject">Reject</button>
 <button type="submit" name="decision" value="request_documents">Request documents</button>
 </form>
-{% elif failed %}
-<h2>Decide</h2>
-<p>The triage failed: posting the claim again triages it. Deciding a claim without a run is not built yet (S048).</p>
+{% if send_back %}
+<form method="post" action="/adjuster/claims/{{ view.claim_id }}/triage">
+<p>Sending the claim back ends the paused run and triages the claim again.</p>
+<button type="submit">Send back to triage</button>
+</form>
+{% elif triage_again %}
+<form method="post" action="/adjuster/claims/{{ view.claim_id }}/triage">
+<p>Triaging again runs the triage once more.</p>
+<button type="submit">Triage again</button>
+</form>
+{% endif %}
+{% if cap_reached %}
+<p>The claim has been triaged {{ cap_words }} times; it cannot be triaged again.</p>
+{% endif %}
 {% endif %}
 
 <h2>Audit trail</h2>
