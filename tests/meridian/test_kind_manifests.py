@@ -1518,6 +1518,20 @@ def test_smoke_runs_the_cost_panel_check_after_the_telemetry_check() -> None:
     ]
 
 
+def test_smoke_runs_the_adjuster_pages_check_after_the_cost_panel_check() -> None:
+    lines = SMOKE_SH.splitlines()
+    calls = [line for line in lines[lines.index("check_edge") :] if line]
+    body = function_body(SMOKE_SH, "check_adjuster_pages")
+
+    assert calls[5] == "check_adjuster_pages"
+    # Same skip rule as the tool check: only when no Meridian Deployment exists.
+    assert "$(deployed_services)" in body
+    assert len(re.findall(r"^\s*skip .*$", body, re.MULTILINE)) == 1
+    # The refusal is the origin check's, so the request carries a foreign Origin.
+    assert "Origin: http://attacker.example" in body
+    assert "eval" not in body.split()
+
+
 def test_smoke_opens_grafana_once_for_the_telemetry_and_the_cost_checks() -> None:
     opener = function_body(SMOKE_SH, "open_grafana")
     telemetry = function_body(SMOKE_SH, "check_telemetry")

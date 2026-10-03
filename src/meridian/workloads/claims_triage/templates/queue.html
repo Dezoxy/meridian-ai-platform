@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Queue{% endblock %}
+{% block content %}
+<h1>Claims that wait for an adjuster</h1>
+{% if rows %}
+<p>Oldest first, at most {{ limit }}: claims waiting for a decision, and claims whose triage failed.</p>
+<table>
+<thead>
+<tr><th scope="col">Claim</th><th scope="col">State</th><th scope="col">Since</th><th scope="col">Peril</th><th scope="col">Claimed amount</th><th scope="col">Reason of the latest proposal</th></tr>
+</thead>
+<tbody>
+{% for row in rows %}
+<tr><td><a href="/adjuster/claims/{{ row.claim_id }}">{{ row.claim_id }}</a></td><td>{{ row.state }}</td><td>{{ row.since }}</td><td>{{ row.peril }}</td><td>{{ row.amount }}</td><td>{{ row.reason }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p>No claim is waiting for an adjuster.</p>
+{% endif %}
+{% endblock %}

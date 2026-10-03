@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
 from opentelemetry import propagate
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import Tracer
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
@@ -43,6 +44,10 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.runtime.models import RunResponse, RunState
+from meridian.workloads.claims_triage.adjuster import (
+    NO_SUCH_CLAIM_DETAIL,
+    add_adjuster_pages,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
     ADJUSTER_REJECTED,
@@ -65,6 +70,7 @@ from meridian.workloads.claims_triage.models import (
     ClaimResponse,
     ClaimSubmission,
     Decision,
+    DecisionFailure,
     DecisionResponse,
     ProposalSummary,
     Route,
@@ -84,10 +90,10 @@ HAS_PROPOSAL_DETAIL = "the claim already has a triage proposal"
 BEING_TRIAGED_DETAIL = "the claim is being triaged"
 TAKEN_OVER_DETAIL = "the triage was taken over by another request"
 DIFFERENT_SUBMISSION_DETAIL = "the claim exists with a different submission"
-NO_SUCH_CLAIM_DETAIL = "no such claim"
 NOT_WAITING_DETAIL = "the claim does not wait for an adjuster"
 DECIDED_OTHERWISE_DETAIL = "the claim was decided otherwise"
 RESUME_FAILED_DETAIL = "the decision is recorded; the run did not complete"
+BEING_APPLIED_DETAIL = "the decision is being applied by another request"
 HTTP_GATEWAY_TIMEOUT = 504
 
 # What a run's answer means for the claim: its status and the proposal's route.
@@ -378,6 +384,66 @@ def _answer(
     return error_answer(status, detail, claim_id=claim_id, **extra)
 
 
+def _decide(
+    dsn: str,
+    tenant: str,
+    http: httpx.Client,
+    tracer: Tracer,
+    claim_id: str,
+    decision: Decision,
+) -> DecisionResponse | DecisionFailure:
+    """The one path of a decision, for the JSON route and the adjuster's page:
+    record it, move the claim and audit it in one transaction, then resume the
+    run. A refusal (404, 409) is raised as ``HTTPException``; every other
+    failure is a ``DecisionFailure`` and the decision, once recorded, stays."""
+    with start_span(tracer, "claims.decide") as span:
+        set_span_attributes(
+            span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
+        )
+        try:
+            state, run_id = _record_decision(dsn, tenant, claim_id, decision)
+        except psycopg.Error as exc:
+            mark_error(span, exc)
+            return DecisionFailure(*database_failure(exc))
+        set_span_attributes(span, {"meridian.run_id": str(run_id)})
+        try:
+            run = _resume_run(http, tenant, claim_id, run_id)
+        except RuntimeCallError as exc:
+            logger.error(
+                "resume of run %s for claim %s failed: %s (runtime status %s)",
+                run_id,
+                claim_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            mark_error(span, exc)
+            return DecisionFailure(
+                HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502,
+                RESUME_FAILED_DETAIL,
+                run_id,
+            )
+        if run.status == "Running":
+            # Another request is applying this decision right now.
+            logger.info(
+                "resume of run %s for claim %s: another request is applying it",
+                run_id,
+                claim_id,
+            )
+            return DecisionFailure(409, BEING_APPLIED_DETAIL, run_id)
+        if run.status != "Completed":
+            # The decision stays recorded; a post of it again resumes again.
+            logger.error(
+                "resume of run %s for claim %s did not complete: run status %s",
+                run_id,
+                claim_id,
+                run.status,
+            )
+            return DecisionFailure(502, RESUME_FAILED_DETAIL, run_id)
+        return DecisionResponse(
+            claim_id=claim_id, state=state, run_id=run_id, run_status=run.status
+        )
+
+
 def create_app(
     settings: ClaimsSettings,
     *,
@@ -501,46 +567,20 @@ def create_app(
     def decide_claim(
         claim_id: Annotated[str, Path(pattern=r"^CLM-[0-9]{4}$")], body: ClaimDecision
     ) -> DecisionResponse | JSONResponse:
-        with start_span(tracer, "claims.decide") as span:
-            set_span_attributes(
-                span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
-            )
-            try:
-                state, run_id = _record_decision(dsn, tenant, claim_id, body.decision)
-            except psycopg.Error as exc:
-                mark_error(span, exc)
-                return _answer(*database_failure(exc), claim_id)
-            set_span_attributes(span, {"meridian.run_id": str(run_id)})
-            try:
-                run = _resume_run(http, tenant, claim_id, run_id)
-            except RuntimeCallError as exc:
-                logger.error(
-                    "resume of run %s for claim %s failed: %s (runtime status %s)",
-                    run_id,
-                    claim_id,
-                    type(exc).__name__,
-                    exc.status_code,
-                )
-                mark_error(span, exc)
-                return _answer(
-                    HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502,
-                    RESUME_FAILED_DETAIL,
-                    claim_id,
-                    run_id,
-                )
-            if run.status != "Completed":
-                # The decision stays recorded; a post of it again resumes again.
-                logger.error(
-                    "resume of run %s for claim %s did not complete: run status %s",
-                    run_id,
-                    claim_id,
-                    run.status,
-                )
-                return _answer(502, RESUME_FAILED_DETAIL, claim_id, run_id)
-            return DecisionResponse(
-                claim_id=claim_id, state=state, run_id=run_id, run_status=run.status
-            )
+        result = _decide(dsn, tenant, http, tracer, claim_id, body.decision)
+        if isinstance(result, DecisionFailure):
+            return _answer(result.status, result.detail, claim_id, result.run_id)
+        return result
 
+    add_adjuster_pages(
+        app,
+        dsn=dsn,
+        tenant=tenant,
+        tracer=tracer,
+        decide=lambda claim_id, decision: _decide(
+            dsn, tenant, http, tracer, claim_id, decision
+        ),
+    )
     return app
 
 

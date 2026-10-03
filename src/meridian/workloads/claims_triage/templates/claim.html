@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ view.claim_id }}{% endblock %}
+{% block content %}
+<h1>Claim {{ view.claim_id }}</h1>
+{% if notice %}
+<p role="alert" class="notice">{{ notice.status }}: {{ notice.detail }}</p>
+{% endif %}
+{% if resend %}
+<p>The decision is recorded and the run has not completed; sending it again completes it.</p>
+<form method="post" action="/adjuster/claims/{{ view.claim_id }}/decision">
+<input type="hidden" name="decision" value="{{ resend }}">
+<button type="submit">Send the decision again</button>
+</form>
+{% endif %}
+
+<h2>Claim</h2>
+<dl>
+<dt>State</dt><dd>{{ view.state }}</dd>
+<dt>Since</dt><dd>{{ since }}</dd>
+<dt>Received at</dt><dd>{{ received_at }}</dd>
+{% for label, value in view.facts.items() %}
+<dt>{{ label }}</dt><dd class="text">{{ value }}</dd>
+{% endfor %}
+</dl>
+
+<h2>Triage proposal</h2>
+{% if view.proposal %}
+{% set p = view.proposal %}
+<dl>
+<dt>Route</dt><dd>{{ p.route }}</dd>
+<dt>Reason</dt><dd>{{ p.reason }}</dd>
+<dt>Recommendation</dt><dd>{{ p.recommendation or "none" }}</dd>
+<dt>Payable amount</dt><dd>{{ payable or "none" }}</dd>
+<dt>Exclusion clause</dt><dd>{{ p.exclusion_clause or "none" }}</dd>
+<dt>Fraud indicators</dt><dd>{{ p.fraud_indicators | join(", ") or "none" }}</dd>
+<dt>Missing documents</dt><dd>{{ p.missing_documents | join(", ") or "none" }}</dd>
+<dt>Gaps in the evidence</dt><dd>{{ p.gaps | join(", ") or "none" }}</dd>
+<dt>Assessment of the exclusions</dt><dd>{{ p.assessment }}</dd>
+<dt>Assessment unavailable because</dt><dd>{{ p.unavailable_because or "not applicable" }}</dd>
+<dt>Rationale</dt><dd class="text">{{ p.rationale or "none" }}</dd>
+<dt>Drafted by</dt><dd>{% if p.drafted_by %}{{ p.drafted_by.deployment }}, {{ p.drafted_by.provider }}, {{ p.drafted_by.mode }}{% else %}no model call{% endif %}</dd>
+</dl>
+<h3>Citations</h3>
+{% if p.citations %}
+<table>
+<thead>
+<tr><th scope="col">Product</th><th scope="col">Wording version</th><th scope="col">Clause</th></tr>
+</thead>
+<tbody>
+{% for c in p.citations %}
+<tr><td>{{ c.product }}</td><td>{{ c.wording_version }}</td><td>{{ c.clause }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p>none</p>
+{% endif %}
+{% else %}
+<p>{{ view.proposal_note }}</p>
+{% endif %}
+
+{% if decision %}
+<h2>Decision</h2>
+<p>Decision recorded: {{ decision[0] }} ({{ decision[1] }})</p>
+{% endif %}
+
+{% if waiting %}
+<h2>Decide</h2>
+<form method="post" action="/adjuster/claims/{{ view.claim_id }}/decision">
+<p>Each button records its own decision. None is a default.</p>
+<button type="submit" name="decision" value="approve">Approve</button>
+<button type="submit" name="decision" value="reject">Reject</button>
+<button type="submit" name="decision" value="request_documents">Request documents</button>
+</form>
+{% elif failed %}
+<h2>Decide</h2>
+<p>The triage failed: posting the claim again triages it. Deciding a claim without a run is not built yet (S048).</p>
+{% endif %}
+
+<h2>Audit trail</h2>
+{% if trail %}
+<table>
+<thead>
+<tr><th scope="col">Recorded at</th><th scope="col">Database role</th><th scope="col">Service</th><th scope="col">Event</th><th scope="col">Outcome</th></tr>
+</thead>
+<tbody>
+{% for recorded_at, db_role, service, event, outcome in trail %}
+<tr><td>{{ recorded_at }}</td><td>{{ db_role }}</td><td>{{ service }}</td><td>{{ event }}</td><td>{{ outcome }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p>No audit rows.</p>
+{% endif %}
+{% endblock %}
