@@ -106,8 +106,9 @@ and Pydantic, at the cost of one dependency.
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
   sign-in and stay designed until S021 exists.
-- **Cost.** Evaluation uses the replay provider unless `--live` is passed
-  (C-04).
+- **Cost.** Evaluation uses ~~the replay provider~~ a scripted model, in
+  process and at no cost (S017), unless `--live` is passed (C-04; `--live`
+  and a recorded model are S050).
 - **Placement.** `src/meridian/platform/cli/`, importing only platform
   packages. The Evaluation Harness reaches workloads through the ~~runtime
   API~~ Claims API (S017: every tool call needs the claim's row, so a run
@@ -4088,9 +4089,15 @@ changed without a reviewed new baseline.
   passed`; `make check`: no ERROR line; `make mermaid-views`: no derived
   block changed (the relationship that moved is in the Governance view,
   which has none).
+- On kind (the cluster S044 built, not recreated): `make deploy` and
+  `make smoke` (13 PASS lines) with the new image, whose workload code
+  changed (`drafted_by.prompt`, the claim's page). The pages of CLM-0001,
+  CLM-0007 and CLM-0009, whose proposals were stored before S017 without a
+  prompt, answer 200 and show no prompt.
 - Not run: anything with a real model (the Azure login is blocked), so
-  QA-06 is measured for the pipeline only; nothing on kind, which this
-  step does not change.
+  QA-06 is measured for the pipeline only; `make demo`, which would use a
+  golden claim to show a new proposal's prompt on kind (the stack test
+  shows it); the rendered views (`make export`).
 
 **Follow-ups:**
 
@@ -4103,7 +4110,9 @@ changed without a reviewed new baseline.
   tool arguments of each run; `eval run` against a deployed stack, with a
   read path for proposals; a report comparing two prompt versions; the
   database store for results; golden-set cases on the fraud indicators'
-  boundaries and an unknown policy number (S003's follow-up).
+  boundaries and an unknown policy number (S003's follow-up); a view
+  that shows the harness's edges, since `evals -> claimsApp` is in none
+  (Containers leaves the harness out, Governance the Claims Triage App).
 - No step yet: `make eval-compare` alone reads whatever report `.eval/`
   holds, which may be stale; a file in the golden set's directory that the
   manifest does not list is not noticed.
