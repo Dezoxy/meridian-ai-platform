@@ -180,7 +180,7 @@ and Pydantic, at the cost of one dependency.
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
-| S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
+| S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | doing | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
@@ -4925,6 +4925,95 @@ unexplained 53 errors, `unused_port()`, the remaining wall-clock limits,
 `ensure_roles`' lock timeout, a coverage gate (now affordable; the owner's
 decision), template databases, the CI limit of 15 minutes, and skipping
 the tests for a pull request that changes only files no test reads.
+
+### S052 — Scheduled sweep
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** a scheduled job brings what a failed request left behind to a
+state a person sees: a claim whose documents are overdue goes to an
+adjuster, a claim stranded in `submitted` or `triaging` becomes
+`triage_failed`, an abandoned run ends and no finished run keeps a
+checkpoint.
+**Decisions:**
+
+- The owner's, asked in chat on 2026-10-03 before anything was built:
+  - The documents' deadline is **14 days** (offered: 30, recommended, 14 and
+    60). A setting of the job, `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`,
+    whole calendar days, at least 1.
+  - It counts **from the latest request**: the moment the claim last moved
+    to `documents_requested` (`state_changed_at`, no new column). Documents
+    that arrive start a triage; if that triage asks again, the clock starts
+    again. The cap of five triages bounds it to five periods. Rejected: the
+    first request, which costs a column and gives a claimant who sent three
+    of four documents on the last day no time for the fourth.
+  - **One job with one narrow role**, `claims_sweep`, which ends an
+    abandoned run directly in the database. Rejected: two jobs and two
+    roles (a paused run that no claim points to needs both schemas, so one
+    of them would read across anyway); resuming through the Agent Runtime
+    (two mechanisms, a network path from the job to the runtime and tool
+    calls made by a janitor).
+- Part D question 3 was answered before the step (2026-10-03): the sweep
+  refers a claim whose documents are overdue to an adjuster. No claim is
+  rejected without a person, so C-02 loses its "procedural closure" and the
+  lifecycle its edge `DocumentsRequested --> Rejected`.
+- What the sweep moves, each through `move_claim`, so each is a
+  compare-and-set with its audit event in the same transaction:
+  - `documents_requested` for longer than the deadline to
+    `awaiting_adjuster`, trigger `documents-overdue`, with no run (as for
+    documents at the triage cap: the adjuster decides with nothing to
+    resume);
+  - `submitted` for longer than the triage lease to `triage_failed`,
+    trigger `triage-not-started` (a new edge of the diagram);
+  - `triaging` for longer than the triage lease to `triage_failed`, trigger
+    `triage-abandoned`.
+  The sweep starts no triage: it makes no model call and no tool call.
+- A run is abandoned when it is `Running` or `AwaitingApproval`, has not
+  changed for the runtime's lease of 600 s, and no claim keeps it. A claim
+  keeps the run it names while it is `awaiting_adjuster`, or for 600 s
+  after its last move (the request that moved it is still ending or
+  resuming the run). The sweep moves such a run to `Failed` with the reason
+  `abandoned` and deletes its thread's checkpoints in one transaction,
+  under the run's row lock, so a resume and the sweep cannot both win.
+  Then it deletes the checkpoints of every thread that has no run in
+  `Running` or `AwaitingApproval`: what a failed delete left (T-63).
+  Cost, accepted with the owner's choice: a run ended this way never
+  writes its decision note; the decision itself is in `claims.decisions`
+  and the audit log.
+- The role's rights (migration 0013) are columns, not tables: it reads and
+  writes a claim's state columns and never its submission, updates a run's
+  status, deletes checkpoints with `SELECT (thread_id)` only, so it cannot
+  read what it deletes, and appends audit events. A trigger on
+  `claims.claims` refuses the role any state but `awaiting_adjuster` and
+  `triage_failed`, so "the sweep decides no claim" is the database's rule
+  and not only the code's.
+- The code: the claims' moves and the entry point in
+  `workloads/claims_triage/sweep.py` (`python -m`), the runs and
+  checkpoints in `runtime/sweep.py`, which imports no LangGraph. On kind a
+  CronJob every five minutes, `concurrencyPolicy: Forbid`.
+- Folded in from S049: `DecisionFailure` gains `stored`, set by the
+  documents route once the names are committed; the claimant's page
+  answers a failed documents post by it, not by the claim's state
+  afterwards.
+- Threat model (`feature-threat-model`, TB-3, TB-8, TB-9), a new row for
+  the sweep's role: it decides a claim (the trigger, `move_claim`'s
+  table); it ends a run a waiting claim needs (the keep rule, the row
+  lock, one transaction); it reads claim text (column grants, IDs only in
+  logs); a move nobody can explain (the audit event, and the adjuster's
+  trail learns the role); a deadline set too short floods the queue (the
+  setting is validated); its credential (a Secret and a `pg_hba` entry of
+  its own, a connection limit, no service-account token). Invariants: no
+  model call, no tool, no framework import, no secret. No tension.
+
+**Work log:**
+
+- Its own session, parallel to S050, S051 and S053; branch
+  `s052-scheduled-sweep` off `origin/main` at 98f35ae (S054 `done`).
+- The advisor was rate-limited before the design; the design went to the
+  owner without it.
+
+**Result / verification:** —
+
+**Follow-ups:** —
 
 ## Part D — Open questions
 
