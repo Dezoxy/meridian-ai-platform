@@ -5,7 +5,8 @@
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its six roles; their password Secrets are
 #      created first, only if absent
-#   4. Grafana admin Secret (only if absent), kube-prometheus-stack, Tempo, Loki,
+#   4. Grafana admin Secret (only if absent), kube-prometheus-stack, the Grafana
+#      dashboards in infra/kind/dashboards (one ConfigMap each), Tempo, Loki,
 #      OpenTelemetry Collector
 # Every version is pinned in pins.env.
 set -euo pipefail
@@ -109,6 +110,25 @@ wait_for_database_roles() {
     jq -c '.status.managedRolesStatus.cannotReconcile // {}')"
 }
 
+# Each infra/kind/dashboards/*.json becomes a ConfigMap in observability that
+# Grafana's dashboard sidecar loads (the label; the sidecar reads that namespace
+# only, see the values file). Server-side apply, so a rerun converges.
+apply_dashboards() {
+  local file name count=0
+  for file in "${KIND_DIR}"/dashboards/*.json; do
+    [[ -e "${file}" ]] || continue
+    name="${file##*/}"
+    kctl -n observability create configmap "meridian-dashboard-${name%.json}" \
+      --from-file="${name}=${file}" --dry-run=client -o json |
+      jq '.metadata.labels = {"grafana_dashboard": "1", "app.kubernetes.io/part-of": "meridian"}
+        | del(.metadata.creationTimestamp)' |
+      kctl apply --server-side --force-conflicts -f - >/dev/null
+    count=$((count + 1))
+  done
+  ((count > 0)) || die "no dashboard (*.json) in ${KIND_DIR}/dashboards"
+  log "observability: ${count} Grafana dashboard(s) applied"
+}
+
 check_prerequisites
 create_cluster
 
@@ -143,6 +163,7 @@ install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" 
   "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml
 kctl -n observability wait --for=condition=Available \
   prometheus/kube-prometheus-stack-prometheus --timeout=10m >/dev/null
+apply_dashboards
 log "observability: Tempo"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml

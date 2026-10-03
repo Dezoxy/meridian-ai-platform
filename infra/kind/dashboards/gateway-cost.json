@@ -1,0 +1,490 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "**Tokens and cost count the attempts a provider answered**, with the provider's own token counts and the registry's prices. What a tenant was *charged* (a reservation kept after a failed attempt, for example) is in the gateway's ledger, table `gateway.usage`. The ledger is the record; this dashboard is a view.\n\n**Cost reads 0 on kind.** The simulated `replay` provider is priced at zero in the registry. Cost is above zero only on a route to a priced deployment.\n\n**How a total is computed.** A gateway process exports its counters once a minute, and its first export already carries what it counted, so `increase()` and `rate()` would miss it. Each panel subtracts a series' value at the start of the time range (zero for a process that started inside the range) from its last value. Choose a range of at least two minutes.",
+        "mode": "markdown"
+      },
+      "title": "What these numbers are",
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tokens the provider counted for answered attempts, over the selected time range.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "locale"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 7
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ],
+      "title": "Tokens",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Cost in euro of answered attempts at the registry's prices, over the selected time range.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 4,
+          "unit": "currencyEUR"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 7
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_cost_EUR_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ],
+      "title": "Cost",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Gateway calls by outcome, over the selected time range.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "locale"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 7
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (meridian_outcome) (last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_calls_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "instant": true,
+          "legendFormat": "{{meridian_outcome}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Calls by outcome",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tokens for answered attempts, split by the chosen dimension, over the selected time range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "green",
+            "mode": "fixed"
+          },
+          "decimals": 0,
+          "unit": "locale"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 5,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by ($dimension) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "instant": true,
+          "legendFormat": "{{$dimension}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Tokens by ${dimension:text}",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Cost in euro for answered attempts, split by the chosen dimension, over the selected time range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "green",
+            "mode": "fixed"
+          },
+          "decimals": 4,
+          "unit": "currencyEUR"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 6,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by ($dimension) (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_cost_EUR_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "instant": true,
+          "legendFormat": "{{$dimension}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cost by ${dimension:text}",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Input tokens, output tokens and cost per tenant, agent, provider and model, over the selected time range.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "locale"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cost (EUR)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[${__range_s}s]) * 0))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[${__range_s}s]) * 0))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_cost_EUR_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "C"
+        }
+      ],
+      "title": "By tenant, agent, provider and model",
+      "transformations": [
+        {
+          "id": "merge"
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "meridian_tenant": 0,
+              "meridian_agent": 1,
+              "meridian_provider": 2,
+              "gen_ai_request_model": 3,
+              "Value #A": 4,
+              "Value #B": 5,
+              "Value #C": 6
+            },
+            "renameByName": {
+              "meridian_tenant": "Tenant",
+              "meridian_agent": "Agent",
+              "meridian_provider": "Provider",
+              "gen_ai_request_model": "Model",
+              "Value #A": "Input tokens",
+              "Value #B": "Output tokens",
+              "Value #C": "Cost (EUR)"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tokens counted in the five minutes before each point.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "decimals": 0,
+          "unit": "locale"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 8,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[5m]) - (meridian_gateway_tokens_total{job=\"model-gateway\"} offset 5m or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[5m]) * 0))",
+          "legendFormat": "{{gen_ai_request_model}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Tokens per 5 minutes, by model",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": [
+    "meridian"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "tenant",
+          "value": "meridian_tenant"
+        },
+        "includeAll": false,
+        "label": "Break down by",
+        "multi": false,
+        "name": "dimension",
+        "options": [
+          {
+            "selected": true,
+            "text": "tenant",
+            "value": "meridian_tenant"
+          },
+          {
+            "selected": false,
+            "text": "agent",
+            "value": "meridian_agent"
+          },
+          {
+            "selected": false,
+            "text": "provider",
+            "value": "meridian_provider"
+          },
+          {
+            "selected": false,
+            "text": "model",
+            "value": "gen_ai_request_model"
+          }
+        ],
+        "query": "tenant : meridian_tenant, agent : meridian_agent, provider : meridian_provider, model : gen_ai_request_model",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Meridian: Model Gateway tokens and cost",
+  "uid": "meridian-gateway-cost"
+}

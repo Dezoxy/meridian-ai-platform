@@ -15,6 +15,12 @@
 #                 to the collector; each is then read back through Grafana's
 #                 datasource proxy (Tempo, Loki, Prometheus), the way an owner
 #                 would see it.
+#   5. cost panel: Grafana serves the provisioned dashboard "Meridian: Model
+#                 Gateway tokens and cost"; and, once the gateway has settled a
+#                 call since it started (the ledger says so), Prometheus holds
+#                 its tokens, cost and calls series. The series line is skipped
+#                 while the services are not deployed (`make deploy`) or the
+#                 gateway has settled nothing yet (`make demo`).
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -27,9 +33,14 @@ readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
 readonly JOB_TIMEOUT=120s
+# The dashboard's uid (infra/kind/dashboards/gateway-cost.json) and the series
+# the gateway exports for it (their names are in src/meridian/platform/gateway).
+readonly DASHBOARD_UID=meridian-gateway-cost
+readonly COST_SERIES=(meridian_gateway_tokens_total meridian_gateway_cost_EUR_total meridian_gateway_calls_total)
 
 failures=0
 skips=0
+grafana_url="" # set by open_grafana
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
 skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
@@ -102,6 +113,14 @@ check_database() {
 }
 
 # ── 3. tools ─────────────────────────────────────────────────────────────────
+# deployed_services: the Meridian Deployments, one name per line (empty when
+# there are none). Stdout only: a warning on stderr is not a Deployment; it goes
+# to the terminal. Shared with the cost check (5).
+deployed_services() {
+  kctl -n meridian get deployment \
+    -l app.kubernetes.io/part-of=meridian -o name --ignore-not-found
+}
+
 # The probe runs in the runtime's own pod, so it uses the addresses the runtime
 # was given. Its stdout is one "<server> <tool> <answer>" line per tool server;
 # it exits 0 only when every answer is unknown-run (the refusal of a run that
@@ -109,11 +128,8 @@ check_database() {
 check_tools() {
   local found out err_file servers
   # Skipped only when no Meridian Deployment exists. When any does, the probe is
-  # required: a missing or renamed agent-runtime fails its exec below. Stderr is
-  # not part of the answer (a warning there is not a Deployment); it goes to the
-  # terminal.
-  if ! found="$(kctl -n meridian get deployment \
-    -l app.kubernetes.io/part-of=meridian -o name --ignore-not-found)"; then
+  # required: a missing or renamed agent-runtime fails its exec below.
+  if ! found="$(deployed_services)"; then
     fail "tools: could not look for the Meridian deployments (kubectl's error is above)"
     return
   fi
@@ -219,6 +235,39 @@ cleanup() {
   [[ -n "${pf_log:-}" ]] && rm -f "${pf_log}"
 }
 
+# open_grafana: read the admin password into ${password} (gcurl uses it) and
+# forward a local port to Grafana, once per run; the address is left in
+# ${grafana_url}. Returns 0 at once when it is open already, and 1 after a FAIL
+# line when it cannot open. The password is never an argument and never printed.
+open_grafana() {
+  [[ -z "${grafana_url}" ]] || return 0
+  if ! password="$(kctl -n observability get secret grafana-admin \
+    -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)" || [[ -z "${password}" ]]; then
+    fail "grafana: could not read the Grafana admin password from Secret grafana-admin"
+    return 1
+  fi
+  pf_log="$(mktemp)"
+  # kubectl itself is backgrounded (not the kctl function), so $! is its PID and
+  # the EXIT trap can stop it.
+  kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" \
+    -n observability port-forward --address 127.0.0.1 "${GRAFANA_SERVICE}" :80 \
+    >"${pf_log}" 2>&1 &
+  pf_pid=$!
+  local port="" waited=0
+  while [[ -z "${port}" && ${waited} -lt 30 ]]; do
+    port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) ->.*/\1/p' "${pf_log}" | head -n 1)"
+    [[ -n "${port}" ]] || { sleep 1; waited=$((waited + 1)); }
+  done
+  if [[ -z "${port}" ]]; then
+    fail "grafana: could not port-forward to Grafana"
+    cleanup || true # a later check may try again with a fresh forward
+    pf_pid=""
+    pf_log=""
+    return 1
+  fi
+  grafana_url="http://127.0.0.1:${port}"
+}
+
 check_telemetry() {
   epoch="$(date +%s)"
   service="meridian-smoke-${epoch}"
@@ -237,28 +286,8 @@ check_telemetry() {
   done
   pass "telemetry: telemetrygen sent trace, log and metric to ${COLLECTOR_ENDPOINT}"
 
-  if ! password="$(kctl -n observability get secret grafana-admin \
-    -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)" || [[ -z "${password}" ]]; then
-    fail "telemetry: could not read the Grafana admin password from Secret grafana-admin"
-    return
-  fi
-  pf_log="$(mktemp)"
-  # kubectl itself is backgrounded (not the kctl function), so $! is its PID and
-  # the EXIT trap can stop it.
-  kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" \
-    -n observability port-forward --address 127.0.0.1 "${GRAFANA_SERVICE}" :80 \
-    >"${pf_log}" 2>&1 &
-  pf_pid=$!
-  local port="" waited=0
-  while [[ -z "${port}" && ${waited} -lt 30 ]]; do
-    port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) ->.*/\1/p' "${pf_log}" | head -n 1)"
-    [[ -n "${port}" ]] || { sleep 1; waited=$((waited + 1)); }
-  done
-  if [[ -z "${port}" ]]; then
-    fail "telemetry: could not port-forward to Grafana"
-    return
-  fi
-  local proxy="http://127.0.0.1:${port}/api/datasources/proxy/uid"
+  open_grafana || return 0 # it printed the FAIL line
+  local proxy="${grafana_url}/api/datasources/proxy/uid"
 
   # Traces: THE done-when of S006.
   if poll '.traces[0].traceID // empty' \
@@ -285,11 +314,106 @@ check_telemetry() {
   fi
 }
 
+# ── 5. cost panel ────────────────────────────────────────────────────────────
+# The series line. A gateway process exports once a minute, so the ledger says
+# whether a series is due: only attempts settled since the process started can
+# be in Prometheus. The start time is checked before it goes into SQL.
+check_cost_series() {
+  local found started primary answer settled first_settled name got missing series_list query
+  series_list="$(printf '%s, ' "${COST_SERIES[@]}")"
+  series_list="${series_list%, }"
+  local start_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+  local ledger_pattern='^([0-9]+)\|([0-9]*)$' # "<count>|<epoch second>"
+  local query_url="${grafana_url}/api/datasources/proxy/uid/prometheus/api/v1/query"
+  local selector='{__name__=~"meridian_gateway_(tokens|cost_EUR|calls)_total", job="model-gateway"}'
+  if ! found="$(deployed_services)"; then
+    fail "cost series: could not look for the Meridian deployments (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "cost series: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+  # The newest container start among the gateway's pods (RFC 3339, so it sorts).
+  if ! started="$(kctl -n meridian get pod -l app.kubernetes.io/name=model-gateway \
+    -o jsonpath='{range .items[*]}{.status.containerStatuses[0].state.running.startedAt}{"\n"}{end}' |
+    sort | tail -n 1)"; then
+    fail "cost series: could not read the gateway's pods (kubectl's error is above)"
+    return
+  fi
+  if ! [[ "${started}" =~ ${start_pattern} ]]; then
+    fail "cost series: could not read when the gateway process started (the newest model-gateway pod has no running start time in the form 2026-01-31T08:00:00Z)"
+    return
+  fi
+  primary="$(kctl -n meridian get pod \
+    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [[ -z "${primary}" ]]; then
+    fail "cost series: no primary pod found for platform-db"
+    return
+  fi
+  if ! answer="$(kctl -n meridian exec "${primary}" -c postgres -- \
+    psql -d meridian -tAc "SELECT count(*) || '|' || coalesce(floor(extract(epoch FROM min(closed_at)))::bigint::text, '') FROM gateway.usage WHERE state = 'settled' AND closed_at > '${started}'" \
+    2>/dev/null)"; then
+    fail "cost series: could not count the settled attempts in gateway.usage of ${primary}"
+    return
+  fi
+  answer="$(clean_lines "${answer}")"
+  if ! [[ "${answer}" =~ ${ledger_pattern} ]]; then
+    fail "cost series: the ledger's answer was not a count and an epoch second"
+    return
+  fi
+  settled="${BASH_REMATCH[1]}"
+  first_settled="${BASH_REMATCH[2]}"
+  if ((10#${settled} == 0)); then
+    skip "cost series: the gateway has settled no call since it started at ${started} (make demo sends a claim)"
+    return
+  fi
+  if [[ -z "${first_settled}" ]]; then
+    fail "cost series: the ledger has ${settled} settled attempt(s) since ${started} but no time for the first"
+    return
+  fi
+  # The previous process's series stay visible for five minutes after a restart: keep
+  # samples exported since the first settled attempt (`and`: timestamp() drops __name__).
+  query="count by (__name__) (${selector} and (timestamp(${selector}) >= ${first_settled}))"
+  if poll "[.data.result[].metric.__name__] as \$got
+    | if ($(printf '%s\n' "${COST_SERIES[@]}" | jq -R . | jq -sc .) - \$got | length) == 0
+      then \$got | sort | join(\", \") else empty end" \
+    -G "${query_url}" --data-urlencode "query=${query}"; then
+    pass "cost series: ${settled} settled attempt(s) in the ledger since the gateway started at ${started}; Prometheus has ${series_list}"
+    return
+  fi
+  # Which of them did not come: one more look, for the message only.
+  got="$(clean_lines "$(gcurl -G "${query_url}" --data-urlencode "query=${query}" 2>/dev/null |
+    jq -r '[.data.result[].metric.__name__] | join(" ")' 2>/dev/null || true)")"
+  missing=""
+  for name in "${COST_SERIES[@]}"; do
+    [[ " ${got} " == *" ${name} "* ]] || missing="${missing:+${missing}, }${name}"
+  done
+  if [[ "${missing}" == "${series_list}" ]]; then
+    fail "cost series: none of the three series came from the gateway after ${POLL_TIMEOUT}s, though the ledger has ${settled} settled attempt(s) since ${started} (it exports once a minute; is the collector up?)"
+  else
+    fail "cost series: missing ${missing} in Prometheus after ${POLL_TIMEOUT}s"
+  fi
+}
+
+check_cost_panel() {
+  open_grafana || return 0 # it printed the FAIL line
+  if poll '(select(.meta.provisioned == true) | .dashboard.title) // empty' \
+    "${grafana_url}/api/dashboards/uid/${DASHBOARD_UID}"; then
+    pass "dashboard: Grafana serves \"$(clean_lines "${poll_result}")\" (uid ${DASHBOARD_UID}), provisioned from infra/kind/dashboards"
+  else
+    fail "dashboard: Grafana has no provisioned dashboard ${DASHBOARD_UID} after ${POLL_TIMEOUT}s (run make up)"
+  fi
+  check_cost_series
+}
+
 trap cleanup EXIT
 check_edge
 check_database
 check_tools
 check_telemetry
+check_cost_panel
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"
@@ -304,3 +428,4 @@ printf 'See it yourself: make grafana (user admin; password: make grafana-passwo
 printf '  Tempo       TraceQL    { resource.service.name = "%s" }\n' "${service}"
 printf '  Loki        LogQL      {service_name="%s"}\n' "${service}"
 printf '  Prometheus  PromQL     {__name__=~"gen.*", job="%s"}\n' "${service}"
+printf '  Grafana     Dashboards > Meridian: Model Gateway tokens and cost\n'
