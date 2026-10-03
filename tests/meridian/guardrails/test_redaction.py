@@ -32,7 +32,7 @@ PHONES = ["+44 20 7946 0958", "+1 (202) 555-0123", "+36301234567"]
 SMALL_LENGTH = 10_000
 LARGE_LENGTH = 40_000
 MAX_GROWTH = 8
-RUNS = 3
+RUNS = 5
 
 VALID = {
     "email": (
@@ -586,11 +586,14 @@ ADVERSARIAL: dict[str, list[Shape]] = {
 
 
 def _best_time(text: str) -> float:
+    # The thread's CPU time, not the wall clock: under parallel workers (S054)
+    # the wall clock also counts the time this test waited for a CPU, which
+    # measured a linear run at 9 to 11 times.
     best = float("inf")
     for _ in range(RUNS):
-        started = time.perf_counter()
+        started = time.thread_time()
         redact(text)
-        best = min(best, time.perf_counter() - started)
+        best = min(best, time.thread_time() - started)
     return best
 
 

@@ -1,9 +1,13 @@
 """Shared by the database fixtures and the tests that use them."""
 
 import os
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
+import psycopg
+from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 ALLOW_REMOTE_ENV = "MERIDIAN_TEST_DATABASE_ALLOW_REMOTE"
@@ -17,6 +21,55 @@ SERVICE_ROLES = (
     "claims_mcp",
     "knowledge_mcp",
 )
+PASSWORD_BYTES = 24
+# The key under which the xdist controller hands its passwords to a worker.
+WORKERINPUT_KEY = "meridian_test_role_passwords"
+# Every worker takes this advisory lock on the shared admin database, so the
+# workers set the roles up one after another (S054).
+ROLES_LOCK_KEY = "meridian-test-roles"
+
+
+def new_passwords() -> dict[str, str]:
+    """A fresh random password for the owner and each service role."""
+    return {
+        role: secrets.token_urlsafe(PASSWORD_BYTES) for role in (OWNER, *SERVICE_ROLES)
+    }
+
+
+def session_passwords(config: Any) -> dict[str, str]:
+    """The passwords of this test run.
+
+    Under pytest-xdist the controller made them once and put them in
+    ``workerinput``; without xdist (or with ``-n 0``) there is no such
+    attribute and this process makes its own.
+    """
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is None:
+        return new_passwords()
+    return dict(workerinput[WORKERINPUT_KEY])
+
+
+def ensure_roles(admin_dsn: str, passwords: Mapping[str, str]) -> None:
+    """Create the roles if absent; give each its password.
+
+    The roles are cluster-wide, so parallel workers all run this against one
+    server. One transaction under an advisory lock serialises them: without it
+    two workers both find no role and both CREATE it (a UniqueViolation), and
+    two ALTERs of one role can fail with "tuple concurrently updated".
+    """
+    with psycopg.connect(admin_dsn) as admin:
+        admin.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (ROLES_LOCK_KEY,))
+        for role, password in passwords.items():
+            exists = admin.execute(
+                "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
+            ).fetchone()
+            verb = "ALTER" if exists else "CREATE"
+            admin.execute(
+                sql.SQL(
+                    "{} ROLE {} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                    "PASSWORD {}"
+                ).format(sql.SQL(verb), sql.Identifier(role), sql.Literal(password))
+            )
 
 
 @dataclass(frozen=True)

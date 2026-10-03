@@ -33,6 +33,9 @@ PYTEST_DB_CONTAINER ?= meridian-pytest-db
 PYTEST_DB_PORT      ?= 55432
 # Extra pytest arguments for `make pytest-db`, e.g. one test file.
 PYTEST_ARGS         ?=
+# Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
+# number, or auto for one per CPU core; 0 runs the tests in one process.
+PYTEST_WORKERS      ?= auto
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
@@ -120,11 +123,11 @@ lint:
 	uv run ruff format --check .
 	uv run lint-imports
 
-## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default auto; 0 runs them in one process)
 pytest:
-	uv run pytest
+	uv run pytest -n $(PYTEST_WORKERS)
 
-## pytest-db       pytest with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default auto; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
 pytest-db:
 	@set -e; \
 	docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true; \
@@ -140,12 +143,12 @@ pytest-db:
 		sleep 1; \
 	done; \
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
-	MERIDIAN_REQUIRE_DB=1 uv run pytest $(PYTEST_ARGS)
+	MERIDIAN_REQUIRE_DB=1 uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
 ## eval            replay the golden set through the stack with the scripted model (needs Docker), write the report and compare it with the baseline
 eval:
 	mkdir -p $(dir $(EVAL_REPORT))
-	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_REPORT)) $(MAKE) pytest-db PYTEST_ARGS="$(EVAL_TEST) -q"
+	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_REPORT)) $(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) -q"
 	$(MAKE) eval-compare
 
 ## eval-compare    compare a report with the baseline (meridian eval compare)
@@ -155,7 +158,7 @@ eval-compare:
 ## eval-baseline   regenerate the baseline after a reviewed prompt, tool or golden-set change (needs Docker)
 eval-baseline:
 	mkdir -p $(dir $(EVAL_BASELINE))
-	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_BASELINE)) $(MAKE) pytest-db PYTEST_ARGS="$(EVAL_TEST) -q"
+	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_BASELINE)) $(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) -q"
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas and the tool-server contracts under api/mcp
 registry:
