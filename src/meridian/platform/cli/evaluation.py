@@ -8,7 +8,9 @@ import typer
 from meridian.platform.evaluation.compare import compare
 from meridian.platform.evaluation.report import Report, ReportError, load_report
 
-EXIT_USAGE = 2
+EXIT_PASSED = 0
+EXIT_FAILED = 1  # a regression, an absolute failure, a missed target or a drift
+EXIT_UNREADABLE = 2  # a report that cannot be read or is not a valid report
 
 app = typer.Typer(no_args_is_help=True, help="Evaluate a workload.")
 
@@ -34,7 +36,7 @@ def compare_reports(
             typer.echo(f"ERROR {path}: {exc}", err=True)
             unreadable = True
     if unreadable:
-        raise typer.Exit(code=EXIT_USAGE)
+        raise typer.Exit(code=EXIT_UNREADABLE)
     old, new = loaded
     comparison = compare(old, new)
 
@@ -53,5 +55,6 @@ def compare_reports(
         typer.echo(f"ERROR {problem}", err=True)
     if not comparison.passed:
         typer.echo("eval compare: failed")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     typer.echo("eval compare: passed")
+    raise typer.Exit(code=EXIT_PASSED)

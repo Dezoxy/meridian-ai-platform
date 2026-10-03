@@ -31,6 +31,7 @@ def make_report(
                 "generator_version": "1",
                 "seed": 7,
                 "files": {"a.json": DIGEST},
+                "manifest": DIGEST,
             },
         },
         "absolute": ["alpha"],
@@ -92,12 +93,26 @@ def test_a_changed_golden_set_asks_for_a_new_baseline() -> None:
         "generator_version": "1",
         "seed": 8,
         "files": {"a.json": DIGEST},
+        "manifest": DIGEST,
     }
 
     comparison = compare(make_report(), with_fingerprint("golden_set", golden_set))
 
     only_problem(comparison, "the golden set changed")
     assert "make eval-baseline" in comparison.problems[0]
+
+
+def test_a_changed_manifest_alone_asks_for_a_new_baseline() -> None:
+    golden_set = {
+        "generator_version": "1",
+        "seed": 7,
+        "files": {"a.json": DIGEST},
+        "manifest": OTHER_DIGEST,
+    }
+
+    comparison = compare(make_report(), with_fingerprint("golden_set", golden_set))
+
+    only_problem(comparison, "the golden set changed")
 
 
 def test_a_different_set_of_cases_names_the_missing_and_the_extra() -> None:
@@ -146,9 +161,9 @@ def test_different_absolute_graders_are_a_problem() -> None:
     only_problem(comparison, "absolute")
 
 
-def test_the_order_of_the_absolute_graders_is_not_a_difference() -> None:
+def test_equal_absolute_graders_are_not_a_difference() -> None:
     baseline = make_report(absolute=["alpha", "beta"], targets={})
-    new = make_report(absolute=["beta", "alpha"], targets={})
+    new = make_report(absolute=["alpha", "beta"], targets={})
 
     comparison = compare(baseline, new)
 

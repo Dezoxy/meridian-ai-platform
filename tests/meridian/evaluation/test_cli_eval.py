@@ -7,6 +7,11 @@ from typing import Any
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
+from meridian.platform.cli.evaluation import (
+    EXIT_FAILED,
+    EXIT_PASSED,
+    EXIT_UNREADABLE,
+)
 from meridian.platform.evaluation.report import Report, write_report
 
 runner = CliRunner()
@@ -33,6 +38,7 @@ def make_report(
                 "generator_version": "1",
                 "seed": 7,
                 "files": {"a.json": DIGEST},
+                "manifest": DIGEST,
             },
         },
         "absolute": ["alpha"],
@@ -159,6 +165,28 @@ def test_two_unreadable_files_are_both_named(tmp_path: Path) -> None:
     assert result.exit_code == 2, result.output
     assert f"ERROR {baseline}: " in result.stderr
     assert f"ERROR {new}: " in result.stderr
+
+
+def test_a_duplicate_key_exits_2_without_naming_the_key(tmp_path: Path) -> None:
+    baseline = save(make_report(), tmp_path / "baseline.json")
+    new = tmp_path / "new.json"
+    text = baseline.read_text(encoding="utf-8")
+    new.write_text(text.replace('"format": 1,', '"format": 1, "format": 1,'), "utf-8")
+    assert new.read_text(encoding="utf-8") != text
+
+    result = run_compare(baseline, new)
+
+    assert result.exit_code == 2, result.output
+    assert result.stderr == f"ERROR {new}: duplicate key\n"
+    assert result.stdout == ""
+
+
+def test_the_exit_codes_are_named() -> None:
+    assert (EXIT_PASSED, EXIT_FAILED, EXIT_UNREADABLE) == (0, 1, 2)
+
+
+def test_a_crash_does_not_print_local_variables() -> None:
+    assert app.pretty_exceptions_show_locals is False
 
 
 def test_the_eval_group_and_command_have_help() -> None:

@@ -10,7 +10,6 @@ The functions are pure. The caller loads the golden set and the registry and
 decides where the report goes.
 """
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,7 @@ from meridian.platform.evaluation.report import (
     Fingerprints,
     Report,
     ReportError,
-    read_text_file,
+    read_json_file,
 )
 from meridian.platform.registry.models import Registry
 
@@ -141,10 +140,7 @@ def grade(
 def _auto_approval_limit(manifest_path: Path) -> int:
     """The golden set's auto-approval limit, from its manifest; refuse a manifest
     that is not JSON or has no integer limit."""
-    try:
-        manifest = json.loads(read_text_file(manifest_path))
-    except json.JSONDecodeError:
-        raise ReportError("the manifest is not valid JSON") from None
+    manifest = read_json_file(manifest_path)
     limit = manifest.get("auto_approval_limit") if isinstance(manifest, dict) else None
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise ReportError("the manifest has no integer auto_approval_limit")

@@ -314,6 +314,17 @@ def test_a_manifest_without_an_auto_approval_limit_is_refused(tmp_path: Any) -> 
         report_for({}, manifest_path=path)
 
 
+def test_a_manifest_with_a_duplicate_limit_is_refused(tmp_path: Any) -> None:
+    text = MANIFEST.read_text(encoding="utf-8")
+    old = f'"auto_approval_limit": {LIMIT},'
+    assert old in text
+    path = tmp_path / "manifest.json"
+    path.write_text(text.replace(old, f'{old} "auto_approval_limit": 1,'), "utf-8")
+
+    with pytest.raises(ReportError, match="duplicate key"):
+        report_for({}, manifest_path=path)
+
+
 @pytest.mark.parametrize("limit", ["2500", 2500.5, True, None])
 def test_a_manifest_whose_limit_is_not_an_integer_is_refused(
     tmp_path: Any, limit: Any
