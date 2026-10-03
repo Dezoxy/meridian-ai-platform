@@ -10,8 +10,10 @@ from psycopg import sql
 from meridian.platform.common.db import connect
 
 SCHEMAS = ("audit", "claims", "gateway", "knowledge", "policy", "runtime")
-# The services that append to the audit log; claims_api writes no audit event.
+# The services that append to the audit log. claims_api joined them in 0009
+# (S015: it records the claim's state changes).
 AUDIT_WRITERS = (
+    "claims_api",
     "agent_runtime",
     "model_gateway",
     "policy_mcp",
@@ -95,8 +97,6 @@ def test_claims_api_stores_a_claim_and_a_proposal(
         "UPDATE audit.events SET outcome = 'x'",
         "DELETE FROM audit.events",
         "SELECT * FROM audit.events",
-        "INSERT INTO audit.events (service, event, outcome) "
-        "VALUES ('claims-api', 'test', 'ok')",
         "UPDATE claims.claims SET tenant = 'x'",
         "DELETE FROM claims.claims",
         "CREATE TABLE claims.extra (id int)",
@@ -434,16 +434,18 @@ def test_no_service_role_reads_the_audit_log(
         run(migrated_database, role, "SELECT count(*) FROM audit.events")
 
 
-def test_claims_api_cannot_even_reach_the_audit_schema(
+def test_claims_api_reaches_the_audit_schema_to_append_and_nothing_more(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(
         migrated_database,
         "claims_api",
-        "SELECT has_schema_privilege('audit', 'USAGE')",
+        "SELECT has_schema_privilege('audit', 'USAGE'), "
+        "has_schema_privilege('audit', 'CREATE'), "
+        "has_table_privilege('audit.events', 'SELECT')",
     )
 
-    assert rows == [(False,)]
+    assert rows == [(True, False, False)]
 
 
 @pytest.mark.parametrize("role", SERVICE_ROLES)

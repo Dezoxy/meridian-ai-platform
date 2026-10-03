@@ -174,3 +174,25 @@ tools:
         replayed: {type: boolean}
       required: [request_id, replayed]
       additionalProperties: false
+
+  - id: approval_outcome
+    server: claims-mcp
+    description: >-
+      The outcome an adjuster recorded for this run's approval request. The
+      answer has no outcome while none is recorded.
+    effect: read
+    scope: claims:approval:read
+    input_schema:
+      type: object
+      properties:
+        claim_id: {type: string, pattern: "^CLM-[0-9]{4}$", maxLength: 8}
+      required: [claim_id]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum: [approve, reject, request_documents]
+      required: []
+      additionalProperties: false

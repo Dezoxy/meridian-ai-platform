@@ -107,6 +107,50 @@
         "meridian/idempotency-key-required": true,
         "meridian/approval-required": false
       }
+    },
+    {
+      "name": "approval_outcome",
+      "description": "The outcome an adjuster recorded for this run's approval request. The answer has no outcome while none is recorded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "pattern": "^CLM-[0-9]{4}$",
+            "maxLength": 8
+          }
+        },
+        "required": [
+          "claim_id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_documents"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "meridian/scope": "claims:approval:read",
+        "meridian/idempotency-key-required": false,
+        "meridian/approval-required": false
+      }
     }
   ]
 }

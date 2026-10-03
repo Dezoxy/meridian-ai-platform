@@ -125,6 +125,13 @@ TOOLS: dict[str, tuple[str, str, str, str, dict[str, Any]]] = {
         "claim_id",
         {"request_id": UNKNOWN_UUID, "replayed": False},
     ),
+    "approval_outcome": (
+        "claims-mcp",
+        "claims_mcp",
+        "claims:approval:read",
+        "claim_id",
+        {},
+    ),
     "wording_search": (
         "knowledge-mcp",
         "knowledge_mcp",
@@ -1128,7 +1135,7 @@ def test_a_tool_without_an_output_schema_refuses_to_build(
 
 
 def claims_handlers(bound_argument: str) -> list[ToolHandler]:
-    first, second = Spy().handlers("claims-mcp")
+    first, *others = Spy().handlers("claims-mcp")
     bound = ToolHandler(
         tool=first.tool,
         scope=first.scope,
@@ -1136,7 +1143,7 @@ def claims_handlers(bound_argument: str) -> list[ToolHandler]:
         bound_to="claim_id",
         run=first.run,
     )
-    return [bound, second]
+    return [bound, *others]
 
 
 def test_a_bound_argument_the_schema_does_not_have_refuses_to_build(

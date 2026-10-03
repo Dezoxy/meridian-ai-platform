@@ -1,11 +1,16 @@
-"""The triage graph (S014): five nodes, the tools in a fixed order, one model call.
+"""The triage graph (S014, S015): seven nodes, the tools in a fixed order, one
+model call, and a pause for an adjuster.
 
 No database and no tool server: a stub answers each tool from the synthetic data
 and records the calls, and a stub stands in for the model client. The stub
 ``wording_search`` returns every clause of the policy's wording (the real search
 is the next contract's). The first group runs the 40 golden claims, the second
 pins the full proposal of one claim per reason, the third the calls, the fourth
-what fails and what does not, the fifth what the state and the logs hold.
+what fails and what does not, the fifth what the state and the logs hold, the
+sixth the pause: the approval request, the decision read from the record on
+resume (never from the resume value), the note.
+Every graph is compiled with a ``MemorySaver`` under one thread ID, as the
+runtime compiles it with its checkpointer.
 """
 
 import json
@@ -17,6 +22,9 @@ from types import MappingProxyType
 from typing import Any, cast
 
 import pytest
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 from pydantic import ValidationError
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
@@ -42,6 +50,7 @@ from meridian.workloads.claims_triage import assessment as assessment_module
 from meridian.workloads.claims_triage import wording as wording_module
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
 from meridian.workloads.claims_triage.graph import build
+from meridian.workloads.claims_triage.models import DECISION_NOTES
 from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.wording import AMOUNTS_PROBE, TIMING_PROBE
 
@@ -62,6 +71,13 @@ POLICY_FIELDS = (
 )
 RATIONALE = "The description states no excluded fact."
 LOGGER = "meridian.workloads.claims_triage"
+REQUEST_ID = "5b0b0b0e-8f1c-4c63-9d0a-2f6f3a1d7e11"
+NOTE_ID = "c1d2e3f4-0a1b-4c2d-8e3f-4a5b6c7d8e9f"
+WRITE_ANSWERS: dict[str, dict[str, Any]] = {
+    "request_approval": {"request_id": REQUEST_ID, "replayed": False},
+    "add_claim_note": {"note_id": NOTE_ID, "replayed": False},
+}
+THREAD = {"configurable": {"thread_id": "claims-graph-test"}}
 
 
 def load(name: str) -> Any:
@@ -135,10 +151,16 @@ class StubModel:
 
 class StubTools:
     """Stands in for ToolClient: answers the three read tools from the synthetic
-    data and records every call. A tool it does not know (a write tool) raises.
+    data and the two write tools with a fixed ID, and records every call. A read
+    call goes to ``calls`` and a write call, with its step, to ``writes``: a test
+    of the read order is not about the writes, and a test of the writes is not
+    about the reads. A tool it does not know raises.
 
     ``errors`` makes a tool raise; ``answers`` replaces a tool's answer; ``tamper``
-    changes the answer of the n-th ``wording_search`` call."""
+    changes the answer of the n-th ``wording_search`` call. ``recorded`` is the
+    decision the Claims API recorded, which ``approval_outcome`` answers (a test
+    sets it between the pause and the resume, as the API does); with none the
+    answer holds no outcome."""
 
     def __init__(
         self,
@@ -146,26 +168,35 @@ class StubTools:
         errors: dict[str, Exception] | None = None,
         answers: dict[str, dict[str, Any]] | None = None,
         tamper: Callable[[int, dict[str, Any]], dict[str, Any]] | None = None,
+        recorded: str | None = None,
     ) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.writes: list[tuple[str, dict[str, Any], str | None]] = []
         self.errors = errors or {}
         self.answers = answers or {}
         self.tamper = tamper
+        self.recorded = recorded
         self.searches = 0
 
     def call(
         self, tool: str, arguments: dict[str, Any], *, step: str | None = None
     ) -> ToolResult:
-        self.calls.append((tool, dict(arguments)))
-        assert step is None, "a read tool takes no step"
+        if tool in WRITE_ANSWERS:
+            self.writes.append((tool, dict(arguments), step))
+        else:
+            self.calls.append((tool, dict(arguments)))
+            assert step is None, "a read tool takes no step"
         if tool in self.errors:
             raise self.errors[tool]
         if tool in self.answers:
             return ToolResult(self.answers[tool], replayed=False, call_id=None)
+        if tool in WRITE_ANSWERS:
+            return ToolResult(WRITE_ANSWERS[tool], replayed=False, call_id=None)
         data = {
             "policy_lookup": self._policy,
             "claim_history": self._history,
             "wording_search": self._search,
+            "approval_outcome": self._outcome,
         }[tool](arguments)
         return ToolResult(data, replayed=False, call_id=None)
 
@@ -177,6 +208,9 @@ class StubTools:
         # The tool's schema has no null: an absent date or sum is left out.
         policy = {f: record[f] for f in POLICY_FIELDS if record.get(f) is not None}
         return {"found": True, "policy": policy}
+
+    def _outcome(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {} if self.recorded is None else {"outcome": self.recorded}
 
     @staticmethod
     def _history(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -202,11 +236,29 @@ class StubTools:
         return [tool for tool, _ in self.calls]
 
 
+def compiled(
+    model: StubModel, tools: StubTools, saver: MemorySaver | None = None
+) -> CompiledStateGraph:
+    graph = build(cast(ModelClient, model), cast(ToolClient, tools))
+    return graph.compile(checkpointer=saver or MemorySaver())
+
+
 def run_graph(
     model: StubModel, tools: StubTools, claim: dict[str, Any]
 ) -> dict[str, Any]:
-    graph = build(cast(ModelClient, model), cast(ToolClient, tools))
-    return graph.compile().invoke({"claim": claim})
+    """The state a run reaches: where it pauses for an adjuster, the state so far
+    (without LangGraph's own ``__interrupt__`` key)."""
+    result = compiled(model, tools).invoke({"claim": claim}, THREAD)
+    result.pop("__interrupt__", None)
+    return result
+
+
+def resume(graph: CompiledStateGraph, value: Any) -> dict[str, Any]:
+    """Resume the one pending pause as the runtime does (``runs._resume_command``):
+    keyed by the interrupt's ID, so ``value`` reaches the node verbatim, ``{}``
+    and a non-dict included."""
+    (pending,) = graph.get_state(THREAD).interrupts
+    return graph.invoke(Command(resume={pending.id: value}), THREAD)
 
 
 def triage(
@@ -272,6 +324,9 @@ def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) ->
     assert (len(model.calls) == 1) == (proposal.assessment != "not_needed")
     assert (proposal.drafted_by is None) == (proposal.assessment == "not_needed")
     assert set(tools.names()) <= set(READ_TOOLS)
+    assert [w[0] for w in tools.writes] == (
+        ["request_approval"] if proposal.route == "adjuster" else []
+    )
 
 
 # -- one claim per reason -----------------------------------------------------
@@ -676,12 +731,16 @@ def test_the_model_call_carries_the_assessments_fixed_shape() -> None:
 
 
 @pytest.mark.parametrize("claim_id", list(CLAIMS))
-def test_no_run_calls_a_write_tool_or_the_model_twice(claim_id: str) -> None:
+def test_a_run_before_any_decision_writes_at_most_the_approval_request(
+    claim_id: str,
+) -> None:
     model, tools = golden_model(claim_id), StubTools()
 
-    triage(claim_id, model, tools)
+    output, _, _ = triage(claim_id, model, tools)
 
     assert set(tools.names()) <= set(READ_TOOLS)
+    assert len(tools.writes) == (1 if output["route"] == "adjuster" else 0)
+    assert {tool for tool, _, _ in tools.writes} <= {"request_approval"}
     assert len(model.calls) <= 1
 
 
@@ -811,6 +870,8 @@ STATE_KEYS = {
     "chunks",
     "assessed",
     "output",
+    "request_id",
+    "decision",
 }
 
 
@@ -869,6 +930,386 @@ def test_no_log_line_and_no_error_holds_claim_text_or_a_tool_result(
     assert not any(CANARY in record.getMessage() for record in caplog.records)
 
 
+# -- the pause ----------------------------------------------------------------
+
+DECISIONS = ("approve", "reject", "request_documents")
+# A claim per way to reach the adjuster route: a rule, an inactive policy, and
+# no policy at all.
+ADJUSTER_CLAIMS = [
+    pytest.param("CLM-0004", {}, "over_threshold", id="over-threshold"),
+    pytest.param("CLM-0002", {}, "policy_inactive", id="policy-inactive"),
+    pytest.param(
+        "CLM-0001", {"policy_number": "POL-9999"}, "policy_not_found", id="no-policy"
+    ),
+]
+
+
+def paused(
+    claim_id: str = "CLM-0004",
+    tools: StubTools | None = None,
+    model: StubModel | None = None,
+    saver: MemorySaver | None = None,
+    **changes: Any,
+) -> tuple[CompiledStateGraph, StubTools]:
+    """A graph that ran a claim up to its pause."""
+    tools = tools or StubTools()
+    graph = compiled(model or StubModel(), tools, saver)
+    graph.invoke({"claim": facts(claim_id, **changes)}, THREAD)
+    return graph, tools
+
+
+def approval_request(reason: str, claim_id: str = "CLM-0004") -> tuple[Any, ...]:
+    return (
+        "request_approval",
+        {"claim_id": claim_id, "reason": reason},
+        "request-approval",
+    )
+
+
+def decision_note(decision: str, claim_id: str = "CLM-0004") -> tuple[Any, ...]:
+    return (
+        "add_claim_note",
+        {"claim_id": claim_id, "note": DECISION_NOTES[decision]},
+        "decision-note",
+    )
+
+
+@pytest.mark.parametrize(("claim_id", "changes", "reason"), ADJUSTER_CLAIMS)
+def test_a_claim_routed_to_an_adjuster_requests_approval_and_pauses(
+    claim_id: str, changes: dict[str, Any], reason: str
+) -> None:
+    graph, tools = paused(claim_id, **changes)
+
+    snapshot = graph.get_state(THREAD)
+    assert snapshot.next == ("await_decision",)
+    (pending,) = snapshot.interrupts
+    assert pending.value == {"request_id": REQUEST_ID}
+    assert tools.writes == [approval_request(reason, claim_id)]
+    proposal = TriageProposal.model_validate(snapshot.values["output"])
+    assert (proposal.route, proposal.reason) == ("adjuster", reason)
+    assert snapshot.values["request_id"] == REQUEST_ID
+    assert snapshot.values["decision"] is None
+
+
+@pytest.mark.parametrize("decision", DECISIONS)
+def test_a_decision_is_noted_with_its_fixed_text_and_the_run_completes(
+    decision: str,
+) -> None:
+    graph, tools = paused()
+    output = graph.get_state(THREAD).values["output"]
+    tools.recorded = decision
+
+    result = resume(graph, {})
+
+    assert "__interrupt__" not in result
+    snapshot = graph.get_state(THREAD)
+    assert snapshot.next == ()
+    assert snapshot.interrupts == ()
+    assert tools.calls[-1] == ("approval_outcome", {"claim_id": "CLM-0004"})
+    assert tools.names().count("approval_outcome") == 1
+    assert tools.writes == [approval_request("over_threshold"), decision_note(decision)]
+    assert snapshot.values["decision"] == decision
+    assert snapshot.values["request_id"] == REQUEST_ID
+    assert snapshot.values["output"] == output
+
+
+def test_the_three_notes_are_different_fixed_texts() -> None:
+    assert set(DECISION_NOTES) == set(DECISIONS)
+    assert len(set(DECISION_NOTES.values())) == 3
+    assert all(1 <= len(note) <= 2000 for note in DECISION_NOTES.values())
+
+
+def test_a_graph_compiled_anew_resumes_the_run_from_the_checkpoint() -> None:
+    saver = MemorySaver()
+    paused(saver=saver)
+    tools = StubTools(recorded="approve")
+    graph = compiled(StubModel(), tools, saver)
+
+    resume(graph, {})
+
+    assert tools.writes == [decision_note("approve")]
+    assert tools.names() == ["approval_outcome"]
+    assert graph.get_state(THREAD).values["decision"] == "approve"
+
+
+@pytest.mark.parametrize(
+    ("claim_id", "route"),
+    [
+        ("CLM-0011", "auto_approve"),
+        ("CLM-0005", "auto_approve"),
+        ("CLM-0003", "request_documents"),
+    ],
+)
+def test_the_other_routes_complete_without_a_write_or_a_pause(
+    claim_id: str, route: str
+) -> None:
+    model = golden_model(claim_id)
+    tools = StubTools()
+    graph = compiled(model, tools)
+
+    result = graph.invoke({"claim": facts(claim_id)}, THREAD)
+
+    assert "__interrupt__" not in result
+    assert result["output"]["route"] == route
+    assert (result["request_id"], result["decision"]) == (None, None)
+    snapshot = graph.get_state(THREAD)
+    assert (snapshot.next, snapshot.interrupts) == ((), ())
+    assert tools.writes == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"decision": "reject"}, id="another-word"),
+        pytest.param({"decision": "approve"}, id="the-same-word"),
+        pytest.param({"decision": "escalate"}, id="unknown-word"),
+        pytest.param({"decision": "approve", "note": CANARY}, id="forged-note"),
+        pytest.param({}, id="empty-dict"),
+        pytest.param("reject", id="bare-string"),
+        pytest.param(["reject"], id="list"),
+        pytest.param(5, id="number"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_the_run_reads_the_record_and_never_the_resume_value(value: Any) -> None:
+    """T-31: the Claims API records the decision, the run only reads it. Whatever
+    the resume carries, the note and the state follow the record."""
+    graph, tools = paused()
+    tools.recorded = "approve"
+
+    resume(graph, value)
+
+    assert tools.writes == [
+        approval_request("over_threshold"),
+        decision_note("approve"),
+    ]
+    assert graph.get_state(THREAD).values["decision"] == "approve"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param({}, id="no-outcome"),
+        pytest.param({"outcome": None}, id="null-outcome"),
+    ],
+)
+def test_a_run_with_no_recorded_decision_fails_before_any_write(
+    answer: dict[str, Any],
+) -> None:
+    tools = StubTools(answers={"approval_outcome": answer})
+    graph, _ = paused(tools=tools)
+
+    with pytest.raises(GraphFailure) as raised:
+        resume(graph, {"decision": "approve"})
+
+    assert raised.value.code == "decision-not-recorded"
+    assert tools.writes == [approval_request("over_threshold")]
+    snapshot = graph.get_state(THREAD)
+    # What the runtime reads to keep the run AwaitingApproval.
+    assert len(snapshot.interrupts) == 1
+    assert snapshot.values["decision"] is None
+
+
+def test_a_run_that_found_no_decision_completes_when_one_is_recorded() -> None:
+    graph, tools = paused()
+    with pytest.raises(GraphFailure):
+        resume(graph, {})
+    tools.recorded = "request_documents"
+
+    resume(graph, {})
+
+    assert tools.writes == [
+        approval_request("over_threshold"),
+        decision_note("request_documents"),
+    ]
+    assert graph.get_state(THREAD).values["decision"] == "request_documents"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param({"outcome": "escalate"}, id="unknown-word"),
+        pytest.param({"outcome": "APPROVE"}, id="capitals"),
+        pytest.param({"outcome": " approve"}, id="padded"),
+        pytest.param({"outcome": ["approve"]}, id="list-word"),
+        pytest.param({"outcome": 1}, id="number-word"),
+        pytest.param({"outcome": "approve", "note": "ok"}, id="extra-field"),
+        pytest.param({"Outcome": "approve"}, id="other-key"),
+        pytest.param({"decision": "approve"}, id="another-key"),
+        pytest.param({"outcome": f"{CANARY}-word", CANARY: CANARY}, id="canary"),
+    ],
+)
+def test_an_outcome_answer_that_does_not_fit_fails_the_run_before_any_write(
+    answer: dict[str, Any],
+) -> None:
+    tools = StubTools(answers={"approval_outcome": answer})
+    graph, _ = paused(tools=tools)
+
+    with pytest.raises(GraphFailure) as raised:
+        resume(graph, {})
+
+    assert raised.value.code == "approval-outcome-unfit"
+    assert CANARY not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert tools.writes == [approval_request("over_threshold")]
+
+
+def test_a_rerun_of_the_approval_request_sends_the_same_payload_and_step() -> None:
+    """T-23: the idempotency key is the run, the tool and the step, so a node
+    that runs again must send the same payload under the same step and be
+    answered with the stored request."""
+    tools = StubTools()
+    graph = build(cast(ModelClient, StubModel()), cast(ToolClient, tools))
+    state = {
+        "claim": facts("CLM-0004"),
+        "output": expected_proposal(reason="over_threshold"),
+    }
+    node = graph.nodes["request_approval"].runnable
+
+    first, second = node.invoke(state), node.invoke(state)
+
+    assert first == second == {"request_id": REQUEST_ID}
+    assert tools.writes == [approval_request("over_threshold")] * 2
+
+
+def test_a_run_replayed_from_the_checkpoint_before_the_request_sends_it_again() -> None:
+    graph, tools = paused()
+    (before,) = [
+        s for s in graph.get_state_history(THREAD) if s.next == ("request_approval",)
+    ]
+
+    graph.invoke(None, before.config)
+
+    assert tools.writes == [approval_request("over_threshold")] * 2
+    assert graph.get_state(THREAD).next == ("await_decision",)
+
+
+def test_a_resume_that_failed_after_its_note_sends_the_same_note_again() -> None:
+    """The node that paused runs from its start when the run resumes, so a
+    resume that failed after sending the note sends it again: the same one."""
+    tools = StubTools(answers={"add_claim_note": {}}, recorded="reject")
+    graph, _ = paused(tools=tools)
+    with pytest.raises(GraphFailure):
+        resume(graph, {})
+    del tools.answers["add_claim_note"]
+
+    resume(graph, {})
+
+    assert tools.writes[1:] == [decision_note("reject")] * 2
+    assert graph.get_state(THREAD).values["decision"] == "reject"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param({"request_id": REQUEST_ID}, id="no-replayed"),
+        pytest.param({"request_id": "not-a-uuid", "replayed": False}, id="not-a-uuid"),
+        pytest.param({"request_id": REQUEST_ID, "replayed": "yes"}, id="not-a-bool"),
+        pytest.param(
+            {"request_id": REQUEST_ID, "replayed": False, "more": 1}, id="extra-field"
+        ),
+        pytest.param({"request_id": f"{CANARY}-id", "replayed": CANARY}, id="canary"),
+    ],
+)
+def test_an_approval_answer_that_does_not_fit_fails_the_run(
+    answer: dict[str, Any],
+) -> None:
+    tools = StubTools(answers={"request_approval": answer})
+
+    with pytest.raises(GraphFailure) as raised:
+        paused(tools=tools)
+
+    assert raised.value.code == "approval-request-unfit"
+    assert CANARY not in str(raised.value)
+    assert len(tools.writes) == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param({"note_id": NOTE_ID}, id="no-replayed"),
+        pytest.param({"note_id": "not-a-uuid", "replayed": False}, id="not-a-uuid"),
+        pytest.param({"note_id": NOTE_ID, "replayed": 3}, id="not-a-bool"),
+        pytest.param({"request_id": NOTE_ID, "replayed": False}, id="other-key"),
+        pytest.param({"note_id": f"{CANARY}-id", "replayed": CANARY}, id="canary"),
+    ],
+)
+def test_a_note_answer_that_does_not_fit_fails_the_run(
+    answer: dict[str, Any],
+) -> None:
+    tools = StubTools(answers={"add_claim_note": answer}, recorded="approve")
+    graph, _ = paused(tools=tools)
+
+    with pytest.raises(GraphFailure) as raised:
+        resume(graph, {})
+
+    assert raised.value.code == "decision-note-unfit"
+    assert CANARY not in str(raised.value)
+    assert [w[0] for w in tools.writes] == ["request_approval", "add_claim_note"]
+
+
+@pytest.mark.parametrize("tool", ["request_approval", "add_claim_note"])
+def test_a_write_tool_error_fails_the_run_unchanged(tool: str) -> None:
+    error = ToolRefused(tool, "idempotency-conflict")
+    tools = StubTools(errors={tool: error}, recorded="approve")
+
+    with pytest.raises(ToolRefused) as raised:
+        graph, _ = paused(tools=tools)
+        resume(graph, {})
+
+    assert raised.value is error
+
+
+def test_the_state_after_a_resumed_run_holds_only_plain_data() -> None:
+    graph, tools = paused()
+    tools.recorded = "request_documents"
+    resume(graph, {})
+
+    values = graph.get_state(THREAD).values
+
+    assert set(values) == STATE_KEYS
+    assert (values["request_id"], values["decision"]) == (
+        REQUEST_ID,
+        "request_documents",
+    )
+    assert_plain(values)
+
+
+def test_no_log_line_and_no_error_of_the_pause_holds_claim_text_or_a_tool_result(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    description = f"A tree fell on the car. {CANARY}-claim"
+    unfit = {"request_id": f"{CANARY}-id", "replayed": f"{CANARY}-flag"}
+
+    graph, _ = paused(tools=StubTools(recorded="approve"), description=description)
+    resume(graph, {})
+    with pytest.raises(GraphFailure) as bad_request:
+        paused(tools=StubTools(answers={"request_approval": unfit}))
+    graph, _ = paused(
+        tools=StubTools(answers={"add_claim_note": unfit}, recorded="approve")
+    )
+    with pytest.raises(GraphFailure) as bad_note:
+        resume(graph, {})
+    graph, _ = paused(
+        tools=StubTools(answers={"approval_outcome": {"outcome": f"{CANARY}-word"}})
+    )
+    with pytest.raises(GraphFailure) as bad_decision:
+        resume(graph, {f"{CANARY}-key": f"{CANARY}-word"})
+
+    assert [failure_reason(e.value) for e in (bad_request, bad_note, bad_decision)] == [
+        "approval-request-unfit",
+        "decision-note-unfit",
+        "approval-outcome-unfit",
+    ]
+    assert not any(
+        CANARY in str(e.value) for e in (bad_request, bad_note, bad_decision)
+    )
+    assert not any(CANARY in record.getMessage() for record in caplog.records)
+
+
 # -- the factory --------------------------------------------------------------
 
 
@@ -878,7 +1319,7 @@ def test_the_graph_is_returned_uncompiled() -> None:
     assert not hasattr(graph, "invoke")
 
 
-def test_the_graph_has_five_nodes_in_a_line_with_one_branch() -> None:
+def test_the_graph_has_seven_nodes_and_two_branches() -> None:
     graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
 
     assert list(graph.nodes) == [
@@ -887,6 +1328,8 @@ def test_the_graph_has_five_nodes_in_a_line_with_one_branch() -> None:
         "retrieve_terms",
         "assess",
         "propose",
+        "request_approval",
+        "await_decision",
     ]
 
 

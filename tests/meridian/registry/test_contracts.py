@@ -80,7 +80,11 @@ def test_a_server_with_one_tool_lacking_an_output_schema_is_not_published(
 def test_a_listing_names_each_tool_with_its_schemas_and_hints(registry) -> None:
     listing = tool_listing(registry, "claims-mcp")
 
-    assert [t["name"] for t in listing] == ["add_claim_note", "request_approval"]
+    assert [t["name"] for t in listing] == [
+        "add_claim_note",
+        "request_approval",
+        "approval_outcome",
+    ]
     first = listing[0]
     assert list(first) == [
         "name",

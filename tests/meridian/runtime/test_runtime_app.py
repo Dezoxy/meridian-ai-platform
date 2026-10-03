@@ -1,20 +1,23 @@
-"""POST /runs and GET /runs/{id} with stub graphs (no workload needed)."""
+"""POST /runs, POST /runs/{id}/resume and GET /runs/{id} with stub graphs (no
+workload needed)."""
 
 import contextlib
 import json
 import logging
+import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, TypedDict, get_args
 
 import httpx
 import psycopg
 import pytest
-from dbsupport import DatabaseHandle
+from dbsupport import OWNER, DatabaseHandle
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -34,12 +37,14 @@ from toolsupport import POLICY, policy_server, seed_world
 
 import meridian.runtime as meridian_runtime
 from meridian.platform.common import audit
+from meridian.platform.common.db import connect
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.runtime import app as runtime_app
 from meridian.runtime import graphs, runs
 from meridian.runtime.app import create_app
+from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.graphs import GraphLoadError
 from meridian.runtime.model_client import ModelClient
@@ -161,6 +166,12 @@ def start(client: TestClient, **overrides: Any) -> httpx.Response:
     return client.post("/runs", json=body)
 
 
+def read(client: TestClient, run_id: object, **overrides: str) -> httpx.Response:
+    """GET a run's status as the tenant and reference ``start`` used."""
+    params = {"tenant": "claims-triage", "reference": "CLM-0001"} | overrides
+    return client.get(f"/runs/{run_id}", params=params)
+
+
 def run_rows(db: DatabaseHandle) -> list[tuple]:
     return owner_rows(
         db,
@@ -221,7 +232,7 @@ def test_a_run_completes_is_stored_audited_and_readable(
     assert len(node_spans) == 1
     assert node_spans[0].context.trace_id == run_span.context.trace_id
 
-    status_response = client.get(f"/runs/{run_id}")
+    status_response = read(client, run_id)
 
     assert status_response.status_code == 200
     status_body = status_response.json()
@@ -643,7 +654,7 @@ def test_when_the_run_row_cannot_be_written_no_graph_runs(
     register(monkeypatch, counting)
     monkeypatch.setattr(runs, "connect", no_database)
 
-    response = start(make_client(None))
+    response = start(make_client(None, checkpointer=MemorySaver()))
 
     assert response.status_code == 503
     assert "hunter2" not in response.text
@@ -651,15 +662,102 @@ def test_when_the_run_row_cannot_be_written_no_graph_runs(
     assert node_calls == []
 
 
+def test_when_the_saver_cannot_connect_no_run_starts(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node_calls: list[str] = []
+
+    def counting(model: ModelClient, tools: ToolClient) -> StateGraph:
+        return graph_of(lambda state: node_calls.append("ran") or {"output": {}})
+
+    @contextlib.contextmanager
+    def refused(dsn: str) -> Iterator[None]:
+        raise psycopg.OperationalError(f"password=hunter2 {CLAIM_TEXT}")
+        yield
+
+    register(monkeypatch, counting)
+    monkeypatch.setattr(runtime_app, "open_saver", refused)
+    exporter = InMemorySpanExporter()
+
+    response = start(make_client(fresh_database, exporter=exporter))
+
+    # The answer start_run's own OperationalError gets, with no row and no run.
+    assert response.status_code == 503
+    assert "hunter2" not in response.text
+    assert CLAIM_TEXT not in response.text
+    assert node_calls == []
+    assert run_rows(fresh_database) == []
+    assert_spans_hold_no_exception_and_no_canary(exporter, CLAIM_TEXT)
+    (run_span,) = [s for s in exporter.get_finished_spans() if s.name == "runtime.run"]
+    assert run_span.status.status_code is StatusCode.ERROR
+
+
 # ── GET /runs/{id} ──────────────────────────────────────────────────────────
 def test_an_unknown_run_is_404(fresh_database: DatabaseHandle) -> None:
-    response = make_client(fresh_database).get(f"/runs/{uuid.uuid4()}")
+    response = read(make_client(fresh_database), uuid.uuid4())
 
     assert response.status_code == 404
 
 
 def test_a_malformed_run_id_is_422(fresh_database: DatabaseHandle) -> None:
-    assert make_client(fresh_database).get("/runs/not-a-uuid").status_code == 422
+    assert read(make_client(fresh_database), "not-a-uuid").status_code == 422
+
+
+def test_a_read_with_the_runs_tenant_and_reference_is_200(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, ok_factory)
+    client = make_client(fresh_database)
+    run_id = start(client).json()["run_id"]
+
+    response = read(client, run_id)
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run_id
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"tenant": "evaluation"}, {"reference": "CLM-0002"}, {"run_id": "unknown"}],
+    ids=["wrong-tenant", "wrong-reference", "unknown-run"],
+)
+def test_a_read_naming_the_wrong_tenant_reference_or_run_gets_one_404_body(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, str],
+) -> None:
+    register(monkeypatch, ok_factory)
+    client = make_client(fresh_database)
+    run_id = start(client).json()["run_id"]
+    fields = dict(overrides)
+    asked = uuid.uuid4() if fields.pop("run_id", None) else run_id
+
+    response = read(client, asked, **fields)
+
+    # No answer says that a run ID exists under another tenant (T-10): the body
+    # is the unknown run's, and the resume's.
+    assert response.status_code == 404
+    assert response.json() == {"detail": "no such run"}
+    assert response.json() == read(client, uuid.uuid4()).json()
+    assert response.text == read(client, uuid.uuid4()).text
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"tenant": "claims-triage"},
+        {"reference": "CLM-0001"},
+        {"tenant": "claims-triage", "reference": "not valid!"},
+    ],
+    ids=["neither", "no-reference", "no-tenant", "malformed-reference"],
+)
+def test_a_read_without_a_valid_tenant_and_reference_is_422(
+    fresh_database: DatabaseHandle, params: dict[str, str]
+) -> None:
+    response = make_client(fresh_database).get(f"/runs/{uuid.uuid4()}", params=params)
+
+    assert response.status_code == 422
 
 
 # ── request validation ──────────────────────────────────────────────────────
@@ -743,7 +841,8 @@ def test_a_database_error_in_the_run_span_leaves_no_message_in_any_span(
     monkeypatch.setattr(runs, "connect", refuse)
     exporter = InMemorySpanExporter()
 
-    response = start(make_client(None, exporter=exporter))
+    # A saver is injected: the PostgreSQL one would be refused first (below).
+    response = start(make_client(None, exporter=exporter, checkpointer=MemorySaver()))
 
     assert response.status_code == 500
     assert CLAIM_TEXT not in response.text
@@ -942,6 +1041,1305 @@ def test_the_checkpoint_is_kept_while_the_run_awaits_approval(
 
     assert response.json()["status"] == "AwaitingApproval"
     assert list(saver.list(None)) != []
+
+
+# ── the PostgreSQL saver (no injected checkpointer) ─────────────────────────
+CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+
+
+def pausing_factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+    return graph_of(lambda state: {"output": {"answer": interrupt("approve?")}})
+
+
+def checkpoint_counts(db: DatabaseHandle, thread_id: uuid.UUID) -> dict[str, int]:
+    """The rows of one thread in each checkpoint table, read as the owner."""
+    return {
+        table: owner_rows(
+            db,
+            f"SELECT count(*) FROM runtime.{table} WHERE thread_id = %s",  # noqa: S608
+            (str(thread_id),),
+        )[0][0]
+        for table in CHECKPOINT_TABLES
+    }
+
+
+def record_puts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Count the checkpoints the PostgreSQL saver writes, so that a test of
+    their deletion can tell a deletion from nothing ever having been written."""
+    puts: list[str] = []
+    real_put = PostgresSaver.put
+
+    def recording_put(self: PostgresSaver, *args: Any, **kwargs: Any) -> Any:
+        puts.append("put")
+        return real_put(self, *args, **kwargs)
+
+    monkeypatch.setattr(PostgresSaver, "put", recording_put)
+    return puts
+
+
+def the_only_thread(db: DatabaseHandle) -> uuid.UUID:
+    ((_, thread_id, *_),) = run_rows(db)
+    return thread_id
+
+
+def test_a_run_that_completes_leaves_no_checkpoint_row(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, ok_factory)
+    puts = record_puts(monkeypatch)
+
+    response = start(make_client(fresh_database))
+
+    assert response.json()["status"] == "Completed"
+    assert puts, "the run never wrote a checkpoint, so none could be deleted"
+    assert checkpoint_counts(fresh_database, the_only_thread(fresh_database)) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_a_run_that_fails_leaves_no_checkpoint_row(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            raise RuntimeError("boom")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+    puts = record_puts(monkeypatch)
+
+    response = start(make_client(fresh_database))
+
+    assert response.json()["status"] == "Failed"
+    assert puts, "the run never wrote a checkpoint, so none could be deleted"
+    assert checkpoint_counts(fresh_database, the_only_thread(fresh_database)) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_a_run_that_awaits_approval_keeps_its_checkpoint_rows(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, pausing_factory)
+
+    response = start(make_client(fresh_database))
+
+    assert response.json()["status"] == "AwaitingApproval"
+    counts = checkpoint_counts(fresh_database, the_only_thread(fresh_database))
+    assert all(count > 0 for count in counts.values()), counts
+
+
+def test_a_second_app_on_the_same_database_sees_the_paused_thread(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, pausing_factory)
+    paused = start(make_client(fresh_database))
+    thread_id = the_only_thread(fresh_database)
+    register(monkeypatch, ok_factory)
+    second = make_client(fresh_database)  # another app on the same database
+
+    finished = start(second)
+    with open_saver(fresh_database.dsn("agent_runtime")) as saver:
+        graph = pausing_factory(None, None).compile(checkpointer=saver)
+        snapshot = graph.get_state({"configurable": {"thread_id": str(thread_id)}})
+
+    assert paused.json()["status"] == "AwaitingApproval"
+    # The second app's own run ended and cleaned up after itself only.
+    assert finished.json()["status"] == "Completed"
+    assert [item.value for item in snapshot.interrupts] == ["approve?"]
+    assert snapshot.next == ("work",)
+
+
+class DeleteRefused(PostgresSaver):
+    """A saver whose delete fails, as a database that went away would."""
+
+    def delete_thread(self, thread_id: str) -> None:
+        raise psycopg.errors.QueryCanceled(f"password=hunter2 {CLAIM_TEXT}")
+
+
+def test_a_failed_delete_is_logged_and_changes_no_answer(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    @contextlib.contextmanager
+    def refusing_delete(dsn: str) -> Iterator[PostgresSaver]:
+        with open_saver(dsn) as real:
+            yield DeleteRefused(real.conn)
+
+    register(monkeypatch, ok_factory)
+    monkeypatch.setattr(runtime_app, "open_saver", refusing_delete)
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "Completed"
+    ((run_id, _, _, _, _, status),) = run_rows(fresh_database)
+    assert (str(run_id), status) == (body["run_id"], "Completed")
+    assert body["run_id"] in caplog.text
+    assert "QueryCanceled" in caplog.text
+    assert "57014" in caplog.text
+    assert "hunter2" not in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+    assert "run.completed" in {e["event"] for e in audit_events(fresh_database, run_id)}
+
+
+DELETE_LOG = "its checkpoints were not deleted"
+
+
+class DeleteFailsOnce(PostgresSaver):
+    """A saver whose deletes fail with the errors in ``failures``, shared by
+    every instance and spent in order, and work once none is left."""
+
+    def __init__(self, conn: psycopg.Connection, failures: list[Exception]) -> None:
+        super().__init__(conn)
+        self.failures = failures
+
+    def delete_thread(self, thread_id: str) -> None:
+        if self.failures:
+            raise self.failures.pop(0)
+        super().delete_thread(thread_id)
+
+
+def failing_delete_scope(
+    monkeypatch: pytest.MonkeyPatch, failures: list[Exception]
+) -> list[psycopg.Connection]:
+    """Make the app's savers fail their next deletes as ``failures`` says; the
+    connection of each saver it opens is returned, in order."""
+    opened: list[psycopg.Connection] = []
+
+    @contextlib.contextmanager
+    def failing(dsn: str) -> Iterator[PostgresSaver]:
+        with open_saver(dsn) as real:
+            opened.append(real.conn)
+            yield DeleteFailsOnce(real.conn, failures)
+
+    monkeypatch.setattr(runtime_app, "open_saver", failing)
+    return opened
+
+
+def test_a_failed_delete_is_retried_once_on_a_fresh_saver(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    register(monkeypatch, ok_factory)
+    opened = failing_delete_scope(
+        monkeypatch, [psycopg.errors.QueryCanceled(f"password=hunter2 {CLAIM_TEXT}")]
+    )
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    assert (response.status_code, response.json()["status"]) == (200, "Completed")
+    assert len(opened) == 2  # the run's saver, and the retry's own
+    assert opened[0] is not opened[1]
+    assert checkpoint_counts(fresh_database, the_only_thread(fresh_database)) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+    assert caplog.text.count(DELETE_LOG) <= 1
+    assert "hunter2" not in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+
+
+def test_when_both_deletes_fail_each_is_logged_and_the_answer_is_unchanged(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    register(monkeypatch, ok_factory)
+    failing_delete_scope(
+        monkeypatch,
+        [
+            psycopg.errors.QueryCanceled(f"password=hunter2 {CLAIM_TEXT}"),
+            psycopg.errors.AdminShutdown(f"password=hunter2 {CLAIM_TEXT}"),
+        ],
+    )
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    assert (response.status_code, response.json()["status"]) == (200, "Completed")
+    assert run_rows(fresh_database)[0][5] == "Completed"
+    assert caplog.text.count(DELETE_LOG) == 2
+    assert "QueryCanceled" in caplog.text
+    assert "57014" in caplog.text
+    assert "AdminShutdown" in caplog.text
+    assert "57P01" in caplog.text
+    assert response.json()["run_id"] in caplog.text
+    assert "hunter2" not in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+    # What the two attempts could not drop is still there.
+    counts = checkpoint_counts(fresh_database, the_only_thread(fresh_database))
+    assert all(count > 0 for count in counts.values()), counts
+
+
+def test_a_delete_that_fails_with_an_error_of_another_library_is_caught(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    register(monkeypatch, ok_factory)
+    failing_delete_scope(
+        monkeypatch,
+        [RuntimeError(f"boom {CLAIM_TEXT}"), ValueError(f"boom {CLAIM_TEXT}")],
+    )
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    assert (response.status_code, response.json()["status"]) == (200, "Completed")
+    assert "RuntimeError" in caplog.text
+    assert "ValueError" in caplog.text
+    assert "sqlstate none" in caplog.text
+    assert "boom" not in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+
+
+def test_the_retry_of_a_delete_uses_the_injected_checkpointer_again(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailsOnce(MemorySaver):
+        deletes = 0
+
+        def delete_thread(self, thread_id: str) -> None:
+            self.deletes += 1
+            if self.deletes == 1:
+                raise RuntimeError("down")
+            super().delete_thread(thread_id)
+
+    register(monkeypatch, ok_factory)
+    saver = FailsOnce()
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database, checkpointer=saver))
+
+    assert response.json()["status"] == "Completed"
+    assert saver.deletes == 2
+    assert list(saver.list(None)) == []
+
+
+def test_the_final_status_is_recorded_before_the_checkpoints_are_deleted(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[str] = []
+
+    class Spying(PostgresSaver):
+        def delete_thread(self, thread_id: str) -> None:
+            seen.append(run_rows(fresh_database)[0][5])
+            super().delete_thread(thread_id)
+
+    @contextlib.contextmanager
+    def spying(dsn: str) -> Iterator[PostgresSaver]:
+        with open_saver(dsn) as real:
+            yield Spying(real.conn)
+
+    register(monkeypatch, ok_factory)
+    monkeypatch.setattr(runtime_app, "open_saver", spying)
+
+    response = start(make_client(fresh_database))
+
+    assert response.json()["status"] == "Completed"
+    assert seen == ["Completed"]
+
+
+# ── resuming a paused run (S015) ────────────────────────────────────────────
+APPROVAL = {"approved": True}
+BEFORE = {"stage": "before"}
+
+
+def resumable(
+    pauses: int = 1, after: Callable[[Any], None] | None = None
+) -> Callable[[ModelClient, ToolClient], StateGraph]:
+    """A graph that writes an output, then pauses ``pauses`` times in a second
+    node; once resumed through them all it calls ``after`` with the last resume
+    value and puts that value in its output. A node restarts from its top on a
+    resume, so ``after`` runs once per finished run, not once per pause."""
+
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def before(state: State) -> State:
+            return {"output": BEFORE}
+
+        def decide(state: State) -> State:
+            answer = None
+            for number in range(pauses):
+                answer = interrupt(f"approve {number}")
+            if after is not None:
+                after(answer)
+            return {"output": {"stage": "after", "answer": answer}}
+
+        graph = StateGraph(State)
+        graph.add_node("before", before)
+        graph.add_node("decide", decide)
+        graph.add_edge(START, "before")
+        graph.add_edge("before", "decide")
+        graph.add_edge("decide", END)
+        return graph
+
+    return factory
+
+
+def resume(client: TestClient, run_id: str, **overrides: Any) -> httpx.Response:
+    body = {
+        "tenant": "claims-triage",
+        "reference": "CLM-0001",
+        "input": APPROVAL,
+    } | overrides
+    return client.post(f"/runs/{run_id}/resume", json=body)
+
+
+def paused_run(client: TestClient) -> str:
+    response = start(client)
+    assert response.json()["status"] == "AwaitingApproval"
+    return response.json()["run_id"]
+
+
+def audit_count(db: DatabaseHandle) -> int:
+    return owner_rows(db, "SELECT count(*) FROM audit.events")[0][0]
+
+
+def event_names(db: DatabaseHandle, run_id: str) -> list[str]:
+    return [e["event"] for e in audit_events(db, uuid.UUID(run_id))]
+
+
+def test_a_paused_run_answers_with_the_output_so_far_and_resumes_to_completion(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+
+    paused = start(client)
+
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "AwaitingApproval"
+    assert paused.json()["output"] == BEFORE
+    run_id = paused.json()["run_id"]
+    thread = the_only_thread(fresh_database)
+
+    resumed = resume(client, run_id)
+
+    assert resumed.status_code == 200
+    assert resumed.json() == {
+        "run_id": run_id,
+        "status": "Completed",
+        "output": {"stage": "after", "answer": APPROVAL},
+    }
+    assert run_rows(fresh_database)[0][5] == "Completed"
+    assert read(client, run_id).json()["status"] == "Completed"
+    assert checkpoint_counts(fresh_database, thread) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["event"], e["outcome"]) for e in events] == [
+        ("run.started", "started"),
+        ("run.awaiting_approval", "paused"),
+        ("run.resumed", "resumed"),
+        ("run.completed", "completed"),
+    ]
+    assert {(e["tenant"], e["agent"], e["reference"]) for e in events} == {
+        ("claims-triage", "claims-triage", "CLM-0001")
+    }
+    assert {(e["reason"], e["tool"]) for e in events} == {(None, None)}
+
+
+def test_a_resume_runs_under_a_span_with_the_attributes_of_a_run_span(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    exporter = InMemorySpanExporter()
+    client = make_client(fresh_database, exporter=exporter)
+    run_id = paused_run(client)
+
+    resume(client, run_id)
+
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == "runtime.resume"]
+    assert dict(span.attributes) == {
+        "meridian.run_id": run_id,
+        "meridian.agent": "claims-triage",
+        "meridian.tenant": "claims-triage",
+        "meridian.run_status": "Completed",
+    }
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tenant": "evaluation"},
+        {"reference": "CLM-0002"},
+        {"run_id": str(uuid.uuid4())},
+    ],
+    ids=["wrong-tenant", "wrong-reference", "unknown-run"],
+)
+def test_a_resume_naming_the_wrong_tenant_reference_or_run_is_404_and_changes_nothing(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, str],
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+    rows_before = run_rows(fresh_database)
+    audit_before = audit_count(fresh_database)
+    fields = dict(overrides)  # the parametrized dict is shared between runs
+    asked = fields.pop("run_id", run_id)
+
+    response = resume(client, asked, **fields)
+
+    assert response.status_code == 404
+    # The answer a GET of a run that does not exist gets: no answer tells a
+    # caller that the run ID exists under another tenant (T-10).
+    assert response.json() == read(client, uuid.uuid4()).json()
+    assert response.json() == {"detail": "no such run"}
+    assert run_rows(fresh_database) == rows_before
+    assert audit_count(fresh_database) == audit_before
+    counts = checkpoint_counts(fresh_database, thread)
+    assert all(count > 0 for count in counts.values()), counts
+
+
+def test_a_run_resumed_twice_runs_its_graph_once_and_the_second_answer_has_no_output(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumed_parts: list[Any] = []
+    register(monkeypatch, resumable(after=resumed_parts.append))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    first = resume(client, run_id)
+    audit_before = audit_count(fresh_database)
+
+    second = resume(client, run_id)
+
+    assert first.json()["status"] == "Completed"
+    assert second.status_code == 200
+    assert second.json() == {"run_id": run_id, "status": "Completed", "output": None}
+    assert resumed_parts == [APPROVAL]
+    assert audit_count(fresh_database) == audit_before
+
+
+def test_a_failed_run_resumed_answers_its_status_and_runs_nothing(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node_calls: list[str] = []
+
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            node_calls.append("ran")
+            raise RuntimeError("boom")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+    client = make_client(fresh_database)
+    failed = start(client)
+    audit_before = audit_count(fresh_database)
+
+    response = resume(client, failed.json()["run_id"])
+
+    assert failed.status_code == 502
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": failed.json()["run_id"],
+        "status": "Failed",
+        "output": None,
+    }
+    assert node_calls == ["ran"]
+    assert audit_count(fresh_database) == audit_before
+
+
+def test_two_resumes_at_the_same_time_run_the_resumed_part_once_and_both_answer_200(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumed_parts: list[Any] = []
+
+    def slowly(answer: Any) -> None:
+        resumed_parts.append(answer)
+        time.sleep(0.3)  # long enough for the other request to arrive meanwhile
+
+    register(monkeypatch, resumable(after=slowly))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    start_together = threading.Barrier(2)
+    answers: list[httpx.Response] = []
+
+    def send() -> None:
+        own = TestClient(client.app, raise_server_exceptions=False)
+        start_together.wait()
+        answers.append(resume(own, run_id))
+
+    racers = [threading.Thread(target=send) for _ in range(2)]
+    for racer in racers:
+        racer.start()
+    for racer in racers:
+        racer.join()
+
+    assert [a.status_code for a in answers] == [200, 200]
+    assert resumed_parts == [APPROVAL]
+    assert sorted(a.json()["output"] is None for a in answers) == [False, True]
+    assert run_rows(fresh_database)[0][5] == "Completed"
+    assert event_names(fresh_database, run_id) == [
+        "run.started",
+        "run.awaiting_approval",
+        "run.resumed",
+        "run.completed",
+    ]
+
+
+def test_a_resume_that_loses_the_claim_answers_the_current_status_and_runs_nothing(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumed_parts: list[Any] = []
+    register(monkeypatch, resumable(after=resumed_parts.append))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    real = runs.claim_paused_run
+
+    def another_request_wins_first(*args: Any) -> runs.RunIdentity | None:
+        assert real(*args) is not None  # the winner, between the read and the claim
+        return real(*args)
+
+    monkeypatch.setattr(runs, "claim_paused_run", another_request_wins_first)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": run_id, "status": "Running", "output": None}
+    assert resumed_parts == []
+    assert event_names(fresh_database, run_id) == [
+        "run.started",
+        "run.awaiting_approval",
+        "run.resumed",
+    ]
+
+
+def test_only_one_of_many_claims_of_a_paused_run_succeeds(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    run_id = paused_run(make_client(fresh_database))
+    dsn = fresh_database.dsn("agent_runtime")
+    claimants = 8
+    start_together = threading.Barrier(claimants)
+    claimed: list[runs.RunIdentity | None] = []
+
+    def claim() -> None:
+        start_together.wait()
+        claimed.append(
+            runs.claim_paused_run(dsn, uuid.UUID(run_id), "claims-triage", "CLM-0001")
+        )
+
+    racers = [threading.Thread(target=claim) for _ in range(claimants)]
+    for racer in racers:
+        racer.start()
+    for racer in racers:
+        racer.join()
+
+    winners = [identity for identity in claimed if identity is not None]
+    assert len(claimed) == claimants
+    assert len(winners) == 1
+    assert winners[0].run_id == uuid.UUID(run_id)
+    assert winners[0].thread_id == the_only_thread(fresh_database)
+    assert event_names(fresh_database, run_id).count("run.resumed") == 1
+
+
+def test_a_tenant_the_registry_no_longer_allows_is_refused_and_the_run_stays_paused(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    plant: Callable[..., Path],
+) -> None:
+    register(monkeypatch, resumable())
+    run_id = paused_run(make_client(fresh_database))
+    directory = plant(
+        (
+            "tenants.yaml",
+            "    agents: [claims-triage, knowledge-ingestion]\n",
+            "    agents: [knowledge-ingestion]\n",
+        )
+    )
+    narrowed = make_client(fresh_database, registry_dir=directory)
+
+    response = resume(narrowed, run_id)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "request refused"}
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
+    refusal = audit_events(fresh_database, uuid.UUID(run_id))[-1]
+    assert (refusal["event"], refusal["outcome"], refusal["reason"]) == (
+        "run.refused",
+        "refused",
+        None,
+    )
+    assert (refusal["tenant"], refusal["agent"], refusal["reference"]) == (
+        "claims-triage",
+        "claims-triage",
+        "CLM-0001",
+    )
+    assert event_names(fresh_database, run_id)[:2] == [
+        "run.started",
+        "run.awaiting_approval",
+    ]
+
+
+def test_a_resumed_graph_that_raises_leaves_the_run_paused_with_502(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def raising(answer: Any) -> None:
+        raise RuntimeError(f"boom {CLAIM_TEXT}")
+
+    register(monkeypatch, resumable(after=raising))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        response = resume(client, run_id)
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "run_id": run_id,
+        "status": "AwaitingApproval",
+        "output": None,
+    }
+    assert CLAIM_TEXT not in response.text
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["event"], e["outcome"]) for e in events] == [
+        ("run.started", "started"),
+        ("run.awaiting_approval", "paused"),
+        ("run.resumed", "resumed"),
+        ("run.resume_failed", "paused"),
+    ]
+    assert (events[-1]["reason"], events[-1]["tool"]) == ("unexpected", None)
+    assert CLAIM_TEXT not in str(events)
+    assert run_id in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+    counts = checkpoint_counts(fresh_database, thread)
+    assert all(count > 0 for count in counts.values()), counts
+
+
+class ToolThatIsDown:
+    """What a resumed node does after its pause: it fails while the tool is
+    down, and once it is up its work is recorded in ``done``."""
+
+    def __init__(self) -> None:
+        self.up = False
+        self.done: list[Any] = []
+
+    def __call__(self, answer: Any) -> None:
+        if not self.up:
+            raise ToolUnavailable("policy_lookup")
+        self.done.append(answer)
+
+
+def test_a_resumed_leg_whose_tool_fails_leaves_the_run_paused_and_resumable(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tool = ToolThatIsDown()
+    register(monkeypatch, resumable(after=tool))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        failed = resume(client, run_id)
+
+    assert failed.status_code == 502
+    assert failed.json() == {
+        "run_id": run_id,
+        "status": "AwaitingApproval",
+        "output": None,
+    }
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
+    assert read(client, run_id).json()["status"] == "AwaitingApproval"
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["event"], e["outcome"]) for e in events] == [
+        ("run.started", "started"),
+        ("run.awaiting_approval", "paused"),
+        ("run.resumed", "resumed"),
+        ("run.resume_failed", "paused"),
+    ]
+    assert (events[-1]["reason"], events[-1]["tool"]) == (
+        "tool-unavailable",
+        "policy_lookup",
+    )
+    assert {e["event"] for e in events} & {"run.failed", "run.completed"} == set()
+    counts = checkpoint_counts(fresh_database, thread)
+    assert all(count > 0 for count in counts.values()), counts
+
+    tool.up = True
+    second = resume(client, run_id)
+
+    assert second.status_code == 200
+    assert second.json() == {
+        "run_id": run_id,
+        "status": "Completed",
+        "output": {"stage": "after", "answer": APPROVAL},
+    }
+    assert tool.done == [APPROVAL]  # the node's work happened once
+    assert run_rows(fresh_database)[0][5] == "Completed"
+    assert event_names(fresh_database, run_id) == [
+        "run.started",
+        "run.awaiting_approval",
+        "run.resumed",
+        "run.resume_failed",
+        "run.resumed",
+        "run.completed",
+    ]
+    assert checkpoint_counts(fresh_database, thread) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_a_resumed_leg_that_fails_again_after_a_failed_one_is_paused_again(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = ToolThatIsDown()
+    register(monkeypatch, resumable(after=tool))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    first = resume(client, run_id)
+    second = resume(client, run_id)
+
+    assert [first.status_code, second.status_code] == [502, 502]
+    assert second.json()["status"] == "AwaitingApproval"
+    assert event_names(fresh_database, run_id).count("run.resume_failed") == 2
+
+
+def test_the_vocabulary_of_a_failed_resume_stays_out_of_the_states_table() -> None:
+    assert runs.RESUME_FAILED_EVENT == ("run.resume_failed", "paused")
+    assert runs.RESUME_FAILED_EVENT not in runs.AUDIT_FOR_STATE.values()
+    assert "run.resume_failed" not in {e for e, _ in runs.AUDIT_FOR_STATE.values()}
+
+
+def test_when_a_failed_resume_cannot_be_recorded_the_answer_is_503_and_the_thread_stays(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable(after=ToolThatIsDown()))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+    attempts: list[str] = []
+
+    def down(*args: Any, **kwargs: Any) -> None:
+        attempts.append("tried")
+        raise psycopg.OperationalError(f"down {CLAIM_TEXT}")
+
+    monkeypatch.setattr(runs, "pause_after_failed_resume", down)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": response.json()["detail"], "run_id": run_id}
+    assert attempts == ["tried", "tried"]
+    assert CLAIM_TEXT not in response.text
+    assert run_rows(fresh_database)[0][5] == "Running"
+    counts = checkpoint_counts(fresh_database, thread)
+    assert all(count > 0 for count in counts.values()), counts
+
+
+def test_the_retry_of_recording_a_failed_resume_keeps_its_reason_and_tool(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable(after=ToolThatIsDown()))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    real = runs.pause_after_failed_resume
+    calls: list[str] = []
+
+    def flaky(*args: Any, **kwargs: Any) -> None:
+        calls.append("tried")
+        if len(calls) == 1:
+            raise psycopg.OperationalError("down")
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(runs, "pause_after_failed_resume", flaky)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 502
+    assert response.json()["status"] == "AwaitingApproval"
+    assert len(calls) == 2
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert (events[-1]["event"], events[-1]["tool"]) == (
+        "run.resume_failed",
+        "policy_lookup",
+    )
+    assert [e["event"] for e in events].count("run.resume_failed") == 1
+
+
+def test_a_failed_resume_is_logged_as_the_resumed_leg_and_a_failed_start_as_the_first(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def raising(answer: Any) -> None:
+        raise RuntimeError("boom")
+
+    register(monkeypatch, resumable(after=raising))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        resume(client, run_id)
+    resumed_log = caplog.text
+    caplog.clear()
+
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            raise RuntimeError("boom")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+    with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
+        start(make_client(fresh_database))
+
+    assert "resumed leg" in resumed_log
+    assert "first leg" not in resumed_log
+    assert "first leg" in caplog.text
+    assert "resumed leg" not in caplog.text
+
+
+def test_a_resumed_gateway_timeout_leaves_the_run_paused_with_504(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def asking(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def decide(state: State) -> State:
+            interrupt("approve?")
+            model.chat([{"role": "user", "content": "hi"}])
+            return {"output": {}}
+
+        return graph_of(decide)
+
+    register(monkeypatch, asking)
+    gateway = Gateway(raises=httpx.ReadTimeout("slow"))
+    client = make_client(fresh_database, gateway)
+    run_id = paused_run(client)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 504
+    assert response.json()["status"] == "AwaitingApproval"
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
+    assert len(gateway.requests) == 1  # the first leg asked nothing
+    reason = audit_events(fresh_database, uuid.UUID(run_id))[-1]
+    assert (reason["event"], reason["reason"]) == ("run.resume_failed", "model-timeout")
+
+
+LOOKS_LIKE_AN_INTERRUPT_ID = "a" * 32  # LangGraph reads such keys as a map
+
+
+@pytest.mark.parametrize(
+    "value",
+    [{}, {LOOKS_LIKE_AN_INTERRUPT_ID: "not the pause's id"}],
+    ids=["empty", "hex-key"],
+)
+def test_the_pause_reads_the_resume_value_verbatim_whatever_its_keys(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, value: dict
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    response = resume(client, run_id, input=value)
+
+    assert response.json()["status"] == "Completed"
+    assert response.json()["output"] == {"stage": "after", "answer": value}
+
+
+def test_a_thread_whose_checkpoints_are_gone_fails_the_resume_before_any_node_runs(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node_calls: list[str] = []
+
+    def counting(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            node_calls.append("ran")
+            return {"output": {"answer": interrupt("approve?")}}
+
+        return graph_of(work)
+
+    register(monkeypatch, counting)
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+    with open_saver(fresh_database.dsn("agent_runtime")) as saver:
+        saver.delete_thread(str(thread))  # out of band
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 502
+    assert response.json() == {"run_id": run_id, "status": "Failed", "output": None}
+    assert node_calls == ["ran"]  # the first leg's only
+    assert run_rows(fresh_database)[0][5] == "Failed"
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [e["event"] for e in events][-2:] == ["run.resumed", "run.failed"]
+    assert (events[-1]["reason"], events[-1]["tool"]) == ("no-pending-pause", None)
+
+
+def test_a_thread_with_two_pending_pauses_fails_the_resume_before_any_node_runs(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node_calls: list[str] = []
+
+    def parallel(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def pausing(name: str) -> Callable[[State], State]:
+            def node(state: State) -> State:
+                node_calls.append(name)
+                interrupt(f"approve {name}")
+                return {}
+
+            return node
+
+        graph = StateGraph(State)
+        for name in ("left", "right"):
+            graph.add_node(name, pausing(name))
+            graph.add_edge(START, name)
+            graph.add_edge(name, END)
+        return graph
+
+    register(monkeypatch, parallel)
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    calls_of_the_first_leg = len(node_calls)
+    thread = the_only_thread(fresh_database)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 502
+    assert response.json()["status"] == "Failed"
+    assert len(node_calls) == calls_of_the_first_leg
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert events[-1]["event"] == "run.failed"
+    assert events[-1]["reason"] == "several-pending-pauses"
+    # Nothing to resume, so nothing to keep: the thread is deleted.
+    assert checkpoint_counts(fresh_database, thread) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_a_run_that_pauses_again_keeps_its_checkpoints_and_resumes_again(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable(pauses=2))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+
+    again = resume(client, run_id, input={"step": 1})
+    kept = checkpoint_counts(fresh_database, thread)
+    status_between = run_rows(fresh_database)[0][5]
+    last = resume(client, run_id, input={"step": 2})
+
+    assert again.status_code == 200
+    assert again.json() == {
+        "run_id": run_id,
+        "status": "AwaitingApproval",
+        "output": BEFORE,
+    }
+    assert status_between == "AwaitingApproval"
+    assert all(count > 0 for count in kept.values()), kept
+    assert last.json()["status"] == "Completed"
+    assert last.json()["output"] == {"stage": "after", "answer": {"step": 2}}
+    assert event_names(fresh_database, run_id) == [
+        "run.started",
+        "run.awaiting_approval",
+        "run.resumed",
+        "run.awaiting_approval",
+        "run.resumed",
+        "run.completed",
+    ]
+    assert checkpoint_counts(fresh_database, thread) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_when_a_resumed_status_cannot_be_recorded_the_answer_is_503_with_the_run_id(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    flaky = FlakyFinish(failures=99)
+    monkeypatch.setattr(runs, "finish_run", flaky)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": response.json()["detail"], "run_id": run_id}
+    assert flaky.calls == 2
+    assert CLAIM_TEXT not in response.text
+    assert run_rows(fresh_database)[0][5] == "Running"
+
+
+def test_a_second_app_on_the_same_database_resumes_a_run_the_first_paused(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    run_id = paused_run(make_client(fresh_database))
+    second = make_client(fresh_database)  # a new create_app: nothing shared
+
+    response = resume(second, run_id)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "Completed"
+    assert response.json()["output"] == {"stage": "after", "answer": APPROVAL}
+
+
+# ── a Running run nobody is running any more is taken over (S015) ───────────
+def make_running(
+    db: DatabaseHandle, run_id: str, *, idle_seconds: int, status: str = "Running"
+) -> None:
+    """As the owner: set a run's status and move its ``updated_at`` back by
+    ``idle_seconds``, as a leg that died or whose last write failed leaves it."""
+    with connect(db.dsn(OWNER), "test-write") as conn:
+        conn.execute(
+            "UPDATE runtime.runs SET status = %s, "
+            "updated_at = now() - make_interval(secs => %s) WHERE run_id = %s",
+            (status, float(idle_seconds), uuid.UUID(run_id)),
+        )
+
+
+PAST_THE_LEASE = runs.RUNNING_LEASE_SECONDS + 60
+INSIDE_THE_LEASE = runs.RUNNING_LEASE_SECONDS - 60
+
+
+def test_the_lease_of_a_running_run_is_ten_minutes() -> None:
+    assert runs.RUNNING_LEASE_SECONDS == 600
+    assert runs.STALE_RUNNING_REASON == "stale-running"
+
+
+def test_a_stale_running_run_with_a_pending_pause_is_resumed_and_completes(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumed_parts: list[Any] = []
+    register(monkeypatch, resumable(after=resumed_parts.append))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    thread = the_only_thread(fresh_database)
+    make_running(fresh_database, run_id, idle_seconds=PAST_THE_LEASE)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": run_id,
+        "status": "Completed",
+        "output": {"stage": "after", "answer": APPROVAL},
+    }
+    assert resumed_parts == [APPROVAL]
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["event"], e["outcome"], e["reason"]) for e in events] == [
+        ("run.started", "started", None),
+        ("run.awaiting_approval", "paused", None),
+        ("run.resumed", "resumed", "stale-running"),
+        ("run.completed", "completed", None),
+    ]
+    assert checkpoint_counts(fresh_database, thread) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_a_paused_run_is_claimed_without_the_takeover_reason(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    # Idle for longer than the lease, but paused: an ordinary claim.
+    make_running(
+        fresh_database, run_id, idle_seconds=PAST_THE_LEASE, status="AwaitingApproval"
+    )
+
+    resume(client, run_id)
+
+    resumed = [
+        e
+        for e in audit_events(fresh_database, uuid.UUID(run_id))
+        if e["event"] == "run.resumed"
+    ]
+    assert [e["reason"] for e in resumed] == [None]
+
+
+def test_a_running_run_inside_the_lease_is_not_taken_and_nothing_runs(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumed_parts: list[Any] = []
+    register(monkeypatch, resumable(after=resumed_parts.append))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    make_running(fresh_database, run_id, idle_seconds=INSIDE_THE_LEASE)
+    audit_before = audit_count(fresh_database)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": run_id, "status": "Running", "output": None}
+    assert resumed_parts == []
+    assert run_rows(fresh_database)[0][5] == "Running"
+    assert audit_count(fresh_database) == audit_before
+
+
+def test_a_stale_running_run_with_no_pending_pause_ends_failed_and_its_thread_goes(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first leg that finished and then could neither record its status nor
+    delete its checkpoint: the thread holds the claim and no pause."""
+
+    @contextlib.contextmanager
+    def refusing_delete(dsn: str) -> Iterator[PostgresSaver]:
+        with open_saver(dsn) as real:
+            yield DeleteRefused(real.conn)
+
+    register(monkeypatch, ok_factory)
+    real_finish = runs.finish_run
+    with monkeypatch.context() as broken:
+        broken.setattr(runs, "finish_run", FlakyFinish(failures=99))
+        broken.setattr(runtime_app, "open_saver", refusing_delete)
+        first = start(make_client(fresh_database))
+    assert first.status_code == 503
+    run_id = first.json()["run_id"]
+    thread = the_only_thread(fresh_database)
+    assert runs.finish_run is real_finish
+    assert all(c > 0 for c in checkpoint_counts(fresh_database, thread).values())
+    make_running(fresh_database, run_id, idle_seconds=PAST_THE_LEASE)
+
+    response = resume(make_client(fresh_database), run_id)
+
+    assert response.status_code == 502
+    assert response.json() == {"run_id": run_id, "status": "Failed", "output": None}
+    assert run_rows(fresh_database)[0][5] == "Failed"
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["event"], e["reason"]) for e in events] == [
+        ("run.started", None),
+        ("run.resumed", "stale-running"),
+        ("run.failed", "no-pending-pause"),
+    ]
+    assert checkpoint_counts(fresh_database, thread) == {
+        table: 0 for table in CHECKPOINT_TABLES
+    }
+
+
+def test_two_takeovers_of_a_stale_running_run_at_the_same_time_run_one_leg(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumed_parts: list[Any] = []
+
+    def slowly(answer: Any) -> None:
+        resumed_parts.append(answer)
+        time.sleep(0.3)  # long enough for the other request to arrive meanwhile
+
+    register(monkeypatch, resumable(after=slowly))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    make_running(fresh_database, run_id, idle_seconds=PAST_THE_LEASE)
+    start_together = threading.Barrier(2)
+    answers: list[httpx.Response] = []
+
+    def send() -> None:
+        own = TestClient(client.app, raise_server_exceptions=False)
+        start_together.wait()
+        answers.append(resume(own, run_id))
+
+    racers = [threading.Thread(target=send) for _ in range(2)]
+    for racer in racers:
+        racer.start()
+    for racer in racers:
+        racer.join()
+
+    assert [a.status_code for a in answers] == [200, 200]
+    assert resumed_parts == [APPROVAL]
+    assert sorted(a.json()["output"] is None for a in answers) == [False, True]
+    assert event_names(fresh_database, run_id) == [
+        "run.started",
+        "run.awaiting_approval",
+        "run.resumed",
+        "run.completed",
+    ]
+
+
+def test_a_stale_running_run_of_another_tenant_or_reference_is_not_claimed(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    run_id = paused_run(make_client(fresh_database))
+    make_running(fresh_database, run_id, idle_seconds=PAST_THE_LEASE)
+    dsn = fresh_database.dsn("agent_runtime")
+    asked = uuid.UUID(run_id)
+
+    wrong_tenant = runs.claim_paused_run(dsn, asked, "evaluation", "CLM-0001")
+    wrong_reference = runs.claim_paused_run(dsn, asked, "claims-triage", "CLM-0002")
+
+    assert (wrong_tenant, wrong_reference) == (None, None)
+    assert event_names(fresh_database, run_id).count("run.resumed") == 0
+
+
+def test_a_resumed_leg_that_fails_after_a_takeover_leaves_the_run_paused(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable(after=ToolThatIsDown()))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+    make_running(fresh_database, run_id, idle_seconds=PAST_THE_LEASE)
+
+    response = resume(client, run_id)
+
+    assert response.status_code == 502
+    assert response.json()["status"] == "AwaitingApproval"
+    assert event_names(fresh_database, run_id)[-2:] == [
+        "run.resumed",
+        "run.resume_failed",
+    ]
+
+
+def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    over = resume(client, run_id, input=input_of_size(32 * 1024 + 1))
+    exact = resume(client, run_id, input=input_of_size(32 * 1024))
+
+    assert over.status_code == 422
+    assert "xxxxxxxx" not in over.text
+    assert exact.status_code == 200
+    assert exact.json()["status"] == "Completed"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"extra": 1},
+        {"reference": "has space"},
+        {"reference": ""},
+        {"tenant": "t" * 65},
+        {"input": []},
+        {"input": "text"},
+    ],
+)
+def test_an_invalid_resume_request_is_422(overrides: dict[str, Any]) -> None:
+    response = resume(make_client(None), str(uuid.uuid4()), **overrides)
+
+    assert response.status_code == 422
+
+
+def test_a_malformed_run_id_in_a_resume_is_422() -> None:
+    assert resume(make_client(None), "not-a-uuid").status_code == 422
+
+
+def test_the_resume_has_an_audit_event_of_its_own_beside_the_states() -> None:
+    assert runs.AUDIT_FOR_STATE["Running"] == ("run.running", "running")
+    assert runs.RESUMED_EVENT == ("run.resumed", "resumed")
 
 
 # ── startup refusals ────────────────────────────────────────────────────────

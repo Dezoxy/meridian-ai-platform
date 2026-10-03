@@ -117,6 +117,49 @@ def seed_and_ingest(gateway: Gateway) -> None:
     gateway.clock.advance(WINDOW_SECONDS)
 
 
+def new_runtime(
+    db: DatabaseHandle,
+    exporter: InMemorySpanExporter,
+    tool_servers: dict[str, Any],
+    model_http: httpx.Client,
+) -> Any:
+    """A newly built Agent Runtime app.
+
+    It is built from nothing but the database, the tool servers and the client
+    it calls the model through: it holds no checkpointer of its own (each
+    request opens one on the database), so a run it did not start can only be
+    resumed from what the database holds."""
+    return create_runtime(
+        RuntimeSettings(
+            registry_dir=REGISTRY_DIR,
+            gateway_url="http://gateway.test",
+            database_url=db.dsn("agent_runtime"),
+        ),
+        tracer_provider=make_tracer_provider("agent-runtime", exporter),
+        http_client=model_http,
+        tool_servers=tool_servers,
+    )
+
+
+def claims_api_over_new_runtime(
+    db: DatabaseHandle,
+    exporter: InMemorySpanExporter,
+    tool_servers: dict[str, Any],
+    model_http: httpx.Client,
+) -> TestClient:
+    """A Claims API client on a Claims API over a newly built Agent Runtime."""
+    runtime = new_runtime(db, exporter, tool_servers, model_http)
+    claims = create_claims_api(
+        ClaimsSettings(
+            runtime_url="http://runtime.test",
+            database_url=db.dsn("claims_api"),
+        ),
+        tracer_provider=make_tracer_provider("claims-api", exporter),
+        http_client=TestClient(runtime),
+    )
+    return TestClient(claims)
+
+
 @dataclass(slots=True)
 class Stack:
     """The Claims API client and what a test reads or moves."""
@@ -125,6 +168,8 @@ class Stack:
     db: DatabaseHandle
     clock: FakeClock
     exporter: InMemorySpanExporter
+    tool_servers: dict[str, Any] = field(repr=False)
+    model_http: httpx.Client = field(repr=False)
 
     def post(self, claim: dict[str, Any], *, advance: bool = True) -> httpx.Response:
         """Post a claim; by default the clock moves first, so the claim finds
@@ -132,6 +177,34 @@ class Stack:
         if advance:
             self.clock.advance(WINDOW_SECONDS)
         return self.client.post("/claims", json=claim)
+
+    def decide(self, claim_id: str, decision: str) -> httpx.Response:
+        """An adjuster's decision on a claim. The clock does not move: the
+        resumed leg calls the claims tool server, not the gateway."""
+        return self.client.post(
+            f"/claims/{claim_id}/decision", json={"decision": decision}
+        )
+
+    def resume_directly(self, claim_id: str, run_id: str) -> httpx.Response:
+        """What anything that can call the runtime can do: resume a paused run
+        with no decision recorded by the Claims API, through a runtime of its
+        own over the same database and tool servers."""
+        runtime = TestClient(
+            new_runtime(self.db, self.exporter, self.tool_servers, self.model_http)
+        )
+        return runtime.post(
+            f"/runs/{run_id}/resume",
+            json={"tenant": "claims-triage", "reference": claim_id, "input": {}},
+        )
+
+    def restart_runtime(self) -> None:
+        """Replace the Agent Runtime (and the Claims API that calls it) with
+        newly built ones over the same database and the same tool servers, as a
+        restarted pod would be. Nothing the old runtime held in memory
+        survives."""
+        self.client = claims_api_over_new_runtime(
+            self.db, self.exporter, self.tool_servers, self.model_http
+        )
 
 
 def build_stack(
@@ -143,30 +216,15 @@ def build_stack(
     gateway = replay_gateway(db, exporter)
     seed_and_ingest(gateway)
     world = World(db, uuid.uuid4())
-    runtime = create_runtime(
-        RuntimeSettings(
-            registry_dir=REGISTRY_DIR,
-            gateway_url="http://gateway.test",
-            database_url=db.dsn("agent_runtime"),
-        ),
-        tracer_provider=make_tracer_provider("agent-runtime", exporter),
-        http_client=runtime_http or gateway.http,
-        tool_servers={
-            "policy-mcp": policy_server(world, exporter),
-            "knowledge-mcp": knowledge_server(world, gateway.http, exporter),
-            "claims-mcp": claims_server(world, exporter),
-        },
-    )
-    claims = create_claims_api(
-        ClaimsSettings(
-            runtime_url="http://runtime.test",
-            database_url=db.dsn("claims_api"),
-        ),
-        tracer_provider=make_tracer_provider("claims-api", exporter),
-        http_client=TestClient(runtime),
-    )
+    tool_servers = {
+        "policy-mcp": policy_server(world, exporter),
+        "knowledge-mcp": knowledge_server(world, gateway.http, exporter),
+        "claims-mcp": claims_server(world, exporter),
+    }
+    model_http = runtime_http or gateway.http
+    client = claims_api_over_new_runtime(db, exporter, tool_servers, model_http)
     exporter.clear()  # the spans of the ingestion are not a claim's trace
-    return Stack(TestClient(claims), db, gateway.clock, exporter)
+    return Stack(client, db, gateway.clock, exporter, tool_servers, model_http)
 
 
 def service_of(span: ReadableSpan) -> str:

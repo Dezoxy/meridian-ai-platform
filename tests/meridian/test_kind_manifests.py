@@ -75,6 +75,7 @@ UP_SH = (KIND_DIR / "up.sh").read_text(encoding="utf-8")
 COMMON_SH = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (KIND_DIR / "deploy.sh").read_text(encoding="utf-8")
 SMOKE_SH = (KIND_DIR / "smoke.sh").read_text(encoding="utf-8")
+DEMO_SH = (KIND_DIR / "demo.sh").read_text(encoding="utf-8")
 PLATFORM_DB = yaml.safe_load((KIND_DIR / "values" / "platform-db.yaml").read_text())
 
 OWNER_SECRET = "meridian-owner-db"  # noqa: S105 (a Secret name, not a password)
@@ -2216,3 +2217,315 @@ def test_smoke_looks_for_the_same_three_series_as_the_dashboard_uses() -> None:
 
     assert set(listed.split()) == GATEWAY_SERIES
     assert len(listed.split()) == 3
+
+
+# ── demo.sh: the claim, the adjuster's decision and the two traces (S015) ────
+# No other test runs demo.sh: these run the whole script, copied with its
+# helpers into a scratch tree, against stubs for the two programs that reach out
+# (curl: the Claims API, the edge and Tempo through Grafana; kubectl: the
+# cluster and the Grafana port-forward). The stub curl records every call in
+# ``calls`` (a "POST url traceparent-trace-id body" or "GET url" line each) and
+# answers from the environment.
+TRIAGE_FIVE = "claims-api agent-runtime policy-mcp knowledge-mcp model-gateway"
+DECISION_THREE = "claims-api agent-runtime claims-mcp"
+DEMO_CLAIMS = [
+    {"claim_id": "CLM-0001", "description": "first"},
+    {"claim_id": "CLM-0002", "description": "second"},
+]
+requires_demo_tools = pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("jq", "openssl", "base64")),
+    reason="jq, openssl or base64 is not installed",
+)
+STUB_CURL = r"""#!/usr/bin/env bash
+out="" url="" reads=no
+while (($#)); do
+  case "$1" in
+    -o) out=$2; shift ;;
+    -H)
+      case "$2" in
+        traceparent:*) trace="${2#*: 00-}"; trace="${trace%%-*}" ;;
+      esac
+      shift ;;
+    --data-binary) reads=body; shift ;;
+    -K) reads=config; shift ;;
+    -w | -m | --noproxy) shift ;;
+    -*) ;;
+    *) url=$1 ;;
+  esac
+  shift
+done
+body=""
+case "${reads}" in body) body="$(cat)" ;; config) cat >/dev/null ;; esac
+case "${url}" in
+  */healthz) printf 200 ;;
+  */claims/*/decision)
+    echo "POST ${url} ${trace} ${body}" >>"${STUB_DIR}/calls"
+    echo "${trace}" >"${STUB_DIR}/decision_trace"
+    printf '%s' "${STUB_DECISION_ANSWER}" >"${out}"
+    printf '%s' "${STUB_DECISION_STATUS}" ;;
+  */claims)
+    echo "POST ${url} ${trace} ${body}" >>"${STUB_DIR}/calls"
+    printf '%s' "${STUB_SUBMIT_ANSWER}" >"${out}"
+    printf 201 ;;
+  */tempo/api/traces/*)
+    echo "GET ${url}" >>"${STUB_DIR}/calls"
+    id="${url##*/}"
+    services="${STUB_TRIAGE_SERVICES}"
+    decided=""
+    marker="${STUB_DIR}/decision_trace"
+    [[ ! -f "${marker}" ]] || decided="$(cat "${marker}")"
+    if [[ "${decided}" == "${id}" ]]; then services="${STUB_DECISION_SERVICES}"; fi
+    jq -cn --arg services "${services}" '{batches: [
+      ($services | split(" ")[] | select(. != "")) as $name
+      | {resource: {attributes: [{key: "service.name", value: {stringValue: $name}}]},
+         scopeSpans: [{spans: [{}, {}]}]}]}'
+    printf '\n200' ;;
+  *) echo "unexpected curl: ${url}" >&2; exit 1 ;;
+esac
+"""
+STUB_KUBECTL = r"""#!/usr/bin/env bash
+case "$*" in
+  *port-forward*) echo "Forwarding from 127.0.0.1:41999 -> 3000"; exec sleep 30 ;;
+  *"get nodes"*) exit 0 ;;
+  *"get secret"*) printf '%s' "$(printf '%s' stub-admin-value | base64)" ;;
+esac
+"""
+
+
+def referred_answer(state: str = "awaiting_adjuster", route: str = "adjuster") -> str:
+    """The Claims API's answer to a posted claim."""
+    paused = state == "awaiting_adjuster"
+    return json.dumps(
+        {
+            "claim_id": "CLM-0001",
+            "state": state,
+            "run_id": "3f1c2d4e-0000-4000-8000-000000000001",
+            "run_status": "AwaitingApproval" if paused else "Completed",
+            "proposal": {"route": route, "drafted_by": None},
+        }
+    )
+
+
+def decision_answer(state: str = "approved") -> str:
+    return json.dumps(
+        {
+            "claim_id": "CLM-0001",
+            "state": state,
+            "run_id": "3f1c2d4e-0000-4000-8000-000000000001",
+            "run_status": "Completed",
+        }
+    )
+
+
+def run_demo(
+    tmp_path: Path,
+    *,
+    decision: str | None = None,
+    submit_answer: str | None = None,
+    decision_status: str = "200",
+    decision_body: str | None = None,
+    triage_services: str = TRIAGE_FIVE + " claims-mcp",
+    decision_services: str = DECISION_THREE,
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+    """demo.sh run in a scratch copy of ``infra/kind`` against the stubs, with
+    a one-second wait for a trace. ``decision`` sets the DECISION variable
+    (unset when None). Returns the process and the stub curl's calls, each as
+    its words: ``POST``/``GET``, the URL, and for a POST the trace ID the
+    traceparent carried and the body."""
+    kind, bin_dir = tmp_path / "infra" / "kind", tmp_path / "bin"
+    data = tmp_path / "data" / "synthetic"
+    for folder in (kind, bin_dir, data):
+        folder.mkdir(parents=True)
+    # The timeouts are readonly constants of the script: a one-second wait keeps
+    # a trace that never arrives from costing two minutes.
+    patched, count = re.subn(
+        r"^readonly POLL_(TIMEOUT|INTERVAL)=\d+$",
+        r"readonly POLL_\1=1",
+        DEMO_SH,
+        flags=re.MULTILINE,
+    )
+    assert count == 2
+    (kind / "demo.sh").write_text(patched, encoding="utf-8")
+    for name in ("common.sh", "pins.env"):
+        (kind / name).write_text((KIND_DIR / name).read_text(encoding="utf-8"))
+    (kind / "kubeconfig").touch()
+    (data / "claims.json").write_text(json.dumps(DEMO_CLAIMS), encoding="utf-8")
+    for name, text in (("curl", STUB_CURL), ("kubectl", STUB_KUBECTL)):
+        (bin_dir / name).write_text(text, encoding="utf-8")
+        (bin_dir / name).chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "STUB_DIR": str(tmp_path),
+        "STUB_SUBMIT_ANSWER": submit_answer or referred_answer(),
+        "STUB_DECISION_STATUS": decision_status,
+        "STUB_DECISION_ANSWER": decision_body or decision_answer(),
+        "STUB_TRIAGE_SERVICES": triage_services,
+        "STUB_DECISION_SERVICES": decision_services,
+    }
+    if decision is not None:
+        env["DECISION"] = decision
+    done = subprocess.run(
+        ["bash", str(kind / "demo.sh")],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        timeout=60,
+    )
+    calls = tmp_path / "calls"
+    lines = calls.read_text().splitlines() if calls.exists() else []
+    return done, [line.split(" ", 3) for line in lines]
+
+
+def posts_of(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if call[0] == "POST"]
+
+
+@requires_demo_tools
+def test_a_referred_claim_is_decided_with_approve_unless_told_otherwise(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(tmp_path)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    claim_post, decision_post = posts_of(calls)
+    assert claim_post[1].endswith(":8088/claims")
+    # Only the first claim is posted, and the decision goes to that claim.
+    assert decision_post[1].endswith(":8088/claims/CLM-0001/decision")
+    assert json.loads(decision_post[3]) == {"decision": "approve"}
+    # Each post carries a trace ID of its own; the traces read back are those.
+    assert len(claim_post[2]) == len(decision_post[2]) == 32
+    assert claim_post[2] != decision_post[2]
+    assert [c[1].rsplit("/", 1)[1] for c in calls if c[0] == "GET"] == [
+        claim_post[2],
+        decision_post[2],
+    ]
+    lines = done.stdout.splitlines()
+    assert "state       awaiting_adjuster" in lines
+    assert "decision    approve" in lines
+    assert "state       approved" in lines
+    assert "run status  Completed" in lines
+    assert any(line.startswith("PASS  trace ") for line in lines)
+    assert any(line.startswith("PASS  decision trace ") for line in lines)
+    assert "no adjuster was needed" not in done.stdout
+
+
+@requires_demo_tools
+def test_decision_reject_is_what_a_referred_claim_is_decided_with(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(
+        tmp_path, decision="reject", decision_body=decision_answer("rejected")
+    )
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert json.loads(posts_of(calls)[1][3]) == {"decision": "reject"}
+    assert "decision    reject" in done.stdout.splitlines()
+    assert "state       rejected" in done.stdout.splitlines()
+
+
+@requires_demo_tools
+def test_an_empty_decision_variable_means_approve_as_when_make_passes_none(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(tmp_path, decision="")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert json.loads(posts_of(calls)[1][3]) == {"decision": "approve"}
+
+
+@requires_demo_tools
+@pytest.mark.parametrize(
+    "decision", ["approved", "Approve", "reject; true", " approve"]
+)
+def test_a_decision_that_is_not_one_of_the_three_words_posts_nothing_and_fails(
+    tmp_path: Path, decision: str
+) -> None:
+    done, calls = run_demo(tmp_path, decision=decision)
+
+    assert done.returncode != 0
+    assert calls == []  # not even the edge's health check
+    assert "DECISION must be approve, reject or request_documents" in done.stderr
+    assert "PASS" not in done.stdout
+
+
+@requires_demo_tools
+def test_request_documents_is_a_decision_the_script_posts(tmp_path: Path) -> None:
+    done, calls = run_demo(
+        tmp_path,
+        decision="request_documents",
+        decision_body=decision_answer("documents_requested"),
+    )
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert json.loads(posts_of(calls)[1][3]) == {"decision": "request_documents"}
+    assert "state       documents_requested" in done.stdout.splitlines()
+
+
+@requires_demo_tools
+def test_a_claim_that_is_not_referred_posts_no_decision_and_passes_on_its_trace(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(
+        tmp_path,
+        submit_answer=referred_answer("approved", "auto_approve"),
+        triage_services=TRIAGE_FIVE,  # no approval request, so no claims-mcp
+    )
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert len(posts_of(calls)) == 1
+    assert not any("/decision" in call[1] for call in calls)
+    lines = done.stdout.splitlines()
+    assert "state       approved" in lines
+    assert any(line.startswith("PASS  trace ") for line in lines)
+    assert not any("decision trace" in line for line in lines)
+    assert "no adjuster was needed; the next make demo posts the next claim" in lines
+    assert len([c for c in calls if c[0] == "GET"]) == 1  # the triage's trace only
+
+
+@requires_demo_tools
+def test_the_decision_trace_check_fails_when_claims_mcp_has_no_span(
+    tmp_path: Path,
+) -> None:
+    done, _ = run_demo(tmp_path, decision_services="claims-api agent-runtime")
+
+    lines = done.stdout.splitlines()
+    assert done.returncode != 0
+    assert any(line.startswith("PASS  trace ") for line in lines)  # the triage
+    (failure,) = [line for line in lines if line.startswith("FAIL")]
+    assert failure.startswith("FAIL  no decision trace ")
+    assert "claims-api agent-runtime claims-mcp" in failure
+    # What Tempo did return is listed, so the missing service shows.
+    returned = lines[lines.index("      Tempo returned:") + 1 :]
+    assert [line.split()[0] for line in returned[:2]] == ["agent-runtime", "claims-api"]
+    assert not any(line.strip().startswith("claims-mcp") for line in returned)
+
+
+@requires_demo_tools
+def test_the_triage_trace_check_fails_without_hiding_the_decision_traces_result(
+    tmp_path: Path,
+) -> None:
+    done, _ = run_demo(tmp_path, triage_services="claims-api agent-runtime")
+
+    lines = done.stdout.splitlines()
+    assert done.returncode != 0
+    (failure,) = [line for line in lines if line.startswith("FAIL")]
+    assert failure.startswith("FAIL  no trace ")
+    assert "policy-mcp" in failure and "model-gateway" in failure
+    assert any(line.startswith("PASS  decision trace ") for line in lines)
+
+
+@requires_demo_tools
+def test_the_decision_is_not_followed_by_a_trace_check_when_the_api_refuses_it(
+    tmp_path: Path,
+) -> None:
+    refusal = json.dumps({"detail": "the claim does not wait for an adjuster"})
+    done, calls = run_demo(tmp_path, decision_status="409", decision_body=refusal)
+
+    assert done.returncode != 0
+    assert (
+        "CLM-0001: decision HTTP 409 the claim does not wait for an adjuster"
+        in done.stderr
+    )
+    assert [c for c in calls if c[0] == "GET"] == []
+    assert "PASS" not in done.stdout

@@ -7,9 +7,9 @@ policy, claims and knowledge tool servers), seeds the policy store and ingests
 the policy wordings; `make demo` runs a claim through them. `make down`
 removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
-servers, S043 for the cost dashboard). Nothing here is deployed anywhere but
-your laptop; the Azure side is S007 onward. The services run in replay mode:
-no model is called, the model's
+servers, S043 for the cost dashboard, S015 for the adjuster's decision).
+Nothing here is deployed anywhere but your laptop; the Azure side is S007
+onward. The services run in replay mode: no model is called, the model's
 text is canned and simulated, and so are the embeddings. A triage that asks
 the model its one question therefore gets no usable answer and goes to an
 adjuster; the rules decide every other claim.
@@ -134,7 +134,7 @@ node image, Kubernetes components and the platform).
 |---|---|
 | `make up` | Create the cluster if absent, install every release and provision the Grafana dashboards. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/`, ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from the five services that triage a claim. |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
@@ -203,7 +203,7 @@ tag.
 | Model Gateway | `model-gateway.meridian.svc:8000`, cluster only | `model_gateway` |
 | Policy tool server (`policy_lookup`, `claim_history`) | `policy-mcp.meridian.svc:8000/mcp`, cluster only | `policy_mcp` |
 | Knowledge tool server (`wording_search`) | `knowledge-mcp.meridian.svc:8000/mcp`, cluster only | `knowledge_mcp` |
-| Claims tool server (`add_claim_note`, `request_approval`; no graph calls them before S015) | `claims-mcp.meridian.svc:8000/mcp`, cluster only | `claims_mcp` |
+| Claims tool server (`add_claim_note`, `request_approval`, `approval_outcome`; the triage graph calls them for a claim referred to an adjuster, S015) | `claims-mcp.meridian.svc:8000/mcp`, cluster only | `claims_mcp` |
 
 The runtime finds the tool servers through `MERIDIAN_TOOL_SERVERS`, a map of
 the registry's server IDs to those addresses. A tool server answers `/mcp`
@@ -292,6 +292,19 @@ up the policy and its claim history, then searches the wording, and each
 search embeds its query through the gateway even when the rules decide and
 the model is never asked. `make grafana` shows the trace in Explore with the
 TraceQL query `{ trace:id = "<id>" }`.
+
+The script also prints the claim's state. A claim the rules referred to an
+adjuster is `awaiting_adjuster`, its run paused in PostgreSQL (S015). The
+script then posts the adjuster's decision, `DECISION` (`approve`, `reject` or
+`request_documents`; `approve` when unset, anything else is refused before
+any request), to `/claims/<id>/decision` with a trace ID of its own, prints
+the claim's new state and the run's status, and PASSes only if that trace has
+spans from `claims-api`, `agent-runtime` and `claims-mcp`: the Claims API
+records the decision and resumes the run, which reads the recorded decision
+and writes a note through the claims tool server. A claim that is not
+referred needs no decision. A claim left waiting (the demo was stopped
+between the two posts) answers 409 to the next `make demo`, which moves on;
+decide it by posting to its decision endpoint yourself.
 
 ## The cost dashboard
 
