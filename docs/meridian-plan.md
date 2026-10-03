@@ -19,9 +19,11 @@
   before any model call and in logs), a claim it refers to an adjuster waits
   with its run paused in PostgreSQL until the adjuster decides it on a
   server-rendered page and the Claims API records the decision and resumes
-  it, CI grades the golden set's proposals with rules against a reviewed
-  baseline (with a scripted model, simulated), and no service runs in
-  Azure yet.
+  it (or sends the claim back to triage), a claim whose triage failed is
+  decided by an adjuster, a claim can be withdrawn or get the documents it
+  was asked for, at most five triages each, CI grades the golden set's
+  proposals with rules against a reviewed baseline (with a scripted model,
+  simulated), and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -161,7 +163,7 @@ and Pydantic, at the cost of one dependency.
 | S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
 | S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated (split on 2026-10-03: the provider's structured outputs are S051) | done | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
-| S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage, at most five triages per claim; ~~a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63)~~ (split on 2026-10-03: the deadline and the sweep are S052, the report date and the claim history S053) | doing | S015 |
+| S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage, at most five triages per claim; ~~a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63)~~ (split on 2026-10-03: the deadline and the sweep are S052, the report date and the claim history S053) | done | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
@@ -4365,7 +4367,7 @@ commit that changes `src/` or `tests/`.
 
 ### S048 — Claim lifecycle, the rest
 
-**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
 **Goal:** the lifecycle's edges that people drive exist: an adjuster sends a
 claim back to triage or decides one whose triage failed, a claimant
 withdraws a claim or reports the documents asked for, and no claim is
@@ -4430,6 +4432,126 @@ triaged more than five times.
   Invariants: no model call outside the gateway, no new tool
   (`approval_outcome` gains two words in its output), no framework import,
   no secret. No tension.
+- Changed after the reviews (see the work log): the two moves that take no
+  input take an empty JSON object, so T-01's refusal of a body that is not
+  JSON covers them; the 20-document bound answers 409, not 422; the
+  adjuster's forms carry the run the page was drawn for, and a post after
+  the claim moved to another run is 409 (T-33); documents that arrive, or a
+  withdrawal, end a run the adjuster's `request_documents` left paused when
+  its resume failed, and a triage taken over ends the send-back's old run.
+
+**Work log:**
+
+- Eleventh step of one session, on the owner's word ("Okay go on 048"),
+  after pull request 37 (S047) was confirmed on `main`: its 53 files are
+  identical there.
+- The advisor before the design asked for the split, a type of its own for
+  the words that end a run, a decision on the cap's dead end (a claim at
+  the cap waiting for documents) and on a failed end of the old run; before
+  the contracts, for one facts builder for every triage (S047's redaction),
+  the five words in agreement across the registry, the tool server's
+  contract and the graph, and the exact-set tests the routes would move.
+- The `implementer` subagent worked in seven contracts: a pure move of the
+  triage machinery from `app.py` to `triaging.py` (the full suite passed on
+  it alone, `5768 passed, 3 skipped`); migration 0012, the lifecycle's edges,
+  the counter and the outcome words; the three routes and the decision with
+  no run; the adjuster's page; the new edges through the real services; two
+  contracts of review fixes. The main session fixed one thing itself: a
+  triage that died at the cap was refused for good, because taking it over
+  is a move into `triaging`, which the cap refuses; it now fails, so an
+  adjuster decides it.
+- The change to `approval_outcome`'s output moved the tools' fingerprint, so
+  `make eval-baseline` was run in this change; only the fingerprint moved.
+- Reviews by `security-reviewer`, `silent-failure-hunter` and
+  `database-reviewer` on the routes, then `security-reviewer` again and
+  `fastapi-reviewer` on the fixed tree, all reading a snapshot worktree
+  while the implementers wrote. The database reviewer applied 0012 to a
+  scratch PostgreSQL and found a tool server's foreign-key check not
+  blocked by a claim the Claims API held. Found by them, fixed here:
+  - the two moves that take no input took no body, so a cross-site HTML
+    form reached them without a preflight, against T-01 (two reviewers, the
+    second round); they now take an empty JSON object;
+  - the page offered "send the decision again" for the latest row of
+    `claims.decisions`, which could be `send_back`, or a decision of an
+    older run that would then be recorded on a new one (three reviewers);
+    the page shows the decision of the claim's own run only, and its forms
+    carry the run they were drawn for, so a page read before the claim
+    moved is 409;
+  - a replayed decision answered 200 on a claim withdrawn since;
+  - a claim left `triaging` by a dead request was never reclaimed by the
+    triage route, and a reclaim dropped a send-back's old run unended;
+  - documents arriving, or a withdrawal, dropped a run an adjuster's
+    `request_documents` had left paused when its resume failed; they now
+    end it;
+  - a submission that repeats a name could make the run's list exceed its
+    bound and fail the run on every retry;
+  - the 20-document bound answered 422 in a shape the contract does not
+    declare; it is 409;
+  - a stored submission that no longer validates would have logged its
+    values.
+- Reviewed and not done, with reasons: database errors logged without the
+  claim's ID (the shared `database_failure`, older than this step); an
+  httpx timeout that applies per phase, so two calls can in theory outlast
+  the lease (the closing update's compare-and-set keeps it correct); the
+  referral and the decision of a failed triage share one audit timestamp,
+  so the page lists them by name (`claim.approved` first); a send-back's
+  run when the triage after it died at the cap; a lapsed `triaging` claim
+  has no button on the page.
+
+**Result / verification:** run by the main session on 9a81dfc, the last
+commit that changes `src/` or `tests/`.
+
+- `GITHUB_ACTIONS=true make pytest-db`: `6137 passed, 3 skipped` in 555 s
+  (the three are the opt-in live Azure tests; the run shared the laptop
+  with a deploy and `make check`). `make eval`: `recommendation: 39/40 ->
+  39/40`, every other grader 40/40, `eval compare: passed`. `make lint`:
+  `Contracts: 4 kept, 0 broken.` `make registry`: `schemas OK`,
+  `contracts OK`. `make docs`: `13 checks passed`. `make test`: `OK`.
+  `make mermaid-render`: the four diagrams rendered, the lifecycle with its
+  new edge. `gitleaks` over the branch: `no leaks found`. `make check`: no
+  ERROR line.
+- In tests through the real services: a referred golden claim sent back
+  ends its old run (`Completed`, the send-back note, no checkpoint row of
+  its thread) and pauses a new one; a withdrawal ends the paused run once
+  however often it is posted; CLM-0030's police report turns its second
+  triage into an automatic approval; a sixth triage is refused and the
+  claim can still be decided; a claim whose triage failed is decided with
+  no run, the referral and the decision audited.
+- On kind (the cluster built for S047): `make deploy` applied migration
+  0012 and rolled out the six services; `make smoke` printed 13 PASS lines.
+  Through the edge: CLM-0002 posted (201), sent back (200), withdrawn (200)
+  and withdrawn again (200); its page's trail shows the old run resumed,
+  its two tool calls (the outcome read, the note) and `run.completed`, the
+  new run paused, then `claim.withdrawn` and that run ended the same way,
+  and nothing after the second withdrawal. A withdrawal posted as a form
+  was refused (422). CLM-0030 posted (201) went to `documents_requested`;
+  its police report (200) triaged it again and the rules approved it; the
+  page lists the report as arriving later. In the built-in browser,
+  CLM-0012's page shows "Send back to triage" under the three decisions,
+  with no console error; nothing was clicked.
+- Not run: anything against Azure; a cold `make up`.
+
+**Follow-ups:**
+
+- The owner: accept the split (S052, S053) and S018's dependencies; the
+  two routes' body (`{}`) and the forms' `run` field; the 409 for a page
+  read before the claim moved; a reported document counts as provided
+  (T-66).
+- S052: the documents' deadline; runs left `Running`; paused runs no claim
+  names, now including an old run whose end failed, a run left on a claim
+  whose triage then failed and was referred or retried, and a send-back's
+  run when the next triage died at the cap; claims left `triaging` past
+  their lease.
+- S053: the report date and the claim history (T-66).
+- S049: withdrawal and documents from the claimant's pages.
+- S021: who sent back, decided or withdrew.
+- No step yet: the CI python job is near its ten-minute limit (the suite
+  took 8 to 9 minutes locally, about 0.15 s per database test); audit rows of
+  one transaction share a time, so the trail cannot order them;
+  `database_failure` without the claim's ID; a per-phase httpx timeout;
+  uploads (T-38); a flaky shell poll test (`test_kind_manifests.py::
+  test_poll_clears_the_last_error_on_success`, failed once and passed
+  alone).
 
 ## Part D — Open questions
 
@@ -4514,3 +4636,9 @@ triaged more than five times.
 - **v0.19, 2026-10-03:** S047 split by the session, for the owner to
   accept at its pull request: the provider's structured outputs, which
   S014 had left to S047, become S051, new, depending on S047.
+- **v0.20, 2026-10-03:** S048 split by the session, for the owner to
+  accept at its pull request: the documents' deadline and the sweep of
+  runs and checkpoints become S052, new, depending on S048 (Part D question
+  3 moves with the deadline); the report date and the claim history become
+  S053, new, depending on S048 and S049. S018 depends on S052, not on
+  S053.
