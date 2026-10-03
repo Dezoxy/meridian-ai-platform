@@ -1288,7 +1288,8 @@ def test_a_resume_that_times_out_is_504_and_the_decision_stays(
     assert decisions(fresh_database) == [(DECISION_ID, run_id, "approve")]
 
 
-@pytest.mark.parametrize("status", ["Failed", "Running", "AwaitingApproval"])
+# "Running" is another request applying the decision: 409 (test_adjuster_pages).
+@pytest.mark.parametrize("status", ["Failed", "AwaitingApproval"])
 def test_a_2xx_answer_of_a_run_that_did_not_complete_is_502_and_the_decision_stays(
     fresh_database: DatabaseHandle,
     status: str,

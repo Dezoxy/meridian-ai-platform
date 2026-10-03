@@ -1,0 +1,10 @@
+body { font-family: system-ui, sans-serif; margin: 1rem auto; max-width: 60rem; padding: 0 1rem; line-height: 1.4; }
+.banner { background: #fff3cd; border: 1px solid #c9a227; padding: 0.5rem; }
+.notice { border: 1px solid #b00020; padding: 0.5rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #999; padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+dl { display: grid; grid-template-columns: 14rem 1fr; gap: 0.25rem 1rem; }
+dt { font-weight: bold; }
+dd { margin: 0; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+button { font: inherit; margin-right: 0.5rem; padding: 0.4rem 0.8rem; }

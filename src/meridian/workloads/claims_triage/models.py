@@ -1,6 +1,7 @@
 """The claim submission (mirrors data/synthetic/claims.json) and the answer."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
 from types import MappingProxyType
 from typing import Annotated, Literal, Self
@@ -126,6 +127,17 @@ class DecisionResponse(WireModel):
     state: LifecycleState
     run_id: UUID
     run_status: RunState
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionFailure:
+    """A decision that did not complete, as a status and a fixed text: the
+    JSON route answers it as JSON and the adjuster's page renders it. The run's
+    ID is there once the decision was recorded and a resume was tried."""
+
+    status: int
+    detail: str
+    run_id: UUID | None = None
 
 
 class ClaimErrorBody(ErrorBody):

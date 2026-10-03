@@ -185,6 +185,16 @@ class Stack:
             f"/claims/{claim_id}/decision", json={"decision": decision}
         )
 
+    def decide_in_page(self, claim_id: str, decision: str) -> httpx.Response:
+        """The same decision from the adjuster's page: a form post from the
+        page's own origin. The redirect is not followed."""
+        return self.client.post(
+            f"/adjuster/claims/{claim_id}/decision",
+            data={"decision": decision},
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+
     def resume_directly(self, claim_id: str, run_id: str) -> httpx.Response:
         """What anything that can call the runtime can do: resume a paused run
         with no decision recorded by the Claims API, through a runtime of its

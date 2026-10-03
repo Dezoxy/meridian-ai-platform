@@ -25,6 +25,12 @@
 #                 demo`, and fails when the gateway is not available); and
 #                 Grafana's service account may not read Secrets in meridian or
 #                 observability.
+#   6. adjuster pages: two lines, through the edge as demo.sh reaches the Claims
+#                 API. The queue page answers 200 with the Content-Security-
+#                 Policy (frame-ancestors 'none', default-src 'none') and the
+#                 synthetic-data line; a decision posted with a foreign Origin is
+#                 refused with 403 before any claim is looked up. Skipped while
+#                 the Meridian services are not deployed (`make deploy`).
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -32,6 +38,10 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 readonly EDGE_URL=http://127.0.0.1:8088/
+readonly ADJUSTER_QUEUE_URL=http://claims.meridian.localhost:8088/adjuster/claims
+readonly ADJUSTER_DECISION_URL=http://claims.meridian.localhost:8088/adjuster/claims/CLM-9999/decision
+# The first sentence of the banner every page carries (templates/base.html).
+readonly ADJUSTER_BANNER="Synthetic data only."
 readonly COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4317
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
@@ -553,12 +563,67 @@ check_cost_panel() {
   check_grafana_rights
 }
 
+# ── 6. adjuster pages ────────────────────────────────────────────────────────
+# The pages are served by the Claims API (S016), through the edge, in the form
+# demo.sh reaches it. Neither line changes a claim: the second is refused by the
+# origin check before any lookup, so CLM-9999 need not exist.
+check_adjuster_pages() {
+  local found headers_file body_file status csp missing=""
+  # Skipped only when no Meridian Deployment exists, as in check_tools.
+  if ! found="$(deployed_services)"; then
+    fail "adjuster pages: could not look for the Meridian deployments (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "adjuster pages: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+
+  headers_file="$(mktemp)"
+  body_file="$(mktemp)"
+  if ! status="$(curl -q --noproxy '*' -sS -m 10 -D "${headers_file}" -o "${body_file}" \
+    -w '%{http_code}' "${ADJUSTER_QUEUE_URL}" 2>&1)"; then
+    fail "adjuster pages: ${ADJUSTER_QUEUE_URL} did not answer: $(clean_lines "${status}")"
+  else
+    status="$(clean_lines "${status}")"
+    # Header names are case-insensitive; the lines end in a carriage return.
+    csp="$(grep -i '^content-security-policy:' "${headers_file}" | LC_ALL=C tr -cd '[:print:]' || true)"
+    [[ "${status}" == 200 ]] || missing="status 200 (got ${status})"
+    [[ "${csp}" == *"frame-ancestors 'none'"* ]] ||
+      missing="${missing:+${missing}, }header Content-Security-Policy with frame-ancestors 'none'"
+    [[ "${csp}" == *"default-src 'none'"* ]] ||
+      missing="${missing:+${missing}, }header Content-Security-Policy with default-src 'none'"
+    grep -qF "${ADJUSTER_BANNER}" "${body_file}" ||
+      missing="${missing:+${missing}, }text \"${ADJUSTER_BANNER}\""
+    if [[ -z "${missing}" ]]; then
+      pass "adjuster pages: ${ADJUSTER_QUEUE_URL} -> 200 with a Content-Security-Policy of frame-ancestors 'none' and default-src 'none', and the synthetic-data line"
+    else
+      fail "adjuster pages: ${ADJUSTER_QUEUE_URL} lacks: ${missing}"
+    fi
+  fi
+  rm -f "${headers_file}" "${body_file}"
+
+  if ! status="$(curl -q --noproxy '*' -sS -m 10 -o /dev/null -w '%{http_code}' \
+    -H 'Origin: http://attacker.example' --data 'decision=approve' \
+    "${ADJUSTER_DECISION_URL}" 2>&1)"; then
+    fail "adjuster pages: ${ADJUSTER_DECISION_URL} did not answer: $(clean_lines "${status}")"
+    return
+  fi
+  status="$(clean_lines "${status}")"
+  if [[ "${status}" == 403 ]]; then
+    pass "adjuster pages: a decision posted with Origin http://attacker.example -> 403, refused before any lookup"
+  else
+    fail "adjuster pages: a decision posted with Origin http://attacker.example expected 403, got ${status}"
+  fi
+}
+
 trap cleanup EXIT
 check_edge
 check_database
 check_tools
 check_telemetry
 check_cost_panel
+check_adjuster_pages
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

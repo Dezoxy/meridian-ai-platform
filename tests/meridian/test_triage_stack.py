@@ -529,6 +529,45 @@ def test_a_decision_is_served_by_a_runtime_built_after_the_run_paused(
     assert sorted(chain, key=above.index) == chain
 
 
+# ── 4b2. the adjuster's page (S016) ─────────────────────────────────────────
+def test_a_referred_claim_is_decided_in_the_adjusters_page_as_it_is_by_the_api(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    """The claim the rules refer to an adjuster is in the page's queue, its page
+    shows the run's own rows (through the Claims API's view of the audit log),
+    and a decision posted from the form redirects, completes the run and
+    writes the note, as ``Stack.decide`` does."""
+    posted = stack.post(CLAIMS[LAPSED_POLICY])
+    assert posted.status_code == 201
+    run_id = uuid.UUID(posted.json()["run_id"])
+
+    queue = stack.client.get("/adjuster/claims")
+    page = stack.client.get(f"/adjuster/claims/{LAPSED_POLICY}")
+
+    assert queue.status_code == 200
+    assert f"/adjuster/claims/{LAPSED_POLICY}" in queue.text
+    assert page.status_code == 200
+    assert "run.awaiting_approval" in page.text
+    assert 'name="decision"' in page.text
+    answer = stack.decide_in_page(LAPSED_POLICY, "reject")
+
+    assert answer.status_code == 303, answer.text
+    assert answer.headers["location"] == f"/adjuster/claims/{LAPSED_POLICY}"
+    assert run_status(fresh_database, run_id) == "Completed"
+    assert states(fresh_database)[LAPSED_POLICY] == "rejected"
+    assert owner_rows(
+        fresh_database, "SELECT claim_id, run_id, decision FROM claims.decisions"
+    ) == [(LAPSED_POLICY, run_id, "reject")]
+    assert owner_rows(fresh_database, "SELECT note FROM claims.notes") == [
+        (DECISION_NOTES["reject"],)
+    ]
+    for table in CHECKPOINT_TABLES:
+        assert table_count(fresh_database, table) == 0, table
+    decided_page = stack.client.get(f"/adjuster/claims/{LAPSED_POLICY}")
+    assert "run.completed" in decided_page.text
+    assert 'name="decision"' not in decided_page.text
+
+
 # ── 4c. the run reads the decision the Claims API recorded (T-31) ───────────
 def run_status(db: DatabaseHandle, run_id: uuid.UUID) -> str:
     ((status,),) = owner_rows(
