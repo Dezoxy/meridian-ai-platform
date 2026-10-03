@@ -124,7 +124,14 @@ def test_concurrent_runners_on_an_empty_database_apply_each_file_once(
 
     expected = [name for name, _ in migration_files()]
     assert sorted(name for applied in results for name in applied) == expected
-    assert sum(1 for applied in results if applied) == 1
+    # Not "one runner applied them all": the lock is taken per file, so a
+    # second runner may win it for a later file. That assertion held only
+    # while one thread kept winning, and failed under load (S054).
+    with connect(empty_database.dsn(OWNER), "test-concurrent") as conn:
+        recorded = conn.execute(
+            "SELECT name FROM public.meridian_migrations ORDER BY name"
+        ).fetchall()
+    assert [name for (name,) in recorded] == expected
 
 
 def test_a_failing_migration_is_rolled_back_whole(
