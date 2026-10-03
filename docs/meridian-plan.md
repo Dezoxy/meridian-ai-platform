@@ -3722,10 +3722,11 @@ in a state of the designed lifecycle.
   overview, and the ClaimsApproval view, whose run now reads the recorded
   decision (`make check` ends with no ERROR line; `make mermaid-render`
   rendered the four diagrams; no derived block shows the changed views).
-  ADR 2 still says S015 would choose between deleting a run's checkpoints
-  and keeping them free of claim text, and would take the adjuster's
-  identity from the sign-in; it records its moment, and this section says
-  what S015 chose (delete) and moved (identity to S021).
+  ADR 2 said S015 would choose between deleting a run's checkpoints and
+  keeping them free of claim text, and would take the adjuster's identity
+  from the sign-in; it keeps its text and gets an amendment in ADR 3's
+  style: S015 deletes them, the identity moved to S021, and a resume is
+  addressed to its pause by ID.
 
 **Result / verification:** run by the main session on the final code
 (contracts 1 to 6c, uncommitted at the time, then committed unchanged).
@@ -3851,3 +3852,10 @@ in a state of the designed lifecycle.
   accept at its pull request: S014 keeps the triage graph, its rules, the
   proposal and its storage; S047, new, takes PII redaction, injection
   detection and the data class per request. S018 and S032 depend on S047.
+- **v0.16, 2026-10-03:** S015 split by the session, for the owner to
+  accept at its pull request: S015 keeps the checkpointer, the pause and
+  the resume, the claim states that a run and an adjuster's decision drive
+  and the audited decision; S048, new, takes the rest of the lifecycle,
+  the report date and the claim history, and the sweep of runs and
+  checkpoints that S009 had left to S015. S018 depends on S048; Part D
+  question 3 is needed by S048.
