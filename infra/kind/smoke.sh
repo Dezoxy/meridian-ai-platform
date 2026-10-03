@@ -15,12 +15,16 @@
 #                 to the collector; each is then read back through Grafana's
 #                 datasource proxy (Tempo, Loki, Prometheus), the way an owner
 #                 would see it.
-#   5. cost panel: Grafana serves the provisioned dashboard "Meridian: Model
-#                 Gateway tokens and cost"; and, once the gateway has settled a
-#                 call since it started (the ledger says so), Prometheus holds
-#                 its tokens, cost and calls series. The series line is skipped
-#                 while the services are not deployed (`make deploy`) or the
-#                 gateway has settled nothing yet (`make demo`).
+#   5. cost panel: three lines. Grafana serves the provisioned dashboard
+#                 "Meridian: Model Gateway tokens and cost", its queries equal
+#                 the file's and every one of them runs in Prometheus; once the
+#                 gateway has settled a call since it started (the ledger says
+#                 so), Prometheus holds its tokens, cost and calls series (the
+#                 series line is skipped while the services are not deployed,
+#                 `make deploy`, or the gateway has settled nothing yet, `make
+#                 demo`, and fails when the gateway is not available); and
+#                 Grafana's service account may not read Secrets in meridian or
+#                 observability.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -36,11 +40,16 @@ readonly JOB_TIMEOUT=120s
 # The dashboard's uid (infra/kind/dashboards/gateway-cost.json) and the series
 # the gateway exports for it (their names are in src/meridian/platform/gateway).
 readonly DASHBOARD_UID=meridian-gateway-cost
+readonly DASHBOARD_FILE="${KIND_DIR}/dashboards/gateway-cost.json"
 readonly COST_SERIES=(meridian_gateway_tokens_total meridian_gateway_cost_EUR_total meridian_gateway_calls_total)
+# The service account the chart makes for Grafana (release name + "-grafana").
+readonly GRAFANA_ACCOUNT=system:serviceaccount:observability:kube-prometheus-stack-grafana
 
 failures=0
 skips=0
-grafana_url="" # set by open_grafana
+grafana_url=""     # set by open_grafana
+grafana_failed=0   # open_grafana failed once: later calls fail quietly
+poll_error=""      # what the last failed poll attempt saw
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
 skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
@@ -206,23 +215,36 @@ EOF
 # gcurl ARGS...: curl against Grafana with basic auth. The password reaches curl
 # on stdin as a config line, so it never appears in a process listing.
 gcurl() {
+  { set +x; } 2>/dev/null # a `bash -x` run must not trace the password
   printf 'user = "admin:%s"\n' "${password}" | curl -q --noproxy '*' -sS -m 15 -K - "$@"
 }
 
 # poll FILTER CURL_ARGS...: run gcurl until jq FILTER prints a non-empty value
-# or POLL_TIMEOUT passes. The value is left in ${poll_result}.
+# or POLL_TIMEOUT passes. The value is left in ${poll_result}. A failed attempt
+# leaves its reason in ${poll_error}: curl's status and stderr, or the start of
+# an answer the filter found nothing in; a success clears it.
 poll() {
   local filter=$1
   shift
-  local deadline=$((SECONDS + POLL_TIMEOUT)) body
+  local deadline=$((SECONDS + POLL_TIMEOUT)) body status err_file
+  err_file="$(mktemp)"
+  poll_error=""
   while ((SECONDS < deadline)); do
-    if body="$(gcurl "$@" 2>/dev/null)" &&
-      poll_result="$(jq -r "${filter}" <<<"${body}" 2>/dev/null)" &&
-      [[ -n "${poll_result}" ]]; then
-      return 0
+    if body="$(gcurl "$@" 2>"${err_file}")"; then
+      if poll_result="$(jq -r "${filter}" <<<"${body}" 2>/dev/null)" &&
+        [[ -n "${poll_result}" ]]; then
+        poll_error=""
+        rm -f "${err_file}"
+        return 0
+      fi
+      poll_error="$(clean_lines "${body:0:160}")"
+    else
+      status=$?
+      poll_error="curl exit ${status}: $(clean_lines "$(<"${err_file}")")"
     fi
     sleep "${POLL_INTERVAL}"
   done
+  rm -f "${err_file}"
   poll_result=""
   return 1
 }
@@ -232,17 +254,27 @@ cleanup() {
     kill "${pf_pid}" 2>/dev/null || true
     wait "${pf_pid}" 2>/dev/null || true # kubectl is gone when smoke.sh returns
   fi
-  [[ -n "${pf_log:-}" ]] && rm -f "${pf_log}"
+  if [[ -n "${pf_log:-}" ]]; then rm -f "${pf_log}"; fi
 }
 
 # open_grafana: read the admin password into ${password} (gcurl uses it) and
 # forward a local port to Grafana, once per run; the address is left in
-# ${grafana_url}. Returns 0 at once when it is open already, and 1 after a FAIL
-# line when it cannot open. The password is never an argument and never printed.
+# ${grafana_url}. Returns 0 at once when the forward is open and alive. Returns
+# 1 after one FAIL line when it cannot open or has died; after that every call
+# returns 1 without a line. The password is never an argument and never printed.
 open_grafana() {
-  [[ -z "${grafana_url}" ]] || return 0
+  { set +x; } 2>/dev/null # a `bash -x` run must not trace the password
+  ((grafana_failed == 0)) || return 1
+  local port="" waited=0 detail
+  if [[ -n "${grafana_url}" ]]; then
+    kill -0 "${pf_pid}" 2>/dev/null && return 0
+    grafana_failed=1
+    fail "grafana: the port-forward to Grafana died (kubectl said: $(clean_lines "$(<"${pf_log}")"))"
+    return 1
+  fi
   if ! password="$(kctl -n observability get secret grafana-admin \
     -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)" || [[ -z "${password}" ]]; then
+    grafana_failed=1
     fail "grafana: could not read the Grafana admin password from Secret grafana-admin"
     return 1
   fi
@@ -253,16 +285,21 @@ open_grafana() {
     -n observability port-forward --address 127.0.0.1 "${GRAFANA_SERVICE}" :80 \
     >"${pf_log}" 2>&1 &
   pf_pid=$!
-  local port="" waited=0
-  while [[ -z "${port}" && ${waited} -lt 30 ]]; do
+  while :; do
     port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) ->.*/\1/p' "${pf_log}" | head -n 1)"
-    [[ -n "${port}" ]] || { sleep 1; waited=$((waited + 1)); }
+    [[ -z "${port}" ]] || break
+    kill -0 "${pf_pid}" 2>/dev/null || break # kubectl has exited: no use waiting
+    ((waited < 30)) || break
+    sleep 1
+    waited=$((waited + 1))
   done
   if [[ -z "${port}" ]]; then
-    fail "grafana: could not port-forward to Grafana"
-    cleanup || true # a later check may try again with a fresh forward
+    detail="$(clean_lines "$(<"${pf_log}")")"
+    grafana_failed=1
+    cleanup || true
     pf_pid=""
     pf_log=""
+    fail "grafana: could not port-forward to Grafana (kubectl said: ${detail})"
     return 1
   fi
   grafana_url="http://127.0.0.1:${port}"
@@ -315,11 +352,85 @@ check_telemetry() {
 }
 
 # ── 5. cost panel ────────────────────────────────────────────────────────────
+# run_dashboard_query TITLE EXPR: one instant query through Grafana's datasource
+# proxy; Prometheus must answer status success. Counts it in ${queries_run};
+# on a refusal returns 1 with "<title>: <error>" in ${query_error}.
+run_dashboard_query() {
+  local title=$1 expr=$2 body status error
+  body="$(gcurl -G "${grafana_url}/api/datasources/proxy/uid/prometheus/api/v1/query" \
+    --data-urlencode "query=${expr}" 2>&1)" || true
+  queries_run=$((queries_run + 1))
+  status="$(jq -r '.status // empty' <<<"${body}" 2>/dev/null || true)"
+  [[ "${status}" != success ]] || return 0
+  error="$(jq -r '.error // empty' <<<"${body}" 2>/dev/null || true)"
+  [[ -n "${error}" ]] || error="${body}"
+  query_error="${title}: $(clean_lines "${error:0:200}")"
+  return 1
+}
+
+# run_dashboard_queries SERVED: every target of the served dashboard, with the
+# range variable set to an hour (3600) and, for a target that names $dimension,
+# once per option of that variable. Leaves the count in ${queries_run}; the first
+# refusal returns 1 (see run_dashboard_query).
+run_dashboard_queries() {
+  local served=$1 total i title expr options option
+  # shellcheck disable=SC2016 # both are Grafana's variable names, written literally
+  local range_ref='${__range_s}' dimension_ref='$dimension'
+  queries_run=0
+  query_error=""
+  options="$(jq -r '.templating.list[] | select(.name == "dimension") | .options[].value' <<<"${served}")"
+  total="$(jq '[.panels[].targets[]?] | length' <<<"${served}")"
+  for ((i = 0; i < total; i++)); do
+    title="$(clean_lines "$(jq -r --argjson i "${i}" '[.panels[] | .title as $t | .targets[]? | $t][$i]' <<<"${served}")")"
+    expr="$(jq -r --argjson i "${i}" '[.panels[].targets[]?][$i].expr' <<<"${served}")"
+    expr="${expr//"${range_ref}"/3600}"
+    if [[ "${expr}" != *"${dimension_ref}"* ]]; then
+      run_dashboard_query "${title}" "${expr}" || return 1
+      continue
+    fi
+    if [[ -z "${options}" ]]; then
+      query_error="${title}: the dashboard has no dimension options"
+      return 1
+    fi
+    while IFS= read -r option; do
+      run_dashboard_query "${title}" "${expr//"${dimension_ref}"/${option}}" || return 1
+    done <<<"${options}"
+  done
+}
+
+# The dashboard line. What Grafana serves must be the file's: a stale provisioned
+# copy fails. Its queries are then run, so a renamed series or a typo shows here.
+check_cost_dashboard() {
+  local served title file_exprs served_exprs
+  if ! poll '(select(.meta.provisioned == true) | .dashboard) // empty | tojson' \
+    "${grafana_url}/api/dashboards/uid/${DASHBOARD_UID}"; then
+    fail "dashboard: Grafana has no provisioned dashboard ${DASHBOARD_UID} after ${POLL_TIMEOUT}s (run make up) (last answer: ${poll_error})"
+    return
+  fi
+  served="${poll_result}"
+  title="$(clean_lines "$(jq -r '.title // empty' <<<"${served}" 2>/dev/null)")"
+  if ! file_exprs="$(jq -c '[.panels[].targets[]?.expr]' "${DASHBOARD_FILE}")"; then
+    fail "dashboard: could not read the queries of ${DASHBOARD_FILE}"
+    return
+  fi
+  served_exprs="$(jq -c '[.panels[].targets[]?.expr]' <<<"${served}" 2>/dev/null || true)"
+  if [[ "${served_exprs}" != "${file_exprs}" ]]; then
+    fail "dashboard: Grafana serves \"${title}\" but its queries differ from infra/kind/dashboards/gateway-cost.json (run make up)"
+    return
+  fi
+  if run_dashboard_queries "${served}"; then
+    pass "dashboard: Grafana serves \"${title}\" (uid ${DASHBOARD_UID}), provisioned, with the file's queries; all ${queries_run} queries ran in Prometheus (range 3600s)"
+  else
+    fail "dashboard: a query of \"${title}\" failed in Prometheus: ${query_error}"
+  fi
+}
+
 # The series line. A gateway process exports once a minute, so the ledger says
 # whether a series is due: only attempts settled since the process started can
 # be in Prometheus. The start time is checked before it goes into SQL.
 check_cost_series() {
-  local found started primary answer settled first_settled name got missing series_list query
+  local found available started primary err_file detail answer settled first_settled
+  local name got final prom_status missing series_list query last
   series_list="$(printf '%s, ' "${COST_SERIES[@]}")"
   series_list="${series_list%, }"
   local start_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
@@ -334,9 +445,18 @@ check_cost_series() {
     skip "cost series: the Meridian services are not deployed (make deploy)"
     return
   fi
+  # A gateway that is down has settled nothing since its start, and that must not
+  # read as one waiting for a claim: it fails here instead of skipping below.
+  available="$(kctl -n meridian get deployment model-gateway \
+    -o jsonpath='{.status.availableReplicas}' || true)"
+  [[ "${available}" =~ ^[0-9]+$ ]] || available=0
+  if ((available < 1)); then
+    fail "cost series: the gateway is not available (Deployment model-gateway reports ${available} available replicas)"
+    return
+  fi
   # The newest container start among the gateway's pods (RFC 3339, so it sorts).
   if ! started="$(kctl -n meridian get pod -l app.kubernetes.io/name=model-gateway \
-    -o jsonpath='{range .items[*]}{.status.containerStatuses[0].state.running.startedAt}{"\n"}{end}' |
+    -o jsonpath='{range .items[*]}{.status.containerStatuses[?(@.name=="model-gateway")].state.running.startedAt}{"\n"}{end}' |
     sort | tail -n 1)"; then
     fail "cost series: could not read the gateway's pods (kubectl's error is above)"
     return
@@ -345,19 +465,25 @@ check_cost_series() {
     fail "cost series: could not read when the gateway process started (the newest model-gateway pod has no running start time in the form 2026-01-31T08:00:00Z)"
     return
   fi
-  primary="$(kctl -n meridian get pod \
+  # kubectl's stderr goes to a file (as in check_tools) and into the FAIL line.
+  err_file="$(mktemp)"
+  if ! primary="$(kctl -n meridian get pod \
     -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  if [[ -z "${primary}" ]]; then
-    fail "cost series: no primary pod found for platform-db"
+    -o jsonpath='{.items[0].metadata.name}' 2>"${err_file}")" || [[ -z "${primary}" ]]; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "cost series: no primary pod found for platform-db${detail:+ (kubectl said: ${detail})}"
     return
   fi
   if ! answer="$(kctl -n meridian exec "${primary}" -c postgres -- \
     psql -d meridian -tAc "SELECT count(*) || '|' || coalesce(floor(extract(epoch FROM min(closed_at)))::bigint::text, '') FROM gateway.usage WHERE state = 'settled' AND closed_at > '${started}'" \
-    2>/dev/null)"; then
-    fail "cost series: could not count the settled attempts in gateway.usage of ${primary}"
+    2>"${err_file}")"; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "cost series: could not count the settled attempts in gateway.usage of ${primary}${detail:+ (kubectl said: ${detail})}"
     return
   fi
+  rm -f "${err_file}"
   answer="$(clean_lines "${answer}")"
   if ! [[ "${answer}" =~ ${ledger_pattern} ]]; then
     fail "cost series: the ledger's answer was not a count and an epoch second"
@@ -383,29 +509,48 @@ check_cost_series() {
     pass "cost series: ${settled} settled attempt(s) in the ledger since the gateway started at ${started}; Prometheus has ${series_list}"
     return
   fi
-  # Which of them did not come: one more look, for the message only.
-  got="$(clean_lines "$(gcurl -G "${query_url}" --data-urlencode "query=${query}" 2>/dev/null |
-    jq -r '[.data.result[].metric.__name__] | join(" ")' 2>/dev/null || true)")"
+  # Which of them did not come, and did Prometheus answer at all: one more look,
+  # for the message only. ${poll_error} is what the last attempt saw.
+  last="(last answer: ${poll_error})"
+  final="$(gcurl -G "${query_url}" --data-urlencode "query=${query}" 2>/dev/null || true)"
+  prom_status="$(jq -r '.status // empty' <<<"${final}" 2>/dev/null || true)"
+  if [[ "${prom_status}" != success ]]; then
+    fail "cost series: Prometheus did not answer the query with status success after ${POLL_TIMEOUT}s ${last}"
+    return
+  fi
+  got="$(clean_lines "$(jq -r '[.data.result[].metric.__name__] | join(" ")' <<<"${final}" 2>/dev/null || true)")"
   missing=""
   for name in "${COST_SERIES[@]}"; do
     [[ " ${got} " == *" ${name} "* ]] || missing="${missing:+${missing}, }${name}"
   done
   if [[ "${missing}" == "${series_list}" ]]; then
-    fail "cost series: none of the three series came from the gateway after ${POLL_TIMEOUT}s, though the ledger has ${settled} settled attempt(s) since ${started} (it exports once a minute; is the collector up?)"
+    fail "cost series: none of the three series came from the gateway after ${POLL_TIMEOUT}s, though the ledger has ${settled} settled attempt(s) since ${started} (it exports once a minute; is the collector up?) ${last}"
   else
-    fail "cost series: missing ${missing} in Prometheus after ${POLL_TIMEOUT}s"
+    fail "cost series: missing ${missing} in Prometheus after ${POLL_TIMEOUT}s ${last}"
   fi
 }
 
+# Grafana's service account must not read Secrets, in the namespace of the
+# database roles' passwords or in its own (the Helm release Secrets, T-68).
+# `can-i` prints yes or no on stdout and exits 1 for no; stderr is not an answer.
+check_grafana_rights() {
+  local namespace answer
+  for namespace in meridian observability; do
+    answer="$(kctl auth can-i get secrets -n "${namespace}" --as "${GRAFANA_ACCOUNT}" 2>/dev/null || true)"
+    if [[ "${answer}" != no ]]; then
+      fail "grafana rights: expected \"no\" to reading Secrets in ${namespace} as ${GRAFANA_ACCOUNT}, got \"$(clean_lines "${answer}")\""
+      return
+    fi
+  done
+  pass "grafana rights: Grafana's service account may not read Secrets in meridian or observability (T-68)"
+}
+
 check_cost_panel() {
-  open_grafana || return 0 # it printed the FAIL line
-  if poll '(select(.meta.provisioned == true) | .dashboard.title) // empty' \
-    "${grafana_url}/api/dashboards/uid/${DASHBOARD_UID}"; then
-    pass "dashboard: Grafana serves \"$(clean_lines "${poll_result}")\" (uid ${DASHBOARD_UID}), provisioned from infra/kind/dashboards"
-  else
-    fail "dashboard: Grafana has no provisioned dashboard ${DASHBOARD_UID} after ${POLL_TIMEOUT}s (run make up)"
+  if open_grafana; then # otherwise it printed the one FAIL line
+    check_cost_dashboard
+    check_cost_series
   fi
-  check_cost_series
+  check_grafana_rights
 }
 
 trap cleanup EXIT

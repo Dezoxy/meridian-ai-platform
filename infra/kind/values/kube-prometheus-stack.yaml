@@ -99,13 +99,17 @@ grafana:
     limits:
       memory: 512Mi
   # The chart's defaults give Grafana's service account a ClusterRole that reads
-  # every ConfigMap and Secret in the cluster, because the dashboard sidecar
-  # watches all namespaces (measured: it could read the database roles' Secrets
-  # in namespace meridian). Every dashboard, the chart's and ours (up.sh), is in
-  # observability, so a Role there is enough. The chart's Role still covers that
-  # namespace's Secrets; the sidecars themselves ask for ConfigMaps only.
+  # every ConfigMap and Secret in the cluster, because the sidecars watch all
+  # namespaces (measured: it could read the database roles' Secrets in namespace
+  # meridian). Every dashboard and datasource, the chart's and ours (up.sh), is
+  # in observability, so the sidecars read that namespace only. The chart's own
+  # Role (rbac.namespaced) still grants Secrets there, whenever a sidecar is on:
+  # the Prometheus account's token and the Helm release Secrets. So the chart
+  # makes no Role at all and manifests/grafana-rbac.yaml grants ConfigMaps only.
+  # rbac.create: false, not rbac.useExistingRole: a RoleBinding's roleRef cannot
+  # change, so an existing cluster could not upgrade to a binding to another Role.
   rbac:
-    namespaced: true
+    create: false
   sidecar:
     # Both sidecars (dashboards, datasources) list every labelled ConfigMap at
     # start; 64Mi was OOM-killed in a loop on the first run.
@@ -119,6 +123,7 @@ grafana:
       searchNamespace: observability
       resource: configmap
     datasources:
+      searchNamespace: observability
       resource: configmap
       # Prometheus keeps the chart's default datasource, uid "prometheus".
       # Alertmanager is off, so its datasource would point nowhere.

@@ -5,9 +5,10 @@
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its six roles; their password Secrets are
 #      created first, only if absent
-#   4. Grafana admin Secret (only if absent), kube-prometheus-stack, the Grafana
-#      dashboards in infra/kind/dashboards (one ConfigMap each), Tempo, Loki,
-#      OpenTelemetry Collector
+#   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
+#      observability, nothing else), kube-prometheus-stack, the Grafana
+#      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
+#      there is deleted), Tempo, Loki, OpenTelemetry Collector
 # Every version is pinned in pins.env.
 set -euo pipefail
 
@@ -112,20 +113,39 @@ wait_for_database_roles() {
 
 # Each infra/kind/dashboards/*.json becomes a ConfigMap in observability that
 # Grafana's dashboard sidecar loads (the label; the sidecar reads that namespace
-# only, see the values file). Server-side apply, so a rerun converges.
+# only, see the values file). Server-side apply, so a rerun converges. Every
+# file is checked first, so a broken one stops the run before anything changes.
+# Then a dashboard whose file is gone is deleted: only ConfigMaps labelled
+# part-of=meridian are looked at, and the chart's dashboards carry no such label.
 apply_dashboards() {
-  local file name count=0
+  local file name wanted="" stale count=0
+  for file in "${KIND_DIR}"/dashboards/*.json; do
+    [[ -e "${file}" ]] || continue
+    jq empty "${file}" 2>/dev/null || die "${file} is not valid JSON"
+  done
   for file in "${KIND_DIR}"/dashboards/*.json; do
     [[ -e "${file}" ]] || continue
     name="${file##*/}"
+    wanted+="meridian-dashboard-${name%.json}"$'\n'
     kctl -n observability create configmap "meridian-dashboard-${name%.json}" \
       --from-file="${name}=${file}" --dry-run=client -o json |
       jq '.metadata.labels = {"grafana_dashboard": "1", "app.kubernetes.io/part-of": "meridian"}
         | del(.metadata.creationTimestamp)' |
-      kctl apply --server-side --force-conflicts -f - >/dev/null
+      kctl -n observability apply --server-side --force-conflicts -f - >/dev/null
     count=$((count + 1))
   done
   ((count > 0)) || die "no dashboard (*.json) in ${KIND_DIR}/dashboards"
+  local existing
+  existing="$(kctl -n observability get configmap \
+    -l grafana_dashboard=1,app.kubernetes.io/part-of=meridian -o name)" ||
+    die "could not list the dashboard ConfigMaps in observability"
+  while IFS= read -r stale; do
+    stale="${stale#configmap/}"
+    [[ -n "${stale}" ]] || continue
+    grep -qxF -- "${stale}" <<<"${wanted}" && continue
+    kctl -n observability delete configmap "${stale}" >/dev/null
+    log "observability: dashboard ConfigMap ${stale} deleted (its file is gone)"
+  done <<<"${existing}"
   log "observability: ${count} Grafana dashboard(s) applied"
 }
 
@@ -158,6 +178,8 @@ kctl -n meridian wait --for=jsonpath='{.status.applied}'=true database/platform-
 log "platform-db is ready (database meridian, roles ${DATABASE_ROLES[*]})"
 
 ensure_grafana_secret
+log "observability: Grafana's Role (ConfigMaps in observability only)"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/grafana-rbac.yaml" >/dev/null
 log "observability: Prometheus and Grafana"
 install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" \
   "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml
