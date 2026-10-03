@@ -180,9 +180,9 @@ and Pydantic, at the cost of one dependency.
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
-| S052 | Scheduled sweep | A scheduled job closes a claim whose documents miss the deadline as rejected (Part D question 3), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
+| S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
-| S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | doing | S049 |
+| S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
 ### M2 — Azure, identity, delivery
@@ -277,12 +277,21 @@ that day; the rest stand as their step recorded them.
 | `database_failure` without the claim's ID | S048 | open | none |
 | A per-phase httpx timeout | S048 | open | none |
 | Uploads (T-38) | S048 | open | none |
-| A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | open | S054 |
-| The CI python job near its time limit | S048 | limit raised to 15 minutes in S049; the rest is S054 | S054 |
-| Running the tests in parallel | S049 | moved to S054 | S054 |
+| A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | open; not seen in S054's parallel runs | none |
+| The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
+| Running the tests in parallel | S049 | done in S054 | none |
 | HTML pages for the shared JSON answers under `/claimant/` | S049 | moved to S053 | S053 |
 | The server span's `http.url` keeps a query string | S049 | moved to S053 | S053 |
 | A documents failure whose cause races with another move | S049 | moved to S052 | S052 |
+| Two resume-race tests in `test_runtime_app.py` rest on a 0.3 s sleep for their overlap | S054 | open | none |
+| One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | open | none |
+| `unused_port()` in `toolsupport.py` closes its socket before the test uses the port | S054 | open | none |
+| Wall-clock limits in four tests (0.5 s to 5 s, thirty times their measured time or more) | S054 | open | none |
+| `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | open | none |
+| A coverage gate in CI (measured once: 99.2 % of lines; coverage adds about a third to the run) | S054 | open, the owner's decision | none |
+| Template databases, so a test database is copied and not migrated | S054 | open | none |
+| The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | open | none |
+| Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | none |
 
 ## Part C — Step details
 
@@ -4807,7 +4816,7 @@ commit that changes `src/` or `tests/`.
 
 ### S054 — Parallel tests
 
-**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
 **Goal:** the suite runs in parallel with `pytest-xdist` in `make pytest`,
 `make pytest-db` and CI, so the python job stops growing towards its limit
 and a coverage gate becomes affordable.
@@ -4844,11 +4853,78 @@ and a coverage gate becomes affordable.
   its workers over execnet's local pipes, against a throwaway server on
   the loopback.
 
+- Changed after the first parallel runs and the review:
+  - The probe's 108 s was too good: the worker whose fixture failed ran
+    none of its database tests. The suite takes about 3 min 30 s to 4 min
+    in parallel here, against 9 min 20 s to 9 min 53 s in one process.
+  - `test_concurrent_runners_on_an_empty_database_apply_each_file_once`,
+    the test that failed on three earlier pull requests, asserted that one
+    runner applies every file. The runner takes its lock per file, each in
+    its own transaction, so a second runner may win it for a later file;
+    the assertion held only while one thread kept winning. It now reads
+    the migrations table: each file recorded once.
+  - The redaction's linear-time test measured the wall clock, which under
+    parallel workers counts the wait for a CPU (a linear run measured 9 to
+    11 times, limit 8). It measures the thread's CPU time, best of five.
+  - The review (`python-reviewer`, no critical or high finding) found that
+    the threaded role test reached only the ALTER half, since the session
+    had made the roles. A second test races on two roles of its own and
+    drops them. A test whose name claimed to check passwords was renamed:
+    under `trust` a login proves nothing about a password.
+
 **Work log:**
+
+- One contract to the `implementer`: `ensure_roles`, `new_passwords` and
+  `session_passwords` in `tests/meridian/dbsupport.py`; the xdist hook
+  `pytest_configure_node` (optional, so pytest accepts it without xdist)
+  and the `db_passwords` fixture in `tests/meridian/conftest.py`;
+  `tests/meridian/db/test_test_roles.py`; `pytest-xdist==3.8.0` in the dev
+  group (the lock gains it and `execnet` 2.1.2, nothing else);
+  `PYTEST_WORKERS ?= auto` in the Makefile, used by `pytest` and
+  `pytest-db`, with `0` for `eval` and `eval-baseline`; the workflow's
+  comment. The two tests that failed under load and the review's three
+  changes were made in the main session: a few lines each, in tests.
+- Reviewed and not done: a lock timeout and an explicit isolation level in
+  `ensure_roles`; the wall-clock limits of four other tests (0.5 s to 5 s,
+  thirty times their measured time or more); `unused_port()` closing its
+  socket before the test uses the port; two resume-race tests in
+  `test_runtime_app.py` that rest on a 0.3 s sleep. None failed in any run
+  here; they are in the backlog.
+- Not explained: one of the implementer's parallel runs, with ten workers,
+  lost 53 tests to "server closed the connection unexpectedly". Six later
+  runs kept the server's log and showed no crash, no restart and no
+  refused connection. Docker has 7.65 GiB here and the kind cluster uses
+  4.2 GiB of it, which may be the cause; CI has no cluster and four
+  workers.
+- The `docs-sync` skill: the README's two test commands, the Makefile's two
+  help lines, this plan (the step, the backlog's rows).
 
 **Result / verification:**
 
-**Follow-ups:**
+Run by the main session on the final tree.
+
+- The role tests without the lock line, three tries: both fail, the
+  CREATE race with `UniqueViolation` and the ALTER race with "tuple
+  concurrently updated". With it: `6 passed`.
+- Three parallel runs (`-n auto`, ten workers), the server's log kept:
+  `6226 passed, 3 skipped` in 3 min 39 s, 4 min 1 s and 3 min 46 s, no
+  crash line in any log. After the review's changes, the gate itself:
+  `GITHUB_ACTIONS=true make pytest-db`, `6227 passed, 3 skipped` in 3 min
+  31 s. In one process (`PYTEST_WORKERS=0`, the implementer's run, before
+  the review's changes): `6226 passed, 3 skipped` in 9 min 20 s.
+- `make eval`: `recommendation: 39/40 -> 39/40`, `eval compare: passed`
+  (one process, by the target). `make lint`: `Contracts: 4 kept, 0
+  broken.` `make test`: `OK`. `make registry`: `contracts OK`. `make docs`:
+  13 checks passed.
+- The CI python job: 9 min 13 s on S049's pull request, 8 min 49 s on
+  S048's; 4 min 50 s on this one, with four workers.
+- Not run: kind (nothing deployed changed), Azure, `make eval-baseline`.
+
+**Follow-ups:** in Part B's backlog: the resume-race tests' sleep, the
+unexplained 53 errors, `unused_port()`, the remaining wall-clock limits,
+`ensure_roles`' lock timeout, a coverage gate (now affordable; the owner's
+decision), template databases, the CI limit of 15 minutes, and skipping
+the tests for a pull request that changes only files no test reads.
 
 ## Part D — Open questions
 
@@ -4856,7 +4932,7 @@ and a coverage gate becomes affordable.
 |---|---|---|---|
 | 1 | How many hours per week, and when do interviews start? | S002 | Plan in two-week increments; cut M3 before M2 |
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
-| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | ~~S015~~ ~~S048~~ S052 (moved with the deadline, 2026-10-03) | Keep, recorded as a procedural closure in C-02 |
+| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? **Answered 2026-10-03: route it to an adjuster**, with the reason that its documents are overdue; no claim is rejected without a person | ~~S015~~ ~~S048~~ S052 (moved with the deadline, 2026-10-03) | ~~Keep, recorded as a procedural closure in C-02~~ |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
 | 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 
@@ -4952,3 +5028,6 @@ and a coverage gate becomes affordable.
   comes later (the design, a security boundary or an accepted risk, the
   cost, the roadmap or a rule). Part A's close says so. The ruleset's five
   required checks stay the gate, with no approval required, as before.
+- **v0.23, 2026-10-03:** by the owner: Part D question 3 is answered. A
+  claim whose documents miss the deadline goes to an adjuster and is not
+  rejected without a person; S052's "done when" says so.
