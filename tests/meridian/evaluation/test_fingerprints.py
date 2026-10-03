@@ -270,6 +270,31 @@ def test_golden_set_of_does_not_name_a_path_with_unusual_characters(
     assert str(raised.value) == DIFFER
 
 
+def test_golden_set_of_refuses_a_file_name_with_a_nul_character(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    manifest = manifest_of(path)
+    manifest["files"]["a\x00b.json"] = "ab" * 32
+    write_manifest(path.parent, manifest)
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == DIFFER
+
+
+def test_golden_set_of_refuses_a_lone_surrogate_in_the_manifest(
+    tmp_path: Path,
+) -> None:
+    # json.dumps escapes it as \ud800, which json.loads reads back as a lone
+    # surrogate that UTF-8 cannot encode.
+    path = make_golden_set(tmp_path / "golden", note="\ud800")
+
+    with pytest.raises(ReportError, match="not valid Unicode"):
+        golden_set_of(path)
+
+
 def test_golden_set_of_refuses_a_listed_directory(tmp_path: Path) -> None:
     path = make_golden_set(tmp_path / "golden")
     manifest = manifest_of(path)

@@ -46,7 +46,8 @@ def _file_sha256(root: Path, name: str) -> str | None:
         with target.open("rb") as stream:
             while chunk := stream.read(HASH_CHUNK_BYTES):
                 digest.update(chunk)
-    except (OSError, RuntimeError):  # a symlink loop raises RuntimeError
+    # A symlink loop raises RuntimeError, a NUL character in the name ValueError.
+    except (OSError, RuntimeError, ValueError):
         return None
     return digest.hexdigest()
 
@@ -69,9 +70,13 @@ def golden_set_of(manifest_path: Path) -> GoldenSet:
     if not isinstance(manifest, dict):
         raise ReportError("the manifest is not a JSON object")
     try:
+        digest = canonical_sha256(manifest)
+    except UnicodeEncodeError:  # a lone surrogate, which JSON escapes allow
+        raise ReportError("the manifest is not valid Unicode") from None
+    try:
         golden_set = GoldenSet.model_validate(
             {key: manifest[key] for key in GOLDEN_SET_KEYS if key in manifest}
-            | {"manifest": canonical_sha256(manifest)}
+            | {"manifest": digest}
         )
     except ValidationError as exc:
         raise ReportError(describe_validation_error(exc)) from None
