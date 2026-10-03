@@ -1,19 +1,25 @@
 # Meridian AI Platform — Plan
 
-> **Status:** bootstrap, 2026-10-02. The architecture model, the first
+> **Status:** bootstrap, 2026-10-03. The architecture model, the first
   decisions, the engineering harness, a local platform on kind, the Azure
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, the gateway routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
-  the same region and holds each tenant to its rate limits and budgets,
-  it answers embedding requests under the same controls (in replay mode
+  the same region and holds each tenant to its rate limits and budgets
+  (a Grafana dashboard on kind shows what each tenant, agent, model and
+  provider used), it answers embedding requests under the same controls (in replay mode
   and against a mocked Azure; not yet run against Azure), three MCP tool
   servers and the runtime's client for them run on kind, where the policy
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
   a fixed order and lets rules decide each claim's route (no real model
-  has answered its one question), and no service runs in Azure yet.
+  has answered its one question), a claim it refers to an adjuster waits
+  with its run paused in PostgreSQL until the adjuster decides it on a
+  server-rendered page and the Claims API records the decision and resumes
+  it, CI grades the golden set's proposals with rules against a reviewed
+  baseline (with a scripted model, simulated), and no service runs in
+  Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -94,16 +100,20 @@ and Pydantic, at the cost of one dependency.
   documentation gates); Terraform and Helm keep infrastructure.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
-  `eval run` and `eval compare`; S039 would add `workload new`.
+  ~~`eval run` and~~ `eval compare`; S050 adds `eval run`; S039 would add
+  `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
   sign-in and stay designed until S021 exists.
-- **Cost.** Evaluation uses the replay provider unless `--live` is passed
-  (C-04).
+- **Cost.** Evaluation uses ~~the replay provider~~ a scripted model, in
+  process and at no cost (S017), unless `--live` is passed (C-04; `--live`
+  and a recorded model are S050).
 - **Placement.** `src/meridian/platform/cli/`, importing only platform
-  packages. The Evaluation Harness reaches workloads through the runtime
-  API, so the import contract from S002 covers the CLI too.
+  packages. The Evaluation Harness reaches workloads through the ~~runtime
+  API~~ Claims API (S017: every tool call needs the claim's row, so a run
+  started on the runtime alone is refused), so the import contract from
+  S002 covers the CLI too.
 
 ### Demo checkpoints
 
@@ -111,7 +121,7 @@ and Pydantic, at the cost of one dependency.
 |---|---|
 | S041 | A claim flows through API, runtime and gateway, visible as one trace |
 | S015 | A triage proposal pauses for an adjuster and resumes on the decision |
-| S017 | An evaluation report comparing two prompt versions |
+| ~~S017~~ S050 | An evaluation report comparing two prompt versions |
 | S018 | The full fifteen-minute demo on kind, from a clean checkout |
 | S026 | The same demo on AKS, recorded, with the run's cost logged |
 | S028 | An incident record written from a real game day |
@@ -140,7 +150,7 @@ and Pydantic, at the cost of one dependency.
 | S010 | Gateway routing ~~and resilience~~ | Registry-driven routing by data class and residency; Azure OpenAI adapter; ~~timeout, retry, circuit breaker and fallback to the second region;~~ a residency mismatch is refused and audited; contract tests pass (split on 2026-10-01: resilience is S042) | done | S004, S007, S009 |
 | S042 | Gateway resilience | Timeout, retry, circuit breaker and fallback across a route's candidates, with a second `gpt-4o` deployment in Sweden Central as the real second candidate and the second region labelled designed until the subscription is upgraded; a fault injected into the first candidate is answered by the second, and every attempt is audited; contract tests pass | done | S010 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced, with the cost reserved before the call; cost metered per tenant, agent, model and provider; ~~one audit record per call; a Grafana cost panel~~ a call ID on every audit record of a call (split on 2026-10-01: the Grafana panel is S043) | done | S010 |
-| S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | todo | S011, S041 |
+| S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | done | S011, S041 |
 | S045 | Gateway embeddings | `POST /v1/embeddings` on the Model Gateway: the embedding route walked like the chat route, with the same caller headers, residency filter, tenant limits, ledger and audit; a simulated replay embedding; the Azure OpenAI adapter; the registry gives each embedding deployment its dimensions and refuses a route whose candidates differ in model or dimensions; contract tests pass | done | S010, S011, S042 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; ~~the knowledge MCP server returns cited chunks;~~ retrieval checked against a labelled query set (split on 2026-10-02: the gateway's embedding endpoint is S045, and the knowledge MCP server is S046) | done | S003, S009, S045 |
 | S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | done | S012, S013 |
@@ -148,10 +158,13 @@ and Pydantic, at the cost of one dependency.
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | done | S013, S041 |
 | S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
 | S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
-| S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
-| S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
-| S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047 |
+| S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
+| S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
+| S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
+| S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
+| S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
+| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
 ### M2 — Azure, identity, delivery
 
@@ -173,7 +186,7 @@ and Pydantic, at the cost of one dependency.
 | S027 | Load test and SLO thresholds | A load test measures latency and error rate; SLO thresholds set from the measurements; an error-budget panel | todo | S026 |
 | S028 | Game day | Provider outage, budget exhaustion and database failure exercised; INC-001 written from the real timeline; rollback exercised | todo | S027 |
 | S029 | Backup and restore drill | PostgreSQL restored into a scratch environment; restore time measured and recorded | todo | S020 |
-| S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023 |
+| S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023, S050 |
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
 | S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
@@ -3405,13 +3418,712 @@ only, and `make docs` ran again after them.
   Tempo, so it can pass on a trace that is not complete yet (one run
   showed one Claims API span where the others showed five).
 
+### S043 — Gateway cost panel
+
+**Status:** done · **Started:** 2026-10-02 · **Finished:** 2026-10-03
+**Goal:** a Grafana dashboard on kind, provisioned from a file in this
+repository, shows what each tenant, agent, model and provider used, in
+tokens and in cost, from the gateway's own metrics, and `make smoke`
+finds the dashboard and the series.
+**Decisions:**
+
+- The owner said "Go on" after S044 merged; this is the sixth step in one
+  session, where Part A says one.
+- No panel uses `increase()` or `rate()`. Measured on the cluster: each
+  gateway process exports its counters once a minute over OTLP, and its
+  first export already carries what it counted, so `increase()` over three
+  hours reported 0 for the ingestions' 17,319 tokens and 0 for the chat
+  model's 1,044. Each panel subtracts a series' value at the start of the
+  range (zero for a process that started inside it) from its last value;
+  every gateway process has its own `instance` label, so a series never
+  resets during its life. Rejected: Prometheus's start-timestamp features,
+  which v3.15.0's documentation gives for scraped data only, and which
+  would still leave `increase()`'s extrapolation to the end of the range:
+  worked through, not measured, about a tenth too high for a process a
+  few minutes old.
+- The dashboard is a JSON file in `infra/kind/dashboards/`, which
+  `make up` turns into a labelled ConfigMap in `observability` for
+  Grafana's sidecar. Rejected: JSON inside a YAML manifest, harder to
+  review and to test. `make up`, not `make deploy`, provisions it, because
+  Grafana belongs to the platform; a dashboard without data is empty, not
+  broken.
+- Cost reads EUR 0 on kind: the `replay` deployments are priced at zero
+  in the registry. The registry is not changed for a dashboard; a price
+  for a simulated provider would spend a tenant's real quota. The
+  dashboard says so on its first panel.
+- No purpose on the calls counter (S045's follow-up was "if the panel
+  needs chat and embeddings apart"): tokens and cost carry the model, and
+  calls by outcome is what a cost panel needs.
+- Grafana's rights are a Role in `observability`. Found while modelling
+  who can put a dashboard into Grafana: since S006 the chart's defaults
+  had given Grafana's service account a ClusterRole to read every
+  ConfigMap and Secret, because the dashboard sidecar watched every
+  namespace, so Grafana could read the database roles' passwords (T-42,
+  new T-68). Fixed here, because this step adds a dashboard through that
+  sidecar. The chart's namespaced Role would still add Secrets (two
+  reviewers), so the chart creates no RBAC for Grafana and
+  `manifests/grafana-rbac.yaml` gives it a Role that reads ConfigMaps in
+  `observability` and nothing else. Rejected: the chart's
+  `useExistingRole`, which changes the `roleRef` of an existing
+  RoleBinding, a field Kubernetes does not let an upgrade change.
+- `make smoke` checks the dashboard always and the series once there is
+  something to find: when the ledger holds an attempt settled since the
+  gateway's process started. Without that gate a gateway that restarted
+  and has served nothing would fail the check while nothing is broken.
+  The series must have a sample exported after the first such attempt,
+  because the previous process's series stay visible for five minutes
+  after a restart; seen on the cluster, where they would have passed the
+  first version of the check. The dashboard line also runs every query
+  of the dashboard Grafana serves, after checking they equal the file's,
+  and a third line checks Grafana's rights, so T-68 cannot regress
+  silently.
+- Reviewed and not done, with reasons:
+  - matching the series to the gateway's process by its `instance` label
+    instead of by time (two reviewers): during a rolling update the old
+    pod can settle a call after the new one started and pass the check
+    for a few seconds; the label is a random ID the script cannot learn
+    from Kubernetes, and the gateway runs one replica;
+  - narrowing the Prometheus operator's and kube-state-metrics' rights to
+    Secrets in every namespace: neither has a sign-in, and changing their
+    collectors needs a check of the chart's dashboards (S019, T-68);
+  - comparing the series' values with the ledger in `make smoke`: done
+    by hand in this step; a smoke check would need the ledger and the
+    metrics over the same window;
+  - "a process younger than five minutes shows its full total" in the
+    five-minute panel: that is its usage in those five minutes, since it
+    started from zero;
+  - the rights line also answers `no` for a service account that does
+    not exist (advisor), so a renamed account would pass it; the
+    dashboard line would then fail, because the sidecars could no
+    longer read the dashboards. A `yes` on ConfigMaps would make the
+    line prove the account is real.
+
+**Work log:**
+
+- PR 31 (S044) verified landed: 17d0b19, the branch's 23 files identical
+  on `main`. Branch from `main`.
+- Orientation on the running cluster: the three series and their labels
+  in Prometheus; `increase()` against the counters' last values and the
+  ledger; Prometheus v3.15.0's feature flags; the chart rendered offline
+  before and after the RBAC values.
+- `feature-threat-model`: one new threat, T-68 (Grafana's rights, who
+  can add a dashboard, who sees every tenant's cost); T-42 notes the
+  finding.
+- Advisor before the contract: no `increase()`; the dashboard as a JSON
+  file applied by `make up`; cost 0 said on the dashboard; no purpose
+  label; `${__range_s}s`, never `$__range`, inside `offset`.
+- `implementer`, three contracts, one agent: the dashboard, `up.sh`, the
+  values and the smoke check; the time filter on the series; the review
+  findings. The main session changed the panels' unit (`short` printed
+  17,319 as "17.3 K") and a comment, and wrote the documents.
+- Three reviewers (infrastructure, security, silent failures): no
+  critical and no high finding. Fixed: Grafana's Role still read Secrets
+  in its namespace (two reviewers); a dashboard whose file is gone was
+  never removed; a dead port-forward or a refused query was reported as
+  missing data; psql's and kubectl's errors were dropped; a `bash -x` run
+  could trace the Grafana password; the dashboard's selector accepted a
+  value from a link; the datasource sidecar's namespace was implicit; the
+  series names were pinned in a test but not tied to `meters.py`; a
+  crash-looping gateway would have skipped instead of failed.
+
+**Result / verification:**
+
+Run by the main session on the kind cluster built in S044.
+
+- `make up` twice on the existing cluster (42 s and 27 s): Helm removed
+  the chart's Grafana ClusterRole, then its Role and RoleBinding; this
+  repository's Role and RoleBinding are the only Grafana RBAC left. The
+  API server answered `no` for Grafana's service account on Secrets in
+  `meridian`, `observability` and `cnpg-system` and on ConfigMaps in
+  `meridian`, `yes` on ConfigMaps in `observability`; before the change
+  it answered `yes` on Secrets in `meridian`. Both sidecars wrote their
+  files with no permission error.
+- Every dashboard query, evaluated through Prometheus over 12 hours for
+  each of the four dimensions, equalled the ledger (`gateway.usage`
+  grouped by tenant, agent, provider and model): 18,512 tokens (17,319
+  for `knowledge-ingestion`, 1,193 for `claims-triage`; 1,044 for
+  `replay-chat`, 17,468 for `replay-embedding`), input and output per
+  row, 37 calls `completed` against 37 settled attempts, EUR 0 against 0
+  micro-euros. The five-minute panel showed the three ingestions as
+  plateaus of about 5,800 tokens.
+- `make smoke`, four runs:
+  - after the first `make up`: ten PASS lines;
+  - after a restart of the gateway: `SKIP cost series: the gateway has
+    settled no call since it started`;
+  - after `make demo` (CLM-0006, to an adjuster): PASS, and a direct
+    query showed the time filter keeping the new process's series and
+    dropping the old one's, which the first version would have counted;
+  - on the final code: eleven PASS lines, among them `all 15 queries ran
+    in Prometheus` and `grafana rights: ... may not read Secrets in
+    meridian or observability`.
+- A labelled ConfigMap planted with no file behind it was deleted by
+  `make up`; the chart's 24 dashboards and ours stayed.
+- Gates on 17f1d2c, the last commit that changes code, manifests, scripts
+  or tests: `GITHUB_ACTIONS=true make pytest-db` `3976 passed, 3 skipped`
+  (the three are the opt-in live Azure tests); the kind tests `165
+  passed`; `make lint` `Contracts: 4 kept, 0 broken.`; `make registry`
+  `schemas OK`, `contracts OK`; `make test` `OK`; `make docs` `13 checks
+  passed`; `shellcheck infra/kind/*.sh` and `bash -n` exit 0. The model
+  did not change, so `make check` did not run.
+- Not run: the dashboard rendered in a browser (each query was checked
+  through Prometheus instead); `make up` from no cluster with these
+  values (the chart was rendered offline: no Grafana Role, RoleBinding
+  or ClusterRole, both sidecars on ConfigMaps in `observability`);
+  anything against Azure; `make down`.
+
+**Follow-ups:**
+
+- The owner: the cluster is still running, with six triaged claims and
+  34 golden claims left; `make down` is the owner's call. Cost reads 0
+  on kind; the demo script (S018) should say why before a viewer asks.
+- S019: narrow the Prometheus operator's and kube-state-metrics' rights
+  to Secrets; NetworkPolicy, so that only the gateway can push its
+  metrics; the dashboards in the charts.
+- S024: alerts on these counters must not use `increase()` or `rate()`
+  either, or must accept that a process's first export is lost; the
+  dashboards as code start from this one.
+- S021: who may see which tenant's cost, by sign-in role.
+
+### S015 — Human approval
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** a claim the rules send to an adjuster pauses its run in a
+PostgreSQL checkpoint, the adjuster's decision is recorded and audited by
+the Claims API, and the run resumes on it; the Claims API keeps each claim
+in a state of the designed lifecycle.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request: this step is the checkpointer, the pause and the resume, and
+  the claim states that a run and an adjuster's decision drive; S048, new,
+  takes sending back, withdrawing, documents that arrive, the documents'
+  deadline, an adjuster's decision on a claim whose triage failed, the
+  report date stamped by the API and the claim history (T-66).
+- S009 left "a reconcile path for a run left `Running` when its final
+  write fails twice" to this step. Half of it is here: a resume takes over
+  a run left `Running` for longer than ten minutes, so a recorded decision
+  can still complete it, and a run with no pause left ends `Failed`. The
+  sweep that finds such runs without a resume moves to S048, with the
+  paused runs that no claim points to any more (the Claims API timed out,
+  or a triage was taken over) and the checkpoints a failed delete left:
+  S048 needs a scheduled job for the documents' deadline anyway, and one
+  sweep serves them all. Until then such a run keeps its checkpoint, which
+  holds claim text; `runtime.runs` still lists the run with its status.
+- The report date stays the claimant's until S048: the golden set runs on
+  the dataset's own clock, so a stamp of today would mark all 40 claims
+  late. From this step an automatic approval completes, so a claimant who
+  writes a false report date is approved within the threshold (T-66).
+- The checkpointer is `langgraph-checkpoint-postgres` 3.1.2, the
+  library's own saver for this LangGraph (it brings `psycopg-pool`).
+  Rejected: a saver of our own, which would have to track LangGraph's
+  checkpoint format. Its tables come from migration 0008, the final shape
+  of the library's migrations copied with attribution (`NOTICE`): the
+  runtime never calls `setup()`, its role cannot create tables, and a test
+  builds the library's own tables in a scratch schema and compares them, so
+  a version bump that changes the shape fails. Only `agent_runtime` may
+  read or write them (T-63). The saver has a connection of its own per
+  request (autocommit, which the library needs, and `search_path=runtime`);
+  with the services' usual connection nothing it wrote would be committed.
+- The checkpoints hold claim text: the claim's facts without the
+  claimant's name and email, while a run runs or waits. A run's thread is
+  deleted when it ends, after its status is recorded; a failed delete is
+  logged and leaves the rows behind.
+- `POST /runs/{run_id}/resume` takes the run's tenant and reference and a
+  value for the pause. A run that is not there and one under another tenant
+  or reference get the same 404 (T-10). One conditional update moves the
+  run from `AwaitingApproval` to `Running` and writes `run.resumed`, so a
+  decision resumes a run once; a later resume answers the run's status and
+  runs nothing. The value goes to the one pending pause by its ID: LangGraph
+  reads a value whose keys all look like interrupt IDs (an empty object
+  among them) as a map of pauses, and the run would pause again. The call
+  limits apply per leg. A resumed leg that fails leaves the run paused
+  with its checkpoint (`run.resume_failed`, with the reason), so the same
+  decision can be sent again; only a thread with no pause, or several,
+  ends the run `Failed`. `GET /runs/{run_id}` needs the tenant and
+  reference too, as T-10 says of reads.
+- The graph pauses only on the route `adjuster`, in two nodes after
+  `propose`: `request_approval` calls the write tool with the proposal's
+  reason code (never claim text, and read back from the checkpoint, so a
+  rerun sends the same payload and gets the stored ID, T-23), and
+  `await_decision` pauses with nothing before the pause, because LangGraph
+  runs a paused node again from its start. On resume it ignores what the
+  resume carries and reads the decision the Claims API recorded for this
+  run through `approval_outcome`, a read tool of the claims server bound to
+  the run's own ID and claim (migration 0010 lets `claims_mcp` read three
+  columns of `claims.decisions`); with none recorded it fails before any
+  write and the run stays paused. Then it adds a note from a fixed table
+  keyed by the decision word. The name keeps the registry's T-31 rule: a
+  tool whose name or scope says it decides is refused, and this one reads
+  the outcome of the graph's own approval request. Rejected: the decision
+  in the resume request, which first shipped here and which reviewers
+  showed anything able to call the runtime could forge (T-10, T-69). No
+  free text from the adjuster reaches the graph, the note or the database.
+- The claim's state is a column of `claims.claims` (migration 0009), one
+  of the lifecycle's eight words, with the time it last changed and the
+  claim's latest run. The transitions the Claims API implements are one
+  table in `lifecycle.py`, and every change is one compare-and-set update
+  with its audit event (`claim.<state>`, the trigger word as the reason) in
+  the same transaction; a test keeps the table equal to the overview's
+  diagram. Rejected: a trigger in the database that enforces the
+  transitions, a second copy of the table.
+- New state `triage_failed`, not in the designed lifecycle (T-67): a run
+  that fails, times out or answers outside the contract leaves the claim
+  there, and posting the claim again triages it, as S014 allowed. Rejected:
+  `awaiting_adjuster` with no proposal and no paused run, which would send
+  every claim of a provider outage to a person and has no run to resume.
+  Referring such a claim to an adjuster is S048's.
+- One triage of a claim at a time: the post that moves the claim to
+  `triaging` owns it, a second gets 409. A claim left `triaging` by an API
+  that died is taken over after a lease of twice the runtime timeout (120
+  s); the owner's closing update matches on the time it took the claim, so
+  a request whose lease was taken over stores nothing (409). Proposals: one
+  per run, and a claim may have several over its life (a new triage after
+  a failure; after documents arrive in S048).
+- `POST /claims/{claim_id}/decision` takes one word. In one transaction,
+  with the claim locked, it records the decision for the claim's paused run
+  (`claims.decisions`, one per run), moves the claim and writes the audit
+  event; then it resumes the run with an empty value. Record first, resume
+  second is load-bearing: the run reads the row this transaction
+  committed. The answer is 200 only when the run completed; anything else
+  is 502 with the decision kept, and the same decision posted again only
+  resumes; another word is 409. A claim stored under another tenant is
+  answered as unknown, and every state change filters by tenant. The
+  Claims API now writes audit events, which 0001 said it never would;
+  0009's header says so.
+
+**Work log:**
+
+- Seventh step of one session, after `/compact`, on the owner's word
+  ("S015"). Pull request 33 (S043) was first confirmed on `main`: its 11
+  files are identical there.
+- The advisor before the design asked for the split in the plan first,
+  the checkpointer's DDL pinned by a test, a state for a failed triage and
+  record first, resume second. The `implementer` subagent worked in nine
+  contracts: the checkpointer; the resume; the graph's pause; the claim
+  states and the decision; the stack, the restart test and the demo; and
+  four of review fixes. It found that LangGraph reads an empty resume
+  value as a map of pauses (the value is now addressed to the pause by its
+  ID), and that after a failed resumed leg the pause is still pending with
+  the first leg's value kept. It broke the rule against editing through
+  scripts once (a heredoc appended a block of tests) and said so.
+- Reviews by `security-reviewer`, `database-reviewer`,
+  `silent-failure-hunter` and `platform-boundary-reviewer` on the first
+  complete source: no critical finding. Two found that the graph acted on
+  the decision carried by the resume request, so anything able to call
+  the runtime could complete a paused run with a decision the Claims API
+  never recorded, or kill it with a value that did not fit; three found
+  that a failed resumed leg ended the run for good and a retry answered
+  200. Both are fixed: the run reads the record, a failed leg stays
+  paused, and the answer is 200 only on completion. Also fixed: the
+  decision's lookup bound to the API's tenant, a tenant filter on every
+  state change, a lock that does not block the tool servers' foreign-key
+  checks, a second try at a failed checkpoint delete, the leg in the
+  failure log, the index the decisions' foreign key lacked, and
+  `GET /runs/{run_id}` bound like the resume. The security reviewer read
+  the fixes again: the three findings are closed; a run whose pause-back
+  write failed would have stayed `Running` for good, and a resume now
+  takes it over after the lease.
+- The `docs-sync` skill: the plan (the split, S048, Part D question 3),
+  the README, the kind README, `api/mcp/README.md`, the threat model (T-10,
+  T-23, T-25, T-30, T-31, T-32, T-50, T-63, T-67, new T-69), the data
+  classification, QA-05 and QA-08, the overview's lifecycle and its new
+  state, the Claims MCP server's description in the model and the
+  overview, and the ClaimsApproval view, whose run now reads the recorded
+  decision (`make check` ends with no ERROR line; `make mermaid-render`
+  rendered the four diagrams; no derived block shows the changed views).
+  ADR 2 said S015 would choose between deleting a run's checkpoints and
+  keeping them free of claim text, and would take the adjuster's identity
+  from the sign-in; it keeps its text and gets an amendment in ADR 3's
+  style: S015 deletes them, the identity moved to S021, and a resume is
+  addressed to its pause by ID.
+
+**Result / verification:** run by the main session on the final code
+(contracts 1 to 6c, uncommitted at the time, then committed unchanged).
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4304 passed, 3 skipped` (the
+  three are the opt-in live Azure tests). `make lint`: `Contracts: 4 kept,
+  0 broken.` `make registry`: `registry OK: 2 providers, 5 deployments, 6
+  tools, 2 agents, 3 tenants`, `schemas OK`, `contracts OK`. `make test`:
+  `OK`. `make docs`: `13 checks passed`. `make check`: no ERROR line.
+  `shellcheck infra/kind/*.sh`: clean.
+- In tests, through the real services: the 40 golden claims with the
+  gateway's replay text, the 29 referred ones paused and decided (8
+  approve, 9 reject, 12 request documents), 29 approval requests, notes
+  and decisions, and no checkpoint row left; a runtime replaced between
+  the pause and the decision; a resume of the runtime that bypasses the
+  Claims API with no decision recorded leaves the run paused and writes
+  nothing; a note that fails once is written once when the same decision
+  is posted again; the claimant's description is found in the checkpoint
+  while the claim waits and nowhere but the claim after the decision.
+- On kind (the cluster S044 built; not recreated): `make deploy` applied
+  migrations 0008, 0009 and 0010; the six claims triaged before were
+  backfilled by their latest route (four `awaiting_adjuster`, one
+  `documents_requested`, one `approved`). `make demo` posted CLM-0007,
+  which paused (`awaiting_adjuster`), approved it (`approved`, run
+  `Completed`), and found both traces: the triage across six services
+  and the decision across claims-api, agent-runtime and claims-mcp. Its
+  audit trail, in order: `claim.triaging`, `run.started`, the approval
+  request, `run.awaiting_approval`, `claim.awaiting_adjuster`,
+  `claim.approved`, `run.resumed`, `approval_outcome`, `add_claim_note`,
+  `run.completed`, each row with the role that wrote it; no checkpoint row
+  was left. QA-08 on the cluster: CLM-0008 was posted and paused (39
+  checkpoint rows), the runtime was restarted with `kubectl rollout
+  restart`, and the decision `reject` sent to the new pod answered 200
+  `Completed`, one note, no checkpoint row; `approve` posted after it was
+  409. `make smoke`: eleven PASS lines.
+- Not run: anything against Azure (the login is still blocked), so no
+  real model has answered; the dashboard, which is unchanged; a cold
+  `make up` from no cluster.
+
+**Follow-ups:**
+
+- The owner: accept the split (S048) and the move of the sweep; T-69,
+  which leaves recording a decision open to anyone who reaches the Claims
+  API until the sign-in (S021); the report date that stays the claimant's
+  (T-66); the four claims on kind backfilled to `awaiting_adjuster`,
+  whose runs ended before this step, so a decision on them is recorded and
+  answered `Completed` with no note.
+- S048: the sweep (runs left `Running` that no resume takes over, paused
+  runs no claim points to, checkpoints a failed delete left); referring a
+  failed triage to an adjuster; sending back; withdrawing; documents and
+  their deadline; the report date; the claim history.
+- S016: the queue lists `awaiting_adjuster` and `triage_failed`, and the
+  UI posts the decision; an index on the claim's state for the queue.
+- S019: a connection limit for `agent_runtime` (a run now holds a second
+  connection for its checkpoints); service identity and a network policy,
+  so that only the Claims API can resume a run (T-10); a throttle on the
+  audit rows a looped resume writes.
+- S021: who decided, from the sign-in (T-32, T-69).
+- No step yet: a migration that adds columns takes a lock on
+  `claims.claims` for its backfill (fine at this size); after a failed
+  resumed leg LangGraph keeps the first leg's value, which the claims
+  graph ignores but another workload's graph would read.
+
+### S016 — Adjuster UI
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** an adjuster lists the claims that wait for a person, reads a
+claim's proposal next to its citations, fraud indicators and audit trail,
+and records approve, reject or request documents from the page, through
+the same code as the JSON decision.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request: the threat model gave S016 the claimant's pages as well (T-01,
+  T-04, T-65), which the step's row never named. They are S049, new; S018
+  does not wait for them, because the demo submits claims from the golden
+  set. The two sessions the row allowed become one.
+- Server-rendered with Jinja2, the templating FastAPI documents (BSD
+  licence, one new dependency). No HTMX: forms that post and redirect need
+  no script, so the pages can forbid every script (T-70, T-07). The model's
+  technology string for the Claims Triage App loses "HTMX".
+  Rejected: a single-page app, which brings a build and a second artefact
+  for three pages; HTMX, vendored and pinned, for no interaction the pages
+  need.
+- The pages live in the Claims Triage App, under `/adjuster/`, out of the
+  OpenAPI contract: `GET /adjuster/claims` (the queue), `GET
+  /adjuster/claims/{claim_id}` (the claim) and `POST
+  /adjuster/claims/{claim_id}/decision` (the form). A decision from the form
+  runs the code of `POST /claims/{claim_id}/decision`, one function for both:
+  record, move and audit in one transaction, then resume. Success redirects
+  to the claim's page (303); a refusal or a failed resume renders the page
+  with the answer's status and its text.
+- The queue lists `awaiting_adjuster` and `triage_failed`, the oldest
+  state change first, for the API's tenant, at most 100 rows; an index on
+  the tenant, state and time serves it (S015's follow-up). A claim whose
+  triage failed shows no decision buttons, because deciding it with no
+  paused run is S048's; its page says that posting the claim again triages
+  it.
+- The four claims on kind whose runs ended before S015 (backfilled to
+  `awaiting_adjuster`) are shown like any other; a decision on one
+  completes with no note, as accepted in S015.
+- Threat model (`feature-threat-model`, TB-1, TB-2, TB-8):
+  - **T-70, new:** a form posts a body that is not JSON, which a browser
+    sends cross-origin without a preflight, so T-01's control does not
+    cover it. The form's route refuses a post whose `Origin` is not the
+    request's own host or whose `Sec-Fetch-Site` names another site; the
+    pages send `Content-Security-Policy` with no script source and
+    `frame-ancestors 'none'`. A client that is not a browser passes, as on
+    the JSON route (T-69). Changed after the security review (see the work
+    log): `Sec-Fetch-Site`, when the browser sends it, decides alone, and
+    the `Origin` comparison applies only without it.
+  - **T-71, new:** reading the audit trail. The Claims API gets one view of
+    `audit.events`, a claim's rows and five columns, never the table.
+  - **T-07:** autoescaping on; the description, the model's rationale and
+    every refusal's text are rendered as text, and a test puts markup in
+    each.
+  - **T-33:** the proposal, its citations, indicators and gaps sit above
+    the buttons; no button is preselected and each is its own submit.
+  - **T-03:** the claim page holds the description; no log line or span
+    attribute of the new routes carries it.
+  - Invariants: no model call, no tool, no framework import, no secret.
+    No tension.
+
+**Work log:**
+
+- Contract 1 (`implementer`): migration 0011, an index for the queue and
+  the view `audit.claim_trail`, which `claims_api` may read instead of
+  `audit.events`. The `database-reviewer` read it: the view joined the
+  claim's runs with `OR` and a subquery, which no index serves; one
+  claim's trail over 400,000 events had not finished after 120 s. Contract
+  1b rewrote it as two branches under `UNION ALL` (the second leaves out
+  the first's rows with `IS DISTINCT FROM`, so a NULL does not drop a row
+  from both), indexed the claims' runs by reference, made the two other
+  indexes partial (the queue's two states; the Claims API's own rows), and
+  added tests: the plan uses the three indexes on 3,000 seeded claims, and
+  the trail's edge cases. It also found that `security_barrier` on a view
+  whose own query is the `UNION ALL` did not hold: a function of the
+  caller ran on rows of the log inside each branch, before the joins
+  dropped them, while `reloptions` still said `security_barrier`. The two
+  branches now sit in a derived table under a plain `SELECT`, and a test
+  with a function of the caller's proves the barrier (it fails with the
+  barrier off). The implementer edited the test file with heredocs three
+  times, against its contract; the file is formatted and passes.
+- Contract 2 (`implementer`): the pages (`adjuster.py`, four templates,
+  one stylesheet), the decision extracted into `_decide`, which both routes
+  call, Jinja2 3.1.6 as a new dependency and `python-multipart` made a
+  direct one; the templates ship in the wheel with `uv_build`'s defaults.
+  Contract 3: two lines in `make smoke`. The implementer of contract 2
+  edited two files once each through a script, against its contract.
+- Reviews by `security-reviewer`, `fastapi-reviewer` and
+  `platform-boundary-reviewer`: no critical finding, one high. With
+  `Referrer-Policy: no-referrer`, Chrome sends `Origin: null` on the page's
+  own form post, with `Sec-Fetch-Site: same-origin`, so the origin check
+  refused every decision from a browser; the unit tests had encoded
+  "`null` is refused" and no browser had run them. Contract 4 lets
+  `Sec-Fetch-Site` decide when it is sent and sets `Referrer-Policy:
+  same-origin`. Also from the reviews: a second post while the first still
+  resumes answers 409 instead of a failed resume, on both routes; the
+  claim page offers to send a recorded decision again until the run has
+  completed, not only right after a failure; a failed audit write renders
+  a page; a post that names the decision twice is refused; a refused post
+  is logged with the claim's ID only; `X-Frame-Options`. Not taken: a list
+  of the pages' own host names (T-70's residual, S019 and S021); keeping
+  the Claims API's own rows out of a run's part of the trail, because that
+  role can already write a row naming the claim and the page shows the
+  role the database stamped; HTML pages for the shared JSON errors under
+  `/adjuster/`; stripping bidirectional control characters. Contract 4's
+  premise that a failed audit write raises `AuditUnavailable` was wrong: a
+  decision's audit write raises a database error, which the existing
+  database answer already renders; the page's own catch stays as a
+  defence. The test that pinned a `Running` run to 502 now covers `Failed`
+  and `AwaitingApproval` only.
+- The `docs-sync` skill: the plan (the split, S049, the status line,
+  changelog v0.17), the README (status, an Adjuster UI row, `make smoke`),
+  the kind README (`make smoke`'s sixth check, the pages), the `Makefile`'s
+  help line, the threat model (T-01, T-04, T-65 and T-66 now cite S049;
+  T-07, T-25, T-33 updated; T-70 and T-71 new), the model's and the
+  overview's technology for the Claims Triage App (Jinja, no HTMX).
+
+**Result / verification:** run by the main session on the final code.
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4465 passed, 3 skipped` (the
+  three are the opt-in live Azure tests). `make lint`: `Contracts: 4 kept,
+  0 broken.` `make test`: `OK`. `make registry`: `schemas OK`, `contracts
+  OK`. `make docs`: `13 checks passed`. `make check`: no ERROR line.
+  `ruff check` and `ruff format --check`: clean. `shellcheck
+  infra/kind/*.sh`: clean. The templates and the stylesheet are in the
+  built wheel.
+- In tests: the queue (states, tenant, order, at most 100); the claim
+  page (proposal, citations, indicators, the trail from the view, no
+  claimant, draft-only and invalid proposals); markup in a description, a
+  rationale and a clause escaped; a form decision that moves the claim and
+  writes the same audit rows as the JSON one; the refusals and a failed
+  resume rendered with the API's status and text; the origin check's
+  cases, Chrome's `Origin: null` with `Sec-Fetch-Site: same-origin`
+  among them; the headers on every answer under `/adjuster/`; no
+  description or claimant name in the log; through the stack, a referred
+  golden claim decided from the form completes its run and writes its
+  note.
+- On kind (the cluster S044 built; not recreated): `make deploy` applied
+  migration 0011 and rolled out the image with the pages; `make smoke`
+  printed 13 PASS lines, the two new ones among them (the queue answers
+  200 with its policy and the synthetic-data line; a post with another
+  site's `Origin` is 403, and the Claims API logged the refusal). In the
+  built-in browser: the queue listed the four claims backfilled in S015;
+  CLM-0001's page showed its facts without the claimant, the proposal,
+  two citations, the gap and the trail with each row's role; no console
+  error, so the policy blocked nothing the page needs. With the owner's
+  yes, "Approve" was clicked: the browser's post answered 303, the claim
+  moved to `approved`, and `claim.approved` joined the trail as
+  `claims_api`. `make demo` passed with CLM-0009 (`documents_requested`,
+  no decision needed).
+- Not run: Firefox and Safari (the Chrome pair is what the fix was found
+  with); anything against Azure; a cold `make up`.
+
+**Follow-ups:**
+
+- The owner: accept the split (S049) and T-70's residual (no list of the
+  pages' host names until S019 or S021).
+- On kind, CLM-0002, CLM-0004 and CLM-0006 still wait, and CLM-0001's page
+  offers to send its decision again for good: their runs ended in S014,
+  before any decision, so no `run.completed` follows one. Sending it again
+  answers `Completed`, so this is cosmetic and ends with those claims.
+- S048: deciding a claim whose triage failed, which the page lists
+  without buttons.
+- S019 or S021: the pages' own host names, checked on every request under
+  `/adjuster/` (T-70); the edge keeping the `Host`, which the check
+  trusts.
+- S021: the sign-in, the adjuster role and who decided (T-32, T-69);
+  keep the origin check when cookies arrive and set `SameSite` on them.
+- S049: the claimant's pages (T-01, T-04, T-65).
+- No step yet: reads of a claim's page are not audited; the queue shows at
+  most 100 claims with no next page.
+
+### S017 — Evaluation harness
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** every change replays the 40 golden claims through the real
+services, grades each proposal against the oracle with rules, and fails CI
+when a grade regresses or when the prompt, the tools or the golden set
+changed without a reviewed new baseline.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request. No model is reachable (the Azure login is blocked), and the
+  golden set has no label a judge could grade groundedness against, so the
+  LLM judge, latency and cost, a recorded or live model, the tool
+  arguments and `eval run` are S050, new. QA-06's route target and its
+  absolute half are decided by rules alone, so they stay here.
+- The model is the scripted one the stack test already uses: it answers
+  each assessment with the oracle's verdict, so it ignores the prompt.
+  The gate on prompt changes is therefore this: the report carries a hash
+  of the prompt, and `meridian eval compare` fails when the prompt, the
+  tools' contracts or the golden set's hashes differ from the committed
+  baseline's, until a new baseline arrives in the same reviewed diff. What
+  a prompt change does to the answers is measured only once S050 records
+  a real model. Rejected for this step: a recorded gateway mode keyed by
+  the request's fingerprint, which is the real gate but needs a new
+  gateway mode, a recording format and a model to record (S050).
+- The run stays in-process, as the successor of
+  `test_a_scripted_model_gives_the_oracle_s_proposals`: it already
+  replays all 40 claims through the real services inside the tenant's
+  rate windows on a hand-moved clock, and CI's python job has no time for
+  a second 40-claim run. Rejected: `eval run` over HTTP against kind,
+  because the Claims API's answer carries only the route (it hides the
+  reason, T-65) and no read path for a proposal exists (S050).
+- The Evaluation Harness reaches workloads through the Claims API, not
+  the runtime alone: every tool call needs the claim's row (`claim-not-bound`),
+  so a run started on the runtime alone is refused. Part B's
+  Developer CLI section is corrected.
+- The platform owns the report's format and the comparison
+  (`meridian.platform.evaluation`, generic over grader names); the
+  workload owns its graders, since route, reason and amount are the
+  claims workload's own words. The CLI imports only the platform package.
+- The report is a JSON file, not rows in the Platform Database: the
+  baseline lives in Git, where a change to it is a reviewed diff (T-29).
+  The database store the model draws is S050's.
+- A proposal names the prompt that drafted it: `drafted_by` gains the
+  prompt's hash, so a proposal on the adjuster's page and a report can be
+  tied to one prompt.
+
+- The prompt's version is the SHA-256 of the messages `build_messages`
+  makes for a fixed, fictional probe claim, with the output budget and the
+  length limit, so a change to the user message's format moves it as well
+  as a change to the system message. Rejected: a hash of the system
+  message alone, which misses the user message; a hand-bumped version
+  number, which someone forgets.
+- `drafted_by.prompt` is optional: the adjuster's page validates stored
+  proposals, and those stored before S017 on a running cluster have none.
+  Every new proposal carries it.
+- The golden set's fingerprint is checked, not trusted: the report hashes
+  the whole manifest and every file it lists, and refuses a file whose
+  bytes differ from the manifest's hash.
+
+**Work log:**
+
+- Opened from `main` at 19cd45b, after S016 merged (pull request 35,
+  its 25 files identical on `main`). The ninth step in one session, on
+  the owner's word.
+- An Explore sweep found what the step had to work around: no prompt
+  version anywhere, no tool arguments recorded, a scripted model that
+  exists only inside pytest, and every tool call bound to a claim row.
+  The advisor set the order: split first, then the deterministic half.
+- Four contracts to `implementer`, the first two in parallel:
+  - A: `meridian.platform.evaluation` (the report, its canonical dump,
+    `compare`, the fingerprints) and `meridian eval compare`;
+  - B1: `PROMPT_VERSION` in `assessment.py`, `drafted_by.prompt`, the
+    prompt on the adjuster's page;
+  - C: the workload's ten rule graders, the report from the stack test,
+    `data/evaluation/`, `make eval`, `eval-compare` and `eval-baseline`,
+    and the CI gate;
+  - A2: the python reviewer's findings (below).
+- The `python-reviewer` found no way to make `compare` pass a regressed
+  grade, a changed fingerprint, a lost case or a broken absolute grader,
+  but blocked on two holes in the loader, both fixed in A2: a duplicate
+  JSON key was read last-wins, so a report could say `false` to a reader
+  and `true` to the gate; and an error message echoed the file's own keys,
+  so a report could print a forged `eval compare: passed` or a GitHub
+  `::` workflow command into the CI log. A2 also took its six smaller
+  points (sorted `absolute`, the manifest's files checked against their
+  bytes, strict numbers, a bounded read that refuses a FIFO, no traceback
+  locals, an atomic write). Its re-review closed all of them and found two
+  inputs that crashed instead of being refused (a NUL in a file name, a
+  lone surrogate in the manifest), fixed by the session.
+- The session fixed C's `.PHONY` line, which had joined `synthetic` and
+  `up` into one word.
+- The implementers broke the no-heredoc rule again: contract B1 once,
+  contract C three times (one appended two tests to
+  `test_ci_config.py`), A2 twice with empty heredocs; contract A wrote one
+  ruff output file to `/tmp/x`. Each reported it; the files pass the
+  gates.
+
+**Result / verification:** done when met, with a scripted model:
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4725 passed, 3 skipped in
+  378.64s` (the three are the opt-in live Azure tests); the report that
+  run wrote compares clean with the baseline.
+- `make eval`: ten graders, 40 of 40 each, `eval compare: passed`.
+- The gate, negatively, with the session's own hands:
+  - one word of `SYSTEM_MESSAGE` changed ("check" to "verify"): the stack
+    test failed with "the prompt changed: regenerate the baseline in this
+    change (make eval-baseline)", and `meridian eval compare` exited 1
+    with every grade still 40 of 40; reverted, no diff, `make eval`
+    passed again;
+  - copies of the baseline with a changed prompt hash, one grade turned
+    false, one absolute grade turned false and one case removed each
+    exited 1 with the matching message, and one with a duplicate key
+    exited 2 with `duplicate key`.
+- `make lint`: `Contracts: 4 kept, 0 broken.`; `make test`: `OK`;
+  `make registry`: `schemas OK`, `contracts OK`; `make docs`: `13 checks
+  passed`; `make check`: no ERROR line; `make mermaid-views`: no derived
+  block changed (the relationship that moved is in the Governance view,
+  which has none).
+- On kind (the cluster S044 built, not recreated): `make deploy` and
+  `make smoke` (13 PASS lines) with the new image, whose workload code
+  changed (`drafted_by.prompt`, the claim's page). The pages of CLM-0001,
+  CLM-0007 and CLM-0009, whose proposals were stored before S017 without a
+  prompt, answer 200 and show no prompt.
+- Not run: anything with a real model (the Azure login is blocked), so
+  QA-06 is measured for the pipeline only; `make demo`, which would use a
+  golden claim to show a new proposal's prompt on kind (the stack test
+  shows it); the rendered views (`make export`).
+
+**Follow-ups:**
+
+- The owner: accept the split (S050); accept that the gate rests on the
+  review of `data/evaluation/` (a pull request may regenerate its own
+  baseline, T-72's residual).
+- S050: a recorded model through the gateway, so a prompt change moves
+  grades; the LLM judge with its own agent identity and the model's
+  `evals -> gateway` relationship; latency and cost from the ledger; the
+  tool arguments of each run; `eval run` against a deployed stack, with a
+  read path for proposals; a report comparing two prompt versions; the
+  database store for results; golden-set cases on the fraud indicators'
+  boundaries and an unknown policy number (S003's follow-up); a view
+  that shows the harness's edges, since `evals -> claimsApp` is in none
+  (Containers leaves the harness out, Governance the Claims Triage App).
+- No step yet: `make eval-compare` alone reads whatever report `.eval/`
+  holds, which may be stale; a file in the golden set's directory that the
+  manifest does not list is not noticed.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
 |---|---|---|---|
 | 1 | How many hours per week, and when do interviews start? | S002 | Plan in two-week increments; cut M3 before M2 |
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
-| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | S015 | Keep, recorded as a procedural closure in C-02 |
+| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | ~~S015~~ S048 (moved with the deadline, 2026-10-03) | Keep, recorded as a procedural closure in C-02 |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
 | 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 
@@ -3467,3 +4179,21 @@ only, and `make docs` ran again after them.
   accept at its pull request: S014 keeps the triage graph, its rules, the
   proposal and its storage; S047, new, takes PII redaction, injection
   detection and the data class per request. S018 and S032 depend on S047.
+- **v0.16, 2026-10-03:** S015 split by the session, for the owner to
+  accept at its pull request: S015 keeps the checkpointer, the pause and
+  the resume, the claim states that a run and an adjuster's decision drive
+  and the audited decision; S048, new, takes the rest of the lifecycle,
+  the report date and the claim history, and the sweep of runs and
+  checkpoints that S009 had left to S015. S018 depends on S048; Part D
+  question 3 is needed by S048.
+- **v0.17, 2026-10-03:** S016 split by the session, for the owner to
+  accept at its pull request: the claimant's pages, which the threat
+  model had given S016 (T-01, T-04, T-65), become S049, new, depending on
+  S016; S018 does not wait for them. S016 keeps one session instead of
+  two.
+- **v0.18, 2026-10-03:** S017 split by the session, for the owner to
+  accept at its pull request: the LLM judge, latency and cost, a recorded
+  or live model, the tool arguments, `eval run` and the demo checkpoint
+  comparing two prompt versions become S050, new, depending on S017; S030
+  depends on S050 as well. The Developer CLI section says the harness
+  reaches workloads through the Claims API.

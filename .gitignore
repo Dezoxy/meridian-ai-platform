@@ -17,6 +17,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .import_linter_cache/
+.eval/
 dist/
 
 # Local secrets and environment

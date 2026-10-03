@@ -27,24 +27,36 @@ classification and records every decision.
 
 ### Claim lifecycle
 
-Designed, not implemented: the states a claim passes through in the reference
-workload. The triage run drafts a proposal. Below the risk threshold and
-without a fraud flag the workload approves the claim itself; otherwise a
-claims adjuster decides (C-02). Triage and the adjuster can both ask the
-claimant for documents, and arriving documents trigger a new triage run. The
-adjuster can send a claim back to triage. A claimant can withdraw while the
-claim waits, and a claim whose documents miss the deadline is closed as
-rejected. Approved, Rejected and Withdrawn are final.
+The states a claim passes through in the reference workload. The triage run
+drafts a proposal. Below the risk threshold and without a fraud flag the
+workload approves the claim itself; otherwise a claims adjuster decides
+(C-02). Triage and the adjuster can both ask the claimant for documents, and
+arriving documents trigger a new triage run. The adjuster can send a claim
+back to triage. A claim whose triage run fails can be triaged again, or be
+referred to an adjuster. A claimant can withdraw while the claim waits, and a
+claim whose documents miss the deadline is closed as rejected. Approved,
+Rejected and Withdrawn are final.
+
+Implemented in part (S015): the Claims API keeps every claim in one of these
+states and moves it only along these edges. The edges out of Submitted and
+Triaging, a new triage of a claim whose triage failed, and the adjuster's
+three decisions are implemented; sending back, withdrawing, arriving
+documents, the deadline and the referral of a failed triage are designed
+(S048).
 
 ```mermaid
 stateDiagram-v2
     state "Awaiting adjuster" as AwaitingAdjuster
     state "Documents requested" as DocumentsRequested
+    state "Triage failed" as TriageFailed
     [*] --> Submitted
     Submitted --> Triaging: triage starts
     Triaging --> Approved: below threshold
     Triaging --> AwaitingAdjuster: over threshold or fraud flag
     Triaging --> DocumentsRequested: info missing
+    Triaging --> TriageFailed: run fails
+    TriageFailed --> Triaging: posted again
+    TriageFailed --> AwaitingAdjuster: referred
     AwaitingAdjuster --> Approved: approves
     AwaitingAdjuster --> Rejected: rejects
     AwaitingAdjuster --> DocumentsRequested: asks for documents
@@ -69,8 +81,8 @@ stateDiagram-v2
 | Platform Registry | Models, providers, tools, agents, policies, tenants | YAML in git, JSON Schema | Control |
 | Platform Database | Claims, wording chunks, checkpoints, audit, usage, results | PostgreSQL 17, pgvector | Control |
 | Key Vault | Provider credentials and signing secrets | Azure Key Vault; Kubernetes Secrets on kind | Control |
-| Claims Triage App | Claims API, adjuster queue UI, the triage graph package | Python, FastAPI, HTMX | Workload |
-| Claims MCP Server | Notes and approval requests as tools; adjuster decisions are recorded by the Claims Triage App | Python, MCP SDK | Workload |
+| Claims Triage App | Claims API, adjuster queue UI, the triage graph package | Python, FastAPI, Jinja | Workload |
+| Claims MCP Server | Notes, approval requests and the outcome recorded for a request as tools; adjuster decisions are recorded by the Claims Triage App | Python, MCP SDK | Workload |
 
 ![Containers view: the building blocks of the platform and the claims-triage workload](embed:Containers)
 

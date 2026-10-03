@@ -63,8 +63,28 @@ ERRORS = {
         "504",
     },
     ("runtime", "post", "/runs"): {"403", "413", "422", "500", "502", "503", "504"},
+    ("runtime", "post", "/runs/{run_id}/resume"): {
+        "403",
+        "404",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
     ("runtime", "get", "/runs/{run_id}"): {"404", "422", "500", "503"},
     ("claims", "post", "/claims"): {"409", "413", "422", "500", "502", "503", "504"},
+    ("claims", "post", "/claims/{claim_id}/decision"): {
+        "404",
+        "409",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
 }
 
 
@@ -97,6 +117,16 @@ def test_an_endpoint_lists_the_error_responses_it_can_answer(
     declared = set(SPECS[service]["paths"][path][method]["responses"])
 
     assert ERRORS[(service, method, path)] <= declared
+
+
+def test_reading_a_run_takes_its_tenant_and_reference_as_query_parameters() -> None:
+    operation = SPECS["runtime"]["paths"]["/runs/{run_id}"]["get"]
+
+    assert {(p["in"], p["name"], p["required"]) for p in operation["parameters"]} == {
+        ("path", "run_id", True),
+        ("query", "tenant", True),
+        ("query", "reference", True),
+    }
 
 
 def test_every_service_declares_healthz() -> None:
@@ -202,6 +232,35 @@ def test_the_claims_api_error_answers_carry_the_claim_id() -> None:
     assert schema_ref(spec, "/claims", "post", "502").endswith("/ClaimErrorBody")
     error = spec["components"]["schemas"]["ClaimErrorBody"]
     assert {"detail", "claim_id"} <= set(error["required"])
+
+
+def test_the_decision_endpoint_declares_its_success_and_error_models() -> None:
+    spec = SPECS["claims"]
+    path = "/claims/{claim_id}/decision"
+
+    assert schema_ref(spec, path, "post", "200").endswith("/DecisionResponse")
+    assert schema_ref(spec, path, "post", "502").endswith("/ClaimErrorBody")
+    assert schema_ref(spec, path, "post", "504").endswith("/ClaimErrorBody")
+    assert schema_ref(spec, path, "post", "404").endswith("/ErrorBody")
+    schemas = spec["components"]["schemas"]
+    assert schemas["ClaimDecision"]["additionalProperties"] is False
+    assert schemas["ClaimDecision"]["properties"]["decision"]["enum"] == [
+        "approve",
+        "reject",
+        "request_documents",
+    ]
+
+
+def test_the_claims_answers_name_the_claims_state() -> None:
+    schemas = SPECS["claims"]["components"]["schemas"]
+
+    assert "state" in schemas["ClaimResponse"]["required"]
+    assert set(schemas["DecisionResponse"]["required"]) == {
+        "claim_id",
+        "state",
+        "run_id",
+        "run_status",
+    }
 
 
 def test_the_claim_response_run_id_is_a_uuid() -> None:

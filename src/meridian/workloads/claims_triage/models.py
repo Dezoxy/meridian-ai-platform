@@ -1,14 +1,18 @@
 """The claim submission (mirrors data/synthetic/claims.json) and the answer."""
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import ConfigDict, Field, StringConstraints, model_validator
 
 from meridian.platform.common.http import ErrorBody
 from meridian.platform.common.wire import NoNul, WireModel
 from meridian.runtime.models import RunState
+from meridian.workloads.claims_triage.lifecycle import LifecycleState
 
 Peril = Literal[
     "accidental_damage",
@@ -23,6 +27,17 @@ Peril = Literal[
     "third_party_liability",
 ]
 Route = Literal["adjuster", "auto_approve", "request_documents"]
+# What an adjuster decides about a claim the rules routed to one.
+Decision = Literal["approve", "reject", "request_documents"]
+# The note the graph records for a decision: fixed text keyed by the word, so a
+# note holds nothing a caller wrote.
+DECISION_NOTES: Mapping[Decision, str] = MappingProxyType(
+    {
+        "approve": "An adjuster decided to approve the claim.",
+        "reject": "An adjuster decided to reject the claim.",
+        "request_documents": "An adjuster decided to request more documents.",
+    }
+)
 # A simple local@domain.tld shape; real validation is the mail server's job.
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=100), NoNul]
@@ -75,6 +90,11 @@ class DraftedBy(WireModel):
     deployment: Annotated[str, NoNul]
     provider: Annotated[str, NoNul]
     mode: Annotated[str, NoNul]
+    # The version of the prompt the model was sent (assessment.py). Null only on
+    # a proposal stored before S017: the adjuster's page validates stored
+    # proposals with ``TriageProposal.model_validate`` (adjuster.py), so rows
+    # already on a running cluster must still read. A new proposal always has it.
+    prompt: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 
 class ProposalSummary(WireModel):
@@ -90,9 +110,39 @@ class ProposalSummary(WireModel):
 
 class ClaimResponse(WireModel):
     claim_id: str
+    state: LifecycleState
     run_id: UUID
     run_status: RunState
     proposal: ProposalSummary | None
+
+
+class ClaimDecision(WireModel):
+    """What ``POST /claims/{claim_id}/decision`` takes: one decision word and
+    nothing else. Strict, so no type is coerced into a word."""
+
+    model_config = ConfigDict(strict=True)
+
+    decision: Decision
+
+
+class DecisionResponse(WireModel):
+    """The claim after the decision, and the run that was resumed on it."""
+
+    claim_id: str
+    state: LifecycleState
+    run_id: UUID
+    run_status: RunState
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionFailure:
+    """A decision that did not complete, as a status and a fixed text: the
+    JSON route answers it as JSON and the adjuster's page renders it. The run's
+    ID is there once the decision was recorded and a resume was tried."""
+
+    status: int
+    detail: str
+    run_id: UUID | None = None
 
 
 class ClaimErrorBody(ErrorBody):

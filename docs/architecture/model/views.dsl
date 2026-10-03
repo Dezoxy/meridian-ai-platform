@@ -34,10 +34,11 @@ dynamic meridian "ClaimsTriage" "What happens between a claim being submitted an
 }
 
 dynamic meridian "ClaimsApproval" "What happens when an adjuster decides on a paused triage proposal?" {
-    adjuster -> meridian.ingress "Approves or rejects the proposal"
+    adjuster -> meridian.ingress "Approves, rejects or asks for documents"
     meridian.ingress -> meridian.claimsApp "Routes the decision"
-    meridian.claimsApp -> meridian.platformDb "Records the decision with the adjuster's identity"
-    meridian.claimsApp -> meridian.runtime "Resumes the paused run with the decision"
+    meridian.claimsApp -> meridian.platformDb "Records the decision with the adjuster's identity and moves the claim"
+    meridian.claimsApp -> meridian.runtime "Resumes the paused run"
+    meridian.runtime -> meridian.claimsMcp "Reads the recorded decision and adds a note"
     meridian.runtime -> meridian.platformDb "Writes the audit event"
     autoLayout lr
 }

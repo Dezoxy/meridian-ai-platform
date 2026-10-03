@@ -4,13 +4,13 @@ What each tool server answers to `tools/list`: one JSON file per server, with
 its description and, for every tool, the name, description, input schema,
 output schema, annotations and, under `_meta`, what the server enforces for
 it: the scope, and whether it needs an idempotency key or an approval.
-Status: **implemented** (S013, S046), proven in-process against PostgreSQL;
-the servers run on kind in S044.
+Status: **implemented** (S013, S046, S015), proven in-process against
+PostgreSQL; the servers run on kind in S044.
 
 | File | Server |
 |---|---|
 | `policy-mcp.json` | `policy_lookup`, `claim_history` |
-| `claims-mcp.json` | `add_claim_note`, `request_approval` |
+| `claims-mcp.json` | `add_claim_note`, `request_approval`, `approval_outcome` |
 | `knowledge-mcp.json` | `wording_search` |
 
 A server is published only when every one of its tools has an output

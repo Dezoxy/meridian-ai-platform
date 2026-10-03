@@ -22,6 +22,7 @@ from toolsupport import (
     KEY,
     OTHER_KEY,
     World,
+    add_claim,
     add_run,
     audit_rows,
     payload_hash,
@@ -349,6 +350,77 @@ def test_a_text_the_database_cannot_hold_is_refused_and_stores_nothing(
     assert rows(world, store) == []
     (row,) = audit_rows(world.db)
     assert (row["outcome"], row["reason"]) == ("refused", "invalid-arguments")
+
+
+# ── approval_outcome (S015): a read of the run's own recorded decision ──────
+def record_decision(world: World, run_id: uuid.UUID, decision: str) -> None:
+    with connect(world.db.dsn(OWNER), "test-seed") as conn:
+        conn.execute(
+            "INSERT INTO claims.decisions (claim_id, run_id, decision) "
+            "VALUES (%s, %s, %s)",
+            (CLAIM, run_id, decision),
+        )
+
+
+def outcome_of(server: Any, run_id: uuid.UUID, claim_id: str = CLAIM) -> Any:
+    return run_call(server, "approval_outcome", {"claim_id": claim_id}, run_id=run_id)
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject", "request_documents"])
+def test_a_run_reads_the_decision_recorded_for_it(
+    world: World, server: Any, decision: str
+) -> None:
+    record_decision(world, world.run_id, decision)
+
+    result = outcome_of(server, world.run_id)
+
+    assert result.is_error is False
+    assert result.structured_content == {"outcome": decision}
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("completed", None)
+
+
+def test_a_run_with_no_recorded_decision_reads_no_outcome(
+    world: World, server: Any
+) -> None:
+    result = outcome_of(server, world.run_id)
+
+    assert result.is_error is False
+    assert result.structured_content == {}
+    assert [r["outcome"] for r in audit_rows(world.db)] == ["completed"]
+
+
+def test_the_decision_recorded_for_another_run_of_the_claim_is_not_visible(
+    world: World, server: Any
+) -> None:
+    record_decision(world, add_run(world.db, CLAIM), "reject")
+
+    result = outcome_of(server, world.run_id)
+
+    assert result.structured_content == {}
+
+
+def test_a_call_naming_another_claim_is_refused_by_the_binding(
+    world: World, server: Any
+) -> None:
+    add_claim(world.db, "CLM-0002")
+    record_decision(world, world.run_id, "approve")
+
+    result = outcome_of(server, world.run_id, claim_id="CLM-0002")
+
+    assert result.is_error is True
+    assert result.meta[META_REFUSAL] == "outside-claim"
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("refused", "outside-claim")
+
+
+def test_a_read_needs_no_idempotency_key_and_writes_one_audit_row_per_call(
+    world: World, server: Any
+) -> None:
+    outcome_of(server, world.run_id)
+    outcome_of(server, world.run_id)
+
+    assert [r["outcome"] for r in audit_rows(world.db)] == ["completed", "completed"]
 
 
 @pytest.mark.parametrize("store", STORES)

@@ -25,6 +25,8 @@ from stacksupport import (
     service_of,
 )
 
+from meridian.workloads.claims_triage.assessment import PROMPT_VERSION
+
 CLAIM = CLAIMS["CLM-0001"]
 SERVICES = {
     "claims-api",
@@ -32,6 +34,7 @@ SERVICES = {
     "model-gateway",
     "policy-mcp",
     "knowledge-mcp",
+    "claims-mcp",
 }
 
 
@@ -49,9 +52,11 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
     body = response.json()
     run_id = uuid.UUID(body["run_id"])
     assert body["claim_id"] == "CLM-0001"
-    assert body["run_status"] == "Completed"
     # In force with a circumstance exclusion to check: the replay gateway's text
-    # is no verdict, so the exclusion stays unassessed and a person decides.
+    # is no verdict, so the exclusion stays unassessed and a person decides: the
+    # run is paused and the claim waits for the adjuster.
+    assert body["run_status"] == "AwaitingApproval"
+    assert body["state"] == "awaiting_adjuster"
     # The answer carries no reason code: it is in the stored proposal below.
     assert set(body["proposal"]) == {"route", "drafted_by"}
     assert body["proposal"]["route"] == "adjuster"
@@ -59,6 +64,7 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
         "deployment": "replay-chat",
         "provider": "replay",
         "mode": "replay",
+        "prompt": PROMPT_VERSION,
     }
 
     # ── the rows ────────────────────────────────────────────────────────────
@@ -84,17 +90,22 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
     ]
     assert owner_rows(
         fresh_database, "SELECT run_id, status, reference FROM runtime.runs"
-    ) == [(run_id, "Completed", "CLM-0001")]
+    ) == [(run_id, "AwaitingApproval", "CLM-0001")]
+    assert owner_rows(
+        fresh_database, "SELECT claim_id, state, run_id FROM claims.claims"
+    ) == [("CLM-0001", "awaiting_adjuster", run_id)]
     events = audit_events(fresh_database, run_id)
     assert Counter((e["service"], e["event"], e["outcome"]) for e in events) == {
         ("agent-runtime", "run.started", "started"): 1,
-        ("agent-runtime", "run.completed", "completed"): 1,
+        ("agent-runtime", "run.awaiting_approval", "paused"): 1,
         ("policy-mcp", "tool.call", "completed"): 2,
         ("knowledge-mcp", "tool.call", "completed"): 4,
+        ("claims-mcp", "tool.call", "completed"): 1,
         ("model-gateway", "model.call", "completed"): 5,
+        ("claims-api", "claim.awaiting_adjuster", "awaiting_adjuster"): 1,
     }
 
-    # ── one trace across the five services ──────────────────────────────────
+    # ── one trace across the six services ───────────────────────────────────
     spans = list(stack.exporter.get_finished_spans())
     assert {service_of(s) for s in spans} == SERVICES
     assert len({s.context.trace_id for s in spans}) == 1
@@ -163,6 +174,7 @@ def test_another_synthetic_claim_takes_the_same_path(
     assert response.status_code == 201
     # A lapsed policy needs no model: the rules decide from the wording alone.
     assert response.json()["proposal"] == {"route": "adjuster", "drafted_by": None}
+    assert response.json()["state"] == "awaiting_adjuster"
     assert owner_rows(
         fresh_database,
         "SELECT route, reason, proposal ->> 'reason' FROM claims.triage_proposals",

@@ -195,3 +195,12 @@ runtime host, not the platform.
 - **Spans.** LangGraph emits none of its own, so the runtime passes a
   callback handler that opens a span per node, keeping one trace across API,
   runtime and gateway (S009).
+
+Amended on 2026-10-03 (S015): a finished run's checkpoints are deleted
+with `delete_thread`, after its status is recorded, and they live in
+PostgreSQL under LangGraph's own saver. The adjuster's identity moved to
+S021 (T-32), so S015 records a decision without it. A resume is addressed
+to the pending pause by its interrupt ID, because LangGraph reads a resume
+value whose keys all look like interrupt IDs, an empty object among them,
+as a map of pauses. The claims workload's run reads the adjuster's
+decision from the Claims API's record, not from the resume.
