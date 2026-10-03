@@ -17,7 +17,9 @@
   has answered its one question), a claim it refers to an adjuster waits
   with its run paused in PostgreSQL until the adjuster decides it on a
   server-rendered page and the Claims API records the decision and resumes
-  it, and no service runs in Azure yet.
+  it, CI grades the golden set's proposals with rules against a reviewed
+  baseline (with a scripted model, simulated), and no service runs in
+  Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -98,16 +100,20 @@ and Pydantic, at the cost of one dependency.
   documentation gates); Terraform and Helm keep infrastructure.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
-  `eval run` and `eval compare`; S039 would add `workload new`.
+  ~~`eval run` and~~ `eval compare`; S050 adds `eval run`; S039 would add
+  `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
   sign-in and stay designed until S021 exists.
-- **Cost.** Evaluation uses the replay provider unless `--live` is passed
-  (C-04).
+- **Cost.** Evaluation uses ~~the replay provider~~ a scripted model, in
+  process and at no cost (S017), unless `--live` is passed (C-04; `--live`
+  and a recorded model are S050).
 - **Placement.** `src/meridian/platform/cli/`, importing only platform
-  packages. The Evaluation Harness reaches workloads through the runtime
-  API, so the import contract from S002 covers the CLI too.
+  packages. The Evaluation Harness reaches workloads through the ~~runtime
+  API~~ Claims API (S017: every tool call needs the claim's row, so a run
+  started on the runtime alone is refused), so the import contract from
+  S002 covers the CLI too.
 
 ### Demo checkpoints
 
@@ -115,7 +121,7 @@ and Pydantic, at the cost of one dependency.
 |---|---|
 | S041 | A claim flows through API, runtime and gateway, visible as one trace |
 | S015 | A triage proposal pauses for an adjuster and resumes on the decision |
-| S017 | An evaluation report comparing two prompt versions |
+| ~~S017~~ S050 | An evaluation report comparing two prompt versions |
 | S018 | The full fifteen-minute demo on kind, from a clean checkout |
 | S026 | The same demo on AKS, recorded, with the run's cost logged |
 | S028 | An incident record written from a real game day |
@@ -156,7 +162,8 @@ and Pydantic, at the cost of one dependency.
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
-| S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
+| S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
+| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
 ### M2 — Azure, identity, delivery
@@ -179,7 +186,7 @@ and Pydantic, at the cost of one dependency.
 | S027 | Load test and SLO thresholds | A load test measures latency and error rate; SLO thresholds set from the measurements; an error-budget panel | todo | S026 |
 | S028 | Game day | Provider outage, budget exhaustion and database failure exercised; INC-001 written from the real timeline; rollback exercised | todo | S027 |
 | S029 | Backup and restore drill | PostgreSQL restored into a scratch environment; restore time measured and recorded | todo | S020 |
-| S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023 |
+| S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023, S050 |
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
 | S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
@@ -3963,6 +3970,153 @@ the same code as the JSON decision.
 - No step yet: reads of a claim's page are not audited; the queue shows at
   most 100 claims with no next page.
 
+### S017 — Evaluation harness
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** every change replays the 40 golden claims through the real
+services, grades each proposal against the oracle with rules, and fails CI
+when a grade regresses or when the prompt, the tools or the golden set
+changed without a reviewed new baseline.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request. No model is reachable (the Azure login is blocked), and the
+  golden set has no label a judge could grade groundedness against, so the
+  LLM judge, latency and cost, a recorded or live model, the tool
+  arguments and `eval run` are S050, new. QA-06's route target and its
+  absolute half are decided by rules alone, so they stay here.
+- The model is the scripted one the stack test already uses: it answers
+  each assessment with the oracle's verdict, so it ignores the prompt.
+  The gate on prompt changes is therefore this: the report carries a hash
+  of the prompt, and `meridian eval compare` fails when the prompt, the
+  tools' contracts or the golden set's hashes differ from the committed
+  baseline's, until a new baseline arrives in the same reviewed diff. What
+  a prompt change does to the answers is measured only once S050 records
+  a real model. Rejected for this step: a recorded gateway mode keyed by
+  the request's fingerprint, which is the real gate but needs a new
+  gateway mode, a recording format and a model to record (S050).
+- The run stays in-process, as the successor of
+  `test_a_scripted_model_gives_the_oracle_s_proposals`: it already
+  replays all 40 claims through the real services inside the tenant's
+  rate windows on a hand-moved clock, and CI's python job has no time for
+  a second 40-claim run. Rejected: `eval run` over HTTP against kind,
+  because the Claims API's answer carries only the route (it hides the
+  reason, T-65) and no read path for a proposal exists (S050).
+- The Evaluation Harness reaches workloads through the Claims API, not
+  the runtime alone: every tool call needs the claim's row (`claim-not-bound`),
+  so a run started on the runtime alone is refused. Part B's
+  Developer CLI section is corrected.
+- The platform owns the report's format and the comparison
+  (`meridian.platform.evaluation`, generic over grader names); the
+  workload owns its graders, since route, reason and amount are the
+  claims workload's own words. The CLI imports only the platform package.
+- The report is a JSON file, not rows in the Platform Database: the
+  baseline lives in Git, where a change to it is a reviewed diff (T-29).
+  The database store the model draws is S050's.
+- A proposal names the prompt that drafted it: `drafted_by` gains the
+  prompt's hash, so a proposal on the adjuster's page and a report can be
+  tied to one prompt.
+
+- The prompt's version is the SHA-256 of the messages `build_messages`
+  makes for a fixed, fictional probe claim, with the output budget and the
+  length limit, so a change to the user message's format moves it as well
+  as a change to the system message. Rejected: a hash of the system
+  message alone, which misses the user message; a hand-bumped version
+  number, which someone forgets.
+- `drafted_by.prompt` is optional: the adjuster's page validates stored
+  proposals, and those stored before S017 on a running cluster have none.
+  Every new proposal carries it.
+- The golden set's fingerprint is checked, not trusted: the report hashes
+  the whole manifest and every file it lists, and refuses a file whose
+  bytes differ from the manifest's hash.
+
+**Work log:**
+
+- Opened from `main` at 19cd45b, after S016 merged (pull request 35,
+  its 25 files identical on `main`). The ninth step in one session, on
+  the owner's word.
+- An Explore sweep found what the step had to work around: no prompt
+  version anywhere, no tool arguments recorded, a scripted model that
+  exists only inside pytest, and every tool call bound to a claim row.
+  The advisor set the order: split first, then the deterministic half.
+- Four contracts to `implementer`, the first two in parallel:
+  - A: `meridian.platform.evaluation` (the report, its canonical dump,
+    `compare`, the fingerprints) and `meridian eval compare`;
+  - B1: `PROMPT_VERSION` in `assessment.py`, `drafted_by.prompt`, the
+    prompt on the adjuster's page;
+  - C: the workload's ten rule graders, the report from the stack test,
+    `data/evaluation/`, `make eval`, `eval-compare` and `eval-baseline`,
+    and the CI gate;
+  - A2: the python reviewer's findings (below).
+- The `python-reviewer` found no way to make `compare` pass a regressed
+  grade, a changed fingerprint, a lost case or a broken absolute grader,
+  but blocked on two holes in the loader, both fixed in A2: a duplicate
+  JSON key was read last-wins, so a report could say `false` to a reader
+  and `true` to the gate; and an error message echoed the file's own keys,
+  so a report could print a forged `eval compare: passed` or a GitHub
+  `::` workflow command into the CI log. A2 also took its six smaller
+  points (sorted `absolute`, the manifest's files checked against their
+  bytes, strict numbers, a bounded read that refuses a FIFO, no traceback
+  locals, an atomic write). Its re-review closed all of them and found two
+  inputs that crashed instead of being refused (a NUL in a file name, a
+  lone surrogate in the manifest), fixed by the session.
+- The session fixed C's `.PHONY` line, which had joined `synthetic` and
+  `up` into one word.
+- The implementers broke the no-heredoc rule again: contract B1 once,
+  contract C three times (one appended two tests to
+  `test_ci_config.py`), A2 twice with empty heredocs; contract A wrote one
+  ruff output file to `/tmp/x`. Each reported it; the files pass the
+  gates.
+
+**Result / verification:** done when met, with a scripted model:
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4725 passed, 3 skipped in
+  378.64s` (the three are the opt-in live Azure tests); the report that
+  run wrote compares clean with the baseline.
+- `make eval`: ten graders, 40 of 40 each, `eval compare: passed`.
+- The gate, negatively, with the session's own hands:
+  - one word of `SYSTEM_MESSAGE` changed ("check" to "verify"): the stack
+    test failed with "the prompt changed: regenerate the baseline in this
+    change (make eval-baseline)", and `meridian eval compare` exited 1
+    with every grade still 40 of 40; reverted, no diff, `make eval`
+    passed again;
+  - copies of the baseline with a changed prompt hash, one grade turned
+    false, one absolute grade turned false and one case removed each
+    exited 1 with the matching message, and one with a duplicate key
+    exited 2 with `duplicate key`.
+- `make lint`: `Contracts: 4 kept, 0 broken.`; `make test`: `OK`;
+  `make registry`: `schemas OK`, `contracts OK`; `make docs`: `13 checks
+  passed`; `make check`: no ERROR line; `make mermaid-views`: no derived
+  block changed (the relationship that moved is in the Governance view,
+  which has none).
+- On kind (the cluster S044 built, not recreated): `make deploy` and
+  `make smoke` (13 PASS lines) with the new image, whose workload code
+  changed (`drafted_by.prompt`, the claim's page). The pages of CLM-0001,
+  CLM-0007 and CLM-0009, whose proposals were stored before S017 without a
+  prompt, answer 200 and show no prompt.
+- Not run: anything with a real model (the Azure login is blocked), so
+  QA-06 is measured for the pipeline only; `make demo`, which would use a
+  golden claim to show a new proposal's prompt on kind (the stack test
+  shows it); the rendered views (`make export`).
+
+**Follow-ups:**
+
+- The owner: accept the split (S050); accept that the gate rests on the
+  review of `data/evaluation/` (a pull request may regenerate its own
+  baseline, T-72's residual).
+- S050: a recorded model through the gateway, so a prompt change moves
+  grades; the LLM judge with its own agent identity and the model's
+  `evals -> gateway` relationship; latency and cost from the ledger; the
+  tool arguments of each run; `eval run` against a deployed stack, with a
+  read path for proposals; a report comparing two prompt versions; the
+  database store for results; golden-set cases on the fraud indicators'
+  boundaries and an unknown policy number (S003's follow-up); a view
+  that shows the harness's edges, since `evals -> claimsApp` is in none
+  (Containers leaves the harness out, Governance the Claims Triage App).
+- No step yet: `make eval-compare` alone reads whatever report `.eval/`
+  holds, which may be stale; a file in the golden set's directory that the
+  manifest does not list is not noticed.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -4037,3 +4191,9 @@ the same code as the JSON decision.
   model had given S016 (T-01, T-04, T-65), become S049, new, depending on
   S016; S018 does not wait for them. S016 keeps one session instead of
   two.
+- **v0.18, 2026-10-03:** S017 split by the session, for the owner to
+  accept at its pull request: the LLM judge, latency and cost, a recorded
+  or live model, the tool arguments, `eval run` and the demo checkpoint
+  comparing two prompt versions become S050, new, depending on S017; S030
+  depends on S050 as well. The Developer CLI section says the harness
+  reaches workloads through the Claims API.

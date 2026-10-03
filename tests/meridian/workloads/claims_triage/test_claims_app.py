@@ -32,7 +32,12 @@ from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 UNUSED_DSN = "postgresql://claims_api@db.invalid/meridian"
 CANARY = "claimant-secret-text-42"
-DRAFTED_BY = {"deployment": "replay-chat", "provider": "replay", "mode": "replay"}
+DRAFTED_BY = {
+    "deployment": "replay-chat",
+    "provider": "replay",
+    "mode": "replay",
+    "prompt": "a" * 64,
+}
 CITATION = {"product": "HOME-STD", "wording_version": "2026-01", "clause": "2.1"}
 # A valid proposal for each of the three routes, as the graph writes it.
 OUTPUT = {

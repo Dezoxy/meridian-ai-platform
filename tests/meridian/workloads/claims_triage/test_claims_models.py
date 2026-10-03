@@ -9,6 +9,7 @@ from servicesupport import claim_with_id, synthetic_claims
 from meridian.workloads.claims_triage.models import (
     ClaimFacts,
     ClaimSubmission,
+    DraftedBy,
     ProposalSummary,
 )
 
@@ -100,6 +101,33 @@ def test_a_proposal_summary_takes_a_route_and_a_drafted_by() -> None:
 
     assert summary.drafted_by is not None
     assert summary.drafted_by.provider == "replay"
+
+
+PROMPT = "a" * 64
+
+
+def test_a_drafted_by_takes_a_prompt_version() -> None:
+    drafted_by = DraftedBy.model_validate(DRAFTED_BY | {"prompt": PROMPT})
+
+    assert drafted_by.prompt == PROMPT
+
+
+def test_a_drafted_by_without_a_prompt_reads_as_a_proposal_stored_before_s017() -> None:
+    drafted_by = DraftedBy.model_validate(DRAFTED_BY)
+
+    assert drafted_by.prompt is None
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ["a" * 63, "a" * 65, "A" * 64, "g" * 64, "", " " + "a" * 63, "a" * 64 + "\n"],
+    ids=["short", "long", "uppercase", "not-hex", "empty", "space", "newline"],
+)
+def test_a_drafted_by_refuses_a_prompt_that_is_not_64_lowercase_hex(
+    prompt: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        DraftedBy.model_validate(DRAFTED_BY | {"prompt": prompt})
 
 
 def test_a_proposal_summary_has_no_reason() -> None:

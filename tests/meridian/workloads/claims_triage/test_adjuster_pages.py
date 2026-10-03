@@ -50,6 +50,7 @@ from meridian.workloads.claims_triage.app import (
     NOT_WAITING_DETAIL,
     RESUME_FAILED_DETAIL,
 )
+from meridian.workloads.claims_triage.models import DraftedBy
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
 TENANT = "claims-triage"
@@ -387,6 +388,38 @@ def test_the_claim_page_shows_the_proposal_next_to_its_evidence(
         assert shown in text, shown
 
 
+def test_the_claim_page_shows_the_first_12_hex_of_the_prompt_version(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    version = "0123456789abcdef" * 4
+    put_claim(db, "CLM-9301")
+    drafted_by = RICH_PROPOSAL["drafted_by"] | {"prompt": version}
+    put_proposal(db, "CLM-9301", RICH_PROPOSAL | {"drafted_by": drafted_by})
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    assert response.status_code == 200
+    text = Page(response.text).text
+    assert "replay-chat, replay, replay, prompt 0123456789ab" in text
+    assert "0123456789abc" not in text
+
+
+def test_the_claim_page_of_a_proposal_stored_before_s017_names_no_prompt(
+    fresh_database: DatabaseHandle,
+) -> None:
+    old = {k: v for k, v in RICH_PROPOSAL["drafted_by"].items() if k != "prompt"}
+    put_claim(fresh_database, "CLM-9301")
+    put_proposal(fresh_database, "CLM-9301", RICH_PROPOSAL | {"drafted_by": old})
+
+    response = client_for(fresh_database).get(url_of("CLM-9301"))
+
+    assert response.status_code == 200
+    text = Page(response.text).text
+    assert "replay-chat, replay, replay" in text
+    assert "prompt" not in text
+
+
 def test_the_claim_page_leaves_out_the_claimants_name_and_email(
     fresh_database: DatabaseHandle,
 ) -> None:
@@ -593,7 +626,13 @@ def test_markup_in_a_citations_clause_is_escaped() -> None:
     stored one cannot carry markup; the template must not depend on that."""
     citation = {**CITATION, "clause": MARKUP + MARKUP_IN_ATTRIBUTE}
     proposal = TriageProposal.model_construct(
-        **(RICH_PROPOSAL | {"citations": [citation]})
+        **(
+            RICH_PROPOSAL
+            | {
+                "citations": [citation],
+                "drafted_by": DraftedBy.model_validate(RICH_PROPOSAL["drafted_by"]),
+            }
+        )
     )
 
     view = adjuster.ClaimView(

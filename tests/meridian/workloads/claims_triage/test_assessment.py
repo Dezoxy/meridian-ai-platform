@@ -7,6 +7,7 @@ the call itself.
 
 import json
 import logging
+import re
 from datetime import date
 from typing import Any, cast
 
@@ -15,10 +16,13 @@ from pydantic import TypeAdapter
 
 from meridian.platform.gateway.models import MAX_CONTENT_CHARS
 from meridian.runtime.model_client import ChatResult, ModelClient
+from meridian.workloads.claims_triage import assessment as assessment_module
 from meridian.workloads.claims_triage.assessment import (
     ASSESSMENT_OUTPUT_TOKENS,
     MAX_USER_MESSAGE_CHARS,
+    PROMPT_VERSION,
     Assessed,
+    _prompt_version,
     assess,
     build_messages,
     read_answer,
@@ -400,7 +404,10 @@ def test_assess_returns_the_assessment_and_who_drafted_it() -> None:
         assessment=Assessment("applies", "3.1"),
         rationale="On purpose.",
         drafted_by=DraftedBy(
-            deployment="eu-chat", provider="azure-openai", mode="live"
+            deployment="eu-chat",
+            provider="azure-openai",
+            mode="live",
+            prompt=PROMPT_VERSION,
         ),
         unavailable_because=None,
     )
@@ -415,7 +422,10 @@ def test_assess_of_an_untrustworthy_answer_still_records_who_drafted_it() -> Non
     assert result.rationale is None
     assert result.unavailable_because == "not-json"
     assert result.drafted_by == DraftedBy(
-        deployment="eu-chat", provider="azure-openai", mode="live"
+        deployment="eu-chat",
+        provider="azure-openai",
+        mode="live",
+        prompt=PROMPT_VERSION,
     )
 
 
@@ -511,3 +521,80 @@ def test_assess_without_candidates_raises_and_asks_nothing() -> None:
         assess(as_client(stub), make_claim(), "motor", "2026.1", ())
 
     assert stub.calls == []
+
+
+# --- the prompt's version ---------------------------------------------------
+
+
+def test_the_prompt_version_is_64_lowercase_hex_and_stable() -> None:
+    assert re.fullmatch(r"[0-9a-f]{64}", PROMPT_VERSION)
+    assert _prompt_version() == PROMPT_VERSION
+    assert _prompt_version() == _prompt_version()
+
+
+def test_the_prompt_version_changes_with_the_system_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = _prompt_version()
+
+    monkeypatch.setattr(assessment_module, "SYSTEM_MESSAGE", "Another text.")
+
+    assert _prompt_version() != before
+
+
+def test_the_prompt_version_changes_with_the_output_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = _prompt_version()
+
+    monkeypatch.setattr(assessment_module, "ASSESSMENT_OUTPUT_TOKENS", 401)
+
+    assert _prompt_version() != before
+
+
+def test_the_prompt_version_changes_with_the_length_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = _prompt_version()
+
+    monkeypatch.setattr(assessment_module, "MAX_USER_MESSAGE_CHARS", 19_999)
+
+    assert _prompt_version() != before
+
+
+def test_the_prompt_version_changes_with_the_user_messages_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = _prompt_version()
+    original = assessment_module.build_messages
+
+    def with_one_more_key(*args: Any) -> list[dict[str, str]]:
+        system, user = original(*args)
+        document = json.loads(user["content"]) | {"language": "en"}
+        return [system, {"role": "user", "content": json.dumps(document)}]
+
+    monkeypatch.setattr(assessment_module, "build_messages", with_one_more_key)
+
+    assert _prompt_version() != before
+
+
+def test_the_prompt_version_does_not_depend_on_the_claim_being_assessed() -> None:
+    first = StubModel(chat_result(answer("none")))
+    second = StubModel(chat_result(answer("none")))
+
+    one = assess(as_client(first), make_claim(), "motor", "2026.1", CANDIDATES)
+    other = assess(
+        as_client(second), make_claim("Another text."), "home", "2027.2", CANDIDATES[:1]
+    )
+
+    assert one.drafted_by is not None and other.drafted_by is not None
+    assert one.drafted_by.prompt == other.drafted_by.prompt == PROMPT_VERSION
+
+
+def test_a_too_long_assessment_names_no_prompt_because_none_was_sent() -> None:
+    candidates = (Clause("3.1", "Racing", user_message_of(MAX_USER_MESSAGE_CHARS + 1)),)
+    stub = StubModel(chat_result(answer("none")))
+
+    result = assess(as_client(stub), make_claim(), "motor", "2026.1", candidates)
+
+    assert result.drafted_by is None

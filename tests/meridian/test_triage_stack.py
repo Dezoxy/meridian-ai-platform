@@ -15,20 +15,25 @@ CLM-0024 (claimed above the policy's limit) included: the probes lose no clause
 (see ``test_triage_retrieval.py``).
 """
 
+import os
 import uuid
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
 from dbsupport import DatabaseHandle
 from servicesupport import (
+    REGISTRY_DIR,
     assert_spans_hold_no_exception_and_no_canary,
     audit_events,
     owner_rows,
 )
 from stacksupport import (
     CLAIMS,
+    EVAL_BASELINE,
     EXPECTED,
+    MANIFEST,
     POLICIES,
     ScriptedModel,
     Stack,
@@ -43,6 +48,16 @@ from stacksupport import (
 )
 from toolsupport import application_log, holds
 
+from meridian.platform.evaluation.compare import compare
+from meridian.platform.evaluation.report import (
+    AnsweredBy,
+    Report,
+    load_report,
+    write_report,
+)
+from meridian.platform.registry import load_registry
+from meridian.workloads.claims_triage.assessment import PROMPT_VERSION
+from meridian.workloads.claims_triage.evaluation import build_report
 from meridian.workloads.claims_triage.mcp_server import tools as claims_tools
 from meridian.workloads.claims_triage.models import DECISION_NOTES
 from meridian.workloads.claims_triage.proposal import TriageProposal
@@ -165,6 +180,28 @@ def unequal(proposals: dict[str, TriageProposal]) -> dict[str, dict[str, Any]]:
     return {claim_id: diff for claim_id, diff in found.items() if diff}
 
 
+def write_evaluation_report(
+    proposals: dict[str, TriageProposal], tmp_path: Path
+) -> tuple[Report, Path]:
+    """Grade the scripted run's proposals with the claims workload's graders and
+    write the report: to ``MERIDIAN_EVAL_REPORT`` when set (``make eval`` and CI
+    read it from there), else into ``tmp_path``."""
+    report = build_report(
+        proposals,
+        EXPECTED,
+        CLAIMS,
+        POLICIES,
+        manifest_path=MANIFEST,
+        registry=load_registry(REGISTRY_DIR),
+        answered_by=AnsweredBy(kind="scripted", label="simulated"),
+        prompt=PROMPT_VERSION,
+    )
+    named = os.environ.get("MERIDIAN_EVAL_REPORT")
+    destination = Path(named) if named else tmp_path / "claims-triage-report.json"
+    write_report(report, destination)
+    return report, destination
+
+
 def routes_and_reasons(
     proposals: dict[str, TriageProposal],
 ) -> tuple[Counter[str], Counter[str]]:
@@ -276,7 +313,7 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
 
 # ── 2. a scripted model ─────────────────────────────────────────────────────
 def test_a_scripted_model_gives_the_oracle_s_proposals(
-    fresh_database: DatabaseHandle,
+    fresh_database: DatabaseHandle, tmp_path: Path
 ) -> None:
     model = ScriptedModel(golden_answer)
     stack = scripted_stack(fresh_database, model)
@@ -284,6 +321,8 @@ def test_a_scripted_model_gives_the_oracle_s_proposals(
     post_all(stack)
 
     proposals = stored_proposals(fresh_database)
+    # S017: the report is written first, so a failing run leaves one to read.
+    report, destination = write_evaluation_report(proposals, tmp_path)
     assert len(proposals) == len(CLAIMS) == 40
     # The model was asked exactly where the rules need it, once per claim.
     assert model.requests == sorted(claims_that_ask_the_model())
@@ -306,6 +345,12 @@ def test_a_scripted_model_gives_the_oracle_s_proposals(
     for proposal in proposals.values():
         assert proposal.gaps == ()
         assert proposal.assessment != "unavailable"
+    # S017's gate: the report equals the committed baseline's verdicts. When the
+    # destination is the baseline itself, the run regenerates it (make
+    # eval-baseline) and there is nothing to compare. A missing baseline fails.
+    if destination.resolve() != EVAL_BASELINE.resolve():
+        outcome = compare(load_report(EVAL_BASELINE), report)
+        assert outcome.passed, (outcome.problems, outcome.regressions)
 
 
 def test_a_model_that_finds_no_exclusion_costs_four_wrong_approvals(

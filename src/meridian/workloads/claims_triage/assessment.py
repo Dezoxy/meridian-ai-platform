@@ -13,11 +13,13 @@ its own string (T-26, T-27). A log line names a reason and never repeats the
 model's text or the claim (T-03).
 """
 
+import hashlib
 import json
 import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from meridian.runtime.model_client import ModelClient
@@ -97,6 +99,51 @@ def build_messages(
         # gateway counts characters.
         {"role": "user", "content": json.dumps(document, ensure_ascii=False)},
     ]
+
+
+# A fixed, fictional claim and two clauses, never sent anywhere: they exist only
+# so that the prompt's version covers the format of the user message.
+PROMPT_PROBE_CLAIM = ClaimFacts(
+    claim_id="CLM-0000",
+    policy_number="POL-0000",
+    reported_on=date(2000, 1, 2),
+    loss_date=date(2000, 1, 1),
+    peril="storm",
+    claimed_amount=1,
+    loss_location={"city": "Probe", "country": "HU"},  # type: ignore[arg-type]
+    description="A probe description.",
+    documents=(),
+)
+PROMPT_PROBE_CLAUSES = (
+    Clause("0.1", "Probe clause one", "The text of the first probe clause."),
+    Clause("0.2", "Probe clause two", "The text of the second probe clause."),
+)
+
+
+def _prompt_version() -> str:
+    """The SHA-256, as 64 hex digits, of what the workload decides about what
+    the model is sent: the system message, the format of the user message (built
+    from the fixed probe), the output budget and the length limit of the user
+    message. A change to any of them changes it.
+
+    It does not cover the model, the deployment (``DraftedBy`` names those), the
+    answer parser ``read_answer``, or the clauses retrieval picks for a claim.
+    """
+    document = {
+        "messages": build_messages(
+            PROMPT_PROBE_CLAIM, "PROBE", "0", PROMPT_PROBE_CLAUSES
+        ),
+        "max_output_tokens": ASSESSMENT_OUTPUT_TOKENS,
+        "max_user_message_chars": MAX_USER_MESSAGE_CHARS,
+    }
+    encoded = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+# Computed once at import: the inputs are module constants and a function.
+PROMPT_VERSION = _prompt_version()
 
 
 def _unavailable(
@@ -205,7 +252,10 @@ def assess(
         assessment=assessment,
         rationale=rationale,
         drafted_by=DraftedBy(
-            deployment=result.deployment, provider=result.provider, mode=result.mode
+            deployment=result.deployment,
+            provider=result.provider,
+            mode=result.mode,
+            prompt=PROMPT_VERSION,
         ),
         unavailable_because=because,
     )
