@@ -4169,6 +4169,9 @@ raised, and the gateway tells a content-filter refusal from an outage.
   refusal of a `special` request is a backstop for any other caller, not
   the triage path. Rejected: failing the run, which T-67 shows never
   reaches a person.
+  Revised after the reviews (see the work log): a candidate *clause* that
+  addresses the model fails the run (`wording-addresses-the-model`): a
+  wording is platform data, so the same line puts it on the other side.
 - One platform module, `meridian.platform.guardrails`, pure and without I/O,
   the standard library's `re` only:
   - `redact`: e-mail addresses, IBANs (checksum-valid), payment card
@@ -4192,10 +4195,17 @@ raised, and the gateway tells a content-filter refusal from an outage.
   redacted text. The wordings hold none of the patterns, and a test
   proves that ingesting them is unchanged. It does not move the prompt's
   version: that hash is computed in the workload before any call.
+  Revised after the reviews (see the work log): redaction runs after the
+  route decision's refusals, so a 403 costs none, and still before the
+  rate limiter (S019).
 - Names cannot be found by a pattern. The Claims API knows the claimant's
   name and email: in the copy of the description it hands the run it
   replaces them, whole and ignoring case, with placeholders. The stored
   submission keeps the claimant's own text.
+  Revised after the reviews (see the work log): `redact` runs first, then the
+  name; the name is stripped and non-blank, parts are split on hyphens and
+  apostrophes and need three letters, and the run's copy may be three
+  times the submission's 5,000 characters.
 - A request's data class: an optional header `X-Meridian-Data-Class`. The
   class used is the higher of the tenant's and the header's, in the order
   `synthetic` < `internal` < `personal` < `special`, so a header can raise
@@ -4217,6 +4227,10 @@ raised, and the gateway tells a content-filter refusal from an outage.
   own error for it and the assessment becomes `unavailable`. The
   reservation follows the existing rule: released for the refused prompt,
   kept for the withheld completion.
+  Revised after the reviews (see the work log): FastAPI itself answers 400
+  for a body it cannot decode, so the status is not enough: the gateway's
+  400 carries `X-Meridian-Refusal: content-filter`, and the runtime
+  raises its own error only for a 400 with that header.
 - The golden set: one claim, CLM-0012, says "I was in hospital for several
   weeks" (a late-report reason of the generator), and its peril has a
   circumstance exclusion (MOTOR-TPL 3.2, racing), so the model would be
@@ -4237,6 +4251,10 @@ raised, and the gateway tells a content-filter refusal from an outage.
   (uvicorn's, the collector's). An exception's text is formatted later by
   the handler and is not covered; the error middleware already keeps it
   out of logs (T-03).
+  Revised after the reviews (see the work log): the factory redacts the
+  message and each argument apart, keeping their shape (uvicorn's access
+  line reads five arguments), and the traceback too; a record it cannot
+  format is withheld, so no raw argument reaches stderr.
 - The model's rationale is redacted before it is stored, although the
   model saw only redacted text: a model can make an identifier up.
 
