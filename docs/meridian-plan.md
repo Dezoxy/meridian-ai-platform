@@ -1,13 +1,14 @@
 # Meridian AI Platform — Plan
 
-> **Status:** bootstrap, 2026-10-02. The architecture model, the first
+> **Status:** bootstrap, 2026-10-03. The architecture model, the first
   decisions, the engineering harness, a local platform on kind, the Azure
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, the gateway routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
-  the same region and holds each tenant to its rate limits and budgets,
-  it answers embedding requests under the same controls (in replay mode
+  the same region and holds each tenant to its rate limits and budgets
+  (a Grafana dashboard on kind shows what each tenant, agent, model and
+  provider used), it answers embedding requests under the same controls (in replay mode
   and against a mocked Azure; not yet run against Azure), three MCP tool
   servers and the runtime's client for them run on kind, where the policy
   wordings are ingested into pgvector and searched through one of those
@@ -140,7 +141,7 @@ and Pydantic, at the cost of one dependency.
 | S010 | Gateway routing ~~and resilience~~ | Registry-driven routing by data class and residency; Azure OpenAI adapter; ~~timeout, retry, circuit breaker and fallback to the second region;~~ a residency mismatch is refused and audited; contract tests pass (split on 2026-10-01: resilience is S042) | done | S004, S007, S009 |
 | S042 | Gateway resilience | Timeout, retry, circuit breaker and fallback across a route's candidates, with a second `gpt-4o` deployment in Sweden Central as the real second candidate and the second region labelled designed until the subscription is upgraded; a fault injected into the first candidate is answered by the second, and every attempt is audited; contract tests pass | done | S010 |
 | S011 | Gateway budgets and cost | Per-tenant quotas, rate limits and token budgets enforced, with the cost reserved before the call; cost metered per tenant, agent, model and provider; ~~one audit record per call; a Grafana cost panel~~ a call ID on every audit record of a call (split on 2026-10-01: the Grafana panel is S043) | done | S010 |
-| S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | todo | S011, S041 |
+| S043 | Gateway cost panel | A Grafana dashboard on kind, provisioned as code, shows tokens and cost per tenant, agent, model and provider from the gateway's metrics; `make smoke` finds the series in Prometheus | done | S011, S041 |
 | S045 | Gateway embeddings | `POST /v1/embeddings` on the Model Gateway: the embedding route walked like the chat route, with the same caller headers, residency filter, tenant limits, ledger and audit; a simulated replay embedding; the Azure OpenAI adapter; the registry gives each embedding deployment its dimensions and refuses a route whose candidates differ in model or dimensions; contract tests pass | done | S010, S011, S042 |
 | S012 | Knowledge and retrieval | Policy wording ingested into pgvector; hybrid search; ~~the knowledge MCP server returns cited chunks;~~ retrieval checked against a labelled query set (split on 2026-10-02: the gateway's embedding endpoint is S045, and the knowledge MCP server is S046) | done | S003, S009, S045 |
 | S046 | Knowledge MCP server | `wording_search` served by the knowledge tool server: the call is bound to the product and wording version of the run's own policy, the query is embedded through the gateway under the run's tenant and agent, and the answer is cited chunks under an output schema; the server's role and grants; contract tests pass | done | S012, S013 |
@@ -3404,6 +3405,167 @@ only, and `make docs` ran again after them.
   `make demo` passes as soon as each expected service has one span in
   Tempo, so it can pass on a trace that is not complete yet (one run
   showed one Claims API span where the others showed five).
+
+### S043 — Gateway cost panel
+
+**Status:** done · **Started:** 2026-10-02 · **Finished:** 2026-10-03
+**Goal:** a Grafana dashboard on kind, provisioned from a file in this
+repository, shows what each tenant, agent, model and provider used, in
+tokens and in cost, from the gateway's own metrics, and `make smoke`
+finds the dashboard and the series.
+**Decisions:**
+
+- The owner said "Go on" after S044 merged; this is the sixth step in one
+  session, where Part A says one.
+- No panel uses `increase()` or `rate()`. Measured on the cluster: each
+  gateway process exports its counters once a minute over OTLP, and its
+  first export already carries what it counted, so `increase()` over three
+  hours reported 0 for the ingestions' 17,319 tokens and 0 for the chat
+  model's 1,044. Each panel subtracts a series' value at the start of the
+  range (zero for a process that started inside it) from its last value;
+  every gateway process has its own `instance` label, so a series never
+  resets during its life. Rejected: Prometheus's start-timestamp features,
+  which v3.15.0's documentation gives for scraped data only, and which
+  would still leave `increase()`'s extrapolation to the end of the range:
+  worked through, not measured, about a tenth too high for a process a
+  few minutes old.
+- The dashboard is a JSON file in `infra/kind/dashboards/`, which
+  `make up` turns into a labelled ConfigMap in `observability` for
+  Grafana's sidecar. Rejected: JSON inside a YAML manifest, harder to
+  review and to test. `make up`, not `make deploy`, provisions it, because
+  Grafana belongs to the platform; a dashboard without data is empty, not
+  broken.
+- Cost reads EUR 0 on kind: the `replay` deployments are priced at zero
+  in the registry. The registry is not changed for a dashboard; a price
+  for a simulated provider would spend a tenant's real quota. The
+  dashboard says so on its first panel.
+- No purpose on the calls counter (S045's follow-up was "if the panel
+  needs chat and embeddings apart"): tokens and cost carry the model, and
+  calls by outcome is what a cost panel needs.
+- Grafana's rights are a Role in `observability`. Found while modelling
+  who can put a dashboard into Grafana: since S006 the chart's defaults
+  had given Grafana's service account a ClusterRole to read every
+  ConfigMap and Secret, because the dashboard sidecar watched every
+  namespace, so Grafana could read the database roles' passwords (T-42,
+  new T-68). Fixed here, because this step adds a dashboard through that
+  sidecar. The chart's namespaced Role would still add Secrets (two
+  reviewers), so the chart creates no RBAC for Grafana and
+  `manifests/grafana-rbac.yaml` gives it a Role that reads ConfigMaps in
+  `observability` and nothing else. Rejected: the chart's
+  `useExistingRole`, which changes the `roleRef` of an existing
+  RoleBinding, a field Kubernetes does not let an upgrade change.
+- `make smoke` checks the dashboard always and the series once there is
+  something to find: when the ledger holds an attempt settled since the
+  gateway's process started. Without that gate a gateway that restarted
+  and has served nothing would fail the check while nothing is broken.
+  The series must have a sample exported after the first such attempt,
+  because the previous process's series stay visible for five minutes
+  after a restart; seen on the cluster, where they would have passed the
+  first version of the check. The dashboard line also runs every query
+  of the dashboard Grafana serves, after checking they equal the file's,
+  and a third line checks Grafana's rights, so T-68 cannot regress
+  silently.
+- Reviewed and not done, with reasons:
+  - matching the series to the gateway's process by its `instance` label
+    instead of by time (two reviewers): during a rolling update the old
+    pod can settle a call after the new one started and pass the check
+    for a few seconds; the label is a random ID the script cannot learn
+    from Kubernetes, and the gateway runs one replica;
+  - narrowing the Prometheus operator's and kube-state-metrics' rights to
+    Secrets in every namespace: neither has a sign-in, and changing their
+    collectors needs a check of the chart's dashboards (S019, T-68);
+  - comparing the series' values with the ledger in `make smoke`: done
+    by hand in this step; a smoke check would need the ledger and the
+    metrics over the same window;
+  - "a process younger than five minutes shows its full total" in the
+    five-minute panel: that is its usage in those five minutes, since it
+    started from zero.
+
+**Work log:**
+
+- PR 31 (S044) verified landed: 17d0b19, the branch's 23 files identical
+  on `main`. Branch from `main`.
+- Orientation on the running cluster: the three series and their labels
+  in Prometheus; `increase()` against the counters' last values and the
+  ledger; Prometheus v3.15.0's feature flags; the chart rendered offline
+  before and after the RBAC values.
+- `feature-threat-model`: one new threat, T-68 (Grafana's rights, who
+  can add a dashboard, who sees every tenant's cost); T-42 notes the
+  finding.
+- Advisor before the contract: no `increase()`; the dashboard as a JSON
+  file applied by `make up`; cost 0 said on the dashboard; no purpose
+  label; `${__range_s}s`, never `$__range`, inside `offset`.
+- `implementer`, three contracts, one agent: the dashboard, `up.sh`, the
+  values and the smoke check; the time filter on the series; the review
+  findings. The main session changed the panels' unit (`short` printed
+  17,319 as "17.3 K") and a comment, and wrote the documents.
+- Three reviewers (infrastructure, security, silent failures): no
+  critical and no high finding. Fixed: Grafana's Role still read Secrets
+  in its namespace (two reviewers); a dashboard whose file is gone was
+  never removed; a dead port-forward or a refused query was reported as
+  missing data; psql's and kubectl's errors were dropped; a `bash -x` run
+  could trace the Grafana password; the dashboard's selector accepted a
+  value from a link; the datasource sidecar's namespace was implicit; the
+  series names were pinned in a test but not tied to `meters.py`; a
+  crash-looping gateway would have skipped instead of failed.
+
+**Result / verification:**
+
+Run by the main session on the kind cluster built in S044.
+
+- `make up` twice on the existing cluster (42 s and 27 s): Helm removed
+  the chart's Grafana ClusterRole, then its Role and RoleBinding; this
+  repository's Role and RoleBinding are the only Grafana RBAC left. The
+  API server answered `no` for Grafana's service account on Secrets in
+  `meridian`, `observability` and `cnpg-system` and on ConfigMaps in
+  `meridian`, `yes` on ConfigMaps in `observability`; before the change
+  it answered `yes` on Secrets in `meridian`. Both sidecars wrote their
+  files with no permission error.
+- Every dashboard query, evaluated through Prometheus over 12 hours for
+  each of the four dimensions, equalled the ledger (`gateway.usage`
+  grouped by tenant, agent, provider and model): 18,512 tokens (17,319
+  for `knowledge-ingestion`, 1,193 for `claims-triage`; 1,044 for
+  `replay-chat`, 17,468 for `replay-embedding`), input and output per
+  row, 37 calls `completed` against 37 settled attempts, EUR 0 against 0
+  micro-euros. The five-minute panel showed the three ingestions as
+  plateaus of about 5,800 tokens.
+- `make smoke`, four runs:
+  - after the first `make up`: ten PASS lines;
+  - after a restart of the gateway: `SKIP cost series: the gateway has
+    settled no call since it started`;
+  - after `make demo` (CLM-0006, to an adjuster): PASS, and a direct
+    query showed the time filter keeping the new process's series and
+    dropping the old one's, which the first version would have counted;
+  - on the final code: eleven PASS lines, among them `all 15 queries ran
+    in Prometheus` and `grafana rights: ... may not read Secrets in
+    meridian or observability`.
+- A labelled ConfigMap planted with no file behind it was deleted by
+  `make up`; the chart's 24 dashboards and ours stayed.
+- Gates on 17f1d2c, the last commit that changes code, manifests, scripts
+  or tests: `GITHUB_ACTIONS=true make pytest-db` `3976 passed, 3 skipped`
+  (the three are the opt-in live Azure tests); the kind tests `165
+  passed`; `make lint` `Contracts: 4 kept, 0 broken.`; `make registry`
+  `schemas OK`, `contracts OK`; `make test` `OK`; `make docs` `13 checks
+  passed`; `shellcheck infra/kind/*.sh` and `bash -n` exit 0. The model
+  did not change, so `make check` did not run.
+- Not run: the dashboard rendered in a browser (each query was checked
+  through Prometheus instead); `make up` from no cluster with these
+  values (the chart was rendered offline: no Grafana Role, RoleBinding
+  or ClusterRole, both sidecars on ConfigMaps in `observability`);
+  anything against Azure; `make down`.
+
+**Follow-ups:**
+
+- The owner: the cluster is still running, with six triaged claims and
+  34 golden claims left; `make down` is the owner's call. Cost reads 0
+  on kind; the demo script (S018) should say why before a viewer asks.
+- S019: narrow the Prometheus operator's and kube-state-metrics' rights
+  to Secrets; NetworkPolicy, so that only the gateway can push its
+  metrics; the dashboards in the charts.
+- S024: alerts on these counters must not use `increase()` or `rate()`
+  either, or must accept that a process's first export is lost; the
+  dashboards as code start from this one.
+- S021: who may see which tenant's cost, by sign-in role.
 
 ## Part D — Open questions
 
