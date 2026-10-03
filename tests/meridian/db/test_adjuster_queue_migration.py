@@ -226,7 +226,7 @@ def test_the_partial_indexes_carry_their_predicates(
     assert (f"WHERE {where}" if found else None) == predicate
 
 
-def test_the_view_has_exactly_the_seven_columns_in_order(
+def test_the_view_has_exactly_the_eight_columns_in_order(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(

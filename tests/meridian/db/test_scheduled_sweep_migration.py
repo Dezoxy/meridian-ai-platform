@@ -5,6 +5,7 @@ import uuid
 import psycopg
 import pytest
 from dbsupport import OWNER, SERVICE_ROLES, DatabaseHandle
+from psycopg.conninfo import make_conninfo
 
 from meridian.platform.common.db import connect
 from meridian.platform.migrations import runner
@@ -223,9 +224,8 @@ def set_state(db: DatabaseHandle, state: str, claim_id: str = CLAIM_ID) -> None:
     )
 
 
-def move_claim(db: DatabaseHandle, role: str, source: str, target: str) -> str | None:
-    """``MOVE_CLAIM`` as ``role``: the trigger's message, or ``None`` if it ran."""
-    params = {
+def move_params(source: str, target: str) -> dict[str, object]:
+    return {
         "target": target,
         "run_id": None,
         "claim_id": CLAIM_ID,
@@ -234,7 +234,11 @@ def move_claim(db: DatabaseHandle, role: str, source: str, target: str) -> str |
         "changed_at": None,
         "max_triages": MAX_TRIAGES_PER_CLAIM,
     }
-    return trigger_refusal(db, role, MOVE_CLAIM, params)  # type: ignore[arg-type]
+
+
+def move_claim(db: DatabaseHandle, role: str, source: str, target: str) -> str | None:
+    """``MOVE_CLAIM`` as ``role``: the trigger's message, or ``None`` if it ran."""
+    return trigger_refusal(db, role, MOVE_CLAIM, move_params(source, target))  # type: ignore[arg-type]
 
 
 def state_of(db: DatabaseHandle, claim_id: str = CLAIM_ID) -> str:
@@ -361,15 +365,20 @@ def test_the_sweep_reads_and_updates_the_granted_columns_of_a_claim(
     claim: DatabaseHandle,
 ) -> None:
     run_id = uuid.uuid4()
-    set_state(claim, "triaging")
+    run(
+        claim,
+        OWNER,
+        "UPDATE claims.claims SET state = 'triaging', run_id = %s",
+        (run_id,),
+    )
 
     run(
         claim,
         ROLE,
         "UPDATE claims.claims SET state = 'triage_failed', "
-        "state_changed_at = clock_timestamp(), run_id = %s, triages = triages "
+        "state_changed_at = clock_timestamp(), run_id = run_id, triages = triages "
         "WHERE claim_id = %s",
-        (run_id, CLAIM_ID),
+        (CLAIM_ID,),
     )
     rows = run(claim, ROLE, SELECT_CLAIM_COLUMNS)
 
@@ -457,11 +466,35 @@ def test_a_move_the_sweep_may_not_make_names_no_row_value_in_its_refusal(
 ) -> None:
     set_state(claim, "approved")
 
-    refusal = move_claim(claim, ROLE, "approved", "awaiting_adjuster")
+    with pytest.raises(psycopg.errors.RaiseException) as caught:
+        run(claim, ROLE, MOVE_CLAIM, move_params("approved", "awaiting_adjuster"))  # type: ignore[arg-type]
 
-    assert refusal == CLAIM_MESSAGE
-    assert CLAIM_ID not in refusal
-    assert "approved" not in refusal
+    diag = caught.value.diag
+    assert diag.message_primary == CLAIM_MESSAGE
+    assert diag.message_detail is None
+    assert diag.message_hint is None
+    assert CLAIM_ID not in str(caught.value)
+    assert "approved" not in str(caught.value)
+
+
+def test_a_run_the_sweep_may_not_change_names_no_row_value_in_its_refusal(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id, _ = start_run(fresh_database, "Completed")
+
+    with pytest.raises(psycopg.errors.RaiseException) as caught:
+        run(
+            fresh_database,
+            ROLE,
+            "UPDATE runtime.runs SET status = 'Failed' WHERE run_id = %s",
+            (run_id,),
+        )
+
+    diag = caught.value.diag
+    assert diag.message_primary == RUN_MESSAGE
+    assert diag.message_detail is None
+    assert diag.message_hint is None
+    assert str(run_id) not in str(caught.value)
 
 
 def test_the_sweep_may_not_raise_the_triage_count_in_an_edge_it_may_take(
@@ -507,6 +540,110 @@ def test_the_sweep_may_not_change_a_claim_without_moving_it(
     )
 
     assert refusal == CLAIM_MESSAGE
+
+
+def test_the_sweep_may_clear_the_run_of_a_claim_it_moves(
+    claim: DatabaseHandle,
+) -> None:
+    run(
+        claim,
+        OWNER,
+        "UPDATE claims.claims SET state = 'triaging', run_id = %s",
+        (uuid.uuid4(),),
+    )
+
+    refusal = trigger_refusal(
+        claim,
+        ROLE,
+        "UPDATE claims.claims SET state = 'triage_failed', run_id = NULL",
+    )
+
+    assert refusal is None
+    assert run(claim, OWNER, "SELECT state, run_id FROM claims.claims") == [
+        ("triage_failed", None)
+    ]
+
+
+def test_the_sweep_may_keep_the_run_of_a_claim_it_moves(
+    claim: DatabaseHandle,
+) -> None:
+    run_id = uuid.uuid4()
+    run(
+        claim,
+        OWNER,
+        "UPDATE claims.claims SET state = 'triaging', run_id = %s",
+        (run_id,),
+    )
+
+    refusal = trigger_refusal(
+        claim,
+        ROLE,
+        "UPDATE claims.claims SET state = 'triage_failed', run_id = run_id",
+    )
+
+    assert refusal is None
+    assert run(claim, OWNER, "SELECT state, run_id FROM claims.claims") == [
+        ("triage_failed", run_id)
+    ]
+
+
+@pytest.mark.parametrize("old_run", [None, uuid.uuid4()], ids=["no-run", "a-run"])
+def test_the_sweep_may_not_point_a_claim_at_another_run(
+    claim: DatabaseHandle, old_run: uuid.UUID | None
+) -> None:
+    run(
+        claim,
+        OWNER,
+        "UPDATE claims.claims SET state = 'triaging', run_id = %s",
+        (old_run,),
+    )
+
+    refusal = trigger_refusal(
+        claim,
+        ROLE,
+        "UPDATE claims.claims SET state = 'triage_failed', run_id = %s",
+        (uuid.uuid4(),),
+    )
+
+    assert refusal == CLAIM_MESSAGE
+    assert run(claim, OWNER, "SELECT state, run_id FROM claims.claims") == [
+        ("triaging", old_run)
+    ]
+
+
+def test_the_sweep_may_not_move_the_time_a_claim_changed_back(
+    claim: DatabaseHandle,
+) -> None:
+    set_state(claim, "triaging")
+
+    refusal = trigger_refusal(
+        claim,
+        ROLE,
+        "UPDATE claims.claims SET state = 'triage_failed', "
+        "state_changed_at = '1970-01-01T00:00:00Z'",
+    )
+
+    assert refusal == CLAIM_MESSAGE
+    assert state_of(claim) == "triaging"
+
+
+@pytest.mark.parametrize(
+    "new_time", ["state_changed_at", "clock_timestamp() + interval '1 hour'"]
+)
+def test_the_sweep_may_keep_or_advance_the_time_a_claim_changed(
+    claim: DatabaseHandle, new_time: str
+) -> None:
+    set_state(claim, "triaging")
+
+    refusal = trigger_refusal(
+        claim,
+        ROLE,
+        f"UPDATE claims.claims SET state = 'triage_failed', "  # noqa: S608
+        f"state_changed_at = {new_time}",
+    )
+
+    assert refusal is None
+    assert state_of(claim) == "triage_failed"
 
 
 def test_one_row_the_sweep_may_not_move_refuses_the_whole_statement(
@@ -1050,3 +1187,170 @@ def test_the_sweeps_question_does_a_claim_name_this_run_can_use_the_index(
         ).fetchall()
 
     assert "claims_run_id_idx" in "\n".join(line for (line,) in rows)
+
+
+# ── what the sweep cannot read or get around ────────────────────────────────
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE claims.claims SET state = 'triage_failed' RETURNING submission",
+        "UPDATE claims.claims SET state = 'triage_failed' RETURNING *",
+        "UPDATE claims.claims SET state = 'triage_failed' "
+        "WHERE submission::text LIKE '%%x%%'",
+        "DELETE FROM runtime.checkpoints WHERE thread_id = 't' RETURNING checkpoint",
+        "DELETE FROM runtime.checkpoints WHERE checkpoint::text LIKE '%%x%%'",
+        "COPY claims.claims (submission) TO STDOUT",
+    ],
+    ids=[
+        "update-returning-submission",
+        "update-returning-star",
+        "update-where-on-submission",
+        "delete-returning-checkpoint",
+        "delete-where-on-checkpoint",
+        "copy-submission",
+    ],
+)
+def test_the_sweep_cannot_read_a_column_it_lacks_through_a_write_or_a_copy(
+    claim: DatabaseHandle, statement: str
+) -> None:
+    set_state(claim, "triaging")
+    run(claim, "agent_runtime", INSERT_CHECKPOINT["checkpoints"], ("t",))
+
+    assert refused(claim, ROLE, statement) == INSUFFICIENT_PRIVILEGE
+    assert state_of(claim) == "triaging"
+    assert count_rows(claim, "checkpoints", "t") == 1
+
+
+def test_the_sweep_may_lock_a_claim_and_a_run_for_update(
+    claim: DatabaseHandle,
+) -> None:
+    # The sweep's locking rests on it: UPDATE on one column is enough for FOR
+    # UPDATE, and the sweep holds that on both tables.
+    run_id, _ = start_run(claim, "Running")
+
+    claims = run(claim, ROLE, "SELECT claim_id FROM claims.claims FOR UPDATE")
+    runs = run(
+        claim,
+        ROLE,
+        "SELECT run_id FROM runtime.runs WHERE run_id = %s FOR UPDATE",
+        (run_id,),
+    )
+
+    assert claims == [(CLAIM_ID,)]
+    assert runs == [(run_id,)]
+
+
+@pytest.mark.parametrize("table", CHECKPOINT_TABLES)
+def test_the_sweep_may_not_lock_a_checkpoint_row_for_update(
+    claim: DatabaseHandle, table: str
+) -> None:
+    run(claim, "agent_runtime", INSERT_CHECKPOINT[table], ("t",))
+
+    state = refused(
+        claim,
+        ROLE,
+        f"SELECT thread_id FROM runtime.{table} FOR UPDATE",  # noqa: S608
+    )
+
+    assert state == INSUFFICIENT_PRIVILEGE
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SET ROLE claims_api",
+        "SET ROLE meridian_owner",
+        "SET SESSION AUTHORIZATION meridian_owner",
+        "SET session_replication_role = replica",
+        "ALTER TABLE claims.claims DISABLE TRIGGER claims_confine_sweep",
+        "ALTER TABLE runtime.runs DISABLE TRIGGER runs_confine_sweep",
+    ],
+)
+def test_the_sweep_cannot_become_another_role_or_switch_its_triggers_off(
+    claim: DatabaseHandle, statement: str
+) -> None:
+    assert refused(claim, ROLE, statement) == INSUFFICIENT_PRIVILEGE
+
+
+def test_no_login_is_a_member_of_the_sweep_role(
+    migrated_database: DatabaseHandle,
+) -> None:
+    rows = run(
+        migrated_database,
+        OWNER,
+        "SELECT count(*) FROM pg_auth_members "
+        "WHERE roleid = 'claims_sweep'::regrole OR member = 'claims_sweep'::regrole",
+    )
+
+    assert rows == [(0,)]
+
+
+# ── the triggers hold for SET ROLE as well as for the login ─────────────────
+def as_sweep_by_set_role(db: DatabaseHandle) -> psycopg.Connection:
+    """A connection whose session user is the admin and whose role is the sweep.
+
+    This is the session of a login later made a member of claims_sweep that runs
+    SET ROLE claims_sweep: session_user is not claims_sweep, current_user is. A
+    superuser may SET ROLE to any role without a membership, and its own powers
+    do not apply once it has.
+    """
+    conn = psycopg.connect(make_conninfo(db.admin_dsn, dbname=db.name))
+    conn.execute("SET ROLE claims_sweep")
+    names = conn.execute("SELECT session_user, current_user").fetchone()
+    assert names is not None
+    assert names[1] == ROLE
+    assert names[0] != ROLE
+    return conn
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "refusal"),
+    [
+        ("approved", "awaiting_adjuster", CLAIM_MESSAGE),
+        ("triaging", "approved", CLAIM_MESSAGE),
+        ("triaging", "triage_failed", None),
+    ],
+)
+def test_a_claim_trigger_binds_a_session_that_set_role_to_the_sweep(
+    claim: DatabaseHandle, source: str, target: str, refusal: str | None
+) -> None:
+    set_state(claim, source)
+
+    with as_sweep_by_set_role(claim) as conn:
+        try:
+            conn.execute(MOVE_CLAIM, move_params(source, target))  # type: ignore[arg-type]
+        except psycopg.errors.RaiseException as exc:
+            message = exc.diag.message_primary
+        else:
+            message = None
+
+    assert message == refusal
+    assert state_of(claim) == (source if refusal else target)
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "refusal"),
+    [
+        ("Completed", "Failed", RUN_MESSAGE),
+        ("Running", "Completed", RUN_MESSAGE),
+        ("Running", "Failed", None),
+    ],
+)
+def test_a_run_trigger_binds_a_session_that_set_role_to_the_sweep(
+    fresh_database: DatabaseHandle, source: str, target: str, refusal: str | None
+) -> None:
+    run_id, _ = start_run(fresh_database, source)
+
+    with as_sweep_by_set_role(fresh_database) as conn:
+        try:
+            conn.execute(
+                "UPDATE runtime.runs SET status = %s WHERE run_id = %s",
+                (target, run_id),
+            )
+        except psycopg.errors.RaiseException as exc:
+            message = exc.diag.message_primary
+        else:
+            message = None
+
+    assert message == refusal
+    assert status_of(fresh_database, run_id) == (source if refusal else target)

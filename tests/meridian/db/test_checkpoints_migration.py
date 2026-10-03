@@ -244,7 +244,7 @@ def test_no_other_role_can_read_or_write_a_checkpoint_table(
 
 
 @pytest.mark.parametrize("table", TABLES)
-def test_only_the_runtime_and_the_owner_hold_a_privilege_on_a_table(
+def test_only_the_runtime_the_sweep_and_the_owner_hold_a_privilege_on_a_table(
     migrated_database: DatabaseHandle, table: str
 ) -> None:
     holders = run(

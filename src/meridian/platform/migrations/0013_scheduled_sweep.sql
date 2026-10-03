@@ -43,22 +43,32 @@
 --                   Claims API's.
 --
 -- The grants cannot say which change of a column is allowed, so two triggers
--- do, for the session user claims_sweep and no other (every other role is
--- passed through untouched; session_user is the login, which SET ROLE does not
--- change). Each raises a fixed message with no row value in it, so a claim's
--- facts are not in an error text or a log line.
+-- do, for a session whose session_user or current_user is claims_sweep and no
+-- other (every other role is passed through untouched). The second test is for
+-- a login that is later made a member of the role and runs SET ROLE
+-- claims_sweep: session_user is then the login, current_user the role. Each
+-- trigger raises a fixed message with no row value in it, no DETAIL and no
+-- HINT, so a claim's facts are not in an error text or a log line.
 --   claims.claims   the only changes of state are documents_requested to
 --                   awaiting_adjuster (the claimant's documents never came, so
 --                   an adjuster looks), and submitted or triaging to
 --                   triage_failed (the triage never ran or never ended), and
 --                   triages stays what it was. It cannot approve, reject,
---                   withdraw, start a triage or move any other claim.
+--                   withdraw, start a triage or move any other claim. run_id
+--                   is cleared or kept, never pointed at another run (it
+--                   could point a claim at another tenant's run), and
+--                   state_changed_at never moves back (the adjuster's queue is
+--                   ordered by it, oldest first).
 --   runtime.runs    the only change of status is Running or AwaitingApproval to
 --                   Failed. It cannot complete a run, reopen one or touch a
 --                   finished one; an update that leaves the status as it was
 --                   is refused too.
 -- The functions get REVOKE ALL FROM PUBLIC as 0001's do. A trigger function
 -- needs no EXECUTE for the role whose statement fires it.
+--
+-- DELETE on the three checkpoint tables is table-wide: nothing in the database
+-- limits the sweep to the threads of dead runs; its own statement does. That
+-- is accepted and recorded in the threat model.
 --
 -- audit.claim_trail (0011) is replaced, with the same seven columns in the same
 -- order and reason after them: why the event happened, a word from a closed
@@ -81,11 +91,14 @@
 -- no query (nothing else reads audit.events by reference). The new one is
 -- partial on the two roles the branch names, so a change of the roles the view
 -- takes needs this index changed. DROP and CREATE INDEX are not concurrent
--- here (the runner wraps each migration in a transaction): they block writes to
--- audit.events while the index builds, which is milliseconds at this size.
+-- here (the runner wraps each migration in a transaction): DROP INDEX takes an
+-- ACCESS EXCLUSIVE lock on audit.events that is held until the migration
+-- commits, so reads of the trail wait as well as writes, for as long as the
+-- index builds (about 230 ms at 635,000 rows on one machine).
 -- claims_run_id_idx is new: the sweep asks whether a claim names a run
 -- (WHERE run_id = ...) before it fails the run, and claims.claims had no index
--- on run_id. It is partial on the claims that name one, as most do not.
+-- on run_id. It is partial on the claims that name one, which are the only
+-- ones the question can match.
 
 DO $$
 DECLARE
@@ -113,14 +126,16 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog
 AS $$
 BEGIN
-    IF session_user <> 'claims_sweep' THEN
+    IF session_user <> 'claims_sweep' AND current_user <> 'claims_sweep' THEN
         RETURN NEW;
     END IF;
     IF (OLD.state, NEW.state) IN (
         ('documents_requested', 'awaiting_adjuster'),
         ('submitted', 'triage_failed'),
         ('triaging', 'triage_failed')
-    ) AND NEW.triages = OLD.triages THEN
+    ) AND NEW.triages = OLD.triages
+        AND (NEW.run_id IS NULL OR NEW.run_id IS NOT DISTINCT FROM OLD.run_id)
+        AND NEW.state_changed_at >= OLD.state_changed_at THEN
         RETURN NEW;
     END IF;
     RAISE EXCEPTION 'claims_sweep may only expire a claim, not decide or reopen it'
@@ -147,7 +162,7 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog
 AS $$
 BEGIN
-    IF session_user <> 'claims_sweep' THEN
+    IF session_user <> 'claims_sweep' AND current_user <> 'claims_sweep' THEN
         RETURN NEW;
     END IF;
     IF OLD.status IN ('Running', 'AwaitingApproval') AND NEW.status = 'Failed' THEN
