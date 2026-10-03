@@ -53,7 +53,7 @@
 {% if lookup_message %}
 <p role="alert" class="notice">{{ lookup_message }}</p>
 {% endif %}
-<form method="get" action="/claimant/claims">
+<form method="post" action="/claimant/claims/lookup">
 <p class="field"><label for="lookup_claim_id">Claim ID</label>
 <input type="text" id="lookup_claim_id" name="claim_id" required>
 <button type="submit">Look up</button></p>

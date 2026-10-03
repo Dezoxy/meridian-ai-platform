@@ -75,6 +75,7 @@ SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
     "cache-control": "no-store",
 }
 STYLESHEET_CACHE_CONTROL = "max-age=3600"

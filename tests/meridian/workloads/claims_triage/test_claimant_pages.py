@@ -9,19 +9,23 @@ validate never shows a value in a message (T-03), and that a post another site
 made is refused with the claimant's page (T-70).
 """
 
+import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
 
 import httpx
+import psycopg
 import pytest
 from dbsupport import DatabaseHandle
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import SpanKind
 from servicesupport import claim_with_id, owner_rows
 from workloads.claims_triage.test_adjuster_pages import (
     OTHER_TENANT,
@@ -48,14 +52,20 @@ from workloads.claims_triage.test_claims_app import (
 )
 
 from meridian.platform.common.audit import AuditUnavailable
-from meridian.workloads.claims_triage.models import MAX_DOCUMENTS
+from meridian.workloads.claims_triage import claimant, triaging
+from meridian.workloads.claims_triage.models import MAX_DOCUMENTS, DecisionFailure
 from meridian.workloads.claims_triage.moves import (
     NOT_AWAITING_DOCUMENTS_DETAIL,
     TOO_MANY_DOCUMENTS_DETAIL,
 )
 
 CLAIMANT_MODULE = "meridian.workloads.claims_triage.claimant"
+TRIAGING_MODULE = "meridian.workloads.claims_triage.triaging"
+UNASSESSED_TEXT = (
+    "Your claim is stored but could not be assessed now. Send the same form again."
+)
 START_URL = "/claimant/claims"
+LOOKUP_URL = f"{START_URL}/lookup"
 SAME_ORIGIN = {"Origin": "http://testserver"}
 SECURITY_HEADERS = {
     "content-security-policy": (
@@ -65,6 +75,7 @@ SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
     "cache-control": "no-store",
 }
 BANNER = (
@@ -76,6 +87,7 @@ NO_SUCH_CLAIM = "no such claim"
 CROSS_SITE = "the request came from another site"
 DATABASE_DOWN = "the database is unavailable"
 AUDIT_DOWN = "the audit log is unavailable"
+RUN_FAILED = "the triage run did not complete; the claim is stored"
 LOOKUP_MESSAGE = "A claim ID is CLM- and four digits, for example CLM-0001."
 FORM_FIELDS = (
     "claim_id",
@@ -334,8 +346,10 @@ def test_the_start_page_has_the_banner_every_field_with_its_label_and_the_header
 def test_the_start_page_has_the_lookup_form_and_a_link_to_itself() -> None:
     page = Page(make_client().get(START_URL).text)
 
-    (lookup,) = [f for f in page.attributes("form") if f.get("method") == "get"]
-    assert lookup["action"] == START_URL
+    # A post: what is typed must not be in a URL (T-03).
+    assert [f for f in page.attributes("form") if f.get("method") == "get"] == []
+    (lookup,) = [f for f in page.attributes("form") if f.get("action") == LOOKUP_URL]
+    assert lookup["method"] == "post"
     assert "claim_id" in [i.get("name") for i in page.attributes("input")]
     assert START_URL in page.links()
 
@@ -398,6 +412,63 @@ def test_the_triage_runs_in_a_span_with_the_claim_and_the_tenant_only(
         "meridian.tenant": "claims-triage",
         "meridian.run_id": str(runtime.run_id),
     }
+
+
+def test_the_submit_span_is_a_child_of_the_requests_server_span(
+    fresh_database: DatabaseHandle,
+) -> None:
+    exporter = InMemorySpanExporter()
+    client = make_client(claims_dsn(fresh_database), Runtime(), exporter)
+
+    post_claim(client, form_of(claim_with_id("CLM-9501")))
+
+    spans = exporter.get_finished_spans()
+    (server,) = [s for s in spans if s.kind == SpanKind.SERVER]
+    (submit,) = [s for s in spans if s.name == "claims.claimant.submit"]
+    assert submit.parent is not None
+    assert submit.parent.span_id == server.context.span_id
+    assert submit.context.trace_id == server.context.trace_id
+
+
+def recording_thread(
+    original: Callable[..., Any], seen: list[str]
+) -> Callable[..., Any]:
+    """``original``, noting whether it ran with an event loop running in its
+    thread: ``asyncio.get_running_loop()`` raises ``RuntimeError`` off the loop."""
+
+    def wrapper(*args: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            seen.append("thread")
+        else:
+            seen.append("event loop")
+        return original(*args)
+
+    return wrapper
+
+
+def test_the_store_and_the_triage_run_off_the_event_loop(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored: list[str] = []
+    triaged: list[str] = []
+    monkeypatch.setattr(
+        f"{CLAIMANT_MODULE}.store_claim",
+        recording_thread(claimant.store_claim, stored),
+    )
+    monkeypatch.setattr(
+        f"{CLAIMANT_MODULE}.triage_claim",
+        recording_thread(claimant.triage_claim, triaged),
+    )
+
+    response = post_claim(
+        client_for(fresh_database, Runtime()), form_of(claim_with_id("CLM-9501"))
+    )
+
+    assert response.status_code == 303
+    assert stored == ["thread"]
+    assert triaged == ["thread"]
 
 
 INVALID_POSTS = {
@@ -512,22 +583,27 @@ def test_a_field_missing_or_named_twice_is_422_and_stores_nothing(
     assert runtime.requests == []
 
 
-def test_a_multipart_file_in_a_field_is_422_and_stores_nothing(
+def test_a_multipart_file_in_the_documents_field_is_422_and_stores_nothing(
     fresh_database: DatabaseHandle,
 ) -> None:
+    # ``documents`` is the one field that may be empty: a file taken for empty
+    # text would store the claim, so only the rule "exactly once, as text" refuses.
     form = form_of(claim_with_id("CLM-9501"))
-    del form["description"]
+    del form["documents"]
+    runtime = Runtime()
 
-    response = client_for(fresh_database, Runtime()).post(
+    response = client_for(fresh_database, runtime).post(
         START_URL,
         data=form,
-        files={"description": ("description.txt", b"a file, not text")},
+        files={"documents": ("documents.txt", b"a file, not text")},
         headers=SAME_ORIGIN,
         follow_redirects=False,
     )
 
-    assert response.status_code == 422
+    page = refused_page(response, 422)
+    assert "exactly once" in page.text
     assert claims_held(fresh_database) == 0
+    assert runtime.requests == []
 
 
 def test_another_submission_under_a_stored_id_is_the_form_again_409_and_the_row_is_kept(
@@ -626,6 +702,70 @@ def test_a_post_when_the_database_is_down_is_the_503_claimant_page() -> None:
     page = refused_page(response, 503)
     assert DATABASE_DOWN in page.text
     assert "/adjuster/claims" not in page.links()
+
+
+def test_a_database_failure_in_the_triage_step_is_the_503_claimant_page(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def database_down(*_: object) -> None:
+        raise psycopg.OperationalError("the connection was lost")
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.triage_claim", database_down)
+
+    response = post_claim(
+        client_for(fresh_database, Runtime()), form_of(claim_with_id("CLM-9501"))
+    )
+
+    page = refused_page(response, 503)
+    assert DATABASE_DOWN in page.text
+    assert claims_held(fresh_database) == 1
+
+
+def test_a_stored_claim_whose_triage_never_started_is_not_left_unseen(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db = fresh_database
+    form = form_of(
+        claim_with_id("CLM-9501"),
+        claimant_name=NAME_SENTINEL,
+        claimant_email=EMAIL_SENTINEL,
+    )
+    runtime = Runtime()
+    client = client_for(db, runtime)
+    real_take_triage = triaging.take_triage
+    calls: list[object] = []
+
+    def down_once(*args: Any) -> Any:
+        calls.append(args)
+        if len(calls) == 1:
+            raise psycopg.OperationalError("the connection was lost")
+        return real_take_triage(*args)
+
+    monkeypatch.setattr(f"{TRIAGING_MODULE}.take_triage", down_once)
+
+    with caplog.at_level(logging.INFO):
+        response = post_claim(client, form)
+
+    # Nothing will triage it and no queue lists it: the claimant is told to send
+    # the form again, not shown a status page that says it is being assessed.
+    page = refused_page(response, 503)
+    assert UNASSESSED_TEXT in page.text
+    assert START_URL in page.links()
+    assert claim_state(db, "CLM-9501") == ("submitted", None)
+    assert runtime.requests == []
+    logged = [r.getMessage() for r in caplog.records if r.name == CLAIMANT_MODULE]
+    assert any("CLM-9501" in message and "503" in message for message in logged)
+    for needle in (NAME_SENTINEL, EMAIL_SENTINEL):
+        assert needle not in caplog.text
+
+    again = post_claim(client, form)
+
+    assert again.status_code == 303
+    assert again.headers["location"] == status_url("CLM-9501")
+    assert claim_state(db, "CLM-9501")[0] == "awaiting_adjuster"
+    assert len(runtime.requests) == 1
 
 
 # ── the status page ─────────────────────────────────────────────────────────
@@ -977,6 +1117,27 @@ DOCUMENTS_REFUSED = {
 }
 
 
+def test_a_multipart_file_in_the_documents_form_is_422_and_stores_nothing(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    waiting_for_documents(db)
+    runtime = MoveRuntime()
+
+    response = client_for(db, runtime).post(
+        documents_url(),
+        files={"documents": ("documents.txt", b"a file, not text")},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+
+    page = refused_page(response, 422)
+    assert "exactly once" in page.text
+    assert "We need more documents before we can go on." in page.text
+    assert arrived_names(db, DOCUMENTS_ID) == []
+    assert runtime.calls == []
+
+
 @pytest.mark.parametrize(
     ("data", "message"), DOCUMENTS_REFUSED.values(), ids=DOCUMENTS_REFUSED
 )
@@ -1010,21 +1171,71 @@ def test_a_documents_post_on_no_claim_is_the_claimant_404_page(
     assert BANNER in page.text
 
 
-def test_a_documents_post_whose_triage_fails_is_the_status_page_with_the_apis_answer(
+def test_a_documents_post_whose_names_were_stored_and_triage_failed_is_303(
     fresh_database: DatabaseHandle,
 ) -> None:
     db = fresh_database
     waiting_for_documents(db)
     runtime = MoveRuntime(start_http=502, start_body={"run_id": str(uuid.uuid4())})
+    client = client_for(db, runtime)
+
+    response = post_to(client, documents_url(), {"documents": "police report"})
+
+    # The names are stored and the claim no longer waits for them: its state is
+    # the answer, as for a submission whose triage failed.
+    assert response.status_code == 303
+    assert response.headers["location"] == status_url(DOCUMENTS_ID)
+    assert arrived_names(db, DOCUMENTS_ID) == ["police report"]
+    assert claim_state(db, DOCUMENTS_ID)[0] == "triage_failed"
+    status = Page(client.get(response.headers["location"]).text)
+    assert "An adjuster is reviewing your claim." in status.text
+    assert Items(client.get(status_url(DOCUMENTS_ID)).text).items == ["police report"]
+
+
+def test_a_documents_failure_with_nothing_stored_is_the_status_page_with_the_notice(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    waiting_for_documents(db)
+
+    def nothing_stored(*_: object) -> DecisionFailure:
+        return DecisionFailure(503, DATABASE_DOWN)
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", nothing_stored)
 
     response = post_to(
-        client_for(db, runtime), documents_url(), {"documents": "police report"}
+        client_for(db, MoveRuntime()), documents_url(), {"documents": "police report"}
     )
 
+    # The claim still waits for documents: the form is there to send them again.
+    page = refused_page(response, 503)
+    assert DATABASE_DOWN in page.text
+    assert "We need more documents before we can go on." in page.text
+    assert documents_url() in [str(f.get("action")) for f in page.attributes("form")]
+    assert arrived_names(db, DOCUMENTS_ID) == []
+
+
+def test_a_documents_failure_and_then_the_database_down_is_the_answers_error_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def triage_failed(*_: object) -> DecisionFailure:
+        return DecisionFailure(502, RUN_FAILED)
+
+    def database_down(*_: object) -> None:
+        raise psycopg.OperationalError("the connection was lost")
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", triage_failed)
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.load_status", database_down)
+
+    response = post_to(make_client(), documents_url(), {"documents": "police report"})
+
+    # The answer's status and text, not the read's (503, "the database is
+    # unavailable"), on the claimant's error page.
     page = refused_page(response, 502)
-    assert "the triage run did not complete; the claim is stored" in page.text
-    assert arrived_names(db, DOCUMENTS_ID) == ["police report"]
-    assert "An adjuster is reviewing your claim." in page.text
+    assert RUN_FAILED in page.text
+    assert DATABASE_DOWN not in page.text
+    assert BANNER in page.text
+    assert "Back to your claims" in page.text
 
 
 # ── the withdrawal ──────────────────────────────────────────────────────────
@@ -1142,6 +1353,7 @@ def test_the_headers_are_on_every_response_under_the_claimant_prefix(
             form_of(claim_with_id("CLM-9501")),
             {"Origin": "https://evil.example"},
         ),
+        "lookup": post_to(client, LOOKUP_URL, {"claim_id": "CLM-0042"}),
         "no route": client.get("/claimant/nothing"),
         "405": client.delete(START_URL),
         "422 claim ID": client.get("/claimant/claims/not-an-id"),
@@ -1164,13 +1376,16 @@ def test_the_headers_are_on_every_response_under_the_claimant_prefix(
 
 
 # ── the lookup ──────────────────────────────────────────────────────────────
+LOOKUP_SENTINEL = "lookup.sentinel-31@example.com"
+
+
 def test_a_lookup_by_a_valid_id_is_a_303_to_its_page() -> None:
-    response = make_client().get(
-        START_URL, params={"claim_id": "CLM-0042"}, follow_redirects=False
-    )
+    response = post_to(make_client(), LOOKUP_URL, {"claim_id": "CLM-0042"})
 
     assert response.status_code == 303
     assert response.headers["location"] == status_url("CLM-0042")
+    for name, value in SECURITY_HEADERS.items():
+        assert response.headers[name] == value
 
 
 LOOKUPS = ("clm-0042", "CLM-42", "CLM-00421", "CLM-0042\n", "", " CLM-0042", "../x")
@@ -1180,22 +1395,104 @@ LOOKUPS = ("clm-0042", "CLM-42", "CLM-00421", "CLM-0042\n", "", " CLM-0042", "..
 def test_a_lookup_by_another_value_is_the_start_page_with_a_message_and_422(
     value: str,
 ) -> None:
-    response = make_client().get(
-        START_URL, params={"claim_id": value}, follow_redirects=False
-    )
+    response = post_to(make_client(), LOOKUP_URL, {"claim_id": value})
 
     page = refused_page(response, 422)
     assert LOOKUP_MESSAGE in page.text
     assert "claim_id" in [i.get("name") for i in page.attributes("input")]
     assert "<script" not in response.text.lower()
+    for name, header in SECURITY_HEADERS.items():
+        assert response.headers[name] == header
+
+
+def test_a_lookup_value_is_never_echoed() -> None:
+    response = post_to(make_client(), LOOKUP_URL, {"claim_id": LOOKUP_SENTINEL})
+
+    page = refused_page(response, 422)
+    assert LOOKUP_MESSAGE in page.text
+    assert LOOKUP_SENTINEL not in response.text
 
 
 def test_a_lookup_that_names_the_id_twice_is_not_followed() -> None:
-    response = make_client().get(
-        START_URL + "?claim_id=CLM-0001&claim_id=CLM-0002", follow_redirects=False
+    response = post_to(
+        make_client(), LOOKUP_URL, {"claim_id": ["CLM-0001", "CLM-0002"]}
     )
 
+    page = refused_page(response, 422)
+    assert LOOKUP_MESSAGE in page.text
+    assert "location" not in response.headers
+
+
+def test_a_lookup_with_no_field_is_the_start_page_with_a_message_and_422() -> None:
+    response = post_to(make_client(), LOOKUP_URL, {})
+
+    page = refused_page(response, 422)
+    assert LOOKUP_MESSAGE in page.text
+
+
+def test_a_lookup_that_sends_a_file_is_the_start_page_with_a_message_and_422() -> None:
+    response = make_client().post(
+        LOOKUP_URL,
+        files={"claim_id": ("claim_id.txt", b"CLM-0042")},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+
+    page = refused_page(response, 422)
+    assert LOOKUP_MESSAGE in page.text
+    assert "location" not in response.headers
+
+
+def test_a_query_string_on_the_start_page_is_not_followed() -> None:
+    client = make_client()
+
+    for query in ("?claim_id=CLM-0042", "?claim_id=CLM-0001&claim_id=CLM-0002"):
+        response = client.get(START_URL + query, follow_redirects=False)
+
+        assert response.status_code == 200, query
+        assert "location" not in response.headers, query
+        page = Page(response.text)
+        assert BANNER in page.text
+        assert LOOKUP_MESSAGE not in page.text
+
+
+def test_a_cross_site_lookup_post_is_403_the_claimant_page() -> None:
+    client = make_client()
+
+    for headers in CROSS_SITE_HEADERS.values():
+        response = post_to(client, LOOKUP_URL, {"claim_id": "CLM-0042"}, headers)
+
+        page = refused_page(response, 403)
+        assert CROSS_SITE in page.text
+        assert "location" not in response.headers
+        assert START_URL in page.links()
+
+
+def span_values(exporter: InMemorySpanExporter) -> list[str]:
+    """Every name, attribute value and event attribute value of the spans."""
+    seen: list[str] = []
+    for span in exporter.get_finished_spans():
+        seen.append(span.name)
+        seen += [str(value) for value in (span.attributes or {}).values()]
+        for event in span.events:
+            seen += [str(value) for value in (event.attributes or {}).values()]
+    return seen
+
+
+def test_what_is_typed_in_the_lookup_is_on_no_span_of_the_request() -> None:
+    exporter = InMemorySpanExporter()
+    client = make_client(exporter=exporter)
+
+    response = post_to(client, LOOKUP_URL, {"claim_id": LOOKUP_SENTINEL})
+
     assert response.status_code == 422
+    seen = span_values(exporter)
+    # The request was traced (the check is not vacuous), and none of it holds
+    # the value, as typed or as a form or a URL encodes it.
+    assert any(LOOKUP_URL in value for value in seen)
+    for form_of_value in (LOOKUP_SENTINEL, LOOKUP_SENTINEL.replace("@", "%40")):
+        assert not [value for value in seen if form_of_value in value]
+    assert not [value for value in seen if "sentinel" in value]
 
 
 # ── what is logged (T-03) ───────────────────────────────────────────────────

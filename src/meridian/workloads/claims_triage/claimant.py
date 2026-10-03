@@ -19,6 +19,11 @@ name or e-mail address or the description. A message about a form that does not
 validate names the field and the rule, never the value (T-03). Nothing here logs
 or puts on a span anything of the claim but its ID. There is no sign-in yet:
 anyone who reaches the pages reads any claim's status by its ID (T-01, S021).
+
+What under ``/claimant/`` is not a page: a claim ID in the path that is not one
+(422), a path with no route (404), a route with another method (405), a body over
+the limit (413) and a body that cannot be parsed (400) are answered by the shared
+handlers, as the JSON body of the Claims API, with the pages' headers.
 """
 
 import logging
@@ -61,6 +66,7 @@ from meridian.workloads.claims_triage.adjuster import (
 from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME, LifecycleState
 from meridian.workloads.claims_triage.models import (
     ClaimMoveResponse,
+    ClaimResponse,
     ClaimSubmission,
     DecisionFailure,
     DocumentsArrival,
@@ -79,6 +85,9 @@ START_PATH = "/claimant/claims"
 HTTP_UNPROCESSABLE = 422
 ONCE_TEXT = "send this field exactly once, as text"
 LOOKUP_MESSAGE = "A claim ID is CLM- and four digits, for example CLM-0001."
+UNASSESSED_DETAIL = (
+    "Your claim is stored but could not be assessed now. Send the same form again."
+)
 # The label of an error that belongs to no one field (the loss after the report).
 CLAIM_LABEL = "Claim"
 DOCUMENTS_LABEL = "Documents"
@@ -349,37 +358,77 @@ def add_claimant_pages(
         page = render_status(view, notice=notice, errors=errors, typed=typed)
         return HTMLResponse(page, status_code=status)
 
-    def triage_stored(claim_id: str, submission: ClaimSubmission) -> None:
+    def triage_stored(claim_id: str, submission: ClaimSubmission) -> bool:
         """Triage a stored claim in a span, in one thread. Whatever the triage
         answers or refuses (409: being triaged, or it already has a proposal), the
-        claim's state is the answer (T-65); an audit failure is not swallowed."""
+        claim's state is the answer (T-65); an audit failure is not swallowed.
+
+        ``True`` when the triage failed and the claim is still ``submitted``: the
+        triage never started, nothing will triage it and no queue lists it, so
+        only the claimant sending the form again can."""
         with start_span(tracer, "claims.claimant.submit") as span:
             set_span_attributes(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
             )
             try:
-                triage_claim(dsn, tenant, http, span, claim_id, submission)
+                result = triage_claim(dsn, tenant, http, span, claim_id, submission)
             except HTTPException as exc:
                 logger.info(
                     "triage of claim %s refused: %s (the claim's state answers)",
                     claim_id,
                     exc.status_code,
                 )
+                return False
+        if isinstance(result, ClaimResponse):
+            return False
+        view = load_status(dsn, tenant, claim_id)
+        if view is None or view.state != "submitted":
+            return False
+        logger.error(
+            "triage of claim %s did not start: %s (the claim is still submitted)",
+            claim_id,
+            result.status_code,
+        )
+        return True
+
+    def left_documents_wait(claim_id: str) -> bool:
+        """Whether the claim no longer waits for documents: its state is the
+        answer, as for a submission whose triage failed. A claim that cannot be
+        read, or is none, is not: the notice then has the answer's own text."""
+        try:
+            view = load_status(dsn, tenant, claim_id)
+        except psycopg.Error as exc:
+            logger.warning(
+                "the state of claim %s could not be read: %s (sqlstate %s)",
+                claim_id,
+                type(exc).__name__,
+                exc.sqlstate or "none",
+            )
+            return False
+        return view is not None and view.state != "documents_requested"
 
     def answered(
         claim_id: str,
         call: Callable[[], ClaimMoveResponse | DecisionFailure],
+        *,
+        stored_names: bool = False,
     ) -> Response:
         """Run a post's one action: a redirect to the status page when it
         succeeds, the status page with the answer's status and text when it
-        does not."""
+        does not. A failure of the documents post (``stored_names``) that left
+        the claim no longer waiting for documents stored the names, and the
+        claim's state is the answer; a refusal (``HTTPException``) stored
+        nothing and keeps the notice."""
         try:
             result = call()
         except HTTPException as exc:
             result = DecisionFailure(exc.status_code, str(exc.detail))
+            stored_names = False
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         if isinstance(result, DecisionFailure):
+            if stored_names and left_documents_wait(claim_id):
+                return to_status(claim_id)
             return status_response(
                 claim_id,
                 notice=Notice(result.status, result.detail),
@@ -387,13 +436,31 @@ def add_claimant_pages(
             )
         return to_status(claim_id)
 
+    # The query string is ignored: what a claimant types is never in a URL, which
+    # a span, an access log and the edge's log would keep (T-03).
     @app.get(START_PATH, include_in_schema=False, response_class=HTMLResponse)
-    def claimant_start(request: Request) -> Response:
-        asked = request.query_params.getlist("claim_id")
-        if not asked:
-            return render_start()
-        if len(asked) == 1 and re.fullmatch(CLAIM_ID_PATTERN, asked[0]):
-            return to_status(asked[0])
+    def claimant_start() -> Response:
+        return render_start()
+
+    # A post, not a GET form, for the same reason. The one field is read by hand
+    # (a ``Form()`` parameter's 422 is JSON): exactly once, as text.
+    @app.post(
+        START_PATH + "/lookup",
+        include_in_schema=False,
+        dependencies=[Depends(require_same_origin)],
+    )
+    async def claimant_lookup(request: Request) -> Response:
+        form = await request.form()
+        try:
+            sent = form.getlist("claim_id")
+        finally:
+            await form.close()
+        if (
+            len(sent) == 1
+            and isinstance(sent[0], str)
+            and re.fullmatch(CLAIM_ID_PATTERN, sent[0])
+        ):
+            return to_status(sent[0])
         # Not echoed: the value is not a claim ID, and the message says what is.
         return render_start(lookup_message=LOOKUP_MESSAGE, status=HTTP_UNPROCESSABLE)
 
@@ -437,9 +504,13 @@ def add_claimant_pages(
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         try:
-            await run_in_threadpool(triage_stored, claim_id, submission)
+            unseen = await run_in_threadpool(triage_stored, claim_id, submission)
+        except psycopg.Error as exc:
+            return claimant_error(*database_failure(exc))
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
+        if unseen:
+            return claimant_error(HTTP_UNAVAILABLE, UNASSESSED_DETAIL)
         return to_status(claim_id)
 
     @app.get(
@@ -482,6 +553,7 @@ def add_claimant_pages(
             lambda: add_documents(
                 dsn, tenant, http, tracer, claim_id, arrival.documents
             ),
+            stored_names=True,
         )
 
     # No field: the button is the whole request.

@@ -106,6 +106,9 @@ SECURITY_HEADERS = {
     # the page itself then carries a real Origin in a browser without Fetch
     # Metadata (``no-referrer`` makes Chrome send ``Origin: null``).
     "Referrer-Policy": "same-origin",
+    # A page of another site cannot load a response of ``/adjuster/`` or
+    # ``/claimant/``, not even with ``no-cors``.
+    "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": "no-store",
 }
 
