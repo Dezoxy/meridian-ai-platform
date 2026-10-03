@@ -360,7 +360,7 @@ def test_a_paused_claim_is_sent_back_and_triaged_again(
     runtime = MoveRuntime()
     exporter = InMemorySpanExporter()
 
-    response = client_for(fresh_database, runtime, exporter).post(triage_url())
+    response = client_for(fresh_database, runtime, exporter).post(triage_url(), json={})
 
     assert response.status_code == 200
     assert response.json() == {
@@ -427,7 +427,7 @@ def test_a_send_back_whose_old_run_cannot_be_ended_still_triages_and_logs_the_ru
     runtime = MoveRuntime(**failure)
 
     with caplog.at_level(logging.ERROR, logger=triaging.__name__):
-        response = client_for(fresh_database, runtime).post(triage_url())
+        response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     # The answer is the new triage's; the old run is only in the log.
     assert response.status_code == 200
@@ -449,7 +449,7 @@ def test_a_send_back_whose_new_triage_fails_answers_the_failure_and_keeps_the_se
         start_http=502, start_body={"run_id": str(failed), "status": "Failed"}
     )
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 502
     assert response.json() == {
@@ -467,7 +467,7 @@ def test_a_claim_with_no_run_is_sent_back_without_a_decision_or_a_resume(
     put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", triages=2)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 200
     assert runtime.calls == ["start"]
@@ -492,7 +492,7 @@ def test_a_claim_sent_back_holds_the_run_it_ends_until_its_new_triage_closes(
         during_start=lambda: seen.append(claim_state(fresh_database, MOVE_ID))
     )
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 200
     assert seen == [("triaging", old)]
@@ -519,7 +519,7 @@ def test_a_decision_on_a_claim_being_triaged_after_a_send_back_is_409_and_inert(
 
     runtime = MoveRuntime(during_start=an_adjuster_decides_meanwhile)
 
-    client_for(fresh_database, runtime).post(triage_url())
+    client_for(fresh_database, runtime).post(triage_url(), json={})
 
     # The claim's run while it is triaging is the old one, which the send-back
     # ended: a decision on it is refused, nothing recorded or moved.
@@ -538,7 +538,7 @@ def test_a_claim_whose_triage_failed_is_retried(
     put_claim(fresh_database, MOVE_ID, "triage_failed", run_id=old, triages=1)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 200
     assert response.json()["state"] == "awaiting_adjuster"
@@ -563,7 +563,7 @@ def test_a_claim_triaged_five_times_is_409_and_nothing_moves(
     before = claim_snapshot(fresh_database)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 409
     assert response.json() == {"detail": CAP_DETAIL}
@@ -582,8 +582,8 @@ def test_the_fifth_triage_is_allowed_and_the_sixth_is_not(
     runtime = MoveRuntime()
     client = client_for(fresh_database, runtime)
 
-    fifth = client.post(triage_url())
-    sixth = client.post(triage_url())
+    fifth = client.post(triage_url(), json={})
+    sixth = client.post(triage_url(), json={})
 
     assert fifth.status_code == 200
     assert triages_of(fresh_database, MOVE_ID) == 5
@@ -657,13 +657,12 @@ def age_triage(db: DatabaseHandle, seconds: float) -> None:
 def test_a_post_of_triage_takes_over_a_triage_that_lapsed(
     fresh_database: DatabaseHandle,
 ) -> None:
-    # The API that was triaging it died: the claim holds the run of the send-back
-    # that was ending, which the takeover drops, as the one by POST /claims does.
-    put_claim(fresh_database, MOVE_ID, "triaging", run_id=uuid.uuid4(), triages=1)
+    # The API that was triaging it died before the run: the claim holds none.
+    put_claim(fresh_database, MOVE_ID, "triaging", triages=1)
     age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 200
     assert response.json()["state"] == "awaiting_adjuster"
@@ -677,6 +676,68 @@ def test_a_post_of_triage_takes_over_a_triage_that_lapsed(
     ]
 
 
+def post_claim(client: TestClient, claim: dict[str, Any]) -> httpx.Response:
+    return client.post("/claims", json=claim)
+
+
+def post_triage_again(client: TestClient, claim: dict[str, Any]) -> httpx.Response:
+    return client.post(triage_url(claim["claim_id"]), json={})
+
+
+@pytest.mark.parametrize(
+    ("post", "success"),
+    [
+        pytest.param(post_claim, 201, id="post-claims"),
+        pytest.param(post_triage_again, 200, id="post-triage"),
+    ],
+)
+def test_a_lapsed_triage_that_a_send_back_left_ends_the_send_backs_old_run(
+    fresh_database: DatabaseHandle,
+    post: Callable[[TestClient, dict[str, Any]], httpx.Response],
+    success: int,
+) -> None:
+    """The API that was sending a claim back died after the move: the claim is
+    ``triaging`` and holds the old run, whose ``send_back`` word is recorded.
+    Whoever takes the triage over ends that run, once, before the new triage."""
+    old = uuid.uuid4()
+    claim = put_claim(fresh_database, MOVE_ID, "triaging", run_id=old, triages=2)
+    put_decision(fresh_database, MOVE_ID, old, "send_back")
+    age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
+    runtime = MoveRuntime()
+
+    response = post(client_for(fresh_database, runtime), claim)
+
+    assert response.status_code == success
+    assert response.json()["run_id"] == str(runtime.run_id)
+    assert runtime.calls == ["resume", "start"]
+    (resume,) = runtime.resumes
+    assert resume.url.path == f"/runs/{old}/resume"
+    assert decisions(fresh_database) == [(MOVE_ID, old, "send_back")]
+    assert claim_state(fresh_database, MOVE_ID) == ("awaiting_adjuster", runtime.run_id)
+    assert triages_of(fresh_database, MOVE_ID) == 3
+
+
+@pytest.mark.parametrize("failure", END_FAILURES)
+def test_a_lapsed_triage_whose_old_run_cannot_be_ended_is_still_taken_over(
+    fresh_database: DatabaseHandle,
+    caplog: pytest.LogCaptureFixture,
+    failure: dict[str, Any],
+) -> None:
+    old = uuid.uuid4()
+    claim = put_claim(fresh_database, MOVE_ID, "triaging", run_id=old, triages=2)
+    put_decision(fresh_database, MOVE_ID, old, "send_back")
+    age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
+    runtime = MoveRuntime(**failure)
+
+    with caplog.at_level(logging.ERROR, logger=triaging.__name__):
+        response = client_for(fresh_database, runtime).post("/claims", json=claim)
+
+    assert response.status_code == 201
+    assert runtime.calls == ["resume", "start"]
+    assert str(old) in caplog.text
+    assert CANARY not in caplog.text + response.text
+
+
 def test_a_post_of_triage_leaves_a_triage_within_its_lease_to_its_owner(
     fresh_database: DatabaseHandle,
 ) -> None:
@@ -685,7 +746,7 @@ def test_a_post_of_triage_leaves_a_triage_within_its_lease_to_its_owner(
     before = claim_snapshot(fresh_database)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 409
     assert response.json() == {"detail": BEING_TRIAGED_DETAIL}
@@ -701,7 +762,7 @@ def test_a_post_of_triage_at_the_cap_fails_a_lapsed_triage_and_commits_it_first(
     age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 409
     assert response.json() == {"detail": CAP_DETAIL}
@@ -731,7 +792,7 @@ def test_a_claim_in_another_state_is_not_triaged_again(
     before = claim_snapshot(fresh_database)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 409
     assert response.json() == {"detail": detail}
@@ -759,7 +820,7 @@ def test_a_triage_taken_over_during_a_send_back_cannot_close_the_claim(
 
     runtime = MoveRuntime(during_start=another_request_finishes_it)
 
-    response = client_for(fresh_database, runtime).post(triage_url())
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
     assert response.status_code == 409
     assert response.json() == {"detail": "the triage was taken over by another request"}
@@ -775,7 +836,9 @@ def test_a_withdrawal_from_a_waiting_claim_records_the_word_and_ends_the_run(
     runtime = MoveRuntime()
     exporter = InMemorySpanExporter()
 
-    response = client_for(fresh_database, runtime, exporter).post(withdrawal_url())
+    response = client_for(fresh_database, runtime, exporter).post(
+        withdrawal_url(), json={}
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -810,8 +873,8 @@ def test_a_withdrawal_posted_again_ends_the_run_again_and_records_nothing_more(
     runtime = MoveRuntime()
     client = client_for(fresh_database, runtime)
 
-    first = client.post(withdrawal_url())
-    again = client.post(withdrawal_url())
+    first = client.post(withdrawal_url(), json={})
+    again = client.post(withdrawal_url(), json={})
 
     assert (first.status_code, again.status_code) == (200, 200)
     assert again.json() == first.json()
@@ -831,10 +894,10 @@ def test_a_withdrawal_whose_run_cannot_be_ended_is_200_without_a_status_and_is_l
 
     with caplog.at_level(logging.ERROR, logger=triaging.__name__):
         failed = client_for(fresh_database, MoveRuntime(**failure)).post(
-            withdrawal_url()
+            withdrawal_url(), json={}
         )
     working = MoveRuntime()
-    again = client_for(fresh_database, working).post(withdrawal_url())
+    again = client_for(fresh_database, working).post(withdrawal_url(), json={})
 
     assert failed.status_code == 200
     assert failed.json()["state"] == "withdrawn"
@@ -856,7 +919,7 @@ def test_a_withdrawal_from_a_waiting_claim_with_no_run_resumes_nothing(
     put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", triages=5)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(withdrawal_url())
+    response = client_for(fresh_database, runtime).post(withdrawal_url(), json={})
 
     assert response.status_code == 200
     assert response.json() == {
@@ -903,8 +966,8 @@ def test_a_withdrawal_while_documents_are_asked_for_ends_the_claims_paused_run(
     runtime = MoveRuntime()
     client = client_for(fresh_database, runtime)
 
-    response = client.post(withdrawal_url())
-    again = client.post(withdrawal_url())
+    response = client.post(withdrawal_url(), json={})
+    again = client.post(withdrawal_url(), json={})
 
     assert response.status_code == 200
     assert response.json() == {
@@ -936,7 +999,7 @@ def test_a_withdrawal_from_documents_whose_run_cannot_be_ended_is_still_200(
 
     with caplog.at_level(logging.ERROR, logger=triaging.__name__):
         response = client_for(fresh_database, MoveRuntime(**failure)).post(
-            withdrawal_url()
+            withdrawal_url(), json={}
         )
 
     assert response.status_code == 200
@@ -954,7 +1017,7 @@ def test_a_withdrawal_from_documents_with_no_run_resumes_nothing(
     put_claim(fresh_database, MOVE_ID, "documents_requested", triages=1)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(withdrawal_url())
+    response = client_for(fresh_database, runtime).post(withdrawal_url(), json={})
 
     assert response.status_code == 200
     assert response.json()["run_id"] is None
@@ -973,13 +1036,63 @@ def test_a_claim_in_another_state_cannot_be_withdrawn(
     before = claim_snapshot(fresh_database)
     runtime = MoveRuntime()
 
-    response = client_for(fresh_database, runtime).post(withdrawal_url())
+    response = client_for(fresh_database, runtime).post(withdrawal_url(), json={})
 
     assert response.status_code == 409
     assert response.json() == {"detail": NOT_WITHDRAWABLE_DETAIL}
     assert runtime.calls == []
     assert claim_snapshot(fresh_database) == before
     assert audit_rows(fresh_database) == 0
+
+
+# ── the two routes that take no input still take a JSON body (T-01) ─────────
+# A body that must be JSON keeps a browser from posting without a preflight: a
+# cross-site HTML form or a ``text/plain`` post is a simple request, and a route
+# with no body at all never looks at the content type.
+NOT_JSON_BODIES = [
+    pytest.param({"data": {"claim": "CLM-9301"}}, id="form-encoded"),
+    pytest.param(
+        {"content": b"{}", "headers": {"content-type": "text/plain"}}, id="text-plain"
+    ),
+    pytest.param({}, id="no-body"),
+    pytest.param({"json": {"state": "approved"}}, id="a-key"),
+    pytest.param({"json": []}, id="a-list"),
+]
+
+
+@pytest.mark.parametrize("url", [triage_url, withdrawal_url])
+@pytest.mark.parametrize("sent", NOT_JSON_BODIES)
+def test_a_move_without_a_json_object_body_is_422_and_nothing_moves_or_runs(
+    fresh_database: DatabaseHandle,
+    url: Callable[[str], str],
+    sent: dict[str, Any],
+) -> None:
+    put_claim(
+        fresh_database, MOVE_ID, "awaiting_adjuster", run_id=uuid.uuid4(), triages=1
+    )
+    before = claim_snapshot(fresh_database)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(url(MOVE_ID), **sent)
+
+    assert response.status_code == 422
+    assert runtime.calls == []
+    assert claim_snapshot(fresh_database) == before
+    assert decisions(fresh_database) == []
+    assert audit_rows(fresh_database) == 0
+
+
+@pytest.mark.parametrize("url", [triage_url, withdrawal_url])
+def test_a_move_with_an_empty_json_object_is_taken(
+    fresh_database: DatabaseHandle, url: Callable[[str], str]
+) -> None:
+    put_claim(
+        fresh_database, MOVE_ID, "awaiting_adjuster", run_id=uuid.uuid4(), triages=1
+    )
+
+    response = client_for(fresh_database, MoveRuntime()).post(url(MOVE_ID), json={})
+
+    assert response.status_code == 200
 
 
 # ── documents ───────────────────────────────────────────────────────────────
@@ -1089,7 +1202,7 @@ def test_a_union_of_exactly_twenty_documents_is_accepted(
     assert len(facts_sent(runtime.starts[0])["documents"]) == 20
 
 
-def test_a_union_over_twenty_is_422_and_nothing_is_stored(
+def test_a_union_over_twenty_is_409_and_nothing_is_stored(
     fresh_database: DatabaseHandle,
 ) -> None:
     waiting_for_documents(fresh_database, [f"submitted-{n}" for n in range(18)])
@@ -1101,8 +1214,9 @@ def test_a_union_over_twenty_is_422_and_nothing_is_stored(
         documents_url(), json={"documents": ["new-1", "new-2"]}
     )
 
-    # The shared answer, not FastAPI's list of problems.
-    assert response.status_code == 422
+    # A refusal against what is stored (like the cap), in the shared answer; the
+    # 422 of this route is FastAPI's, for a body that is not a list of names.
+    assert response.status_code == 409
     assert response.json() == {"detail": TOO_MANY_DOCUMENTS_DETAIL}
     assert arrived_names(fresh_database, MOVE_ID) == ["arrived-earlier"]
     assert claim_snapshot(fresh_database) == before
@@ -1500,7 +1614,7 @@ def test_a_decision_posted_again_after_the_claim_was_withdrawn_is_409_and_inert(
     runtime = MoveRuntime()
     client = client_for(fresh_database, runtime)
     decided = client.post(DECISION_URL, json={"decision": "request_documents"})
-    withdrawn = client.post(withdrawal_url())
+    withdrawn = client.post(withdrawal_url(), json={})
     resumes_before = len(runtime.resumes)
     audit_before = claim_audit(fresh_database, MOVE_ID)
 
@@ -1565,7 +1679,7 @@ def test_the_decision_route_still_refuses_the_words_that_end_a_run(
 @pytest.mark.parametrize(
     ("url", "state", "body"),
     [
-        pytest.param(triage_url, "awaiting_adjuster", None, id="triage"),
+        pytest.param(triage_url, "awaiting_adjuster", {}, id="triage"),
         pytest.param(
             documents_url, "documents_requested", {"documents": ["photos"]}, id="docs"
         ),
@@ -1615,8 +1729,8 @@ def test_a_stored_submission_that_is_not_valid_is_a_500_with_the_claim_and_no_va
 
 # ── 404 and the database ────────────────────────────────────────────────────
 ROUTES = [
-    pytest.param(triage_url, None, id="triage"),
-    pytest.param(withdrawal_url, None, id="withdrawal"),
+    pytest.param(triage_url, {}, id="triage"),
+    pytest.param(withdrawal_url, {}, id="withdrawal"),
     pytest.param(documents_url, {"documents": ["photos"]}, id="documents"),
 ]
 
@@ -1717,8 +1831,8 @@ SECRET_DOCUMENT = {"documents": [f"{CANARY}-posted"]}
 @pytest.mark.parametrize(
     ("url", "state", "body"),
     [
-        pytest.param(triage_url, "awaiting_adjuster", None, id="triage"),
-        pytest.param(withdrawal_url, "awaiting_adjuster", None, id="withdrawal"),
+        pytest.param(triage_url, "awaiting_adjuster", {}, id="triage"),
+        pytest.param(withdrawal_url, "awaiting_adjuster", {}, id="withdrawal"),
         pytest.param(documents_url, "documents_requested", SECRET_DOCUMENT, id="docs"),
     ],
 )

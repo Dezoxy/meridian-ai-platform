@@ -11,7 +11,10 @@ a failed resume that the claim's own routes give (403, 404 for a claim, 409,
 shared JSON answers stay JSON, with the security headers: 413 (body too large),
 422 (a claim ID or a decision that is not one), 404 for a path under
 ``/adjuster/`` that is no route and 405. The form's route refuses a post
-another site made (T-70). Nothing here logs or puts on a span anything of the
+another site made (T-70). The decision and triage forms each carry the claim's
+run as the page saw it (a hidden ``run``, empty for a claim with no run), and
+a post of a page read before the claim moved to another run is a 409 (T-33).
+Nothing here logs or puts on a span anything of the
 claim but its ID (T-03). There is no sign-in yet: anyone who reaches the pages
 can decide (T-69, S021).
 """
@@ -106,8 +109,10 @@ SECURITY_HEADERS = {
 }
 
 ClaimId = Annotated[str, Path(pattern=CLAIM_ID_PATTERN)]
-DecideFn = Callable[[str, Decision], DecisionResponse | DecisionFailure]
-TriageAgainFn = Callable[[str], ClaimMoveResponse | DecisionFailure]
+# Each takes the claim, the move and the run the page showed (empty for a claim
+# with no run): a claim that has another run now is refused (T-33).
+DecideFn = Callable[[str, Decision, str], DecisionResponse | DecisionFailure]
+TriageAgainFn = Callable[[str, str], ClaimMoveResponse | DecisionFailure]
 
 TEMPLATES = Environment(
     loader=FileSystemLoader(PACKAGE_DIR / "templates"),
@@ -367,6 +372,8 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         cap_words=NUMBER_WORDS[MAX_TRIAGES_PER_CLAIM],
         notice=notice,
         resend=resend,
+        # Jinja would print ``None``: a claim with no run is the empty string.
+        run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
     )
 
@@ -538,8 +545,10 @@ def add_adjuster_pages(
             return failure_page(result, claim_id)
         return RedirectResponse(f"{QUEUE_PATH}/{claim_id}", status_code=HTTP_SEE_OTHER)
 
-    # ``Form(max_length=1)`` on a list: a post that names ``decision`` twice is a
-    # 422 (FastAPI's own, the shared JSON answer), not "the last one wins".
+    # ``Form(min_length=1, max_length=1)`` on a list: a post that names a field
+    # twice, or not at all, is a 422 (FastAPI's own, the shared JSON answer), not
+    # "the last one wins". ``run`` is the claim's run as the page saw it (T-33),
+    # empty for a claim with no run; a claim that has another run now is a 409.
     @app.post(
         QUEUE_PATH + "/{claim_id}/decision",
         include_in_schema=False,
@@ -548,16 +557,20 @@ def add_adjuster_pages(
     def adjuster_decision(
         claim_id: ClaimId,
         decision: Annotated[list[Decision], Form(min_length=1, max_length=1)],
+        run: Annotated[list[str], Form(min_length=1, max_length=1)],
     ) -> Response:
-        return answered(lambda: decide(claim_id, decision[0]), claim_id)
+        return answered(lambda: decide(claim_id, decision[0], run[0]), claim_id)
 
-    # No form field: the button is the whole request. It sends a paused claim
-    # back to triage and tries a failed triage again (the code behind
-    # ``POST /claims/{claim_id}/triage``).
+    # The one field is the page's run: the button is the rest of the request. It
+    # sends a paused claim back to triage and tries a failed triage again (the
+    # code behind ``POST /claims/{claim_id}/triage``).
     @app.post(
         QUEUE_PATH + "/{claim_id}/triage",
         include_in_schema=False,
         dependencies=[Depends(require_same_origin)],
     )
-    def adjuster_triage(claim_id: ClaimId) -> Response:
-        return answered(lambda: triage_again(claim_id), claim_id)
+    def adjuster_triage(
+        claim_id: ClaimId,
+        run: Annotated[list[str], Form(min_length=1, max_length=1)],
+    ) -> Response:
+        return answered(lambda: triage_again(claim_id, run[0]), claim_id)

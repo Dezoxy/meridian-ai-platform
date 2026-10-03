@@ -153,6 +153,16 @@ class ClaimDecision(WireModel):
     decision: Decision
 
 
+class ClaimMoveRequest(WireModel):
+    """What ``POST /claims/{claim_id}/triage`` and ``.../withdrawal`` take: a JSON
+    object with no field. A claim move takes no input; the body exists so that
+    the route requires a JSON content type. A route with no body never checks it,
+    and a cross-site HTML form or ``text/plain`` post is a simple request a
+    browser sends without a preflight (T-01). Clients send ``{}``."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
 class DecisionResponse(WireModel):
     """The claim after the decision, and the run that was resumed on it: none
     when the claim was referred to an adjuster with no paused run (S048)."""

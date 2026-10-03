@@ -8,7 +8,7 @@ the triage itself: a paused run is ended through ``end_run`` (the claim's move
 stands if that fails), and a triage runs through ``run_taken_triage``, the code
 ``POST /claims`` runs. Each function returns ``ClaimMoveResponse`` or a
 ``DecisionFailure`` (a status and a fixed text, which the JSON route answers and
-the adjuster's page renders) and raises ``HTTPException`` for 404, 409 and 422.
+the adjuster's page renders) and raises ``HTTPException`` for 404 and 409.
 No document name, description or claimant field reaches a log line or a span
 attribute (T-03).
 """
@@ -68,6 +68,7 @@ from meridian.workloads.claims_triage.triaging import (
 
 logger = logging.getLogger(__name__)
 
+STALE_PAGE_DETAIL = "the claim changed after the page was read; read it again"
 NOT_TRIAGEABLE_DETAIL = "the claim cannot be triaged again in its state"
 NOT_WITHDRAWABLE_DETAIL = "the claim cannot be withdrawn in its state"
 NOT_AWAITING_DOCUMENTS_DETAIL = "the claim does not wait for documents"
@@ -144,6 +145,16 @@ def _move_answer(
     )
 
 
+def refuse_stale_page(page_run: str | None, run_id: UUID | None) -> None:
+    """A page read before the claim changed cannot decide or move a run nobody
+    read (T-33). ``page_run`` is the run the page showed, empty for a claim with
+    no run; ``None`` is a caller with no page (the JSON routes), which is not
+    checked. Called with the claim locked; the refusal is a 409 and nothing has
+    been written."""
+    if page_run is not None and page_run != ("" if run_id is None else str(run_id)):
+        raise HTTPException(409, STALE_PAGE_DETAIL)
+
+
 def _refuse_move(moved_at: datetime | None, detail: str) -> datetime:
     """The moment a claim moved. A claim that did not move under this request's
     lock (not expected) is a 409 and the transaction rolls back."""
@@ -189,22 +200,31 @@ def _take_from_state(
 
 
 def _take_over(
-    conn: psycopg.Connection, tenant: str, claim_id: str, triages: int
+    conn: psycopg.Connection,
+    tenant: str,
+    claim_id: str,
+    run_id: UUID | None,
+    triages: int,
 ) -> _Taken | str:
     """Take a ``triaging`` claim's triage over if its lease lapsed, exactly as
     ``POST /claims`` does; otherwise, or at the cap (where the claim was moved to
     ``triage_failed``, to be committed), the detail of the 409 that refuses it.
-    The takeover ends no run: the one the claim may hold is the send-back's, which
-    its own request ended or tried to."""
+    The run the claim holds is the send-back's, whose request died before it
+    ended it or could not: it is returned to be ended after the commit."""
     row = conn.execute(
         TRIAGE_AGE_SQL, (TRIAGE_LEASE_SECONDS, claim_id, tenant)
     ).fetchone()
     if row is None or not row[1]:
         return BEING_TRIAGED_DETAIL
-    taken_at = take_over_lapsed_triage(
-        conn, claim_id=claim_id, tenant=tenant, changed_at=row[0], triages=triages
+    lapsed = take_over_lapsed_triage(
+        conn,
+        claim_id=claim_id,
+        tenant=tenant,
+        changed_at=row[0],
+        triages=triages,
+        run_id=run_id,
     )
-    if taken_at is None:
+    if lapsed is None:
         return (
             TRIAGE_CAP_DETAIL
             if triages >= MAX_TRIAGES_PER_CLAIM
@@ -212,14 +232,15 @@ def _take_over(
         )
     submission = _submission(conn, claim_id)
     facts = facts_for_run(submission, arrived_documents(conn, claim_id))
-    return _Taken(None, taken_at, facts)
+    return _Taken(lapsed.old_run, lapsed.taken_at, facts)
 
 
-def _take_again(dsn: str, tenant: str, claim_id: str) -> _Taken:
+def _take_again(dsn: str, tenant: str, claim_id: str, page_run: str | None) -> _Taken:
     with connect(dsn, SERVICE_NAME) as conn:
         state, run_id, triages = _lock_claim(conn, tenant, claim_id)
+        refuse_stale_page(page_run, run_id)
         taken = (
-            _take_over(conn, tenant, claim_id, triages)
+            _take_over(conn, tenant, claim_id, run_id, triages)
             if state == "triaging"
             else _take_from_state(conn, tenant, claim_id, state, run_id, triages)
         )
@@ -231,16 +252,24 @@ def _take_again(dsn: str, tenant: str, claim_id: str) -> _Taken:
 
 
 def triage_again(
-    dsn: str, tenant: str, http: httpx.Client, tracer: Tracer, claim_id: str
+    dsn: str,
+    tenant: str,
+    http: httpx.Client,
+    tracer: Tracer,
+    claim_id: str,
+    *,
+    page_run: str | None = None,
 ) -> ClaimMoveResponse | DecisionFailure:
     """Triage the claim again: a claim waiting for an adjuster is sent back (its
-    paused run is ended), a claim whose triage failed is tried again."""
+    paused run is ended), a claim whose triage failed is tried again. The
+    adjuster's page passes the run it showed as ``page_run``: a claim that has
+    changed run since is a 409 and nothing moves (see ``refuse_stale_page``)."""
     with start_span(tracer, "claims.triage_again") as span:
         set_span_attributes(
             span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
         )
         try:
-            taken = _take_again(dsn, tenant, claim_id)
+            taken = _take_again(dsn, tenant, claim_id, page_run)
         except psycopg.Error as exc:
             mark_error(span, exc)
             return DecisionFailure(*database_failure(exc))
@@ -350,7 +379,7 @@ def _store_arrival(
         submission = _submission(conn, claim_id)
         held = {*submission.documents, *arrived_documents(conn, claim_id)}
         if len(held | set(documents)) > MAX_DOCUMENTS:
-            raise HTTPException(422, TOO_MANY_DOCUMENTS_DETAIL)
+            raise HTTPException(409, TOO_MANY_DOCUMENTS_DETAIL)
         for name in documents:
             conn.execute(RECORD_DOCUMENT_SQL, (claim_id, name))
         if triages >= MAX_TRIAGES_PER_CLAIM:

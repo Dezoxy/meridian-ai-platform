@@ -306,7 +306,32 @@ def test_the_routes_that_move_a_claim_answer_the_claim_move_response(
 
     assert schema_ref(spec, path, "post", "200").endswith("/ClaimMoveResponse")
     assert schema_ref(spec, path, "post", "404").endswith("/ErrorBody")
+    # A refusal against what is stored, among them the bound of twenty documents.
+    assert schema_ref(spec, path, "post", "409").endswith("/ErrorBody")
     assert schema_ref(spec, path, "post", "503").endswith("/ClaimErrorBody")
+
+
+@pytest.mark.parametrize(
+    "path", ["/claims/{claim_id}/triage", "/claims/{claim_id}/withdrawal"]
+)
+def test_the_moves_that_take_no_input_declare_a_required_json_body_with_no_field(
+    path: str,
+) -> None:
+    """T-01: a route with no body never checks the content type, so a cross-site
+    form could reach it; a required JSON body is what keeps a browser from posting
+    without a preflight."""
+    spec = SPECS["claims"]
+
+    body = spec["paths"][path]["post"]["requestBody"]
+    assert body["required"] is True
+    assert list(body["content"]) == ["application/json"]
+    assert body["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ClaimMoveRequest"
+    )
+    request = spec["components"]["schemas"]["ClaimMoveRequest"]
+    assert request["additionalProperties"] is False
+    assert not request.get("properties")
+    assert not request.get("required")
 
 
 def test_the_claim_move_response_has_a_run_and_a_proposal_only_when_a_triage_ran() -> (

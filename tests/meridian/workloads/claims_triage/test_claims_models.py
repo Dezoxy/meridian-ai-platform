@@ -12,6 +12,7 @@ from meridian.workloads.claims_triage.models import (
     Claimant,
     ClaimDecision,
     ClaimFacts,
+    ClaimMoveRequest,
     ClaimMoveResponse,
     ClaimSubmission,
     Decision,
@@ -263,6 +264,17 @@ def test_documents_arriving_are_read_from_a_json_array() -> None:
     arrival = DocumentsArrival.model_validate_json('{"documents": ["a", "b"]}')
 
     assert arrival.documents == ("a", "b")
+
+
+def test_a_claim_move_request_is_an_empty_json_object() -> None:
+    assert ClaimMoveRequest.model_validate_json("{}") == ClaimMoveRequest()
+    assert not ClaimMoveRequest.model_fields
+
+
+@pytest.mark.parametrize("body", ['{"state": "approved"}', "[]", "null", '"{}"'])
+def test_a_claim_move_request_with_anything_else_is_refused(body: str) -> None:
+    with pytest.raises(ValidationError):
+        ClaimMoveRequest.model_validate_json(body)
 
 
 def test_a_move_response_may_carry_the_state_alone() -> None:

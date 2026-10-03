@@ -27,6 +27,10 @@ below are in ``moves.py``.
 - ``POST /claims/{claim_id}/documents`` takes the names of the documents that
   arrived for a claim waiting for them, and triages the claim with them (or
   refers it to an adjuster, with no run, at the triage cap).
+
+The first two take no input, and both require a JSON body of ``{}``: a route
+with no body never checks the content type, and a cross-site form could reach it
+(T-01).
 """
 
 import logging
@@ -72,6 +76,7 @@ from meridian.workloads.claims_triage.lifecycle import (
 from meridian.workloads.claims_triage.models import (
     ClaimDecision,
     ClaimErrorBody,
+    ClaimMoveRequest,
     ClaimMoveResponse,
     ClaimResponse,
     ClaimSubmission,
@@ -83,6 +88,7 @@ from meridian.workloads.claims_triage.models import (
 from meridian.workloads.claims_triage.moves import (
     RECORD_OUTCOME_SQL,
     add_documents,
+    refuse_stale_page,
     triage_again,
     withdraw,
 )
@@ -119,12 +125,28 @@ LATEST_RUNLESS_DECISION_SQL = (
 logger = logging.getLogger(__name__)
 
 
+def _reply[Success](
+    result: Success | DecisionFailure, claim_id: str
+) -> Success | JSONResponse:
+    """What a JSON route answers for a function's result: the result itself, or
+    a failure as the shared error answer."""
+    if isinstance(result, DecisionFailure):
+        return answer(result.status, result.detail, claim_id, result.run_id)
+    return result
+
+
 def _record_decision(
-    dsn: str, tenant: str, claim_id: str, decision: Decision
+    dsn: str,
+    tenant: str,
+    claim_id: str,
+    decision: Decision,
+    page_run: str | None = None,
 ) -> tuple[LifecycleState, UUID | None]:
     """Record the adjuster's decision and move the claim; the claim's state and
     the run to resume, ``None`` for a claim with no paused run. A decision made
-    again is recorded once."""
+    again is recorded once. ``page_run`` is the run the adjuster's page showed
+    (``None`` for the JSON route, which holds no page): a claim that has another
+    run now is a 409 with nothing written (T-33)."""
     transition = DECISION_TRANSITIONS[decision]
     with connect(dsn, SERVICE_NAME) as conn:
         row = conn.execute(
@@ -135,6 +157,7 @@ def _record_decision(
         if row is None:
             raise HTTPException(404, NO_SUCH_CLAIM_DETAIL)
         state, run_id = row
+        refuse_stale_page(page_run, run_id)
         # A claim with no paused run: its triage failed (it is referred first, so
         # the decision follows an edge of the lifecycle) or documents arrived at
         # the triage cap. The decision is recorded with no run; nothing resumes.
@@ -196,17 +219,19 @@ def _decide(
     tracer: Tracer,
     claim_id: str,
     decision: Decision,
+    page_run: str | None = None,
 ) -> DecisionResponse | DecisionFailure:
     """The one path of a decision, for the JSON route and the adjuster's page:
     record it, move the claim and audit it in one transaction, then resume the
     run. A refusal (404, 409) is raised as ``HTTPException``; every other
-    failure is a ``DecisionFailure`` and the decision, once recorded, stays."""
+    failure is a ``DecisionFailure`` and the decision, once recorded, stays.
+    The page passes the run it showed as ``page_run``; the JSON route none."""
     with start_span(tracer, "claims.decide") as span:
         set_span_attributes(
             span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
         )
         try:
-            state, run_id = _record_decision(dsn, tenant, claim_id, decision)
+            state, run_id = _record_decision(dsn, tenant, claim_id, decision, page_run)
         except psycopg.Error as exc:
             mark_error(span, exc)
             return DecisionFailure(*database_failure(exc))
@@ -313,10 +338,9 @@ def create_app(
     def decide_claim(
         claim_id: Annotated[str, Path(pattern=r"^CLM-[0-9]{4}$")], body: ClaimDecision
     ) -> DecisionResponse | JSONResponse:
-        result = _decide(dsn, tenant, http, tracer, claim_id, body.decision)
-        if isinstance(result, DecisionFailure):
-            return answer(result.status, result.detail, claim_id, result.run_id)
-        return result
+        return _reply(
+            _decide(dsn, tenant, http, tracer, claim_id, body.decision), claim_id
+        )
 
     @app.post(
         "/claims/{claim_id}/triage",
@@ -326,11 +350,10 @@ def create_app(
         responses=error_responses(404, 409, 413)
         | error_responses(500, 502, 503, 504, model=ClaimErrorBody),
     )
-    def triage_claim_again(claim_id: ClaimId) -> ClaimMoveResponse | JSONResponse:
-        result = triage_again(dsn, tenant, http, tracer, claim_id)
-        if isinstance(result, DecisionFailure):
-            return answer(result.status, result.detail, claim_id, result.run_id)
-        return result
+    def triage_claim_again(
+        claim_id: ClaimId, body: ClaimMoveRequest
+    ) -> ClaimMoveResponse | JSONResponse:
+        return _reply(triage_again(dsn, tenant, http, tracer, claim_id), claim_id)
 
     @app.post(
         "/claims/{claim_id}/withdrawal",
@@ -340,11 +363,10 @@ def create_app(
         responses=error_responses(404, 409, 413)
         | error_responses(500, 503, model=ClaimErrorBody),
     )
-    def withdraw_claim(claim_id: ClaimId) -> ClaimMoveResponse | JSONResponse:
-        result = withdraw(dsn, tenant, http, tracer, claim_id)
-        if isinstance(result, DecisionFailure):
-            return answer(result.status, result.detail, claim_id, result.run_id)
-        return result
+    def withdraw_claim(
+        claim_id: ClaimId, body: ClaimMoveRequest
+    ) -> ClaimMoveResponse | JSONResponse:
+        return _reply(withdraw(dsn, tenant, http, tracer, claim_id), claim_id)
 
     @app.post(
         "/claims/{claim_id}/documents",
@@ -357,20 +379,22 @@ def create_app(
     def report_documents(
         claim_id: ClaimId, body: DocumentsArrival
     ) -> ClaimMoveResponse | JSONResponse:
-        result = add_documents(dsn, tenant, http, tracer, claim_id, body.documents)
-        if isinstance(result, DecisionFailure):
-            return answer(result.status, result.detail, claim_id, result.run_id)
-        return result
+        return _reply(
+            add_documents(dsn, tenant, http, tracer, claim_id, body.documents),
+            claim_id,
+        )
 
     add_adjuster_pages(
         app,
         dsn=dsn,
         tenant=tenant,
         tracer=tracer,
-        decide=lambda claim_id, decision: _decide(
-            dsn, tenant, http, tracer, claim_id, decision
+        decide=lambda claim_id, decision, page_run: _decide(
+            dsn, tenant, http, tracer, claim_id, decision, page_run
         ),
-        triage_again=lambda claim_id: triage_again(dsn, tenant, http, tracer, claim_id),
+        triage_again=lambda claim_id, page_run: triage_again(
+            dsn, tenant, http, tracer, claim_id, page_run=page_run
+        ),
     )
     return app
 

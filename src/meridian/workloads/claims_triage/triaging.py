@@ -13,7 +13,7 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 import httpx
@@ -365,6 +365,15 @@ def store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> None:
         raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
 
 
+class LapsedTriage(NamedTuple):
+    """A triage taken over: the moment the claim moved, which the request that
+    took it keeps (its closing update matches on it), and the run it must end
+    after the commit, if the claim held one."""
+
+    taken_at: datetime
+    old_run: UUID | None
+
+
 def take_over_lapsed_triage(
     conn: psycopg.Connection,
     *,
@@ -372,10 +381,16 @@ def take_over_lapsed_triage(
     tenant: str,
     changed_at: datetime,
     triages: int,
-) -> datetime | None:
+    run_id: UUID | None,
+) -> LapsedTriage | None:
     """Take over a triage whose lease lapsed, in the caller's transaction (the
-    claim locked, found ``triaging`` since ``changed_at``): the moment it moved,
-    which the request that took it keeps (its closing update matches on it).
+    claim locked, found ``triaging`` since ``changed_at`` and holding ``run_id``).
+
+    A ``triaging`` claim holds a run only when it was sent back (every other
+    move into ``triaging`` passes none), and the send-back recorded that run's
+    ``send_back`` word with the move. Its own request died before it ended the
+    run or could not, so the takeover returns it, and the caller ends it, best
+    effort, after the commit (``end_run``). The move drops the claim's run.
 
     A triage that died at the cap cannot be taken over (``move_claim`` refuses a
     move into triaging there), so the claim is moved to ``triage_failed`` instead
@@ -392,31 +407,34 @@ def take_over_lapsed_triage(
             changed_at=changed_at,
         )
         return None
-    return move_claim(
+    taken_at = move_claim(
         conn,
         TRIAGE_RECLAIMED,
         claim_id=claim_id,
         tenant=tenant,
         changed_at=changed_at,
     )
+    return None if taken_at is None else LapsedTriage(taken_at, run_id)
 
 
 def take_triage(
     dsn: str, tenant: str, claim_id: str
-) -> tuple[datetime | None, LifecycleState, tuple[str, ...]]:
+) -> tuple[datetime | None, LifecycleState, tuple[str, ...], UUID | None]:
     """Move the claim to ``triaging`` if it may be triaged now.
 
     Returns the moment it moved (the request keeps it: its closing update
-    matches on it) or ``None``, the state the claim was found in and the names
+    matches on it) or ``None``, the state the claim was found in, the names
     of the documents that arrived for it, read in the same transaction after the
-    move (none for a claim that was never waiting for any). A claim that has
+    move (none for a claim that was never waiting for any), and the run to end
+    after the commit: the one a send-back left on a triage that lapsed (see
+    ``take_over_lapsed_triage``), otherwise ``None``. A claim that has
     been triaged ``MAX_TRIAGES_PER_CLAIM`` times is refused with 409.
     """
     with connect(dsn, SERVICE_NAME) as conn:
         row = conn.execute(
             "SELECT state, state_changed_at, "
             "state_changed_at < clock_timestamp() - make_interval(secs => %s), "
-            "triages "
+            "triages, run_id "
             "FROM claims.claims WHERE claim_id = %s AND tenant = %s "
             "FOR NO KEY UPDATE",
             (TRIAGE_LEASE_SECONDS, claim_id, tenant),
@@ -424,17 +442,20 @@ def take_triage(
         if row is None:
             # Not this tenant's (``store_claim`` refuses that first) or gone.
             raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
-        state, changed_at, lapsed, triages = row
+        state, changed_at, lapsed, triages, run_id = row
         at_cap = triages >= MAX_TRIAGES_PER_CLAIM
+        old_run: UUID | None = None
         if state == "triaging" and lapsed:
             # Committed with the 409 when the claim is at the cap (see the helper).
-            moved_at = take_over_lapsed_triage(
+            taken = take_over_lapsed_triage(
                 conn,
                 claim_id=claim_id,
                 tenant=tenant,
                 changed_at=changed_at,
                 triages=triages,
+                run_id=run_id,
             )
+            moved_at, old_run = taken or (None, None)
         elif state in ("submitted", "triage_failed"):
             moved_at = (
                 None
@@ -448,11 +469,11 @@ def take_triage(
                 )
             )
         else:
-            return None, state, ()
+            return None, state, (), None
         arrived = () if moved_at is None else arrived_documents(conn, claim_id)
     if at_cap:
         raise HTTPException(409, TRIAGE_CAP_DETAIL)
-    return moved_at, state, arrived
+    return moved_at, state, arrived, old_run
 
 
 def _insert_proposal(
@@ -548,7 +569,7 @@ def triage_claim(
     ``HTTPException``; a failure is answered with the claim's ID. The run is
     sent the submission's facts and the documents that arrived for the claim."""
     try:
-        taken_at, found_in, arrived = take_triage(dsn, tenant, claim_id)
+        taken_at, found_in, arrived, old_run = take_triage(dsn, tenant, claim_id)
     except psycopg.Error as exc:
         mark_error(span, exc)
         return answer(*database_failure(exc), claim_id)
@@ -557,6 +578,8 @@ def triage_claim(
             409,
             BEING_TRIAGED_DETAIL if found_in == "triaging" else HAS_PROPOSAL_DETAIL,
         )
+    if old_run is not None:
+        end_run(http, tenant, claim_id, old_run)
     result = run_taken_triage(
         dsn,
         tenant,

@@ -14,6 +14,7 @@ answers ``POST /v1/chat`` in the gateway's reply shape, from the golden labels
 """
 
 import json
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -190,11 +191,14 @@ class Stack:
         )
 
     def decide_in_page(self, claim_id: str, decision: str) -> httpx.Response:
-        """The same decision from the adjuster's page: a form post from the
-        page's own origin. The redirect is not followed."""
+        """The same decision from the adjuster's page: the page is read, and its
+        form posts its hidden ``run`` (T-33) from the page's own origin. The
+        redirect is not followed."""
+        page = self.client.get(f"/adjuster/claims/{claim_id}")
+        run = re.search(r'name="run" value="([^"]*)"', page.text)
         return self.client.post(
             f"/adjuster/claims/{claim_id}/decision",
-            data={"decision": decision},
+            data={"decision": decision, "run": run.group(1) if run else ""},
             headers={"Origin": "http://testserver"},
             follow_redirects=False,
         )
@@ -204,13 +208,13 @@ class Stack:
         triage runs, so by default the clock moves first, as in ``post``."""
         if advance:
             self.clock.advance(WINDOW_SECONDS)
-        return self.client.post(f"/claims/{claim_id}/triage")
+        return self.client.post(f"/claims/{claim_id}/triage", json={})
 
     def withdraw(self, claim_id: str) -> httpx.Response:
         """The claimant withdraws a claim (S048). The clock does not move: ending
         the run resumes it, which calls the claims tool server, not the
         gateway."""
-        return self.client.post(f"/claims/{claim_id}/withdrawal")
+        return self.client.post(f"/claims/{claim_id}/withdrawal", json={})
 
     def report_documents(
         self, claim_id: str, names: list[str], *, advance: bool = True

@@ -709,6 +709,14 @@ def test_a_claim_that_has_been_triaging_for_longer_than_the_lease_is_taken_over(
     set_claim(
         fresh_database, "CLM-9103", "triaging", triaging.TRIAGE_LEASE_SECONDS + 10
     )
+    # A claim that is triaging holds no run unless it was sent back (a failed run
+    # stays on the claim that failed, which this fixture moved on by hand): the
+    # first post died before its run, so the takeover has none to end.
+    owner_rows(
+        fresh_database,
+        "UPDATE claims.claims SET run_id = NULL WHERE claim_id = %s RETURNING 1",
+        ("CLM-9103",),
+    )
     runtime = Runtime()
 
     response = make_client(claims_dsn(fresh_database), runtime).post(
