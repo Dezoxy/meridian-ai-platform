@@ -153,7 +153,8 @@ and Pydantic, at the cost of one dependency.
 | S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
-| S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
+| S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | doing | S015 |
+| S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
@@ -3789,6 +3790,70 @@ in a state of the designed lifecycle.
   `claims.claims` for its backfill (fine at this size); after a failed
   resumed leg LangGraph keeps the first leg's value, which the claims
   graph ignores but another workload's graph would read.
+
+### S016 — Adjuster UI
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** an adjuster lists the claims that wait for a person, reads a
+claim's proposal next to its citations, fraud indicators and audit trail,
+and records approve, reject or request documents from the page, through
+the same code as the JSON decision.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request: the threat model gave S016 the claimant's pages as well (T-01,
+  T-04, T-65), which the step's row never named. They are S049, new; S018
+  does not wait for them, because the demo submits claims from the golden
+  set. The two sessions the row allowed become one.
+- Server-rendered with Jinja2, the templating FastAPI documents (BSD
+  licence, one new dependency). No HTMX: forms that post and redirect need
+  no script, so the pages can forbid every script (T-70, T-07). The model's
+  technology string for the Claims Triage App loses "HTMX".
+  Rejected: a single-page app, which brings a build and a second artefact
+  for three pages; HTMX, vendored and pinned, for no interaction the pages
+  need.
+- The pages live in the Claims Triage App, under `/adjuster/`, out of the
+  OpenAPI contract: `GET /adjuster/claims` (the queue), `GET
+  /adjuster/claims/{claim_id}` (the claim) and `POST
+  /adjuster/claims/{claim_id}/decision` (the form). A decision from the form
+  runs the code of `POST /claims/{claim_id}/decision`, one function for both:
+  record, move and audit in one transaction, then resume. Success redirects
+  to the claim's page (303); a refusal or a failed resume renders the page
+  with the answer's status and its text.
+- The queue lists `awaiting_adjuster` and `triage_failed`, the oldest
+  state change first, for the API's tenant, at most 100 rows; an index on
+  the tenant, state and time serves it (S015's follow-up). A claim whose
+  triage failed shows no decision buttons, because deciding it with no
+  paused run is S048's; its page says that posting the claim again triages
+  it.
+- The four claims on kind whose runs ended before S015 (backfilled to
+  `awaiting_adjuster`) are shown like any other; a decision on one
+  completes with no note, as accepted in S015.
+- Threat model (`feature-threat-model`, TB-1, TB-2, TB-8):
+  - **T-70, new:** a form posts a body that is not JSON, which a browser
+    sends cross-origin without a preflight, so T-01's control does not
+    cover it. The form's route refuses a post whose `Origin` is not the
+    request's own host or whose `Sec-Fetch-Site` names another site; the
+    pages send `Content-Security-Policy` with no script source and
+    `frame-ancestors 'none'`. A client that is not a browser passes, as on
+    the JSON route (T-69).
+  - **T-71, new:** reading the audit trail. The Claims API gets one view of
+    `audit.events`, a claim's rows and five columns, never the table.
+  - **T-07:** autoescaping on; the description, the model's rationale and
+    every refusal's text are rendered as text, and a test puts markup in
+    each.
+  - **T-33:** the proposal, its citations, indicators and gaps sit above
+    the buttons; no button is preselected and each is its own submit.
+  - **T-03:** the claim page holds the description; no log line or span
+    attribute of the new routes carries it.
+  - Invariants: no model call, no tool, no framework import, no secret.
+    No tension.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
