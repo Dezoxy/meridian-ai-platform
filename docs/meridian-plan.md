@@ -62,7 +62,9 @@ blurs what the step was for.
    step's own "done when" criterion.
 6. **Close.** Fill in the work log and verification, set `done`, commit, open
    the PR, merge after CI is green, and confirm the content landed on `main`.
-   Start the next step in a new session.
+   Start the next step in a new session. A follow-up that no step's "done
+   when" covers goes into Part B's follow-up backlog, with a proposed home,
+   not only into the step's own section.
 
 Cost rules:
 
@@ -169,10 +171,11 @@ and Pydantic, at the cost of one dependency.
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | done | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
-| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
+| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
-| S052 | Scheduled sweep | A scheduled job closes a claim whose documents miss the deadline as rejected (Part D question 3), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S048 |
-| S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66) | todo | S048, S049 |
+| S052 | Scheduled sweep | A scheduled job closes a claim whose documents miss the deadline as rejected (Part D question 3), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
+| S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
+| S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | todo | S049 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
 ### M2 — Azure, identity, delivery
@@ -211,6 +214,67 @@ and Pydantic, at the cost of one dependency.
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | todo | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | todo | S018 |
 
+### Follow-up backlog
+
+Follow-ups that no step's "done when" covers. Part C's "No step yet" lines
+are history; this table is current. "Home" is a proposal until that step
+opens and takes the item into its "done when"; "none" means no step fits
+yet. Rebuilt on 2026-10-03 from every "No step yet" line in S041 to S049;
+each item was checked against the code that day.
+
+| Item | Raised in | Status | Home |
+|---|---|---|---|
+| `make up` waits on the Gateway's `Programmed` condition, which Envoy Gateway left `False` for hours while the edge served | S041 | open | S019 |
+| `make demo` spends one golden claim per run and fails once all are triaged; a way to reset them | S041, S044 | open | S018 |
+| `make demo` passes as soon as each service has one span in Tempo, so it can pass on a trace that is not complete | S044 | open | S018 |
+| Old `meridian:*` images and finished migrate and seed Jobs stay until `make down` | S041, S044 | open | none |
+| The wait after an interrupted deploy | S044 | open | none |
+| `make smoke` does not read the stores | S044 | partly closed by S043 (it reads `gateway.usage`) | none |
+| A deployment past its `retires` date still routes | S010 | open | S030 |
+| A registry notice when every candidate of a route shares a region | S042 | open | S020 |
+| A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
+| A `make` target for the secret scan, so it gates a push and not only CI | S042 | open | none |
+| Retention for `audit.events` and `gateway.usage` | S011 | open | none |
+| A connection pool (a request opens about three connections) | S011 | open | S027 |
+| An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open | S019, S021 |
+| `create_app` cut into a handler class | S011 | declined in S011, with reasons | none |
+| `NOT VALID` checks when a column is added to a large audit table | S011 | declined in S011, with reasons | none |
+| A tool-server client that lives longer than one call | S013 | open | none |
+| An OpenAPI or health entry for the tool servers in `test_openapi.py` | S013 | open | none |
+| Length checks on `runtime.runs` text columns | S013 | open | none |
+| An upper bound on a provider's token counts | S045 | open | none |
+| A purpose on the gateway's refusal rows | S045 | open | none |
+| 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | open | none |
+| Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | open | none |
+| After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
+| Ingestion tests that run without a database | S012 | open | none |
+| A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
+| The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | open | none |
+| One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | open | none |
+| The count of a refusal flood's last window is never written | S046 | open | S024 |
+| `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | none |
+| A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open | none |
+| The tool-call limits are the same for every agent | S014 | open | S031 |
+| A migration that adds columns locks `claims.claims` for its backfill | S015 | open | none |
+| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
+| Reads of a claim's page are not audited | S016 | open | S021 |
+| The adjuster's queue shows at most 100 claims with no next page | S016 | open | none |
+| `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | open | S050 |
+| A file in the golden set's directory that the manifest does not list is not noticed | S017 | open | S050 |
+| Hungarian forms of names and identifiers in the screening | S047 | open | S032 |
+| The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | none |
+| `drafted_by` on a completion the filter withheld but the provider billed | S047 | open | S050 |
+| Audit rows of one transaction share a time, so the trail cannot order them | S048 | open | none |
+| `database_failure` without the claim's ID | S048 | open | none |
+| A per-phase httpx timeout | S048 | open | none |
+| Uploads (T-38) | S048 | open | none |
+| A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | open | S054 |
+| The CI python job near its time limit | S048 | limit raised to 15 minutes in S049; the rest is S054 | S054 |
+| Running the tests in parallel | S049 | moved to S054 | S054 |
+| HTML pages for the shared JSON answers under `/claimant/` | S049 | moved to S053 | S053 |
+| The server span's `http.url` keeps a query string | S049 | moved to S053 | S053 |
+| A documents failure whose cause races with another move | S049 | moved to S052 | S052 |
+
 ## Part C — Step details
 
 Each step gets a section here when it starts. Template:
@@ -222,7 +286,8 @@ Each step gets a section here when it starts. Template:
 **Decisions:** bullets, with the alternative rejected and why.
 **Work log:** what was actually done, commands, links to PRs.
 **Result / verification:** how we proved it is done.
-**Follow-ups:** new steps or issues this created.
+**Follow-ups:** new steps or issues this created; those no step covers
+also go into Part B's follow-up backlog.
 ```
 
 ### S000 — Plan, harness and architecture bootstrap
@@ -4820,3 +4885,10 @@ commit that changes `src/` or `tests/`.
   3 moves with the deadline); the report date and the claim history become
   S053, new, depending on S048 and S049. S018 depends on S052, not on
   S053.
+- **v0.21, 2026-10-03:** by the owner, before S050: a follow-up backlog in
+  Part B holds every "No step yet" item of S041 to S049, each checked
+  against the code, with a status and a proposed home; Part A's close and
+  the Part C template send new ones there. S054 (parallel tests) is new,
+  depending on S049, and S050 now depends on S054 so it runs first. S052
+  takes S049's documents failure that races another move; S053 takes the
+  claimant's error pages and the query string on the server span.
