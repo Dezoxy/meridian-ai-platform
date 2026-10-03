@@ -26,7 +26,9 @@ jobs:
   python:
     name: python
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The suite took 8 to 9 minutes on S048's runs; 15 keeps a margin until
+    # the tests run in parallel.
+    timeout-minutes: 15
     env:
       # The database tests (S009) run against the service container below;
       # MERIDIAN_REQUIRE_DB makes a missing database a failure, not a skip.
