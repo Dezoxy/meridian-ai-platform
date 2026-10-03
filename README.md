@@ -156,7 +156,7 @@ make view     # browse the model at http://localhost:8080/workspace/1
 make mermaid  # regenerate derived Mermaid blocks, render every fence (Docker)
 make pdf      # the Documentation tab and every view as one PDF
 make lint     # ruff, format check, import-linter contracts (needs uv)
-make pytest   # package and generator tests, including the import-contract check (needs uv)
+make pytest   # package and generator tests, including the import-contract check, in parallel (PYTEST_WORKERS=0 for one process; needs uv)
 make pytest-db  # the same with a throwaway PostgreSQL container (with pgvector), so the database tests run too (Docker)
 make registry # validate the registry, its schemas and the tool-server contracts under api/mcp, against the Terraform output snapshot (needs uv)
 make synthetic  # regenerate data/synthetic from its seed; a rerun changes nothing (needs uv)

@@ -26,8 +26,9 @@ jobs:
   python:
     name: python
     runs-on: ubuntu-24.04
-    # The suite took 8 to 9 minutes on S048's runs; 15 keeps a margin until
-    # the tests run in parallel.
+    # The suite took 8 to 9 minutes on S048's runs, serially. The tests now run
+    # in parallel (make pytest, -n auto); the limit stays 15 until CI's
+    # parallel time is measured.
     timeout-minutes: 15
     env:
       # The database tests (S009) run against the service container below;

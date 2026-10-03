@@ -15,6 +15,7 @@ import secrets
 import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 # First, before anything that can import langgraph: the runtime package forces
 # LangGraph's strict msgpack mode, which LangGraph reads once, at first import.
@@ -24,10 +25,13 @@ import psycopg
 import pytest
 from dbsupport import (
     OWNER,
-    SERVICE_ROLES,
+    WORKERINPUT_KEY,
     DatabaseHandle,
     RemoteDatabaseRefusedError,
+    ensure_roles,
+    new_passwords,
     require_loopback,
+    session_passwords,
 )
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
@@ -41,7 +45,21 @@ Edit = tuple[str, str, str]
 TEST_DATABASE_URL_ENV = "MERIDIAN_TEST_DATABASE_URL"
 REQUIRE_DB_ENV = "MERIDIAN_REQUIRE_DB"
 SKIP_REASON = "set MERIDIAN_TEST_DATABASE_URL (make pytest-db)"
-PASSWORD_BYTES = 24
+
+# The xdist controller's passwords for this run; a worker never reads it.
+_PASSWORDS = pytest.StashKey[dict[str, str]]()
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node: Any) -> None:
+    """Hand every xdist worker the same role passwords (S054).
+
+    Each worker makes the roles' passwords itself otherwise, and the last
+    ALTER ROLE wins: the other workers' DSNs would carry a password the server
+    no longer has. In memory only: no file, no environment variable.
+    """
+    passwords = node.config.stash.setdefault(_PASSWORDS, new_passwords())
+    node.workerinput[WORKERINPUT_KEY] = passwords
 
 
 @pytest.fixture(autouse=True)
@@ -71,23 +89,15 @@ def db_admin_dsn() -> str:
 
 
 @pytest.fixture(scope="session")
-def db_passwords(db_admin_dsn: str) -> dict[str, str]:
-    """Create the roles if absent; give each a fresh random password."""
-    passwords = {
-        role: secrets.token_urlsafe(PASSWORD_BYTES) for role in (OWNER, *SERVICE_ROLES)
-    }
-    with psycopg.connect(db_admin_dsn, autocommit=True) as admin:
-        for role, password in passwords.items():
-            exists = admin.execute(
-                "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
-            ).fetchone()
-            verb = "ALTER" if exists else "CREATE"
-            admin.execute(
-                sql.SQL(
-                    "{} ROLE {} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
-                    "PASSWORD {}"
-                ).format(sql.SQL(verb), sql.Identifier(role), sql.Literal(password))
-            )
+def db_passwords(request: pytest.FixtureRequest, db_admin_dsn: str) -> dict[str, str]:
+    """Create the roles if absent; give each the run's random password.
+
+    Under xdist the controller made one set of passwords for every worker
+    (``pytest_configure_node``); a lock in ``ensure_roles`` serialises the
+    workers' CREATE and ALTER of the cluster-wide roles.
+    """
+    passwords = session_passwords(request.config)
+    ensure_roles(db_admin_dsn, passwords)
     return passwords
 
 
