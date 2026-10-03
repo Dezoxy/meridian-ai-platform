@@ -228,6 +228,61 @@ class Stack:
             f"/claims/{claim_id}/documents", json={"documents": names}
         )
 
+    def submit_in_page(
+        self, claim: dict[str, Any], *, advance: bool = True
+    ) -> httpx.Response:
+        """The claim as the claimant's form posts it (S049): the nested location
+        and claimant flattened, the documents one per line, the amount and the
+        dates as text. It is posted from the page's own origin and the redirect
+        is not followed. A triage runs, so by default the clock moves first, as
+        in ``post``."""
+        if advance:
+            self.clock.advance(WINDOW_SECONDS)
+        fields = {
+            "claim_id": claim["claim_id"],
+            "policy_number": claim["policy_number"],
+            "peril": claim["peril"],
+            "loss_date": claim["loss_date"],
+            "reported_on": claim["reported_on"],
+            "claimed_amount": str(claim["claimed_amount"]),
+            "city": claim["loss_location"]["city"],
+            "country": claim["loss_location"]["country"],
+            "description": claim["description"],
+            "documents": "\n".join(claim["documents"]),
+            "claimant_name": claim["claimant"]["name"],
+            "claimant_email": claim["claimant"]["email"],
+        }
+        return self.client.post(
+            "/claimant/claims",
+            data=fields,
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+
+    def documents_in_page(
+        self, claim_id: str, names: list[str], *, advance: bool = True
+    ) -> httpx.Response:
+        """The status page's documents form: one name per line. The claim is
+        triaged with them, so by default the clock moves first, as in
+        ``post``."""
+        if advance:
+            self.clock.advance(WINDOW_SECONDS)
+        return self.client.post(
+            f"/claimant/claims/{claim_id}/documents",
+            data={"documents": "\n".join(names)},
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+
+    def withdraw_in_page(self, claim_id: str) -> httpx.Response:
+        """The status page's withdrawal form, which has no field. The clock does
+        not move, as in ``withdraw``."""
+        return self.client.post(
+            f"/claimant/claims/{claim_id}/withdrawal",
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+
     def resume_directly(self, claim_id: str, run_id: str) -> httpx.Response:
         """What anything that can call the runtime can do: resume a paused run
         with no decision recorded by the Claims API, through a runtime of its

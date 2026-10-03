@@ -172,12 +172,16 @@ node image, Kubernetes components and the platform).
    nothing since it started, this line prints SKIP; `make demo` sends a
    claim. Grafana's rights: its service account may not read Secrets in
    `meridian` or `observability`.
-6. **Adjuster pages.** Two lines. The queue at
+6. **Adjuster pages.** Three lines. The queue at
    `http://claims.meridian.localhost:8088/adjuster/claims` answers 200 with
    a `Content-Security-Policy` that forbids framing and every script, and
    carries the synthetic-data line. A decision posted with another site's
    `Origin` is refused with 403 before any claim is looked up (threat model
-   T-70). Before `make deploy` this check prints SKIP.
+   T-70). The claimant's start page at
+   `http://claims.meridian.localhost:8088/claimant/claims` answers 200 with
+   the same policy and carries the banner's second sentence, which says that
+   every value entered must be fictional (T-04); the request is a GET and
+   changes no claim. Before `make deploy` this check prints SKIP.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
