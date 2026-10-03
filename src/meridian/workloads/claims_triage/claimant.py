@@ -76,7 +76,11 @@ from meridian.workloads.claims_triage.models import (
     DocumentsArrival,
     Peril,
 )
-from meridian.workloads.claims_triage.moves import add_documents, withdraw
+from meridian.workloads.claims_triage.moves import (
+    RefusedAfterStoring,
+    add_documents,
+    withdraw,
+)
 from meridian.workloads.claims_triage.triaging import (
     arrived_documents,
     store_claim,
@@ -140,8 +144,6 @@ STATE_SENTENCES: Mapping[LifecycleState, str] = {
 }
 # A claimant may take back a claim that waits for an adjuster or for documents.
 WITHDRAWABLE: tuple[LifecycleState, ...] = ("awaiting_adjuster", "documents_requested")
-# The two states the adjuster's queue lists (its QUEUE_SQL).
-IN_ADJUSTERS_QUEUE: tuple[LifecycleState, ...] = ("awaiting_adjuster", "triage_failed")
 # A claim whose triage failed and that is in one of these is in no queue.
 UNQUEUED_AFTER_FAILURE: tuple[LifecycleState, ...] = ("submitted", "triaging")
 
@@ -401,45 +403,27 @@ def add_claimant_pages(
         )
         return True
 
-    def in_adjusters_queue(claim_id: str) -> bool:
-        """Whether an adjuster's queue lists the claim now: its state is the
-        answer, as for a submission whose triage failed. A claim still waiting
-        for documents or left ``triaging``, one that cannot be read and none are
-        not: the notice then has the answer's own text."""
-        try:
-            view = load_status(dsn, tenant, claim_id)
-        except psycopg.Error as exc:
-            logger.warning(
-                "the state of claim %s could not be read: %s (sqlstate %s)",
-                claim_id,
-                type(exc).__name__,
-                exc.sqlstate or "none",
-            )
-            return False
-        return view is not None and view.state in IN_ADJUSTERS_QUEUE
-
     def answered(
         claim_id: str,
         call: Callable[[], ClaimMoveResponse | DecisionFailure],
-        *,
-        stored_names: bool = False,
     ) -> Response:
         """Run a post's one action: a redirect to the status page when it
         succeeds, the status page with the answer's status and text when it
-        does not. A failure of the documents post (``stored_names``) that left
-        the claim in an adjuster's queue stored the names, and the claim's state
-        is the answer; one that left it waiting for documents or ``triaging``
-        keeps the notice, as does a refusal (``HTTPException``), which stored
-        nothing."""
+        does not. A failure that says it ``stored`` what the post sent (the
+        documents post, whose names were committed before the triage failed or
+        was taken over) is answered by what was stored, not by the claim's state
+        afterwards; any other failure, a refusal (``HTTPException``) included,
+        keeps the notice."""
         try:
             result = call()
+        except RefusedAfterStoring:
+            return to_status(claim_id)
         except HTTPException as exc:
             result = DecisionFailure(exc.status_code, str(exc.detail))
-            stored_names = False
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         if isinstance(result, DecisionFailure):
-            if stored_names and in_adjusters_queue(claim_id):
+            if result.stored:
                 return to_status(claim_id)
             return status_response(
                 claim_id,
@@ -570,7 +554,6 @@ def add_claimant_pages(
             lambda: add_documents(
                 dsn, tenant, http, tracer, claim_id, arrival.documents
             ),
-            stored_names=True,
         )
 
     # No field: the button is the whole request.
