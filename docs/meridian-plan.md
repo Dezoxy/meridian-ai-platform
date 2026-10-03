@@ -3479,7 +3479,12 @@ finds the dashboard and the series.
     metrics over the same window;
   - "a process younger than five minutes shows its full total" in the
     five-minute panel: that is its usage in those five minutes, since it
-    started from zero.
+    started from zero;
+  - the rights line also answers `no` for a service account that does
+    not exist (advisor), so a renamed account would pass it; the
+    dashboard line would then fail, because the sidecars could no
+    longer read the dashboards. A `yes` on ConfigMaps would make the
+    line prove the account is real.
 
 **Work log:**
 
