@@ -238,6 +238,48 @@ def test_the_chat_estimate_is_the_input_estimate_and_the_largest_reply() -> None
     assert estimate.tokens == 276
 
 
+# A response schema is billed as prompt tokens, so the estimate counts it (S051).
+SCHEMA = {
+    "type": "object",
+    "properties": {"verdict": {"type": "string", "enum": ["applies", "none"]}},
+    "required": ["verdict"],
+    "additionalProperties": False,
+}
+COMPACT_SCHEMA = (
+    '{"additionalProperties":false,"properties":{"verdict":{"enum":'
+    '["applies","none"],"type":"string"}},"required":["verdict"],"type":"object"}'
+)
+
+
+def test_the_estimate_adds_the_compact_json_of_a_response_schema() -> None:
+    plain = text_request("x" * 30)
+    asking = plain.model_copy(update={"response_schema": SCHEMA})
+
+    extra = estimate_input_tokens(asking) - estimate_input_tokens(plain)
+
+    assert extra == -(-len(COMPACT_SCHEMA.encode("utf-8")) // 3)
+    assert chat_estimate(asking).tokens == chat_estimate(plain).tokens + extra
+
+
+def test_a_request_without_a_schema_estimates_exactly_as_before() -> None:
+    request = text_request("x" * 30, max_output=250)
+
+    assert request.response_schema is None
+    assert estimate_input_tokens(request) == 10 + 8 + 8
+    assert chat_estimate(request) == TokenEstimate(26, 250)
+
+
+def test_the_schema_estimate_does_not_depend_on_the_key_order() -> None:
+    plain = text_request("x")
+    reordered = dict(reversed(SCHEMA.items()))
+
+    one = plain.model_copy(update={"response_schema": SCHEMA})
+    other = plain.model_copy(update={"response_schema": reordered})
+
+    assert estimate_input_tokens(one) == estimate_input_tokens(other)
+    assert estimate_input_tokens(one) > estimate_input_tokens(plain)
+
+
 def embedding_request(*inputs: str) -> EmbeddingRequest:
     return EmbeddingRequest(inputs=inputs)
 

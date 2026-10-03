@@ -21,6 +21,11 @@ at all. A candidate clause that addresses the model is different: the wording is
 platform data, so the run fails (``GraphFailure``) and is loud. The call carries
 the data class ``personal``, and the rationale is redacted before it is
 returned: the model saw only redacted text, but it can make an identifier up.
+
+The answer is asked for by schema (S051), which makes its shape likely and
+nothing else: it is read as strictly as before. A model can still answer in a
+shape the schema forbids, and ``read_answer`` makes that assessment
+``unavailable``.
 """
 
 import hashlib
@@ -63,6 +68,19 @@ MAX_USER_MESSAGE_CHARS = 20_000
 
 ANSWER_FIELDS = frozenset({"verdict", "clause", "rationale"})
 VERDICTS = frozenset({"applies", "none", "unsure"})
+# The JSON Schema the call asks the answer in. Read-only: it is sent as it is
+# and hashed into the prompt's version. A closed subset of keywords only (the
+# gateway accepts no more, and Azure's strict mode has no string lengths).
+ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["applies", "none", "unsure"]},
+        "clause": {"type": ["string", "null"]},
+        "rationale": {"type": "string"},
+    },
+    "required": ["verdict", "clause", "rationale"],
+    "additionalProperties": False,
+}
 # One Markdown code fence around the whole answer, with or without ``json``.
 FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.DOTALL)
 
@@ -147,8 +165,8 @@ PROMPT_PROBE_CLAUSES = (
 def _prompt_version() -> str:
     """The SHA-256, as 64 hex digits, of what the workload decides about what
     the model is sent: the system message, the format of the user message (built
-    from the fixed probe), the output budget and the length limit of the user
-    message. A change to any of them changes it.
+    from the fixed probe), the output budget, the length limit of the user
+    message and the answer schema. A change to any of them changes it.
 
     It does not cover the model, the deployment (``DraftedBy`` names those), the
     answer parser ``read_answer``, or the clauses retrieval picks for a claim.
@@ -159,6 +177,7 @@ def _prompt_version() -> str:
         ),
         "max_output_tokens": ASSESSMENT_OUTPUT_TOKENS,
         "max_user_message_chars": MAX_USER_MESSAGE_CHARS,
+        "response_schema": ANSWER_SCHEMA,
     }
     encoded = json.dumps(
         document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -301,6 +320,7 @@ def assess(
             messages,
             max_output_tokens=ASSESSMENT_OUTPUT_TOKENS,
             data_class=PERSONAL_DATA,
+            response_schema=ANSWER_SCHEMA,
         )
     except ModelCallFilteredError:
         return _without_an_answer("filtered")

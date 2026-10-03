@@ -223,7 +223,7 @@ azure-apply:
 azure-smoke:
 	infra/terraform/foundation.sh smoke
 
-## gateway-live    two real chat calls and one embedding call through the Model Gateway in live mode on this laptop, one chat call with the first candidate made to fail: az login, a synthetic prompt, a throwaway PostgreSQL (needs Docker; well under EUR 0.01)
+## gateway-live    four real chat calls and one embedding call through the Model Gateway in live mode on this laptop, one chat call with the first candidate made to fail and two with a response schema: az login, a synthetic prompt, a throwaway PostgreSQL (needs Docker; well under EUR 0.01)
 gateway-live:
 	infra/terraform/foundation.sh gateway-live
 

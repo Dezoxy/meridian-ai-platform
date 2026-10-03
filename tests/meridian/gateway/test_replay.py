@@ -107,6 +107,26 @@ def test_the_replay_provider_returns_the_same_text_and_tokens_as_replay_chat() -
     )
 
 
+def test_a_response_schema_is_ignored_and_the_reply_is_not_json() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"verdict": {"type": "string"}},
+        "required": ["verdict"],
+        "additionalProperties": False,
+    }
+    deployment = load_registry(REGISTRY_DIR).replay_deployment("chat")
+    assert deployment is not None
+    plain = ChatRequest(messages=MESSAGES)
+    asking = ChatRequest(messages=MESSAGES, response_schema=schema)
+
+    without = ReplayProvider().chat(deployment, plain, timeout_seconds=1.0)
+    with_schema = ReplayProvider().chat(deployment, asking, timeout_seconds=1.0)
+
+    assert with_schema == without
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(with_schema.text)
+
+
 # ── the replay embedding (S045): SIMULATED, a hashed bag of words ───────────
 EMBEDDING_TEXT = "Storm damage to the roof, claim 2890."
 

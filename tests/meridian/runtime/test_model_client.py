@@ -104,6 +104,22 @@ def test_max_output_tokens_is_sent_when_given_and_left_out_when_not() -> None:
     assert omitted == {"messages": [{"role": "user", "content": "hi"}]}
 
 
+def test_response_schema_is_sent_when_given_and_left_out_when_not() -> None:
+    http, seen = client_for()
+    client = model(http)
+    schema = {"type": "object", "properties": {"verdict": {"type": "string"}}}
+
+    client.chat([{"role": "user", "content": "hi"}], response_schema=schema)
+    client.chat([{"role": "user", "content": "hi"}])
+
+    given, omitted = (json.loads(request.content) for request in seen)
+    assert given == {
+        "messages": [{"role": "user", "content": "hi"}],
+        "response_schema": schema,
+    }
+    assert "response_schema" not in omitted
+
+
 @pytest.mark.parametrize("finish_reason", ["stop", "length"])
 def test_the_finish_reason_of_the_reply_is_in_the_result(finish_reason: str) -> None:
     reply = {**GATEWAY_REPLY, "output": {"text": "t", "finish_reason": finish_reason}}

@@ -52,6 +52,7 @@ def azure_chat_deployment_yaml(
     purpose: chat
     model: gpt-4o
     version: "2024-11-20"
+    structured_outputs: true
     deployment_name: {deployment_name}
     sku: {sku}
     region: swedencentral

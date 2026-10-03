@@ -16,8 +16,8 @@ change (T-29); the reviewer reads the grade diff, not just the hashes.
 What each fingerprint covers:
 
 - `prompt`: what the model is sent, the system message, the user message's
-  format, the output budget and the length limit (`assessment.py`); not the
-  model, the deployment or the answer parser.
+  format, the output budget, the length limit and the answer schema
+  (`assessment.py`); not the model, the deployment or the answer parser.
 - `tools`: the agent's registry entry, with its allowlist, and the registry
   entries of the tools on it; not the tool servers' entries.
 - `golden_set`: the generator's version and seed, the hash of the whole

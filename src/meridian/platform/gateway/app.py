@@ -30,6 +30,17 @@ mode as in live mode: replay simulates the provider, not the gateway's
 controls. The gateway counts tokens, cost and calls in its metrics. No text a
 caller sends and no vector it gets back is in an audit row, a span, a metric or
 a log line (T-56).
+
+A chat request may carry a response schema, the shape of the answer (S051). It
+is checked against a closed subset when the body is read, so one outside it is
+a 422 that names nothing of it. The route decision then refuses (403, audited,
+before any redaction, limiter or reservation) an agent that does not declare
+``structured_outputs`` in the registry (``schema-not-allowed``), and a request
+for which no deployment the class allows declares it (``no-schema-deployment``);
+a deployment that cannot honour a schema is left out of the candidates, so a
+fallback never answers in free text. The schema passes redaction untouched,
+counts as input tokens in the estimate, and is sent to the provider as it is.
+The span says only that one was sent, as a boolean: never a word of it.
 """
 
 import time
@@ -517,7 +528,14 @@ def create_app(
             redacted, redactions = redact_chat(body)
             return chat_operation(redacted), redactions
 
-        return handle("gateway.chat", routes[CHAT_PURPOSE], caller, build, data_class)
+        return handle(
+            "gateway.chat",
+            routes[CHAT_PURPOSE],
+            caller,
+            build,
+            data_class,
+            wants_schema=body.response_schema is not None,
+        )
 
     @app.post(
         "/v1/embeddings",
@@ -548,15 +566,19 @@ def create_app(
         caller: Caller,
         build: Callable[[], tuple[Operation[Any, ResponseT], int]],
         requested: DataClass | None,
+        wants_schema: bool = False,
     ) -> ResponseT:
         """One request of either purpose: a span of its own, counted once by its
         outcome. ``build`` redacts the request's text and builds the operation
         from it; ``answer`` calls it once policy has not refused the request.
-        ``requested`` is the class the request's header names, if any."""
+        ``requested`` is the class the request's header names, if any;
+        ``wants_schema`` is true for a chat request with a response schema."""
         record = meters.call_record()
         try:
             with start_span(tracer, span_name) as span:
-                response = answer(span, record, caller, route, build, requested)
+                response = answer(
+                    span, record, caller, route, build, requested, wants_schema
+                )
         except Exception:
             record.end("failed")  # a refusal counted itself first and stays one
             raise
@@ -584,10 +606,16 @@ def create_app(
         route: _Route,
         build: Callable[[], tuple[Operation[Any, ResponseT], int]],
         requested: DataClass | None,
+        wants_schema: bool,
     ) -> ResponseT:
         describe_call(span, caller, route)
         decision = decide(
-            registry, route.considered, caller.tenant, caller.agent, requested
+            registry,
+            route.considered,
+            caller.tenant,
+            caller.agent,
+            requested,
+            wants_schema=wants_schema,
         )
         limits = decision.limits  # None exactly for an unknown tenant, refused here
         if decision.refusal is not None or limits is None:
@@ -603,6 +631,8 @@ def create_app(
         if decision.data_class is not None:
             # The class used, never the tenant's alone: a header may raise it.
             set_span_attributes(span, {"meridian.data_class": decision.data_class})
+        if wants_schema:  # that one was sent, never the schema (S051)
+            set_span_attributes(span, {"meridian.response_schema": True})
         # Redaction costs time in proportion to the text, so a request policy
         # refuses is never redacted (T-20); nothing below sees the original.
         operation, redactions = build()
