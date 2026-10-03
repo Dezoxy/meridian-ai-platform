@@ -29,7 +29,8 @@ from servicesupport import (
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.guardrails import addresses_the_model, redact
 from meridian.workloads.claims_triage import app as claims_app
-from meridian.workloads.claims_triage.app import create_app, description_for_run
+from meridian.workloads.claims_triage import triaging
+from meridian.workloads.claims_triage.app import create_app
 from meridian.workloads.claims_triage.lifecycle import TRIAGE_FAILED
 from meridian.workloads.claims_triage.models import (
     MAX_RUN_DESCRIPTION_CHARS,
@@ -38,6 +39,7 @@ from meridian.workloads.claims_triage.models import (
     ClaimFacts,
 )
 from meridian.workloads.claims_triage.settings import ClaimsSettings
+from meridian.workloads.claims_triage.triaging import description_for_run
 
 UNUSED_DSN = "postgresql://claims_api@db.invalid/meridian"
 CANARY = "claimant-secret-text-42"
@@ -672,7 +674,7 @@ def test_a_second_post_while_the_claim_is_being_triaged_is_409_and_starts_no_run
 
 
 def test_the_triage_lease_is_twice_the_longest_runtime_call() -> None:
-    assert claims_app.TRIAGE_LEASE_SECONDS == 2 * claims_app.RUNTIME_TIMEOUT_SECONDS
+    assert triaging.TRIAGE_LEASE_SECONDS == 2 * triaging.RUNTIME_TIMEOUT_SECONDS
 
 
 def test_a_claim_that_has_been_triaging_for_less_than_the_lease_is_left_alone(
@@ -683,7 +685,7 @@ def test_a_claim_that_has_been_triaging_for_less_than_the_lease_is_left_alone(
         "/claims", json=claim
     )
     set_claim(
-        fresh_database, "CLM-9103", "triaging", claims_app.TRIAGE_LEASE_SECONDS - 10
+        fresh_database, "CLM-9103", "triaging", triaging.TRIAGE_LEASE_SECONDS - 10
     )
     runtime = Runtime()
 
@@ -705,7 +707,15 @@ def test_a_claim_that_has_been_triaging_for_longer_than_the_lease_is_taken_over(
         "/claims", json=claim
     )
     set_claim(
-        fresh_database, "CLM-9103", "triaging", claims_app.TRIAGE_LEASE_SECONDS + 10
+        fresh_database, "CLM-9103", "triaging", triaging.TRIAGE_LEASE_SECONDS + 10
+    )
+    # A claim that is triaging holds no run unless it was sent back (a failed run
+    # stays on the claim that failed, which this fixture moved on by hand): the
+    # first post died before its run, so the takeover has none to end.
+    owner_rows(
+        fresh_database,
+        "UPDATE claims.claims SET run_id = NULL WHERE claim_id = %s RETURNING 1",
+        ("CLM-9103",),
     )
     runtime = Runtime()
 
@@ -734,9 +744,7 @@ def _age_the_triage_and_have_another_request_finish_it(
     and another post takes the triage over and finishes it."""
 
     def take_over() -> None:
-        set_claim(
-            db, claim["claim_id"], "triaging", claims_app.TRIAGE_LEASE_SECONDS + 1
-        )
+        set_claim(db, claim["claim_id"], "triaging", triaging.TRIAGE_LEASE_SECONDS + 1)
         taken = make_client(claims_dsn(db), other).post("/claims", json=claim)
         assert taken.status_code == 201
 
@@ -1104,17 +1112,17 @@ def test_when_marking_the_claim_failed_fails_too_the_answer_is_the_same_and_logg
 ) -> None:
     run_id = uuid.uuid4()
     runtime = failing_runtime(run_id)
-    real_move = claims_app.move_claim
+    real_move = triaging.move_claim
 
     def move(conn: psycopg.Connection, transition: Any, **kwargs: Any) -> Any:
         if transition is TRIAGE_FAILED:
             raise psycopg.OperationalError(f"down {CANARY}")
         return real_move(conn, transition, **kwargs)
 
-    monkeypatch.setattr(claims_app, "move_claim", move)
+    monkeypatch.setattr(triaging, "move_claim", move)
     client = make_client(claims_dsn(fresh_database), runtime)
 
-    with caplog.at_level(logging.ERROR, logger=claims_app.__name__):
+    with caplog.at_level(logging.ERROR, logger=triaging.__name__):
         response = client.post("/claims", json=claim_with_id("CLM-9104"))
 
     assert response.status_code == 502
@@ -1134,7 +1142,7 @@ def test_the_log_of_a_runtime_failure_names_the_status_and_the_run_but_no_conten
     runtime = Runtime(status=500, body={"detail": CANARY, "run_id": str(run_id)})
     client = make_client(claims_dsn(fresh_database), runtime)
 
-    with caplog.at_level(logging.ERROR, logger=claims_app.__name__):
+    with caplog.at_level(logging.ERROR, logger=triaging.__name__):
         client.post("/claims", json=claim_with_id("CLM-9104"))
 
     assert "RuntimeCallError" in caplog.text
@@ -1154,10 +1162,10 @@ def test_when_the_proposal_cannot_be_stored_the_answer_is_503_with_both_ids(
     def refuse(*_a: object, **_k: object) -> None:
         raise psycopg.OperationalError(f"down {CANARY}")
 
-    monkeypatch.setattr(claims_app, "_insert_proposal", refuse)
+    monkeypatch.setattr(triaging, "_insert_proposal", refuse)
     client = make_client(claims_dsn(fresh_database), runtime)
 
-    with caplog.at_level(logging.ERROR, logger=claims_app.__name__):
+    with caplog.at_level(logging.ERROR, logger=triaging.__name__):
         response = client.post("/claims", json=claim_with_id("CLM-9108"))
 
     assert response.status_code == 503
@@ -1185,7 +1193,7 @@ def test_when_the_database_is_down_the_answer_is_503_and_no_run_starts(
     def no_database(*_a: object, **_k: object) -> None:
         raise psycopg.OperationalError("password=hunter2")
 
-    monkeypatch.setattr(claims_app, "connect", no_database)
+    monkeypatch.setattr(triaging, "connect", no_database)
     runtime = Runtime()
 
     response = make_client(runtime=runtime).post(
@@ -1204,7 +1212,7 @@ def test_a_database_error_that_is_not_an_outage_is_a_500_not_a_503(
     def refuse(*_a: object, **_k: object) -> None:
         raise database_error(CANARY)
 
-    monkeypatch.setattr(claims_app, "connect", refuse)
+    monkeypatch.setattr(triaging, "connect", refuse)
 
     response = make_client().post("/claims", json=claim_with_id("CLM-9105"))
 
@@ -1218,7 +1226,7 @@ def test_a_database_error_inside_the_span_leaves_no_message_in_any_span(
     def refuse(*_a: object, **_k: object) -> None:
         raise database_error(CANARY)
 
-    monkeypatch.setattr(claims_app, "connect", refuse)
+    monkeypatch.setattr(triaging, "connect", refuse)
     exporter = InMemorySpanExporter()
 
     make_client(exporter=exporter).post("/claims", json=claim_with_id("CLM-9105"))
@@ -1236,7 +1244,7 @@ def test_an_unexpected_error_inside_the_span_leaves_no_message_in_any_span(
     def explode(*_a: object, **_k: object) -> None:
         raise RuntimeError(CANARY)
 
-    monkeypatch.setattr(claims_app, "connect", explode)
+    monkeypatch.setattr(triaging, "connect", explode)
     exporter = InMemorySpanExporter()
 
     response = make_client(exporter=exporter).post(
@@ -1652,7 +1660,6 @@ def test_a_resumed_leg_that_failed_and_left_the_run_paused_is_502_and_resumes_ag
     [
         "submitted",
         "triaging",
-        "triage_failed",
         "documents_requested",
         "approved",
         "rejected",
@@ -1679,20 +1686,24 @@ def test_a_decision_on_a_claim_that_does_not_wait_for_an_adjuster_is_409(
     assert claim_state(fresh_database, DECISION_ID)[0] == state
 
 
-def test_a_decision_on_a_claim_without_a_run_is_409(
+def test_a_decision_on_a_claim_without_a_run_that_is_not_waiting_is_409(
     fresh_database: DatabaseHandle,
 ) -> None:
-    runtime = Runtime(raises=httpx.ConnectError("refused"))
-    make_client(claims_dsn(fresh_database), runtime).post(
-        "/claims", json=claim_with_id(DECISION_ID)
+    # A claim whose triage failed is referred and decided (S048,
+    # test_claim_moves.py); one that was never triaged is neither.
+    owner_rows(
+        fresh_database,
+        "INSERT INTO claims.claims (claim_id, tenant, submission, state) "
+        "VALUES (%s, %s, %s, 'submitted') RETURNING 1",
+        (DECISION_ID, "claims-triage", Jsonb(claim_with_id(DECISION_ID))),
     )
-    assert claim_state(fresh_database, DECISION_ID) == ("triage_failed", None)
 
     response = make_client(claims_dsn(fresh_database), Runtime()).post(
         DECISION_URL, json={"decision": "approve"}
     )
 
     assert response.status_code == 409
+    assert response.json() == {"detail": "the claim does not wait for an adjuster"}
     assert decisions(fresh_database) == []
 
 
@@ -1780,6 +1791,10 @@ def test_a_post_of_a_claim_that_another_tenant_holds_is_409_and_starts_no_run(
     "body",
     [
         {"decision": "maybe"},
+        # The words that end a run without a decision are recorded by their own
+        # routes, never by this one (S048, T-74).
+        {"decision": "send_back"},
+        {"decision": "withdrawn"},
         {"decision": "Approve"},
         {"decision": "APPROVE"},
         {"decision": "approve ", "extra": "x"},

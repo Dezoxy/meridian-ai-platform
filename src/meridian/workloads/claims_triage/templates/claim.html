@@ -9,6 +9,7 @@
 <p>The decision is recorded and the run has not completed; sending it again completes it.</p>
 <form method="post" action="/adjuster/claims/{{ view.claim_id }}/decision">
 <input type="hidden" name="decision" value="{{ resend }}">
+<input type="hidden" name="run" value="{{ run }}">
 <button type="submit">Send the decision again</button>
 </form>
 {% endif %}
@@ -64,17 +65,40 @@
 <p>Decision recorded: {{ decision[0] }} ({{ decision[1] }})</p>
 {% endif %}
 
-{% if waiting %}
+{% if waiting or failed %}
 <h2>Decide</h2>
+{% if failed and view.proposal %}
+<p>The latest triage failed; the proposal shown is from an earlier triage. A decision refers the claim to you and records it.</p>
+{% elif failed %}
+<p>The triage failed and there is no proposal to read; a decision refers the claim to you and records it.</p>
+{% elif no_run and view.proposal %}
+<p>There is no paused run and no new proposal: the claim was triaged {{ cap_words }} times, and the proposal shown predates the documents that arrived.</p>
+{% elif no_run %}
+<p>There is no paused run and no new proposal: the claim was triaged {{ cap_words }} times, and there is no proposal.</p>
+{% endif %}
 <form method="post" action="/adjuster/claims/{{ view.claim_id }}/decision">
+<input type="hidden" name="run" value="{{ run }}">
 <p>Each button records its own decision. None is a default.</p>
 <button type="submit" name="decision" value="approve">Approve</button>
 <button type="submit" name="decision" value="reject">Reject</button>
 <button type="submit" name="decision" value="request_documents">Request documents</button>
 </form>
-{% elif failed %}
-<h2>Decide</h2>
-<p>The triage failed: posting the claim again triages it. Deciding a claim without a run is not built yet (S048).</p>
+{% if send_back %}
+<form method="post" action="/adjuster/claims/{{ view.claim_id }}/triage">
+<input type="hidden" name="run" value="{{ run }}">
+<p>Sending the claim back ends the paused run and triages the claim again.</p>
+<button type="submit">Send back to triage</button>
+</form>
+{% elif triage_again %}
+<form method="post" action="/adjuster/claims/{{ view.claim_id }}/triage">
+<input type="hidden" name="run" value="{{ run }}">
+<p>Triaging again runs the triage once more.</p>
+<button type="submit">Triage again</button>
+</form>
+{% endif %}
+{% if cap_reached %}
+<p>The claim has been triaged {{ cap_words }} times; it cannot be triaged again.</p>
+{% endif %}
 {% endif %}
 
 <h2>Audit trail</h2>

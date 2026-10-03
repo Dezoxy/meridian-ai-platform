@@ -110,7 +110,7 @@
     },
     {
       "name": "approval_outcome",
-      "description": "The outcome an adjuster recorded for this run's approval request. The answer has no outcome while none is recorded.",
+      "description": "The outcome recorded for this run's approval request: a decision, or that the claim was sent back or withdrawn. The answer has no outcome while none is recorded.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -133,7 +133,9 @@
             "enum": [
               "approve",
               "reject",
-              "request_documents"
+              "request_documents",
+              "send_back",
+              "withdrawn"
             ]
           }
         },

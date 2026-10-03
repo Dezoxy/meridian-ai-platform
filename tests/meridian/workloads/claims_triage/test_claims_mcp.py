@@ -11,10 +11,11 @@ from typing import Any
 
 import pytest
 from dbsupport import OWNER, DatabaseHandle
+from jsonschema import Draft202012Validator
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from servicesupport import assert_spans_hold_no_exception_and_no_canary
+from servicesupport import REGISTRY_DIR, assert_spans_hold_no_exception_and_no_canary
 from toolsupport import (
     AGENT,
     CANARY,
@@ -35,6 +36,8 @@ from toolsupport import (
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.registry import load_registry
+from meridian.platform.toolserver.validation import build_validator, fits
 from meridian.platform.toolserver.wire import META_CALL_ID, META_REFUSAL
 from meridian.workloads.claims_triage.mcp_server.app import create_app
 
@@ -366,7 +369,10 @@ def outcome_of(server: Any, run_id: uuid.UUID, claim_id: str = CLAIM) -> Any:
     return run_call(server, "approval_outcome", {"claim_id": claim_id}, run_id=run_id)
 
 
-@pytest.mark.parametrize("decision", ["approve", "reject", "request_documents"])
+OUTCOMES = ["approve", "reject", "request_documents", "send_back", "withdrawn"]
+
+
+@pytest.mark.parametrize("decision", OUTCOMES)
 def test_a_run_reads_the_decision_recorded_for_it(
     world: World, server: Any, decision: str
 ) -> None:
@@ -378,6 +384,30 @@ def test_a_run_reads_the_decision_recorded_for_it(
     assert result.structured_content == {"outcome": decision}
     (row,) = audit_rows(world.db)
     assert (row["outcome"], row["reason"]) == ("completed", None)
+
+
+def outcome_validator() -> Draft202012Validator:
+    """The validator of ``approval_outcome``'s output schema, from the registry."""
+    tool = load_registry(REGISTRY_DIR).tool("approval_outcome")
+    assert tool is not None
+    assert tool.output_schema is not None
+    return build_validator(tool.output_schema)
+
+
+@pytest.mark.parametrize("word", OUTCOMES)
+def test_the_answer_for_each_outcome_fits_the_registry_s_output_schema(
+    world: World, server: Any, word: str
+) -> None:
+    record_decision(world, world.run_id, word)
+
+    result = outcome_of(server, world.run_id)
+
+    assert result.structured_content == {"outcome": word}
+    assert fits(outcome_validator(), result.structured_content)
+
+
+def test_an_outcome_word_the_schema_does_not_list_is_not_an_answer() -> None:
+    assert not fits(outcome_validator(), {"outcome": "cancelled"})
 
 
 def test_a_run_with_no_recorded_decision_reads_no_outcome(

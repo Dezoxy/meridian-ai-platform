@@ -11,19 +11,23 @@ a failed resume that the claim's own routes give (403, 404 for a claim, 409,
 shared JSON answers stay JSON, with the security headers: 413 (body too large),
 422 (a claim ID or a decision that is not one), 404 for a path under
 ``/adjuster/`` that is no route and 405. The form's route refuses a post
-another site made (T-70). Nothing here logs or puts on a span anything of the
+another site made (T-70). The decision and triage forms each carry the claim's
+run as the page saw it (a hidden ``run``, empty for a claim with no run), and
+a post of a page read before the claim moved to another run is a 409 (T-33).
+Nothing here logs or puts on a span anything of the
 claim but its ID (T-03). There is no sign-in yet: anyone who reaches the pages
 can decide (T-69, S021).
 """
 
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path as FilePath
 from typing import Annotated, NamedTuple
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import psycopg
 from fastapi import Depends, FastAPI, Form, HTTPException, Path, Request
@@ -42,13 +46,18 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
-from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME
+from meridian.workloads.claims_triage.lifecycle import (
+    MAX_TRIAGES_PER_CLAIM,
+    SERVICE_NAME,
+)
 from meridian.workloads.claims_triage.models import (
+    ClaimMoveResponse,
     Decision,
     DecisionFailure,
     DecisionResponse,
 )
 from meridian.workloads.claims_triage.proposal import TriageProposal
+from meridian.workloads.claims_triage.triaging import NUMBER_WORDS, arrived_documents
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +68,7 @@ STYLESHEET_PATH = "/adjuster/static/adjuster.css"
 NO_SUCH_CLAIM_DETAIL = "no such claim"
 CROSS_SITE_DETAIL = "the request came from another site"
 NO_PROPOSAL_TEXT = "no proposal is stored"
+ARRIVED_LABEL = "Documents that arrived later"
 NO_STRUCTURED_PROPOSAL_TEXT = "no structured proposal"
 UNREADABLE_PROPOSAL_TEXT = "the stored proposal could not be read"
 # The queue's two states are literals in QUEUE_SQL: the partial index of
@@ -99,7 +109,10 @@ SECURITY_HEADERS = {
 }
 
 ClaimId = Annotated[str, Path(pattern=CLAIM_ID_PATTERN)]
-DecideFn = Callable[[str, Decision], DecisionResponse | DecisionFailure]
+# Each takes the claim, the move and the run the page showed (empty for a claim
+# with no run): a claim that has another run now is refused (T-33).
+DecideFn = Callable[[str, Decision, str], DecisionResponse | DecisionFailure]
+TriageAgainFn = Callable[[str, str], ClaimMoveResponse | DecisionFailure]
 
 TEMPLATES = Environment(
     loader=FileSystemLoader(PACKAGE_DIR / "templates"),
@@ -120,17 +133,25 @@ QUEUE_SQL = (
     "ORDER BY c.state_changed_at, c.claim_id LIMIT %s"
 )
 CLAIM_SQL = (
-    "SELECT state, state_changed_at, received_at, submission "
+    "SELECT state, state_changed_at, received_at, submission, run_id, triages "
     "FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 )
 PROPOSAL_SQL = (
     "SELECT proposal FROM claims.triage_proposals "
     "WHERE claim_id = %s ORDER BY created_at DESC LIMIT 1"
 )
+# The decision that moved the claim into its state: a word of the three, for
+# the claim's own run (``IS NOT DISTINCT FROM``: a decision with no run belongs
+# to a claim with no run). ``send_back`` and ``withdrawn`` end a run; they are
+# moves, which the trail shows, and never a decision.
 DECISION_SQL = (
     "SELECT decision, decided_at FROM claims.decisions "
-    "WHERE claim_id = %s ORDER BY decided_at DESC LIMIT 1"
+    "WHERE claim_id = %s AND run_id IS NOT DISTINCT FROM %s::uuid "
+    "AND decision IN ('approve', 'reject', 'request_documents') "
+    "ORDER BY decided_at DESC LIMIT 1"
 )
+# The states a decision leads to; in any other the page shows no decision.
+DECIDED_STATES = ("approved", "rejected", "documents_requested")
 # audit.claim_trail is the one thing of the audit log the Claims API may read
 # (migration 0011, T-71); the tenant filter is the page's own as well.
 TRAIL_SQL = (
@@ -166,8 +187,11 @@ class QueueRow(NamedTuple):
 class ClaimView:
     """What a claim's page shows. ``facts`` holds the submission's fields the
     decision needs, as text, and never the claimant's name or email.
-    ``resend_due`` is true when a decision is recorded and no ``run.completed``
-    event was recorded at or after it."""
+    ``decision`` is the one that moved the claim into its state, if it is in a
+    state a decision leads to. ``resend_due`` is true when that decision has a
+    run and no ``run.completed`` event was recorded at or after it. ``run_id``
+    is the claim's run (``None`` when it has none) and ``triages`` the number
+    of times it has been triaged."""
 
     claim_id: str
     state: str
@@ -179,6 +203,8 @@ class ClaimView:
     decision: tuple[str, datetime] | None
     trail: tuple[TrailRow, ...]
     resend_due: bool = False
+    run_id: UUID | None = None
+    triages: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,8 +297,10 @@ def _text(value: object) -> str:
     return "" if value is None else str(value)
 
 
-def facts_of(submission: object) -> dict[str, str]:
-    """The submission's fields a decision needs. The claimant is not one."""
+def facts_of(submission: object, arrived: Sequence[str] = ()) -> dict[str, str]:
+    """The submission's fields a decision needs, and the names of documents that
+    arrived later, in a row of their own when there are any. The claimant is not
+    one of the fields."""
     claim = submission if isinstance(submission, dict) else {}
     location = claim.get("loss_location")
     place = (
@@ -282,6 +310,7 @@ def facts_of(submission: object) -> dict[str, str]:
     )
     documents = claim.get("documents")
     named = ", ".join(map(str, documents)) if isinstance(documents, list) else ""
+    later = {ARRIVED_LABEL: ", ".join(arrived)} if arrived else {}
     return {
         "Policy number": _text(claim.get("policy_number")),
         "Peril": _text(claim.get("peril")),
@@ -290,6 +319,7 @@ def facts_of(submission: object) -> dict[str, str]:
         "Claimed amount": _euros(claim.get("claimed_amount")),
         "Loss location": place,
         "Documents named": named or "none",
+        **later,
         "Description": _text(claim.get("description")),
     }
 
@@ -319,6 +349,10 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         if view.decision and view.resend_due and _may_resend(notice)
         else None
     )
+    waiting = view.state == "awaiting_adjuster"
+    failed = view.state == "triage_failed"
+    has_run = view.run_id is not None
+    at_cap = view.triages >= MAX_TRIAGES_PER_CLAIM
     return TEMPLATES.get_template("claim.html").render(
         view=view,
         since=_when(view.since),
@@ -326,10 +360,20 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         decision=view.decision and (view.decision[0], _when(view.decision[1])),
         trail=[(_when(t.recorded_at), *t[1:]) for t in view.trail],
         payable=payable,
-        waiting=view.state == "awaiting_adjuster",
-        failed=view.state == "triage_failed",
+        waiting=waiting,
+        failed=failed,
+        # A claim referred at the cap has no paused run: nothing to send back.
+        no_run=waiting and not has_run,
+        # Triaging again is a send-back of a paused run, or a retry of a failed
+        # triage; at the cap it is neither, and the page says why.
+        send_back=waiting and has_run and not at_cap,
+        triage_again=failed and not at_cap,
+        cap_reached=at_cap and (failed or (waiting and has_run)),
+        cap_words=NUMBER_WORDS[MAX_TRIAGES_PER_CLAIM],
         notice=notice,
         resend=resend,
+        # Jinja would print ``None``: a claim with no run is the empty string.
+        run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
     )
 
@@ -379,39 +423,52 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         claim = conn.execute(CLAIM_SQL, (claim_id, tenant)).fetchone()
         if claim is None:
             return None
+        state, since, received_at, submission, run_id, triages = claim
         proposal_row = conn.execute(PROPOSAL_SQL, (claim_id,)).fetchone()
-        decision = conn.execute(DECISION_SQL, (claim_id,)).fetchone()
+        arrived = arrived_documents(conn, claim_id)
+        decision = None
+        if state in DECIDED_STATES:
+            decision = conn.execute(DECISION_SQL, (claim_id, run_id)).fetchone()
         trail = conn.execute(TRAIL_SQL, (claim_id, tenant, TRAIL_LIMIT)).fetchall()
-        # Asked of the database, not read off the listed rows: the page lists
-        # at most TRAIL_LIMIT of them.
-        completed = (
-            decision is not None
-            and conn.execute(COMPLETED_SQL, (claim_id, tenant, decision[1])).fetchone()[
-                0
-            ]
-        )
-    state, since, received_at, submission = claim
+        # A decision with no run has nothing to resume, so nothing to send again.
+        # Whether the run completed is asked of the database, not read off the
+        # listed rows: the page lists at most TRAIL_LIMIT of them.
+        resend_due = False
+        if decision is not None and run_id is not None:
+            completed = conn.execute(
+                COMPLETED_SQL, (claim_id, tenant, decision[1])
+            ).fetchone()
+            resend_due = not completed[0]
     proposal, note = _proposal_of(claim_id, proposal_row)
     return ClaimView(
         claim_id=claim_id,
         state=state,
         since=since,
         received_at=received_at,
-        facts=facts_of(submission),
+        facts=facts_of(submission, arrived),
         proposal=proposal,
         proposal_note=note,
         decision=None if decision is None else (decision[0], decision[1]),
         trail=tuple(TrailRow(*row) for row in trail),
-        resend_due=decision is not None and not completed,
+        resend_due=resend_due,
+        run_id=run_id,
+        triages=triages,
     )
 
 
 # ── the routes ──────────────────────────────────────────────────────────────
 def add_adjuster_pages(
-    app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer, decide: DecideFn
+    app: FastAPI,
+    *,
+    dsn: str,
+    tenant: str,
+    tracer: Tracer,
+    decide: DecideFn,
+    triage_again: TriageAgainFn,
 ) -> None:
-    """Add the queue, the claim, the decision form and the stylesheet to the
-    Claims API. ``decide`` is the API's one decision path."""
+    """Add the queue, the claim, the decision and triage forms and the
+    stylesheet to the Claims API. ``decide`` is the API's one decision path and
+    ``triage_again`` the one that sends a claim back or tries it again (S048)."""
     stylesheet = (PACKAGE_DIR / "static" / "adjuster.css").read_bytes()
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -469,19 +526,15 @@ def add_adjuster_pages(
         notice = Notice(failure.status, failure.detail)
         return HTMLResponse(render_claim(view, notice), status_code=failure.status)
 
-    # ``Form(max_length=1)`` on a list: a post that names ``decision`` twice is a
-    # 422 (FastAPI's own, the shared JSON answer), not "the last one wins".
-    @app.post(
-        QUEUE_PATH + "/{claim_id}/decision",
-        include_in_schema=False,
-        dependencies=[Depends(require_same_origin)],
-    )
-    def adjuster_decision(
-        claim_id: ClaimId,
-        decision: Annotated[list[Decision], Form(min_length=1, max_length=1)],
+    def answered(
+        call: Callable[[], DecisionResponse | ClaimMoveResponse | DecisionFailure],
+        claim_id: str,
     ) -> Response:
+        """Run a post's one action: a redirect to the claim's page when it
+        succeeds, the claim's page (or an error page) with the answer's status
+        and text when it does not."""
         try:
-            result = decide(claim_id, decision[0])
+            result = call()
         except HTTPException as exc:
             result = DecisionFailure(exc.status_code, str(exc.detail))
         except AuditUnavailable as exc:
@@ -491,3 +544,33 @@ def add_adjuster_pages(
         if isinstance(result, DecisionFailure):
             return failure_page(result, claim_id)
         return RedirectResponse(f"{QUEUE_PATH}/{claim_id}", status_code=HTTP_SEE_OTHER)
+
+    # ``Form(min_length=1, max_length=1)`` on a list: a post that names a field
+    # twice, or not at all, is a 422 (FastAPI's own, the shared JSON answer), not
+    # "the last one wins". ``run`` is the claim's run as the page saw it (T-33),
+    # empty for a claim with no run; a claim that has another run now is a 409.
+    @app.post(
+        QUEUE_PATH + "/{claim_id}/decision",
+        include_in_schema=False,
+        dependencies=[Depends(require_same_origin)],
+    )
+    def adjuster_decision(
+        claim_id: ClaimId,
+        decision: Annotated[list[Decision], Form(min_length=1, max_length=1)],
+        run: Annotated[list[str], Form(min_length=1, max_length=1)],
+    ) -> Response:
+        return answered(lambda: decide(claim_id, decision[0], run[0]), claim_id)
+
+    # The one field is the page's run: the button is the rest of the request. It
+    # sends a paused claim back to triage and tries a failed triage again (the
+    # code behind ``POST /claims/{claim_id}/triage``).
+    @app.post(
+        QUEUE_PATH + "/{claim_id}/triage",
+        include_in_schema=False,
+        dependencies=[Depends(require_same_origin)],
+    )
+    def adjuster_triage(
+        claim_id: ClaimId,
+        run: Annotated[list[str], Form(min_length=1, max_length=1)],
+    ) -> Response:
+        return answered(lambda: triage_again(claim_id, run[0]), claim_id)

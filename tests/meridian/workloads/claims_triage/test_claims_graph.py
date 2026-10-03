@@ -49,7 +49,7 @@ from meridian.runtime.tool_client import (
 from meridian.workloads.claims_triage import assessment as assessment_module
 from meridian.workloads.claims_triage import wording as wording_module
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
-from meridian.workloads.claims_triage.graph import build
+from meridian.workloads.claims_triage.graph import ApprovalOutcome, build
 from meridian.workloads.claims_triage.models import DECISION_NOTES
 from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.wording import AMOUNTS_PROBE, TIMING_PROBE
@@ -984,6 +984,9 @@ def test_no_log_line_and_no_error_holds_claim_text_or_a_tool_result(
 # -- the pause ----------------------------------------------------------------
 
 DECISIONS = ("approve", "reject", "request_documents")
+# What the Claims API may record for a run: the decisions, and the two words that
+# end a run without one (S048).
+OUTCOMES = (*DECISIONS, "send_back", "withdrawn")
 # A claim per way to reach the adjuster route: a rule, an inactive policy, and
 # no policy at all.
 ADJUSTER_CLAIMS = [
@@ -1042,7 +1045,7 @@ def test_a_claim_routed_to_an_adjuster_requests_approval_and_pauses(
     assert snapshot.values["decision"] is None
 
 
-@pytest.mark.parametrize("decision", DECISIONS)
+@pytest.mark.parametrize("decision", OUTCOMES)
 def test_a_decision_is_noted_with_its_fixed_text_and_the_run_completes(
     decision: str,
 ) -> None:
@@ -1064,10 +1067,50 @@ def test_a_decision_is_noted_with_its_fixed_text_and_the_run_completes(
     assert snapshot.values["output"] == output
 
 
-def test_the_three_notes_are_different_fixed_texts() -> None:
-    assert set(DECISION_NOTES) == set(DECISIONS)
-    assert len(set(DECISION_NOTES.values())) == 3
+def test_the_five_notes_are_different_fixed_texts() -> None:
+    assert set(DECISION_NOTES) == set(OUTCOMES)
+    assert len(set(DECISION_NOTES.values())) == 5
     assert all(1 <= len(note) <= 2000 for note in DECISION_NOTES.values())
+
+
+@pytest.mark.parametrize(
+    ("word", "note"),
+    [
+        ("send_back", "An adjuster sent the claim back to triage."),
+        ("withdrawn", "The claimant withdrew the claim."),
+    ],
+)
+def test_a_run_ended_without_a_decision_writes_its_fixed_note_and_completes(
+    word: str, note: str
+) -> None:
+    graph, tools = paused()
+    tools.recorded = word
+
+    result = resume(graph, {})
+
+    assert "__interrupt__" not in result
+    snapshot = graph.get_state(THREAD)
+    assert (snapshot.next, snapshot.interrupts) == ((), ())
+    assert tools.writes == [
+        approval_request("over_threshold"),
+        (
+            "add_claim_note",
+            {"claim_id": "CLM-0004", "note": note},
+            "decision-note",
+        ),
+    ]
+    assert snapshot.values["decision"] == word
+
+
+@pytest.mark.parametrize("word", OUTCOMES)
+def test_an_approval_outcome_takes_each_of_the_five_words(word: str) -> None:
+    assert ApprovalOutcome.model_validate({"outcome": word}).outcome == word
+
+
+@pytest.mark.parametrize("word", ["cancelled", "send-back", "Withdrawn", ""])
+def test_an_approval_outcome_refuses_a_sixth_word(word: str) -> None:
+    with pytest.raises(ValidationError):
+        ApprovalOutcome.model_validate({"outcome": word})
 
 
 def test_a_graph_compiled_anew_resumes_the_run_from_the_checkpoint() -> None:
