@@ -25,6 +25,8 @@ from stacksupport import (
     service_of,
 )
 
+from meridian.workloads.claims_triage.assessment import PROMPT_VERSION
+
 CLAIM = CLAIMS["CLM-0001"]
 SERVICES = {
     "claims-api",
@@ -62,6 +64,7 @@ def test_a_claim_crosses_api_runtime_and_gateway_in_one_trace(
         "deployment": "replay-chat",
         "provider": "replay",
         "mode": "replay",
+        "prompt": PROMPT_VERSION,
     }
 
     # ── the rows ────────────────────────────────────────────────────────────

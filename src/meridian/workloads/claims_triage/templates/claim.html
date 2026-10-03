@@ -38,7 +38,7 @@
 <dt>Assessment of the exclusions</dt><dd>{{ p.assessment }}</dd>
 <dt>Assessment unavailable because</dt><dd>{{ p.unavailable_because or "not applicable" }}</dd>
 <dt>Rationale</dt><dd class="text">{{ p.rationale or "none" }}</dd>
-<dt>Drafted by</dt><dd>{% if p.drafted_by %}{{ p.drafted_by.deployment }}, {{ p.drafted_by.provider }}, {{ p.drafted_by.mode }}{% else %}no model call{% endif %}</dd>
+<dt>Drafted by</dt><dd>{% if p.drafted_by %}{{ p.drafted_by.deployment }}, {{ p.drafted_by.provider }}, {{ p.drafted_by.mode }}{% if p.drafted_by.prompt %}, prompt {{ p.drafted_by.prompt[:12] }}{% endif %}{% else %}no model call{% endif %}</dd>
 </dl>
 <h3>Citations</h3>
 {% if p.citations %}

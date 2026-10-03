@@ -331,7 +331,12 @@ def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) ->
 
 # -- one claim per reason -----------------------------------------------------
 
-DRAFTED_BY = {"deployment": "eu-chat", "provider": "azure-openai", "mode": "live"}
+DRAFTED_BY = {
+    "deployment": "eu-chat",
+    "provider": "azure-openai",
+    "mode": "live",
+    "prompt": assessment_module.PROMPT_VERSION,
+}
 
 
 def expected_proposal(**changes: Any) -> dict[str, Any]:

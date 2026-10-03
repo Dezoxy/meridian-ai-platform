@@ -8,7 +8,12 @@ from pydantic import ValidationError
 from meridian.workloads.claims_triage.proposal import Citation, TriageProposal
 from meridian.workloads.claims_triage.rules import AUTO_APPROVAL_LIMIT, Reason
 
-DRAFTED_BY = {"deployment": "replay-chat", "provider": "replay", "mode": "replay"}
+DRAFTED_BY = {
+    "deployment": "replay-chat",
+    "provider": "replay",
+    "mode": "replay",
+    "prompt": "a" * 64,
+}
 CITATION = {"product": "HOME-STD", "wording_version": "2026-01", "clause": "2.1"}
 
 

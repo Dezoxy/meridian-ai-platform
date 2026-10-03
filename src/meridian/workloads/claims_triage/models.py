@@ -90,6 +90,11 @@ class DraftedBy(WireModel):
     deployment: Annotated[str, NoNul]
     provider: Annotated[str, NoNul]
     mode: Annotated[str, NoNul]
+    # The version of the prompt the model was sent (assessment.py). Null only on
+    # a proposal stored before S017: the adjuster's page validates stored
+    # proposals with ``TriageProposal.model_validate`` (adjuster.py), so rows
+    # already on a running cluster must still read. A new proposal always has it.
+    prompt: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 
 class ProposalSummary(WireModel):
