@@ -114,8 +114,9 @@ sets it when it honours a JSON schema for the answer (Azure OpenAI's
 structured outputs); a replay deployment accepts a schema and ignores it
 (simulated). An agent sets it when it may send the Model Gateway a response
 schema, and the gateway refuses one from an agent that does not. Status:
-the declarations and their check are implemented (S051); the gateway's
-refusal is a later change.
+implemented (S051): the declarations, their check, the gateway's refusal,
+and the Azure adapter, which sends the schema as strict structured outputs
+(tried live from a laptop on 2026-10-03).
 
 An agent is of kind `graph` unless it says otherwise: the Agent Runtime
 runs its graph, and refuses to start when a graph agent has no published

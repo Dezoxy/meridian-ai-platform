@@ -14,7 +14,8 @@
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
   a fixed order and lets rules decide each claim's route (no real model
-  has answered its one question; claimant text that holds special-category
+  has answered its one question in a run, which is asked for by schema;
+  claimant text that holds special-category
   data or addresses the model is not sent, and identifiers are redacted
   before any model call and in logs), a claim it refers to an adjuster waits
   with its run paused in PostgreSQL until the adjuster decides it on a
@@ -179,7 +180,7 @@ and Pydantic, at the cost of one dependency.
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | done | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
-| S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | doing | S047 |
+| S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | done | S047 |
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
@@ -292,6 +293,9 @@ that day; the rest stand as their step recorded them.
 | Template databases, so a test database is copied and not migrated | S054 | open | none |
 | The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | open | none |
 | Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | none |
+| A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open | S032 |
+| The estimate of a response schema's tokens (its compact JSON's bytes over three) rests on one live measurement, 43 counted against 64 reserved | S051 | open | S050 |
+| Registry tests anchor on adjacent lines of `models.yaml`, so a field added inside a deployment's entry breaks them | S051 | open | none |
 
 ## Part C — Step details
 
@@ -4928,7 +4932,7 @@ the tests for a pull request that changes only files no test reads.
 
 ### S051 — Structured outputs
 
-**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
 **Goal:** a caller may ask the Model Gateway for an answer in the shape of a
 JSON schema, the gateway passes the schema to a provider that honours it
 (Azure OpenAI's structured outputs) and to no other, and the triage
@@ -5015,9 +5019,114 @@ as before.
 
 **Work log:**
 
-**Result / verification:**
+- One session, one of four running at once (S050, S052 and S053 beside it),
+  each with its own database containers and ports and three test workers.
+  `git fetch` first: `origin/main` at 98f35ae, S054 `done`.
+- The `feature-threat-model` skill before the code: the decisions above,
+  T-75 new. The advisor, before the design was fixed, moved the schema from
+  the registry into the request (the second decision above) and named the
+  replay deployment as the choice that would otherwise break kind, CI and
+  the evaluation.
+- The `implementer` subagent worked in three short contracts, two of them
+  in parallel: the registry's two declarations and their check; the
+  runtime's client and the workload; then the gateway (the subset's
+  validator, the route decision, the estimate, the adapter). The main
+  session read every source diff, reran the gates, and wrote the two live
+  tests and the documentation itself.
+- Found on the way:
+  - the span attribute `meridian.response_schema` was not on the allowlist
+    of `common/telemetry.py` (T-03), so every schema request that passed
+    the route decision would have answered 500. The gateway's implementer
+    stopped there, because the file was outside its contract; the main
+    session added the key, and the full suite then failed one test, which
+    pins the allowlist's keys and now names the new one;
+  - the shared test helper that plants extra Azure chat deployments had to
+    declare `structured_outputs`, or the new check refuses those test
+    registries;
+  - the evaluation gate saw two fingerprints move, not one: the prompt's
+    (the schema is hashed into `PROMPT_VERSION`) and the tools' (it hashes
+    the agent's registry entry, which gained `structured_outputs`). No
+    tool contract changed. The baseline was regenerated; no grade moved;
+  - a registry in which an agent declares structured outputs and a chat
+    candidate lacks them cannot load, so the gateway's tests of the filter
+    and of `no-schema-deployment` change a loaded registry in memory.
+- `infra/terraform/README.md` said the live embedding request had not been
+  run; it ran on 2026-10-03. Corrected in passing.
+- Reviews by `security-reviewer` and `platform-boundary-reviewer` on the
+  committed change. No finding of theirs was in the source: the boundary
+  reviewer blocked on the baseline, regenerated after the commit it read,
+  and both named two status labels that still said "designed" or "later".
+  Added from them: a test that keeps the workload's schema inside the
+  gateway's subset (outside it every triage would answer 422), and two
+  residuals in T-75's row.
+- Reviewed and not done, with reasons:
+  - a rule against long digit runs in a schema's words (an IBAN typed in
+    lower case fits the pattern): the redaction misses that form in a
+    message too (T-73), a name is a word, and a schema is a workload's
+    code, not a claim's data. Recorded as T-75's residual;
+  - `structured_outputs` in the same place in every `models.yaml` entry:
+    two registry tests anchor on adjacent lines of `replay-chat`;
+  - the gateway's `answer` function, 68 lines with this change: cutting
+    `create_app` apart was declined in S011, and this step adds ten lines
+    to it.
+- No owner question was asked: the row fixed the design's two ends (the
+  registry declares, the deployment that cannot is refused), and the
+  recommendation score did not move.
+
+**Result / verification:** run by the main session on the branch's last
+commit that changes `src/`, `tests/` or `data/`.
+
+- `make pytest-db` with `GITHUB_ACTIONS=true` and three workers:
+  `6505 passed, 5 skipped` in 435.60 s (the five are the opt-in live Azure
+  tests). `make eval`: ten graders, `recommendation: 39/40 -> 39/40`,
+  every other 40/40, `eval compare: passed`. `make lint`: `Contracts: 4
+  kept, 0 broken.` `make test`: `OK` (124 tests). `make registry`:
+  `schemas OK`, `contracts OK`. `make docs`: `13 checks passed`. `gitleaks`
+  over the branch: `no leaks found`. `make check`: not run, neither the
+  model nor an ADR changed.
+- Live, from this laptop with the Azure CLI login (`make gateway-live`,
+  2026-10-03, `5 passed in 9.13s`), against `aoai-sdc-gpt-4o`:
+  - a prompt that asks for one bare word, sent with a schema of one field,
+    was answered with that object and nothing around it: the deployment
+    honoured the schema, not the prompt. Azure counted 43 input tokens,
+    against 15 for the same prompt without a schema, and the gateway had
+    reserved 64 for the input;
+  - the triage's own call (`assess`, through the runtime's client, class
+    `personal`) for one synthetic description of a track day and clauses
+    3.1 and 3.2 of the synthetic motor wording: `applies`, clause 3.2, 525
+    input and 48 output tokens, read by the unchanged `read_answer`.
+  One synthetic question is not a measurement of the model: the golden set
+  answered by a real model is S050.
+- The gateway, tested: each rule and bound of the subset; a canary in
+  every position a caller controls reaches no 422 body, audit row, span,
+  metric, ledger row or log line; an agent that does not declare
+  structured outputs is 403 `schema-not-allowed`, and a route with no
+  honouring candidate 403 `no-schema-deployment`, both with no provider
+  call and no reservation; a first candidate that cannot honour a schema
+  is never called, and a failing one that can never falls back to free
+  text; the reservation is higher by exactly the schema's estimate; a
+  request without a schema sends Azure what it sent before; a model's
+  refusal is the 400 with the refusal header, with nothing of its text
+  kept.
+- The baseline: `data/evaluation/claims-triage-baseline.json` differs in
+  its `prompt` and `tools` fingerprints and in nothing else.
+- kind: not run. The gateway there is in replay mode, which accepts a
+  schema and ignores it, so it shows nothing of a provider's structured
+  outputs; the replay path is covered by a test with the real registry.
+- Not run: a real refusal by a model (the mapping to `filtered` is proven
+  against a mocked transport); the second deployment with a schema (the
+  live fallback test sends none).
 
 **Follow-ups:**
+
+- S050: the golden set by schema against the real model, which is what
+  shows whether `not-json` and `not-the-format` still occur; a recording
+  must be keyed by the schema too, which `PROMPT_VERSION` now covers.
+- S032: a model's refusal of a structured request as a case, once one can
+  be provoked with synthetic text.
+- No step yet: the estimate of a schema's tokens rests on one live
+  measurement; registry tests that anchor on adjacent YAML lines break
+  when a field is added inside an entry. Both are in Part B's backlog.
 
 ## Part D — Open questions
 

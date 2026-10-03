@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 from servicesupport import synthetic_claims
 
 from meridian.platform.gateway.models import MAX_CONTENT_CHARS
+from meridian.platform.gateway.response_schema import response_schema_errors
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import (
     ChatResult,
@@ -704,6 +705,11 @@ def test_the_answer_schema_describes_the_three_fields_and_the_verdicts() -> None
     assert ANSWER_SCHEMA["properties"]["clause"] == {"type": ["string", "null"]}
     assert ANSWER_SCHEMA["properties"]["rationale"] == {"type": "string"}
     assert ANSWER_SCHEMA["additionalProperties"] is False
+
+
+def test_the_answer_schema_is_inside_the_subset_the_gateway_accepts() -> None:
+    # Outside it the gateway answers 422 and every triage run fails.
+    assert response_schema_errors(ANSWER_SCHEMA) == []
 
 
 def test_an_answer_the_schema_would_not_allow_is_still_not_the_format() -> None:
