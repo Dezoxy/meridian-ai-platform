@@ -173,18 +173,17 @@ def facts_for_run(
     submission: ClaimSubmission, arrived: Sequence[str] = ()
 ) -> dict[str, Any]:
     """The facts a triage run is sent: for every triage, whatever starts it. The
-    documents are the submission's, then each name that arrived and is not
-    among them, in order (S048)."""
+    documents are the submission's, then each name that arrived, each name once
+    and in order of first appearance (S048): the submission's bound counts
+    names and does not require them to differ, and the documents route checks
+    the bound over the distinct names, so the list must be that set."""
     # The runtime gets what the graph needs, not the claimant's name or email,
     # and a description with neither of them in it (S047).
     facts = submission.model_dump(mode="json", exclude={"claimant"})
     facts["description"] = description_for_run(
         submission.description, submission.claimant
     )
-    facts["documents"] = [
-        *submission.documents,
-        *(name for name in arrived if name not in submission.documents),
-    ]
+    facts["documents"] = list(dict.fromkeys([*submission.documents, *arrived]))
     return facts
 
 
@@ -193,6 +192,16 @@ def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...
     connection (so inside its transaction)."""
     rows = conn.execute(ARRIVED_DOCUMENTS_SQL, (claim_id,)).fetchall()
     return tuple(name for (name,) in rows)
+
+
+# When the claim moved to its state and whether that is longer ago than the
+# triage lease (the same test ``take_triage`` makes in its one ``SELECT``); read
+# by the triage-again route, which has locked the claim without its age.
+TRIAGE_AGE_SQL = (
+    "SELECT state_changed_at, "
+    "state_changed_at < clock_timestamp() - make_interval(secs => %s) "
+    "FROM claims.claims WHERE claim_id = %s AND tenant = %s"
+)
 
 
 class RuntimeCallError(Exception):
@@ -291,21 +300,28 @@ def end_run(
 ) -> RunState | None:
     """End a paused run by resuming it: the run reads the word recorded for it
     and completes. Best effort: the run's status, or ``None`` when the call
-    failed, after logging the claim, the run, the exception's class and the
-    runtime's status (never a body). The claim's move stands either way."""
+    failed, after logging the claim, the run, the exception's class and fixed
+    message (``RuntimeCallError`` messages are fixed text, never the runtime's
+    body or the claim's), whether it timed out, and the runtime's status. A run
+    that answered without completing is a run left behind: it is logged at
+    ERROR too, with the IDs and its status only. The claim's move stands either
+    way."""
     try:
         run = resume_run(http, tenant, claim_id, run_id, END_RUN_TIMEOUT_SECONDS)
     except RuntimeCallError as exc:
         logger.error(
-            "ending run %s of claim %s failed: %s (runtime status %s)",
+            "ending run %s of claim %s failed: %s: %s "
+            "(runtime status %s, timed_out=%s)",
             run_id,
             claim_id,
             type(exc).__name__,
+            str(exc),
             exc.status_code,
+            exc.timed_out,
         )
         return None
     if run.status != "Completed":
-        logger.warning(
+        logger.error(
             "ending run %s of claim %s: run status %s", run_id, claim_id, run.status
         )
     return run.status
@@ -349,6 +365,42 @@ def store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> None:
         raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
 
 
+def take_over_lapsed_triage(
+    conn: psycopg.Connection,
+    *,
+    claim_id: str,
+    tenant: str,
+    changed_at: datetime,
+    triages: int,
+) -> datetime | None:
+    """Take over a triage whose lease lapsed, in the caller's transaction (the
+    claim locked, found ``triaging`` since ``changed_at``): the moment it moved,
+    which the request that took it keeps (its closing update matches on it).
+
+    A triage that died at the cap cannot be taken over (``move_claim`` refuses a
+    move into triaging there), so the claim is moved to ``triage_failed`` instead
+    and ``None`` answered: the caller commits that and then refuses with 409, so
+    that an adjuster decides a claim whose triage failed. ``None`` is also the
+    answer for a claim that did not move (not expected under the lock).
+    """
+    if triages >= MAX_TRIAGES_PER_CLAIM:
+        move_claim(
+            conn,
+            TRIAGE_FAILED,
+            claim_id=claim_id,
+            tenant=tenant,
+            changed_at=changed_at,
+        )
+        return None
+    return move_claim(
+        conn,
+        TRIAGE_RECLAIMED,
+        claim_id=claim_id,
+        tenant=tenant,
+        changed_at=changed_at,
+    )
+
+
 def take_triage(
     dsn: str, tenant: str, claim_id: str
 ) -> tuple[datetime | None, LifecycleState, tuple[str, ...]]:
@@ -373,37 +425,30 @@ def take_triage(
             # Not this tenant's (``store_claim`` refuses that first) or gone.
             raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
         state, changed_at, lapsed, triages = row
-        if state == "submitted":
-            transition = TRIAGE_STARTED
-        elif state == "triage_failed":
-            transition = TRIAGE_RETRIED
-        elif state == "triaging" and lapsed:
-            transition = TRIAGE_RECLAIMED
+        at_cap = triages >= MAX_TRIAGES_PER_CLAIM
+        if state == "triaging" and lapsed:
+            # Committed with the 409 when the claim is at the cap (see the helper).
+            moved_at = take_over_lapsed_triage(
+                conn,
+                claim_id=claim_id,
+                tenant=tenant,
+                changed_at=changed_at,
+                triages=triages,
+            )
+        elif state in ("submitted", "triage_failed"):
+            moved_at = (
+                None
+                if at_cap
+                else move_claim(
+                    conn,
+                    TRIAGE_STARTED if state == "submitted" else TRIAGE_RETRIED,
+                    claim_id=claim_id,
+                    tenant=tenant,
+                    changed_at=changed_at,
+                )
+            )
         else:
             return None, state, ()
-        at_cap = triages >= MAX_TRIAGES_PER_CLAIM
-        if at_cap and transition is TRIAGE_RECLAIMED:
-            # A triage that died at the cap cannot be taken over (``move_claim``
-            # refuses a move into triaging there), so it fails, committed before
-            # the 409: an adjuster decides a claim whose triage failed.
-            move_claim(
-                conn,
-                TRIAGE_FAILED,
-                claim_id=claim_id,
-                tenant=tenant,
-                changed_at=changed_at,
-            )
-        moved_at = (
-            None
-            if at_cap
-            else move_claim(
-                conn,
-                transition,
-                claim_id=claim_id,
-                tenant=tenant,
-                changed_at=changed_at,
-            )
-        )
         arrived = () if moved_at is None else arrived_documents(conn, claim_id)
     if at_cap:
         raise HTTPException(409, TRIAGE_CAP_DETAIL)

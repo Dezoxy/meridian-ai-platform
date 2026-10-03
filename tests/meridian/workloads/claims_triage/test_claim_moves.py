@@ -220,6 +220,35 @@ def test_the_facts_without_arrived_documents_are_the_submissions() -> None:
     assert triaging.facts_for_run(submission, ()) == triaging.facts_for_run(submission)
 
 
+def test_the_facts_hold_each_name_once_the_submissions_own_repeats_included() -> None:
+    # The submission's bound is on the length, not on the names being distinct.
+    submission = ClaimSubmission.model_validate(with_documents(MOVE_ID, ["a"] * 20))
+    arrived = [f"new-{n}" for n in range(19)]
+
+    documents = triaging.facts_for_run(submission, arrived)["documents"]
+
+    assert documents == ["a", *arrived]
+    assert len(documents) == 20
+
+
+def test_a_submission_that_repeats_a_name_is_sent_twenty_names_at_most(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """The bound the documents route checks counts distinct names, so the run
+    must be sent the distinct names too, or the runtime refuses the facts."""
+    waiting_for_documents(fresh_database, ["a"] * 20)
+    runtime = MoveRuntime()
+    arrived = [f"new-{n}" for n in range(19)]
+
+    response = client_for(fresh_database, runtime).post(
+        documents_url(), json={"documents": arrived}
+    )
+
+    assert response.status_code == 200
+    # Those that arrive together are in name order.
+    assert facts_sent(runtime.starts[0])["documents"] == ["a", *sorted(arrived)]
+
+
 # ── ending a run ────────────────────────────────────────────────────────────
 def test_ending_a_run_resumes_it_with_its_own_short_timeout() -> None:
     old = uuid.uuid4()
@@ -241,35 +270,58 @@ def test_ending_a_run_resumes_it_with_its_own_short_timeout() -> None:
     assert triaging.END_RUN_TIMEOUT_SECONDS < triaging.TRIAGE_LEASE_SECONDS
 
 
-def test_a_run_that_did_not_complete_is_logged_at_warning_and_its_status_answered(
+def test_a_run_that_did_not_complete_is_logged_at_error_and_its_status_answered(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # A run left behind: it is still paused, or running, and nobody will end it.
+    old = uuid.uuid4()
     runtime = MoveRuntime(resume_status="Running")
 
     with caplog.at_level(logging.WARNING, logger=triaging.__name__):
-        status = triaging.end_run(runtime.client, TENANT, MOVE_ID, uuid.uuid4())
+        status = triaging.end_run(runtime.client, TENANT, MOVE_ID, old)
 
     assert status == "Running"
     (record,) = caplog.records
-    assert record.levelno == logging.WARNING
+    assert record.levelno == logging.ERROR
     assert "Running" in record.getMessage()
+    assert str(old) in caplog.text
+    assert MOVE_ID in caplog.text
 
 
 @pytest.mark.parametrize(
-    "runtime",
+    ("runtime", "reason", "timed_out"),
     [
-        pytest.param(MoveRuntime(resume_raises=httpx.ReadTimeout(CANARY)), id="slow"),
         pytest.param(
-            MoveRuntime(resume_raises=httpx.ConnectError(CANARY)), id="unreachable"
+            MoveRuntime(resume_raises=httpx.ReadTimeout(CANARY)),
+            "the runtime timed out",
+            True,
+            id="slow",
         ),
         pytest.param(
-            MoveRuntime(resume_http=500, resume_body={"detail": CANARY}), id="500"
+            MoveRuntime(resume_raises=httpx.ConnectError(CANARY)),
+            "the runtime is unreachable",
+            False,
+            id="unreachable",
         ),
-        pytest.param(MoveRuntime(resume_body={"nonsense": CANARY}), id="no-contract"),
+        pytest.param(
+            MoveRuntime(resume_http=500, resume_body={"detail": CANARY}),
+            "the runtime answered an error",
+            False,
+            id="500",
+        ),
+        pytest.param(
+            MoveRuntime(resume_body={"nonsense": CANARY}),
+            "the runtime answered outside its contract",
+            False,
+            id="no-contract",
+        ),
     ],
 )
-def test_a_run_that_cannot_be_ended_answers_none_and_logs_both_ids_and_no_body(
-    runtime: MoveRuntime, caplog: pytest.LogCaptureFixture
+def test_a_run_that_cannot_be_ended_answers_none_and_logs_why_but_no_body(
+    runtime: MoveRuntime,
+    reason: str,
+    timed_out: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     old = uuid.uuid4()
 
@@ -282,6 +334,9 @@ def test_a_run_that_cannot_be_ended_answers_none_and_logs_both_ids_and_no_body(
     assert MOVE_ID in caplog.text
     assert str(old) in caplog.text
     assert "RuntimeCallError" in caplog.text
+    # Why: the exception's fixed text, and whether it was a timeout.
+    assert reason in caplog.text
+    assert f"timed_out={timed_out}" in caplog.text
     assert CANARY not in caplog.text
 
 
@@ -334,7 +389,8 @@ def test_a_paused_claim_is_sent_back_and_triaged_again(
     assert claim_state(fresh_database, MOVE_ID) == ("awaiting_adjuster", runtime.run_id)
     assert triages_of(fresh_database, MOVE_ID) == 2
     assert claim_audit(fresh_database, MOVE_ID) == [
-        ("claim.triaging", "triaging", "adjuster-sent-back", None, "claims_api"),
+        # The send-back's event names the run it ends.
+        ("claim.triaging", "triaging", "adjuster-sent-back", old, "claims_api"),
         (
             "claim.awaiting_adjuster",
             "awaiting_adjuster",
@@ -417,6 +473,62 @@ def test_a_claim_with_no_run_is_sent_back_without_a_decision_or_a_resume(
     assert runtime.calls == ["start"]
     assert decisions(fresh_database) == []
     assert triages_of(fresh_database, MOVE_ID) == 3
+    assert claim_audit(fresh_database, MOVE_ID)[0] == (
+        "claim.triaging",
+        "triaging",
+        "adjuster-sent-back",
+        None,
+        "claims_api",
+    )
+
+
+def test_a_claim_sent_back_holds_the_run_it_ends_until_its_new_triage_closes(
+    fresh_database: DatabaseHandle,
+) -> None:
+    old = uuid.uuid4()
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", run_id=old, triages=1)
+    seen: list[tuple[str, uuid.UUID | None]] = []
+    runtime = MoveRuntime(
+        during_start=lambda: seen.append(claim_state(fresh_database, MOVE_ID))
+    )
+
+    response = client_for(fresh_database, runtime).post(triage_url())
+
+    assert response.status_code == 200
+    assert seen == [("triaging", old)]
+    assert claim_state(fresh_database, MOVE_ID) == ("awaiting_adjuster", runtime.run_id)
+
+
+@pytest.mark.parametrize("word", ["approve", "request_documents"])
+def test_a_decision_on_a_claim_being_triaged_after_a_send_back_is_409_and_inert(
+    fresh_database: DatabaseHandle, word: str
+) -> None:
+    old = uuid.uuid4()
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", run_id=old, triages=1)
+    answers: list[httpx.Response] = []
+    snapshots: list[list[tuple]] = []
+
+    def an_adjuster_decides_meanwhile() -> None:
+        snapshots.append(claim_snapshot(fresh_database))
+        answers.append(
+            client_for(fresh_database, MoveRuntime()).post(
+                f"/claims/{MOVE_ID}/decision", json={"decision": word}
+            )
+        )
+        snapshots.append(claim_snapshot(fresh_database))
+
+    runtime = MoveRuntime(during_start=an_adjuster_decides_meanwhile)
+
+    client_for(fresh_database, runtime).post(triage_url())
+
+    # The claim's run while it is triaging is the old one, which the send-back
+    # ended: a decision on it is refused, nothing recorded or moved.
+    (answer,) = answers
+    assert answer.status_code == 409
+    # The run's word is send_back, which is not the decision posted.
+    assert answer.json() == {"detail": DECIDED_OTHERWISE_DETAIL}
+    assert snapshots[0] == snapshots[1]
+    assert decisions(fresh_database) == [(MOVE_ID, old, "send_back")]
 
 
 @pytest.mark.parametrize("old", [None, uuid.uuid4()], ids=["no-run", "failed-run"])
@@ -530,6 +642,75 @@ def test_a_triage_at_the_cap_whose_lease_holds_is_left_to_its_owner(
     assert response.status_code == 409
     assert response.json() == {"detail": BEING_TRIAGED_DETAIL}
     assert claim_state(fresh_database, MOVE_ID)[0] == "triaging"
+
+
+def age_triage(db: DatabaseHandle, seconds: float) -> None:
+    """The claim has been triaging for ``seconds``."""
+    owner_rows(
+        db,
+        "UPDATE claims.claims SET state_changed_at = now() - make_interval(secs => %s)"
+        " WHERE claim_id = %s RETURNING 1",
+        (seconds, MOVE_ID),
+    )
+
+
+def test_a_post_of_triage_takes_over_a_triage_that_lapsed(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # The API that was triaging it died: the claim holds the run of the send-back
+    # that was ending, which the takeover drops, as the one by POST /claims does.
+    put_claim(fresh_database, MOVE_ID, "triaging", run_id=uuid.uuid4(), triages=1)
+    age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(triage_url())
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "awaiting_adjuster"
+    assert response.json()["run_id"] == str(runtime.run_id)
+    assert runtime.calls == ["start"]
+    assert decisions(fresh_database) == []
+    assert triages_of(fresh_database, MOVE_ID) == 2
+    assert [e[:3] for e in claim_audit(fresh_database, MOVE_ID)] == [
+        ("claim.triaging", "triaging", "triage-reclaimed"),
+        ("claim.awaiting_adjuster", "awaiting_adjuster", "rules-referred"),
+    ]
+
+
+def test_a_post_of_triage_leaves_a_triage_within_its_lease_to_its_owner(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "triaging", run_id=uuid.uuid4(), triages=1)
+    age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS - 10)
+    before = claim_snapshot(fresh_database)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(triage_url())
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": BEING_TRIAGED_DETAIL}
+    assert runtime.calls == []
+    assert claim_snapshot(fresh_database) == before
+    assert audit_rows(fresh_database) == 0
+
+
+def test_a_post_of_triage_at_the_cap_fails_a_lapsed_triage_and_commits_it_first(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "triaging", triages=5)
+    age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(triage_url())
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": CAP_DETAIL}
+    assert runtime.calls == []
+    assert claim_state(fresh_database, MOVE_ID) == ("triage_failed", None)
+    assert triages_of(fresh_database, MOVE_ID) == 5
+    assert [e[:3] for e in claim_audit(fresh_database, MOVE_ID)] == [
+        ("claim.triage_failed", "triage_failed", "triage-failed")
+    ]
 
 
 @pytest.mark.parametrize(
@@ -693,11 +874,32 @@ def test_a_withdrawal_from_a_waiting_claim_with_no_run_resumes_nothing(
     ]
 
 
-def test_a_withdrawal_while_documents_are_asked_for_ends_no_run_and_keeps_its_own(
+def put_decision(
+    db: DatabaseHandle,
+    claim_id: str,
+    run_id: uuid.UUID | None,
+    word: str,
+    age: timedelta = timedelta(0),
+) -> None:
+    """A word recorded for the claim as the owner wrote it, ``age`` ago."""
+    owner_rows(
+        db,
+        "INSERT INTO claims.decisions (claim_id, run_id, decision, decided_at) "
+        "VALUES (%s, %s, %s, now() - %s) RETURNING 1",
+        (claim_id, run_id, word, age),
+    )
+
+
+def test_a_withdrawal_while_documents_are_asked_for_ends_the_claims_paused_run(
     fresh_database: DatabaseHandle,
 ) -> None:
-    ended = uuid.uuid4()
-    put_claim(fresh_database, MOVE_ID, "documents_requested", run_id=ended, triages=1)
+    """An adjuster's ``request_documents`` whose resume failed leaves the claim
+    in ``documents_requested`` with its run still paused: the withdrawal ends it
+    (the run reads the recorded word and completes), and again when posted
+    again."""
+    paused = uuid.uuid4()
+    put_claim(fresh_database, MOVE_ID, "documents_requested", run_id=paused, triages=1)
+    put_decision(fresh_database, MOVE_ID, paused, "request_documents")
     runtime = MoveRuntime()
     client = client_for(fresh_database, runtime)
 
@@ -705,16 +907,60 @@ def test_a_withdrawal_while_documents_are_asked_for_ends_no_run_and_keeps_its_ow
     again = client.post(withdrawal_url())
 
     assert response.status_code == 200
-    assert response.json()["state"] == "withdrawn"
-    assert response.json()["run_id"] is None
-    assert response.json()["run_status"] is None
-    # Posted again: its run has no withdrawn word, so nothing is ended.
+    assert response.json() == {
+        "claim_id": MOVE_ID,
+        "state": "withdrawn",
+        "run_id": str(paused),
+        "run_status": "Completed",
+        "proposal": None,
+    }
     assert again.status_code == 200
     assert again.json() == response.json()
-    assert runtime.calls == []
-    assert decisions(fresh_database) == []
-    assert claim_state(fresh_database, MOVE_ID) == ("withdrawn", ended)
+    assert [r.url.path for r in runtime.resumes] == [f"/runs/{paused}/resume"] * 2
+    assert runtime.starts == []
+    # No second word for the run (its row is unique), and one audit event.
+    assert decisions(fresh_database) == [(MOVE_ID, paused, "request_documents")]
+    assert claim_state(fresh_database, MOVE_ID) == ("withdrawn", paused)
     assert len(claim_audit(fresh_database, MOVE_ID)) == 1
+
+
+@pytest.mark.parametrize("failure", END_FAILURES)
+def test_a_withdrawal_from_documents_whose_run_cannot_be_ended_is_still_200(
+    fresh_database: DatabaseHandle,
+    caplog: pytest.LogCaptureFixture,
+    failure: dict[str, Any],
+) -> None:
+    paused = uuid.uuid4()
+    put_claim(fresh_database, MOVE_ID, "documents_requested", run_id=paused, triages=1)
+    put_decision(fresh_database, MOVE_ID, paused, "request_documents")
+
+    with caplog.at_level(logging.ERROR, logger=triaging.__name__):
+        response = client_for(fresh_database, MoveRuntime(**failure)).post(
+            withdrawal_url()
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "withdrawn"
+    assert response.json()["run_status"] is None
+    assert str(paused) in caplog.text
+    assert MOVE_ID in caplog.text
+    assert CANARY not in caplog.text + response.text
+    assert claim_state(fresh_database, MOVE_ID) == ("withdrawn", paused)
+
+
+def test_a_withdrawal_from_documents_with_no_run_resumes_nothing(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "documents_requested", triages=1)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(withdrawal_url())
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] is None
+    assert response.json()["run_status"] is None
+    assert runtime.calls == []
+    assert claim_state(fresh_database, MOVE_ID) == ("withdrawn", None)
 
 
 @pytest.mark.parametrize(
@@ -756,7 +1002,7 @@ def waiting_for_documents(
 def test_documents_that_arrive_are_stored_and_the_claim_is_triaged_with_the_union(
     fresh_database: DatabaseHandle,
 ) -> None:
-    waiting_for_documents(fresh_database, ["police-report"])
+    asked_for_them = waiting_for_documents(fresh_database, ["police-report"])
     runtime = MoveRuntime()
     exporter = InMemorySpanExporter()
 
@@ -773,8 +1019,11 @@ def test_documents_that_arrive_are_stored_and_the_claim_is_triaged_with_the_unio
         "proposal": {"route": "adjuster", "drafted_by": DRAFTED_BY},
     }
     assert arrived_names(fresh_database, MOVE_ID) == ["invoice", "photos"]
-    # No run is resumed: the one that asked for documents has ended.
-    assert runtime.calls == ["start"]
+    # The claim's run is ended first (a resume of a run that has ended answers
+    # its status and runs nothing), then the new one starts.
+    assert runtime.calls == ["resume", "start"]
+    (resume,) = runtime.resumes
+    assert resume.url.path == f"/runs/{asked_for_them}/resume"
     (start,) = runtime.starts
     facts = facts_sent(start)
     # Those that arrived together arrive in name order.
@@ -920,7 +1169,7 @@ def test_documents_for_a_claim_that_does_not_wait_for_them_are_409(
 def test_documents_that_arrive_at_the_cap_are_stored_and_refer_the_claim_with_no_run(
     fresh_database: DatabaseHandle,
 ) -> None:
-    waiting_for_documents(fresh_database, ["police-report"], triages=5)
+    asked_for_them = waiting_for_documents(fresh_database, ["police-report"], triages=5)
     runtime = MoveRuntime()
 
     response = client_for(fresh_database, runtime).post(
@@ -936,7 +1185,9 @@ def test_documents_that_arrive_at_the_cap_are_stored_and_refer_the_claim_with_no
         "proposal": None,
     }
     assert arrived_names(fresh_database, MOVE_ID) == ["photos"]
-    assert runtime.calls == []
+    # No triage runs, but the claim's old run is ended: the claim drops it.
+    assert runtime.calls == ["resume"]
+    assert runtime.resumes[0].url.path == f"/runs/{asked_for_them}/resume"
     assert claim_state(fresh_database, MOVE_ID) == ("awaiting_adjuster", None)
     assert triages_of(fresh_database, MOVE_ID) == 5
     assert claim_audit(fresh_database, MOVE_ID) == [
@@ -948,6 +1199,49 @@ def test_documents_that_arrive_at_the_cap_are_stored_and_refer_the_claim_with_no
             "claims_api",
         )
     ]
+
+
+@pytest.mark.parametrize("triages", [1, 5], ids=["triaged", "at-the-cap"])
+def test_documents_that_arrive_end_the_run_an_adjusters_request_left_paused(
+    fresh_database: DatabaseHandle, triages: int
+) -> None:
+    """An adjuster's ``request_documents`` whose resume failed: the decision is
+    recorded and the claim moved, the run still paused. The claim drops its run
+    when documents arrive, so this is the last that can end it; the run reads
+    the recorded word and completes with its note."""
+    paused = waiting_for_documents(fresh_database, ["police-report"], triages=triages)
+    put_decision(fresh_database, MOVE_ID, paused, "request_documents")
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    assert response.status_code == 200
+    assert [r.url.path for r in runtime.resumes] == [f"/runs/{paused}/resume"]
+    assert runtime.calls[0] == "resume"
+    assert decisions(fresh_database) == [(MOVE_ID, paused, "request_documents")]
+
+
+@pytest.mark.parametrize("failure", END_FAILURES)
+def test_documents_whose_old_run_cannot_be_ended_still_move_the_claim_and_log_the_run(
+    fresh_database: DatabaseHandle,
+    caplog: pytest.LogCaptureFixture,
+    failure: dict[str, Any],
+) -> None:
+    paused = waiting_for_documents(fresh_database, ["police-report"])
+    runtime = MoveRuntime(**failure)
+
+    with caplog.at_level(logging.ERROR, logger=triaging.__name__):
+        response = client_for(fresh_database, runtime).post(
+            documents_url(), json={"documents": ["photos"]}
+        )
+
+    assert response.status_code == 200
+    assert runtime.calls == ["resume", "start"]
+    assert claim_state(fresh_database, MOVE_ID) == ("awaiting_adjuster", runtime.run_id)
+    assert str(paused) in caplog.text
+    assert CANARY not in caplog.text + response.text
 
 
 def test_a_claim_posted_again_after_its_triage_failed_is_triaged_with_the_documents(
@@ -1042,7 +1336,8 @@ def test_a_claim_referred_at_the_cap_is_decided_with_nothing_resumed(
         "run_id": None,
         "run_status": None,
     }
-    assert runtime.calls == []
+    # The documents ended the old run; the decision resumes nothing.
+    assert runtime.calls == ["resume"]
     assert decisions(fresh_database) == [(MOVE_ID, None, word)]
     assert [e[:3] for e in claim_audit(fresh_database, MOVE_ID)] == [
         ("claim.awaiting_adjuster", "awaiting_adjuster", "triage-cap-reached"),
@@ -1050,19 +1345,21 @@ def test_a_claim_referred_at_the_cap_is_decided_with_nothing_resumed(
     ]
 
 
+DECIDED_OTHERWISE_DETAIL = "the claim was decided otherwise"
+DECISION_URL = f"/claims/{MOVE_ID}/decision"
+
+
 @pytest.mark.parametrize("first_state", ["triage_failed", "awaiting_adjuster"])
-@pytest.mark.parametrize("second", ["approve", "reject"])
-def test_a_decision_posted_again_on_a_claim_decided_with_no_run_is_409(
-    fresh_database: DatabaseHandle, first_state: str, second: str
+def test_another_decision_on_a_claim_decided_with_no_run_is_409(
+    fresh_database: DatabaseHandle, first_state: str
 ) -> None:
     put_claim(fresh_database, MOVE_ID, first_state, triages=5)
     runtime = MoveRuntime()
     client = client_for(fresh_database, runtime)
-    url = f"/claims/{MOVE_ID}/decision"
-    first = client.post(url, json={"decision": "approve"})
+    first = client.post(DECISION_URL, json={"decision": "approve"})
     audit_before = audit_rows(fresh_database)
 
-    again = client.post(url, json={"decision": second})
+    again = client.post(DECISION_URL, json={"decision": "reject"})
 
     assert first.status_code == 200
     assert again.status_code == 409
@@ -1070,6 +1367,175 @@ def test_a_decision_posted_again_on_a_claim_decided_with_no_run_is_409(
     assert decisions(fresh_database) == [(MOVE_ID, None, "approve")]
     assert audit_rows(fresh_database) == audit_before
     assert runtime.calls == []
+
+
+@pytest.mark.parametrize("word", DECISION_OUTCOMES)
+@pytest.mark.parametrize("first_state", ["triage_failed", "awaiting_adjuster"])
+def test_the_same_decision_posted_again_on_a_claim_decided_with_no_run_is_200(
+    fresh_database: DatabaseHandle, first_state: str, word: str
+) -> None:
+    # The answer to the first one may have been lost: the same answer, and
+    # nothing is recorded, moved, audited or resumed.
+    state, _ = DECISION_OUTCOMES[word]
+    put_claim(fresh_database, MOVE_ID, first_state, triages=5)
+    runtime = MoveRuntime()
+    client = client_for(fresh_database, runtime)
+    first = client.post(DECISION_URL, json={"decision": word})
+    audit_before = claim_audit(fresh_database, MOVE_ID)
+    snapshot_before = claim_snapshot(fresh_database)
+
+    again = client.post(DECISION_URL, json={"decision": word})
+
+    assert first.status_code == 200
+    assert again.status_code == 200
+    expected = {"claim_id": MOVE_ID, "state": state, "run_id": None, "run_status": None}
+    assert first.json() == expected
+    assert again.json() == expected
+    assert decisions(fresh_database) == [(MOVE_ID, None, word)]
+    assert claim_audit(fresh_database, MOVE_ID) == audit_before
+    assert claim_snapshot(fresh_database) == snapshot_before
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize(
+    ("recorded", "posted", "status", "detail"),
+    [
+        pytest.param("approve", "approve", 200, None, id="same-word"),
+        pytest.param(
+            "reject", "approve", 409, DECIDED_OTHERWISE_DETAIL, id="other-word"
+        ),
+    ],
+)
+def test_a_claim_with_no_run_in_the_decisions_target_is_answered_by_its_runless_word(
+    fresh_database: DatabaseHandle,
+    recorded: str,
+    posted: str,
+    status: int,
+    detail: str | None,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "approved", triages=1)
+    put_decision(fresh_database, MOVE_ID, None, recorded)
+    before = claim_snapshot(fresh_database)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(
+        DECISION_URL, json={"decision": posted}
+    )
+
+    assert response.status_code == status
+    if detail is not None:
+        assert response.json() == {"detail": detail}
+    assert runtime.calls == []
+    assert claim_snapshot(fresh_database) == before
+    assert decisions(fresh_database) == [(MOVE_ID, None, recorded)]
+    assert audit_rows(fresh_database) == 0
+
+
+@pytest.mark.parametrize(
+    ("older", "newer", "status"),
+    [
+        pytest.param("reject", "approve", 200, id="latest-is-the-same"),
+        pytest.param("approve", "reject", 409, id="latest-is-another"),
+    ],
+)
+def test_the_latest_runless_word_of_the_claim_answers_a_decision_posted_again(
+    fresh_database: DatabaseHandle, older: str, newer: str, status: int
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "approved", triages=1)
+    put_decision(fresh_database, MOVE_ID, None, older, timedelta(days=2))
+    put_decision(fresh_database, MOVE_ID, None, newer, timedelta(days=1))
+
+    response = client_for(fresh_database, MoveRuntime()).post(
+        DECISION_URL, json={"decision": "approve"}
+    )
+
+    assert response.status_code == status
+    if status == 409:
+        assert response.json() == {"detail": DECIDED_OTHERWISE_DETAIL}
+
+
+@pytest.mark.parametrize("state", ["approved", "rejected", "withdrawn", "triaging"])
+def test_a_claim_with_no_run_and_no_word_of_its_own_does_not_wait_for_an_adjuster(
+    fresh_database: DatabaseHandle, state: str
+) -> None:
+    # The rules put it there, or the claimant; an adjuster decided nothing.
+    put_claim(fresh_database, MOVE_ID, state, triages=1)
+    before = claim_snapshot(fresh_database)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(
+        DECISION_URL, json={"decision": "approve"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": NOT_WAITING_DETAIL}
+    assert runtime.calls == []
+    assert claim_snapshot(fresh_database) == before
+    assert decisions(fresh_database) == []
+
+
+def test_a_claim_with_no_run_whose_state_is_not_the_decisions_target_is_not_waiting(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # Decided with no run, then withdrawn: the same word posted again moved
+    # nothing here, so the answer is not "decided": the claim has gone on.
+    put_claim(fresh_database, MOVE_ID, "withdrawn", triages=1)
+    put_decision(fresh_database, MOVE_ID, None, "request_documents")
+
+    response = client_for(fresh_database, MoveRuntime()).post(
+        DECISION_URL, json={"decision": "request_documents"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": NOT_WAITING_DETAIL}
+
+
+def test_a_decision_posted_again_after_the_claim_was_withdrawn_is_409_and_inert(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """The answer to the first decision was lost, and the claim has moved on
+    since: a replay is answered 200 only for the move the decision made."""
+    run = uuid.uuid4()
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", run_id=run, triages=1)
+    runtime = MoveRuntime()
+    client = client_for(fresh_database, runtime)
+    decided = client.post(DECISION_URL, json={"decision": "request_documents"})
+    withdrawn = client.post(withdrawal_url())
+    resumes_before = len(runtime.resumes)
+    audit_before = claim_audit(fresh_database, MOVE_ID)
+
+    again = client.post(DECISION_URL, json={"decision": "request_documents"})
+
+    assert (decided.status_code, withdrawn.status_code) == (200, 200)
+    assert again.status_code == 409
+    assert again.json() == {"detail": NOT_WAITING_DETAIL}
+    assert len(runtime.resumes) == resumes_before
+    assert decisions(fresh_database) == [(MOVE_ID, run, "request_documents")]
+    assert claim_state(fresh_database, MOVE_ID) == ("withdrawn", run)
+    assert claim_audit(fresh_database, MOVE_ID) == audit_before
+
+
+def test_a_decision_whose_answer_was_lost_is_still_answered_while_the_claim_is_there(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # The other side of the boundary: the decision's own move is the state.
+    run = uuid.uuid4()
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", run_id=run, triages=1)
+    down = MoveRuntime(resume_raises=httpx.ConnectError(CANARY))
+    first = client_for(fresh_database, down).post(
+        DECISION_URL, json={"decision": "request_documents"}
+    )
+    up = MoveRuntime()
+
+    again = client_for(fresh_database, up).post(
+        DECISION_URL, json={"decision": "request_documents"}
+    )
+
+    assert first.status_code == 502
+    assert again.status_code == 200
+    assert again.json()["state"] == "documents_requested"
+    assert again.json()["run_id"] == str(run)
+    assert [r.url.path for r in up.resumes] == [f"/runs/{run}/resume"]
 
 
 @pytest.mark.parametrize("word", ["send_back", "withdrawn"])
@@ -1093,6 +1559,58 @@ def test_the_decision_route_still_refuses_the_words_that_end_a_run(
     assert decisions(fresh_database) == []
     assert claim_snapshot(fresh_database) == before
     assert audit_rows(fresh_database) == 0
+
+
+# ── a stored submission that no longer validates ───────────────────────────
+@pytest.mark.parametrize(
+    ("url", "state", "body"),
+    [
+        pytest.param(triage_url, "awaiting_adjuster", None, id="triage"),
+        pytest.param(
+            documents_url, "documents_requested", {"documents": ["photos"]}, id="docs"
+        ),
+    ],
+)
+def test_a_stored_submission_that_is_not_valid_is_a_500_with_the_claim_and_no_value(
+    fresh_database: DatabaseHandle,
+    caplog: pytest.LogCaptureFixture,
+    url: Callable[[str], str],
+    state: str,
+    body: dict[str, Any] | None,
+) -> None:
+    # Pydantic's message quotes the value it refused: neither the log nor the
+    # answer may carry it, and the claim does not move.
+    put_claim(
+        fresh_database,
+        MOVE_ID,
+        state,
+        run_id=uuid.uuid4(),
+        triages=1,
+        submission={**claim_with_id(MOVE_ID), "peril": CANARY},
+    )
+    before = claim_snapshot(fresh_database)
+    runtime = MoveRuntime()
+    exporter = InMemorySpanExporter()
+
+    with caplog.at_level(logging.DEBUG):
+        response = client_for(fresh_database, runtime, exporter).post(
+            url(MOVE_ID), json=body
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error", "claim_id": MOVE_ID}
+    error_lines = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any(
+        MOVE_ID in r.getMessage() and "ValidationError" in r.getMessage()
+        for r in error_lines
+    )
+    assert CANARY not in response.text + caplog.text
+    assert "input_value" not in caplog.text
+    assert runtime.calls == []
+    assert claim_snapshot(fresh_database) == before
+    assert decisions(fresh_database) == []
+    assert audit_rows(fresh_database) == 0
+    assert_spans_hold_no_exception_and_no_canary(exporter, CANARY)
 
 
 # ── 404 and the database ────────────────────────────────────────────────────

@@ -108,6 +108,14 @@ DECISION_TRANSITIONS: Mapping[Decision, Transition] = {
     "request_documents": ADJUSTER_REQUESTED_DOCUMENTS,
 }
 
+# The word of the latest decision recorded for the claim with no run (a claim
+# referred with no paused run, then decided).
+LATEST_RUNLESS_DECISION_SQL = (
+    "SELECT decision FROM claims.decisions "
+    "WHERE claim_id = %s AND run_id IS NULL "
+    "ORDER BY decided_at DESC, decision_id DESC LIMIT 1"
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,7 +154,16 @@ def _record_decision(
                 raise HTTPException(409, NOT_WAITING_DETAIL)
             return transition.target, None
         if run_id is None:
-            raise HTTPException(409, NOT_WAITING_DETAIL)
+            # Decided with no run, and the answer to the first post lost: only a
+            # claim still in this decision's own move is answered again.
+            if state != transition.target:
+                raise HTTPException(409, NOT_WAITING_DETAIL)
+            runless = conn.execute(LATEST_RUNLESS_DECISION_SQL, (claim_id,)).fetchone()
+            if runless is None:
+                raise HTTPException(409, NOT_WAITING_DETAIL)
+            if runless[0] != decision:
+                raise HTTPException(409, DECIDED_OTHERWISE_DETAIL)
+            return state, None
         if state == "awaiting_adjuster":
             conn.execute(RECORD_OUTCOME_SQL, (claim_id, run_id, decision))
             moved = move_claim(
@@ -156,7 +173,9 @@ def _record_decision(
                 raise HTTPException(409, NOT_WAITING_DETAIL)
             return transition.target, run_id
         # Not waiting: only a claim this run's decision already moved may go on
-        # to the resume again (the answer to the first one was lost).
+        # to the resume again (the answer to the first one was lost). One the
+        # claim has left since (withdrawn, sent back to triage) is not this
+        # decision's move any more: nothing is resumed for it.
         decided = conn.execute(
             "SELECT decision FROM claims.decisions WHERE claim_id = %s AND run_id = %s",
             (claim_id, run_id),
@@ -165,6 +184,8 @@ def _record_decision(
             raise HTTPException(409, NOT_WAITING_DETAIL)
         if decided[0] != decision:
             raise HTTPException(409, DECIDED_OTHERWISE_DETAIL)
+        if state != transition.target:
+            raise HTTPException(409, NOT_WAITING_DETAIL)
         return state, run_id
 
 
