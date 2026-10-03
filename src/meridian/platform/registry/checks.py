@@ -61,6 +61,7 @@ REPLAY_FORBIDDEN = ("sku", "region", "terraform_key", "rate_limits")
 # check_tenant_limits.
 SHARED_RATE_FIELDS = ("requests_per_10_seconds", "tokens_per_minute")
 EMBEDDING_PURPOSE = "embedding"
+CHAT_PURPOSE = "chat"
 # What must be equal for two vectors to be comparable (T-54).
 VECTOR_FIELDS = ("model", "version", "dimensions")
 REPLAY_PROVIDER_ID = "replay"
@@ -593,6 +594,53 @@ def check_tenant_coverage(registry: Registry) -> list[str]:
     return errors
 
 
+def _chat_deployments(registry: Registry) -> list[tuple[Deployment, str]]:
+    """The chat route's candidates and the chat replay deployment, each with
+    how to say its role; a name that resolves to nothing is skipped."""
+    found: list[tuple[Deployment, str]] = []
+    route = registry.route(CHAT_PURPOSE)
+    for name in () if route is None else route.candidates:
+        if dep := registry.deployment(name):
+            found.append((dep, f"a candidate of the {CHAT_PURPOSE!r} route"))
+    if dep := registry.replay_deployment(CHAT_PURPOSE):
+        found.append((dep, f"the replay deployment for purpose {CHAT_PURPOSE!r}"))
+    return found
+
+
+def check_structured_outputs(registry: Registry) -> list[str]:
+    """A schema for the answer needs a deployment that can honour it (S051).
+
+    An embedding deployment has no answer to shape. When an agent may send a
+    schema, every chat deployment the gateway could pick, replay included,
+    must declare it, or a run would meet the refusal only at the call.
+    """
+    index = {dep.id: i for i, dep in enumerate(registry.deployments)}
+    errors = [
+        f"{MODELS}: deployments[{i}].structured_outputs: must not be set for "
+        f"purpose {dep.purpose!r} (deployment {dep.id!r})"
+        for i, dep in enumerate(registry.deployments)
+        if dep.structured_outputs and dep.purpose != CHAT_PURPOSE
+    ]
+    asking = [agent.id for agent in registry.agents if agent.structured_outputs]
+    if not asking:
+        return errors
+    who = ("agent " if len(asking) == 1 else "agents ") + " and ".join(
+        map(repr, asking)
+    )
+    verb = "declares" if len(asking) == 1 else "declare"
+    reported: set[str] = set()
+    for dep, role in _chat_deployments(registry):
+        if dep.structured_outputs or dep.id in reported:
+            continue
+        reported.add(dep.id)
+        errors.append(
+            f"{MODELS}: deployments[{index[dep.id]}].structured_outputs: required "
+            f"because {who} {verb} structured_outputs and this deployment "
+            f"is {role} (deployment {dep.id!r})"
+        )
+    return errors
+
+
 def check_tenant_limits(registry: Registry) -> list[str]:
     """The tenants' rate limits must fit in every route's candidates.
 
@@ -639,6 +687,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_embedding_route,
     check_replay,
     check_replay_dimensions,
+    check_structured_outputs,
     check_tenant_coverage,
     check_tenant_limits,
 )

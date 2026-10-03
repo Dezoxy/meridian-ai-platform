@@ -8,6 +8,7 @@ the call itself.
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import date
 from typing import Any, cast
 
@@ -16,6 +17,7 @@ from pydantic import TypeAdapter
 from servicesupport import synthetic_claims
 
 from meridian.platform.gateway.models import MAX_CONTENT_CHARS
+from meridian.platform.gateway.response_schema import response_schema_errors
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import (
     ChatResult,
@@ -25,9 +27,12 @@ from meridian.runtime.model_client import (
 )
 from meridian.workloads.claims_triage import assessment as assessment_module
 from meridian.workloads.claims_triage.assessment import (
+    ANSWER_FIELDS,
+    ANSWER_SCHEMA,
     ASSESSMENT_OUTPUT_TOKENS,
     MAX_USER_MESSAGE_CHARS,
     PROMPT_VERSION,
+    VERDICTS,
     Assessed,
     _prompt_version,
     assess,
@@ -94,6 +99,7 @@ class StubModel:
         self.result = result
         self.calls: list[tuple[list[dict[str, str]], int | None]] = []
         self.data_classes: list[str | None] = []
+        self.schemas: list[Mapping[str, Any] | None] = []
 
     def chat(
         self,
@@ -101,9 +107,11 @@ class StubModel:
         *,
         max_output_tokens: int | None = None,
         data_class: str | None = None,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> ChatResult:
         self.calls.append((messages, max_output_tokens))
         self.data_classes.append(data_class)
+        self.schemas.append(response_schema)
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -676,6 +684,45 @@ def test_the_call_names_the_personal_data_class() -> None:
     assert stub.data_classes == ["personal"]
 
 
+def test_the_call_asks_for_the_answer_by_schema() -> None:
+    stub = StubModel(chat_result(answer("none")))
+
+    assess(as_client(stub), make_claim(), "motor", "2026.1", CANDIDATES)
+
+    assert stub.schemas == [ANSWER_SCHEMA]
+
+
+def test_the_answer_schema_describes_the_three_fields_and_the_verdicts() -> None:
+    assert ANSWER_SCHEMA["type"] == "object"
+    assert set(ANSWER_SCHEMA["properties"]) == ANSWER_FIELDS
+    assert set(ANSWER_SCHEMA["required"]) == ANSWER_FIELDS
+    assert ANSWER_SCHEMA["properties"]["verdict"]["enum"] == [
+        "applies",
+        "none",
+        "unsure",
+    ]
+    assert set(ANSWER_SCHEMA["properties"]["verdict"]["enum"]) == VERDICTS
+    assert ANSWER_SCHEMA["properties"]["clause"] == {"type": ["string", "null"]}
+    assert ANSWER_SCHEMA["properties"]["rationale"] == {"type": "string"}
+    assert ANSWER_SCHEMA["additionalProperties"] is False
+
+
+def test_the_answer_schema_is_inside_the_subset_the_gateway_accepts() -> None:
+    # Outside it the gateway answers 422 and every triage run fails.
+    assert response_schema_errors(ANSWER_SCHEMA) == []
+
+
+def test_an_answer_the_schema_would_not_allow_is_still_not_the_format() -> None:
+    # The schema makes the shape likely; the reading checks it all the same.
+    stray = json.dumps(
+        {"verdict": "none", "clause": None, "rationale": "x", "extra": 1}
+    )
+
+    result = read_answer(stray, "stop", CANDIDATES)
+
+    assert result == (Assessment("unavailable"), None, "not-the-format")
+
+
 def test_a_filtered_call_is_unavailable_with_no_drafter_and_logs_one_word(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -792,6 +839,18 @@ def test_the_prompt_version_changes_with_the_system_message(
     before = _prompt_version()
 
     monkeypatch.setattr(assessment_module, "SYSTEM_MESSAGE", "Another text.")
+
+    assert _prompt_version() != before
+
+
+def test_the_prompt_version_changes_with_the_answer_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = _prompt_version()
+
+    monkeypatch.setattr(
+        assessment_module, "ANSWER_SCHEMA", {**ANSWER_SCHEMA, "required": []}
+    )
 
     assert _prompt_version() != before
 

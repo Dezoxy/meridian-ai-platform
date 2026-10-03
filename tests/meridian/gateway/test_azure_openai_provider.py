@@ -477,6 +477,133 @@ def test_a_completion_the_content_filter_withheld_is_filtered(
     assert (error.kind, error.status_code) == ("filtered", None)
 
 
+# ── a response schema (S051) ─────────────────────────────────────────────────
+SCHEMA = {
+    "type": "object",
+    "properties": {"verdict": {"type": "string", "enum": ["applies", "none"]}},
+    "required": ["verdict"],
+    "additionalProperties": False,
+}
+SCHEMA_REQUEST = REQUEST.model_copy(update={"response_schema": SCHEMA})
+
+
+def test_a_schema_request_sends_exactly_the_strict_json_schema_response_format(
+    deployment: Deployment,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(answer(), requests)
+
+    provider.chat(deployment, SCHEMA_REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
+
+    body = json.loads(requests[0].content)
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "strict": True, "schema": SCHEMA},
+    }
+    assert body["messages"][-1] == {"role": "user", "content": "Draft it."}
+    assert body["max_tokens"] == 321
+
+
+def test_a_request_without_a_schema_sends_no_response_format_at_all(
+    deployment: Deployment,
+) -> None:
+    requests: list[httpx.Request] = []
+    provider = make_provider(answer(), requests)
+
+    provider.chat(deployment, REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS)
+
+    assert "response_format" not in json.loads(requests[0].content)
+
+
+def refusal_choice(refusal: object, **changes: Any) -> dict[str, Any]:
+    """What structured outputs answer when the model declines: no content."""
+    message = {"role": "assistant", "content": None, "refusal": refusal}
+    return {"index": 0, "finish_reason": "stop", "message": message} | changes
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        pytest.param(refusal_choice(CANARY), id="refusal-with-no-content"),
+        pytest.param(refusal_choice(""), id="empty-refusal"),
+        pytest.param(
+            refusal_choice(CANARY, finish_reason="length"), id="refusal-at-length"
+        ),
+        pytest.param(
+            refusal_choice(
+                CANARY,
+                message={
+                    "role": "assistant",
+                    "content": '{"verdict":"none"}',
+                    "refusal": CANARY,
+                },
+            ),
+            id="refusal-beside-content",
+        ),
+    ],
+)
+def test_a_models_refusal_is_filtered_with_no_status_and_none_of_its_text(
+    deployment: Deployment,
+    choice: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    provider = make_provider(answer(choices=[choice]))
+
+    with pytest.raises(ProviderError) as raised:
+        provider.chat(
+            deployment, SCHEMA_REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS
+        )
+
+    error = raised.value
+    assert (error.kind, error.status_code, error.sent) == ("filtered", None, True)
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    assert CANARY not in str(error) + repr(error) + repr(error.args)
+    assert CANARY not in caplog.text + " ".join(r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("refusal", [5, True, ["no"], {"text": "no"}, 1.5])
+def test_a_refusal_that_is_not_a_string_is_a_bad_response(
+    deployment: Deployment, refusal: object
+) -> None:
+    provider = make_provider(answer(choices=[refusal_choice(refusal)]))
+
+    error = error_of(provider, deployment)
+
+    assert (error.kind, error.status_code) == ("bad-response", None)
+
+
+def test_a_null_refusal_with_content_is_an_ordinary_answer(
+    deployment: Deployment,
+) -> None:
+    message = {"role": "assistant", "content": '{"verdict":"none"}', "refusal": None}
+    provider = make_provider(answer(choices=[refusal_choice(None, message=message)]))
+
+    reply = provider.chat(
+        deployment, SCHEMA_REQUEST, timeout_seconds=PROVIDER_TIMEOUT_SECONDS
+    )
+
+    assert reply.text == '{"verdict":"none"}'
+
+
+def test_a_null_refusal_with_no_content_is_still_a_bad_response(
+    deployment: Deployment,
+) -> None:
+    provider = make_provider(answer(choices=[refusal_choice(None)]))
+
+    assert error_of(provider, deployment).kind == "bad-response"
+
+
+def test_the_content_filter_finish_reason_wins_over_a_refusal(
+    deployment: Deployment,
+) -> None:
+    choice = refusal_choice(5, finish_reason="content_filter")
+    provider = make_provider(answer(choices=[choice]))
+
+    assert error_of(provider, deployment).kind == "filtered"
+
+
 def bad_choice(**changes: Any) -> dict[str, Any]:
     choice = completion()["choices"][0]
     return choice | changes

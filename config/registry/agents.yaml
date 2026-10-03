@@ -3,6 +3,7 @@
 agents:
   - id: claims-triage
     description: Triages a new claim and prepares it for an adjuster.
+    structured_outputs: true
     tools:
       - policy_lookup
       - claim_history

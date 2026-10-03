@@ -3,10 +3,11 @@
 A tenant has a token budget per UTC day and a cost quota per UTC month. Before
 a provider call the gateway reserves the most the call can use: the estimated
 input plus the largest reply it allows (none for an embedding, whose estimate
-is its input alone). The reservation is written to PostgreSQL before the call
-because a process that crashes mid-call must not leave a call that was sent and
-never counted (T-14), and because the check and the increment must be one
-statement, or two concurrent calls both pass the same check (QA-12). The
+is its input alone; a response schema counts as input, because the provider
+bills it as prompt tokens). The reservation is written to PostgreSQL before
+the call because a process that crashes mid-call must not leave a call that was
+sent and never counted (T-14), and because the check and the increment must be
+one statement, or two concurrent calls both pass the same check (QA-12). The
 reservation is then closed in one of three ways:
 
 - ``settle``: the provider answered; the charge is its own count of tokens and
@@ -24,12 +25,13 @@ tables hold identifiers and numbers, never content (T-03, T-25). A database
 error propagates: a call that cannot be reserved is not made.
 """
 
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_CEILING, Decimal
-from typing import Literal
+from typing import Any, Literal
 
 import psycopg
 
@@ -124,12 +126,27 @@ def _utf8_tokens(text: str) -> int:
     return -(-len(text.encode("utf-8")) // BYTES_PER_TOKEN)
 
 
+def _schema_tokens(schema: dict[str, Any] | None) -> int:
+    """The tokens of a response schema, which the provider bills as prompt:
+    its compact JSON, keys sorted, counted as a message's text is (S051)."""
+    if schema is None:
+        return 0
+    return _utf8_tokens(
+        json.dumps(schema, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    )
+
+
 def estimate_input_tokens(request: ChatRequest) -> int:
     """An estimate of the input tokens: per message the UTF-8 bytes over three,
-    rounded up, plus the message overhead; plus the reply's priming."""
-    return REPLY_OVERHEAD_TOKENS + sum(
-        _utf8_tokens(message.content) + MESSAGE_OVERHEAD_TOKENS
-        for message in request.messages
+    rounded up, plus the message overhead; plus the reply's priming; plus the
+    response schema's compact JSON when the request carries one (S051)."""
+    return (
+        REPLY_OVERHEAD_TOKENS
+        + sum(
+            _utf8_tokens(message.content) + MESSAGE_OVERHEAD_TOKENS
+            for message in request.messages
+        )
+        + _schema_tokens(request.response_schema)
     )
 
 
