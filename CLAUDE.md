@@ -92,8 +92,9 @@ A change that violates one is wrong even if it works.
   then `cp CLAUDE.md AGENTS.md`. `make docs` enforces it.
 - **Merge discipline** (`.claude/rules/ecc/common/merge-discipline.md`):
   never stack pull requests; after a merge, verify the content landed. The
-  owner merges; the plan's Part A says which pull requests a session may
-  set to auto-merge (documentation or tests only, nothing to accept).
+  session merges each pull request once its required checks pass, and asks
+  the owner first about any decision that shapes what comes later (the
+  plan's Part A).
 - Prose in Markdown wraps at 80 columns; tables, fences and single long
   tokens are exempt. Do not use a Markdown formatter to enforce it.
 
