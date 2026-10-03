@@ -1,0 +1,35 @@
+# What Grafana's sidecars may read: ConfigMaps in observability, nothing else.
+# The chart's own Role always includes Secrets whenever a sidecar is on (the
+# Prometheus service account's token, the Helm release Secrets), so the values
+# file sets grafana.rbac.create: false and this Role takes its place. The
+# sidecars load dashboards (up.sh's ConfigMaps labelled grafana_dashboard) and
+# the chart's datasource ConfigMap, all in observability. Applied by up.sh
+# before kube-prometheus-stack; the ServiceAccount comes from the chart, and
+# the binding may name it before it exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-sidecar-reader
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: meridian
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grafana-sidecar-reader
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: meridian
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grafana-sidecar-reader
+subjects:
+  - kind: ServiceAccount
+    name: kube-prometheus-stack-grafana
+    namespace: observability

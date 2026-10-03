@@ -7,8 +7,9 @@ policy, claims and knowledge tool servers), seeds the policy store and ingests
 the policy wordings; `make demo` runs a claim through them. `make down`
 removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
-servers). Nothing here is deployed anywhere but your laptop; the Azure side is
-S007 onward. The services run in replay mode: no model is called, the model's
+servers, S043 for the cost dashboard). Nothing here is deployed anywhere but
+your laptop; the Azure side is S007 onward. The services run in replay mode:
+no model is called, the model's
 text is canned and simulated, and so are the embeddings. A triage that asks
 the model its one question therefore gets no usable answer and goes to an
 adjuster; the rules decide every other claim.
@@ -27,13 +28,26 @@ adjuster; the rules decide every other claim.
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
 to change one. The values that override chart defaults are in
-[`values/`](values/), the Gateway and namespaces in [`manifests/`](manifests/).
+[`values/`](values/); the Gateway, the namespaces and Grafana's Role are in
+[`manifests/`](manifests/).
 
 How telemetry flows: an application sends OTLP to
 `otel-collector.observability:4317` (gRPC) or `:4318` (HTTP). The collector
 forwards traces to Tempo, metrics to Prometheus's OTLP receiver and logs to
 Loki's OTLP endpoint. Grafana has three datasources with fixed uids:
 `prometheus`, `tempo` and `loki`. Retention is 24 hours everywhere.
+
+Grafana reads ConfigMaps in its own namespace and nothing else (S043). The
+chart's defaults let its dashboard sidecar watch every namespace, which gave
+Grafana's service account a ClusterRole to read every ConfigMap and Secret
+in the cluster, the database roles' passwords among them, and the chart's
+namespaced Role would still add Secrets. So the chart creates no RBAC for
+Grafana; [`manifests/grafana-rbac.yaml`](manifests/grafana-rbac.yaml) gives
+it a Role in `observability` that reads ConfigMaps only, and both sidecars
+watch that namespace only (threat model T-68). `make smoke` checks it.
+
+`make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
+ConfigMap each in `observability` (below).
 
 The database is a CloudNativePG `Cluster` named `platform-db` with one
 instance and 2 Gi of storage. CloudNativePG generates the `app` credentials
@@ -118,7 +132,7 @@ node image, Kubernetes components and the platform).
 
 | Command | What it does |
 |---|---|
-| `make up` | Create the cluster if absent and install every release. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
+| `make up` | Create the cluster if absent, install every release and provision the Grafana dashboards. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/`, ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo. Prints PASS only when the trace has spans from the five services that triage a claim. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
@@ -126,7 +140,7 @@ node image, Kubernetes components and the platform).
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks four things:
+`make smoke` checks five things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -146,6 +160,17 @@ node image, Kubernetes components and the platform).
    through the collector. The script then reads each back through Grafana's
    datasource proxy from Tempo, Loki and Prometheus, waiting up to 120 seconds
    each. It prints the trace ID and how to find the data in Grafana Explore.
+5. **Cost panel.** Three lines. The dashboard: Grafana serves
+   `meridian-gateway-cost` as provisioned, with the same queries as the
+   file, and Prometheus runs each of them without an error. The gateway's
+   series: when the gateway is available and its ledger holds an attempt
+   settled since its process started, Prometheus must hold its tokens,
+   cost and calls series with a sample exported after the first of those
+   attempts, so that the series of a process that has just been replaced
+   do not count. Before `make deploy`, and while the gateway has settled
+   nothing since it started, this line prints SKIP; `make demo` sends a
+   claim. Grafana's rights: its service account may not read Secrets in
+   `meridian` or `observability`.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -267,6 +292,36 @@ up the policy and its claim history, then searches the wording, and each
 search embeds its query through the gateway even when the rules decide and
 the model is never asked. `make grafana` shows the trace in Explore with the
 TraceQL query `{ trace:id = "<id>" }`.
+
+## The cost dashboard
+
+`make grafana`, then Dashboards, **Meridian: Model Gateway tokens and cost**
+(S043). It shows the gateway's tokens, cost and calls for the selected time
+range: three totals, tokens and cost broken down by tenant, agent, provider
+or model (a selector at the top), a table by all four, and tokens per five
+minutes by model. The file is
+[`dashboards/gateway-cost.json`](dashboards/gateway-cost.json); edit it
+there and rerun `make up`, because Grafana does not save changes made in
+its editor to a provisioned dashboard. `make up` also removes the
+ConfigMap of a dashboard whose file is gone.
+
+What the numbers are, which the dashboard also says on its first panel:
+
+- **Answered attempts only.** Tokens and cost count what a provider
+  answered, with the provider's own token counts and the registry's prices.
+  The ledger, table `gateway.usage`, is the record of what a tenant was
+  charged, including a reservation kept after a failed attempt.
+- **Cost reads 0 on kind.** The simulated `replay` deployments are priced at
+  zero in the registry; cost is above zero only on a route to a priced
+  deployment.
+- **No `increase()` or `rate()`.** A gateway process exports its counters
+  once a minute over OTLP, and its first export already carries what it
+  counted, so `increase()` reported 0 for 17,319 ingestion tokens on this
+  cluster. Each panel subtracts a series' value at the start of the range
+  (zero for a process that started inside it) from its last value. Measured
+  on 2026-10-03 over 12 hours, every panel and breakdown equalled the
+  ledger: 18,512 tokens, 37 calls, EUR 0.
+- Choose a range of at least two minutes; a shorter one can hold no export.
 
 ## If `make up` was interrupted
 

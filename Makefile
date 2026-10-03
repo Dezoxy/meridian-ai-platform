@@ -148,7 +148,7 @@ synthetic:
 # infra/kind/README.md says what these create. The cluster's credentials stay in
 # infra/kind/kubeconfig (gitignored); ~/.kube/config is never touched.
 
-## up              create the kind cluster and install the local platform (needs Docker, kind, kubectl, helm; first run pulls images)
+## up              create the kind cluster, install the local platform and provision the Grafana dashboards (needs Docker, kind, kubectl, helm; first run pulls images)
 up:
 	infra/kind/up.sh
 
@@ -160,7 +160,7 @@ deploy:
 demo: deploy
 	infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources and, once deployed, one call per tool server through the runtime's client
+## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client and the gateway's series
 smoke:
 	infra/kind/smoke.sh
 

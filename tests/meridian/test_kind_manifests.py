@@ -6,10 +6,12 @@ to a constant or an import in ``src/``, so a rename in the code fails here and
 not on the owner's laptop (S041).
 """
 
+import base64
 import importlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,6 +19,7 @@ from urllib.parse import urlsplit
 import pytest
 import typer.main
 import yaml
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Metric, Sum
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.cli import app as meridian_cli
@@ -24,7 +27,9 @@ from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
+from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS, make_meter_provider
 from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
+from meridian.platform.gateway.meters import GatewayMeters
 from meridian.platform.gateway.ratelimit import (
     TOKEN_WINDOW_SECONDS as GATEWAY_TOKEN_WINDOW_SECONDS,
 )
@@ -1039,13 +1044,20 @@ def test_smoke_runs_the_tool_check_after_the_database_check() -> None:
 
 def test_the_tool_check_skips_only_when_no_meridian_deployment_exists() -> None:
     body = function_body(SMOKE_SH, "check_tools")
-    found = re.search(r"get deployment.*?--ignore-not-found", body, re.DOTALL)
+    # The lookup is deployed_services, which the cost check shares.
+    found = re.search(
+        r"get deployment.*?--ignore-not-found",
+        function_body(SMOKE_SH, "deployed_services"),
+        re.DOTALL,
+    )
     assert found, "no lookup of the Deployments"
     lookup = found.group(0)
     skips = re.findall(r"^\s*skip .*$", body, re.MULTILINE)
 
     # Any Meridian Deployment makes the probe required: a missing or renamed
     # agent-runtime fails the probe's exec instead of skipping the check.
+    assert "$(deployed_services)" in body
+    assert "get deployment" not in body
     assert "-l app.kubernetes.io/part-of=meridian" in lookup
     assert "agent-runtime" not in lookup
     assert "--ignore-not-found" in lookup
@@ -1077,3 +1089,1130 @@ def test_dockerignore_keeps_secret_files_out_even_inside_allowed_folders() -> No
 
     for pattern in ("**/.env*", "**/*.pem", "**/*.key"):
         assert lines.index(pattern) > last_allowed, pattern
+
+
+# ── The gateway's cost dashboard (S043) ──────────────────────────────────────
+DASHBOARD_FILE = KIND_DIR / "dashboards" / "gateway-cost.json"
+VALUES_FILE = KIND_DIR / "values" / "kube-prometheus-stack.yaml"
+# Pinned, not derived: a renamed series must fail here and not show an empty panel.
+GATEWAY_SERIES = {
+    "meridian_gateway_tokens_total",
+    "meridian_gateway_cost_EUR_total",
+    "meridian_gateway_calls_total",
+}
+# The id the chart gives its Prometheus datasource (the values file says so).
+PROMETHEUS_UID = "prometheus"
+# The attribute keys of the gateway's metrics with each "." as "_", the way
+# Prometheus names a label that came in over OTLP; "job" comes from the collector.
+METRIC_LABELS = {key.replace(".", "_") for key in METRIC_ATTRIBUTE_KEYS} | {
+    "job",
+    "__name__",
+}
+DIMENSIONS = {
+    "tenant": "meridian_tenant",
+    "agent": "meridian_agent",
+    "provider": "meridian_provider",
+    "model": "gen_ai_request_model",
+}
+# The epoch second of the first settled attempt, as the stub ledger answers it.
+FIRST_SETTLED = "1790000000"
+requires_jq = pytest.mark.skipif(
+    shutil.which("jq") is None, reason="jq is not installed"
+)
+
+
+def dashboard() -> dict:
+    return json.loads(DASHBOARD_FILE.read_text(encoding="utf-8"))
+
+
+def dashboard_panels() -> list[dict]:
+    return dashboard()["panels"]
+
+
+def dashboard_targets() -> list[dict]:
+    return [t for panel in dashboard_panels() for t in panel.get("targets", [])]
+
+
+def panel_titled(title: str) -> dict:
+    (found,) = [p for p in dashboard_panels() if p["title"] == title]
+    return found
+
+
+def selectors_of(expr: str) -> list[tuple[str, str]]:
+    """``(metric name, matchers)`` of every selector in a PromQL expression."""
+    return re.findall(r"\b([A-Za-z_:][A-Za-z0-9_:]*)\{([^}]*)\}", expr)
+
+
+def labels_used(expr: str) -> set[str]:
+    """The labels a ``by (...)`` clause or a selector of ``expr`` names."""
+    labels: set[str] = set()
+    for clause in re.findall(r"\bby \(([^)]*)\)", expr):
+        labels |= {label.strip() for label in clause.split(",") if label.strip()}
+    for _, matchers in selectors_of(expr):
+        labels |= set(re.findall(r"(\w+)\s*(?:=~|!~|!=|=)", matchers))
+    return labels
+
+
+def variable_named(name: str) -> dict:
+    (found,) = [v for v in dashboard()["templating"]["list"] if v["name"] == name]
+    return found
+
+
+def test_the_dashboard_is_json_with_the_uid_smoke_looks_for_and_no_id() -> None:
+    (uid,) = re.findall(r"^readonly DASHBOARD_UID=(\S+)$", SMOKE_SH, re.MULTILINE)
+
+    assert dashboard()["uid"] == uid == "meridian-gateway-cost"
+    assert "id" not in dashboard()
+    assert "__inputs" not in dashboard()
+
+
+def test_every_target_names_only_the_three_gateway_series_of_the_gateway_job() -> None:
+    targets = dashboard_targets()
+    seen: set[str] = set()
+
+    assert len(targets) >= 8
+    for target in targets:
+        expr = target["expr"]
+        selectors = selectors_of(expr)
+        assert selectors, expr
+        for name, matchers in selectors:
+            assert name in GATEWAY_SERIES, expr
+            assert 'job="model-gateway"' in matchers, expr
+            seen.add(name)
+        assert 'job="model-gateway"' in expr
+    assert seen == GATEWAY_SERIES
+
+
+def test_no_target_uses_increase_or_rate_or_a_range_that_is_not_in_seconds() -> None:
+    # A gateway process exports once a minute and its first export already holds
+    # what it counted: increase() and rate() read 0 for it.
+    for target in dashboard_targets():
+        expr = target["expr"]
+        assert not re.search(r"\b(increase|rate|irate)\(", expr), expr
+        assert not re.search(r"\$\{?__range(?!_s)", expr), expr
+        assert not re.search(r"\$__rate_interval|\$__interval", expr), expr
+        # The form that matched the ledger: the last value minus the value at
+        # the start of the window, or the last value alone for a new process.
+        assert expr.count("last_over_time(") == 2, expr
+        assert " offset " in expr and " or " in expr, expr
+
+
+def test_every_label_a_target_groups_or_selects_by_is_one_the_gateway_exports() -> None:
+    for target in dashboard_targets():
+        assert labels_used(target["expr"]) - {"$dimension"} <= METRIC_LABELS, target
+    for option in variable_named("dimension")["options"]:
+        assert option["value"] in METRIC_LABELS
+    assert any("$dimension" in t["expr"] for t in dashboard_targets())
+
+
+def test_every_panel_and_target_reads_the_prometheus_datasource_by_uid() -> None:
+    datasource = {"type": "prometheus", "uid": PROMETHEUS_UID}
+    panels = dashboard_panels()
+
+    # The chart gives its Prometheus datasource the uid "prometheus"; the values
+    # file must not set another one for the sidecar's datasources.
+    datasources = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))["grafana"][
+        "sidecar"
+    ]["datasources"]
+    assert datasources.get("uid", PROMETHEUS_UID) == PROMETHEUS_UID
+    for panel in panels:
+        if panel["type"] != "text":
+            assert panel["datasource"] == datasource, panel["title"]
+        for target in panel.get("targets", []):
+            assert target["datasource"] == datasource, panel["title"]
+    assert [p["type"] for p in panels].count("text") == 1
+
+
+def test_the_dimension_variable_offers_each_dimension_and_the_table_shows_them() -> (
+    None
+):
+    variable = variable_named("dimension")
+    table = panel_titled("By tenant, agent, provider and model")
+
+    assert variable["type"] == "custom"
+    assert not variable.get("multi")
+    assert {o["text"]: o["value"] for o in variable["options"]} == DIMENSIONS
+    assert variable["current"] == {"text": "tenant", "value": "meridian_tenant"}
+    assert len(table["targets"]) == 3
+    for target in table["targets"]:
+        (clause,) = re.findall(r"\bby \(([^)]*)\)", target["expr"])
+        assert [c.strip() for c in clause.split(",")] == list(DIMENSIONS.values())
+        assert target["format"] == "table"
+        assert target["instant"] is True
+
+
+def test_the_dashboard_has_the_panels_the_plan_asks_for_in_order() -> None:
+    panels = dashboard_panels()
+
+    assert [p["title"] for p in panels] == [
+        "What these numbers are",
+        "Tokens",
+        "Cost",
+        "Calls by outcome",
+        "Tokens by ${dimension:text}",
+        "Cost by ${dimension:text}",
+        "By tenant, agent, provider and model",
+        "Tokens per 5 minutes, by model",
+    ]
+    assert [p["type"] for p in panels] == [
+        "text",
+        "stat",
+        "stat",
+        "stat",
+        "bargauge",
+        "bargauge",
+        "table",
+        "timeseries",
+    ]
+    for panel in panels[1:7]:
+        assert "selected time range" in panel["description"], panel["title"]
+    for title in ("Cost", "Cost by ${dimension:text}"):
+        assert panel_titled(title)["fieldConfig"]["defaults"]["unit"] == "currencyEUR"
+    series = panel_titled("Tokens per 5 minutes, by model")
+    assert "[5m]" in series["targets"][0]["expr"]
+    assert series["interval"] == "1m"
+
+
+def test_up_applies_labelled_dashboard_configmaps_after_prometheus_is_ready() -> None:
+    lines = UP_SH.splitlines()
+    called = lines.index("apply_dashboards")
+    (installed,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("install_release kube-prometheus-stack")
+    ]
+    (waited,) = [
+        i for i, line in enumerate(lines) if "prometheus/kube-prometheus-stack" in line
+    ]
+    body = function_body(UP_SH, "apply_dashboards")
+
+    assert installed < waited < called
+    assert "--force-conflicts" in body
+    assert "--dry-run=client" in body
+    assert '"grafana_dashboard": "1"' in body
+
+
+def run_apply_dashboards(
+    tmp_path: Path, kind_dir: Path, listed: str = ""
+) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+    """``apply_dashboards`` from up.sh in bash with ``kind_dir`` as ``KIND_DIR``
+    and a ``kctl`` that records its arguments and the manifest it is given.
+    ``listed`` is what the cluster answers when asked for the labelled
+    dashboard ConfigMaps (``-o name`` lines)."""
+    applied, calls = tmp_path / "applied.json", tmp_path / "calls"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"KIND_DIR={kind_dir}",
+            'log() { echo "LOG $*"; }',
+            'die() { echo "DIE $*"; exit 1; }',
+            "kctl() {",
+            f'  echo "$*" >>"{calls}"',
+            '  case "$*" in',
+            '    *" create configmap "*) printf \'%s\' "${MANIFEST}" ;;',
+            f'    *" apply "*) cat >"{applied}" ;;',
+            '    *" get configmap "*) printf \'%s\' "${LISTED}" ;;',
+            "  esac",
+            "}",
+            function_definition(UP_SH, "apply_dashboards"),
+            "apply_dashboards",
+        ]
+    )
+    manifest = json.dumps(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "meridian-dashboard-gateway-cost",
+                "namespace": "observability",
+                "creationTimestamp": None,
+            },
+            "data": {},
+        }
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "MANIFEST": manifest, "LISTED": listed},
+        check=False,
+    )
+    text = applied.read_text() if applied.exists() else ""
+    return done, calls.read_text().splitlines() if calls.exists() else [], text
+
+
+@requires_jq
+def test_apply_dashboards_labels_each_dashboard_for_grafanas_sidecar(
+    tmp_path: Path,
+) -> None:
+    done, calls, applied = run_apply_dashboards(tmp_path, KIND_DIR)
+    path = DASHBOARD_FILE
+
+    assert done.returncode == 0, done.stderr
+    assert len([line for line in done.stdout.splitlines() if "LOG" in line]) == 1
+    assert (
+        f"-n observability create configmap meridian-dashboard-gateway-cost "
+        f"--from-file={path.name}={path} --dry-run=client -o json"
+    ) in calls
+    assert "-n observability apply --server-side --force-conflicts -f -" in calls
+    labels = json.loads(applied)["metadata"]["labels"]
+    assert labels == {
+        "grafana_dashboard": "1",
+        "app.kubernetes.io/part-of": "meridian",
+    }
+    assert "creationTimestamp" not in json.loads(applied)["metadata"]
+
+
+def test_apply_dashboards_fails_when_the_folder_holds_no_dashboard(
+    tmp_path: Path,
+) -> None:
+    done, calls, _ = run_apply_dashboards(tmp_path, tmp_path)
+
+    assert done.returncode == 1
+    assert "DIE no dashboard" in done.stdout
+    assert calls == []
+
+
+@requires_jq
+def test_apply_dashboards_stops_on_a_file_that_is_not_json_before_applying_any(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "dashboards"
+    folder.mkdir()
+    (folder / "good.json").write_text('{"title": "ok"}', encoding="utf-8")
+    (folder / "broken.json").write_text('{"title": ', encoding="utf-8")
+
+    done, calls, applied = run_apply_dashboards(tmp_path, tmp_path)
+
+    assert done.returncode == 1
+    assert "DIE" in done.stdout and "broken.json" in done.stdout
+    assert calls == []  # nothing was created, applied or deleted
+    assert applied == ""
+
+
+@requires_jq
+def test_apply_dashboards_deletes_a_stale_dashboard_and_keeps_a_current_one(
+    tmp_path: Path,
+) -> None:
+    listed = (
+        "configmap/meridian-dashboard-gateway-cost\n"
+        "configmap/meridian-dashboard-renamed-away\n"
+    )
+
+    done, calls, _ = run_apply_dashboards(tmp_path, KIND_DIR, listed)
+
+    assert done.returncode == 0, done.stderr
+    # Only Meridian's own, labelled ConfigMaps are listed: the chart's dashboards
+    # carry no part-of label, so the selector cannot reach them.
+    assert (
+        "-n observability get configmap "
+        "-l grafana_dashboard=1,app.kubernetes.io/part-of=meridian -o name"
+    ) in calls
+    deletions = [line for line in calls if " delete " in line]
+    assert deletions == [
+        "-n observability delete configmap meridian-dashboard-renamed-away"
+    ]
+    logs = [line for line in done.stdout.splitlines() if line.startswith("LOG")]
+    assert len([line for line in logs if "renamed-away" in line]) == 1
+    # Pruning comes after every apply, so a run that fails to apply deletes nothing.
+    assert calls.index(deletions[0]) > max(
+        i for i, line in enumerate(calls) if " apply " in line
+    )
+
+
+@requires_jq
+def test_apply_dashboards_deletes_nothing_when_nothing_is_stale(
+    tmp_path: Path,
+) -> None:
+    done, calls, _ = run_apply_dashboards(
+        tmp_path, KIND_DIR, "configmap/meridian-dashboard-gateway-cost\n"
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert not [line for line in calls if " delete " in line]
+
+
+def test_the_chart_creates_no_grafana_role_and_both_sidecars_read_one_namespace() -> (
+    None
+):
+    grafana = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))["grafana"]
+    sidecar = grafana["sidecar"]
+
+    # The chart's own Role always includes Secrets; ours (manifests/) does not.
+    assert grafana["rbac"]["create"] is False
+    assert "namespaced" not in grafana["rbac"]
+    for name in ("dashboards", "datasources"):
+        assert sidecar[name]["searchNamespace"] == "observability", name
+        assert sidecar[name]["resource"] == "configmap", name
+    # What was there before stays.
+    assert sidecar["datasources"]["alertmanager"] == {"enabled": False}
+    assert "resources" in sidecar
+
+
+# The ServiceAccount the chart makes for Grafana: "<release>-grafana".
+GRAFANA_SERVICE_ACCOUNT = "kube-prometheus-stack-grafana"
+GRAFANA_RBAC_FILE = KIND_DIR / "manifests" / "grafana-rbac.yaml"
+
+
+def test_grafanas_role_reads_configmaps_in_observability_and_nothing_else() -> None:
+    documents = load_documents(GRAFANA_RBAC_FILE)
+    (role,) = [d for d in documents if d["kind"] == "Role"]
+    (binding,) = [d for d in documents if d["kind"] == "RoleBinding"]
+
+    assert len(documents) == 2
+    assert role["metadata"]["name"] == binding["metadata"]["name"]
+    assert role["metadata"]["name"] == "grafana-sidecar-reader"
+    # Exactly ConfigMaps, read-only: a Secret, a write or a wildcard fails here.
+    (rule,) = role["rules"]
+    assert rule["apiGroups"] == [""]
+    assert rule["resources"] == ["configmaps"]
+    assert sorted(rule["verbs"]) == ["get", "list", "watch"]
+    assert binding["roleRef"] == {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": role["metadata"]["name"],
+    }
+    assert binding["subjects"] == [
+        {
+            "kind": "ServiceAccount",
+            "name": GRAFANA_SERVICE_ACCOUNT,
+            "namespace": "observability",
+        }
+    ]
+    for document in documents:
+        assert document["metadata"]["namespace"] == "observability"
+        assert document["metadata"]["labels"] == {
+            "app.kubernetes.io/part-of": "meridian"
+        }
+
+
+def test_up_applies_grafanas_role_before_the_prometheus_stack_release() -> None:
+    lines = UP_SH.splitlines()
+    secret = lines.index("ensure_grafana_secret")
+    (applied,) = [
+        i
+        for i, line in enumerate(lines)
+        if "manifests/grafana-rbac.yaml" in line and "kctl apply" in line
+    ]
+    (installed,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("install_release kube-prometheus-stack")
+    ]
+
+    assert secret < applied < installed
+    assert "--server-side --force-conflicts" in lines[applied]
+
+
+def test_smoke_runs_the_cost_panel_check_after_the_telemetry_check() -> None:
+    lines = SMOKE_SH.splitlines()
+    calls = [line for line in lines[lines.index("check_edge") :] if line]
+
+    assert calls[:5] == [
+        "check_edge",
+        "check_database",
+        "check_tools",
+        "check_telemetry",
+        "check_cost_panel",
+    ]
+
+
+def test_smoke_opens_grafana_once_for_the_telemetry_and_the_cost_checks() -> None:
+    opener = function_body(SMOKE_SH, "open_grafana")
+    telemetry = function_body(SMOKE_SH, "check_telemetry")
+
+    assert "open_grafana" in telemetry
+    assert "open_grafana" in function_body(SMOKE_SH, "check_cost_panel")
+    assert "port-forward" in opener and "port-forward" not in telemetry
+    assert "grafana-admin" in opener and "grafana-admin" not in telemetry
+    assert 'grafana_url="http://127.0.0.1:${port}"' in opener
+    assert "${grafana_url}" in telemetry
+    # The password is read once, goes to curl on stdin and is never an argument.
+    assert "base64 -d" in opener
+    assert not re.search(r"(kctl|kubectl|curl)[^\n]*\$\{?password", opener)
+    assert not re.search(r"\b(echo|printf)\b[^\n]*\$\{?password", opener)
+    # A `bash -x` run must not trace the password, here or where it is used.
+    for body in (opener, function_body(SMOKE_SH, "gcurl")):
+        assert body.splitlines()[0].startswith("  { set +x; } 2>/dev/null")
+
+
+def test_the_cleanup_trap_never_returns_a_failure_by_accident() -> None:
+    last = function_body(SMOKE_SH, "cleanup").strip().splitlines()[-1]
+
+    assert last.strip() == 'if [[ -n "${pf_log:-}" ]]; then rm -f "${pf_log}"; fi'
+
+
+def test_the_gateways_start_time_is_read_from_its_container_by_name() -> None:
+    body = function_body(SMOKE_SH, "check_cost_series")
+
+    assert 'containerStatuses[?(@.name=="model-gateway")]' in body
+    assert "containerStatuses[0]" not in body
+
+
+def one_line_function(script: str, name: str) -> str:
+    match = re.search(rf"^{name}\(\) .*$", script, re.MULTILINE)
+    assert match, f"no one-line function {name}"
+    return match.group(0)
+
+
+PROMETHEUS_ERROR_ANSWER = json.dumps(
+    {"status": "error", "errorType": "bad_data", "error": "parse error: boom"}
+)
+DASHBOARD_TITLE = "Meridian: Model Gateway tokens and cost"
+
+
+def dashboard_query_count() -> int:
+    """How many queries the smoke check runs: one per target, and one per
+    option of the ``dimension`` variable for a target that names it."""
+    options = len(variable_named("dimension")["options"])
+    return sum(
+        options if "$dimension" in target["expr"] else 1
+        for target in dashboard_targets()
+    )
+
+
+def run_cost_panel(
+    tmp_path: Path,
+    *,
+    deployed: str = "deployment.apps/model-gateway",
+    available: str = "1",
+    started: str = "2026-10-02T08:00:00Z",
+    primary: str = "platform-db-1",
+    count: str = f"3|{FIRST_SETTLED}",
+    series: str = ", ".join(sorted(GATEWAY_SERIES)),
+    seen_in_prometheus: list[str] | None = None,
+    prometheus_status: str = "success",
+    served: dict | str | None = None,
+    bad_query: str = "",
+    poll_error: str = "",
+    can_i: tuple[str, str] = ("no", "no"),
+    grafana_opens: bool = True,
+    asked: list[str] | None = None,
+) -> tuple[list[str], str]:
+    """``check_cost_panel`` and the functions it calls, from smoke.sh in bash,
+    against stubs. ``kctl``: ``count`` is the ledger's one-line answer and
+    ``FAIL`` makes the query fail with a message on stderr; ``primary``
+    ``FAIL`` does the same for the pod lookup; ``can_i`` is what ``auth can-i``
+    prints for meridian and observability. ``poll``: an empty ``series`` is a
+    timeout and an empty string for ``served`` means no dashboard; both leave
+    ``poll_error``. ``gcurl`` answers every query with Prometheus's answer
+    (``seen_in_prometheus``, ``prometheus_status``), except a query that holds
+    ``bad_query``: that one gets an error. ``open_grafana`` is a stub too.
+
+    The output lines, and what ``kctl exec`` and the series poll were asked
+    (the latter after a ``POLL`` marker). The queries sent through ``gcurl``
+    are appended to ``asked``."""
+    calls, sent = tmp_path / "exec-calls", tmp_path / "gcurl-calls"
+    calls.touch()
+    sent.touch()
+    answer = {
+        "status": prometheus_status,
+        "data": {
+            "result": [
+                {"metric": {"__name__": name}} for name in seen_in_prometheus or []
+            ]
+        },
+    }
+    if served is None:
+        served = dashboard()
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "failures=0; skips=0",
+            f"KIND_DIR={KIND_DIR}",
+            'pass() { echo "PASS  $*"; }',
+            'fail() { echo "FAIL  $*"; }',
+            'skip() { echo "SKIP  $*"; }',
+            *re.findall(
+                r"^readonly (?:DASHBOARD_UID|DASHBOARD_FILE|COST_SERIES|POLL_TIMEOUT"
+                r"|GRAFANA_ACCOUNT)=.*$",
+                SMOKE_SH,
+                re.MULTILINE,
+            ),
+            one_line_function(SMOKE_SH, "clean_lines"),
+            "open_grafana() {",
+            "  grafana_url=http://127.0.0.1:1",
+            '  [[ "${GRAFANA_OPENS}" == yes ]]',
+            "}",
+            "poll() {",
+            '  case "$*" in',
+            '    *api/dashboards/uid/*) poll_result="${SERVED}" ;;',
+            f'    *) echo "POLL $*" >>"{calls}"; poll_result="${{SERIES}}" ;;',
+            "  esac",
+            '  [[ -n "${poll_result}" ]] || { poll_error="${POLL_ERROR}"; return 1; }',
+            '  poll_error=""',
+            "}",
+            "gcurl() {",
+            '  local arg query=""',
+            '  for arg in "$@"; do',
+            '    case "${arg}" in query=*) query="${arg#query=}" ;; esac',
+            "  done",
+            f'  echo "${{query}}" >>"{sent}"',
+            '  if [[ -n "${BAD_QUERY}" && "${query}" == *"${BAD_QUERY}"* ]]; then',
+            "    printf '%s' \"${ERROR_ANSWER}\"",
+            "  else",
+            "    printf '%s' \"${ANSWER}\"",
+            "  fi",
+            "}",
+            "kctl() {",
+            '  case "$*" in',
+            f'    *" exec "*) echo "$*" >>"{calls}"',
+            '      if [[ "${COUNT}" == FAIL ]]; then',
+            '        echo "psql: connection refused" >&2; return 1',
+            "      fi",
+            '      echo "${COUNT}" ;;',
+            '    *"auth can-i"*)',
+            '      case "$*" in',
+            '        *"-n meridian "*) answer="${CAN_I_MERIDIAN}" ;;',
+            '        *) answer="${CAN_I_OBSERVABILITY}" ;;',
+            "      esac",
+            '      echo "${answer}"; [[ "${answer}" != no ]] ;;',
+            '    *"get deployment model-gateway"*) printf "%s" "${AVAILABLE}" ;;',
+            '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            '    *"app.kubernetes.io/name=model-gateway"*) echo "${STARTED}" ;;',
+            '    *"cnpg.io/cluster=platform-db"*)',
+            '      if [[ "${PRIMARY}" == FAIL ]]; then',
+            '        echo "Error from server (Forbidden)" >&2; return 1',
+            "      fi",
+            '      echo "${PRIMARY}" ;;',
+            "  esac",
+            "}",
+            *(
+                function_definition(SMOKE_SH, name)
+                for name in (
+                    "deployed_services",
+                    "run_dashboard_query",
+                    "run_dashboard_queries",
+                    "check_cost_dashboard",
+                    "check_cost_series",
+                    "check_grafana_rights",
+                    "check_cost_panel",
+                )
+            ),
+            "check_cost_panel",
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "DEPLOYED": deployed,
+            "AVAILABLE": available,
+            "STARTED": started,
+            "PRIMARY": primary,
+            "COUNT": count,
+            "SERIES": series,
+            "SERVED": served if isinstance(served, str) else json.dumps(served),
+            "POLL_ERROR": poll_error,
+            "BAD_QUERY": bad_query,
+            "ANSWER": json.dumps(answer),
+            "ERROR_ANSWER": PROMETHEUS_ERROR_ANSWER,
+            "CAN_I_MERIDIAN": can_i[0],
+            "CAN_I_OBSERVABILITY": can_i[1],
+            "GRAFANA_OPENS": "yes" if grafana_opens else "no",
+        },
+        check=True,
+    )
+    if asked is not None:
+        asked.extend(sent.read_text().splitlines())
+    return done.stdout.splitlines(), calls.read_text()
+
+
+@requires_jq
+def test_the_cost_check_finds_the_dashboard_and_skips_the_series_when_not_deployed(
+    tmp_path: Path,
+) -> None:
+    lines, queries = run_cost_panel(tmp_path, deployed="")
+
+    assert len(lines) == 3
+    assert lines[0].startswith("PASS  dashboard:")
+    assert DASHBOARD_TITLE in lines[0]
+    assert "meridian-gateway-cost" in lines[0]
+    assert f"{dashboard_query_count()} queries" in lines[0]
+    assert lines[1] == (
+        "SKIP  cost series: the Meridian services are not deployed (make deploy)"
+    )
+    assert lines[2].startswith("PASS  grafana rights:")
+    assert queries == ""
+
+
+@requires_jq
+def test_the_cost_check_skips_the_series_when_the_gateway_settled_nothing_since_start(
+    tmp_path: Path,
+) -> None:
+    lines, queries = run_cost_panel(tmp_path, count="0|")
+
+    assert lines[1] == (
+        "SKIP  cost series: the gateway has settled no call since it started at "
+        "2026-10-02T08:00:00Z (make demo sends a claim)"
+    )
+    assert "closed_at > '2026-10-02T08:00:00Z'" in queries
+    assert "state = 'settled'" in queries
+    assert "psql -d meridian -tAc" in queries
+    # One line: the count and the epoch second of the first settled attempt.
+    assert "count(*) || '|' || coalesce(" in queries
+    assert "min(closed_at)" in queries
+    assert "POLL" not in queries
+
+
+@pytest.mark.parametrize(
+    "started",
+    [
+        "",
+        "yesterday",
+        "2026-10-02T08:00:00+02:00",
+        "2026-10-02T08:00:00.123Z",
+        "2026-10-02T08:00:00Z'; DROP TABLE gateway.usage; --",
+    ],
+)
+@requires_jq
+def test_the_cost_check_fails_before_sql_on_a_start_time_that_is_not_a_timestamp(
+    tmp_path: Path, started: str
+) -> None:
+    lines, queries = run_cost_panel(tmp_path, started=started)
+
+    assert lines[1].startswith("FAIL  cost series:")
+    assert "DROP" not in lines[1]  # the answer is not quoted back
+    assert queries == ""  # nothing reached the database
+
+
+@pytest.mark.parametrize(
+    "count",
+    [
+        "FAIL",
+        "",
+        "lots",
+        "3 rows",
+        "3",  # no separator
+        "3|",  # settled attempts but no epoch for the first
+        "3|soon",
+        "3|1790000000'; DROP TABLE gateway.usage; --",
+        "|1790000000",
+    ],
+)
+@requires_jq
+def test_the_cost_check_fails_on_a_ledger_answer_that_is_not_a_count_and_an_epoch(
+    tmp_path: Path, count: str
+) -> None:
+    lines, queries = run_cost_panel(tmp_path, count=count)
+
+    assert lines[1].startswith("FAIL  cost series:")
+    assert "POLL" not in queries  # Prometheus was not asked
+
+
+@requires_jq
+def test_the_cost_check_passes_when_the_three_series_are_in_prometheus(
+    tmp_path: Path,
+) -> None:
+    lines, queries = run_cost_panel(tmp_path, count=f"7|{FIRST_SETTLED}")
+
+    assert len(lines) == 3
+    assert [line.split(":")[0] for line in lines] == [
+        "PASS  dashboard",
+        "PASS  cost series",
+        "PASS  grafana rights",
+    ]
+    assert lines[1].startswith("PASS  cost series:")
+    assert "7 settled" in lines[1]
+    assert "2026-10-02T08:00:00Z" in lines[1]
+    assert lines[1].endswith(
+        "Prometheus has meridian_gateway_tokens_total, "
+        "meridian_gateway_cost_EUR_total, meridian_gateway_calls_total"
+    )
+    assert queries.count("exec") == 1
+    # Only samples exported after the first settled attempt count: the epoch is
+    # in the query. timestamp() drops the metric name, so the selector is
+    # filtered with `and` and `count by (__name__)` still sees the names.
+    assert queries.count("POLL") == 1
+    poll = queries[queries.index("POLL") :]  # the jq filter spans lines
+    assert "count by (__name__) ({__name__=~" in poll
+    assert '} and (timestamp({__name__=~"' in poll
+    assert f") >= {FIRST_SETTLED}))" in poll
+    assert poll.count('job="model-gateway"') == 2
+
+
+@requires_jq
+def test_the_cost_check_names_the_series_prometheus_lacks_after_the_timeout(
+    tmp_path: Path,
+) -> None:
+    present = "meridian_gateway_tokens_total"
+    partial, _ = run_cost_panel(tmp_path, series="", seen_in_prometheus=[present])
+    nothing, _ = run_cost_panel(tmp_path, series="")
+
+    assert partial[1].startswith("FAIL  cost series:")
+    assert "missing" in partial[1]
+    assert present not in partial[1].split("missing", 1)[1]
+    assert "meridian_gateway_cost_EUR_total" in partial[1]
+    assert "meridian_gateway_calls_total" in partial[1]
+    assert nothing[1].startswith("FAIL  cost series:")
+    assert "none of the three" in nothing[1]
+
+
+@pytest.mark.parametrize("available", ["0", "", "none"])
+@requires_jq
+def test_the_cost_check_fails_instead_of_skipping_when_the_gateway_is_not_available(
+    tmp_path: Path, available: str
+) -> None:
+    # A crash-looping gateway has settled nothing since its start: that must not
+    # read as a gateway waiting for a claim.
+    lines, queries = run_cost_panel(tmp_path, available=available, count="0|")
+
+    assert lines[1].startswith("FAIL  cost series: the gateway is not available")
+    assert queries == ""  # the ledger was not read
+
+
+@requires_jq
+def test_the_cost_check_shows_what_the_cluster_said_when_a_lookup_or_the_sql_fails(
+    tmp_path: Path,
+) -> None:
+    sql, _ = run_cost_panel(tmp_path, count="FAIL")
+    pod, _ = run_cost_panel(tmp_path, primary="FAIL")
+    none, _ = run_cost_panel(tmp_path, primary="")
+
+    assert sql[1].startswith("FAIL  cost series:")
+    assert "psql: connection refused" in sql[1]
+    assert pod[1].startswith("FAIL  cost series: no primary pod")
+    assert "Error from server (Forbidden)" in pod[1]
+    assert none[1].startswith("FAIL  cost series: no primary pod")
+
+
+@requires_jq
+def test_the_cost_checks_failures_end_with_the_last_answer_polling_saw(
+    tmp_path: Path,
+) -> None:
+    no_dashboard, _ = run_cost_panel(
+        tmp_path, served="", poll_error="curl exit 7: refused"
+    )
+    partial, _ = run_cost_panel(
+        tmp_path,
+        series="",
+        seen_in_prometheus=["meridian_gateway_tokens_total"],
+        poll_error="boom",
+    )
+    nothing, _ = run_cost_panel(tmp_path, series="", poll_error="boom")
+
+    assert no_dashboard[0].startswith("FAIL  dashboard:")
+    assert "run make up" in no_dashboard[0]
+    assert no_dashboard[0].endswith("(last answer: curl exit 7: refused)")
+    for line in (partial[1], nothing[1]):
+        assert line.endswith("(last answer: boom)")
+    assert "collector" in nothing[1]
+
+
+@requires_jq
+def test_the_collector_hint_is_dropped_when_prometheus_did_not_answer_success(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_cost_panel(
+        tmp_path, series="", prometheus_status="error", poll_error="bad gateway"
+    )
+
+    assert lines[1].startswith("FAIL  cost series:")
+    assert "collector" not in lines[1]
+    assert "status" in lines[1]  # it says what came back instead
+    assert lines[1].endswith("(last answer: bad gateway)")
+
+
+@requires_jq
+def test_the_dashboard_check_fails_on_a_served_copy_that_differs_from_the_file(
+    tmp_path: Path,
+) -> None:
+    stale = json.loads(json.dumps(dashboard()))
+    stale["panels"][1]["targets"][0]["expr"] += " "  # a stale provisioned copy
+    asked: list[str] = []
+
+    lines, _ = run_cost_panel(tmp_path, served=stale, asked=asked)
+
+    assert lines[0].startswith("FAIL  dashboard:")
+    assert "differ" in lines[0] and "make up" in lines[0]
+    assert asked == []  # no query is run for a dashboard that is not the file's
+    assert lines[1].startswith("PASS  cost series:")  # the other checks still run
+
+
+@requires_jq
+def test_the_dashboard_check_fails_naming_the_panel_whose_query_prometheus_refuses(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_cost_panel(tmp_path, bad_query="meridian_gateway_calls_total")
+
+    assert lines[0].startswith("FAIL  dashboard:")
+    assert "Calls by outcome" in lines[0]
+    assert "parse error: boom" in lines[0]
+    assert "PASS" not in lines[0]
+
+
+@requires_jq
+def test_the_dashboard_check_runs_each_query_over_an_hour_and_for_each_dimension(
+    tmp_path: Path,
+) -> None:
+    asked: list[str] = []
+    options = [o["value"] for o in variable_named("dimension")["options"]]
+
+    lines, _ = run_cost_panel(tmp_path, deployed="", asked=asked)
+
+    assert lines[0].startswith("PASS  dashboard:")
+    assert len(asked) == dashboard_query_count() == len(set(asked))
+    for query in asked:
+        assert "${__range_s}" not in query and "$dimension" not in query
+    assert len([q for q in asked if "[3600s]" in q]) == len(asked) - 1
+    assert all("offset 3600s" in q for q in asked if "[3600s]" in q)
+    # The two panels that name $dimension run once per option, each a different
+    # grouping; the table and the stat panels run once.
+    over_the_range = [q for q in asked if "[3600s]" in q]
+    for option in options:
+        grouped = [q for q in over_the_range if q.startswith(f"sum by ({option}) (")]
+        assert len(grouped) == 2, option
+    assert [q for q in asked if "[5m]" in q] == [
+        q for q in asked if "offset 5m" in q
+    ]  # a window that is not the range stays as it is
+
+
+@pytest.mark.parametrize(
+    ("can_i", "refused"),
+    [
+        (("yes", "no"), "meridian"),
+        (("no", "yes"), "observability"),
+        (("no", ""), "observability"),
+        (("no", "no\nyes"), "observability"),
+    ],
+)
+@requires_jq
+def test_the_rights_line_fails_unless_both_answers_are_exactly_no(
+    tmp_path: Path, can_i: tuple[str, str], refused: str
+) -> None:
+    lines, _ = run_cost_panel(tmp_path, can_i=can_i)
+
+    assert lines[2].startswith("FAIL  grafana rights:")
+    assert refused in lines[2]
+    assert can_i[1 if refused == "observability" else 0].split("\n")[0] in lines[2]
+
+
+@requires_jq
+def test_the_rights_line_passes_on_two_noes_and_runs_without_a_grafana_forward(
+    tmp_path: Path,
+) -> None:
+    expected = (
+        "PASS  grafana rights: Grafana's service account may not read Secrets "
+        "in meridian or observability (T-68)"
+    )
+    with_grafana, _ = run_cost_panel(tmp_path)
+    without, _ = run_cost_panel(tmp_path, grafana_opens=False)
+
+    assert with_grafana[-1] == expected
+    # open_grafana printed its own FAIL; the cost lines stay quiet and the rights
+    # line, which needs no forward, still runs.
+    assert without == [expected]
+    body = function_body(SMOKE_SH, "check_grafana_rights")
+    (account,) = re.findall(r"^readonly GRAFANA_ACCOUNT=(\S+)$", SMOKE_SH, re.M)
+    assert "auth can-i get secrets" in body
+    assert "for namespace in meridian observability" in body
+    assert "--as" in body and "${GRAFANA_ACCOUNT}" in body
+    assert account == f"system:serviceaccount:observability:{GRAFANA_SERVICE_ACCOUNT}"
+    assert "2>&1" not in body  # the answer is stdout only
+
+
+STUB_LOGIN_VALUE = "stub-value"  # what the stub Secret holds
+
+
+def run_open_grafana(
+    kubectl: str,
+    steps: str,
+    *,
+    admin_secret: str = STUB_LOGIN_VALUE,
+) -> subprocess.CompletedProcess[str]:
+    """``open_grafana`` and ``cleanup`` from smoke.sh in bash, with ``kubectl``
+    (the port-forward) replaced by the shell function ``kubectl``, ``kctl``
+    answering the admin Secret, and ``steps`` run after them."""
+    secret = base64.b64encode(admin_secret.encode()).decode()
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "failures=0",
+            'fail() { echo "FAIL  $*"; failures=$((failures + 1)); }',
+            "readonly GRAFANA_SERVICE=svc/grafana KUBECONFIG_FILE=/dev/null",
+            "readonly KUBE_CONTEXT=ctx",
+            *re.findall(r"^(?:grafana_url|grafana_failed)=.*$", SMOKE_SH, re.MULTILINE),
+            one_line_function(SMOKE_SH, "clean_lines"),
+            f"kctl() {{ printf '%s' '{secret}'; }}",
+            f"kubectl() {{ {kubectl}; }}",
+            function_definition(SMOKE_SH, "cleanup"),
+            function_definition(SMOKE_SH, "open_grafana"),
+            function_definition(SMOKE_SH, "gcurl"),
+            "curl() { cat >/dev/null; }",
+            steps,
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"]},
+        check=True,
+        timeout=60,
+    )
+
+
+def test_open_grafana_gives_one_fail_with_kubectls_output_when_the_forward_ends() -> (
+    None
+):
+    done = run_open_grafana(
+        'echo "error: lost connection to pod"; exit 1',
+        'open_grafana || echo "first=$?"; open_grafana || echo "second=$?"; '
+        'echo "url=[${grafana_url}]"',
+    )
+
+    fails = [line for line in done.stdout.splitlines() if line.startswith("FAIL")]
+    assert len(fails) == 1, done.stdout  # the second call prints nothing new
+    assert "grafana:" in fails[0]
+    assert "lost connection to pod" in fails[0]
+    assert "first=1" in done.stdout and "second=1" in done.stdout
+    assert "url=[]" in done.stdout
+
+
+def test_open_grafana_returns_the_open_forward_and_notices_when_it_dies() -> None:
+    done = run_open_grafana(
+        'echo "Forwarding from 127.0.0.1:41999 -> 3000"; sleep 5',
+        'open_grafana; echo "open=$? url=${grafana_url}"; open_grafana; '
+        'echo "again=$?"; kill "${pf_pid}"; wait "${pf_pid}" || true; '
+        'open_grafana || echo "dead=$?"; open_grafana || echo "dead-again=$?"',
+    )
+
+    fails = [line for line in done.stdout.splitlines() if line.startswith("FAIL")]
+    assert "open=0 url=http://127.0.0.1:41999" in done.stdout
+    assert "again=0" in done.stdout
+    assert len(fails) == 1, done.stdout
+    assert "the port-forward to Grafana died" in fails[0]
+    assert "dead=1" in done.stdout and "dead-again=1" in done.stdout
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        "set -x; open_grafana; set +x",  # reads the password from the Secret
+        "password=hunter2-s3cret; set -x; gcurl http://127.0.0.1:1/x; set +x",
+    ],
+)
+def test_neither_open_grafana_nor_gcurl_leaves_the_password_in_a_trace(
+    steps: str,
+) -> None:
+    password = "hunter2-s3cret"  # noqa: S105 (a test value, not a credential)
+    done = run_open_grafana(
+        'echo "Forwarding from 127.0.0.1:41999 -> 3000"; sleep 2',
+        steps,
+        admin_secret=password,
+    )
+
+    assert password not in done.stderr + done.stdout
+    assert base64.b64encode(password.encode()).decode() not in done.stderr
+
+
+def run_poll(gcurl: str, *, stale: str = "stale") -> str:
+    """One run of the real ``poll`` (a one-second budget) against a ``gcurl``
+    that behaves as ``gcurl`` says; what it left in ``poll_error``."""
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "readonly POLL_TIMEOUT=1 POLL_INTERVAL=1",
+            one_line_function(SMOKE_SH, "clean_lines"),
+            f"gcurl() {{ {gcurl}; }}",
+            function_definition(SMOKE_SH, "poll"),
+            f"poll_error={stale}",
+            "if poll '.ok // empty' http://127.0.0.1:1/x; then s=OK; else s=NO; fi",
+            'echo "${s}|${poll_result}|${poll_error}"',
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"]},
+        check=True,
+        timeout=60,
+    )
+    return done.stdout.rstrip("\n")
+
+
+@requires_jq
+def test_poll_keeps_curls_status_and_stderr_when_curl_fails() -> None:
+    result = run_poll('echo "curl: (7) Failed to connect" >&2; return 7')
+
+    status, value, error = result.split("|", 2)
+    assert (status, value) == ("NO", "")
+    assert "7" in error and "Failed to connect" in error
+
+
+@requires_jq
+def test_poll_keeps_the_start_of_an_answer_the_filter_found_nothing_in() -> None:
+    result = run_poll("printf '%s' '{\"message\":\"Dashboard not found\"}'")
+
+    assert result.startswith("NO||")
+    assert "Dashboard not found" in result
+
+
+@requires_jq
+def test_poll_cuts_a_long_answer_and_strips_escape_bytes() -> None:
+    long = run_poll(
+        'printf \'%s\' "{\\"message\\":\\"$(printf \'x%.0s\' {1..400})\\"}"'
+    )
+    hostile = run_poll("printf '\\033[31mred\\033[0m'")
+
+    assert len(long.split("|", 2)[2]) <= 160
+    assert long.split("|", 2)[2].startswith('{"message":"xxx')
+    assert "\x1b" not in hostile
+    assert "red" in hostile
+
+
+@requires_jq
+def test_poll_clears_the_last_error_on_success() -> None:
+    result = run_poll("printf '%s' '{\"ok\":\"yes\"}'")
+
+    assert result == "OK|yes|"
+
+
+# ── The dashboard and the metric names, tied to their sources (S043) ─────────
+def test_the_dashboard_refuses_a_custom_dimension_and_says_the_retention() -> None:
+    text = panel_titled("What these numbers are")["options"]["content"]
+
+    # A crafted link must not put PromQL into `by (...)`.
+    assert variable_named("dimension")["allowCustomValue"] is False
+    assert text.endswith(
+        "Choose a range of at least two minutes. Prometheus keeps 24 hours on kind, "
+        "so a longer range shows what it still holds."
+    )
+
+
+def prometheus_name(metric: Metric) -> str:
+    """The name Prometheus gives an OTLP metric: dots become underscores, a unit
+    in braces is dropped, any other unit follows after an underscore, and a
+    monotonic sum ends in ``_total`` (what the cluster showed)."""
+    name = metric.name.replace(".", "_")
+    unit = metric.unit or ""
+    if unit and not re.fullmatch(r"\{[^}]*\}", unit):
+        assert re.fullmatch(r"[A-Za-z]+", unit), unit
+        name += f"_{unit}"
+    assert isinstance(metric.data, Sum)
+    assert metric.data.is_monotonic
+    return name + "_total"
+
+
+def test_the_pinned_series_names_follow_from_the_gateways_instruments() -> None:
+    reader = InMemoryMetricReader()
+    meters = GatewayMeters(make_meter_provider("model-gateway", reader))
+    deployment = load_registry(REGISTRY_DIR).deployments[0]
+
+    meters.settled("claims-triage", "triage", deployment, 3, 4, 5)
+    meters.call_record().end("completed")
+    data = reader.get_metrics_data()
+
+    assert data is not None
+    (scope,) = data.resource_metrics[0].scope_metrics
+    assert {prometheus_name(metric) for metric in scope.metrics} == GATEWAY_SERIES
+
+
+def test_smoke_looks_for_the_same_three_series_as_the_dashboard_uses() -> None:
+    (listed,) = re.findall(r"^readonly COST_SERIES=\((.*)\)$", SMOKE_SH, re.MULTILINE)
+
+    assert set(listed.split()) == GATEWAY_SERIES
+    assert len(listed.split()) == 3
