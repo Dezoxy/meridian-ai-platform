@@ -80,7 +80,7 @@ stateDiagram-v2
 | Platform Registry | Models, providers, tools, agents, policies, tenants | YAML in git, JSON Schema | Control |
 | Platform Database | Claims, wording chunks, checkpoints, audit, usage, results | PostgreSQL 17, pgvector | Control |
 | Key Vault | Provider credentials and signing secrets | Azure Key Vault; Kubernetes Secrets on kind | Control |
-| Claims Triage App | Claims API, adjuster queue UI, the triage graph package | Python, FastAPI, Jinja | Workload |
+| Claims Triage App | Claims API, adjuster queue UI, claimant pages, the triage graph package | Python, FastAPI, Jinja | Workload |
 | Claims MCP Server | Notes, approval requests and the outcome recorded for a request as tools; adjuster decisions are recorded by the Claims Triage App | Python, MCP SDK | Workload |
 
 ![Containers view: the building blocks of the platform and the claims-triage workload](embed:Containers)
