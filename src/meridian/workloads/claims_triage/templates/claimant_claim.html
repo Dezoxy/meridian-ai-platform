@@ -1,0 +1,53 @@
+{% extends "claimant_base.html" %}
+{% block title %}{{ claim_id }}{% endblock %}
+{% block content %}
+<h1>Claim {{ claim_id }}</h1>
+{% if notice %}
+<p role="alert" class="notice">{{ notice.status }}: {{ notice.detail }}</p>
+{% endif %}
+{% if errors %}
+<ul role="alert" class="notice">
+{% for label, message in errors %}
+<li>{{ label }}: {{ message }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+<dl>
+<dt>Claim</dt><dd>{{ claim_id }}</dd>
+<dt>Received</dt><dd>{{ received_at }}</dd>
+</dl>
+<p>{{ sentence }}</p>
+{% if asking %}
+{% if missing %}
+<p>Documents asked for:</p>
+<ul>
+{% for name in missing %}
+<li>{{ name }}</li>
+{% endfor %}
+</ul>
+{% else %}
+<p>Tell us below which documents you are sending.</p>
+{% endif %}
+{% endif %}
+{% if arrived %}
+<h2>Documents that arrived</h2>
+<ul>
+{% for name in arrived %}
+<li>{{ name }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if asking %}
+<form method="post" action="/claimant/claims/{{ claim_id }}/documents">
+<p class="field"><label for="documents">Documents you are sending, one name per line</label>
+<textarea id="documents" name="documents" rows="4" required>
+{{ typed }}</textarea></p>
+<button type="submit">Send these documents</button>
+</form>
+{% endif %}
+{% if can_withdraw %}
+<form method="post" action="/claimant/claims/{{ claim_id }}/withdrawal">
+<button type="submit">Withdraw this claim</button>
+</form>
+{% endif %}
+{% endblock %}

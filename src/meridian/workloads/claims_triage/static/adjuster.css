@@ -8,3 +8,6 @@ dt { font-weight: bold; }
 dd { margin: 0; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 button { font: inherit; margin-right: 0.5rem; padding: 0.4rem 0.8rem; }
+.field label { display: block; font-weight: bold; }
+.field input, .field select, .field textarea { font: inherit; box-sizing: border-box; max-width: 100%; width: 30rem; padding: 0.3rem; }
+.hint { color: #555; display: block; font-size: 0.9rem; }
