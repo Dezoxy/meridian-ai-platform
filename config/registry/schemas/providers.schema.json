@@ -16,7 +16,8 @@
         "kind": {
           "enum": [
             "azure-openai",
-            "replay"
+            "replay",
+            "recorded"
           ],
           "title": "Kind",
           "type": "string"

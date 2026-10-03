@@ -28,7 +28,7 @@ def make_report(
             "c-3": {"alpha": True, "beta": False},
         }
     data: dict[str, Any] = {
-        "format": 1,
+        "format": 2,
         "workload": "demo",
         "answered_by": {"kind": "scripted", "label": "simulated"},
         "fingerprints": {
@@ -171,7 +171,7 @@ def test_a_duplicate_key_exits_2_without_naming_the_key(tmp_path: Path) -> None:
     baseline = save(make_report(), tmp_path / "baseline.json")
     new = tmp_path / "new.json"
     text = baseline.read_text(encoding="utf-8")
-    new.write_text(text.replace('"format": 1,', '"format": 1, "format": 1,'), "utf-8")
+    new.write_text(text.replace('"format": 2,', '"format": 2, "format": 2,'), "utf-8")
     assert new.read_text(encoding="utf-8") != text
 
     result = run_compare(baseline, new)
@@ -198,3 +198,120 @@ def test_the_eval_group_and_command_have_help() -> None:
     assert command.exit_code == 0
     assert "BASELINE" in command.stdout
     assert "REPORT" in command.stdout
+
+
+# ── meridian eval diff ──────────────────────────────────────────────────────
+def run_diff(first: Path, second: Path) -> Any:
+    return runner.invoke(app, ["eval", "diff", str(first), str(second)])
+
+
+def test_diff_prints_the_markdown_and_exits_0_even_when_the_reports_differ(
+    tmp_path: Path,
+) -> None:
+    first = save(make_report(), tmp_path / "a.json")
+    worse = make_report(
+        {
+            "c-1": {"alpha": False, "beta": False},
+            "c-2": {"alpha": False, "beta": False},
+            "c-3": {"alpha": False, "beta": False},
+        }
+    )
+    second = save(worse, tmp_path / "b.json")
+
+    result = run_diff(first, second)
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert lines[0] == "# Evaluation: A and B"
+    assert "| alpha | 3 | 0 | 3 |" in lines
+    assert "| c-1 | grade alpha | passed | failed |" in lines
+    assert result.stdout.endswith("\n")
+    assert not result.stdout.endswith("\n\n")
+    assert result.stderr == ""
+
+
+def test_diff_of_a_report_with_itself_exits_0(tmp_path: Path) -> None:
+    path = save(make_report(), tmp_path / "a.json")
+
+    result = run_diff(path, path)
+
+    assert result.exit_code == 0, result.output
+    assert "No grade or observed value differs." in result.stdout.splitlines()
+
+
+def test_diff_of_reports_that_cannot_be_read_side_by_side_exits_1(
+    tmp_path: Path,
+) -> None:
+    first = save(make_report(), tmp_path / "a.json")
+    second = save(make_report(workload="other"), tmp_path / "b.json")
+
+    result = run_diff(first, second)
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr.startswith("ERROR ")
+    assert "different workloads" in result.stderr
+    assert result.stdout == ""
+
+
+def test_diff_with_a_missing_file_exits_2_and_names_it(tmp_path: Path) -> None:
+    first = save(make_report(), tmp_path / "a.json")
+    missing = tmp_path / "missing.json"
+
+    result = run_diff(first, missing)
+
+    assert result.exit_code == 2, result.output
+    assert result.stderr.startswith(f"ERROR {missing}: ")
+    assert "not found" in result.stderr
+    assert result.stdout == ""
+
+
+def test_diff_with_an_old_format_report_exits_2(tmp_path: Path) -> None:
+    first = save(make_report(), tmp_path / "a.json")
+    old = tmp_path / "old.json"
+    old.write_text(
+        first.read_text(encoding="utf-8").replace('"format": 2', '"format": 1'),
+        encoding="utf-8",
+    )
+
+    result = run_diff(first, old)
+
+    assert result.exit_code == 2, result.output
+    assert f"ERROR {old}: format: " in result.stderr
+    assert result.stdout == ""
+
+
+def test_diff_names_both_files_when_both_are_unreadable(tmp_path: Path) -> None:
+    first = tmp_path / "a.json"
+    second = tmp_path / "b.json"
+    first.write_text("{", encoding="utf-8")
+    second.write_text("[]", encoding="utf-8")
+
+    result = run_diff(first, second)
+
+    assert result.exit_code == 2, result.output
+    assert f"ERROR {first}: " in result.stderr
+    assert f"ERROR {second}: " in result.stderr
+
+
+def test_diff_does_not_echo_a_hostile_observed_value_as_a_line(tmp_path: Path) -> None:
+    data = make_report().model_dump(mode="json")
+    data["cases"][0]["observed"] = {"alpha": "\n::error::x"}
+    first = save(Report.model_validate(data), tmp_path / "a.json")
+    second = save(make_report(), tmp_path / "b.json")
+
+    result = run_diff(first, second)
+
+    assert result.exit_code == 0, result.output
+    assert "::" not in result.stdout
+    assert (
+        "| c-1 | observed alpha | ???error??x | absent |" in result.stdout.splitlines()
+    )
+
+
+def test_diff_has_help() -> None:
+    result = runner.invoke(app, ["eval", "diff", "--help"])
+
+    assert result.exit_code == 0
+    assert "diff" in runner.invoke(app, ["eval", "--help"]).stdout
+    assert "A" in result.stdout
+    assert "B" in result.stdout

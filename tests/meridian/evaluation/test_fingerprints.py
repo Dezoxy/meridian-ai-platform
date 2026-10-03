@@ -349,10 +349,173 @@ def test_golden_set_of_accepts_a_symlink_that_stays_inside(tmp_path: Path) -> No
     path = make_golden_set(tmp_path / "golden")
     (path.parent / "link.json").symlink_to(path.parent / "a.json")
     manifest = manifest_of(path)
-    manifest["files"] = {"link.json": sha256_of(FILES["a.json"])}
+    manifest["files"] = {
+        "a.json": sha256_of(FILES["a.json"]),
+        "link.json": sha256_of(FILES["a.json"]),
+    }
     write_manifest(path.parent, manifest)
 
-    assert set(golden_set_of(path).files) == {"link.json"}
+    assert set(golden_set_of(path).files) == {"a.json", "link.json"}
+
+
+# ── a file the manifest does not list ───────────────────────────────────────
+UNLISTED = "the golden set holds a file its manifest does not list"
+
+
+def test_golden_set_of_refuses_an_unlisted_file_with_a_listed_suffix(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "extra.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == f"{UNLISTED}: extra.json"
+
+
+def test_golden_set_of_refuses_an_unlisted_file_in_a_listed_subdirectory(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "sub" / "new.md").write_text("# new\n", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == f"{UNLISTED}: sub/new.md"
+
+
+def test_golden_set_of_accepts_a_file_of_another_suffix_beside_listed_ones(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "README.md").write_text("# readme\n", encoding="utf-8")
+    (path.parent / "sub" / "notes.txt").write_text("notes\n", encoding="utf-8")
+
+    assert set(golden_set_of(path).files) == set(FILES)
+
+
+def test_golden_set_of_ignores_a_directory_that_holds_no_listed_file(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "generator").mkdir()
+    (path.parent / "generator" / "other.json").write_text("{}", encoding="utf-8")
+    (path.parent / "generator" / "other.md").write_text("#", encoding="utf-8")
+
+    assert set(golden_set_of(path).files) == set(FILES)
+
+
+def test_golden_set_of_does_not_count_the_manifest_as_unlisted(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    assert path.name == "manifest.json"
+    assert (path.parent / "a.json").exists()
+
+    assert golden_set_of(path).files
+
+
+def test_golden_set_of_names_the_first_unlisted_file_in_path_order(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    for name in ("z.json", "sub/m.md", "b.json"):
+        (path.parent / name).write_text("x", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == f"{UNLISTED}: b.json"
+
+
+def test_golden_set_of_does_not_name_an_unlisted_file_with_unusual_characters(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "bad name.json").write_text("x", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == UNLISTED
+
+
+def test_golden_set_of_does_not_name_an_unlisted_path_over_100_characters(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / ("x" * 96 + ".json")).write_text("x", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == UNLISTED
+
+
+def test_golden_set_of_names_an_unlisted_path_of_exactly_100_characters(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    name = "x" * 95 + ".json"
+    (path.parent / name).write_text("x", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == f"{UNLISTED}: {name}"
+
+
+def test_golden_set_of_does_not_follow_an_unlisted_symlink_out_of_the_directory(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "outside.json").write_text("outside", encoding="utf-8")
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "link.json").symlink_to(tmp_path / "outside.json")
+
+    assert set(golden_set_of(path).files) == set(FILES)
+
+
+def test_golden_set_of_refuses_an_unlisted_symlink_to_a_file_inside(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "link.json").symlink_to(path.parent / "a.json")
+
+    with pytest.raises(ReportError, match="does not list"):
+        golden_set_of(path)
+
+
+def test_golden_set_of_ignores_an_unlisted_directory_with_a_listed_suffix(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "folder.json").mkdir()
+
+    assert set(golden_set_of(path).files) == set(FILES)
+
+
+def test_golden_set_of_compares_suffixes_without_regard_to_case(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "SHOUT.JSON").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ReportError, match="does not list"):
+        golden_set_of(path)
+
+
+def test_the_unlisted_file_error_names_no_file_content_or_manifest_key(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    (path.parent / "extra.json").write_text("SECRET-MARKER-9f3a", encoding="utf-8")
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert "SECRET-MARKER" not in str(raised.value)
 
 
 def test_tools_fingerprint_is_stable_across_two_loads(real_registry: Path) -> None:

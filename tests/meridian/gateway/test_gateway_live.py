@@ -60,8 +60,11 @@ BODY = {"messages": [{"role": "user", "content": CLAIM_TEXT}]}
 EU_DEPLOYMENT = "aoai-sdc-gpt-4o"
 GLOBAL_DEPLOYMENT = "aoai-sdc-gpt-4o-global"
 # Every kind answers 502 or 504 but the content filter's, which is a 400 of its
-# own (tested in test_gateway_guardrails.py).
-ERROR_KINDS = tuple(k for k in get_args(ProviderErrorKind) if k != "filtered")
+# own (tested in test_gateway_guardrails.py), and a missing recording's, which
+# has its own detail (tested in test_recorded.py).
+ERROR_KINDS = tuple(
+    k for k in get_args(ProviderErrorKind) if k not in ("filtered", "not-recorded")
+)
 
 
 class CrashingProvider:

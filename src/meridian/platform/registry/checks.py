@@ -15,6 +15,7 @@ from meridian.platform.registry.models import (
     ProviderKind,
     Purpose,
     Registry,
+    ReplayRoute,
     ResidencyLabel,
 )
 from meridian.platform.registry.tool_schema import input_schema_errors
@@ -57,6 +58,14 @@ AZURE_REQUIRED = (
     "rate_limits",
 )
 REPLAY_FORBIDDEN = ("sku", "region", "terraform_key", "rate_limits")
+RECORDED_FORBIDDEN = ("deployment_name", *REPLAY_FORBIDDEN)
+# Prices a recorded deployment must share with the deployment it was recorded from.
+RECORDED_PRICE_FIELDS = (
+    "currency",
+    "input_per_million_tokens",
+    "output_per_million_tokens",
+)
+RECORDED_PURPOSE = "chat"
 # What a deployment's rate_limits and a tenant's limits both name, compared by
 # check_tenant_limits.
 SHARED_RATE_FIELDS = ("requests_per_10_seconds", "tokens_per_minute")
@@ -65,6 +74,13 @@ EMBEDDING_PURPOSE = "embedding"
 VECTOR_FIELDS = ("model", "version", "dimensions")
 REPLAY_PROVIDER_ID = "replay"
 REPLAY_MODEL_PREFIX = "replay-"
+RECORDED_PROVIDER_ID = "recorded"
+RECORDED_MODEL_PREFIX = "recorded-"
+# Provider kinds that run inside the platform, each with the one id it may have.
+IN_PLATFORM_PROVIDER_IDS = {
+    "replay": REPLAY_PROVIDER_ID,
+    "recorded": RECORDED_PROVIDER_ID,
+}
 # T-31, second signal: a word in a tool's id or scope that says it decides.
 # Inflections count (approved, declined, decided ...). "approval" and
 # "approvals" are the one exception: request_approval only asks a human.
@@ -124,6 +140,7 @@ def check_unique_ids(registry: Registry) -> list[str]:
         (f"{POLICIES}: data_classes", "id", [c.id for c in registry.data_classes]),
         (f"{POLICIES}: routes", "purpose", [r.purpose for r in registry.routes]),
         (f"{POLICIES}: replay", "purpose", [r.purpose for r in registry.replay]),
+        (f"{POLICIES}: recorded", "purpose", [r.purpose for r in registry.recorded]),
     )
     errors = [
         f"{where}: duplicate {field} {value!r}"
@@ -236,10 +253,11 @@ def check_policy_ceiling(registry: Registry) -> list[str]:
 
 def check_providers(registry: Registry) -> list[str]:
     return [
-        f"{PROVIDERS}: providers[{i}].id: a provider of kind 'replay' must have "
-        f"id {REPLAY_PROVIDER_ID!r}"
+        f"{PROVIDERS}: providers[{i}].id: a provider of kind {provider.kind!r} "
+        f"must have id {IN_PLATFORM_PROVIDER_IDS[provider.kind]!r}"
         for i, provider in enumerate(registry.providers)
-        if provider.kind == "replay" and provider.id != REPLAY_PROVIDER_ID
+        if provider.kind in IN_PLATFORM_PROVIDER_IDS
+        and provider.id != IN_PLATFORM_PROVIDER_IDS[provider.kind]
     ]
 
 
@@ -267,6 +285,66 @@ def _replay_field_errors(dep: Deployment, where: str) -> list[str]:
     return errors
 
 
+def _recorded_price_errors(
+    dep: Deployment, source: Deployment, where: str
+) -> list[str]:
+    """A recorded run is charged what the live run was charged."""
+    return [
+        f"{where}.price.{name}: {ours} differs from {theirs} of deployment "
+        f"{source.id!r} (recorded_from); a recorded run is charged what the live "
+        f"run was charged (deployment {dep.id!r})"
+        for name in RECORDED_PRICE_FIELDS
+        if (ours := getattr(dep.price, name)) != (theirs := getattr(source.price, name))
+    ]
+
+
+def _recorded_from_errors(registry: Registry, dep: Deployment, where: str) -> list[str]:
+    if dep.recorded_from is None:
+        return [
+            f"{where}.recorded_from: required for provider kind 'recorded' "
+            f"(deployment {dep.id!r})"
+        ]
+    ref = f"{where}.recorded_from"
+    source = registry.deployment(dep.recorded_from)
+    if source is None:
+        return [f"{ref}: unknown deployment {dep.recorded_from!r}"]
+    provider = registry.provider(source.provider)
+    if provider is not None and provider.kind != "azure-openai":
+        return [
+            f"{ref}: deployment {source.id!r} is a {provider.kind} deployment; "
+            "a recording is of a real model"
+        ]
+    errors: list[str] = []
+    if source.purpose != dep.purpose:
+        errors.append(
+            f"{ref}: deployment {source.id!r} has purpose {source.purpose!r}, "
+            f"the recorded deployment's is {dep.purpose!r}"
+        )
+    return errors + _recorded_price_errors(dep, source, where)
+
+
+def _recorded_field_errors(
+    registry: Registry, dep: Deployment, where: str
+) -> list[str]:
+    errors = [
+        f"{where}.{name}: must not be set for provider kind 'recorded' "
+        f"(deployment {dep.id!r})"
+        for name in RECORDED_FORBIDDEN
+        if getattr(dep, name) is not None
+    ]
+    if not dep.model.startswith(RECORDED_MODEL_PREFIX):
+        errors.append(
+            f"{where}.model: a recorded deployment's model must start with "
+            f"{RECORDED_MODEL_PREFIX!r} (deployment {dep.id!r})"
+        )
+    if dep.purpose != RECORDED_PURPOSE:
+        errors.append(
+            f"{where}.purpose: a recorded deployment's purpose must be "
+            f"{RECORDED_PURPOSE!r}, not {dep.purpose!r} (deployment {dep.id!r})"
+        )
+    return errors + _recorded_from_errors(registry, dep, where)
+
+
 def check_provider_fields(registry: Registry) -> list[str]:
     errors: list[str] = []
     for i, dep in enumerate(registry.deployments):
@@ -274,11 +352,18 @@ def check_provider_fields(registry: Registry) -> list[str]:
         if provider is None:
             continue
         where = f"{MODELS}: deployments[{i}]"
+        if provider.kind != "recorded" and dep.recorded_from is not None:
+            errors.append(
+                f"{where}.recorded_from: must not be set for provider kind "
+                f"{provider.kind!r} (deployment {dep.id!r})"
+            )
         match provider.kind:
             case "azure-openai":
                 errors += _azure_field_errors(dep, where)
             case "replay":
                 errors += _replay_field_errors(dep, where)
+            case "recorded":
+                errors += _recorded_field_errors(registry, dep, where)
             case unreachable:
                 assert_never(unreachable)
     return errors
@@ -314,8 +399,8 @@ def _label_facts(
 ) -> tuple[tuple[str, ...], str] | None:
     """The labels the facts allow and how to say the facts; None if unknown."""
     match kind:
-        case "replay":
-            return ("eu-region",), "the replay provider runs inside the platform"
+        case "replay" | "recorded":
+            return ("eu-region",), f"the {kind} provider runs inside the platform"
         case "azure-openai":
             if dep.sku is None or dep.region is None:
                 return None  # reported by check_provider_fields
@@ -488,6 +573,11 @@ def _is_replay(registry: Registry, deployment: Deployment) -> bool:
     return provider is not None and provider.kind == "replay"
 
 
+def _is_recorded(registry: Registry, deployment: Deployment) -> bool:
+    provider = registry.provider(deployment.provider)
+    return provider is not None and provider.kind == "recorded"
+
+
 def check_replay(registry: Registry) -> list[str]:
     """Replay is a gateway mode: one replay deployment per routed purpose.
 
@@ -525,7 +615,44 @@ def check_replay(registry: Registry) -> list[str]:
         for route in registry.routes
         if route.purpose not in covered
     ]
-    errors += _replay_tenant_errors(registry)
+    errors += _mode_tenant_errors(registry, registry.replay, "replay")
+    return errors
+
+
+def check_recorded(registry: Registry) -> list[str]:
+    """Recorded is a gateway mode: answers recorded from a real model.
+
+    Unlike replay it need not cover every purpose. A recorded deployment is
+    never a route candidate, so a real outage cannot be answered from a file;
+    it is never a replay entry either (check_replay reports that).
+    """
+    errors: list[str] = []
+    for i, entry in enumerate(registry.recorded):
+        where = f"{POLICIES}: recorded[{i}].deployment"
+        dep = registry.deployment(entry.deployment)
+        if dep is None:
+            errors.append(f"{where}: unknown deployment {entry.deployment!r}")
+            continue
+        provider = registry.provider(dep.provider)
+        if provider is not None and provider.kind != "recorded":
+            errors.append(
+                f"{where}: deployment {dep.id!r} is not a recorded deployment "
+                f"(provider kind {provider.kind!r})"
+            )
+        if dep.purpose != entry.purpose:
+            errors.append(
+                f"{where}: deployment {dep.id!r} has purpose {dep.purpose!r}, "
+                f"the recorded entry is {entry.purpose!r}"
+            )
+    for i, route in enumerate(registry.routes):
+        errors += [
+            f"{POLICIES}: routes[{i}].candidates[{j}]: deployment {name!r} is a "
+            "recorded deployment; recorded is a gateway mode, never a route "
+            "candidate"
+            for j, name in enumerate(route.candidates)
+            if (dep := registry.deployment(name)) and _is_recorded(registry, dep)
+        ]
+    errors += _mode_tenant_errors(registry, registry.recorded, "recorded")
     return errors
 
 
@@ -552,23 +679,25 @@ def check_replay_dimensions(registry: Registry) -> list[str]:
     return errors
 
 
-def _replay_tenant_errors(registry: Registry) -> list[str]:
-    """Replay stands in for the route of a purpose, so it must serve every
-    tenant the route serves: its classes must include the tenant's class and
-    its label must be one that class may reach."""
+def _mode_tenant_errors(
+    registry: Registry, entries: tuple[ReplayRoute, ...], mode: str
+) -> list[str]:
+    """Replay (and recorded mode) stands in for the route of a purpose, so it
+    must serve every tenant the route serves: its classes must include the
+    tenant's class and its label must be one that class may reach."""
     errors: list[str] = []
     routed = {route.purpose for route in registry.routes}
-    for i, entry in enumerate(registry.replay):
+    for i, entry in enumerate(entries):
         dep = registry.deployment(entry.deployment)
         if dep is None or entry.purpose not in routed:
             continue
-        where = f"{POLICIES}: replay[{i}]: deployment {dep.id!r}"
+        where = f"{POLICIES}: {mode}[{i}]: deployment {dep.id!r}"
         for tenant in registry.tenants:
             policy = registry.data_class(tenant.data_class)
             who = f"data class {tenant.data_class!r} of tenant {tenant.id!r}"
             if tenant.data_class not in dep.data_classes:
                 errors.append(
-                    f"{where} does not allow {who}, so replay mode could not serve it"
+                    f"{where} does not allow {who}, so {mode} mode could not serve it"
                 )
             if policy is not None and dep.residency not in policy.residency:
                 errors.append(
@@ -638,6 +767,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_routes,
     check_embedding_route,
     check_replay,
+    check_recorded,
     check_replay_dimensions,
     check_tenant_coverage,
     check_tenant_limits,

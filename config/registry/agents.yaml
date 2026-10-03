@@ -14,3 +14,7 @@ agents:
     description: Embeds policy wordings for the knowledge store; it calls no tool.
     kind: job
     tools: []
+  - id: evaluation-judge
+    description: Grades whether a rationale is grounded in the text it was drawn from; it calls no tool.
+    kind: job
+    tools: []

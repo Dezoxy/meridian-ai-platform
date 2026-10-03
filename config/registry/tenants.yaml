@@ -24,9 +24,9 @@ tenants:
       tokens_per_day: 300000
       cost_per_month_eur: 10
   - id: evaluation
-    description: Evaluation runs of the claims-triage agent, at the same class.
+    description: Evaluation runs of the claims-triage agent and their judge, at the same class.
     data_class: personal
-    agents: [claims-triage]
+    agents: [claims-triage, evaluation-judge]
     limits:
       requests_per_10_seconds: 6
       tokens_per_minute: 6000

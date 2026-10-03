@@ -8,6 +8,8 @@ from meridian.platform.registry.models import Deployment
 
 # ``filtered``: the provider's content filter refused the prompt (a 400) or
 # withheld the completion (no status). It says nothing of the deployment.
+# ``not-recorded``: no recording holds an answer to the request (S050, T-75);
+# nothing was sent, and it says nothing of the deployment either.
 ProviderErrorKind = Literal[
     "timeout",
     "rate-limited",
@@ -16,6 +18,7 @@ ProviderErrorKind = Literal[
     "filtered",
     "auth",
     "bad-response",
+    "not-recorded",
 ]
 
 

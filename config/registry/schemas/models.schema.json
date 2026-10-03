@@ -80,6 +80,19 @@
           ],
           "default": null
         },
+        "recorded_from": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recorded From"
+        },
         "region": {
           "anyOf": [
             {

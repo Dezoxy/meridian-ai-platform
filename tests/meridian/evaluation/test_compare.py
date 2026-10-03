@@ -21,7 +21,7 @@ def make_report(
             "c-3": {"alpha": True, "beta": False},
         }
     data: dict[str, Any] = {
-        "format": 1,
+        "format": 2,
         "workload": "demo",
         "answered_by": {"kind": "scripted", "label": "simulated"},
         "fingerprints": {
@@ -50,6 +50,11 @@ def with_fingerprint(name: str, value: Any) -> Report:
     fingerprints = base.model_dump(mode="json")["fingerprints"]
     fingerprints[name] = value
     return make_report(fingerprints=fingerprints)
+
+
+def with_fingerprints(values: dict[str, Any]) -> dict[str, Any]:
+    fingerprints = make_report().model_dump(mode="json")["fingerprints"]
+    return fingerprints | values
 
 
 def only_problem(comparison: Comparison, fragment: str) -> None:
@@ -86,6 +91,69 @@ def test_changed_tools_ask_for_a_new_baseline() -> None:
 
     only_problem(comparison, "the tools' contracts changed")
     assert "make eval-baseline" in comparison.problems[0]
+
+
+def test_a_changed_judge_prompt_asks_for_a_new_baseline() -> None:
+    comparison = compare(
+        with_fingerprint("judge", DIGEST), with_fingerprint("judge", OTHER_DIGEST)
+    )
+
+    only_problem(comparison, "the judge's prompt changed")
+    assert "make eval-baseline" in comparison.problems[0]
+
+
+def test_a_changed_recording_asks_for_a_new_baseline() -> None:
+    comparison = compare(
+        with_fingerprint("recording", DIGEST),
+        with_fingerprint("recording", OTHER_DIGEST),
+    )
+
+    only_problem(comparison, "the recording changed")
+    assert "make eval-baseline" in comparison.problems[0]
+
+
+def test_a_judge_or_recording_on_one_side_only_is_a_difference() -> None:
+    only_problem(
+        compare(make_report(), with_fingerprint("judge", DIGEST)),
+        "the judge's prompt changed",
+    )
+    only_problem(
+        compare(with_fingerprint("recording", DIGEST), make_report()),
+        "the recording changed",
+    )
+
+
+def test_an_equal_judge_and_recording_pass() -> None:
+    both = {"judge": DIGEST, "recording": OTHER_DIGEST}
+
+    comparison = compare(
+        make_report(fingerprints=with_fingerprints(both)),
+        make_report(fingerprints=with_fingerprints(both)),
+    )
+
+    assert comparison.passed
+    assert comparison.problems == ()
+
+
+def test_tools_and_measures_that_differ_are_never_compared() -> None:
+    def with_extras(calls: int, tool: str) -> Report:
+        data = make_report().model_dump(mode="json")
+        for case in data["cases"]:
+            case["tools"] = [{"tool": tool, "arguments": {"n": calls}}]
+            case["measured"] = {
+                "model_calls": calls,
+                "input_tokens": calls * 10,
+                "output_tokens": calls,
+                "cost_micro_eur": calls * 100,
+                "latency_ms": calls * 7,
+            }
+        return Report.model_validate(data)
+
+    comparison = compare(with_extras(1, "lookup"), with_extras(9, "decide"))
+
+    assert comparison.passed
+    assert comparison.problems == ()
+    assert comparison == compare(make_report(), make_report())
 
 
 def test_a_changed_golden_set_asks_for_a_new_baseline() -> None:

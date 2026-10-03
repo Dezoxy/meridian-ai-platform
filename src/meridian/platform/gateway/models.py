@@ -42,7 +42,7 @@ class Usage(WireModel):
 
 class ChatResponse(WireModel):
     call_id: UUID
-    mode: Literal["replay", "live"]
+    mode: Literal["replay", "recorded", "live"]
     deployment: str
     provider: str
     model: str
@@ -75,7 +75,7 @@ class EmbeddingResponse(WireModel):
     made them: only vectors of one deployment are comparable (T-54)."""
 
     call_id: UUID
-    mode: Literal["replay", "live"]
+    mode: Literal["replay", "recorded", "live"]
     deployment: str
     provider: str
     model: str

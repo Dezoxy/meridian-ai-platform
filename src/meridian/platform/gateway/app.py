@@ -79,12 +79,17 @@ from meridian.platform.gateway.providers.base import (
     ProviderError,
     ProviderReply,
 )
+from meridian.platform.gateway.providers.recorded import (
+    RecordedProvider,
+    RecordingError,
+    load_recording,
+)
 from meridian.platform.gateway.ratelimit import RateRefusalReason, TenantRateLimiter
 from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
-from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.gateway.settings import RECORDINGS_ENV, GatewaySettings
 from meridian.platform.gateway.walk import (
     BudgetRefused,
     CandidateWalker,
@@ -101,11 +106,14 @@ SERVICE_NAME = "model-gateway"
 CHAT_PURPOSE = "chat"
 EMBEDDING_PURPOSE = "embedding"
 REPLAY_ENVIRONMENTS = frozenset({"test", "ci", "kind"})
+# A recording is a laptop's or a CI run's, never a cluster's (T-75).
+RECORDED_ENVIRONMENTS = frozenset({"test", "ci", "local"})
 # The Azure CLI credential is a developer's login, so a gateway that builds its
 # own live providers starts on a laptop only.
 LIVE_ENVIRONMENT = "local"
 AZURE_KIND = "azure-openai"
 REPLAY_KIND = "replay"
+RECORDED_KIND = "recorded"
 
 HTTP_BAD_REQUEST = 400
 # The mark of the gateway's own 400: FastAPI answers 400 too, for a body it
@@ -126,6 +134,9 @@ PROVIDER_FAILED = "the model provider failed"
 PROVIDER_FILTERED = "the model provider's content filter refused the request"
 # No attempt was made: every candidate was skipped.
 PROVIDER_UNAVAILABLE = "the model provider is unavailable"
+# Recorded mode: the recording holds no answer to this request (T-75). Fixed, so
+# it names no prompt; it says which command records again.
+NOT_RECORDED = "no recording answers this request; record again (make eval-record)"
 # The reason on the calls counter of a request no candidate was called for.
 NOT_CALLED_REASON = "unavailable"
 # The route's own description of 503; the shared one names the database only.
@@ -172,6 +183,15 @@ def _check_start_allowed(
                 "(T-39)"
             )
         return
+    if settings.mode == "recorded":
+        if settings.environment not in RECORDED_ENVIRONMENTS:
+            raise SettingsError(
+                "recorded mode is refused outside the test, ci and local "
+                "environments (T-75)"
+            )
+        if providers is None and settings.recordings is None:
+            raise SettingsError(f"recorded mode needs {RECORDINGS_ENV}")
+        return
     if providers is not None:
         return  # the caller brought its own providers (tests)
     if settings.azure_credential != "azure-cli":
@@ -189,10 +209,11 @@ def _check_start_allowed(
 @dataclass(frozen=True, slots=True)
 class _Route:
     """What one purpose may use: the deployments a request may use before policy
-    narrows them (in replay mode its one replay deployment, in live mode the
-    route's candidates in order), and, in replay mode only, that deployment: where
-    the call goes is known before policy decides, so a refusal says it too
-    (T-39)."""
+    narrows them (in replay mode its one replay deployment, in recorded mode its
+    one recorded or else replay deployment, in live mode the route's candidates
+    in order), and, in replay and recorded mode only, that deployment: where the
+    call goes is known before policy decides, so a refusal says it too (T-39).
+    The field is named ``replay`` for the mode it was made for."""
 
     considered: tuple[Deployment, ...]
     replay: Deployment | None
@@ -203,6 +224,17 @@ def _route(settings: GatewaySettings, registry: Registry, purpose: str) -> _Rout
         deployment = registry.replay_deployment(purpose)
         if deployment is None:
             raise SettingsError(f"the registry has no replay deployment for {purpose}")
+        return _Route((deployment,), deployment)
+    if settings.mode == "recorded":
+        # A purpose with no recorded deployment (embedding) is answered by replay.
+        recorded = registry.recorded_deployment(purpose)
+        deployment = (
+            recorded if recorded is not None else registry.replay_deployment(purpose)
+        )
+        if deployment is None:
+            raise SettingsError(
+                f"the registry has no recorded or replay deployment for {purpose}"
+            )
         return _Route((deployment,), deployment)
     route = registry.route(purpose)
     if route is None:
@@ -293,6 +325,21 @@ def _live_providers(
     return {AZURE_KIND: provider}, provider.close
 
 
+def _recorded_providers(settings: GatewaySettings) -> dict[str, ModelProvider]:
+    """The recording's provider and the replay one (embeddings). A recording
+    that cannot be read stops the start; the error names the variable and none
+    of the file."""
+    if settings.recordings is None:
+        raise SettingsError(f"recorded mode needs {RECORDINGS_ENV}")
+    try:
+        recording = load_recording(settings.recordings)
+    except RecordingError as error:
+        raise SettingsError(
+            f"{RECORDINGS_ENV} is not a usable recording: {error}"
+        ) from None
+    return {RECORDED_KIND: RecordedProvider(recording), REPLAY_KIND: ReplayProvider()}
+
+
 def _unanswered(result: Unanswered) -> NoReturn:
     """The status when no candidate answered: the last attempt's kind (400 for a
     content filter, 504 for a timeout, 502 for the rest), or 503 when none was
@@ -307,6 +354,8 @@ def _unanswered(result: Unanswered) -> NoReturn:
             detail=PROVIDER_FILTERED,
             headers={REFUSAL_HEADER: REFUSAL_CONTENT_FILTER},
         )
+    if result.last_attempt_kind == "not-recorded":
+        raise HTTPException(status_code=HTTP_BAD_GATEWAY, detail=NOT_RECORDED)
     timed_out = result.last_attempt_kind == "timeout"
     raise HTTPException(
         status_code=HTTP_GATEWAY_TIMEOUT if timed_out else HTTP_BAD_GATEWAY,
@@ -326,11 +375,13 @@ def create_app(
     """Build the app; raise when the registry fails to load or the mode,
     environment and providers are not an allowed combination.
 
-    ``providers`` is keyed by provider kind (``replay``, ``azure-openai``); a
-    test injects fakes. Without it the app builds the replay provider and, in
-    live mode, the Azure one. A provider is asked for the method of the purpose
-    of the request only, so a fake with ``chat`` alone serves chat, and nothing
-    checks at the start that it has ``embed``. ``clock`` times the circuit
+    ``providers`` is keyed by provider kind (``replay``, ``recorded``,
+    ``azure-openai``); a test injects fakes. Without it the app builds the
+    replay provider, in recorded mode the recorded one too (from
+    ``settings.recordings``) and, in live mode, the Azure one. A provider is
+    asked for the method of the purpose of the request only, so a fake with
+    ``chat`` alone serves chat, and nothing checks at the start that it has
+    ``embed``. ``clock`` times the circuit
     breaker (one per app), the tenants' rate windows and each request's
     deadline; ``today`` is the UTC day the ledger charges to. A test injects
     fakes of both. A ``meter_provider`` is its caller's to shut down; without
@@ -346,15 +397,18 @@ def create_app(
     kinds = _provider_kinds(registry, considered)
     if settings.mode == "live":
         for purpose, route in routes.items():
-            if any(kinds[d.id] == REPLAY_KIND for d in route.considered):
-                # The registry checks refuse it too; this is the second line.
-                raise SettingsError(
-                    f"the {purpose} route has a replay candidate in live mode"
-                )
+            for kind in (REPLAY_KIND, RECORDED_KIND):
+                if any(kinds[d.id] == kind for d in route.considered):
+                    # The registry checks refuse it too; this is the second line.
+                    raise SettingsError(
+                        f"the {purpose} route has a {kind} candidate in live mode"
+                    )
     close: Callable[[], None] | None = None
     if providers is None:
         if settings.mode == "replay":
             providers = {REPLAY_KIND: ReplayProvider()}
+        elif settings.mode == "recorded":
+            providers = _recorded_providers(settings)
         else:
             providers, close = _live_providers(settings, considered, kinds)
     if not set(kinds.values()) <= providers.keys():

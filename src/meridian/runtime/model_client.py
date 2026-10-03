@@ -108,7 +108,7 @@ class _Reply(BaseModel):
     deployment: str
     provider: str
     model: str
-    mode: Literal["replay", "live"]
+    mode: Literal["replay", "recorded", "live"]
     output: Output
     usage: Usage
 

@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import (
     Field,
+    JsonValue,
     StrictBool,
     StrictFloat,
     StrictInt,
@@ -25,7 +26,7 @@ from pydantic import (
 
 from meridian.platform.common.wire import WireModel
 
-REPORT_FORMAT = 1
+REPORT_FORMAT = 2
 MAX_REPORT_BYTES = 5 * 1024 * 1024  # a report is a few KiB; this refuses a mistake
 MAX_REPORTED_ERRORS = 5
 MAX_LOC_PART_CHARS = 40
@@ -55,11 +56,11 @@ class AnsweredBy(WireModel):
 
     @model_validator(mode="after")
     def _label_matches_the_kind(self) -> "AnsweredBy":
-        # A recorded run may be real later; the other three are fixed.
+        # A recorded run replays a real model's answers; the label is fixed.
         if self.kind in ("scripted", "replay") and self.label != "simulated":
             raise ValueError("a scripted or replay run is labelled simulated")
-        if self.kind == "live" and self.label != "real":
-            raise ValueError("a live run is labelled real")
+        if self.kind in ("recorded", "live") and self.label != "real":
+            raise ValueError(f"a {self.kind} run is labelled real")
         return self
 
 
@@ -76,13 +77,38 @@ class Fingerprints(WireModel):
     prompt: HexDigest
     tools: HexDigest
     golden_set: GoldenSet
+    judge: HexDigest | None = None  # the judge's prompt, when a judge grades
+    recording: HexDigest | None = None  # the recording file's bytes, when replayed
+
+
+Count = Annotated[StrictInt, Field(ge=0)]
+
+
+class ToolCall(WireModel):
+    """A call the agent made, as the workload logged it."""
+
+    tool: GraderName
+    arguments: dict[str, JsonValue]
+
+
+class Measured(WireModel):
+    """What one case's run cost."""
+
+    model_calls: Count
+    input_tokens: Count
+    output_tokens: Count
+    cost_micro_eur: Count
+    latency_ms: Count | None = None
 
 
 class Case(WireModel):
     case: CaseId
     grades: Annotated[dict[GraderName, StrictBool], Field(min_length=1)]
-    # What the workload saw, for a human reading a diff. Never compared.
+    # What the workload saw, for a human reading a diff. Never compared; nor are
+    # the tool calls and the measures.
     observed: dict[GraderName, StrictStr | StrictInt | None]
+    tools: tuple[ToolCall, ...] | None = None
+    measured: Measured | None = None
 
 
 class Report(WireModel):
@@ -114,6 +140,10 @@ class Report(WireModel):
             raise ValueError("absolute names a grader no case grades")
         if not set(self.targets) <= graders:
             raise ValueError("targets names a grader no case grades")
+        if len({case.tools is None for case in self.cases}) > 1:
+            raise ValueError("either every case has tools or none does")
+        if len({case.measured is None for case in self.cases}) > 1:
+            raise ValueError("either every case has measured or none does")
         return self
 
 

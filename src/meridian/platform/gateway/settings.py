@@ -20,8 +20,9 @@ ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
 ENDPOINTS_ENV = "MERIDIAN_AZURE_OPENAI_ENDPOINTS"
 CREDENTIAL_ENV = "MERIDIAN_AZURE_CREDENTIAL"
 TENANT_ID_ENV = "MERIDIAN_AZURE_TENANT_ID"
+RECORDINGS_ENV = "MERIDIAN_GATEWAY_RECORDINGS"
 
-GatewayMode = Literal["replay", "live"]
+GatewayMode = Literal["replay", "recorded", "live"]
 # "local" is a developer's laptop outside any cluster.
 Environment = Literal["local", "test", "ci", "kind", "azure"]
 AzureCredential = Literal["azure-cli"]
@@ -131,6 +132,8 @@ class GatewaySettings(BaseModel):
     azure_openai_endpoints: Mapping[str, str] = Field(default_factory=dict, repr=False)
     azure_credential: AzureCredential | None = Field(default=None, repr=False)
     azure_tenant_id: str | None = Field(default=None, repr=False)
+    # Recorded mode only (S050): the file whose answers the gateway replays.
+    recordings: Path | None = None
 
     @field_validator("azure_openai_endpoints")
     @classmethod
@@ -155,4 +158,5 @@ class GatewaySettings(BaseModel):
             azure_openai_endpoints=_endpoints_from(environ),
             azure_credential=environ.get(CREDENTIAL_ENV) or None,
             azure_tenant_id=_tenant_id_from(environ),
+            recordings=Path(raw) if (raw := environ.get(RECORDINGS_ENV)) else None,
         )

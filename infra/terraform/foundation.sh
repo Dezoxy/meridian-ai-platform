@@ -16,6 +16,13 @@
 #          candidate made to fail, with this az login and a throwaway
 #          PostgreSQL (needs Docker). Read-only
 #          in Azure apart from those calls (well under EUR 0.01).
+#   eval-record  SPENDS MONEY (about 60 chat calls, under EUR 0.50): the golden
+#          set and a variant prompt answered by the live models, judged by the
+#          judge, through the Model Gateway on this laptop; records the answers
+#          and rewrites the files under data/evaluation/ (S050). Same login and
+#          throwaway PostgreSQL as gateway-live; PYTEST_DB_CONTAINER and
+#          PYTEST_DB_PORT in the environment name the database container and
+#          port. Also one long answer under the output cap (T-45).
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
 set -euo pipefail
@@ -35,7 +42,7 @@ fail() {
 }
 
 usage() {
-  printf 'usage: %s <init|plan|apply|smoke|outputs|gateway-live>\n' "$(basename "$0")" >&2
+  printf 'usage: %s <init|plan|apply|smoke|outputs|gateway-live|eval-record>\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -330,6 +337,40 @@ cmd_gateway_live() {
     redact | redact_account
 }
 
+# ── eval-record ──────────────────────────────────────────────────────────────
+# The golden set answered by the live models and judged, then the variant prompt
+# (S050), through the Model Gateway on this laptop. Like gateway-live the
+# endpoints come from Terraform's outputs and the token from this az login, and
+# the output is filtered the same way. The tests write the recording and the
+# reports under data/evaluation/ and print per call only the claim, the tokens,
+# the latency and the rate. The golden set's test runs first: the variant's
+# comparison reads the report it writes. One process (PYTEST_WORKERS=0).
+readonly EVAL_RECORD_TESTS='tests/meridian/test_evaluation_stack.py::test_record_the_golden_set_with_the_live_model tests/meridian/test_evaluation_stack.py::test_record_the_variant_prompt_with_the_live_model tests/meridian/gateway/test_live_azure.py::test_an_answer_capped_at_1024_tokens_ends_inside_the_read_limit'
+
+cmd_eval_record() {
+  tf_init
+  local deployments endpoints
+  deployments="$(tf output -json openai_deployments 2>/dev/null)" ||
+    die "Terraform has no openai_deployments output; run 'make azure-apply' first"
+  endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
+    <<<"${deployments}" 2>/dev/null)" ||
+    die "the openai_deployments output has no endpoints"
+  # A caller who must not collide with another run names its own container and port.
+  local -a overrides=()
+  [[ -z "${PYTEST_DB_CONTAINER:-}" ]] || overrides+=("PYTEST_DB_CONTAINER=${PYTEST_DB_CONTAINER}")
+  [[ -z "${PYTEST_DB_PORT:-}" ]] || overrides+=("PYTEST_DB_PORT=${PYTEST_DB_PORT}")
+  log "about 60 chat calls on the live models, under EUR 0.50; rewrites files under data/evaluation/ (synthetic text only)"
+  MERIDIAN_LIVE_AZURE=1 \
+    MERIDIAN_EVAL_RECORD=1 \
+    MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
+    MERIDIAN_AZURE_TENANT_ID="${ARM_TENANT_ID}" \
+    make -C "${TF_DIR}/../.." --no-print-directory pytest-db \
+    PYTEST_WORKERS=0 \
+    ${overrides[@]+"${overrides[@]}"} \
+    PYTEST_ARGS="${EVAL_RECORD_TESTS} -s -q -p no:cacheprovider" 2>&1 |
+    redact | redact_account
+}
+
 [[ $# -eq 1 ]] || usage
 case "$1" in
   init)
@@ -352,6 +393,10 @@ case "$1" in
   gateway-live)
     need_tools terraform az jq docker uv make
     cmd_gateway_live
+    ;;
+  eval-record)
+    need_tools terraform az jq docker uv make
+    cmd_eval_record
     ;;
   *) usage ;;
 esac

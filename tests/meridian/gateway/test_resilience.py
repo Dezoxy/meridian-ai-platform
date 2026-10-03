@@ -365,8 +365,9 @@ def test_the_time_limits_nest_inside_the_runtimes_timeout_to_the_gateway() -> No
 
 def test_every_provider_error_kind_is_deliberately_counted_or_not() -> None:
     # The request or the credential is at fault, not the deployment, or the
-    # provider's content filter refused the request (S047).
-    uncounted = {"rejected", "auth", "filtered"}
+    # provider's content filter refused the request (S047), or no recording
+    # answers the request, which says nothing of any deployment (S050).
+    uncounted = {"rejected", "auth", "filtered", "not-recorded"}
 
     assert DEPLOYMENT_FAILURES.isdisjoint(uncounted)
     assert DEPLOYMENT_FAILURES | uncounted == set(get_args(ProviderErrorKind))

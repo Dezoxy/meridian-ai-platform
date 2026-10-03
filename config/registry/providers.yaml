@@ -8,3 +8,6 @@ providers:
   - id: replay
     kind: replay
     description: Deterministic replay inside the platform; sends nothing out.
+  - id: recorded
+    kind: recorded
+    description: Answers recorded from a real model, replayed inside the platform; sends nothing out (S050).

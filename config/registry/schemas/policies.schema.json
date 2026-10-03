@@ -35,7 +35,7 @@
     },
     "ReplayRoute": {
       "additionalProperties": false,
-      "description": "The deployment the gateway uses for a purpose in replay mode.",
+      "description": "The deployment the gateway uses for a purpose in replay mode (and, for\nthe ``recorded`` list, in recorded mode).",
       "properties": {
         "deployment": {
           "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -94,6 +94,14 @@
         "$ref": "#/$defs/DataClassPolicy"
       },
       "title": "Data Classes",
+      "type": "array"
+    },
+    "recorded": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReplayRoute"
+      },
+      "title": "Recorded",
       "type": "array"
     },
     "replay": {
