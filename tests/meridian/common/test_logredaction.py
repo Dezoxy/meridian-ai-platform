@@ -122,7 +122,9 @@ def test_a_record_whose_formatting_fails_leaks_nothing_to_the_handler_or_stderr(
     assert "anna@" not in stream.getvalue()
     assert "anna@" not in captured.err
     assert "anna@" not in captured.out
-    assert "TypeError" in captured.err  # the failure itself is still reported
+    # The factory formats the record, so it is withheld whole and the handler
+    # has no failure to print.
+    assert stream.getvalue() == "log record withheld: it could not be redacted\n"
 
 
 def test_a_mapping_of_arguments_keeps_its_keys() -> None:
@@ -262,6 +264,67 @@ def test_an_argument_whose_text_cannot_be_read_withholds_the_record() -> None:
 
     assert record.msg == "log record withheld: it could not be redacted"
     assert record.args == ()
+
+
+def test_a_template_that_cuts_the_value_in_two_withholds_the_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_log_redaction()
+    stream, logger = _handler_output("meridian.test.cut")
+
+    logger.info("contact %s@example.com now", "kovacs.peter")
+
+    captured = capsys.readouterr()
+    assert "kovacs.peter" not in stream.getvalue()
+    assert "kovacs.peter" not in captured.err
+    assert "kovacs.peter" not in captured.out
+    assert stream.getvalue() == "log record withheld: it could not be redacted\n"
+
+
+def test_a_mapping_template_that_cuts_the_value_in_two_withholds_the_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_log_redaction()
+    stream, logger = _handler_output("meridian.test.cutmap")
+
+    logger.info("contact %(u)s@example.com now", {"u": "kovacs.peter"})
+
+    captured = capsys.readouterr()
+    assert "kovacs.peter" not in stream.getvalue()
+    assert "kovacs.peter" not in captured.err
+    assert "kovacs.peter" not in captured.out
+    assert stream.getvalue() == "log record withheld: it could not be redacted\n"
+
+
+def test_a_record_that_cannot_be_formatted_is_withheld_with_no_arguments() -> None:
+    install_log_redaction()
+
+    record = _build("contact %s@example.com now", ("kovacs.peter",))
+
+    assert record.msg == logredaction.WITHHELD
+    assert record.args == ()
+    assert record.getMessage() == logredaction.WITHHELD
+
+
+def test_a_number_that_looks_like_a_card_is_logged_as_the_number_it_is(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_log_redaction()
+    stream, logger = _handler_output("meridian.test.number")
+
+    logger.info("took %d ns", 4111111111111111)
+
+    assert stream.getvalue() == "took 4111111111111111 ns\n"
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("value", [4111111111111111, 1.5, True, None])
+def test_a_number_a_bool_and_none_stay_the_objects_they_were(value: object) -> None:
+    install_log_redaction()
+
+    record = _build("got %s", (value,))
+
+    assert record.args[0] is value
 
 
 def test_installing_twice_wraps_once() -> None:

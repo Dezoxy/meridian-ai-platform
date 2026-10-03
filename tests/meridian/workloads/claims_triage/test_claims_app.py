@@ -3,6 +3,7 @@
 import json
 import logging
 import threading
+import unicodedata
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -423,10 +424,60 @@ def test_a_name_part_that_is_a_placeholders_word_does_not_match_the_placeholder(
     assert "[[" not in result
 
 
-def test_a_part_is_not_matched_inside_square_brackets() -> None:
-    claimant = Claimant(name="Ana Kovacs", email="ana.kovacs@example.com")
+ANNA = Claimant(name="Anna Kovacs", email="anna.kovacs@example.com")
 
-    assert description_for_run("[Ana] and Ana", claimant) == "[Ana] and [name]"
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Reported by [Anna Kovacs] today", "Reported by [[name]] today"),
+        ("Ana and Anna Kovacs] today", "Ana and [name]] today"),
+        ("[Kovacs] and Kovacs[", "[[name]] and [name]["),
+        ("Reported by Anna_Kovacs today", "Reported by [name]_[name] today"),
+    ],
+    ids=["both-brackets", "closing-bracket", "single-part", "underscore"],
+)
+def test_a_name_next_to_a_square_bracket_or_an_underscore_is_replaced(
+    text: str, expected: str
+) -> None:
+    assert description_for_run(text, ANNA) == expected
+
+
+def test_a_name_is_bounded_by_letters_and_digits_only() -> None:
+    text = "Kovacs_1 and 2Kovacs and Kovacsx and Kovacs7"
+
+    assert description_for_run(text, ANNA) == (
+        "[name]_1 and 2Kovacs and Kovacsx and Kovacs7"
+    )
+
+
+def test_a_placeholder_stays_whole_next_to_a_name() -> None:
+    claimant = Claimant(name="Name Smith", email="ann@example.com")
+
+    result = description_for_run(
+        "[name] [email] [iban] [card] [phone] and Name Smith", claimant
+    )
+
+    assert result == "[name] [email] [iban] [card] [phone] and [name]"
+
+
+def test_a_name_in_a_different_unicode_form_is_replaced() -> None:
+    composed = "Kovács"
+    decomposed = "Kovács"
+    claimant = Claimant(name=f"Peter {composed}", email="peter@example.net")
+
+    result = description_for_run(f"Peter {decomposed} and {composed}.", claimant)
+
+    assert result == "[name] and [name]."
+    assert unicodedata.is_normalized("NFC", result)
+
+
+def test_a_composed_description_is_matched_by_a_decomposed_name() -> None:
+    claimant = Claimant(name="Peter Kovács", email="peter@example.net")
+
+    result = description_for_run("Peter Kovács wrote.", claimant)
+
+    assert result == "[name] wrote."
 
 
 @pytest.mark.parametrize(

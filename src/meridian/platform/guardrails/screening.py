@@ -29,6 +29,7 @@ def _phrase(*words: str) -> str:
     return r"\s+".join(words)
 
 
+_BODY_PART = r"(?:arm|leg|wrist|ankle|ribs?|nose|collarbone|hip)"
 _SPECIAL_CATEGORY = re.compile(
     r"\b(?:"
     + "|".join(
@@ -59,6 +60,17 @@ _SPECIAL_CATEGORY = re.compile(
             r"surgeons?",
             r"chemotherapy",
             r"hiv",
+            r"concussions?",
+            r"paramedics?",
+            r"clinics?",
+            r"nurses?",
+            r"dentists?",
+            r"x-rays?",
+            r"dementia",
+            r"epilepsy",
+            _phrase("heart", "attacks?"),
+            _phrase("broken", _BODY_PART),
+            _phrase("broke", "my", _BODY_PART),
             # The other Article 9 categories, as unambiguous words only.
             r"religio(?:n|ns|us)",
             _phrase("ethnic", "origin"),
@@ -68,6 +80,7 @@ _SPECIAL_CATEGORY = re.compile(
             _phrase("political", "opinions?"),
             r"biometrics?",
             r"genetics?",
+            r"(?:muslim|jewish|catholic|christian|hindu|buddhist|sikh)s?",
         ]
     )
     + r")\b"
@@ -80,10 +93,13 @@ def holds_special_category(text: str) -> bool:
     orientation, political opinion, biometric and genetic data.
 
     The text is normalised, then matched against a short, conservative list of
-    whole words and phrases. The list is incomplete on purpose: a miss is
-    T-13's residual risk, and a word that merely resembles one ("will", "ill",
-    "hospitality") never matches. A false positive costs little: the claim
-    goes to a person (T-73). It does not log or keep the text."""
+    whole words and phrases. The list is English only: a claim written in
+    Hungarian or German is not screened by it. It is incomplete on purpose: a
+    miss is T-13's residual risk, and a word that merely resembles one
+    ("will", "ill", "hospitality") never matches; a word with an ordinary
+    sense ("stroke", "stitches", "bruises", "anxiety") is left out. A false
+    positive costs little: the claim goes to a person (T-73). It does not log
+    or keep the text."""
     return _SPECIAL_CATEGORY.search(_normalise(text)) is not None
 
 

@@ -3,11 +3,13 @@
 Every chat message and every embedding input has its personal identifiers
 replaced (``meridian.platform.guardrails.redact``), whatever the request's data
 class: the class decides where a request may go, never whether an e-mail address
-or a card number is sent. It runs when the operation is built, after policy has
-let the request through and before the rate limiter, so the estimate, the
+or a card number is sent. It runs when the operation is built, after the route
+decision's refusals (403) and before the rate limiter, so the estimate, the
 limiter, the ledger, the provider and the replay provider all see the redacted
 text and nothing below the route decision sees the original. A request policy
-refuses is never redacted: it costs time in proportion to its text.
+refuses is never redacted: it costs time in proportion to its text. A request
+the limiter or the budget refuses (429, 413) has been redacted: those refusals
+come after this step.
 
 Roles, and the number and order of messages and inputs, are kept. The new
 request is copied, not validated again: a placeholder can be one character

@@ -47,11 +47,20 @@ JSON_ESCAPE_BEFORE = rf"\\[{JSON_ESCAPE_LETTERS}]"
 # starts only where a local part starts, so one of any length costs one scan,
 # and it is redacted whole, never in part.
 EMAIL_LOCAL_CHAR = r"[\w.%+\-̀-ͯ]"
+# The domain is dot-separated labels of letters and digits of any script (not
+# "_"), a combining mark and hyphens, then a top-level domain of two or more
+# letters of any script, or a punycode one ("xn--" and letters or digits). A
+# label cannot hold ".", so each label ends at one dot and the match has one
+# way to go; the punycode form comes first, so that "xn" alone is not taken as
+# a two-letter domain. The ASCII-only form is a subset, so what matched still
+# matches.
+EMAIL_LABEL_CHAR = r"(?:[^\W_]|[̀-ͯ-])"
+EMAIL_TLD = r"(?:xn--[A-Za-z0-9]+|[^\W\d_]{2,})"
 EMAIL = re.compile(
     rf"(?:(?<!{EMAIL_LOCAL_CHAR})(?!(?<=\\)[{JSON_ESCAPE_LETTERS}])"
     rf"|(?<={JSON_ESCAPE_BEFORE}))"
     rf"{EMAIL_LOCAL_CHAR}+"
-    r"@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}"
+    rf"@(?:{EMAIL_LABEL_CHAR}+\.)+{EMAIL_TLD}"
 )
 
 # Two letters, two digits, then 11 to 30 letters or digits: groups of four
@@ -75,6 +84,10 @@ CARD_RUN = re.compile(rf"(?<![0-9+])[0-9]+(?:[{SPACE_CHARS}-][0-9]+)*")
 DIGIT_GROUP = re.compile(r"[0-9]+")
 CARD_MIN_DIGITS = 13
 CARD_MAX_DIGITS = 19
+# Every group of a window but the last holds at least four digits, as in 4-4-4-4,
+# 4-6-5, 4-6-4 and an unspaced run. A date, a short number or a phone number
+# written in small groups is not a card, whatever its checksum says.
+CARD_MIN_GROUP_DIGITS = 4
 
 # International form only: "+", a country code and 7 to 14 more digits, with
 # single spaces or hyphens and one pair of parentheses around a group. National
@@ -130,8 +143,10 @@ def redact(text: str) -> Redaction:
     space, a narrow no-break space, a thin space or a tab (a card and a phone
     number also by a hyphen); a separator that JSON writes as an escape is not
     one. In a run of digit groups, a card is any window of whole groups holding
-    13 to 19 digits: from the earliest start, the longest window that passes
-    Luhn and is a whole token is replaced, then the search resumes after it. An
+    13 to 19 digits, every group but the last of four digits or more (a date
+    followed by a number is not one): from the earliest start, the longest
+    window that passes Luhn and is a whole token is replaced, then the search
+    resumes after it. An
     IBAN written without spaces is replaced only when its country code is
     uppercase, so an all-lowercase unspaced IBAN is missed (T-73's residual).
     Text that is not matched is returned unchanged, byte for byte. It does not
@@ -293,7 +308,8 @@ def _card_spans(text: str, run_start: int, run_end: int) -> list[tuple[int, int]
     """The cards in a run of digit groups, left to right and apart.
 
     From each group start, in order, the window is the longest run of whole
-    groups holding 13 to 19 digits that is a whole token and passes Luhn. The
+    groups holding 13 to 19 digits, all but the last of four digits or more,
+    that is a whole token and passes Luhn. The
     first start that has one wins, so of two overlapping valid windows the
     earliest start is taken, then the longest from it; the search resumes at
     the group after it. A window never starts with a zero: Luhn ignores leading
@@ -317,6 +333,11 @@ def _card_spans(text: str, run_start: int, run_end: int) -> list[tuple[int, int]
     return spans
 
 
+def _group_too_short(group: tuple[int, int]) -> bool:
+    """Whether a group holds too few digits to sit anywhere but last in a card."""
+    return group[1] - group[0] < CARD_MIN_GROUP_DIGITS
+
+
 def _longest_card_window(
     text: str, groups: list[tuple[int, int]], first: int
 ) -> tuple[int, int] | None:
@@ -329,6 +350,8 @@ def _longest_card_window(
     best: tuple[int, int] | None = None
     for last in range(first, len(groups)):
         group_start, group_end = groups[last]
+        if last > first and _group_too_short(groups[last - 1]):
+            break
         digits += text[group_start:group_end]
         if len(digits) > CARD_MAX_DIGITS:
             break

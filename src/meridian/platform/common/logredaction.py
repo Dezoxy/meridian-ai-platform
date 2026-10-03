@@ -17,8 +17,10 @@ because the line is built later, by the handler. An identifier cut in two by
 the template (``"%s@example.com"``) is not found; log the whole value as one
 argument. A record that cannot be redacted is withheld: its message becomes a
 fixed text with no arguments and no exception, because the logging module
-prints a record it cannot format to stderr with its arguments as they are. The
-factory never raises.
+prints a record it cannot format to stderr with its arguments as they are, so
+the factory formats the record once after redacting it and withholds it when
+that fails (a template that cuts a value in two does). Numbers, bools and
+``None`` are left as they are. The factory never raises.
 """
 
 import logging
@@ -32,7 +34,11 @@ WITHHELD = "log record withheld: it could not be redacted"
 
 def _redacted_value(value: object) -> object:
     """``value`` itself when nothing in its text is found, else the redacted
-    text: a string is redacted as it is, any other object by its ``str()``."""
+    text: a string is redacted as it is, any other object by its ``str()``. A
+    number, a bool and ``None`` stay as they are: they hold no address or IBAN,
+    and ``%d`` needs a number."""
+    if value is None or isinstance(value, int | float):  # bool is an int
+        return value
     text = value if isinstance(value, str) else str(value)
     redacted = redact(text)
     return redacted.text if redacted.found else value
@@ -59,6 +65,10 @@ def _redact_record(record: logging.LogRecord) -> None:
         # The handler's formatter reuses ``exc_text`` instead of formatting.
         traceback = logging.Formatter().formatException(record.exc_info)
         record.exc_text = redact(traceback).text
+    # A template that cuts a value in two ("%s@example.com") is redacted piece by
+    # piece and cannot be formatted; the handler would then print the arguments
+    # as they are. Formatting here, inside the guard, withholds that record.
+    record.getMessage()
 
 
 def _withhold(record: logging.LogRecord) -> None:

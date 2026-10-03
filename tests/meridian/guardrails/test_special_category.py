@@ -54,6 +54,19 @@ HEALTH_WORDS = [
     "surgeon",
     "chemotherapy",
     "HIV",
+    "concussion",
+    "paramedic",
+    "paramedics",
+    "clinic",
+    "clinics",
+    "nurse",
+    "nurses",
+    "dentist",
+    "dentists",
+    "x-ray",
+    "x-rays",
+    "dementia",
+    "epilepsy",
 ]
 OTHER_WORDS = [
     "religion",
@@ -61,6 +74,24 @@ OTHER_WORDS = [
     "ethnicity",
     "biometric",
     "genetic",
+    "muslim",
+    "jewish",
+    "catholic",
+    "christian",
+    "hindu",
+    "buddhist",
+    "sikh",
+]
+BODY_PARTS = [
+    "arm",
+    "leg",
+    "wrist",
+    "ankle",
+    "rib",
+    "ribs",
+    "nose",
+    "collarbone",
+    "hip",
 ]
 PHRASES = [
     "mental health",
@@ -68,6 +99,9 @@ PHRASES = [
     "trade union",
     "sexual orientation",
     "political opinion",
+    "heart attack",
+    *[f"broken {part}" for part in BODY_PARTS],
+    *[f"broke my {part}" for part in BODY_PARTS],
 ]
 
 
@@ -133,6 +167,17 @@ def test_a_word_inside_another_word_is_not_special_category() -> None:
         "the alarm was disabled",
         "the burglar disabled the alarm and took the laptop",
         "the hive was empty",
+        "he suffered a stroke of bad luck",
+        "stitches in the curtain came loose",
+        "bruises on the apples",
+        "anxiety about the deadline",
+        "the nursery was flooded",
+        "a clinical review of the file",
+        "the broken window let the rain in",
+        "he broke my fence and my gate",
+        "the dentistry bill",
+        "the paramedical forms",
+        "a heart of gold and an attack of nerves",
         "",
     ],
 )

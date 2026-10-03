@@ -88,15 +88,15 @@ def test_of_two_overlapping_valid_windows_the_earliest_start_is_taken() -> None:
 
 
 def _two_valid_lengths_from_one_start() -> str:
-    """Six groups of three digits: the first five (15 digits) and all six
-    (18 digits) both pass Luhn."""
-    head = ["411", "111", "111", "111"]
-    for fifth in range(1000):
-        fifth_group = f"{fifth:03d}"
-        if not _luhn_valid("".join([*head, fifth_group])):
+    """Five groups: four of four digits and a last of three. The first four
+    (16 digits) and all five (19 digits) both pass Luhn."""
+    head = ["4111", "1111", "1111"]
+    for fourth in range(10000):
+        fourth_group = f"{fourth:04d}"
+        if not _luhn_valid("".join([*head, fourth_group])):
             continue
-        for sixth in range(1000):
-            groups = [*head, fifth_group, f"{sixth:03d}"]
+        for fifth in range(1000):
+            groups = [*head, fourth_group, f"{fifth:03d}"]
             if _luhn_valid("".join(groups)):
                 return " ".join(groups)
     raise AssertionError("no groups found")
@@ -104,7 +104,7 @@ def _two_valid_lengths_from_one_start() -> str:
 
 def test_from_one_start_the_longest_valid_window_is_taken() -> None:
     text = _two_valid_lengths_from_one_start()
-    assert _luhn_valid(text.replace(" ", "")[:15])
+    assert _luhn_valid(text.replace(" ", "")[:16])
     assert _luhn_valid(text.replace(" ", ""))
 
     result = redact(f"ref {text} end")

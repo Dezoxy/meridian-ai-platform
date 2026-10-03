@@ -7,11 +7,12 @@ with the higher of the tenant's data class and the one the request's optional
 ``X-Meridian-Data-Class`` header names (T-11), and refused (403) and audited
 when nothing is allowed or the class is ``special`` (T-13). Only a request that
 passes has its text redacted (T-20), whatever its class, so nothing below sees
-an e-mail address, an IBAN or a card number, and a refused request costs no
-redaction. The tenant's rate windows
-come next, one set for both purposes: a request over them is refused (429, or
-413 when it alone is larger than the tenant's token limit) before any circuit,
-reservation or provider is touched. Then the allowed candidates are walked in
+an e-mail address, an IBAN or a card number, and a request policy refuses costs
+no redaction (one a tenant limit or the budget refuses has been redacted). The
+tenant's rate windows come next, one set for both purposes: a request over them
+is refused (429, or 413 when it alone is larger than the tenant's token limit)
+before any circuit, reservation or provider is touched. Then the allowed
+candidates are walked in
 order under one deadline (S042), each one reserved in the ledger before it is
 called (QA-12). A candidate whose circuit is open, or that the deadline leaves
 no time for, is skipped; a deployment's own failure moves the walk to the next

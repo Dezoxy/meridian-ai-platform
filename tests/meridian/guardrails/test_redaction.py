@@ -159,6 +159,49 @@ def test_a_card_before_a_year_is_still_replaced() -> None:
     assert dict(result.found) == {"card": 1}
 
 
+# Each text holds a run of digit groups whose digits pass Luhn, so that a window
+# of any groups would be taken for a card; no card is written that way. Each
+# pair is the text and the digits the window would hold.
+LUHN_PASSING_NON_CARDS = [
+    ("2021-01-10 22914", "2021011022914"),
+    ("13 July 2026 12 34567 1000", "202612345671000"),
+    ("2026-07-13 06 30 1234561", "2026071306301234561"),
+]
+
+
+@pytest.mark.parametrize(("text", "digits"), LUHN_PASSING_NON_CARDS)
+def test_a_date_followed_by_a_number_is_not_a_card(text: str, digits: str) -> None:
+    assert 13 <= len(digits) <= 19
+    assert _luhn_valid(digits)
+    assert re.sub(r"[^0-9]", "", text).endswith(digits)
+
+    result = redact(f"Ref {text} noted")
+
+    assert result.text == f"Ref {text} noted"
+    assert dict(result.found) == {}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("3782 822463 10005", "[card]"),
+        ("3056 930902 5904", "[card]"),
+        ("3782-822463-10005", "[card]"),
+        ("378282246310005", "[card]"),
+        ("91 4111 1111 1111 1111", "91 [card]"),
+        ("1 4111 1111 1111 1111", "1 [card]"),
+        ("4111 1111 1111 1111 123", "[card] 123"),
+    ],
+)
+def test_a_card_shaped_run_of_groups_is_still_replaced(
+    text: str, expected: str
+) -> None:
+    result = redact(text)
+
+    assert result.text == expected
+    assert dict(result.found) == {"card": 1}
+
+
 def test_a_card_is_not_half_taken_as_a_phone_number() -> None:
     result = redact(f"Card {CARDS[0]} and phone {PHONES[0]} on file")
 
@@ -178,6 +221,41 @@ def test_an_email_hides_the_digits_it_carries() -> None:
 
     assert result.text == "Write to [email] now"
     assert dict(result.found) == {"email": 1}
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "info@árvíztűrő.hu",
+        "kovács.péter@példa.hu",
+        "bob@münchen.de",
+        "bob@xn--e1afmkfd.xn--p1ai",
+        "bob@пример.рф",
+        f"bob@mu{chr(0x308)}nchen.de",
+        "bob@mail.münchen-süd.de",
+        "bob@münchen.example.com",
+    ],
+)
+def test_an_address_with_an_accented_domain_is_replaced_whole(address: str) -> None:
+    result = redact(f"Write to {address}, please.")
+
+    assert result.text == "Write to [email], please."
+    assert dict(result.found) == {"email": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "bob@münchen",
+        "bob@münchen.d",
+        "bob@münchen.1",
+        "bob@xn--",
+        "bob@ex_ample.com",
+        "bob@",
+    ],
+)
+def test_an_address_without_a_domain_and_tld_is_left_alone(text: str) -> None:
+    assert redact(text).text == text
 
 
 def test_a_phone_number_keeps_the_text_after_its_last_digit() -> None:
@@ -469,6 +547,11 @@ ADVERSARIAL: dict[str, list[Shape]] = {
         lambda n: "a@" + "a." * (n // 2),
         lambda n: "a@" * (n // 2),
         lambda n: "a.b" * (n // 3) + "@x",
+        lambda n: "a@" + "é." * (n // 2),
+        lambda n: "a@" + "é" * n,
+        lambda n: "a@" + "é-" * (n // 2),
+        lambda n: "a@" + "xn--a." * (n // 6),
+        lambda n: "a@é." + "ü" * n,
     ],
     "iban": [
         lambda n: "GB82" + " abcd" * (n // 5),
@@ -484,6 +567,8 @@ ADVERSARIAL: dict[str, list[Shape]] = {
         lambda n: "1  " * (n // 3),
         lambda n: "4111 1111 1111 111 " * (n // 19),
         lambda n: "4111 1111 1111 1112 " * (n // 20),
+        lambda n: "1" * 3 + " 1111" * (n // 5),
+        lambda n: "1 1111 " * (n // 7),
     ],
     "phone": [
         lambda n: "+" + "1 " * (n // 2),

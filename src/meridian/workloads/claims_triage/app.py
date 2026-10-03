@@ -16,6 +16,7 @@ only reads it (T-31). It answers 200 only when the run completed.
 
 import logging
 import re
+import unicodedata
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any
@@ -45,7 +46,7 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
-from meridian.platform.guardrails import EMAIL_PLACEHOLDER, redact
+from meridian.platform.guardrails import EMAIL_PLACEHOLDER, PLACEHOLDERS, redact
 from meridian.runtime.models import RunResponse, RunState
 from meridian.workloads.claims_triage.adjuster import (
     NO_SUCH_CLAIM_DETAIL,
@@ -124,11 +125,15 @@ CURLY_APOSTROPHE = chr(0x2019)
 # The characters a name is split on into the parts that are replaced on their
 # own: white space, hyphens, apostrophes (straight and curly) and dots.
 NAME_PART_SEPARATORS = re.compile(r"[\s\-'" + CURLY_APOSTROPHE + r".]+")
-# A name is matched as a whole word, and never next to a square bracket: a
-# placeholder is "[word]", and a part that is that word ("Name", "Email") must
-# not turn it into "[[name]]".
-NAME_BOUNDARY_BEFORE = r"(?<![\w\[\]])"
-NAME_BOUNDARY_AFTER = r"(?![\w\[\]])"
+# A name is matched as a whole word: bounded by letters and digits only, so an
+# underscore or a square bracket next to it is not a boundary that protects it.
+NAME_BOUNDARY_BEFORE = r"(?<![^\W_])"
+NAME_BOUNDARY_AFTER = r"(?![^\W_])"
+# The exact placeholders, tried first at every position: a part that is a
+# placeholder's word ("Name", "Email") must not turn "[name]" into "[[name]]".
+PLACEHOLDER_PATTERN = "|".join(
+    re.escape(placeholder) for placeholder in (*PLACEHOLDERS.values(), NAME_PLACEHOLDER)
+)
 
 
 def _name_alternatives(name: str) -> list[str]:
@@ -157,21 +162,33 @@ def description_for_run(description: str, claimant: Claimant) -> str:
     it finds (so a third party's address that shares the claimant's surname is
     one address, not cut by a name); then the full name and each part of it of
     at least three letters become ``[name]``, each as a whole word and ignoring
-    case. A pattern cannot find a name, and this API is the one place that knows
-    it. The claimant's values are escaped: they are matched, never read as a
-    pattern. The name is replaced in one pass, and never next to a square
-    bracket, so no placeholder is matched or nested. The copy can be longer than
-    the submission (``MAX_RUN_DESCRIPTION_CHARS``)."""
+    case, bounded by letters and digits only (a square bracket or an underscore
+    next to it does not protect it). A pattern cannot find a name, and this API
+    is the one place that knows it. The claimant's values are escaped: they are
+    matched, never read as a pattern. One pass finds the exact placeholders
+    first and keeps each as it is, then the name, so no placeholder is cut or
+    nested. The description and the name are compared in Unicode form NFC, and
+    the copy is NFC. The copy can be longer than the submission
+    (``MAX_RUN_DESCRIPTION_CHARS``)."""
     emailless = re.sub(
-        re.escape(claimant.email), EMAIL_PLACEHOLDER, description, flags=re.IGNORECASE
+        re.escape(claimant.email),
+        EMAIL_PLACEHOLDER,
+        unicodedata.normalize("NFC", description),
+        flags=re.IGNORECASE,
     )
-    redacted = redact(emailless).text
-    alternatives = _name_alternatives(claimant.name)
+    redacted = unicodedata.normalize("NFC", redact(emailless).text)
+    alternatives = _name_alternatives(unicodedata.normalize("NFC", claimant.name))
     if not alternatives:
         return redacted
     whole = "(?:" + "|".join(alternatives) + ")"
-    pattern = NAME_BOUNDARY_BEFORE + whole + NAME_BOUNDARY_AFTER
-    return re.sub(pattern, NAME_PLACEHOLDER, redacted, flags=re.IGNORECASE)
+    pattern = re.compile(
+        f"({PLACEHOLDER_PATTERN})|{NAME_BOUNDARY_BEFORE}{whole}{NAME_BOUNDARY_AFTER}",
+        flags=re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: match.group(1) or NAME_PLACEHOLDER,
+        redacted,
+    )
 
 
 class RuntimeCallError(Exception):
