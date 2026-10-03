@@ -165,7 +165,7 @@ and Pydantic, at the cost of one dependency.
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage, at most five triages per claim; ~~a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63)~~ (split on 2026-10-03: the deadline and the sweep are S052, the report date and the claim history S053) | done | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
-| S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
+| S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | doing | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
@@ -4552,6 +4552,64 @@ commit that changes `src/` or `tests/`.
   uploads (T-38); a flaky shell poll test (`test_kind_manifests.py::
   test_poll_clears_the_last_error_on_success`, failed once and passed
   alone).
+
+### S049 — Claimant pages
+
+**Status:** doing · **Started:** 2026-10-03
+**Goal:** a claimant submits a claim on a server-rendered page, reads its
+status, reports the documents asked for and withdraws it, and the page
+tells the claimant what happens next without describing the proposal.
+**Decisions:**
+
+- The pages live in the Claims Triage App under `/claimant/`, beside the
+  adjuster's, out of the OpenAPI contract, with the same headers (no script,
+  no framing, `no-store`) and the same refusal of a post another site made
+  (T-70). `GET /claimant/claims` is the start page: the claim form and a
+  lookup by claim ID. `POST /claimant/claims` stores and triages the claim
+  through the code of `POST /claims`; `GET /claimant/claims/{claim_id}` is
+  the status page; `POST .../documents` and `POST .../withdrawal` run the
+  code of S048's JSON routes. A post that succeeds redirects to the status
+  page (303).
+- The claim ID is a field of the form. The API takes the client's ID and
+  the golden set's IDs are fixed; an ID the server makes up would change
+  the contract. Until claimants are identified (S021), anyone who reaches
+  the pages reads any claim's status by its ID (T-01, T-65).
+- The report date is a field too, the claimant's word, as on the JSON route
+  (T-66, S053).
+- Once a claim is stored, every outcome of its triage redirects to the
+  status page, whose text is the claim's state. Only a refusal before
+  anything is stored (another submission under this ID, 409; a form that
+  does not validate, 422) shows the form again.
+- What the status page shows (T-65): the claim's ID, when it was received,
+  what happens next in the claimant's words, the documents asked for and
+  the names that arrived. `awaiting_adjuster` and `triage_failed` read the
+  same ("an adjuster is reviewing it"). The documents asked for are the
+  proposal's missing documents; an adjuster's `request_documents` names
+  none, and the page then says documents were asked for. Never the reason,
+  an amount, an indicator, the model's text, the claimant's name or email,
+  or the description.
+- The form says that every value must be fictional (T-04). A form that does
+  not validate is shown again with each field's message and never its value
+  in the message; nothing of a claim but its ID is logged (T-03).
+- Threat model (`feature-threat-model`, TB-1, TB-2, TB-8):
+  - **T-01:** the pages are as reachable as the adjuster's: on kind only
+    from the laptop, through the `*.localhost` route; no sign-in until
+    S021. Every post takes T-70's origin check. Residual: a claim's status
+    is read by its ID.
+  - **T-04:** the banner on the form.
+  - **T-65:** the status page as above. Residual: a withdrawal is offered
+    from `awaiting_adjuster` and not from `triage_failed` (the lifecycle has
+    no such edge), so its button tells the two apart; an approval within
+    the request still tells the rules from an adjuster.
+  - **T-07:** the form's values shown again and the document names are
+    rendered as text, tested with markup.
+  - **T-38:** document names are stripped and deduplicated before the
+    bound of 20.
+  - Invariants: no model call outside the gateway, no tool, no framework
+    import, no secret. No tension.
+- First commit: the CI python job's limit goes from 10 to 15 minutes (it
+  took 8 min 49 s on S048's pull request); running the tests in parallel is
+  the real fix and needs a database per worker.
 
 ## Part D — Open questions
 
