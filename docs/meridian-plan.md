@@ -98,7 +98,8 @@ and Pydantic, at the cost of one dependency.
   documentation gates); Terraform and Helm keep infrastructure.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
-  `eval run` and `eval compare`; S039 would add `workload new`.
+  ~~`eval run` and~~ `eval compare`; S050 adds `eval run`; S039 would add
+  `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
@@ -106,8 +107,10 @@ and Pydantic, at the cost of one dependency.
 - **Cost.** Evaluation uses the replay provider unless `--live` is passed
   (C-04).
 - **Placement.** `src/meridian/platform/cli/`, importing only platform
-  packages. The Evaluation Harness reaches workloads through the runtime
-  API, so the import contract from S002 covers the CLI too.
+  packages. The Evaluation Harness reaches workloads through the ~~runtime
+  API~~ Claims API (S017: every tool call needs the claim's row, so a run
+  started on the runtime alone is refused), so the import contract from
+  S002 covers the CLI too.
 
 ### Demo checkpoints
 
@@ -115,7 +118,7 @@ and Pydantic, at the cost of one dependency.
 |---|---|
 | S041 | A claim flows through API, runtime and gateway, visible as one trace |
 | S015 | A triage proposal pauses for an adjuster and resumes on the decision |
-| S017 | An evaluation report comparing two prompt versions |
+| ~~S017~~ S050 | An evaluation report comparing two prompt versions |
 | S018 | The full fifteen-minute demo on kind, from a clean checkout |
 | S026 | The same demo on AKS, recorded, with the run's cost logged |
 | S028 | An incident record written from a real game day |
@@ -156,7 +159,8 @@ and Pydantic, at the cost of one dependency.
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
-| S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
+| S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | doing | S003, S014 |
+| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
 ### M2 — Azure, identity, delivery
@@ -179,7 +183,7 @@ and Pydantic, at the cost of one dependency.
 | S027 | Load test and SLO thresholds | A load test measures latency and error rate; SLO thresholds set from the measurements; an error-budget panel | todo | S026 |
 | S028 | Game day | Provider outage, budget exhaustion and database failure exercised; INC-001 written from the real timeline; rollback exercised | todo | S027 |
 | S029 | Backup and restore drill | PostgreSQL restored into a scratch environment; restore time measured and recorded | todo | S020 |
-| S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023 |
+| S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023, S050 |
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
 | S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | todo | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
@@ -3963,6 +3967,62 @@ the same code as the JSON decision.
 - No step yet: reads of a claim's page are not audited; the queue shows at
   most 100 claims with no next page.
 
+### S017 — Evaluation harness
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** every change replays the 40 golden claims through the real
+services, grades each proposal against the oracle with rules, and fails CI
+when a grade regresses or when the prompt, the tools or the golden set
+changed without a reviewed new baseline.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request. No model is reachable (the Azure login is blocked), and the
+  golden set has no label a judge could grade groundedness against, so the
+  LLM judge, latency and cost, a recorded or live model, the tool
+  arguments and `eval run` are S050, new. QA-06's route target and its
+  absolute half are decided by rules alone, so they stay here.
+- The model is the scripted one the stack test already uses: it answers
+  each assessment with the oracle's verdict, so it ignores the prompt.
+  The gate on prompt changes is therefore this: the report carries a hash
+  of the prompt, and `meridian eval compare` fails when the prompt, the
+  tools' contracts or the golden set's hashes differ from the committed
+  baseline's, until a new baseline arrives in the same reviewed diff. What
+  a prompt change does to the answers is measured only once S050 records
+  a real model. Rejected for this step: a recorded gateway mode keyed by
+  the request's fingerprint, which is the real gate but needs a new
+  gateway mode, a recording format and a model to record (S050).
+- The run stays in-process, as the successor of
+  `test_a_scripted_model_gives_the_oracle_s_proposals`: it already
+  replays all 40 claims through the real services inside the tenant's
+  rate windows on a hand-moved clock, and CI's python job has no time for
+  a second 40-claim run. Rejected: `eval run` over HTTP against kind,
+  because the Claims API's answer carries only the route (it hides the
+  reason, T-65) and no read path for a proposal exists (S050).
+- The Evaluation Harness reaches workloads through the Claims API, not
+  the runtime alone: every tool call needs the claim's row (`claim-not-bound`),
+  so a run started on the runtime alone is refused. Part B's
+  Developer CLI section is corrected.
+- The platform owns the report's format and the comparison
+  (`meridian.platform.evaluation`, generic over grader names); the
+  workload owns its graders, since route, reason and amount are the
+  claims workload's own words. The CLI imports only the platform package.
+- The report is a JSON file, not rows in the Platform Database: the
+  baseline lives in Git, where a change to it is a reviewed diff (T-29).
+  The database store the model draws is S050's.
+- A proposal names the prompt that drafted it: `drafted_by` gains the
+  prompt's hash, so a proposal on the adjuster's page and a report can be
+  tied to one prompt.
+
+**Work log:**
+
+- Opened from `main` at 19cd45b, after S016 merged (pull request 35,
+  its 25 files identical on `main`). The ninth step in one session, on
+  the owner's word.
+
+**Result / verification:** —
+**Follow-ups:** —
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -4037,3 +4097,9 @@ the same code as the JSON decision.
   model had given S016 (T-01, T-04, T-65), become S049, new, depending on
   S016; S018 does not wait for them. S016 keeps one session instead of
   two.
+- **v0.18, 2026-10-03:** S017 split by the session, for the owner to
+  accept at its pull request: the LLM judge, latency and cost, a recorded
+  or live model, the tool arguments, `eval run` and the demo checkpoint
+  comparing two prompt versions become S050, new, depending on S017; S030
+  depends on S050 as well. The Developer CLI section says the harness
+  reaches workloads through the Claims API.
