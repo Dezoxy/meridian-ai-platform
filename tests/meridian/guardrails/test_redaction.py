@@ -1,7 +1,11 @@
 """Redaction: what it replaces, what it leaves byte for byte, and how fast."""
 
+import hashlib
 import json
+import random
+import re
 import time
+import uuid
 
 import pytest
 
@@ -266,6 +270,187 @@ def test_the_golden_set_and_the_wordings_pass_through_unchanged(
 
     for text in [*claim_descriptions.values(), *wording_texts.values()]:
         assert redact(text) == Redaction(text=text, found={})
+
+
+SAMPLE_SEED = 47
+SENTENCE = "run {}: its checkpoints were not deleted"
+HYPHENATED_DIGITS = re.compile(r"[0-9](?:-?[0-9]){12,18}")
+# UUIDs from a log that held a hyphen-separated run of 13 to 19 digits passing
+# Luhn, which an earlier rule cut apart ("run 3395ca3d-[card]dc9efc3cce").
+LUHN_UUIDS = [
+    "3395ca3d-4954-4500-9093-61dc9efc3cce",
+    "4a630a26-8e50-43d3-8e43-68503394444e",
+]
+
+
+def _random_bytes_hex(rng: random.Random, size: int) -> str:
+    return rng.getrandbits(size * 8).to_bytes(size, "big").hex()
+
+
+def _identifier_samples() -> dict[str, list[str]]:
+    """The same identifiers on every run: they come from a seeded generator."""
+    rng = random.Random(SAMPLE_SEED)  # noqa: S311 - a fixed seed, not a secret
+    return {
+        "uuid": [
+            str(uuid.UUID(int=rng.getrandbits(128), version=4)) for _ in range(2_000)
+        ],
+        "uuid-hex": [
+            uuid.UUID(int=rng.getrandbits(128), version=4).hex for _ in range(2_000)
+        ],
+        "span-id": [_random_bytes_hex(rng, 8) for _ in range(2_000)],
+        "trace-id": [_random_bytes_hex(rng, 16) for _ in range(2_000)],
+        "sha256": [
+            hashlib.sha256(_random_bytes_hex(rng, 8).encode()).hexdigest()
+            for _ in range(500)
+        ],
+    }
+
+
+IDENTIFIER_SAMPLES = _identifier_samples()
+
+
+def _luhn_valid(digits: str) -> bool:
+    """A second, separate Luhn check, so the tests do not trust the code."""
+    total = 0
+    for index, char in enumerate(reversed(digits)):
+        value = int(char) * (2 if index % 2 else 1)
+        total += value - 9 if value > 9 else value
+    return total % 10 == 0
+
+
+def _iban_shaped_hex(body: str) -> str:
+    """A valid IBAN written with hex digits only: "ab", two check digits that
+    make the mod-97 check hold, then ``body``."""
+    rearranged = f"{body}ab00"
+    remainder = int("".join(str(int(ch, 36)) for ch in rearranged)) % 97
+    return f"ab{98 - remainder:02d}{body}"
+
+
+HEX_IBAN = _iban_shaped_hex("0123456789abcdef0123")
+HEX_IBAN_UPPER = HEX_IBAN[:2].upper() + HEX_IBAN[2:]
+
+
+@pytest.mark.parametrize("kind", list(IDENTIFIER_SAMPLES))
+def test_the_samples_hold_the_expected_number_of_distinct_identifiers(
+    kind: str,
+) -> None:
+    samples = IDENTIFIER_SAMPLES[kind]
+
+    assert len(samples) == (500 if kind == "sha256" else 2_000)
+    assert len(set(samples)) == len(samples)
+
+
+@pytest.mark.parametrize("kind", list(IDENTIFIER_SAMPLES))
+def test_an_identifier_is_never_cut_apart_alone_or_inside_a_sentence(
+    kind: str,
+) -> None:
+    cut: list[str] = []
+    for value in IDENTIFIER_SAMPLES[kind]:
+        for text in (value, SENTENCE.format(value)):
+            result = redact(text)
+            if result.text != text or dict(result.found):
+                cut.append(f"{text} -> {result.text}")
+
+    assert cut == []
+
+
+@pytest.mark.parametrize("value", LUHN_UUIDS)
+def test_a_uuid_with_a_luhn_valid_run_of_digits_stays_whole(value: str) -> None:
+    runs = HYPHENATED_DIGITS.findall(value)
+    assert any(_luhn_valid(run.replace("-", "")) for run in runs)
+
+    for text in (value, SENTENCE.format(value)):
+        result = redact(text)
+
+        assert result.text == text
+        assert dict(result.found) == {}
+
+
+def test_the_hex_digits_of_an_iban_shaped_value_do_pass_the_check() -> None:
+    assert redact(f"pay {HEX_IBAN_UPPER} now") == Redaction(
+        text="pay [iban] now", found={"iban": 1}
+    )
+
+
+def test_an_unspaced_iban_is_redacted_only_with_an_uppercase_country_code() -> None:
+    assert redact("BE68539007547034") == Redaction(text="[iban]", found={"iban": 1})
+    assert redact("Be68539007547034").text == "Be68539007547034"
+    assert redact("be68539007547034") == Redaction(text="be68539007547034", found={})
+    assert redact(f"pay {HEX_IBAN} now").text == f"pay {HEX_IBAN} now"
+
+
+def test_a_spaced_iban_keeps_any_case() -> None:
+    assert redact("gb82 west 1234 5698 7654 32") == Redaction(
+        text="[iban]", found={"iban": 1}
+    )
+    assert redact("Gb82 WEST 1234 5698 7654 32").text == "[iban]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"id-{HEX_IBAN_UPPER}",
+        f"id_{HEX_IBAN_UPPER}",
+        f"{HEX_IBAN_UPPER}-a1b2",
+        f"{HEX_IBAN_UPPER}_x",
+        f"run {HEX_IBAN_UPPER}-1: deleted",
+        f"{HEX_IBAN_UPPER}0123456789abcdef",
+    ],
+)
+def test_an_iban_shaped_part_of_an_identifier_stays_whole(text: str) -> None:
+    result = redact(text)
+
+    assert result.text == text
+    assert dict(result.found) == {}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ref-4111111111111111",
+        "ref_4111111111111111",
+        "x4111111111111111",
+        "4111111111111111x",
+        "4111111111111111_",
+        "4111111111111111-5",
+        "4111-1111-1111-1111-5",
+        "ref-4111-1111-1111-1111",
+        "ref-GB82WEST12345698765432",
+        "GB82WEST12345698765432-x",
+        "ab+36301234567",
+        "1+36301234567",
+        "a_+36301234567",
+        "+36301234567x",
+        "+36301234567-ab",
+    ],
+)
+def test_a_value_joined_to_a_word_or_a_digit_is_not_redacted(text: str) -> None:
+    result = redact(text)
+
+    assert result.text == text
+    assert dict(result.found) == {}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("ref 4111111111111111", "ref [card]"),
+        ("ref: 4111111111111111.", "ref: [card]."),
+        ("4111111111111111-", "[card]-"),
+        ("see GB82WEST12345698765432-", "see [iban]-"),
+        ("id-5 4111 1111 1111 1111 -7", "id-5 [card] -7"),
+        ("tel:+36301234567", "tel:[phone]"),
+        ("+44 20 7946 0958-5", "[phone]"),
+        ("call (+36 30 123 4567).", "call ([phone])."),
+        ("Card 4111 1111 1111 1111.", "Card [card]."),
+        ("(4111-1111-1111-1111)", "([card])"),
+        ("GB82 WEST 1234 5698 7654 32.", "[iban]."),
+    ],
+)
+def test_a_value_set_off_by_a_separator_or_a_mark_is_still_redacted(
+    text: str, expected: str
+) -> None:
+    assert redact(text).text == expected
 
 
 ADVERSARIAL = {

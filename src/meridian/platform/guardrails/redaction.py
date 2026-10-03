@@ -1,6 +1,7 @@
 """Redaction of personal identifiers from text on its way to a model."""
 
 import re
+import string
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -43,6 +44,8 @@ IBAN_MODULUS = 97
 # 13 to 19 digits with a single space or hyphen between any two of them. A
 # "+" before the run leaves it to the phone rule.
 CARD = re.compile(r"(?<![0-9+])[0-9](?:[ -]?[0-9]){12,18}(?![0-9])")
+DIGIT_GROUP = re.compile(r"[0-9]+")
+SEPARATOR = re.compile(r"[ -]")
 CARD_MIN_DIGITS = 13
 CARD_MAX_DIGITS = 19
 
@@ -58,8 +61,16 @@ PHONE_SHAPE = re.compile(r"\+[0-9]+(?:[ -][0-9]+)*")
 PAREN_GROUP = re.compile(r"\([0-9]+\)")
 SEPARATORS = " -"
 
-# The span of a candidate to replace, as offsets within it, or None.
-Chooser = Callable[[str], tuple[int, int] | None]
+# The span to replace in a candidate, as offsets within the text, or None. It
+# gets the text and the offsets of the candidate in it, to see what surrounds
+# a span.
+Chooser = Callable[[str, int, int], tuple[int, int] | None]
+
+# An IBAN, a card number or a phone number is a whole token: not a piece of a
+# longer identifier such as a UUID, a trace ID or a digest, where a run of
+# digits or hex characters can pass a checksum by chance.
+TOKEN_CHARS = frozenset(string.ascii_letters + string.digits + "_")
+JOINING_HYPHEN = "-"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +94,14 @@ def redact(text: str) -> Redaction:
 
     An IBAN is replaced only when its ISO 13616 mod-97 check holds, a card
     number only when its Luhn check holds: a number that is merely shaped like
-    one is left alone. Text that is not matched is returned unchanged, byte
-    for byte. It does not find names, addresses or national phone numbers, and
-    it does not log or keep the text it is given."""
+    one is left alone. An IBAN, a card or a phone number is also replaced only
+    as a whole token, not as a piece of a longer identifier: the character on
+    each side is the edge of the text or not a letter, a digit, ``_`` or a
+    hyphen that joins it to one of those. An IBAN written without spaces is
+    replaced only when its country code is uppercase, so an all-lowercase
+    unspaced IBAN is missed (T-73's residual). Text that is not matched is
+    returned unchanged, byte for byte. It does not find names, addresses or
+    national phone numbers, and it does not log or keep the text it is given."""
     found: dict[str, int] = {}
     # Order matters: an address can carry digits that look like a card, and a
     # card is not to be half-taken as a phone number.
@@ -126,11 +142,11 @@ def _replace_candidates(
     position = 0
     count = 0
     while match := pattern.search(text, position):
-        span = choose(match.group())
+        span = choose(text, match.start(), match.end())
         if span is None:
             position = match.start() + 1 if rescan_failed else match.end()
             continue
-        start, end = match.start() + span[0], match.start() + span[1]
+        start, end = span
         parts.append(text[copied_to:start])
         parts.append(PLACEHOLDERS[kind])
         copied_to = position = end
@@ -142,21 +158,57 @@ def _replace_candidates(
     return "".join(parts)
 
 
+def _joins_before(text: str, start: int) -> bool:
+    """Whether the text before ``start`` joins to it: a token character, or a
+    hyphen that follows one."""
+    if start == 0:
+        return False
+    before = text[start - 1]
+    if before in TOKEN_CHARS:
+        return True
+    return before == JOINING_HYPHEN and start >= 2 and text[start - 2] in TOKEN_CHARS
+
+
+def _joins_after(text: str, end: int) -> bool:
+    """Whether the text from ``end`` joins to what comes before it: a token
+    character, or a hyphen that precedes one."""
+    if end >= len(text):
+        return False
+    after = text[end]
+    if after in TOKEN_CHARS:
+        return True
+    return (
+        after == JOINING_HYPHEN and end + 1 < len(text) and text[end + 1] in TOKEN_CHARS
+    )
+
+
+def _is_whole_token(text: str, start: int, end: int) -> bool:
+    return not _joins_before(text, start) and not _joins_after(text, end)
+
+
 def _mod97_holds(compact: str) -> bool:
     rearranged = compact[4:] + compact[:4]
     digits = "".join(str(int(ch, 36)) for ch in rearranged)
     return int(digits) % IBAN_MODULUS == 1
 
 
-def _choose_iban_span(candidate: str) -> tuple[int, int] | None:
+def _choose_iban_span(text: str, start: int, end: int) -> tuple[int, int] | None:
     """The longest prefix of the candidate, cut at a space, that is a valid
-    IBAN: a word after the IBAN can look like one more group."""
-    groups = candidate.split(" ")
+    IBAN and a whole token: a word after the IBAN can look like one more
+    group. A prefix without a space needs an uppercase country code, so that a
+    lowercase hex identifier that passes mod-97 by chance is left alone."""
+    if _joins_before(text, start):
+        return None
+    groups = text[start:end].split(" ")
     for count in range(len(groups), 0, -1):
         prefix = " ".join(groups[:count])
         compact = prefix.replace(" ", "")
-        if IBAN_MIN_LENGTH <= len(compact) <= IBAN_MAX_LENGTH and _mod97_holds(compact):
-            return 0, len(prefix)
+        if not IBAN_MIN_LENGTH <= len(compact) <= IBAN_MAX_LENGTH:
+            continue
+        if " " not in prefix and not prefix[:2].isupper():
+            continue
+        if not _joins_after(text, start + len(prefix)) and _mod97_holds(compact):
+            return start, start + len(prefix)
     return None
 
 
@@ -172,20 +224,26 @@ def _luhn_holds(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _choose_card_span(candidate: str) -> tuple[int, int] | None:
+def _choose_card_span(text: str, start: int, end: int) -> tuple[int, int] | None:
     """The longest run of whole digit groups in the candidate, of 13 to 19
-    digits, that passes the Luhn check; the earliest of equals. Neighbouring
-    numbers can join a card into one candidate ("13 4111 1111 1111 1111")."""
-    groups = [(m.start(), m.end()) for m in re.finditer(r"[0-9]+", candidate)]
+    digits, that is a whole token and passes the Luhn check; the earliest of
+    equals. Neighbouring numbers can join a card into one candidate
+    ("13 4111 1111 1111 1111")."""
+    groups = [(m.start(), m.end()) for m in DIGIT_GROUP.finditer(text, start, end)]
     best: tuple[int, int, int] | None = None
     for first in range(len(groups)):
+        run_start = groups[first][0]
+        if _joins_before(text, run_start):
+            continue
         for last in range(len(groups) - 1, first - 1, -1):
-            start, end = groups[first][0], groups[last][1]
-            digits = re.sub(r"[ -]", "", candidate[start:end])
+            run_end = groups[last][1]
+            digits = SEPARATOR.sub("", text[run_start:run_end])
             if not CARD_MIN_DIGITS <= len(digits) <= CARD_MAX_DIGITS:
                 continue
-            if _luhn_holds(digits) and (best is None or len(digits) > best[0]):
-                best = (len(digits), start, end)
+            if _joins_after(text, run_end) or not _luhn_holds(digits):
+                continue
+            if best is None or len(digits) > best[0]:
+                best = (len(digits), run_start, run_end)
     return None if best is None else (best[1], best[2])
 
 
@@ -213,14 +271,17 @@ def _without_trailing_marks(text: str) -> str:
     return text
 
 
-def _choose_phone_span(candidate: str) -> tuple[int, int] | None:
+def _choose_phone_span(text: str, start: int, end: int) -> tuple[int, int] | None:
     """The longest prefix of the candidate, cut after a digit or a closing
-    parenthesis, whose shape is an international number."""
-    trimmed = candidate
+    parenthesis, whose shape is an international number and that is a whole
+    token: the "+" is not preceded by a letter, a digit or "_"."""
+    if start > 0 and text[start - 1] in TOKEN_CHARS:
+        return None
+    trimmed = text[start:end]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed)
-        if _phone_shape_holds(trimmed):
-            return 0, len(trimmed)
+        if not _joins_after(text, start + len(trimmed)) and _phone_shape_holds(trimmed):
+            return start, start + len(trimmed)
         cut = max(trimmed.rfind(sep) for sep in SEPARATORS)
         trimmed = trimmed[:cut] if cut > 0 else ""
     return None
