@@ -217,7 +217,7 @@ def test_exactly_a_hundred_entries_are_not_truncated(world: World, server: Any) 
     assert answer["truncated"] is False
 
 
-# ── the decided claims of the claims store (S053, T-66, T-75) ───────────────
+# ── the decided claims of the claims store (S053, T-66, T-76) ───────────────
 OTHER_TENANT = "another-tenant"
 CANARY_NAME = "CANARY-NAME-4c1e"
 CANARY_EMAIL = "canary-4c1e@example.com"

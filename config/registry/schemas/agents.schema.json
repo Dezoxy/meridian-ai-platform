@@ -22,6 +22,11 @@
           "title": "Kind",
           "type": "string"
         },
+        "structured_outputs": {
+          "default": false,
+          "title": "Structured Outputs",
+          "type": "boolean"
+        },
         "tools": {
           "items": {
             "pattern": "^[a-z][a-z0-9_]*$",

@@ -15,7 +15,7 @@ runtime compiles it with its checkpointer.
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cache
 from importlib.metadata import entry_points
 from types import MappingProxyType
@@ -138,6 +138,7 @@ class StubModel:
         *,
         max_output_tokens: int | None = None,
         data_class: str | None = None,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> ChatResult:
         self.calls.append((messages, max_output_tokens))
         self.data_classes.append(data_class)

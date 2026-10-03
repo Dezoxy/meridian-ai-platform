@@ -11,7 +11,7 @@ the platform's own approved and rejected claims. A decided claim's entry has
 its claim ID as ``history_id`` and its state as ``status``. The view's rows are
 the run's tenant's and never the run's own claim, which the run is deciding;
 the view carries no word of the claimant, so neither does an entry. The Claims
-API writes nothing to the policy store (the owner's decision, T-66, T-75).
+API writes nothing to the policy store (the owner's decision, T-66, T-76).
 """
 
 import logging

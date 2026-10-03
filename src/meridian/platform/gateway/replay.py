@@ -4,7 +4,9 @@ No model is called and nothing is recorded from a real one; the text is built
 from a fingerprint of the request, so the same messages always get the same
 answer. It reads no fixture file and never the golden set's expected outcomes.
 The request's ``max_output_tokens`` is accepted and ignored: the text has a
-fixed length.
+fixed length. So is a response schema (S051): the text is fixed and is not JSON
+(SIMULATED), so a strict reader finds no answer in it; the reply is the same
+with and without one.
 
 A replay embedding is a hashed bag of words: no model was called, and the
 vector carries no meaning of the text. Two texts that share words get vectors

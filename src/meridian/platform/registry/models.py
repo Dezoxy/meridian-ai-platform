@@ -100,6 +100,10 @@ class Deployment(RegistryModel):
     # provider and checked on every answer (T-54); checks.py requires it for
     # purpose embedding and refuses it for chat.
     dimensions: Annotated[int, Field(ge=1, le=MAX_EMBEDDING_DIMENSIONS)] | None = None
+    # The deployment honours a JSON schema for the answer (Azure OpenAI's
+    # structured outputs); checks.py refuses it for purpose embedding. A replay
+    # deployment accepts a schema and ignores it (simulated).
+    structured_outputs: bool = False
 
 
 class ModelsFile(RegistryModel):
@@ -142,6 +146,9 @@ class Agent(RegistryModel):
     # no run row, so checks.py refuses a tool.
     kind: AgentKind = "graph"
     tools: tuple[ToolId, ...]
+    # The agent may send the Model Gateway a response schema; the gateway
+    # refuses one from an agent that does not declare it.
+    structured_outputs: bool = False
 
 
 class AgentsFile(RegistryModel):

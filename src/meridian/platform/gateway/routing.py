@@ -10,6 +10,15 @@ lower it (T-11, T-13). Special-category data is refused outright, before any
 deployment is looked at, so the refusal says why (``special-data``): no
 deployment reaches that class today, and that is a decision, not a gap in the
 registry (T-13).
+
+A request that carries a response schema (S051) is refused unless its agent
+declares ``structured_outputs`` in the registry (``schema-not-allowed``), and
+it may use only the deployments that declare it too: after the class filter, a
+deployment that cannot honour a schema is left out before anything is called,
+as a deployment the class may not reach is (T-44), so a fallback never answers
+a request that asked for a shape with free text. When the class filter keeps
+deployments and none declares it, the refusal is ``no-schema-deployment``. A
+request without a schema is decided exactly as before.
 """
 
 from collections.abc import Sequence
@@ -24,8 +33,10 @@ RefusalReason = Literal[
     "unknown-tenant",
     "agent-not-allowed",
     "special-data",
+    "schema-not-allowed",
     "no-route",
     "no-allowed-deployment",
+    "no-schema-deployment",
 ]
 SPECIAL: DataClass = "special"
 
@@ -51,19 +62,30 @@ def deployment_allows(
     )
 
 
+def _agent_declares_schema(registry: Registry, agent_id: str) -> bool:
+    """The agent is in the registry and declares ``structured_outputs``."""
+    agent = registry.agent(agent_id)
+    return agent is not None and agent.structured_outputs
+
+
 def decide(
     registry: Registry,
     considered: Sequence[Deployment],
     tenant_id: str,
     agent_id: str,
     requested: DataClass | None = None,
+    *,
+    wants_schema: bool = False,
 ) -> RouteDecision:
     """Keep, in order, the considered deployments the request's class may reach.
 
     The class is the tenant's, raised to ``requested`` when that is higher;
     ``None`` means the request names none. Replay passes its one deployment of
     the request's purpose, live mode that purpose's route candidates; an empty
-    ``considered`` means the registry has no route.
+    ``considered`` means the registry has no route. ``wants_schema`` is true for
+    a chat request that carries a response schema: the agent must declare it,
+    and ``candidates`` holds only deployments that honour one, in the route's
+    order.
     """
     tenant = registry.tenant(tenant_id)
     if tenant is None:
@@ -78,9 +100,15 @@ def decide(
         return RouteDecision(data_class, (), "agent-not-allowed", limits)
     if data_class == SPECIAL:
         return RouteDecision(data_class, (), "special-data", limits)
+    if wants_schema and not _agent_declares_schema(registry, agent_id):
+        return RouteDecision(data_class, (), "schema-not-allowed", limits)
     if not considered:
         return RouteDecision(data_class, (), "no-route", limits)
     kept = tuple(d for d in considered if deployment_allows(registry, d, data_class))
     if not kept:
         return RouteDecision(data_class, (), "no-allowed-deployment", limits)
+    if wants_schema:
+        kept = tuple(d for d in kept if d.structured_outputs)
+        if not kept:
+            return RouteDecision(data_class, (), "no-schema-deployment", limits)
     return RouteDecision(data_class, kept, None, limits)

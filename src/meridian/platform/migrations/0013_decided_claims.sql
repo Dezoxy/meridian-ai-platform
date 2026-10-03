@@ -1,4 +1,4 @@
--- 0013: a decided claim enters the claim history (S053, T-66, T-75).
+-- 0013: a decided claim enters the claim history (S053, T-66, T-76).
 --
 -- Run by the owner role (meridian_owner), which owns everything created here.
 -- It adds one view and one index and a grant on the view; it changes no table
