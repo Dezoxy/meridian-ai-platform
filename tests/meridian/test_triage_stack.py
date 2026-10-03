@@ -71,6 +71,14 @@ IN_FORCE_WITH_CANDIDATE = "CLM-0011"
 # the model, so its run calls no search and no gateway.
 LAPSED_POLICY = "CLM-0002"
 CIRCUMSTANCE_EXCLUDED = sorted(c for c in CLAIMS if circumstance_clause(c))
+# S047: the one golden claim the model is no longer asked about, and how its
+# proposal then differs from the oracle's (``{field: (proposal, oracle)}``).
+# Its description says "I was in hospital for several weeks": special-category
+# data, so the assessment is unavailable (``special-data``) and the claim keeps
+# its route to an adjuster but loses the recommendation the oracle makes with
+# every fact known. Its payable amount and citations do not depend on the model.
+WITHHELD_FROM_THE_MODEL = {"CLM-0012": {"recommendation": (None, "approve")}}
+WITHHELD = frozenset(WITHHELD_FROM_THE_MODEL)
 # What the answer to a posted claim says for each route: the run's status and
 # the claim's state. Only the adjuster's route waits.
 AFTER_TRIAGE = {
@@ -237,8 +245,13 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
         assert "exclusion_assessment" in proposal.gaps, claim_id
         assert proposal.route != "auto_approve", claim_id
         assert proposal.rationale is None, claim_id
-        assert proposal.drafted_by is not None, claim_id
-        assert proposal.drafted_by.mode == "replay", claim_id
+        if claim_id in WITHHELD:
+            # S047: no call was made, so there was nothing to replay.
+            assert proposal.unavailable_because == "special-data", claim_id
+            assert proposal.drafted_by is None, claim_id
+        else:
+            assert proposal.drafted_by is not None, claim_id
+            assert proposal.drafted_by.mode == "replay", claim_id
         if proposal.reason in STEP_8_REASONS:
             assert proposal.recommendation is None, claim_id
     routes, reasons = routes_and_reasons(proposals)
@@ -324,11 +337,21 @@ def test_a_scripted_model_gives_the_oracle_s_proposals(
     # S017: the report is written first, so a failing run leaves one to read.
     report, destination = write_evaluation_report(proposals, tmp_path)
     assert len(proposals) == len(CLAIMS) == 40
-    # The model was asked exactly where the rules need it, once per claim.
-    assert model.requests == sorted(claims_that_ask_the_model())
+    # The model was asked exactly where the rules need it, once per claim, but
+    # for the claim whose description holds special-category data (S047).
+    assert model.requests == sorted(claims_that_ask_the_model() - set(WITHHELD))
     # Every one of the 40 equals the oracle in all eight fields, CLM-0024 (above
-    # the policy's limit) included; the counts are the golden set's own.
-    assert unequal(proposals) == {}
+    # the policy's limit) included, but for the one deviation S047 pins; the
+    # counts are the golden set's own.
+    assert unequal(proposals) == WITHHELD_FROM_THE_MODEL
+    for claim_id in WITHHELD:
+        proposal = proposals[claim_id]
+        assert (proposal.route, proposal.reason) == ("adjuster", "fraud_indicator")
+        assert proposal.assessment == "unavailable"
+        assert proposal.unavailable_because == "special-data"
+        assert proposal.gaps == ("exclusion_assessment",)
+        assert proposal.drafted_by is None
+        assert proposal.rationale is None
     # CLM-0024 cites the limit clause 4.2 the amounts probe found.
     assert [c.clause for c in proposals[ABOVE_THE_LIMIT].citations] == [
         "2.2",
@@ -342,9 +365,10 @@ def test_a_scripted_model_gives_the_oracle_s_proposals(
     assert auto_approved(proposals) == sorted(
         c for c, e in EXPECTED.items() if e["route"] == "auto_approve"
     )
-    for proposal in proposals.values():
-        assert proposal.gaps == ()
-        assert proposal.assessment != "unavailable"
+    for claim_id, proposal in proposals.items():
+        if claim_id not in WITHHELD:
+            assert proposal.gaps == (), claim_id
+            assert proposal.assessment != "unavailable", claim_id
     # S017's gate: the report equals the committed baseline's verdicts. When the
     # destination is the baseline itself, the run regenerates it (make
     # eval-baseline) and there is nothing to compare. A missing baseline fails.
@@ -386,7 +410,8 @@ def test_a_model_that_finds_no_exclusion_costs_four_wrong_approvals(
     ]
     assert proposals["CLM-0001"].route == "adjuster"
     assert proposals["CLM-0001"].reason == "over_threshold"
-    assert set(unequal(proposals)) == set(CIRCUMSTANCE_EXCLUDED)
+    # S047: and the claim withheld from the model, which is not asked at all.
+    assert set(unequal(proposals)) == set(CIRCUMSTANCE_EXCLUDED) | WITHHELD
 
 
 # ── 4. one run's audit rows and its trace ───────────────────────────────────

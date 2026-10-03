@@ -24,8 +24,10 @@ the ``interrupt`` and the read of the record comes before its first write.
 
 A platform that cannot answer fails the run, and the claim can be triaged again:
 no tool or model error is caught here. Only two things become a proposal for a
-person: no such policy, and a model answer that cannot be trusted (that one is
-turned into an assessment by ``assessment.py``). No log line, exception message
+person: no such policy, and an assessment that is unavailable: a model answer
+that cannot be trusted, a description that holds special-category data or
+addresses the model, or a request the provider's content filter refused (S047;
+``assessment.py`` turns each into an assessment). No log line, exception message
 or span attribute of the graph holds claim text, a tool result or model text:
 a tool result that does not fit its model raises a ``GraphFailure`` whose code
 says which answer, not what it held (the graph's own violations all do).

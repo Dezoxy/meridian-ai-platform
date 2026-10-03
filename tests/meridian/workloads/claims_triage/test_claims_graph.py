@@ -130,11 +130,17 @@ class StubModel:
     def __init__(self, result: str | Exception | None = None) -> None:
         self.result = model_answer() if result is None else result
         self.calls: list[tuple[list[dict[str, str]], int | None]] = []
+        self.data_classes: list[str | None] = []
 
     def chat(
-        self, messages: list[dict[str, str]], *, max_output_tokens: int | None = None
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_output_tokens: int | None = None,
+        data_class: str | None = None,
     ) -> ChatResult:
         self.calls.append((messages, max_output_tokens))
+        self.data_classes.append(data_class)
         if isinstance(self.result, Exception):
             raise self.result
         return ChatResult(
@@ -285,12 +291,20 @@ def golden_model(claim_id: str) -> StubModel:
     return StubModel()
 
 
+# S047: the one golden claim whose description says "I was in hospital": the
+# model is not asked, so the assessment is unavailable and the claim, which the
+# oracle recommends approving, keeps its route to an adjuster but no
+# recommendation. The oracle is the insurer's answer with every fact known.
+WITHHELD_FROM_THE_MODEL = "CLM-0012"
+
+
 @pytest.mark.parametrize("claim_id", list(CLAIMS))
 def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) -> None:
     expected = EXPECTED[claim_id]
     policy = POLICIES[CLAIMS[claim_id]["policy_number"]]
     model = golden_model(claim_id)
     tools = StubTools()
+    withheld = claim_id == WITHHELD_FROM_THE_MODEL
 
     output, _, _ = triage(claim_id, model, tools)
 
@@ -303,7 +317,7 @@ def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) ->
     ) == (
         expected["route"],
         expected["reason"],
-        expected["recommendation"],
+        None if withheld else expected["recommendation"],
         expected["payable_amount"],
     )
     assert list(proposal.fraud_indicators) == expected["fraud_indicators"]
@@ -319,10 +333,13 @@ def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) ->
         }
         for c in expected["citations"]
     ]
-    assert proposal.gaps == ()
-    assert len(model.calls) <= 1
-    assert (len(model.calls) == 1) == (proposal.assessment != "not_needed")
-    assert (proposal.drafted_by is None) == (proposal.assessment == "not_needed")
+    asked = proposal.assessment != "not_needed" and not withheld
+    assert proposal.gaps == (("exclusion_assessment",) if withheld else ())
+    assert (proposal.assessment, proposal.unavailable_because) == (
+        ("unavailable", "special-data") if withheld else (proposal.assessment, None)
+    )
+    assert len(model.calls) == int(asked)
+    assert (proposal.drafted_by is None) == (not asked)
     assert set(tools.names()) <= set(READ_TOOLS)
     assert [w[0] for w in tools.writes] == (
         ["request_approval"] if proposal.route == "adjuster" else []
@@ -379,6 +396,7 @@ def test_within_threshold_with_the_model_finding_no_exclusion() -> None:
         drafted_by=DRAFTED_BY,
     )
     assert len(model.calls) == 1
+    assert model.data_classes == ["personal"]  # S047
 
 
 def test_within_threshold_without_any_candidate_exclusion_needs_no_model() -> None:
@@ -407,18 +425,19 @@ def test_over_threshold() -> None:
 
 
 def test_fraud_indicator() -> None:
-    output, _, _ = triage("CLM-0012")
+    # CLM-0012 says "I was in hospital" (S047): the model is not asked.
+    output, model, _ = triage("CLM-0012")
 
     assert output == expected_proposal(
         reason="fraud_indicator",
-        recommendation="approve",
         payable_amount=2470,
         fraud_indicators=["late_report"],
         citations=cited("MOTOR-TPL", "2.1", "4.1", "5.1"),
-        assessment="none_applies",
-        rationale=RATIONALE,
-        drafted_by=DRAFTED_BY,
+        gaps=["exclusion_assessment"],
+        assessment="unavailable",
+        unavailable_because="special-data",
     )
+    assert model.calls == []
 
 
 def test_excluded_by_a_circumstance_exclusion_the_model_found() -> None:

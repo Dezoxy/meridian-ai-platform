@@ -15,6 +15,7 @@ only reads it (T-31). It answers 200 only when the run completed.
 """
 
 import logging
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any
@@ -44,6 +45,7 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
+from meridian.platform.guardrails import EMAIL_PLACEHOLDER, redact
 from meridian.runtime.models import RunResponse, RunState
 from meridian.workloads.claims_triage.adjuster import (
     NO_SUCH_CLAIM_DETAIL,
@@ -66,6 +68,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     move_claim,
 )
 from meridian.workloads.claims_triage.models import (
+    Claimant,
     ClaimDecision,
     ClaimErrorBody,
     ClaimResponse,
@@ -110,6 +113,35 @@ DECISION_TRANSITIONS: Mapping[Decision, Transition] = {
 }
 
 logger = logging.getLogger(__name__)
+
+NAME_PLACEHOLDER = "[name]"
+# The shortest part of a name that is replaced on its own: a shorter one ("Li",
+# "Jr.") is also an ordinary word or an initial.
+MIN_NAME_PART_LETTERS = 3
+
+
+def description_for_run(description: str, claimant: Claimant) -> str:
+    """The description the run is sent (S047): the claimant's e-mail address,
+    ignoring case, becomes ``[email]``, the full name (any white space between
+    its parts) and then each part of at least three letters become ``[name]``,
+    each as a whole word and ignoring case, and what ``redact`` finds is
+    replaced too. A pattern cannot find a name, and this API is the one place
+    that knows it. The claimant's values are escaped: they are matched, never
+    read as a pattern. The name is replaced in one pass, so a part that is the
+    placeholder's own word ("Name") does not match a placeholder."""
+    emailless = re.sub(
+        re.escape(claimant.email), EMAIL_PLACEHOLDER, description, flags=re.IGNORECASE
+    )
+    parts = claimant.name.split()
+    alternatives = [r"\s+".join(re.escape(part) for part in parts)]
+    alternatives += [
+        re.escape(part)
+        for part in sorted(set(parts), key=len, reverse=True)
+        if sum(char.isalpha() for char in part) >= MIN_NAME_PART_LETTERS
+    ]
+    pattern = r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)"
+    nameless = re.sub(pattern, NAME_PLACEHOLDER, emailless, flags=re.IGNORECASE)
+    return redact(nameless).text
 
 
 class RuntimeCallError(Exception):
@@ -483,8 +515,12 @@ def create_app(
     )
     def submit_claim(submission: ClaimSubmission) -> ClaimResponse | JSONResponse:
         claim = submission.model_dump(mode="json")
-        # The runtime gets what the graph needs, not the claimant's name or email.
+        # The runtime gets what the graph needs, not the claimant's name or email,
+        # and a description with neither of them in it (S047).
         facts = submission.model_dump(mode="json", exclude={"claimant"})
+        facts["description"] = description_for_run(
+            submission.description, submission.claimant
+        )
         claim_id = submission.claim_id
         with start_span(tracer, "claims.submit") as span:
             set_span_attributes(

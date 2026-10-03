@@ -22,12 +22,14 @@ from servicesupport import (
     claim_with_id,
     database_error,
     owner_rows,
+    synthetic_claims,
 )
 
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.workloads.claims_triage import app as claims_app
-from meridian.workloads.claims_triage.app import create_app
+from meridian.workloads.claims_triage.app import create_app, description_for_run
 from meridian.workloads.claims_triage.lifecycle import TRIAGE_FAILED
+from meridian.workloads.claims_triage.models import Claimant
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 UNUSED_DSN = "postgresql://claims_api@db.invalid/meridian"
@@ -267,6 +269,103 @@ def test_a_claim_is_stored_triaged_and_answered_201(
         "meridian.tenant": "claims-triage",
         "meridian.run_id": str(runtime.run_id),
     }
+
+
+# ── the run's copy of the description (S047) ────────────────────────────────
+ANA = Claimant(name="Ana Kovacs", email="ana.kovacs@example.com")
+
+
+def test_a_description_naming_the_claimant_reaches_the_run_without_the_name(
+    fresh_database: DatabaseHandle,
+) -> None:
+    description = (
+        "I, Ana Kovacs, parked at home. KOVACS saw it, and ana.KOVACS@example.com "
+        "is my address. Annabel next door did not."
+    )
+    claim = {
+        **claim_with_id("CLM-9120"),
+        "claimant": ANA.model_dump(),
+        "description": description,
+    }
+    runtime = Runtime()
+    client = make_client(claims_dsn(fresh_database), runtime)
+
+    response = client.post("/claims", json=claim)
+
+    assert response.status_code == 201
+    (request,) = runtime.requests
+    sent = json.loads(request.content)["input"]["claim"]["description"]
+    assert sent == (
+        "I, [name], parked at home. [name] saw it, and [email] "
+        "is my address. Annabel next door did not."
+    )
+    # The stored submission keeps the claimant's own text.
+    ((submission,),) = owner_rows(
+        fresh_database, "SELECT submission FROM claims.claims"
+    )
+    assert submission["description"] == description
+
+
+def test_a_word_that_only_contains_a_name_part_is_not_replaced() -> None:
+    text = "Annabel and Banana and Anastasia met Ana."
+
+    assert description_for_run(text, ANA) == (
+        "Annabel and Banana and Anastasia met [name]."
+    )
+
+
+def test_the_whole_name_is_found_across_any_run_of_white_space() -> None:
+    text = "Ana \t\n  Kovacs signed."
+
+    assert description_for_run(text, ANA) == "[name] signed."
+
+
+def test_a_part_of_fewer_than_three_letters_is_left_alone() -> None:
+    claimant = Claimant(name="Li Wu Kovacs", email="li@example.com")
+
+    result = description_for_run("Li and Wu and Kovacs and Li Wu Kovacs", claimant)
+
+    assert result == "Li and Wu and [name] and [name]"
+
+
+def test_a_name_with_regex_metacharacters_is_matched_literally() -> None:
+    claimant = Claimant(name="A.(B)+ C*", email="meta@example.com")
+
+    result = description_for_run("A.(B)+ C* wrote; AxxBB Cxx did not.", claimant)
+
+    assert result == "[name] wrote; AxxBB Cxx did not."
+
+
+def test_a_name_part_with_an_accent_is_matched_ignoring_case() -> None:
+    claimant = Claimant(name="Jakub Horváth", email="jakub.horvath36@example.com")
+
+    result = description_for_run("HORVÁTH said JAKUB came.", claimant)
+
+    assert result == "[name] said [name] came."
+
+
+def test_a_name_part_that_is_the_placeholders_own_word_is_not_replaced_twice() -> None:
+    claimant = Claimant(name="Ana Name", email="ana.name@example.com")
+
+    assert description_for_run("Ana Name and Name", claimant) == "[name] and [name]"
+
+
+def test_identifiers_in_the_description_are_redacted_too() -> None:
+    result = description_for_run("Call me, or pay 4111 1111 1111 1111.", ANA)
+
+    assert result == "Call me, or pay [card]."
+
+
+def test_no_golden_description_names_its_claimant_or_holds_an_identifier() -> None:
+    claims = synthetic_claims()
+
+    assert len(claims) == 40
+    for claim in claims:
+        claimant = Claimant.model_validate(claim["claimant"])
+        assert (
+            description_for_run(claim["description"], claimant)
+            == (claim["description"])
+        ), claim["claim_id"]
 
 
 # The run's status and the claim's state and trigger, for each route: a claim
