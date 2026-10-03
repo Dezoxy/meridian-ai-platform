@@ -14,7 +14,9 @@
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
   a fixed order and lets rules decide each claim's route (no real model
-  has answered its one question), a claim it refers to an adjuster waits
+  has answered its one question; claimant text that holds special-category
+  data or addresses the model is not sent, and identifiers are redacted
+  before any model call and in logs), a claim it refers to an adjuster waits
   with its run paused in PostgreSQL until the adjuster decides it on a
   server-rendered page and the Claims API records the decision and resumes
   it, CI grades the golden set's proposals with rules against a reviewed
@@ -157,7 +159,7 @@ and Pydantic, at the cost of one dependency.
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | done | S013, S041 |
 | S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
-| S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated (split on 2026-10-03: the provider's structured outputs are S051) | doing | S014 |
+| S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated (split on 2026-10-03: the provider's structured outputs are S051) | done | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
@@ -4129,7 +4131,7 @@ changed without a reviewed new baseline.
 
 ### S047 — Guardrails
 
-**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
 **Goal:** before a model reads claimant text, personal identifiers are
 redacted, special-category data and injected instructions stop the call and
 send the claim to a person, a request carries a data class that can only be
@@ -4240,9 +4242,106 @@ raised, and the gateway tells a content-filter refusal from an outage.
 
 **Work log:**
 
-**Result / verification:**
+- Tenth step of one session, on the owner's word ("okay next we should
+  close S047 to S050"), after the owner's Azure login worked again and the
+  live checks recorded under S045 passed. Pull request 36 (S017) was first
+  confirmed on `main`: its 37 files are identical there.
+- The `feature-threat-model` skill before the code: the section's
+  decisions above, T-73 new. The advisor before the design asked for the
+  split first, for the outcomes to follow S014's line between refusal and
+  failure, and for the golden claims the screens would move (CLM-0012).
+- The `implementer` subagent worked in eleven short contracts: the
+  guardrails module; the gateway, the runtime's client and the log factory
+  in parallel; identifiers never cut apart; the workload; three parallel
+  contracts of review fixes; two of last fixes. The main session read every
+  source diff, fixed two things itself (the rationale redacted before its
+  cut; a name under three letters never replaced) and restored the log
+  record factory after every test, which tests of the production factories
+  had left installed for the rest of the session.
+- Contract A's tests found that the motor wordings say "injury", so the
+  special-category screen runs on claimant text only. Contract B found a
+  UUID logged as `…46b[card]d`: a hyphenated digit run inside it passed
+  Luhn. A redaction is now a whole token, and an unspaced IBAN needs an
+  uppercase country code (a lowercase hex ID can be a valid Belgian IBAN).
+- Reviews by `platform-boundary-reviewer`, `security-reviewer`,
+  `python-reviewer` and `silent-failure-hunter`, then the two that blocked
+  again on the fixed tree. Found by them, fixed here:
+  - a blank claimant name made the name pass match everywhere and split a
+    `system:` marker, so the injection screen missed it (two reviewers);
+  - the log factory lost every access line holding an identifier
+    (uvicorn's formatter reads five arguments), and a record that could not
+    be formatted printed its raw arguments to stderr (three reviewers);
+  - the run's copy of the description could outgrow its 5,000 characters
+    and fail the run for good (two reviewers);
+  - any 400 read as the content filter, though FastAPI answers 400 for a
+    body it cannot decode (three reviewers);
+  - a card after another number was never examined, and a value after a
+    JSON escape (`\n` in the triage call's own message) was not redacted
+    (two reviewers);
+  - the name pass ran before `redact` and cut a third party's address; a
+    name next to a square bracket reached the model;
+  - redaction cost seconds of CPU before the cheap refusals.
+- Reviewed and not done, with reasons: the screens' outcome carried from
+  the Claims API into the run (a name that hides a word also keeps it from
+  the model, so nothing leaves; recorded under T-73); redaction before the
+  rate limiter (the limiter and the ledger must count the same redacted
+  text; S019); Hungarian suffixes, accent folding of names, national phone
+  and account forms, negation, `extra=` in logs, the injection screen's
+  misses and false positives (T-73's residual, S032's list).
+- The implementers wrote no file through a heredoc this time; contract R4a
+  wrote one scratch file to `/tmp/x` and said so.
+
+**Result / verification:** run by the main session on f5aa0dc, the last
+commit that changes `src/` or `tests/`.
+
+- `make pytest-db` with `GITHUB_ACTIONS=true`: `5768 passed, 3 skipped`
+  in 443.80 s (the three are the opt-in live Azure tests). `make eval`:
+  ten graders, `recommendation: 39/40 -> 39/40`, every other 40/40,
+  `eval compare: passed`. `make lint`: `Contracts: 4 kept, 0 broken.`
+  `make test`: `OK`. `make registry`: `schemas OK`, `contracts OK`.
+  `make docs`: `13 checks passed`. `make check`: no ERROR line. `gitleaks`
+  over the branch: `no leaks found`.
+- The golden set through the stack with the scripted model: 39 proposals
+  equal the oracle; CLM-0012 differs in its recommendation only (`None`,
+  the oracle `approve`): its assessment is unavailable (`special-data`)
+  and the scripted model got no call for it. The baseline was regenerated
+  in this change; the prompt's fingerprint did not move.
+- The guardrails, against data that must pass through: every golden
+  description and every wording is unchanged by `redact` and a negative of
+  the injection screen; exactly CLM-0012 is special; seeded samples of
+  UUIDs, trace and span IDs and SHA-256 digests are never cut; each
+  pattern's time grows linearly between two sizes (a digit flood of 200,000
+  characters fell from 1.47 s to 0.09 s with card-shaped groups).
+- The gateway, tested: a header can raise a class and not lower it; a
+  `special` request is 403 `special-data` before its limits; a redacted
+  request reaches the provider, the estimate and the ledger; Azure's
+  `content_filter` 400 and finish reason are `filtered`, with no fallback
+  and no circuit, answered 400 with `X-Meridian-Refusal: content-filter`,
+  which the runtime requires.
+- On kind, recreated by `make up` after the owner had removed the cluster
+  and said to build it: `make deploy` exit 0; `make smoke` 13 PASS lines;
+  `make demo` triaged CLM-0001 to the adjuster and recorded the decision,
+  with traces across the five services. CLM-0012, posted through the edge,
+  answered 201, and its adjuster page reads route `adjuster`,
+  recommendation `none`, "Assessment unavailable because special-data"
+  and "Drafted by no model call".
+- Not run: any call to Azure with
+  the guardrails, so no real content filter has refused anything and no
+  real model has answered a redacted prompt.
 
 **Follow-ups:**
+
+- S051: the provider's structured outputs, new.
+- S019: rate limits before any work on a request, so a refused request
+  costs no redaction.
+- S024: a metric of the assessment's outcomes by reason word, so a jump in
+  `special-data`, `injection-suspected` or `filtered` is seen.
+- S032: the screens' misses and false positives the reviews listed, as
+  cases (T-73).
+- S050: the guardrails against a real model and a real content filter.
+- No step yet: Hungarian forms of names and identifiers; the class of the
+  ingestion (`internal`) needs a tenant of its own, not a header (T-60);
+  `drafted_by` on a completion the filter withheld but the provider billed.
 
 ## Part D — Open questions
 
