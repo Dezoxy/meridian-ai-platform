@@ -413,7 +413,7 @@ ENTRY_FIELDS = {
     "output_tokens",
     "latency_ms",
 }
-# T-75: nothing in the file but what a model answered. The first group is
+# T-76: nothing in the file but what a model answered. The first group is
 # matched whatever the case; the scheme "Bearer " is matched as it is written.
 FORBIDDEN = {
     "an Azure OpenAI host": re.compile(r"\.openai\.azure\.com", re.IGNORECASE),

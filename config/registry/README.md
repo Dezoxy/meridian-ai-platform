@@ -86,6 +86,9 @@ job. Beyond the schemas, validation refuses:
 - an embedding deployment without `dimensions` (the length of the vectors it
   returns, 1 to 2000, the most pgvector can index in its `vector` type; its
   `halfvec` type indexes up to 4000) and a chat deployment with it;
+- `structured_outputs: true` on an embedding deployment, and, once an agent
+  declares it, a chat route candidate or the chat replay deployment that does
+  not (see below);
 - an embedding route whose candidates differ from the first in model, version
   or `dimensions`, and a replay embedding deployment whose `dimensions`
   differ from a candidate's: vectors of different models or sizes are not
@@ -132,6 +135,15 @@ generated from this registry into [`api/mcp/`](../../api/mcp/README.md), and
 `make registry` fails when the two differ. Status: implemented (S013,
 S046) for `policy-mcp`, `claims-mcp` and `knowledge-mcp`, proven
 in-process; the servers run on kind in S044.
+
+`structured_outputs` (default `false`) is declared twice. A chat deployment
+sets it when it honours a JSON schema for the answer (Azure OpenAI's
+structured outputs); a replay deployment accepts a schema and ignores it
+(simulated). An agent sets it when it may send the Model Gateway a response
+schema, and the gateway refuses one from an agent that does not. Status:
+implemented (S051): the declarations, their check, the gateway's refusal,
+and the Azure adapter, which sends the schema as strict structured outputs
+(tried live from a laptop on 2026-10-03).
 
 An agent is of kind `graph` unless it says otherwise: the Agent Runtime
 runs its graph, and refuses to start when a graph agent has no published

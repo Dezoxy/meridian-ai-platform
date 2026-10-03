@@ -319,3 +319,255 @@ def test_a_refusal_is_set_exactly_when_there_are_no_candidates(
     decision = decide(registry, considered, tenant, agent)
 
     assert (decision.refusal is None) == bool(decision.candidates)
+
+
+# ── a request with a response schema (S051) ──────────────────────────────────
+def plain(deployment: Deployment, deployment_id: str | None = None) -> Deployment:
+    """The deployment without the declaration: it cannot honour a schema."""
+    return deployment.model_copy(
+        update={
+            "id": deployment_id or deployment.id,
+            "structured_outputs": False,
+        }
+    )
+
+
+def honouring(deployment: Deployment, deployment_id: str) -> Deployment:
+    return deployment.model_copy(
+        update={"id": deployment_id, "structured_outputs": True}
+    )
+
+
+def with_agent_declaring(registry: Registry, declares: bool) -> Registry:
+    """The registry with the agent's declaration set to ``declares``."""
+    agents = tuple(
+        a.model_copy(update={"structured_outputs": declares}) if a.id == AGENT else a
+        for a in registry.agents
+    )
+    return registry.model_copy(update={"agents": agents})
+
+
+def without_agent(registry: Registry) -> Registry:
+    """The agent is gone from the registry; the tenants still list it."""
+    agents = tuple(a for a in registry.agents if a.id != AGENT)
+    return registry.model_copy(update={"agents": agents})
+
+
+def test_the_real_registry_declares_the_triage_agent_and_its_deployment(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    agent = registry.agent(AGENT)
+
+    assert agent is not None
+    assert agent.structured_outputs
+    assert eu_deployment.structured_outputs
+
+
+def test_a_schema_request_from_a_declaring_agent_keeps_the_honouring_candidates(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry, (eu_deployment,), PERSONAL_TENANT, AGENT, wants_schema=True
+    )
+
+    assert decision == RouteDecision(
+        "personal", (eu_deployment,), None, limits_of(registry, PERSONAL_TENANT)
+    )
+
+
+def test_an_agent_that_does_not_declare_is_refused(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    changed = with_agent_declaring(registry, False)
+
+    decision = decide(
+        changed, (eu_deployment,), PERSONAL_TENANT, AGENT, wants_schema=True
+    )
+
+    assert decision == RouteDecision(
+        "personal", (), "schema-not-allowed", limits_of(changed, PERSONAL_TENANT)
+    )
+
+
+def test_an_agent_missing_from_the_registry_is_refused(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    changed = without_agent(registry)
+
+    decision = decide(
+        changed, (eu_deployment,), PERSONAL_TENANT, AGENT, wants_schema=True
+    )
+
+    assert decision == RouteDecision(
+        "personal", (), "schema-not-allowed", limits_of(changed, PERSONAL_TENANT)
+    )
+
+
+def test_a_non_declaring_agent_is_refused_even_when_no_deployment_is_listed(
+    registry: Registry,
+) -> None:
+    changed = with_agent_declaring(registry, False)
+
+    decision = decide(changed, (), PERSONAL_TENANT, AGENT, wants_schema=True)
+
+    assert decision.refusal == "schema-not-allowed"
+
+
+def test_a_declaring_agent_with_no_route_is_no_route(registry: Registry) -> None:
+    decision = decide(registry, (), PERSONAL_TENANT, AGENT, wants_schema=True)
+
+    assert decision.refusal == "no-route"
+
+
+def test_the_two_new_refusals_come_after_who_and_what_class(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    undeclared = with_agent_declaring(registry, False)
+
+    unknown = decide(
+        undeclared, (eu_deployment,), "nobody", AGENT, "special", wants_schema=True
+    )
+    other = decide(
+        undeclared,
+        (eu_deployment,),
+        PERSONAL_TENANT,
+        "other-agent",
+        "special",
+        wants_schema=True,
+    )
+    special = decide(
+        undeclared,
+        (eu_deployment,),
+        PERSONAL_TENANT,
+        AGENT,
+        "special",
+        wants_schema=True,
+    )
+
+    assert unknown.refusal == "unknown-tenant"
+    assert other.refusal == "agent-not-allowed"
+    assert special.refusal == "special-data"
+
+
+def test_a_missing_declaration_is_refused_before_the_class_filter(
+    registry: Registry, global_deployment: Deployment
+) -> None:
+    undeclared = with_agent_declaring(registry, False)
+
+    decision = decide(
+        undeclared, (global_deployment,), PERSONAL_TENANT, AGENT, wants_schema=True
+    )
+
+    assert decision.refusal == "schema-not-allowed"  # not no-allowed-deployment
+
+
+def test_the_class_filter_refuses_before_the_schema_filter(
+    registry: Registry, global_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry, (global_deployment,), PERSONAL_TENANT, AGENT, wants_schema=True
+    )
+
+    assert decision.refusal == "no-allowed-deployment"  # not no-schema-deployment
+
+
+def test_no_honouring_candidate_is_no_schema_deployment(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    candidates = (plain(eu_deployment), plain(eu_deployment, "aoai-second"))
+
+    decision = decide(registry, candidates, PERSONAL_TENANT, AGENT, wants_schema=True)
+
+    assert decision == RouteDecision(
+        "personal", (), "no-schema-deployment", limits_of(registry, PERSONAL_TENANT)
+    )
+
+
+def test_a_candidate_the_class_filter_dropped_does_not_count_as_honouring(
+    registry: Registry, eu_deployment: Deployment, global_deployment: Deployment
+) -> None:
+    # The global one honours a schema, but a personal request cannot reach it.
+    assert global_deployment.structured_outputs
+    candidates = (global_deployment, plain(eu_deployment))
+
+    decision = decide(registry, candidates, PERSONAL_TENANT, AGENT, wants_schema=True)
+
+    assert decision.refusal == "no-schema-deployment"
+
+
+def test_a_candidate_that_cannot_honour_a_schema_is_left_out_in_the_routes_order(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    first = plain(eu_deployment, "aoai-first")
+    second = honouring(eu_deployment, "aoai-second")
+    third = plain(eu_deployment, "aoai-third")
+    fourth = honouring(eu_deployment, "aoai-fourth")
+
+    decision = decide(
+        registry,
+        (first, fourth, second, third),
+        SYNTHETIC_TENANT,
+        AGENT,
+        wants_schema=True,
+    )
+
+    assert [d.id for d in decision.candidates] == ["aoai-fourth", "aoai-second"]
+    assert decision.refusal is None
+
+
+def test_a_global_deployment_that_honours_a_schema_stays_ahead_for_synthetic_data(
+    registry: Registry, eu_deployment: Deployment, global_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry,
+        (global_deployment, eu_deployment),
+        SYNTHETIC_TENANT,
+        AGENT,
+        wants_schema=True,
+    )
+
+    assert decision.candidates == (global_deployment, eu_deployment)
+
+
+def test_without_a_schema_nothing_changes_for_any_agent_or_deployment(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    undeclared = with_agent_declaring(registry, False)
+    candidates = (plain(eu_deployment, "aoai-first"), eu_deployment)
+
+    default = decide(undeclared, candidates, PERSONAL_TENANT, AGENT)
+    explicit = decide(undeclared, candidates, PERSONAL_TENANT, AGENT, None)
+    said = decide(undeclared, candidates, PERSONAL_TENANT, AGENT, wants_schema=False)
+
+    assert default == explicit == said
+    assert default.candidates == candidates
+    assert default.refusal is None
+
+
+def test_the_schema_flag_is_keyword_only(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    with pytest.raises(TypeError):
+        decide(registry, (eu_deployment,), PERSONAL_TENANT, AGENT, None, True)  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("declares", [True, False])
+@pytest.mark.parametrize("kind", ["none", "plain", "honouring"])
+def test_a_refusal_with_a_schema_is_set_exactly_when_there_are_no_candidates(
+    registry: Registry, eu_deployment: Deployment, declares: bool, kind: str
+) -> None:
+    candidates = {
+        "none": (),
+        "plain": (plain(eu_deployment),),
+        "honouring": (eu_deployment,),
+    }[kind]
+
+    decision = decide(
+        with_agent_declaring(registry, declares),
+        candidates,
+        PERSONAL_TENANT,
+        AGENT,
+        wants_schema=True,
+    )
+
+    assert (decision.refusal is None) == bool(decision.candidates)

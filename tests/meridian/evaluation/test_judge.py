@@ -1,4 +1,4 @@
-"""The LLM judge: a strict reader of one groundedness verdict (S050, T-29, T-76).
+"""The LLM judge: a strict reader of one groundedness verdict (S050, T-29, T-77).
 
 The unit tests run over ``httpx.MockTransport``; two tests go through the real
 gateway app in replay mode and need the database (``make pytest-db``)."""

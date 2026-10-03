@@ -145,6 +145,11 @@
           "default": null,
           "title": "Sku"
         },
+        "structured_outputs": {
+          "default": false,
+          "title": "Structured Outputs",
+          "type": "boolean"
+        },
         "terraform_key": {
           "anyOf": [
             {

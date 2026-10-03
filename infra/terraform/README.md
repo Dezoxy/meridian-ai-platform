@@ -159,7 +159,7 @@ az cognitiveservices usage list -l swedencentral --subscription "<pinned subscri
 | `make azure-apply` | Apply exactly the saved plan, then remove the plan file. Refuses to run without a plan. | Yes |
 | `make azure-smoke` | One PASS or FAIL line per check; exits non-zero on any FAIL. | No, apart from one tiny model call per deployment |
 | `make registry-snapshot` | `foundation.sh outputs`: the `openai_deployments` output as JSON without account names and endpoints, written to `config/registry/snapshots/`. | No |
-| `make gateway-live` | Two real chat calls and one embedding call through the Model Gateway in live mode on this laptop, one chat call with the first candidate made to fail: this `az login`, synthetic text and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from three tiny model calls |
+| `make gateway-live` | Four real chat calls and one embedding call through the Model Gateway in live mode on this laptop, one chat call with the first candidate made to fail and two with a response schema: this `az login`, synthetic text and the throwaway PostgreSQL of `make pytest-db` (needs Docker). | No, apart from five tiny model calls |
 
 The order is `azure-state` once, then `azure-plan`, review, `azure-apply`,
 `azure-smoke`. The hooks ask for confirmation before `azure-state` and
@@ -215,7 +215,19 @@ A third request embeds two synthetic texts through the embedding route
 the `completed` audit row and a settled ledger row at the embedding price,
 and prints the deployment ID, the provider's model string, the vector
 length and the token count, never a vector or a text. This third request
-has not been run yet: the Azure login was blocked when S045 was built.
+first ran on 2026-10-03.
+
+A fourth and a fifth request are structured outputs (S051). The fourth
+sends the first request's prompt, which asks for one bare word, with a
+response schema: the answer is the schema's object, so the deployment
+honoured the schema and not the prompt, and the reservation, which counts
+the schema, was not below Azure's own input count. The fifth is the
+triage's own call (`assess`, through the runtime's client) for one
+synthetic description and two clauses of the synthetic motor wording: it
+asks by schema, under the class `personal`, and the answer is read by the
+same strict reader as any. The test prints the status and the clause
+number, never the rationale. One synthetic question does not measure the
+model: the golden set answered by a real model is S050.
 
 The gateway on kind stays in replay mode: a pod there has no Azure identity
 until workload identity arrives with S020.

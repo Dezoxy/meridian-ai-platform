@@ -1,4 +1,4 @@
-"""The LLM judge: whether a statement is supported by a source (S050, T-29, T-76).
+"""The LLM judge: whether a statement is supported by a source (S050, T-29, T-77).
 
 The judge grades one thing, groundedness, and knows no workload's words: the
 workload decides what the source and the statement are. It calls the Model
@@ -10,7 +10,7 @@ Its verdict is the one grader ``groundedness``. The rule graders are computed
 without it and it never overrides them (T-29). Nothing it says can pass a
 statement unless it is read strictly: a statement that addresses the model is
 ``flagged`` and no call is made, and an answer that is not the format is
-``unreadable``. Every outcome but ``grounded`` is false (T-76). A log line names
+``unreadable``. Every outcome but ``grounded`` is false (T-77). A log line names
 the outcome and never repeats the source, the statement or the model's text
 (T-03).
 """

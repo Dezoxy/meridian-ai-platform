@@ -11,10 +11,10 @@
 #   outputs print the model deployments from Terraform's outputs as JSON, only
 #          the fields the registry compares (no account names or endpoints):
 #          the snapshot the registry is checked against (T-12). Read-only.
-#   gateway-live  two real chat calls and one embedding call through the Model
+#   gateway-live  four real chat calls and one embedding call through the Model
 #          Gateway in live mode on this laptop, one chat call with the first
-#          candidate made to fail, with this az login and a throwaway
-#          PostgreSQL (needs Docker). Read-only
+#          candidate made to fail and two with a response schema, with this
+#          az login and a throwaway PostgreSQL (needs Docker). Read-only
 #          in Azure apart from those calls (well under EUR 0.01).
 #   eval-record  SPENDS MONEY (about 60 chat calls, under EUR 0.50): the golden
 #          set and a variant prompt answered by the live models, judged by the
@@ -328,7 +328,7 @@ cmd_gateway_live() {
   endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
     <<<"${deployments}" 2>/dev/null)" ||
     die "the openai_deployments output has no endpoints"
-  log "two chat calls and one embedding call through the gateway as tenant development (synthetic text)"
+  log "four chat calls and one embedding call through the gateway as tenant development (synthetic text)"
   MERIDIAN_LIVE_AZURE=1 \
     MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
     MERIDIAN_AZURE_TENANT_ID="${ARM_TENANT_ID}" \

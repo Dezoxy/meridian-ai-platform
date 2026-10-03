@@ -18,6 +18,14 @@ whose error code is exactly ``content_filter``, or a completion whose
 ``finish_reason`` is ``content_filter``, is ``filtered``. Only the result of that
 comparison is kept (T-67).
 
+A request with a response schema (S051) is sent as strict structured outputs
+(``response_format`` of type ``json_schema``, the schema as the request holds
+it); one without sends no ``response_format``. A model that declines a
+structured request answers with a ``refusal`` string and no content: that is
+``filtered`` too, the kind of the content filter, so the walk does not fall
+over and no circuit counts it (T-67). Nothing of the refusal's text is kept: it
+can echo the prompt. A refusal that is not a string is a bad response.
+
 An embeddings answer is trusted only when it holds exactly one vector of the
 registry's length per input, in index order, of finite numbers (T-54); anything
 else is a bad response.
@@ -35,6 +43,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 import openai
@@ -86,6 +95,9 @@ CLIENT_ERRORS = range(400, 500)
 # comes as a 200 whose ``finish_reason`` is this word.
 BAD_REQUEST = 400
 CONTENT_FILTER_CODE = "content_filter"
+# The name Azure wants for the schema of a structured output; the answer is one
+# object, so one fixed word serves every agent.
+RESPONSE_FORMAT_NAME = "answer"
 
 
 def kind_of_status(status: int) -> ProviderErrorKind:
@@ -226,6 +238,8 @@ class AzureOpenAIProvider:
             raise ValueError(f"deployment {deployment.id} has no deployment_name")
         client = self._client_for(deployment)
         timeout = _attempt_timeout(timeout_seconds)
+        # Without a schema the SDK is called as it always was: no response_format.
+        extra = _schema_arguments(request)
         completion = _call_sdk(
             lambda: client.chat.completions.create(
                 model=name,
@@ -237,6 +251,7 @@ class AzureOpenAIProvider:
                 max_tokens=request.max_output_tokens,
                 n=1,
                 timeout=timeout,
+                **extra,
             )
         )
         return _reply_from(completion)
@@ -271,6 +286,23 @@ class AzureOpenAIProvider:
         return _embedding_reply(
             response, inputs=len(request.inputs), dimensions=dimensions
         )
+
+
+def _schema_arguments(request: ChatRequest) -> dict[str, Any]:
+    """The ``response_format`` argument of a request with a response schema,
+    strict, and nothing for one without."""
+    if request.response_schema is None:
+        return {}
+    return {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": RESPONSE_FORMAT_NAME,
+                "strict": True,
+                "schema": request.response_schema,
+            },
+        }
+    }
 
 
 def _attempt_timeout(timeout_seconds: float) -> openai.Timeout:
@@ -383,6 +415,13 @@ def _read(completion: ChatCompletion) -> ProviderReply:
             pass
         case _:
             raise ProviderError("bad-response")
+    refusal = choice.message.refusal
+    if isinstance(refusal, str):
+        # The model's own refusal of a structured request, with no content. Its
+        # text is never read further: it can echo the prompt (T-67).
+        raise ProviderError("filtered")
+    if refusal is not None:
+        raise ProviderError("bad-response")
     text = choice.message.content
     if not isinstance(text, str):
         raise ProviderError("bad-response")

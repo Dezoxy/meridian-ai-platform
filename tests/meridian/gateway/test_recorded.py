@@ -1,4 +1,4 @@
-"""The gateway answers chat from a recording (S050, T-75).
+"""The gateway answers chat from a recording (S050, T-76).
 
 The key, the file, the two providers, and the app in recorded mode on the
 throwaway PostgreSQL. Nothing here reaches a network.
@@ -733,7 +733,7 @@ def test_recorded_mode_is_refused_outside_test_ci_and_local(
     with pytest.raises(
         SettingsError,
         match=r"recorded mode is refused outside the test, ci and local "
-        r"environments \(T-75\)",
+        r"environments \(T-76\)",
     ):
         create_app(recorded_settings(environment, recordings), providers=providers)
 

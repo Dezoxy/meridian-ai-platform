@@ -6,6 +6,7 @@ graph code neither sets headers nor knows the gateway's address (T-08).
 
 import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Literal
@@ -144,13 +145,19 @@ class ModelClient:
         *,
         max_output_tokens: int | None = None,
         data_class: DataClass | None = None,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> ChatResult:
         """Raises ``ModelCallLimitError`` past ``max_calls``, before any send.
 
         ``data_class`` is the class of the content of this call; the gateway
         uses the higher of it and the tenant's. Raises
         ``ModelCallFilteredError`` when the gateway answers 400 with the
-        content-filter header; any other 400 is a ``ModelCallError``."""
+        content-filter header; any other 400 is a ``ModelCallError``.
+
+        ``response_schema`` asks the provider for an answer of that shape. The
+        gateway refuses it (403) from an agent the registry does not declare
+        for it. The answer is still text, and the caller still reads it: the
+        schema is not checked here."""
         with self._lock:  # a graph's parallel nodes share this client
             if self._calls >= self._max_calls:
                 raise ModelCallLimitError
@@ -158,6 +165,8 @@ class ModelClient:
         body: dict[str, Any] = {"messages": messages}
         if max_output_tokens is not None:
             body["max_output_tokens"] = max_output_tokens
+        if response_schema is not None:
+            body["response_schema"] = dict(response_schema)
         headers = dict(self._headers)
         if data_class is not None:
             headers[DATA_CLASS_HEADER] = data_class

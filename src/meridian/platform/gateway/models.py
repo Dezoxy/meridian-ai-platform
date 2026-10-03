@@ -1,11 +1,12 @@
 """The gateway's wire contract: minimal internal JSON (S009 decision)."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import Field, StringConstraints
+from pydantic import AfterValidator, Field, StringConstraints
 
 from meridian.platform.common.wire import NoNul, WireModel
+from meridian.platform.gateway.response_schema import response_schema_errors
 
 MAX_MESSAGES = 50
 MAX_CONTENT_CHARS = 20_000
@@ -18,6 +19,21 @@ MAX_OUTPUT_TOKENS = 1024
 # so the bound is on inputs and characters, not on a reply.
 MAX_EMBEDDING_INPUTS = 16
 MAX_EMBEDDING_INPUT_CHARS = 8000
+# The one sentence a refused schema is answered with. The service's 422 copies a
+# validator's message, so it names nothing of the schema: a name or a value in
+# it would travel to a log, a trace or a reply (T-56).
+RESPONSE_SCHEMA_REFUSAL = "the response schema is outside the allowed subset"
+
+
+def _check_response_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if response_schema_errors(schema):
+        raise ValueError(RESPONSE_SCHEMA_REFUSAL)
+    return schema
+
+
+# Treated as read-only, like a registry ``Tool.input_schema``: the model is
+# frozen, the dict inside it is not, and nothing here or below changes it.
+ResponseSchema = Annotated[dict[str, Any], AfterValidator(_check_response_schema)]
 
 
 class Message(WireModel):
@@ -28,6 +44,9 @@ class Message(WireModel):
 class ChatRequest(WireModel):
     messages: tuple[Message, ...] = Field(min_length=1, max_length=MAX_MESSAGES)
     max_output_tokens: int = Field(DEFAULT_OUTPUT_TOKENS, ge=1, le=MAX_OUTPUT_TOKENS)
+    # The shape of the answer (S051); the gateway refuses it for an agent or a
+    # deployment that cannot honour one.
+    response_schema: ResponseSchema | None = None
 
 
 class ChatOutput(WireModel):
