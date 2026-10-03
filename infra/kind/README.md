@@ -7,7 +7,8 @@ policy, claims and knowledge tool servers), seeds the policy store and ingests
 the policy wordings; `make demo` runs a claim through them. `make down`
 removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
-servers, S043 for the cost dashboard, S015 for the adjuster's decision).
+servers, S043 for the cost dashboard, S015 for the adjuster's decision,
+S016 for the adjuster's pages).
 Nothing here is deployed anywhere but your laptop; the Azure side is S007
 onward. The services run in replay mode: no model is called, the model's
 text is canned and simulated, and so are the embeddings. A triage that asks
