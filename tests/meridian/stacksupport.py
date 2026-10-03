@@ -199,6 +199,31 @@ class Stack:
             follow_redirects=False,
         )
 
+    def triage_again(self, claim_id: str, *, advance: bool = True) -> httpx.Response:
+        """Send a claim back to triage, or try a failed one again (S048). A
+        triage runs, so by default the clock moves first, as in ``post``."""
+        if advance:
+            self.clock.advance(WINDOW_SECONDS)
+        return self.client.post(f"/claims/{claim_id}/triage")
+
+    def withdraw(self, claim_id: str) -> httpx.Response:
+        """The claimant withdraws a claim (S048). The clock does not move: ending
+        the run resumes it, which calls the claims tool server, not the
+        gateway."""
+        return self.client.post(f"/claims/{claim_id}/withdrawal")
+
+    def report_documents(
+        self, claim_id: str, names: list[str], *, advance: bool = True
+    ) -> httpx.Response:
+        """The names of the documents that arrived for a claim (S048). The claim
+        is triaged with them, so by default the clock moves first, as in
+        ``post``."""
+        if advance:
+            self.clock.advance(WINDOW_SECONDS)
+        return self.client.post(
+            f"/claims/{claim_id}/documents", json={"documents": names}
+        )
+
     def resume_directly(self, claim_id: str, run_id: str) -> httpx.Response:
         """What anything that can call the runtime can do: resume a paused run
         with no decision recorded by the Claims API, through a runtime of its
