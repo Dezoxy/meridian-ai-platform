@@ -219,8 +219,9 @@ and Pydantic, at the cost of one dependency.
 Follow-ups that no step's "done when" covers. Part C's "No step yet" lines
 are history; this table is current. "Home" is a proposal until that step
 opens and takes the item into its "done when"; "none" means no step fits
-yet. Rebuilt on 2026-10-03 from every "No step yet" line in S041 to S049;
-each item was checked against the code that day.
+yet. Rebuilt on 2026-10-03 from every "No step yet" line in S041 to S049.
+The items a later step could have closed were checked against the code
+that day; the rest stand as their step recorded them.
 
 | Item | Raised in | Status | Home |
 |---|---|---|---|
@@ -255,6 +256,7 @@ each item was checked against the code that day.
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | none |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open | none |
 | The tool-call limits are the same for every agent | S014 | open | S031 |
+| Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | open | none |
 | A migration that adds columns locks `claims.claims` for its backfill | S015 | open | none |
 | After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
