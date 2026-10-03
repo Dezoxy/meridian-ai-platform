@@ -36,10 +36,15 @@ PYTEST_ARGS         ?=
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
+# The evaluation of the claims workload (S017): the baseline committed in Git,
+# the report a run writes (gitignored) and the one test that writes it.
+EVAL_BASELINE       ?= data/evaluation/claims-triage-baseline.json
+EVAL_REPORT         ?= .eval/claims-triage-report.json
+EVAL_TEST           ?= tests/meridian/test_triage_stack.py::test_a_scripted_model_gives_the_oracle_s_proposals
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -136,6 +141,21 @@ pytest-db:
 	done; \
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
 	MERIDIAN_REQUIRE_DB=1 uv run pytest $(PYTEST_ARGS)
+
+## eval            replay the golden set through the stack with the scripted model (needs Docker), write the report and compare it with the baseline
+eval:
+	mkdir -p $(dir $(EVAL_REPORT))
+	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_REPORT)) $(MAKE) pytest-db PYTEST_ARGS="$(EVAL_TEST) -q"
+	$(MAKE) eval-compare
+
+## eval-compare    compare a report with the baseline (meridian eval compare)
+eval-compare:
+	uv run meridian eval compare $(EVAL_BASELINE) $(EVAL_REPORT)
+
+## eval-baseline   regenerate the baseline after a reviewed prompt, tool or golden-set change (needs Docker)
+eval-baseline:
+	mkdir -p $(dir $(EVAL_BASELINE))
+	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_BASELINE)) $(MAKE) pytest-db PYTEST_ARGS="$(EVAL_TEST) -q"
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas and the tool-server contracts under api/mcp
 registry:

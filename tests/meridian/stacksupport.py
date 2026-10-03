@@ -33,6 +33,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from servicesupport import (
     GATEWAY_REPLY,
     REGISTRY_DIR,
+    REPO_ROOT,
     FakeClock,
     owner_rows,
     synthetic_claims,
@@ -78,6 +79,9 @@ POLICIES: dict[str, dict[str, Any]] = {
 EXPECTED: dict[str, dict[str, Any]] = {
     e["claim_id"]: e for e in load("expected-outcomes.json")
 }
+MANIFEST = SYNTHETIC_DIR / "manifest.json"
+# The committed evaluation baseline (S017); `make eval-baseline` rewrites it.
+EVAL_BASELINE = REPO_ROOT / "data" / "evaluation" / "claims-triage-baseline.json"
 
 
 def replay_gateway(
