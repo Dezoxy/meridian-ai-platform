@@ -583,7 +583,9 @@ def test_the_default_clock_is_the_date_in_the_insurers_time_zone(
 
     response = post_claim(client, form_of(claim_with_id("CLM-9501")))
 
-    # A clock in UTC would give the 13th.
+    # A clock in UTC would give the 13th; the instant alone would also pass for
+    # any zone two hours ahead, so the zone is named.
+    assert claimant.REPORT_TIME_ZONE.key == "Europe/Vienna"
     assert claimant.today_in_vienna() == date(2026, 7, 14)
     assert response.status_code == 303
     assert stored_report_date(fresh_database, "CLM-9501") == "2026-07-14"
