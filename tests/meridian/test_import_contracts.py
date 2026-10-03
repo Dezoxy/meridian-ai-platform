@@ -92,6 +92,11 @@ def test_unmodified_copy_passes_with_at_least_one_kept_contract(
             id="platform-imports-a-langgraph-submodule",
         ),
         pytest.param(
+            "from langgraph.checkpoint.postgres import PostgresSaver\n",
+            "langgraph",
+            id="platform-imports-the-langgraph-postgres-checkpointer",
+        ),
+        pytest.param(
             "import langchain\n", "langchain", id="platform-imports-langchain"
         ),
         pytest.param(

@@ -1,7 +1,8 @@
-"""The claims server's two write tools (S013).
+"""The claims server's two write tools (S013) and one read (S015).
 
-Each stores one row under the idempotency key the runtime derived (T-23). A key
-is unique per run. The insert is ``ON CONFLICT (run_id, idempotency_key) DO
+``approval_outcome`` is the read, at the end of this module. Each write tool
+stores one row under the idempotency key the runtime derived (T-23). A key is
+unique per run. The insert is ``ON CONFLICT (run_id, idempotency_key) DO
 NOTHING``, so two calls of one run with one key cannot both insert, however
 they interleave: at READ COMMITTED, which ``connect()`` pins, the second waits
 for the first's transaction and then finds the row. At a stricter level it
@@ -103,6 +104,20 @@ def request_approval(conn: psycopg.Connection, call: ToolCall) -> Completed | Re
     return insert_or_replay(conn, call, APPROVAL_REQUESTS)
 
 
+# The run's own row: the claim and the run both come from the call's binding.
+SELECT_OUTCOME = """
+SELECT decision FROM claims.decisions WHERE run_id = %s AND claim_id = %s
+"""
+
+
+def approval_outcome(conn: psycopg.Connection, call: ToolCall) -> Completed | Refused:
+    """The decision recorded for this run, or an answer without ``outcome``
+    while none is. Reads only: the Claims API records the decision (T-31)."""
+    binding = call.binding
+    row = conn.execute(SELECT_OUTCOME, (binding.run_id, binding.claim_id)).fetchone()
+    return Completed({} if row is None else {"outcome": row[0]})
+
+
 HANDLERS = (
     ToolHandler(
         tool="add_claim_note",
@@ -117,5 +132,12 @@ HANDLERS = (
         bound_argument="claim_id",
         bound_to="claim_id",
         run=request_approval,
+    ),
+    ToolHandler(
+        tool="approval_outcome",
+        scope="claims:approval:read",
+        bound_argument="claim_id",
+        bound_to="claim_id",
+        run=approval_outcome,
     ),
 )

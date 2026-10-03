@@ -33,6 +33,9 @@ PYTEST_DB_CONTAINER ?= meridian-pytest-db
 PYTEST_DB_PORT      ?= 55432
 # Extra pytest arguments for `make pytest-db`, e.g. one test file.
 PYTEST_ARGS         ?=
+# The adjuster's decision `make demo` posts for a claim referred to an adjuster:
+# approve, reject or request_documents (the script refuses anything else).
+DECISION            ?= approve
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
@@ -156,9 +159,9 @@ up:
 deploy:
 	infra/kind/deploy.sh
 
-## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088 and find its one trace across the five services that triage it in Tempo
+## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088, find its trace across the five services that triage it in Tempo and, when it is referred to an adjuster, decide it and find that trace too (make demo DECISION=reject; approve, reject or request_documents)
 demo: deploy
-	infra/kind/demo.sh
+	DECISION="$(DECISION)" infra/kind/demo.sh
 
 ## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client and the gateway's series
 smoke:

@@ -1,24 +1,27 @@
-"""The Agent Runtime app: ``POST /runs`` and ``GET /runs/{run_id}`` (ADR 2).
+"""The Agent Runtime app: ``POST /runs``, ``POST /runs/{run_id}/resume`` and
+``GET /runs/{run_id}`` (ADR 2).
 
 A run is synchronous at this step: the request answers when the graph ends or
 pauses. The run row and its first audit event are written before any graph
-runs; if they cannot be, nothing runs (503).
+runs; if they cannot be, nothing runs (503). A paused run is resumed by a
+second request, which claims it once and runs the next leg.
 """
 
 import logging
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any, Literal
 
 import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde import _msgpack
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.trace import Tracer
+from opentelemetry.trace import Span, Tracer
 
 import meridian.runtime
 from meridian.platform.common.audit import AuditEvent, write_audit
@@ -27,6 +30,7 @@ from meridian.platform.common.http import (
     DATABASE_UNAVAILABLE,
     REFUSED,
     SMALL_BODY_LIMIT_BYTES,
+    BoundedEntityId,
     create_service_app,
     error_answer,
     error_responses,
@@ -39,10 +43,13 @@ from meridian.platform.common.telemetry import (
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
 from meridian.runtime import SERVICE_NAME, runs
+from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import failure_reason
-from meridian.runtime.graphs import load_graph_factory
+from meridian.runtime.graphs import GraphFactory, load_graph_factory
 from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
 from meridian.runtime.models import (
+    Reference,
+    ResumeRequest,
     RunErrorBody,
     RunRequest,
     RunResponse,
@@ -65,8 +72,13 @@ FINISH_ATTEMPTS = 2
 REFUSAL_REASON = "tool-not-allowed"
 # The audit reason of a run request for a job agent, which has no graph.
 JOB_REFUSAL_REASON = "not-a-graph-agent"
+# The detail of a 404 for a run: the same text whether the run does not exist
+# or belongs to another tenant or reference.
+NO_SUCH_RUN = "no such run"
 HTTP_BAD_GATEWAY = 502
 HTTP_GATEWAY_TIMEOUT = 504
+# The leg of a run a failure belongs to: its first, or one resumed after a pause.
+Leg = Literal["first", "resumed"]
 
 logger = logging.getLogger(__name__)
 
@@ -104,21 +116,46 @@ def _tool_of(error: Exception) -> str | None:
     return error.tool if isinstance(error, ToolError) else None
 
 
-def _log_failure(run_id: uuid.UUID, error: Exception) -> None:
-    # The reason word and the class; for a gateway call its status code; for a
-    # tool error its tool (a registry ID or none) and, for a refusal, the
-    # refusal word. Nothing else: a message could hold claim text.
+def _set_run_attributes(span: Span, run_id: uuid.UUID, agent: str, tenant: str) -> None:
+    set_span_attributes(
+        span,
+        {
+            "meridian.run_id": str(run_id),
+            "meridian.agent": agent,
+            "meridian.tenant": tenant,
+        },
+    )
+
+
+def _log_failure(run_id: uuid.UUID, error: Exception, leg: Leg) -> None:
+    # The leg, the reason word and the class; for a gateway call its status
+    # code; for a tool error its tool (a registry ID or none) and, for a
+    # refusal, the refusal word. Nothing else: a message could hold claim text.
     status = error.status_code if isinstance(error, ModelCallError) else None
     refusal = error.reason if isinstance(error, ToolRefused) else None
     logger.error(
-        "run %s failed: %s (%s; gateway status %s; tool %s; refusal %s)",
+        "run %s failed on its %s leg: %s (%s; gateway status %s; tool %s; refusal %s)",
         run_id,
+        leg,
         failure_reason(error),
         type(error).__name__,
         status,
         _tool_of(error),
         refusal,
     )
+
+
+def _record(write: Callable[[], None]) -> psycopg.Error | None:
+    """Run a status write; try twice, return the last error if both fail."""
+    last: psycopg.Error | None = None
+    for _ in range(FINISH_ATTEMPTS):
+        try:
+            write()
+        except psycopg.Error as exc:
+            last = exc
+        else:
+            return None
+    return last
 
 
 def _finish(
@@ -129,15 +166,51 @@ def _finish(
     tool: str | None = None,
 ) -> psycopg.Error | None:
     """Record the final status; try twice, return the last error if both fail."""
-    last: psycopg.Error | None = None
-    for _ in range(FINISH_ATTEMPTS):
-        try:
-            runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
-        except psycopg.Error as exc:
-            last = exc
-        else:
-            return None
-    return last
+    return _record(
+        lambda: runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
+    )
+
+
+def _pause_again(
+    dsn: str, identity: RunIdentity, reason: str, tool: str | None
+) -> psycopg.Error | None:
+    """Record a failed resumed leg and the run's return to its pause; try
+    twice, return the last error if both fail."""
+    return _record(
+        lambda: runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
+    )
+
+
+def _delete_checkpoints(
+    saver: BaseCheckpointSaver,
+    identity: RunIdentity,
+    fresh: Callable[[], AbstractContextManager[BaseCheckpointSaver]],
+) -> None:
+    """Drop the run's thread; a failure is logged and changes no answer. A
+    failed delete is tried once more on ``fresh()``, a saver of its own (the
+    injected one, when there is one). The run is already recorded, and a message
+    could hold claim text, so each log line has the run ID, the exception class
+    and the sqlstate only."""
+    thread = str(identity.thread_id)
+    try:
+        saver.delete_thread(thread)
+        return
+    except Exception as exc:  # whatever the saver raises changes no answer
+        _log_delete_failure(identity, exc)
+    try:
+        with fresh() as retry:
+            retry.delete_thread(thread)
+    except Exception as exc:
+        _log_delete_failure(identity, exc)
+
+
+def _log_delete_failure(identity: RunIdentity, error: Exception) -> None:
+    logger.error(
+        "run %s: its checkpoints were not deleted: %s (sqlstate %s)",
+        identity.run_id,
+        type(error).__name__,
+        (error.sqlstate if isinstance(error, psycopg.Error) else None) or "none",
+    )
 
 
 def tool_client_for(
@@ -233,9 +306,13 @@ def create_app(
         timeout=GATEWAY_TIMEOUT_SECONDS,
         trust_env=False,
     )
-    # Until S015 brings the PostgreSQL checkpointer, runs live in memory.
-    saver = checkpointer or MemorySaver()
     dsn = settings.database_url
+
+    # An injected checkpointer (tests) serves every request; otherwise each
+    # request opens the PostgreSQL saver on a connection of its own (S015).
+    def saver_scope() -> AbstractContextManager[BaseCheckpointSaver]:
+        return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
+
     service = create_service_app(
         title="Meridian Agent Runtime",
         description="Runs an agent's graph and keeps the run's status (ADR 2).",
@@ -247,7 +324,13 @@ def create_app(
     )
     app, tracer = service.app, service.tracer
 
-    def refuse(body: RunRequest, reason: str | None = None) -> HTTPException:
+    def refuse(
+        tenant: str,
+        agent: str,
+        reference: str,
+        reason: str | None = None,
+        run_id: uuid.UUID | None = None,
+    ) -> HTTPException:
         write_audit(
             dsn,
             AuditEvent(
@@ -255,12 +338,82 @@ def create_app(
                 event="run.refused",
                 outcome="refused",
                 reason=reason,
-                tenant=body.tenant,
-                agent=body.agent,
-                reference=body.reference,
+                tenant=tenant,
+                agent=agent,
+                run_id=run_id,
+                reference=reference,
             ),
         )
         return HTTPException(status_code=403, detail=REFUSED)
+
+    def run_leg(
+        factory: GraphFactory,
+        saver: BaseCheckpointSaver,
+        span: Span,
+        identity: RunIdentity,
+        response: Response,
+        run_input: dict[str, Any],
+        resume: dict[str, Any] | None = None,
+    ) -> RunResponse | JSONResponse:
+        """Run one leg of a run that is ``Running`` (its first, or one resumed
+        after a pause) and record how it ended: the failure logged, the status
+        and its audit event written, the checkpoints dropped unless the run
+        is paused, the answer built. A resumed leg that fails leaves the run
+        paused, its pause still pending in the checkpoints, so a later resume
+        can finish it; only a resume with nothing to resume ends it ``Failed``."""
+        failure: Exception | None = None
+        leg: Leg = "first" if resume is None else "resumed"
+        try:
+            tools = tool_client_for(
+                servers,
+                registry=registry,
+                dsn=dsn,
+                tracer=tracer,
+                identity=identity,
+                throttle=refusal_throttle,
+            )
+            outcome = runs.execute(
+                factory, saver, http, tools, tracer, identity, run_input, resume=resume
+            )
+        except Exception as exc:
+            _log_failure(identity.run_id, exc, leg)
+            mark_error(span, exc)
+            failure, outcome = exc, RunOutcome("Failed", None)
+        if failure is None:
+            unsaved = _finish(dsn, identity, outcome.status)
+        elif leg == "resumed" and failure_reason(failure) not in runs.NOTHING_TO_RESUME:
+            outcome = RunOutcome("AwaitingApproval", None)
+            unsaved = _pause_again(
+                dsn, identity, failure_reason(failure), _tool_of(failure)
+            )
+        else:
+            unsaved = _finish(
+                dsn,
+                identity,
+                outcome.status,
+                reason=failure_reason(failure),
+                tool=_tool_of(failure),
+            )
+        if outcome.status != "AwaitingApproval":
+            # The checkpoint holds the claim; a finished run needs none,
+            # whether or not its status could be recorded.
+            _delete_checkpoints(saver, identity, saver_scope)
+        set_span_attributes(span, {"meridian.run_status": outcome.status})
+        if unsaved is not None:
+            logger.error(
+                "run %s could not be marked %s: %s (sqlstate %s)",
+                identity.run_id,
+                outcome.status,
+                type(unsaved).__name__,
+                unsaved.sqlstate or "none",
+            )
+            mark_error(span, unsaved)
+            return error_answer(503, DATABASE_UNAVAILABLE, run_id=str(identity.run_id))
+        if failure is not None:
+            response.status_code = _failure_status(failure)
+        return RunResponse(
+            run_id=identity.run_id, status=outcome.status, output=outcome.output
+        )
 
     @app.post(
         "/runs",
@@ -275,11 +428,11 @@ def create_app(
     )
     def create_run(body: RunRequest, response: Response) -> RunResponse | JSONResponse:
         if not registry.tenant_may_run(body.tenant, body.agent):
-            raise refuse(body)
+            raise refuse(body.tenant, body.agent, body.reference)
         factory = factories.get(body.agent)
         if factory is None:
             # A job agent: a tenant may list it, but it has no graph to run.
-            raise refuse(body, JOB_REFUSAL_REASON)
+            raise refuse(body.tenant, body.agent, body.reference, JOB_REFUSAL_REASON)
         identity = RunIdentity(
             run_id=uuid.uuid4(),
             thread_id=uuid.uuid4(),
@@ -287,78 +440,83 @@ def create_app(
             tenant=body.tenant,
             reference=body.reference,
         )
-        with start_span(tracer, "runtime.run") as span:
-            set_span_attributes(
-                span,
-                {
-                    "meridian.run_id": str(identity.run_id),
-                    "meridian.agent": identity.agent,
-                    "meridian.tenant": identity.tenant,
-                },
-            )
+        # The saver is opened before the run row is written, so a database
+        # that refuses its connection starts no run (same answer as start_run).
+        with start_span(tracer, "runtime.run") as span, saver_scope() as saver:
+            _set_run_attributes(span, identity.run_id, identity.agent, identity.tenant)
             runs.start_run(dsn, identity)
-            failure: Exception | None = None
-            try:
-                tools = tool_client_for(
-                    servers,
-                    registry=registry,
-                    dsn=dsn,
-                    tracer=tracer,
-                    identity=identity,
-                    throttle=refusal_throttle,
-                )
-                outcome = runs.execute(
-                    factory,
-                    saver,
-                    http,
-                    tools,
-                    tracer,
-                    identity,
-                    body.input,
-                )
-            except Exception as exc:
-                _log_failure(identity.run_id, exc)
-                mark_error(span, exc)
-                failure, outcome = exc, RunOutcome("Failed", None)
-            if outcome.status != "AwaitingApproval":
-                # The checkpoint holds the claim; a finished run needs none.
-                saver.delete_thread(str(identity.thread_id))
-            unsaved = _finish(
-                dsn,
-                identity,
-                outcome.status,
-                reason=None if failure is None else failure_reason(failure),
-                tool=None if failure is None else _tool_of(failure),
+            return run_leg(factory, saver, span, identity, response, body.input)
+
+    @app.post(
+        "/runs/{run_id}/resume",
+        tags=["runs"],
+        summary="Resume a run that paused and wait for it to end or pause again.",
+        response_model=RunResponse,
+        # A run that is not paused (already resumed, running, finished) answers
+        # 200 with its status and no output, unless it has been Running for
+        # longer than its lease, when the resume takes it over (a leg that died
+        # leaves a run so); the rest is as for POST /runs,
+        # except that a failed leg answers its 502 or 504 with status
+        # "AwaitingApproval": the run is paused again and can be resumed.
+        responses=error_responses(403, 404, 413, 500)
+        | error_responses(502, 504, model=RunResponse)
+        | error_responses(503, model=RunErrorBody),
+    )
+    def resume_run(
+        run_id: uuid.UUID, body: ResumeRequest, response: Response
+    ) -> RunResponse | JSONResponse:
+        found = runs.fetch_run(dsn, run_id)
+        # The same answer for a run that is not there and one under another
+        # tenant or reference: no answer says that a run ID exists (T-10).
+        if found is None or (found.tenant, found.reference) != (
+            body.tenant,
+            body.reference,
+        ):
+            raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
+        if not registry.tenant_may_run(found.tenant, found.agent):
+            raise refuse(found.tenant, found.agent, found.reference, run_id=run_id)
+        factory = factories.get(found.agent)
+        if factory is None:
+            raise refuse(
+                found.tenant,
+                found.agent,
+                found.reference,
+                JOB_REFUSAL_REASON,
+                run_id=run_id,
             )
-            set_span_attributes(span, {"meridian.run_status": outcome.status})
-            if unsaved is not None:
-                logger.error(
-                    "run %s could not be marked %s: %s (sqlstate %s)",
-                    identity.run_id,
-                    outcome.status,
-                    type(unsaved).__name__,
-                    unsaved.sqlstate or "none",
-                )
-                mark_error(span, unsaved)
-                return error_answer(
-                    503, DATABASE_UNAVAILABLE, run_id=str(identity.run_id)
-                )
-        if failure is not None:
-            response.status_code = _failure_status(failure)
-        return RunResponse(
-            run_id=identity.run_id, status=outcome.status, output=outcome.output
-        )
+        if found.status in ("Completed", "Failed"):
+            return RunResponse(run_id=run_id, status=found.status, output=None)
+        # A run that is paused, or Running (a leg in progress, or one that died:
+        # the claim takes over only a run idle for longer than its lease), goes
+        # to the claim, which decides.
+        # The saver is opened before the claim, so a database that refuses its
+        # connection leaves the run paused instead of stuck as Running.
+        with start_span(tracer, "runtime.resume") as span, saver_scope() as saver:
+            _set_run_attributes(span, run_id, found.agent, found.tenant)
+            identity = runs.claim_paused_run(dsn, run_id, body.tenant, body.reference)
+            if identity is None:
+                # Another request claimed the run between the read and the
+                # claim: it runs the leg, and this one reports where the run is.
+                current = runs.fetch_run(dsn, run_id)
+                if current is None:
+                    raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
+                return RunResponse(run_id=run_id, status=current.status, output=None)
+            return run_leg(factory, saver, span, identity, response, {}, body.input)
 
     @app.get(
         "/runs/{run_id}",
         tags=["runs"],
-        summary="Read the status of a run.",
+        summary="Read the status of a run of the given tenant and reference.",
         responses=error_responses(404, 500, 503),
     )
-    def read_run(run_id: uuid.UUID) -> RunStatus:
+    def read_run(
+        run_id: uuid.UUID, tenant: BoundedEntityId, reference: Reference
+    ) -> RunStatus:
         found = runs.fetch_run(dsn, run_id)
-        if found is None:
-            raise HTTPException(status_code=404, detail="no such run")
+        # Bound like the resume: the same 404 for a run that is not there and
+        # one under another tenant or reference (T-10).
+        if found is None or (found.tenant, found.reference) != (tenant, reference):
+            raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
         return found
 
     return app

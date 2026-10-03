@@ -9,6 +9,7 @@ agents:
       - wording_search
       - add_claim_note
       - request_approval
+      - approval_outcome
   - id: knowledge-ingestion
     description: Embeds policy wordings for the knowledge store; it calls no tool.
     kind: job

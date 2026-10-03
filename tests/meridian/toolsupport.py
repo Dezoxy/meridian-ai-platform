@@ -317,6 +317,8 @@ def a_valid_answer(name: str, arguments: Mapping[str, Any]) -> types.CallToolRes
     if name in ("add_claim_note", "request_approval"):
         key = "note_id" if name == "add_claim_note" else "request_id"
         return structured({key: str(uuid.uuid4()), "replayed": False})
+    if name == "approval_outcome":
+        return structured({})
     if name == "claim_history":
         return structured({"entries": [], "truncated": False})
     if name == "wording_search":

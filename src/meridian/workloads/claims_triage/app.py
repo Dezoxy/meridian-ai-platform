@@ -1,19 +1,28 @@
-"""The Claims API app: ``POST /claims`` (S009).
+"""The Claims API app: ``POST /claims`` (S009) and the decision (S015).
 
 A claim is stored, then triaged through the Agent Runtime, then its triage
-proposal is stored. A failure after the claim is stored leaves the claim row in
-place and answers 502, 503 or 504 with the claim's ID (and the run's, when
-there is one). The same claim posted again, unchanged and still without a
-proposal, is triaged again; the claim lifecycle in S015 will replace this.
+proposal is stored. Every claim is in one state of the lifecycle
+(``lifecycle.py``) and moves only along its listed transitions, each change
+audited. A triage of a claim runs one at a time: the request that moves the
+claim to ``triaging`` owns it. A failure after the claim is stored moves it to
+``triage_failed`` and answers 502, 503 or 504 with the claim's ID (and the
+run's, when there is one); the same claim posted again, unchanged, is triaged
+again. A claim the rules refer to an adjuster waits in ``awaiting_adjuster``
+with its run paused; ``POST /claims/{claim_id}/decision`` records the
+adjuster's decision and then resumes that run, which reads the decision from
+the record (the resume carries none). The API records the decision and the run
+only reads it (T-31). It answers 200 only when the run completed.
 """
 
 import logging
-from typing import Any, Literal
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import httpx
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
 from opentelemetry import propagate
 from opentelemetry.sdk.trace import TracerProvider
@@ -33,31 +42,71 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
-from meridian.runtime.models import RunResponse
+from meridian.runtime.models import RunResponse, RunState
+from meridian.workloads.claims_triage.lifecycle import (
+    ADJUSTER_APPROVED,
+    ADJUSTER_REJECTED,
+    ADJUSTER_REQUESTED_DOCUMENTS,
+    RULES_APPROVED,
+    RULES_REFERRED,
+    RULES_REQUESTED_DOCUMENTS,
+    SERVICE_NAME,
+    TRIAGE_FAILED,
+    TRIAGE_RECLAIMED,
+    TRIAGE_RETRIED,
+    TRIAGE_STARTED,
+    LifecycleState,
+    Transition,
+    move_claim,
+)
 from meridian.workloads.claims_triage.models import (
+    ClaimDecision,
     ClaimErrorBody,
     ClaimResponse,
     ClaimSubmission,
+    Decision,
+    DecisionResponse,
     ProposalSummary,
+    Route,
 )
 from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
-SERVICE_NAME = "claims-api"
 AGENT = "claims-triage"
 RUNTIME_TIMEOUT_SECONDS = 60.0
+# How long a claim may stay ``triaging`` before another post takes the triage
+# over: twice the longest a runtime call lasts, so a live request is not robbed.
+TRIAGE_LEASE_SECONDS = 2 * RUNTIME_TIMEOUT_SECONDS
 RUN_FAILED_DETAIL = "the triage run did not complete; the claim is stored"
 RUN_TIMEOUT_DETAIL = "the triage run timed out; the claim is stored"
 PROPOSAL_LOST_DETAIL = "the proposal could not be stored; the claim is stored"
+HAS_PROPOSAL_DETAIL = "the claim already has a triage proposal"
+BEING_TRIAGED_DETAIL = "the claim is being triaged"
+TAKEN_OVER_DETAIL = "the triage was taken over by another request"
+DIFFERENT_SUBMISSION_DETAIL = "the claim exists with a different submission"
+NO_SUCH_CLAIM_DETAIL = "no such claim"
+NOT_WAITING_DETAIL = "the claim does not wait for an adjuster"
+DECIDED_OTHERWISE_DETAIL = "the claim was decided otherwise"
+RESUME_FAILED_DETAIL = "the decision is recorded; the run did not complete"
 HTTP_GATEWAY_TIMEOUT = 504
 
-ClaimStanding = Literal["new", "retry", "has_proposal", "differs"]
+# What a run's answer means for the claim: its status and the proposal's route.
+RUN_OUTCOMES: Mapping[tuple[RunState, Route], Transition] = {
+    ("Completed", "auto_approve"): RULES_APPROVED,
+    ("Completed", "request_documents"): RULES_REQUESTED_DOCUMENTS,
+    ("AwaitingApproval", "adjuster"): RULES_REFERRED,
+}
+DECISION_TRANSITIONS: Mapping[Decision, Transition] = {
+    "approve": ADJUSTER_APPROVED,
+    "reject": ADJUSTER_REJECTED,
+    "request_documents": ADJUSTER_REQUESTED_DOCUMENTS,
+}
 
 logger = logging.getLogger(__name__)
 
 
 class RuntimeCallError(Exception):
-    """The runtime gave no usable answer to a triage call.
+    """The runtime gave no usable answer to a call.
 
     Carries the HTTP status it answered (0: none, it timed out, was unreachable
     or answered outside its contract) and its run ID when it named one. The
@@ -85,23 +134,13 @@ def _run_id_in(response: httpx.Response) -> UUID | None:
         return None
 
 
-def _start_run(
-    http: httpx.Client, tenant: str, reference: str, facts: dict[str, Any]
-) -> RunResponse:
-    """Call the runtime; raise ``RuntimeCallError`` for any failure."""
+def _call_runtime(http: httpx.Client, path: str, body: dict[str, Any]) -> RunResponse:
+    """Post to the runtime with the trace context; raise ``RuntimeCallError``
+    for any failure."""
     headers: dict[str, str] = {}
     propagate.inject(headers)
     try:
-        response = http.post(
-            "/runs",
-            json={
-                "agent": AGENT,
-                "tenant": tenant,
-                "reference": reference,
-                "input": {"claim": facts},
-            },
-            headers=headers,
-        )
+        response = http.post(path, json=body, headers=headers)
     except httpx.TimeoutException:
         raise RuntimeCallError("the runtime timed out", timed_out=True) from None
     except httpx.HTTPError:
@@ -118,21 +157,53 @@ def _start_run(
         raise RuntimeCallError("the runtime answered outside its contract") from None
 
 
-def _accepted_proposal(run: RunResponse) -> TriageProposal | None:
-    """The run's proposal; ``None`` while the run is not ``Completed``."""
-    if run.status != "Completed":
-        return None
+def _start_run(
+    http: httpx.Client, tenant: str, reference: str, facts: dict[str, Any]
+) -> RunResponse:
+    return _call_runtime(
+        http,
+        "/runs",
+        {
+            "agent": AGENT,
+            "tenant": tenant,
+            "reference": reference,
+            "input": {"claim": facts},
+        },
+    )
+
+
+def _resume_run(
+    http: httpx.Client, tenant: str, claim_id: str, run_id: UUID
+) -> RunResponse:
+    """Resume the paused run. The resume carries no decision: the run reads the
+    one recorded here (T-31), so a caller of the runtime cannot make one up."""
+    return _call_runtime(
+        http,
+        f"/runs/{run_id}/resume",
+        {"tenant": tenant, "reference": claim_id, "input": {}},
+    )
+
+
+def _triage_outcome(run: RunResponse) -> tuple[TriageProposal, Transition]:
+    """The run's proposal and the claim's move it leads to; anything else the
+    runtime answered is outside the contract."""
     try:
         proposal = TriageProposal.model_validate(run.output)
     except ValidationError:
         raise RuntimeCallError(
             "the runtime's output is not a triage proposal", run_id=run.run_id
         ) from None
-    return proposal
+    transition = RUN_OUTCOMES.get((run.status, proposal.route))
+    if transition is None:
+        raise RuntimeCallError(
+            "the runtime's answer does not fit its proposal", run_id=run.run_id
+        )
+    return proposal, transition
 
 
-def _store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> ClaimStanding:
-    """Store the claim, or say how an existing one stands against this post."""
+def _store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> None:
+    """Store the claim. An existing one under this ID is left as it is; it is a
+    409 unless it is the same submission."""
     with connect(dsn, SERVICE_NAME) as conn:
         cursor = conn.execute(
             "INSERT INTO claims.claims (claim_id, tenant, submission) "
@@ -140,35 +211,164 @@ def _store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> ClaimStanding:
             (claim["claim_id"], tenant, Jsonb(claim)),
         )
         if cursor.rowcount == 1:
-            return "new"
+            return
         row = conn.execute(
-            "SELECT c.submission, EXISTS "
-            "(SELECT 1 FROM claims.triage_proposals p WHERE p.claim_id = c.claim_id) "
-            "FROM claims.claims c WHERE c.claim_id = %s",
+            "SELECT submission, tenant FROM claims.claims WHERE claim_id = %s",
             (claim["claim_id"],),
         ).fetchone()
-    if row is None or row[0] != claim:
-        return "differs"
-    return "has_proposal" if row[1] else "retry"
+    # A claim of another tenant answers as a different submission does, so no
+    # answer tells a caller that another tenant has the ID.
+    if row is None or row[1] != tenant or row[0] != claim:
+        raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
+
+
+def _take_triage(
+    dsn: str, tenant: str, claim_id: str
+) -> tuple[datetime | None, LifecycleState]:
+    """Move the claim to ``triaging`` if it may be triaged now.
+
+    Returns the moment it moved (the request keeps it: its closing update
+    matches on it) or ``None``, and the state the claim was found in.
+    """
+    with connect(dsn, SERVICE_NAME) as conn:
+        row = conn.execute(
+            "SELECT state, state_changed_at, "
+            "state_changed_at < clock_timestamp() - make_interval(secs => %s) "
+            "FROM claims.claims WHERE claim_id = %s AND tenant = %s "
+            "FOR NO KEY UPDATE",
+            (TRIAGE_LEASE_SECONDS, claim_id, tenant),
+        ).fetchone()
+        if row is None:
+            # Not this tenant's (``_store_claim`` refuses that first) or gone.
+            raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
+        state, changed_at, lapsed = row
+        if state == "submitted":
+            transition = TRIAGE_STARTED
+        elif state == "triage_failed":
+            transition = TRIAGE_RETRIED
+        elif state == "triaging" and lapsed:
+            transition = TRIAGE_RECLAIMED
+        else:
+            return None, state
+        moved_at = move_claim(
+            conn, transition, claim_id=claim_id, tenant=tenant, changed_at=changed_at
+        )
+    return moved_at, state
 
 
 def _insert_proposal(
-    dsn: str, claim_id: str, run_id: UUID, proposal: TriageProposal
+    conn: psycopg.Connection, claim_id: str, run_id: UUID, proposal: TriageProposal
 ) -> None:
+    conn.execute(
+        "INSERT INTO claims.triage_proposals "
+        "(proposal_id, claim_id, run_id, route, reason, proposal) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (
+            uuid4(),
+            claim_id,
+            run_id,
+            proposal.route,
+            proposal.reason,
+            Jsonb(proposal.model_dump(mode="json")),
+        ),
+    )
+
+
+def _close_triage(
+    dsn: str,
+    tenant: str,
+    claim_id: str,
+    run: RunResponse,
+    proposal: TriageProposal,
+    transition: Transition,
+    taken_at: datetime,
+) -> bool:
+    """Store the proposal and move the claim on, in one transaction.
+
+    ``False`` when the claim is no longer the one this request took (its lease
+    ran out and another request took the triage over); nothing is stored then.
+    """
     with connect(dsn, SERVICE_NAME) as conn:
-        conn.execute(
-            "INSERT INTO claims.triage_proposals "
-            "(proposal_id, claim_id, run_id, route, reason, proposal) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (
-                uuid4(),
-                claim_id,
-                run_id,
-                proposal.route,
-                proposal.reason,
-                Jsonb(proposal.model_dump(mode="json")),
-            ),
+        moved = move_claim(
+            conn,
+            transition,
+            claim_id=claim_id,
+            tenant=tenant,
+            run_id=run.run_id,
+            changed_at=taken_at,
         )
+        if moved is None:
+            return False
+        _insert_proposal(conn, claim_id, run.run_id, proposal)
+    return True
+
+
+def _fail_triage(
+    dsn: str, tenant: str, claim_id: str, run_id: UUID | None, taken_at: datetime
+) -> None:
+    """Move the claim to ``triage_failed`` so a post triages it again. If that
+    fails too the claim stays ``triaging`` until its lease runs out; the log
+    says which claim and run it was."""
+    try:
+        with connect(dsn, SERVICE_NAME) as conn:
+            move_claim(
+                conn,
+                TRIAGE_FAILED,
+                claim_id=claim_id,
+                tenant=tenant,
+                run_id=run_id,
+                changed_at=taken_at,
+            )
+    except psycopg.Error as exc:
+        logger.error(
+            "claim %s (run %s) could not be marked triage_failed: %s (sqlstate %s)",
+            claim_id,
+            run_id,
+            type(exc).__name__,
+            exc.sqlstate or "none",
+        )
+
+
+def _record_decision(
+    dsn: str, tenant: str, claim_id: str, decision: Decision
+) -> tuple[LifecycleState, UUID]:
+    """Record the adjuster's decision and move the claim; the claim's state and
+    the run to resume. A decision made again is recorded once."""
+    transition = DECISION_TRANSITIONS[decision]
+    with connect(dsn, SERVICE_NAME) as conn:
+        row = conn.execute(
+            "SELECT state, run_id FROM claims.claims "
+            "WHERE claim_id = %s AND tenant = %s FOR NO KEY UPDATE",
+            (claim_id, tenant),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, NO_SUCH_CLAIM_DETAIL)
+        state, run_id = row
+        if run_id is None:
+            raise HTTPException(409, NOT_WAITING_DETAIL)
+        if state == "awaiting_adjuster":
+            conn.execute(
+                "INSERT INTO claims.decisions (claim_id, run_id, decision) "
+                "VALUES (%s, %s, %s)",
+                (claim_id, run_id, decision),
+            )
+            moved = move_claim(
+                conn, transition, claim_id=claim_id, tenant=tenant, run_id=run_id
+            )
+            if moved is None:
+                raise HTTPException(409, NOT_WAITING_DETAIL)
+            return transition.target, run_id
+        # Not waiting: only a claim this run's decision already moved may go on
+        # to the resume again (the answer to the first one was lost).
+        decided = conn.execute(
+            "SELECT decision FROM claims.decisions WHERE claim_id = %s AND run_id = %s",
+            (claim_id, run_id),
+        ).fetchone()
+        if decided is None:
+            raise HTTPException(409, NOT_WAITING_DETAIL)
+        if decided[0] != decision:
+            raise HTTPException(409, DECIDED_OTHERWISE_DETAIL)
+        return state, run_id
 
 
 def _answer(
@@ -193,7 +393,10 @@ def create_app(
     dsn, tenant = settings.database_url, settings.tenant
     service = create_service_app(
         title="Meridian Claims API",
-        description="Takes a claim, has it triaged and keeps the proposal.",
+        description=(
+            "Takes a claim, has it triaged, keeps the proposal and records the "
+            "adjuster's decision."
+        ),
         service_name=SERVICE_NAME,
         tracer_name="meridian.claims",
         max_body_bytes=SMALL_BODY_LIMIT_BYTES,
@@ -221,17 +424,21 @@ def create_app(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
             )
             try:
-                standing = _store_claim(dsn, tenant, claim)
+                _store_claim(dsn, tenant, claim)
+                taken_at, found_in = _take_triage(dsn, tenant, claim_id)
             except psycopg.Error as exc:
                 mark_error(span, exc)
                 return _answer(*database_failure(exc), claim_id)
-            if standing == "has_proposal":
-                raise HTTPException(409, "the claim already has a triage proposal")
-            if standing == "differs":
-                raise HTTPException(409, "the claim exists with a different submission")
+            if taken_at is None:
+                raise HTTPException(
+                    409,
+                    BEING_TRIAGED_DETAIL
+                    if found_in == "triaging"
+                    else HAS_PROPOSAL_DETAIL,
+                )
             try:
                 run = _start_run(http, tenant, claim_id, facts)
-                proposal = _accepted_proposal(run)
+                proposal, transition = _triage_outcome(run)
             except RuntimeCallError as exc:
                 logger.error(
                     "triage of %s failed: %s (runtime status %s, run %s)",
@@ -241,6 +448,7 @@ def create_app(
                     exc.run_id,
                 )
                 mark_error(span, exc)
+                _fail_triage(dsn, tenant, claim_id, exc.run_id, taken_at)
                 return _answer(
                     HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502,
                     RUN_TIMEOUT_DETAIL if exc.timed_out else RUN_FAILED_DETAIL,
@@ -248,32 +456,89 @@ def create_app(
                     exc.run_id,
                 )
             set_span_attributes(span, {"meridian.run_id": str(run.run_id)})
-            if proposal is not None:
-                try:
-                    _insert_proposal(dsn, claim_id, run.run_id, proposal)
-                except psycopg.Error as exc:
-                    # The run finished and its proposal is lost unless the
-                    # log says which run it was: a retry triages again.
-                    logger.error(
-                        "proposal of claim %s (run %s) not stored: %s (sqlstate %s)",
-                        claim_id,
-                        run.run_id,
-                        type(exc).__name__,
-                        exc.sqlstate or "none",
-                    )
-                    mark_error(span, exc)
-                    return _answer(503, PROPOSAL_LOST_DETAIL, claim_id, run.run_id)
+            try:
+                closed = _close_triage(
+                    dsn, tenant, claim_id, run, proposal, transition, taken_at
+                )
+            except psycopg.Error as exc:
+                # The run finished and its proposal is lost unless the log says
+                # which run it was: a retry triages again.
+                logger.error(
+                    "proposal of claim %s (run %s) not stored: %s (sqlstate %s)",
+                    claim_id,
+                    run.run_id,
+                    type(exc).__name__,
+                    exc.sqlstate or "none",
+                )
+                mark_error(span, exc)
+                _fail_triage(dsn, tenant, claim_id, run.run_id, taken_at)
+                return _answer(503, PROPOSAL_LOST_DETAIL, claim_id, run.run_id)
+            if not closed:
+                logger.warning(
+                    "triage of %s (run %s) was taken over; its proposal is dropped",
+                    claim_id,
+                    run.run_id,
+                )
+                raise HTTPException(409, TAKEN_OVER_DETAIL)
             return ClaimResponse(
                 claim_id=claim_id,
+                state=transition.target,
                 run_id=run.run_id,
                 run_status=run.status,
-                proposal=(
-                    None
-                    if proposal is None
-                    else ProposalSummary(
-                        route=proposal.route, drafted_by=proposal.drafted_by
-                    )
+                proposal=ProposalSummary(
+                    route=proposal.route, drafted_by=proposal.drafted_by
                 ),
+            )
+
+    @app.post(
+        "/claims/{claim_id}/decision",
+        response_model=DecisionResponse,
+        tags=["claims"],
+        summary="Record an adjuster's decision and resume the claim's paused run.",
+        responses=error_responses(404, 409, 413)
+        | error_responses(500, 502, 503, 504, model=ClaimErrorBody),
+    )
+    def decide_claim(
+        claim_id: Annotated[str, Path(pattern=r"^CLM-[0-9]{4}$")], body: ClaimDecision
+    ) -> DecisionResponse | JSONResponse:
+        with start_span(tracer, "claims.decide") as span:
+            set_span_attributes(
+                span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
+            )
+            try:
+                state, run_id = _record_decision(dsn, tenant, claim_id, body.decision)
+            except psycopg.Error as exc:
+                mark_error(span, exc)
+                return _answer(*database_failure(exc), claim_id)
+            set_span_attributes(span, {"meridian.run_id": str(run_id)})
+            try:
+                run = _resume_run(http, tenant, claim_id, run_id)
+            except RuntimeCallError as exc:
+                logger.error(
+                    "resume of run %s for claim %s failed: %s (runtime status %s)",
+                    run_id,
+                    claim_id,
+                    type(exc).__name__,
+                    exc.status_code,
+                )
+                mark_error(span, exc)
+                return _answer(
+                    HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502,
+                    RESUME_FAILED_DETAIL,
+                    claim_id,
+                    run_id,
+                )
+            if run.status != "Completed":
+                # The decision stays recorded; a post of it again resumes again.
+                logger.error(
+                    "resume of run %s for claim %s did not complete: run status %s",
+                    run_id,
+                    claim_id,
+                    run.status,
+                )
+                return _answer(502, RESUME_FAILED_DETAIL, claim_id, run_id)
+            return DecisionResponse(
+                claim_id=claim_id, state=state, run_id=run_id, run_status=run.status
             )
 
     return app

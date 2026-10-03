@@ -1,14 +1,17 @@
 """The claim submission (mirrors data/synthetic/claims.json) and the answer."""
 
+from collections.abc import Mapping
 from datetime import date
+from types import MappingProxyType
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import ConfigDict, Field, StringConstraints, model_validator
 
 from meridian.platform.common.http import ErrorBody
 from meridian.platform.common.wire import NoNul, WireModel
 from meridian.runtime.models import RunState
+from meridian.workloads.claims_triage.lifecycle import LifecycleState
 
 Peril = Literal[
     "accidental_damage",
@@ -23,6 +26,17 @@ Peril = Literal[
     "third_party_liability",
 ]
 Route = Literal["adjuster", "auto_approve", "request_documents"]
+# What an adjuster decides about a claim the rules routed to one.
+Decision = Literal["approve", "reject", "request_documents"]
+# The note the graph records for a decision: fixed text keyed by the word, so a
+# note holds nothing a caller wrote.
+DECISION_NOTES: Mapping[Decision, str] = MappingProxyType(
+    {
+        "approve": "An adjuster decided to approve the claim.",
+        "reject": "An adjuster decided to reject the claim.",
+        "request_documents": "An adjuster decided to request more documents.",
+    }
+)
 # A simple local@domain.tld shape; real validation is the mail server's job.
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=100), NoNul]
@@ -90,9 +104,28 @@ class ProposalSummary(WireModel):
 
 class ClaimResponse(WireModel):
     claim_id: str
+    state: LifecycleState
     run_id: UUID
     run_status: RunState
     proposal: ProposalSummary | None
+
+
+class ClaimDecision(WireModel):
+    """What ``POST /claims/{claim_id}/decision`` takes: one decision word and
+    nothing else. Strict, so no type is coerced into a word."""
+
+    model_config = ConfigDict(strict=True)
+
+    decision: Decision
+
+
+class DecisionResponse(WireModel):
+    """The claim after the decision, and the run that was resumed on it."""
+
+    claim_id: str
+    state: LifecycleState
+    run_id: UUID
+    run_status: RunState
 
 
 class ClaimErrorBody(ErrorBody):

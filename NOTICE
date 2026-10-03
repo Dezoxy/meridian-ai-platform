@@ -33,3 +33,14 @@ ECC material in this repository:
   and the session hooks. GateGuard came into ECC from
   https://github.com/zunoworks/gateguard, also under the MIT License.
 - The chrome-devtools server entry in .mcp.json
+
+LangGraph checkpoint-postgres (langgraph-checkpoint-postgres 3.1.2)
+https://github.com/langchain-ai/langgraph
+Copyright (c) 2024 LangChain, Inc.
+Licensed under the MIT License; the full text is in the LICENSE file of the
+package's distribution.
+
+LangGraph material in this repository:
+
+- The checkpoint tables' DDL, the final shape of the library's MIGRATIONS,
+  schema-qualified, in src/meridian/platform/migrations/0008_checkpoints.sql

@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
-# Show the walking skeleton working: `make demo` (deploys first).
+# Show the platform working end to end: `make demo` (deploys first). With
+# `make demo DECISION=reject` (approve, reject or request_documents; approve
+# when unset) the adjuster's decision is the one you name.
 #   1. posts the first synthetic claim that has no triage proposal yet to the
-#      Claims API through the edge, with a W3C traceparent the script generated
-#   2. reads that trace back from Tempo through Grafana's datasource proxy, the
-#      way an owner would see it, and PASSes only when it has spans from all
-#      five services: claims-api, agent-runtime, policy-mcp, knowledge-mcp and
-#      model-gateway. The graph calls policy_lookup and claim_history on the
-#      policy server and wording_search on the knowledge server, which embeds
-#      the query through the gateway, so every triage of a claim whose policy
-#      exists leaves spans of the five. (claims-mcp serves the two write tools,
-#      which no graph calls before S015, so it is not expected.)
+#      Claims API through the edge, with a W3C traceparent the script generated,
+#      and prints the claim's state
+#   2. when the rules referred the claim to an adjuster (state
+#      awaiting_adjuster, its run paused), posts the decision to
+#      /claims/<id>/decision with a traceparent of its own: the Claims API
+#      records it and the runtime resumes the run, which writes one note
+#   3. reads each trace back from Tempo through Grafana's datasource proxy, the
+#      way an owner would see it, and PASSes only when it has spans from every
+#      service expected of it:
+#        the triage trace: claims-api, agent-runtime, policy-mcp, knowledge-mcp
+#          and model-gateway. The graph calls policy_lookup and claim_history on
+#          the policy server and wording_search on the knowledge server, which
+#          embeds the query through the gateway, so every triage of a claim
+#          whose policy exists leaves spans of the five. A referred claim's
+#          triage also calls claims-mcp (request_approval), which is not
+#          required: a claim that is not referred does not call it.
+#        the decision trace: claims-api, agent-runtime and claims-mcp (the
+#          resumed run's note).
 # Each run uses the next claim in data/synthetic/claims.json; a claim that was
-# triaged before answers 409 and is skipped. Prints identifiers and the route,
-# never a claimant field. Exits non-zero on any failure.
+# triaged before answers 409 and is skipped (a claim still awaiting its
+# adjuster is skipped too: decide it by hand). A claim that is not referred
+# needs no decision, and the next `make demo` posts the next claim. Prints
+# identifiers, states and the route, never a claimant field. Exits non-zero on
+# any failure.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -24,8 +38,10 @@ readonly CLAIMS_URL=http://claims.meridian.localhost:8088/claims
 readonly HEALTH_URL=http://claims.meridian.localhost:8088/healthz
 readonly EDGE_TIMEOUT=60
 readonly ALREADY_TRIAGED="the claim already has a triage proposal"
+readonly AWAITING_ADJUSTER=awaiting_adjuster
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
-readonly EXPECTED_SERVICES=(claims-api agent-runtime policy-mcp knowledge-mcp model-gateway)
+readonly TRIAGE_SERVICES=(claims-api agent-runtime policy-mcp knowledge-mcp model-gateway)
+readonly DECISION_SERVICES=(claims-api agent-runtime claims-mcp)
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
 readonly POST_TIMEOUT=60
@@ -39,7 +55,18 @@ need_cluster
 # a hostile answer cannot inject terminal escape sequences or extra lines.
 clean() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]'; }
 
-pf_pid="" pf_log="" response=""
+# check_decision: DECISION is one of the three words the Claims API accepts, or
+# unset (approve). Nothing is posted before this has passed.
+check_decision() {
+  DECISION="${DECISION:-approve}"
+  case "${DECISION}" in
+    approve | reject | request_documents) ;;
+    *) die "DECISION must be approve, reject or request_documents (got: $(clean "${DECISION}"))" ;;
+  esac
+}
+check_decision
+
+pf_pid="" pf_log="" response="" decision_trace_id=""
 cleanup() {
   if [[ -n "${pf_pid}" ]]; then
     kill "${pf_pid}" 2>/dev/null || true
@@ -63,17 +90,17 @@ wait_for_edge() {
   die "the edge did not answer ${HEALTH_URL} with 200 in ${EDGE_TIMEOUT}s (last: $(clean "${code}"); is 'make deploy' done?)"
 }
 
-# post_claim CLAIM_JSON TRACE_ID: print the HTTP status; the body is left in
+# post_json URL BODY TRACE_ID: print the HTTP status; the body is left in
 # ${response}. The parent span ID is random: the Claims API's span becomes a
 # child of a span nobody exported, which Tempo shows as the trace's root.
-post_claim() {
-  local claim=$1 trace_id=$2 parent
+post_json() {
+  local url=$1 body=$2 trace=$3 parent
   parent="$(openssl rand -hex 8)"
-  printf '%s' "${claim}" |
+  printf '%s' "${body}" |
     curl -q --noproxy '*' -sS -m "${POST_TIMEOUT}" -o "${response}" -w '%{http_code}' \
       -H 'Content-Type: application/json' \
-      -H "traceparent: 00-${trace_id}-${parent}-01" \
-      --data-binary @- "${CLAIMS_URL}"
+      -H "traceparent: 00-${trace}-${parent}-01" \
+      --data-binary @- "${url}"
 }
 
 # Post claims in order until one is triaged. Sets ${claim_id}, ${status} and
@@ -85,7 +112,7 @@ submit_next_claim() {
   while IFS= read -r claim; do
     claim_id="$(clean "$(jq -r '.claim_id' <<<"${claim}")")"
     trace_id="$(openssl rand -hex 16)"
-    if ! status="$(post_claim "${claim}" "${trace_id}")"; then
+    if ! status="$(post_json "${CLAIMS_URL}" "${claim}" "${trace_id}")"; then
       die "could not reach ${CLAIMS_URL} (is 'make deploy' done?)"
     fi
     status="$(clean "${status}")"
@@ -107,6 +134,23 @@ submit_next_claim() {
     esac
   done < <(jq -c '.[]' "${CLAIMS_FILE}")
   die "every claim in data/synthetic/claims.json is already triaged; nothing left to post"
+}
+
+# decide_claim: post ${DECISION} for ${claim_id}, which waits for an adjuster.
+# Sets ${decision_trace_id}; the answer is left in ${response}. Any answer but
+# 200 stops the demo, with the API's fixed error text.
+decide_claim() {
+  local code detail
+  decision_trace_id="$(openssl rand -hex 16)"
+  if ! code="$(post_json "${CLAIMS_URL}/${claim_id}/decision" \
+    "$(jq -cn --arg decision "${DECISION}" '{decision: $decision}')" "${decision_trace_id}")"; then
+    die "could not reach ${CLAIMS_URL}/${claim_id}/decision"
+  fi
+  code="$(clean "${code}")"
+  if [[ "${code}" != 200 ]]; then
+    detail="$(jq -r '.detail | tostring' "${response}" 2>/dev/null || head -c 200 "${response}")"
+    die "${claim_id}: decision HTTP ${code} $(clean "${detail}")"
+  fi
 }
 
 # gcurl ARGS...: curl against Grafana with basic auth. The password reaches curl
@@ -143,33 +187,35 @@ readonly SPANS_PER_SERVICE='
   | group_by(.service)[]
   | "\(.[0].service) \(map(.spans) | add)"'
 
-# has_every_service: true when ${counts} lists every expected service.
+# has_every_service SERVICE...: true when ${counts} lists every service given.
 has_every_service() {
   local service
-  for service in "${EXPECTED_SERVICES[@]}"; do
+  for service in "$@"; do
     grep -q "^${service} " <<<"${counts}" || return 1
   done
 }
 
-# Wait until Tempo has spans of every expected service for the trace. Leaves the
-# per-service counts in ${counts}. Tempo answers 404 until it has the trace, and
-# the five services flush their spans separately, so the answer can be partial.
+# wait_for_trace TRACE_ID SERVICE...: wait until Tempo has spans of every
+# service given for the trace. Leaves the per-service counts in ${counts}. Tempo
+# answers 404 until it has the trace, and the services flush their spans
+# separately, so the answer can be partial.
 wait_for_trace() {
-  local deadline=$((SECONDS + POLL_TIMEOUT)) out http body
+  local id=$1 deadline=$((SECONDS + POLL_TIMEOUT)) out http body
+  shift
   counts=""
   while ((SECONDS < deadline)); do
     kill -0 "${pf_pid}" 2>/dev/null ||
       die "the Grafana port-forward died: $(clean "$(tail -n 3 "${pf_log}")")"
     # The status follows the body on its own line. Only 200 and 404 (Tempo has
     # not got the trace yet) are expected; anything else ends the demo.
-    out="$(gcurl -w '\n%{http_code}' "${proxy}/tempo/api/traces/${trace_id}" 2>&1)" ||
+    out="$(gcurl -w '\n%{http_code}' "${proxy}/tempo/api/traces/${id}" 2>&1)" ||
       die "could not query Tempo through Grafana: $(clean "${out}")"
     http="${out##*$'\n'}"
     body="${out%$'\n'*}"
     case "${http}" in
       200)
         counts="$(jq -r "${SPANS_PER_SERVICE}" <<<"${body}" 2>/dev/null | LC_ALL=C tr -cd '[:print:]\n')" || counts=""
-        if has_every_service; then return 0; fi
+        if has_every_service "$@"; then return 0; fi
         ;;
       404) ;;
       *) die "Tempo answered HTTP $(clean "${http}") through Grafana: $(clean "${body:0:200}")" ;;
@@ -179,20 +225,22 @@ wait_for_trace() {
   return 1
 }
 
-# report_trace: wait for the trace, print PASS or FAIL; the status is the result.
+# report_trace LABEL TRACE_ID SERVICE...: wait for the trace, print PASS or
+# FAIL; the status is the result.
 report_trace() {
-  local service count
-  if wait_for_trace; then
-    printf 'PASS  trace %s has spans from all of: %s\n' "${trace_id}" "${EXPECTED_SERVICES[*]}"
+  local label=$1 id=$2 service count
+  shift 2
+  if wait_for_trace "${id}" "$@"; then
+    printf 'PASS  %s %s has spans from all of: %s\n' "${label}" "${id}" "$*"
     while read -r service count; do
       printf '        %-14s %s span(s)\n' "${service}" "${count}"
     done <<<"${counts}"
     printf 'See it yourself: make grafana (user admin; password: make grafana-password), then Explore:\n'
-    printf '  Tempo       TraceQL    { trace:id = "%s" }\n' "${trace_id}"
+    printf '  Tempo       TraceQL    { trace:id = "%s" }\n' "${id}"
     return 0
   fi
-  printf 'FAIL  no trace %s with spans from all of: %s after %ss\n' \
-    "${trace_id}" "${EXPECTED_SERVICES[*]}" "${POLL_TIMEOUT}"
+  printf 'FAIL  no %s %s with spans from all of: %s after %ss\n' \
+    "${label}" "${id}" "$*" "${POLL_TIMEOUT}"
   if [[ -n "${counts}" ]]; then
     printf '      Tempo returned:\n'
     while read -r service count; do
@@ -206,12 +254,24 @@ trap cleanup EXIT
 wait_for_edge
 submit_next_claim
 route="$(jq -r '.proposal.route' "${response}")"
+state="$(clean "$(jq -r '.state' "${response}")")"
 drafted_by="$(jq -r '.proposal.drafted_by | if . == null then "none (the rules decided; no model was called)" else "\(.deployment) (provider \(.provider), mode \(.mode))" end' "${response}")"
 printf 'claim       %s\n' "${claim_id}"
 printf 'status      %s\n' "${status}"
+printf 'state       %s\n' "${state}"
 printf 'route       %s\n' "$(clean "${route}")"
 printf 'drafted by  %s\n' "$(clean "${drafted_by}")"
 printf 'trace       %s\n' "${trace_id}"
+
+if [[ "${state}" == "${AWAITING_ADJUSTER}" ]]; then
+  decide_claim
+  printf 'decision    %s\n' "${DECISION}"
+  printf 'state       %s\n' "$(clean "$(jq -r '.state' "${response}")")"
+  printf 'run status  %s\n' "$(clean "$(jq -r '.run_status' "${response}")")"
+  printf 'trace       %s (the decision)\n' "${decision_trace_id}"
+else
+  printf 'no adjuster was needed; the next make demo posts the next claim\n'
+fi
 
 if ! password="$(kctl -n observability get secret grafana-admin \
   -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)" || [[ -z "${password}" ]]; then
@@ -219,4 +279,10 @@ if ! password="$(kctl -n observability get secret grafana-admin \
 fi
 start_grafana_forward
 
-report_trace
+failed=0
+report_trace trace "${trace_id}" "${TRIAGE_SERVICES[@]}" || failed=1
+if [[ -n "${decision_trace_id}" ]]; then
+  report_trace "decision trace" "${decision_trace_id}" "${DECISION_SERVICES[@]}" || failed=1
+fi
+# The status of the last command is the script's: 1 when a trace check failed.
+[[ "${failed}" == 0 ]]

@@ -1,10 +1,26 @@
-"""The claims triage graph (S014): five nodes, the tools in a fixed order.
+"""The claims triage graph (S014, S015): seven nodes, the tools in a fixed order.
 
 The graph's own code calls the tools and asks the model at most once; the model
 never chooses a tool or an argument, and ``rules.decide`` chooses the route. The
-graph reads and writes nothing: the approval path is S015. The state holds plain
-data only (the runtime runs LangGraph in strict msgpack mode), and each node
-validates what it reads back into the typed models.
+state holds plain data only (the runtime runs LangGraph in strict msgpack mode),
+and each node validates what it reads back into the typed models.
+
+The graph writes in one place: a claim the rules route to an adjuster. After
+``propose``, ``request_approval`` records an approval request through the claims
+tool server, and ``await_decision`` pauses the run (``interrupt``). The decision
+is read from the record the Claims API committed before it resumed the run: the
+resume value carries nothing and is ignored, so nothing that can call the
+runtime can decide. The node reads the record through the ``approval_outcome``
+tool and fits the answer strictly (``approval-outcome-unfit``); with no
+decision recorded it fails (``decision-not-recorded``) before a write, and the
+runtime leaves the run paused. It then adds a note from a fixed table, so the
+note holds nothing the caller wrote. The Claims API checks that the caller may
+decide and records it; the graph only reads it (T-31). The reason sent with the
+request is the proposal's reason code, never claim text. Both writes carry a
+step and send the same payload when their node runs again, so the tool server's
+idempotency key makes a rerun answer with the stored ID (T-23):
+``await_decision`` runs again from its start on every resume, so nothing but
+the ``interrupt`` and the read of the record comes before its first write.
 
 A platform that cannot answer fails the run, and the claim can be triaged again:
 no tool or model error is caught here. Only two things become a proposal for a
@@ -16,16 +32,19 @@ says which answer, not what it held (the graph's own violations all do).
 """
 
 from typing import Any, TypedDict
+from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ValidationError
+from langgraph.types import interrupt
+from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
+from meridian.platform.common.wire import WireModel
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
 
 from .assessment import Assessed, assess
-from .models import ClaimFacts, DraftedBy
+from .models import DECISION_NOTES, ClaimFacts, Decision, DraftedBy
 from .proposal import Citation, TriageProposal
 from .rules import (
     Assessment,
@@ -47,6 +66,32 @@ class ClaimState(TypedDict):
     chunks: list[dict[str, Any]]
     assessed: dict[str, Any] | None
     output: dict[str, Any]
+    request_id: str | None
+    decision: str | None
+
+
+class ApprovalRequested(WireModel):
+    """The answer of ``request_approval``."""
+
+    request_id: UUID
+    replayed: StrictBool
+
+
+class ApprovalOutcome(WireModel):
+    """The answer of ``approval_outcome``: the decision word the Claims API
+    recorded for this run, none while there is none. Strict, so no type is
+    coerced into a word."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    outcome: Decision | None = None
+
+
+class NoteAdded(WireModel):
+    """The answer of ``add_claim_note``."""
+
+    note_id: UUID
+    replayed: StrictBool
 
 
 def _fitted[M: BaseModel](model: type[M], answer: Any, code: str) -> M:
@@ -93,6 +138,12 @@ def _no_policy_next(state: ClaimState) -> str:
     return "propose" if state["policy"] is None else "load_history"
 
 
+def _after_propose(state: ClaimState) -> str:
+    """Only a claim the rules route to an adjuster waits for one."""
+    route = TriageProposal.model_validate(state["output"]).route
+    return "request_approval" if route == "adjuster" else END
+
+
 def build(model: ModelClient, tools: ToolClient) -> StateGraph:
     """The workload's graph factory, published as the ``claims-triage`` entry
     point. Returned uncompiled: the runtime compiles it with its checkpointer."""
@@ -108,6 +159,8 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
             "history_truncated": False,
             "chunks": [],
             "assessed": None,
+            "request_id": None,
+            "decision": None,
         }
         if not found["found"]:
             return empty
@@ -212,12 +265,48 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
         )
         return {"output": proposal.model_dump(mode="json")}
 
+    def request_approval(state: ClaimState) -> dict[str, Any]:
+        claim = ClaimFacts.model_validate(state["claim"])
+        # Read back from the checkpointed state, so a rerun sends the same reason.
+        proposal = TriageProposal.model_validate(state["output"])
+        answer = tools.call(
+            "request_approval",
+            {"claim_id": claim.claim_id, "reason": proposal.reason},
+            step="request-approval",
+        ).data
+        requested = _fitted(ApprovalRequested, answer, "approval-request-unfit")
+        return {"request_id": str(requested.request_id)}
+
+    def await_decision(state: ClaimState) -> dict[str, Any]:
+        # Nothing before the pause: this node runs again from its start on resume.
+        # The resume value is ignored: what the caller sent is not the decision,
+        # the Claims API's record is.
+        interrupt({"request_id": state["request_id"]})
+        claim = ClaimFacts.model_validate(state["claim"])
+        decision = _fitted(
+            ApprovalOutcome,
+            tools.call("approval_outcome", {"claim_id": claim.claim_id}).data,
+            "approval-outcome-unfit",
+        ).outcome
+        if decision is None:
+            # Resumed with no decision recorded: leave the run paused.
+            raise GraphFailure("decision-not-recorded")
+        answer = tools.call(
+            "add_claim_note",
+            {"claim_id": claim.claim_id, "note": DECISION_NOTES[decision]},
+            step="decision-note",
+        ).data
+        _fitted(NoteAdded, answer, "decision-note-unfit")
+        return {"decision": decision}
+
     graph = StateGraph(ClaimState)
     graph.add_node("lookup_policy", lookup_policy)
     graph.add_node("load_history", load_history)
     graph.add_node("retrieve_terms", retrieve_terms)
     graph.add_node("assess", assess_exclusions)
     graph.add_node("propose", propose)
+    graph.add_node("request_approval", request_approval)
+    graph.add_node("await_decision", await_decision)
     graph.add_edge(START, "lookup_policy")
     graph.add_conditional_edges(
         "lookup_policy",
@@ -227,5 +316,11 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
     graph.add_edge("load_history", "retrieve_terms")
     graph.add_edge("retrieve_terms", "assess")
     graph.add_edge("assess", "propose")
-    graph.add_edge("propose", END)
+    graph.add_conditional_edges(
+        "propose",
+        _after_propose,
+        {"request_approval": "request_approval", END: END},
+    )
+    graph.add_edge("request_approval", "await_decision")
+    graph.add_edge("await_decision", END)
     return graph
