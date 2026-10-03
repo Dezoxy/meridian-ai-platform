@@ -1,0 +1,61 @@
+{% extends "claimant_base.html" %}
+{% block title %}Your claims{% endblock %}
+{% block content %}
+{% macro line(name, type="text", hint="") %}
+<p class="field"><label for="{{ name }}">{{ labels[name] }}</label>
+<input type="{{ type }}" id="{{ name }}" name="{{ name }}" value="{{ values[name] }}" required>
+{% if hint %}
+<span class="hint">{{ hint }}</span>
+{% endif %}
+</p>
+{% endmacro %}
+<h1>Submit a claim</h1>
+{% if notice %}
+<p role="alert" class="notice">{{ notice.status }}: {{ notice.detail }}</p>
+{% endif %}
+{% if errors %}
+<ul role="alert" class="notice">
+{% for label, message in errors %}
+<li>{{ label }}: {{ message }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+<form method="post" action="/claimant/claims">
+{{ line("claim_id", hint="CLM- and four digits, for example CLM-0001") }}
+{{ line("policy_number", hint="POL- and four digits, for example POL-0049") }}
+<p class="field"><label for="peril">{{ labels["peril"] }}</label>
+<select id="peril" name="peril" required>
+<option value="">Choose a peril</option>
+{% for peril in perils %}
+<option value="{{ peril }}"{% if values["peril"] == peril %} selected{% endif %}>{{ peril }}</option>
+{% endfor %}
+</select></p>
+{{ line("loss_date", type="date") }}
+{{ line("reported_on", type="date") }}
+<p class="field"><label for="claimed_amount">{{ labels["claimed_amount"] }}</label>
+<input type="number" id="claimed_amount" name="claimed_amount" value="{{ values["claimed_amount"] }}" min="1" max="1000000" step="1" required>
+<span class="hint">whole euros, 1 to 1000000</span></p>
+{{ line("city") }}
+{{ line("country", hint="two capital letters, for example AT") }}
+<p class="field"><label for="description">{{ labels["description"] }}</label>
+<textarea id="description" name="description" rows="6" required>
+{{ values["description"] }}</textarea></p>
+<p class="field"><label for="documents">{{ labels["documents"] }}</label>
+<textarea id="documents" name="documents" rows="4">
+{{ values["documents"] }}</textarea>
+<span class="hint">one name per line, if you have any</span></p>
+{{ line("claimant_name") }}
+{{ line("claimant_email", type="email") }}
+<button type="submit">Submit the claim</button>
+</form>
+
+<h2>Look up a claim</h2>
+{% if lookup_message %}
+<p role="alert" class="notice">{{ lookup_message }}</p>
+{% endif %}
+<form method="post" action="/claimant/claims/lookup">
+<p class="field"><label for="lookup_claim_id">Claim ID</label>
+<input type="text" id="lookup_claim_id" name="claim_id" required>
+<button type="submit">Look up</button></p>
+</form>
+{% endblock %}

@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 PACKAGE_DIR = FilePath(__file__).parent
 PAGES_PREFIX = "/adjuster/"
+CLAIMANT_PREFIX = "/claimant/"
 QUEUE_PATH = "/adjuster/claims"
 STYLESHEET_PATH = "/adjuster/static/adjuster.css"
 NO_SUCH_CLAIM_DETAIL = "no such claim"
@@ -105,6 +106,9 @@ SECURITY_HEADERS = {
     # the page itself then carries a real Origin in a browser without Fetch
     # Metadata (``no-referrer`` makes Chrome send ``Origin: null``).
     "Referrer-Policy": "same-origin",
+    # A page of another site cannot load a response of ``/adjuster/`` or
+    # ``/claimant/``, not even with ``no-cors``.
+    "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": "no-store",
 }
 
@@ -259,14 +263,17 @@ def require_same_origin(request: Request) -> None:
 
 
 class SecurityHeadersMiddleware:
-    """Add the pages' headers to every response under ``/adjuster/``: a 422 and
-    a 413 as well as a page. The JSON routes are not touched."""
+    """Add the pages' headers to every response under ``/adjuster/`` and
+    ``/claimant/``: a 404, a 405, a 413 and a 422 as well as a page. The JSON
+    routes are not touched."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith(PAGES_PREFIX):
+        if scope["type"] != "http" or not scope["path"].startswith(
+            (PAGES_PREFIX, CLAIMANT_PREFIX)
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -382,9 +389,18 @@ def _may_resend(notice: Notice | None) -> bool:
     return notice is None or notice.status in RESEND_STATUSES
 
 
-def render_error(status: int, detail: str) -> HTMLResponse:
+def render_error(
+    status: int, detail: str, *, for_claimant: bool = False
+) -> HTMLResponse:
+    """An error page in the layout of the pages it was refused on: the
+    adjuster's, with a way back to the queue, or a claimant's, with a way back
+    to the claimant's claims and nothing of the adjuster's."""
     page = TEMPLATES.get_template("error.html").render(
-        status=status, detail=detail, queue_path=QUEUE_PATH
+        status=status,
+        detail=detail,
+        layout="claimant_base.html" if for_claimant else "base.html",
+        back_path=CLAIMANT_PREFIX + "claims" if for_claimant else QUEUE_PATH,
+        back_label="Back to your claims" if for_claimant else "Back to the queue",
     )
     return HTMLResponse(page, status_code=status)
 
@@ -479,7 +495,13 @@ def add_adjuster_pages(
         if not re.fullmatch(CLAIM_ID_PATTERN, claim_id):
             claim_id = "(not a claim ID)"
         logger.warning("cross-site post refused for claim %s", claim_id)
-        return render_error(HTTP_FORBIDDEN, CROSS_SITE_DETAIL)
+        # The page of the site the post was aimed at: a claimant's refused post
+        # never shows the adjuster's banner or link.
+        return render_error(
+            HTTP_FORBIDDEN,
+            CROSS_SITE_DETAIL,
+            for_claimant=request.url.path.startswith(CLAIMANT_PREFIX),
+        )
 
     @app.get(STYLESHEET_PATH, include_in_schema=False)
     def adjuster_stylesheet() -> Response:

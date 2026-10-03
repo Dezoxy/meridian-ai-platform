@@ -1,7 +1,7 @@
-{% extends "base.html" %}
+{% extends layout %}
 {% block title %}{{ status }}{% endblock %}
 {% block content %}
 <h1>{{ status }}</h1>
 <p role="alert">{{ detail }}</p>
-<p><a href="{{ queue_path }}">Back to the queue</a></p>
+<p><a href="{{ back_path }}">{{ back_label }}</a></p>
 {% endblock %}

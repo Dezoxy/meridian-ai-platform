@@ -183,7 +183,7 @@ deploy:
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series and the adjuster's pages
+## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series and the adjuster's and claimant's pages
 smoke:
 	infra/kind/smoke.sh
 

@@ -21,7 +21,9 @@
   server-rendered page and the Claims API records the decision and resumes
   it (or sends the claim back to triage), a claim whose triage failed is
   decided by an adjuster, a claim can be withdrawn or get the documents it
-  was asked for, at most five triages each, CI grades the golden set's
+  was asked for, at most five triages each, a claimant submits a claim,
+  reads its status, reports documents and withdraws it on server-rendered
+  pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
   proposals with rules against a reviewed baseline (with a scripted model,
   simulated), and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
@@ -165,7 +167,7 @@ and Pydantic, at the cost of one dependency.
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage, at most five triages per claim; ~~a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63)~~ (split on 2026-10-03: the deadline and the sweep are S052, the report date and the claim history S053) | done | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
-| S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
+| S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | done | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
@@ -4552,6 +4554,182 @@ commit that changes `src/` or `tests/`.
   uploads (T-38); a flaky shell poll test (`test_kind_manifests.py::
   test_poll_clears_the_last_error_on_success`, failed once and passed
   alone).
+
+### S049 — Claimant pages
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** a claimant submits a claim on a server-rendered page, reads its
+status, reports the documents asked for and withdraws it, and the page
+tells the claimant what happens next without describing the proposal.
+**Decisions:**
+
+- The pages live in the Claims Triage App under `/claimant/`, beside the
+  adjuster's, out of the OpenAPI contract, with the same headers (no script,
+  no framing, `no-store`) and the same refusal of a post another site made
+  (T-70). `GET /claimant/claims` is the start page: the claim form and a
+  lookup by claim ID. `POST /claimant/claims` stores and triages the claim
+  through the code of `POST /claims`; `GET /claimant/claims/{claim_id}` is
+  the status page; `POST .../documents` and `POST .../withdrawal` run the
+  code of S048's JSON routes. A post that succeeds redirects to the status
+  page (303).
+- The claim ID is a field of the form. The API takes the client's ID and
+  the golden set's IDs are fixed; an ID the server makes up would change
+  the contract. Until claimants are identified (S021), anyone who reaches
+  the pages reads any claim's status by its ID (T-01, T-65).
+- The report date is a field too, the claimant's word, as on the JSON route
+  (T-66, S053).
+- Once a claim is stored, every outcome of its triage redirects to the
+  status page, whose text is the claim's state. Only a refusal before
+  anything is stored (another submission under this ID, 409; a form that
+  does not validate, 422) shows the form again.
+- What the status page shows (T-65): the claim's ID, when it was received,
+  what happens next in the claimant's words, the documents asked for and
+  the names that arrived. `awaiting_adjuster` and `triage_failed` read the
+  same ("an adjuster is reviewing it"). The documents asked for are the
+  proposal's missing documents; an adjuster's `request_documents` names
+  none, and the page then says documents were asked for. Never the reason,
+  an amount, an indicator, the model's text, the claimant's name or email,
+  or the description.
+- The form says that every value must be fictional (T-04). A form that does
+  not validate is shown again with each field's message and never its value
+  in the message; nothing of a claim but its ID is logged (T-03).
+- Threat model (`feature-threat-model`, TB-1, TB-2, TB-8):
+  - **T-01:** the pages are as reachable as the adjuster's: on kind only
+    from the laptop, through the `*.localhost` route; no sign-in until
+    S021. Every post takes T-70's origin check. Residual: a claim's status
+    is read by its ID.
+  - **T-04:** the banner on the form.
+  - **T-65:** the status page as above. Residual: a withdrawal is offered
+    from `awaiting_adjuster` and not from `triage_failed` (the lifecycle has
+    no such edge), so its button tells the two apart; an approval within
+    the request still tells the rules from an adjuster.
+  - **T-07:** the form's values shown again and the document names are
+    rendered as text, tested with markup.
+  - **T-38:** document names are stripped and deduplicated before the
+    bound of 20.
+  - Invariants: no model call outside the gateway, no tool, no framework
+    import, no secret. No tension.
+- First commit: the CI python job's limit goes from 10 to 15 minutes (it
+  took 8 min 49 s on S048's pull request); running the tests in parallel is
+  the real fix and needs a database per worker.
+- Changed after the reviews (see the work log): the lookup is a post, so
+  what a claimant types into it reaches no URL, span or access log (T-03);
+  a stored claim whose triage could not be taken, or was left `triaging`, is
+  answered with the form filled in again and a 503 that says the claim is
+  stored and to send it again, not with the status page; a documents post
+  whose names were stored and whose triage failed is answered by the status
+  page (303) only when the claim reached a state an adjuster's queue lists;
+  `Cross-Origin-Resource-Policy: same-origin` joins the pages' headers, the
+  adjuster's included.
+
+**Work log:**
+
+- Twelfth step of one session, on the owner's word ("Okay go on"), after
+  pull request 38 (S048) was confirmed on `main`: the 28 files it changed
+  are identical there.
+- The advisor before the contracts asked for the threat model first, the
+  decisions recorded (the claim ID and the report date as form fields, the
+  withdraw button's residual, wording for documents asked for with no list),
+  the form read by hand so no FastAPI 422 carries a value, the store's and
+  the triage's 409 told apart by which call raised, the claimant's error
+  page and back link chosen by path, and document names stripped and
+  deduplicated.
+- The `implementer` subagent worked in four contracts: the pages (contract
+  1; it corrected the contract twice: 21 names are a 422 of the model's
+  bound, as on the JSON route, and the run's ID is on the submit span, as
+  on the JSON route's); the pages through the real services and a third
+  line in `make smoke` (contract 2); two contracts of review fixes.
+- Reviews by `security-reviewer` and `fastapi-reviewer` on a snapshot
+  worktree, then `security-reviewer` again on the fixed tree. Found by them,
+  fixed here:
+  - the lookup was a GET form, so a name or an address typed into it by
+    mistake reached the URL, the server span's `http.url`, uvicorn's access
+    log and the edge's, where the log redactor does not see an address
+    encoded as `%40` (T-03);
+  - a database error while taking the triage left a stored claim
+    `submitted`, which no queue lists, while the claimant read "we are
+    assessing it"; then the 503 that replaced it showed an empty form, and a
+    claim sent again with any difference is another submission (409);
+  - a claim left `triaging` when the run and `fail_triage`'s own write both
+    failed was answered as assessed;
+  - a documents post whose names were stored and whose triage failed
+    answered 502 with the API's text, where a submission answers 303;
+  - no `Cross-Origin-Resource-Policy`, so a page of another site could load
+    a response with `no-cors`;
+  - tests that could not fail: a file in a field that may not be empty, the
+    span's parent, the work off the event loop.
+- Reviewed and not done, with reasons: the trailing-slash redirect trusts
+  `Host` (every service's, T-70's residual); no rate limit on posts that
+  start a triage (S019, S021); `AuditUnavailable` inside `close_triage`
+  leaves a claim `triaging` until its lease lapses (S048's, S052's sweep);
+  HTML pages for the shared JSON answers under `/claimant/` (a 422 for an ID
+  in the path, 404, 405, 413, 400), which the docstring lists; a documents
+  failure whose cause races with another move (a `stored` flag on
+  `DecisionFailure`); the server span's `http.url` keeps a query string the
+  pages no longer produce (the instrumentor's attribute, platform-wide); a
+  claim left `triaging` cannot be sent again until its lease lapses (the
+  post answers its status page until then).
+- The `docs-sync` skill: the plan (S049 opened and closed, the status
+  line), the threat model (T-01, T-03, T-04, T-07, T-38, T-65, T-66, T-70),
+  the data classification (claims, proposals), the README (a Claimant pages
+  row, the adjuster row's "designed" claim, `make smoke`), the `Makefile`'s
+  help line, the kind README (`make smoke`'s sixth check), the model's and
+  the overview's Claims Triage App and the edge's technology.
+
+**Result / verification:** run by the main session on cceade8, the last
+commit that changes `src/` or `tests/`.
+
+- `GITHUB_ACTIONS=true make pytest-db`: `6221 passed, 3 skipped` (the
+  three are the opt-in live Azure tests) in 9 min 53 s, which is why the CI
+  job's limit moved first. `make eval`: `recommendation: 39/40 -> 39/40`, `eval compare:
+  passed`. `make lint`: `Contracts: 4 kept, 0 broken.` `make registry`:
+  `schemas OK`, `contracts OK`. `make test`: `OK`. `make docs`: `13 checks
+  passed`. `make check`: no ERROR line. `gitleaks` over the branch: `no
+  leaks found`.
+- In tests: the start page, the form refused field by field with messages
+  that hold no value, another submission under an ID (409), the same one
+  again (303), a failed triage (303), a triage that could not be taken or
+  was left `triaging` (the form again, 503), each state's sentence, no
+  marker of the proposal or the claimant on the status page in any state,
+  documents stripped and deduplicated, the bound, withdrawal, the origin
+  check on the four posts, the headers on every answer, nothing of a claim
+  but its ID in a log record or a span. Through the real services: CLM-0002
+  submitted from the page waits for an adjuster and is withdrawn, its run
+  ended; CLM-0030's police report from the page turns it into an automatic
+  approval.
+- On kind (the cluster built for S047): `make deploy` rolled out the pages;
+  `make smoke` printed 14 PASS lines, the claimant's start page among them,
+  and again after cceade8 was deployed. The walk below ran on 6666544,
+  before the second round of fixes, which change only failure answers.
+  Through the edge with golden claims: CLM-0028 (a fraud indicator)
+  submitted from the form, 303, its page "An adjuster is reviewing your
+  claim." with no word of the indicator or the claimant, then withdrawn
+  (303, "You withdrew this claim."); CLM-0027 asked for `photos`, reported
+  from the page (303); its triage was refused `gateway-busy` (the third
+  triage in one 10 s window, S019's), so the page said an adjuster reviews
+  it, and after a retry through the JSON route the rules referred it for
+  `over_threshold`, which its page does not say. The lookup redirected; a
+  lookup and a withdrawal posted as another site were 403. The pages read
+  carried `Cross-Origin-Resource-Policy: same-origin`. In the built-in
+  browser, on cceade8, the start page and CLM-0027's status page rendered
+  with the stylesheet and no console message, so the policy blocks nothing
+  they need; both forms of the start page post; nothing was clicked.
+- Not run: a browser click on the claimant's forms (the posts went through
+  the edge from a script); anything against Azure; a cold `make up`.
+
+**Follow-ups:**
+
+- The owner: accept the claim ID and the report date as form fields, the
+  status page's residual (the withdraw button), and that anyone who reaches
+  the pages reads a claim's status by its ID until S021.
+- S021: claimant identity; the pages behind a sign-in.
+- S052: a claim left `triaging` or `submitted` by a failure (the sweep).
+- S053: the report date stamped by the API.
+- S019 or S021: a rate limit on posts that start a triage; the pages' own
+  host names (T-70).
+- No step yet: HTML pages for the shared JSON answers under `/claimant/`;
+  the query string in the server span's `http.url`; a documents failure
+  racing another move; running the tests in parallel.
 
 ## Part D — Open questions
 
