@@ -8,6 +8,7 @@ not on the owner's laptop (S041).
 
 import base64
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -65,6 +66,12 @@ MIGRATE_JOB_FILE = MANIFESTS / "migrate-job.yaml"
 SEED_JOB_FILE = MANIFESTS / "seed-job.yaml"
 INGEST_JOB_FILE = MANIFESTS / "ingest-job.yaml"
 JOB_FILES = (MIGRATE_JOB_FILE, SEED_JOB_FILE, INGEST_JOB_FILE)
+SWEEP_FILE = MANIFESTS / "sweep-cronjob.yaml"
+SWEEP_MODULE = "meridian.workloads.claims_triage.sweep"
+SWEEP_ROLE = "claims_sweep"
+# The job's own setting (S052), whole calendar days; the code's settings class
+# is the Python contract's, so the name is pinned here as the manifest sets it.
+SWEEP_DEADLINE_ENV = "MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS"
 TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
 SERVER_PORT = 8000
 # The tenant whose limits the ingestion's embedding calls count against.
@@ -149,6 +156,18 @@ def job_named(name: str) -> dict:
     return found
 
 
+def sweep_cronjob() -> dict:
+    (found,) = [
+        d for d in documents_of("CronJob") if d["metadata"]["name"] == "meridian-sweep"
+    ]
+    return found
+
+
+def pod_workloads() -> list[dict]:
+    """Every object that runs a pod: the Deployments, the Jobs and the CronJob."""
+    return documents_of("Deployment") + documents_of("Job") + documents_of("CronJob")
+
+
 def containers(document: dict) -> list[dict]:
     return document["spec"]["template"]["spec"]["containers"]
 
@@ -199,7 +218,8 @@ def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
         assert service["spec"]["type"] == "ClusterIP"
         assert name in {d["metadata"]["name"] for d in documents_of("ServiceAccount")}
     accounts = documents_of("ServiceAccount")
-    assert len(accounts) == len(SERVICES) + len(JOB_FILES)  # each Job has its own
+    # each Job, and the sweep's CronJob, has its own
+    assert len(accounts) == len(SERVICES) + len(JOB_FILES) + 1
     assert all(a["automountServiceAccountToken"] is False for a in accounts)
 
 
@@ -401,11 +421,11 @@ def test_dockerignore_allows_the_seed_data_and_nothing_more_of_that_folder() -> 
 
 
 def test_every_container_runs_non_root_without_privileges() -> None:
-    workloads = documents_of("Deployment") + documents_of("Job")
-    assert len(workloads) == len(SERVICES) + len(JOB_FILES)
+    workloads = pod_workloads()
+    assert len(workloads) == len(SERVICES) + len(JOB_FILES) + 1  # the sweep
 
     for workload in workloads:
-        pod = workload["spec"]["template"]["spec"]
+        pod = pod_spec(workload)
         for container in pod["containers"]:
             context = container["securityContext"]
             assert context["runAsNonRoot"] is True
@@ -415,8 +435,8 @@ def test_every_container_runs_non_root_without_privileges() -> None:
 
 
 def test_every_container_uses_the_image_placeholder_and_never_pulls() -> None:
-    for workload in documents_of("Deployment") + documents_of("Job"):
-        for container in workload["spec"]["template"]["spec"]["containers"]:
+    for workload in pod_workloads():
+        for container in pod_spec(workload)["containers"]:
             assert container["image"] == "@IMAGE@"
             assert container["imagePullPolicy"] == "IfNotPresent"
 
@@ -591,6 +611,150 @@ def test_the_ingestions_tenant_may_run_the_ingestion_agent() -> None:
     assert registry.tenant_may_run(INGEST_TENANT, INGESTION_AGENT)
 
 
+SWEEP_PERIOD_SECONDS = 5 * 60  # schedule "*/5 * * * *"
+
+
+def sweep_job_spec() -> dict:
+    return sweep_cronjob()["spec"]["jobTemplate"]["spec"]
+
+
+def sweep_container() -> dict:
+    (container,) = pod_spec(sweep_cronjob())["containers"]
+    return container
+
+
+def test_the_sweep_cronjob_runs_the_sweep_module_and_nothing_else() -> None:
+    container = sweep_container()
+
+    assert container["command"] == ["python", "-m", SWEEP_MODULE]
+    assert "args" not in container
+    # The command is a real module of the image: the Python contract's file.
+    assert importlib.util.find_spec(SWEEP_MODULE) is not None
+
+
+def test_the_sweep_takes_its_own_roles_connection_string_and_the_deadline() -> None:
+    environment = env_of(sweep_container())
+
+    # The role's Secret is named as common.sh's role_secret_name names it.
+    secret = SWEEP_ROLE.replace("_", "-") + "-db"
+    assert set(environment) == {DATABASE_URL_ENV, SWEEP_DEADLINE_ENV}
+    assert environment[DATABASE_URL_ENV]["valueFrom"]["secretKeyRef"] == {
+        "name": secret,
+        "key": "uri",
+    }
+    assert environment[SWEEP_DEADLINE_ENV] == {
+        "name": SWEEP_DEADLINE_ENV,
+        "value": "14",
+    }
+    assert "envFrom" not in sweep_container()
+
+
+def test_the_sweep_reads_its_own_secret_and_the_ca_and_never_the_owners() -> None:
+    pod = pod_spec(sweep_cronjob())
+
+    assert secrets_referenced_by(pod) == {"claims-sweep-db", "platform-db-ca"}
+    assert OWNER_SECRET not in SWEEP_FILE.read_text(encoding="utf-8")
+    # Only the public certificate of the CA's Secret, as the Jobs mount it.
+    (volume,) = pod["volumes"]
+    assert volume["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
+    (mount,) = sweep_container()["volumeMounts"]
+    assert mount == {
+        "name": volume["name"],
+        "mountPath": "/etc/meridian/db-ca",
+        "readOnly": True,
+    }
+
+
+def test_the_sweep_has_an_account_of_its_own_with_no_service_account_token() -> None:
+    accounts = {
+        d["metadata"]["name"]: d
+        for d in load_documents(SWEEP_FILE)
+        if d["kind"] == "ServiceAccount"
+    }
+    pod = pod_spec(sweep_cronjob())
+
+    assert set(accounts) == {"meridian-sweep"}
+    assert accounts["meridian-sweep"]["automountServiceAccountToken"] is False
+    assert pod["serviceAccountName"] == "meridian-sweep"
+    assert pod["automountServiceAccountToken"] is False
+    # Nothing in the file grants the account a right.
+    assert {d["kind"] for d in load_documents(SWEEP_FILE)} == {
+        "ServiceAccount",
+        "CronJob",
+    }
+
+
+def test_the_sweeps_pod_is_hardened_like_the_jobs_pods() -> None:
+    pod = pod_spec(sweep_cronjob())
+    context = sweep_container()["securityContext"]
+    resources = sweep_container()["resources"]
+
+    assert context["runAsNonRoot"] is True
+    assert context["allowPrivilegeEscalation"] is False
+    assert context["capabilities"]["drop"] == ["ALL"]
+    assert context["seccompProfile"]["type"] == "RuntimeDefault"
+    assert pod["restartPolicy"] == "Never"
+    assert {"cpu", "memory"} <= set(resources["requests"])
+    assert "memory" in resources["limits"]
+    assert sweep_container()["image"] == "@IMAGE@"
+    assert sweep_container()["imagePullPolicy"] == "IfNotPresent"
+    for flag in ("hostNetwork", "hostPID", "hostIPC"):
+        assert not pod.get(flag), flag
+
+
+def test_the_sweep_never_runs_two_passes_at_once_and_a_failed_pass_is_not_retried() -> (
+    None
+):
+    spec = sweep_cronjob()["spec"]
+
+    assert spec["schedule"] == "*/5 * * * *"
+    assert spec["concurrencyPolicy"] == "Forbid"
+    assert not spec.get("suspend")
+    # The next run is the retry: a pod that failed is not started again.
+    assert sweep_job_spec()["backoffLimit"] == 0
+
+
+def test_a_sweep_pass_ends_well_before_the_next_one_is_due() -> None:
+    spec = sweep_cronjob()["spec"]
+    deadline = sweep_job_spec()["activeDeadlineSeconds"]
+
+    # Forbid skips a run while the last one is alive, so a hung pass would
+    # silence the sweep: the deadline ends it, with room to spare.
+    assert 0 < deadline <= SWEEP_PERIOD_SECONDS // 2
+    assert 0 < spec["startingDeadlineSeconds"] <= SWEEP_PERIOD_SECONDS
+    assert spec["successfulJobsHistoryLimit"] <= 3
+    assert 1 <= spec["failedJobsHistoryLimit"] <= 5
+    assert sweep_job_spec()["ttlSecondsAfterFinished"] > 0
+
+
+def test_the_sweep_cronjob_carries_the_labels_of_the_other_manifests() -> None:
+    labels = {
+        "app.kubernetes.io/name": "meridian-sweep",
+        "app.kubernetes.io/part-of": "meridian",
+    }
+    cronjob = sweep_cronjob()
+
+    assert cronjob["metadata"]["labels"] == labels
+    assert cronjob["spec"]["jobTemplate"]["metadata"]["labels"] == labels
+    assert (
+        cronjob["spec"]["jobTemplate"]["spec"]["template"]["metadata"]["labels"]
+        == labels
+    )
+
+
+def test_deploy_applies_the_sweep_cronjob_with_the_image_and_no_tag() -> None:
+    skipped = re.findall(
+        r"^readonly \w+_MANIFEST=(\S+\.yaml)$", DEPLOY_SH, re.MULTILINE
+    )
+    placeholders = set(re.findall(r"@[A-Z_]+@", SWEEP_FILE.read_text(encoding="utf-8")))
+
+    # Found by the glob, not skipped as a Job; a CronJob's name is fixed, so a
+    # new image changes its spec in place (a Job's spec cannot change).
+    assert SWEEP_FILE.name not in skipped
+    assert placeholders == {"@IMAGE@"}
+    assert sweep_cronjob()["metadata"]["name"] == "meridian-sweep"
+
+
 def test_every_from_line_of_the_dockerfile_is_pinned_by_digest() -> None:
     stages = dockerfile_instructions("FROM")
 
@@ -634,6 +798,7 @@ def test_the_database_declares_its_roles_with_login_only() -> None:
         "policy_mcp",
         "claims_mcp",
         "knowledge_mcp",
+        SWEEP_ROLE,
     }
     for name, role in roles.items():
         assert role["login"] is True
@@ -655,7 +820,7 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     limits = {
         r["name"]: r["connectionLimit"]
         for r in PLATFORM_DB["cluster"]["roles"]
-        if "connectionLimit" in r
+        if "connectionLimit" in r and r["name"] != SWEEP_ROLE
     }
 
     # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one
@@ -664,6 +829,32 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     assert set(limits) == {name.replace("-", "_") for name in TOOL_SERVERS}
     for name, limit in limits.items():
         assert limit >= 2 * (MAX_CONCURRENT_CALLS + 1), name
+
+
+def test_the_sweep_role_may_hold_a_few_connections_and_no_more() -> None:
+    (role,) = [r for r in PLATFORM_DB["cluster"]["roles"] if r["name"] == SWEEP_ROLE]
+
+    # One pod at a time (concurrencyPolicy: Forbid), one connection at a time;
+    # a run by hand beside the scheduled one makes two pods. Anything near the
+    # tool servers' 20 would not be a bound on a one-connection job.
+    assert 2 <= role["connectionLimit"] <= 5
+
+
+def test_the_sweep_role_is_in_both_pg_hba_lines_of_the_meridian_roles() -> None:
+    rules = PLATFORM_DB["cluster"]["postgresql"]["pg_hba"]
+    accepted = [r for r in rules if r.startswith("hostssl meridian ") and "scram" in r]
+    refused = [
+        r for r in rules if r.startswith("hostssl all ") and r.endswith("reject")
+    ]
+
+    (accept,) = accepted
+    (refuse,) = refused
+    assert SWEEP_ROLE in accept.split()[2].split(",")
+    assert SWEEP_ROLE in refuse.split()[2].split(",")
+    # Both lines list the same roles as the roles' own list.
+    listed = {r["name"] for r in PLATFORM_DB["cluster"]["roles"]}
+    assert set(accept.split()[2].split(",")) == listed
+    assert set(refuse.split()[2].split(",")) == listed
 
 
 def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> None:
@@ -681,6 +872,8 @@ def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> Non
 
 
 def pod_spec(workload: dict) -> dict:
+    if workload["kind"] == "CronJob":
+        return workload["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     return workload["spec"]["template"]["spec"]
 
 
@@ -720,7 +913,7 @@ def test_a_deployment_reads_only_its_own_secrets_and_takes_no_env_from(
 
 
 def test_every_container_has_requests_and_a_memory_limit() -> None:
-    for workload in documents_of("Deployment") + documents_of("Job"):
+    for workload in pod_workloads():
         for container in pod_spec(workload)["containers"]:
             resources = container["resources"]
             assert {"cpu", "memory"} <= set(resources["requests"])
@@ -728,7 +921,7 @@ def test_every_container_has_requests_and_a_memory_limit() -> None:
 
 
 def test_no_pod_is_privileged_or_shares_the_nodes_namespaces() -> None:
-    for workload in documents_of("Deployment") + documents_of("Job"):
+    for workload in pod_workloads():
         pod = pod_spec(workload)
         for flag in ("hostNetwork", "hostPID", "hostIPC"):
             assert not pod.get(flag), flag
@@ -740,7 +933,7 @@ def test_the_manifests_run_the_user_the_dockerfile_sets() -> None:
     (user,) = dockerfile_instructions("USER")
     uid = int(user.split(":")[0])
 
-    for workload in documents_of("Deployment") + documents_of("Job"):
+    for workload in pod_workloads():
         for container in pod_spec(workload)["containers"]:
             assert container["securityContext"]["runAsUser"] == uid
 
@@ -2543,3 +2736,223 @@ def test_the_decision_is_not_followed_by_a_trace_check_when_the_api_refuses_it(
     )
     assert [c for c in calls if c[0] == "GET"] == []
     assert "PASS" not in done.stdout
+
+
+def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:
+    lines = SMOKE_SH.splitlines()
+    calls = [line for line in lines[lines.index("check_edge") :] if line]
+    body = function_body(SMOKE_SH, "check_sweep")
+
+    assert calls[6] == "check_sweep"
+    # Same skip rule as the tool check: only when no Meridian Deployment exists,
+    # and the lookups are read-only kubectl through kctl.
+    assert "$(deployed_services)" in body
+    assert "meridian-sweep" in SMOKE_SH
+    assert not re.search(r"kctl[^\n]*\b(create|apply|delete|patch|replace)\b", body)
+
+
+SWEEP_CRONJOB_ANSWER = {"metadata": {"name": "meridian-sweep"}, "spec": {}}
+
+
+def sweep_job(
+    name: str, finished: str | None = None, *, kind: str = "Complete"
+) -> dict:
+    """A Job the CronJob made (``finished`` None: still running)."""
+    conditions = (
+        []
+        if finished is None
+        else [{"type": kind, "status": "True", "lastTransitionTime": finished}]
+    )
+    return {
+        "metadata": {
+            "name": name,
+            "ownerReferences": [{"kind": "CronJob", "name": "meridian-sweep"}],
+        },
+        "status": {"conditions": conditions},
+    }
+
+
+def run_sweep_check(
+    tmp_path: Path,
+    *,
+    deployed: str = "deployment.apps/claims-api",
+    cronjob: dict | str | None = None,
+    jobs: list[dict] | str | None = None,
+) -> tuple[list[str], str]:
+    """``check_sweep`` from smoke.sh in bash against a stub ``kctl``. ``cronjob``
+    is the CronJob's answer (an empty string: it does not exist; ``FAIL``: the
+    lookup fails) and ``jobs`` the Jobs of the namespace. Returns the output
+    lines and what ``kctl`` was asked."""
+    asked = tmp_path / "kctl-calls"
+    asked.touch()
+    if cronjob is None:
+        cronjob = SWEEP_CRONJOB_ANSWER
+    if jobs is None:
+        jobs = []
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "failures=0; skips=0",
+            'pass() { echo "PASS  $*"; }',
+            'fail() { echo "FAIL  $*"; }',
+            'skip() { echo "SKIP  $*"; }',
+            *re.findall(r"^readonly SWEEP_\w+=.*$", SMOKE_SH, re.MULTILINE),
+            one_line_function(SMOKE_SH, "clean_lines"),
+            "kctl() {",
+            f'  echo "$*" >>"{asked}"',
+            '  case "$*" in',
+            '    *"get cronjob"*)',
+            '      if [[ "${CRONJOB}" == FAIL ]]; then',
+            '        echo "Error from server" >&2; return 1',
+            "      fi",
+            '      printf "%s" "${CRONJOB}" ;;',
+            '    *"get job"*)',
+            '      if [[ "${JOBS}" == FAIL ]]; then',
+            '        echo "Error from server" >&2; return 1',
+            "      fi",
+            '      printf "%s" "${JOBS}" ;;',
+            '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            "  esac",
+            "}",
+            function_definition(SMOKE_SH, "deployed_services"),
+            function_definition(SMOKE_SH, "sweep_last_finished"),
+            function_definition(SMOKE_SH, "check_sweep"),
+            "check_sweep",
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "DEPLOYED": deployed,
+            "CRONJOB": cronjob if isinstance(cronjob, str) else json.dumps(cronjob),
+            "JOBS": jobs if isinstance(jobs, str) else json.dumps({"items": jobs}),
+        },
+        check=True,
+    )
+    return done.stdout.splitlines(), asked.read_text()
+
+
+@requires_jq
+def test_the_sweep_check_skips_while_the_services_are_not_deployed(
+    tmp_path: Path,
+) -> None:
+    lines, asked = run_sweep_check(tmp_path, deployed="")
+
+    assert lines == [
+        "SKIP  sweep: the Meridian services are not deployed (make deploy)"
+    ]
+    assert "cronjob" not in asked
+
+
+@requires_jq
+def test_the_sweep_check_fails_when_the_services_run_but_the_cronjob_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_sweep_check(tmp_path, cronjob="")[0]
+
+    assert line.startswith("FAIL  sweep: cronjob/meridian-sweep does not exist")
+
+
+@requires_jq
+def test_the_sweep_check_fails_when_the_cronjob_cannot_be_read(tmp_path: Path) -> None:
+    (line,) = run_sweep_check(tmp_path, cronjob="FAIL")[0]
+
+    assert line.startswith("FAIL  sweep: could not read cronjob/meridian-sweep")
+
+
+@requires_jq
+def test_the_sweep_check_fails_on_a_suspended_cronjob_whatever_its_jobs_did(
+    tmp_path: Path,
+) -> None:
+    suspended = {"metadata": {"name": "meridian-sweep"}, "spec": {"suspend": True}}
+    ok = [sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z")]
+
+    (line,) = run_sweep_check(tmp_path, cronjob=suspended, jobs=ok)[0]
+
+    assert line.startswith("FAIL  sweep: cronjob/meridian-sweep is suspended")
+
+
+@requires_jq
+def test_the_sweep_check_skips_while_no_job_of_the_cronjob_has_finished(
+    tmp_path: Path,
+) -> None:
+    other = {
+        "metadata": {
+            "name": "meridian-ingest-abc",
+            "ownerReferences": [{"kind": "CronJob", "name": "another"}],
+        },
+        "status": {"conditions": [{"type": "Failed", "status": "True"}]},
+    }
+    jobs = [sweep_job("meridian-sweep-2", None), other]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
+
+    assert line.startswith("SKIP  sweep: no Job of cronjob/meridian-sweep has finished")
+
+
+@requires_jq
+def test_the_sweep_check_passes_on_the_newest_finished_job_that_succeeded(
+    tmp_path: Path,
+) -> None:
+    jobs = [
+        sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z", kind="Failed"),
+        sweep_job("meridian-sweep-3", "2026-10-03T10:10:00Z"),
+        sweep_job("meridian-sweep-2", "2026-10-03T10:05:00Z", kind="Failed"),
+        sweep_job("meridian-sweep-4", None),  # running: not finished yet
+    ]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
+
+    assert line.startswith("PASS  sweep:")
+    assert "meridian-sweep-3" in line
+    assert "succeeded" in line
+
+
+@requires_jq
+def test_the_sweep_check_fails_when_the_newest_finished_job_failed(
+    tmp_path: Path,
+) -> None:
+    jobs = [
+        sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z"),
+        sweep_job("meridian-sweep-2", "2026-10-03T10:05:00Z", kind="Failed"),
+    ]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
+
+    assert line.startswith("FAIL  sweep:")
+    assert "meridian-sweep-2" in line
+    assert "failed" in line
+
+
+@requires_jq
+def test_the_sweep_check_counts_a_job_made_by_hand_from_the_cronjob(
+    tmp_path: Path,
+) -> None:
+    # `kubectl create job --from=cronjob/meridian-sweep` sets the same owner.
+    jobs = [
+        sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z"),
+        sweep_job("meridian-sweep-manual", "2026-10-03T10:02:00Z", kind="Failed"),
+    ]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
+
+    assert line.startswith("FAIL  sweep:")
+    assert "meridian-sweep-manual" in line
+
+
+@requires_jq
+def test_the_sweep_check_fails_when_the_jobs_cannot_be_read(tmp_path: Path) -> None:
+    (line,) = run_sweep_check(tmp_path, jobs="FAIL")[0]
+
+    assert line.startswith("FAIL  sweep: could not read the Jobs")
+
+
+@requires_jq
+def test_the_sweep_check_only_reads(tmp_path: Path) -> None:
+    _, asked = run_sweep_check(tmp_path, jobs=[])
+
+    for call in asked.splitlines():
+        assert " get " in call, call

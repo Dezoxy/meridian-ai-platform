@@ -33,6 +33,11 @@
 #                 start page answers 200 with the same policy and the banner's
 #                 fictional-data sentence (T-04), and changes no claim. Skipped
 #                 while the Meridian services are not deployed (`make deploy`).
+#   7. sweep:     one line, read-only. The CronJob meridian-sweep exists, is not
+#                 suspended, and the last of its Jobs to finish (the scheduled
+#                 ones and any made by hand) succeeded. Skipped while the
+#                 Meridian services are not deployed (`make deploy`) or while
+#                 no Job of it has finished yet; fails when the last one failed.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -44,6 +49,7 @@ readonly ADJUSTER_QUEUE_URL=http://claims.meridian.localhost:8088/adjuster/claim
 readonly ADJUSTER_DECISION_URL=http://claims.meridian.localhost:8088/adjuster/claims/CLM-9999/decision
 # The first sentence of the banner every page carries (templates/base.html).
 readonly ADJUSTER_BANNER="Synthetic data only."
+readonly SWEEP_CRONJOB=meridian-sweep
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
@@ -649,6 +655,68 @@ check_adjuster_pages() {
   rm -f "${headers_file}" "${body_file}"
 }
 
+# ── 7. sweep ─────────────────────────────────────────────────────────────────
+# sweep_last_finished JOBS_JSON: "succeeded <job>" or "failed <job>" for the Job
+# of the CronJob that finished last (by the time of its Complete or Failed
+# condition, the name breaking a tie), or nothing when none has finished. A Job
+# made by hand with `kubectl create job --from=cronjob/...` has the same owner.
+sweep_last_finished() {
+  jq -r --arg cronjob "${SWEEP_CRONJOB}" '
+    [.items[]
+      | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cronjob))
+      | . as $job
+      | ([$job.status.conditions[]? | select(.status == "True" and (.type == "Complete" or .type == "Failed"))] | first // empty) as $done
+      | {name: $job.metadata.name, type: $done.type, at: ($done.lastTransitionTime // "")}]
+    | sort_by([.at, .name]) | last // empty
+    | "\(if .type == "Complete" then "succeeded" else "failed" end) \(.name)"
+  ' <<<"$1"
+}
+
+# Same skip rule as the tool check: only when no Meridian Deployment exists. Only
+# reads; the Jobs of the whole namespace are listed and filtered by owner.
+check_sweep() {
+  local found cronjob jobs last outcome job
+  if ! found="$(deployed_services)"; then
+    fail "sweep: could not look for the Meridian deployments (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "sweep: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+  if ! cronjob="$(kctl -n meridian get cronjob "${SWEEP_CRONJOB}" -o json --ignore-not-found)"; then
+    fail "sweep: could not read cronjob/${SWEEP_CRONJOB} (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${cronjob}" ]]; then
+    fail "sweep: cronjob/${SWEEP_CRONJOB} does not exist (make deploy)"
+    return
+  fi
+  if [[ "$(jq -r '.spec.suspend // false' <<<"${cronjob}")" == true ]]; then
+    fail "sweep: cronjob/${SWEEP_CRONJOB} is suspended, so the sweep does not run"
+    return
+  fi
+  if ! jobs="$(kctl -n meridian get job -o json)"; then
+    fail "sweep: could not read the Jobs in meridian (kubectl's error is above)"
+    return
+  fi
+  if ! last="$(sweep_last_finished "${jobs}")"; then
+    fail "sweep: could not read the Jobs' conditions"
+    return
+  fi
+  if [[ -z "${last}" ]]; then
+    skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (it runs every five minutes)"
+    return
+  fi
+  outcome="${last%% *}"
+  job="$(clean_lines "${last#* }")"
+  if [[ "${outcome}" == succeeded ]]; then
+    pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${job}, succeeded"
+  else
+    fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${job}, failed (kubectl -n meridian logs job/${job})"
+  fi
+}
+
 trap cleanup EXIT
 check_edge
 check_database
@@ -656,6 +724,7 @@ check_tools
 check_telemetry
 check_cost_panel
 check_adjuster_pages
+check_sweep
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

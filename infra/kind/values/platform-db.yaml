@@ -4,9 +4,10 @@
 # and its Secret platform-db-app; no credential is set here.
 #
 # The walking skeleton (S041) adds the database "meridian" and four roles; the
-# three tool servers (S013, S046) add three more. Their passwords are in
-# Secrets that up.sh creates before this release installs (CloudNativePG cannot
-# reconcile a role whose Secret is missing); nothing secret is written here.
+# three tool servers (S013, S046) add three more and the scheduled sweep
+# (S052) one. Their passwords are in Secrets that up.sh creates before this
+# release installs (CloudNativePG cannot reconcile a role whose Secret is
+# missing); nothing secret is written here.
 # The "app" database, role and Secret are untouched: changing initdb would not
 # converge on an existing cluster.
 # Without this the chart names the Cluster "platform-db-cluster".
@@ -42,15 +43,16 @@ cluster:
     pg_hba:
       # Plain-text connections are refused outright, not only by client sslmode.
       - hostnossl all all all reject
-      # The seven Meridian roles log in to the meridian database over TLS.
-      - hostssl meridian meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp all scram-sha-256
+      # The eight Meridian roles log in to the meridian database over TLS.
+      - hostssl meridian meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp,claims_sweep all scram-sha-256
       # ... and reach no other database.
-      - hostssl all meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp all reject
+      - hostssl all meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp,claims_sweep all reject
       # No other role (the app role, for one) reaches meridian.
       - hostssl meridian all all reject
   # login is off by default in the operator; no role gets superuser, createdb,
   # createrole or replication. meridian_owner runs the migrations and owns the
-  # database; the other six are the service roles the migration grants to.
+  # database; the other seven are the roles the migrations grant to: six
+  # services and the scheduled sweep.
   roles:
     - name: meridian_owner
       ensure: present
@@ -96,6 +98,17 @@ cluster:
       connectionLimit: 20
       passwordSecret:
         name: knowledge-mcp-db
+    # The scheduled sweep (S052) runs one pod at a time (the CronJob's
+    # concurrencyPolicy is Forbid) and holds one connection at a time. A pass
+    # started by hand beside the scheduled one makes two pods, and each may
+    # open a second connection while it replaces a broken one: 2 * 2 = 4. A
+    # runaway job cannot take more of PostgreSQL's 100.
+    - name: claims_sweep
+      ensure: present
+      login: true
+      connectionLimit: 4
+      passwordSecret:
+        name: claims-sweep-db
 
 # Enable pgvector declaratively (CloudNativePG Database resource). The
 # extension ships in the "standard" image.

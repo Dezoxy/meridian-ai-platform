@@ -57,11 +57,15 @@ extension is enabled declaratively by a `Database` resource. The image ships
 PostgreSQL 17.11 with pgvector 0.8.6 (read from the image on 2026-10-02).
 
 For the walking skeleton `make up` also declares a second database,
-`meridian`, owned by the role `meridian_owner`, and six more roles:
+`meridian`, owned by the role `meridian_owner`, and seven more roles:
 `claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
-`policy_mcp` and `claims_mcp`, and for the knowledge server (S046)
-`knowledge_mcp`. All seven can log in and nothing more (no superuser, createdb
-or createrole). The three tool-server roles may each hold at most 20
+`policy_mcp` and `claims_mcp`, for the knowledge server (S046)
+`knowledge_mcp` and for the scheduled sweep (S052, below) `claims_sweep`. All
+eight can log in and nothing more (no superuser, createdb or createrole). The
+sweep's role may hold at most 4 connections: its job runs one pod at a time
+and holds one connection at a time, a run by hand beside the scheduled one
+makes two pods, and each may open a second connection while it replaces a
+broken one. The three tool-server roles may each hold at most 20
 connections: a tool server runs at most eight calls at once, one connection
 each and one more for a failure's audit row, and during a rollout two of its
 pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
@@ -75,8 +79,8 @@ first; `make smoke` looks for the extension in both databases. Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
-`claims-mcp-db` and `knowledge-mcp-db`. `make up` creates a Secret only if
-it is absent, before the
+`claims-mcp-db`, `knowledge-mcp-db` and `claims-sweep-db`. `make up` creates
+a Secret only if it is absent, before the
 `platform-db` release installs (CloudNativePG cannot reconcile a role whose
 Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
 on stdin; it is never an argument, never in a file and never printed. The `uri`
@@ -92,7 +96,8 @@ Rotating a password is the owner's call and `make up` never overwrites a
 Secret. Both `password` and `uri` (it embeds the password) must change
 together, CloudNativePG then applies the new password to the role, and the
 Deployment that uses the role must restart to read it; the Jobs read the
-owner's Secret afresh on every `make deploy`:
+owner's Secret afresh on every `make deploy`, and the sweep's every run reads
+its own:
 
 ```sh
 kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
@@ -103,7 +108,7 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 PostgreSQL itself enforces the database boundary, with `pg_hba` rules in
 [`values/platform-db.yaml`](values/platform-db.yaml) that CloudNativePG places
 before its default catch-all, after its own local, replication and pooler
-rules: a connection without TLS is rejected; the seven roles may log in to
+rules: a connection without TLS is rejected; the eight roles may log in to
 `meridian` over TLS with a SCRAM password and to no other database; no other
 role may log in to `meridian`. A client that asks for `sslmode=disable`, or a
 service that is pointed at the `app` or `postgres` database, is refused by the
@@ -134,14 +139,14 @@ node image, Kubernetes components and the platform).
 | Command | What it does |
 |---|---|
 | `make up` | Create the cluster if absent, install every release and provision the Grafana dashboards. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
-| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/`, ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/` (the sweep's CronJob among them), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks six things:
+`make smoke` checks seven things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -182,6 +187,11 @@ node image, Kubernetes components and the platform).
    the same policy and carries the banner's second sentence, which says that
    every value entered must be fictional (T-04); the request is a GET and
    changes no claim. Before `make deploy` this check prints SKIP.
+7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, is
+   not suspended, and the last of its Jobs to finish, scheduled or made by
+   hand, succeeded. Before `make deploy`, and while no Job of it has finished
+   yet, this line prints SKIP; it fails when the CronJob is missing or
+   suspended or the last finished Job failed.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -239,9 +249,9 @@ In order, `make deploy`:
    table gets a stored proposal "policy not found", and a stored proposal is
    final.
 4. Applies every other file in `manifests/meridian/` (found by glob: the
-   ServiceAccounts, Deployments, Services, the HTTPRoute and the
-   BackendTrafficPolicy). `@IMAGE@` (and `@TAG@` in a Job's name) are the
-   only text it substitutes.
+   ServiceAccounts, Deployments, Services, the HTTPRoute, the
+   BackendTrafficPolicy and the sweep's CronJob). `@IMAGE@` (and `@TAG@` in a
+   Job's name) are the only text it substitutes.
 5. Waits for the Model Gateway, then runs a Job `meridian-ingest-<tag>` with
    `meridian knowledge ingest`, which embeds the 85 clauses of the four
    wordings through the gateway and replaces the knowledge store in one
@@ -321,6 +331,39 @@ laptop, which lists the claims that wait for an adjuster and those whose
 triage failed; a claim's page shows its proposal, citations and audit trail
 and records the decision. The pages have no sign-in yet (threat model
 T-69), and the edge serves them only to the laptop.
+
+## The scheduled sweep
+
+A CronJob `meridian-sweep` (S052, in
+[`manifests/meridian/sweep-cronjob.yaml`](manifests/meridian/sweep-cronjob.yaml))
+runs `python -m meridian.workloads.claims_triage.sweep` every five minutes,
+in the image `make deploy` built, as the database role `claims_sweep` (Secret
+`claims-sweep-db`, never the owner's). One pass refers
+a claim whose documents are overdue to an adjuster, fails a claim stranded in
+`submitted` or `triaging`, ends a run no resume takes over and deletes the
+checkpoints a finished run left. It needs PostgreSQL only: no call to any
+service and no model. The deadline for documents is
+`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days.
+
+`concurrencyPolicy: Forbid` means a pass that is still running is never
+joined by another. A pass is cut off after 120 seconds and is not retried
+(`backoffLimit: 0`): the next run, five minutes later, is the retry. The
+last Job that succeeded and the last three that failed are kept, and
+Kubernetes removes each a day after it finishes. A pod has no service-account
+token, no extra privilege and mounts only the CA's public certificate.
+
+To run one pass now, beside the schedule (the name is yours; it must be new):
+
+```sh
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
+  create job --from=cronjob/meridian-sweep meridian-sweep-by-hand-1
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
+  logs job/meridian-sweep-by-hand-1
+```
+
+The by-hand Job counts as the sweep's last Job for `make smoke`. To stop the
+schedule, patch `suspend` to `true` on the CronJob; `make smoke` then fails
+until it is `false` again.
 
 ## The cost dashboard
 
