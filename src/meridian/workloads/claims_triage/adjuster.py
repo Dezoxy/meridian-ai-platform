@@ -159,15 +159,28 @@ DECIDED_STATES = ("approved", "rejected", "documents_requested")
 # audit.claim_trail is the one thing of the audit log the Claims API may read
 # (migration 0011, T-71); the tenant filter is the page's own as well.
 TRAIL_SQL = (
-    "SELECT recorded_at, db_role, service, event, outcome FROM audit.claim_trail "
+    "SELECT recorded_at, db_role, service, event, outcome, reason "
+    "FROM audit.claim_trail "
     "WHERE claim_id = %s AND tenant = %s ORDER BY recorded_at, event LIMIT %s"
 )
-# Whether the run completed at or after the decision (the resend button's test).
+# Whether the run ended, completed or failed, at or after the decision (the
+# resend button's test): the sweep ends an abandoned run Failed, and sending
+# the decision again could not complete it.
 COMPLETED_SQL = (
     "SELECT EXISTS (SELECT 1 FROM audit.claim_trail "
-    "WHERE claim_id = %s AND tenant = %s AND event = 'run.completed' "
-    "AND recorded_at >= %s)"
+    "WHERE claim_id = %s AND tenant = %s "
+    "AND event IN ('run.completed', 'run.failed') AND recorded_at >= %s)"
 )
+# Why the claim is in its present state: the reason of the latest ``claim.<state>``
+# event, the move that brought it there. Asked of the database, not read off the
+# listed rows, which are at most TRAIL_LIMIT.
+REASON_SQL = (
+    "SELECT reason FROM audit.claim_trail "
+    "WHERE claim_id = %s AND tenant = %s AND event = %s "
+    "ORDER BY recorded_at DESC LIMIT 1"
+)
+# The reason of the sweep's move of a claim whose documents did not come.
+DOCUMENTS_OVERDUE_REASON = "documents-overdue"
 
 
 class TrailRow(NamedTuple):
@@ -176,6 +189,7 @@ class TrailRow(NamedTuple):
     service: str
     event: str
     outcome: str
+    reason: str | None
 
 
 class QueueRow(NamedTuple):
@@ -193,9 +207,11 @@ class ClaimView:
     decision needs, as text, and never the claimant's name or email.
     ``decision`` is the one that moved the claim into its state, if it is in a
     state a decision leads to. ``resend_due`` is true when that decision has a
-    run and no ``run.completed`` event was recorded at or after it. ``run_id``
-    is the claim's run (``None`` when it has none) and ``triages`` the number
-    of times it has been triaged."""
+    run and no ``run.completed`` or ``run.failed`` event was recorded at or
+    after it. ``run_id`` is the claim's run (``None`` when it has none) and
+    ``triages`` the number of times it has been triaged. ``referral_reason`` is
+    the reason of the move that brought a waiting claim to the adjuster (``None``
+    for a claim in another state, or a move with no reason)."""
 
     claim_id: str
     state: str
@@ -209,6 +225,7 @@ class ClaimView:
     resend_due: bool = False
     run_id: UUID | None = None
     triages: int = 0
+    referral_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,17 +377,20 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
     failed = view.state == "triage_failed"
     has_run = view.run_id is not None
     at_cap = view.triages >= MAX_TRIAGES_PER_CLAIM
+    overdue = waiting and view.referral_reason == DOCUMENTS_OVERDUE_REASON
     return TEMPLATES.get_template("claim.html").render(
         view=view,
         since=_when(view.since),
         received_at=_when(view.received_at),
         decision=view.decision and (view.decision[0], _when(view.decision[1])),
-        trail=[(_when(t.recorded_at), *t[1:]) for t in view.trail],
+        trail=[(_when(t.recorded_at), *t[1:5], _text(t.reason)) for t in view.trail],
         payable=payable,
         waiting=waiting,
         failed=failed,
         # A claim referred at the cap has no paused run: nothing to send back.
         no_run=waiting and not has_run,
+        # The sweep referred it: the documents asked for did not arrive.
+        overdue=overdue,
         # Triaging again is a send-back of a paused run, or a retry of a failed
         # triage; at the cap it is neither, and the page says why.
         send_back=waiting and has_run and not at_cap,
@@ -455,6 +475,12 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
                 COMPLETED_SQL, (claim_id, tenant, decision[1])
             ).fetchone()
             resend_due = not completed[0]
+        referral_reason = None
+        if state == "awaiting_adjuster":
+            referral = conn.execute(
+                REASON_SQL, (claim_id, tenant, f"claim.{state}")
+            ).fetchone()
+            referral_reason = None if referral is None else referral[0]
     proposal, note = _proposal_of(claim_id, proposal_row)
     return ClaimView(
         claim_id=claim_id,
@@ -469,6 +495,7 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         resend_due=resend_due,
         run_id=run_id,
         triages=triages,
+        referral_reason=referral_reason,
     )
 
 

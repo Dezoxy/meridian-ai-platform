@@ -71,6 +71,8 @@
 <p>The latest triage failed; the proposal shown is from an earlier triage. A decision refers the claim to you and records it.</p>
 {% elif failed %}
 <p>The triage failed and there is no proposal to read; a decision refers the claim to you and records it.</p>
+{% elif overdue %}
+<p>The documents asked for did not arrive in time, so the claim is referred to you. There is no paused run; a decision here is recorded and moves the claim on.</p>
 {% elif no_run and view.proposal %}
 <p>There is no paused run and no new proposal: the claim was triaged {{ cap_words }} times, and the proposal shown predates the documents that arrived.</p>
 {% elif no_run %}
@@ -105,11 +107,11 @@
 {% if trail %}
 <table>
 <thead>
-<tr><th scope="col">Recorded at</th><th scope="col">Database role</th><th scope="col">Service</th><th scope="col">Event</th><th scope="col">Outcome</th></tr>
+<tr><th scope="col">Recorded at</th><th scope="col">Database role</th><th scope="col">Service</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Reason</th></tr>
 </thead>
 <tbody>
-{% for recorded_at, db_role, service, event, outcome in trail %}
-<tr><td>{{ recorded_at }}</td><td>{{ db_role }}</td><td>{{ service }}</td><td>{{ event }}</td><td>{{ outcome }}</td></tr>
+{% for recorded_at, db_role, service, event, outcome, reason in trail %}
+<tr><td>{{ recorded_at }}</td><td>{{ db_role }}</td><td>{{ service }}</td><td>{{ event }}</td><td>{{ outcome }}</td><td>{{ reason }}</td></tr>
 {% endfor %}
 </tbody>
 </table>
