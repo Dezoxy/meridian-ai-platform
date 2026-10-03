@@ -17,7 +17,9 @@
   has answered its one question), a claim it refers to an adjuster waits
   with its run paused in PostgreSQL until the adjuster decides it on a
   server-rendered page and the Claims API records the decision and resumes
-  it, and no service runs in Azure yet.
+  it, CI grades the golden set's proposals with rules against a reviewed
+  baseline (with a scripted model, simulated), and no service runs in
+  Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.

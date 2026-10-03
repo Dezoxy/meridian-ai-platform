@@ -62,7 +62,7 @@ meridian.knowledgeMcp -> meridian.registry "Loads its tools, their schemas and t
 meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTPS/JSON, tenant and agent headers" "Layer Services"
 
 // Evaluation
-meridian.evals -> meridian.runtime "Executes golden-set claims on" "HTTPS/JSON" "Layer Services"
+meridian.evals -> meridian.claimsApp "Submits golden-set claims to and reads their proposals from" "HTTPS/JSON" "Layer Services"
 meridian.evals -> meridian.platformDb "Stores evaluation results in" "PostgreSQL" "Layer Services"
 
 // Telemetry, one arrow per emitting service

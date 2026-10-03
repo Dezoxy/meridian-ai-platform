@@ -13,6 +13,18 @@ Never edit it by hand. A change to the prompt, a tool's contract or the golden
 set changes a fingerprint, so the gate asks for a new baseline in the same
 change (T-29); the reviewer reads the grade diff, not just the hashes.
 
+What each fingerprint covers:
+
+- `prompt`: what the model is sent, the system message, the user message's
+  format, the output budget and the length limit (`assessment.py`); not the
+  model, the deployment or the answer parser.
+- `tools`: the agent's registry entry, with its allowlist, and the registry
+  entries of the tools on it; not the tool servers' entries.
+- `golden_set`: the generator's version and seed, the hash of the whole
+  manifest and the hash of every file it lists, each checked against the
+  file's bytes when the report is written, so a file edited without
+  `make synthetic` fails the run.
+
 ## The graders
 
 All are rules, graded per claim against the oracle in
