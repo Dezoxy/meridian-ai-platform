@@ -4425,10 +4425,11 @@ triaged more than five times.
   Withdrawal and documents are JSON only until the claimant's pages (S049).
 - Threat model (`feature-threat-model`, TB-1, TB-3, TB-8): T-74, new (a
   caller moves a claim past its adjuster); T-38 designed in part (names,
-  the bound, the cap); T-63's residual and T-67's referral; T-69's residual
-  grows by the three routes. Invariants: no model call outside the
-  gateway, no new tool (`approval_outcome` gains two words in its output),
-  no framework import, no secret. No tension.
+  the bound, the cap); T-63 and T-66 cite S052 and S053; T-67's referral
+  and T-69's residual (the three routes) are updated when the step closes.
+  Invariants: no model call outside the gateway, no new tool
+  (`approval_outcome` gains two words in its output), no framework import,
+  no secret. No tension.
 
 ## Part D — Open questions
 
