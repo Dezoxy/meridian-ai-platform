@@ -1652,7 +1652,6 @@ def test_a_resumed_leg_that_failed_and_left_the_run_paused_is_502_and_resumes_ag
     [
         "submitted",
         "triaging",
-        "triage_failed",
         "documents_requested",
         "approved",
         "rejected",
@@ -1679,20 +1678,24 @@ def test_a_decision_on_a_claim_that_does_not_wait_for_an_adjuster_is_409(
     assert claim_state(fresh_database, DECISION_ID)[0] == state
 
 
-def test_a_decision_on_a_claim_without_a_run_is_409(
+def test_a_decision_on_a_claim_without_a_run_that_is_not_waiting_is_409(
     fresh_database: DatabaseHandle,
 ) -> None:
-    runtime = Runtime(raises=httpx.ConnectError("refused"))
-    make_client(claims_dsn(fresh_database), runtime).post(
-        "/claims", json=claim_with_id(DECISION_ID)
+    # A claim whose triage failed is referred and decided (S048,
+    # test_claim_moves.py); one that was never triaged is neither.
+    owner_rows(
+        fresh_database,
+        "INSERT INTO claims.claims (claim_id, tenant, submission, state) "
+        "VALUES (%s, %s, %s, 'submitted') RETURNING 1",
+        (DECISION_ID, "claims-triage", Jsonb(claim_with_id(DECISION_ID))),
     )
-    assert claim_state(fresh_database, DECISION_ID) == ("triage_failed", None)
 
     response = make_client(claims_dsn(fresh_database), Runtime()).post(
         DECISION_URL, json={"decision": "approve"}
     )
 
     assert response.status_code == 409
+    assert response.json() == {"detail": "the claim does not wait for an adjuster"}
     assert decisions(fresh_database) == []
 
 

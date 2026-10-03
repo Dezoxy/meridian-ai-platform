@@ -85,6 +85,34 @@ ERRORS = {
         "503",
         "504",
     },
+    ("claims", "post", "/claims/{claim_id}/triage"): {
+        "404",
+        "409",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    ("claims", "post", "/claims/{claim_id}/withdrawal"): {
+        "404",
+        "409",
+        "413",
+        "422",
+        "500",
+        "503",
+    },
+    ("claims", "post", "/claims/{claim_id}/documents"): {
+        "404",
+        "409",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
 }
 
 
@@ -259,6 +287,37 @@ def test_the_claims_answers_name_the_claims_state() -> None:
     assert "state" in schemas["ClaimResponse"]["required"]
     # The run is absent when a claim was referred with no paused run (S048).
     assert set(schemas["DecisionResponse"]["required"]) == {"claim_id", "state"}
+    assert "run_id" not in schemas["DecisionResponse"]["required"]
+    assert "run_status" not in schemas["DecisionResponse"]["required"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/claims/{claim_id}/triage",
+        "/claims/{claim_id}/withdrawal",
+        "/claims/{claim_id}/documents",
+    ],
+)
+def test_the_routes_that_move_a_claim_answer_the_claim_move_response(
+    path: str,
+) -> None:
+    spec = SPECS["claims"]
+
+    assert schema_ref(spec, path, "post", "200").endswith("/ClaimMoveResponse")
+    assert schema_ref(spec, path, "post", "404").endswith("/ErrorBody")
+    assert schema_ref(spec, path, "post", "503").endswith("/ClaimErrorBody")
+
+
+def test_the_claim_move_response_has_a_run_and_a_proposal_only_when_a_triage_ran() -> (
+    None
+):
+    schemas = SPECS["claims"]["components"]["schemas"]
+
+    assert set(schemas["ClaimMoveResponse"]["required"]) == {"claim_id", "state"}
+    assert schemas["DocumentsArrival"]["additionalProperties"] is False
+    assert schemas["DocumentsArrival"]["required"] == ["documents"]
+    assert schemas["DocumentsArrival"]["properties"]["documents"]["maxItems"] == 20
 
 
 def test_the_claim_response_run_id_is_a_uuid() -> None:

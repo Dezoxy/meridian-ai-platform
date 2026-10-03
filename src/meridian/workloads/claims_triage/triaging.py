@@ -11,7 +11,7 @@ claimant's name nor e-mail address (S047).
 import logging
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -31,6 +31,7 @@ from meridian.platform.common.telemetry import mark_error, set_span_attributes
 from meridian.platform.guardrails import EMAIL_PLACEHOLDER, PLACEHOLDERS, redact
 from meridian.runtime.models import RunResponse, RunState
 from meridian.workloads.claims_triage.lifecycle import (
+    MAX_TRIAGES_PER_CLAIM,
     RULES_APPROVED,
     RULES_REFERRED,
     RULES_REQUESTED_DOCUMENTS,
@@ -47,6 +48,7 @@ from meridian.workloads.claims_triage.models import (
     Claimant,
     ClaimResponse,
     ClaimSubmission,
+    DecisionFailure,
     ProposalSummary,
     Route,
 )
@@ -54,6 +56,10 @@ from meridian.workloads.claims_triage.proposal import TriageProposal
 
 AGENT = "claims-triage"
 RUNTIME_TIMEOUT_SECONDS = 60.0
+# Ending a run is best effort (the claim's move stands), and a send-back runs a
+# new triage after it inside the claim's lease (``TRIAGE_LEASE_SECONDS``), so
+# this call must stay short.
+END_RUN_TIMEOUT_SECONDS = 15.0
 # How long a claim may stay ``triaging`` before another post takes the triage
 # over: twice the longest a runtime call lasts, so a live request is not robbed.
 TRIAGE_LEASE_SECONDS = 2 * RUNTIME_TIMEOUT_SECONDS
@@ -65,6 +71,18 @@ BEING_TRIAGED_DETAIL = "the claim is being triaged"
 TAKEN_OVER_DETAIL = "the triage was taken over by another request"
 DIFFERENT_SUBMISSION_DETAIL = "the claim exists with a different submission"
 HTTP_GATEWAY_TIMEOUT = 504
+# The cap's number in words, so the text follows the constant (T-38).
+NUMBER_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight")
+TRIAGE_CAP_DETAIL = (
+    f"the claim has been triaged {NUMBER_WORDS[MAX_TRIAGES_PER_CLAIM]} times; "
+    "an adjuster decides it"
+)
+# The names of the documents that arrived for a claim after its submission, in
+# the order they arrived (those of one arrival, by name).
+ARRIVED_DOCUMENTS_SQL = (
+    "SELECT name FROM claims.claim_documents WHERE claim_id = %s "
+    "ORDER BY received_at, name"
+)
 
 # What a run's answer means for the claim: its status and the proposal's route.
 RUN_OUTCOMES: Mapping[tuple[RunState, Route], Transition] = {
@@ -151,15 +169,30 @@ def description_for_run(description: str, claimant: Claimant) -> str:
     )
 
 
-def facts_for_run(submission: ClaimSubmission) -> dict[str, Any]:
-    """The facts a triage run is sent for a submission."""
+def facts_for_run(
+    submission: ClaimSubmission, arrived: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The facts a triage run is sent: for every triage, whatever starts it. The
+    documents are the submission's, then each name that arrived and is not
+    among them, in order (S048)."""
     # The runtime gets what the graph needs, not the claimant's name or email,
     # and a description with neither of them in it (S047).
     facts = submission.model_dump(mode="json", exclude={"claimant"})
     facts["description"] = description_for_run(
         submission.description, submission.claimant
     )
+    facts["documents"] = [
+        *submission.documents,
+        *(name for name in arrived if name not in submission.documents),
+    ]
     return facts
+
+
+def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...]:
+    """The names of the documents that arrived for the claim, on the caller's
+    connection (so inside its transaction)."""
+    rows = conn.execute(ARRIVED_DOCUMENTS_SQL, (claim_id,)).fetchall()
+    return tuple(name for (name,) in rows)
 
 
 class RuntimeCallError(Exception):
@@ -191,13 +224,20 @@ def _run_id_in(response: httpx.Response) -> UUID | None:
         return None
 
 
-def _call_runtime(http: httpx.Client, path: str, body: dict[str, Any]) -> RunResponse:
+def _call_runtime(
+    http: httpx.Client,
+    path: str,
+    body: dict[str, Any],
+    timeout: float | None = None,
+) -> RunResponse:
     """Post to the runtime with the trace context; raise ``RuntimeCallError``
-    for any failure."""
+    for any failure. ``timeout`` replaces the client's for this call."""
     headers: dict[str, str] = {}
     propagate.inject(headers)
+    # ``timeout=None`` would mean no timeout to httpx, so none is passed.
+    options: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     try:
-        response = http.post(path, json=body, headers=headers)
+        response = http.post(path, json=body, headers=headers, **options)
     except httpx.TimeoutException:
         raise RuntimeCallError("the runtime timed out", timed_out=True) from None
     except httpx.HTTPError:
@@ -230,7 +270,11 @@ def start_run(
 
 
 def resume_run(
-    http: httpx.Client, tenant: str, claim_id: str, run_id: UUID
+    http: httpx.Client,
+    tenant: str,
+    claim_id: str,
+    run_id: UUID,
+    timeout: float | None = None,
 ) -> RunResponse:
     """Resume the paused run. The resume carries no decision: the run reads the
     one recorded here (T-31), so a caller of the runtime cannot make one up."""
@@ -238,7 +282,33 @@ def resume_run(
         http,
         f"/runs/{run_id}/resume",
         {"tenant": tenant, "reference": claim_id, "input": {}},
+        timeout,
     )
+
+
+def end_run(
+    http: httpx.Client, tenant: str, claim_id: str, run_id: UUID
+) -> RunState | None:
+    """End a paused run by resuming it: the run reads the word recorded for it
+    and completes. Best effort: the run's status, or ``None`` when the call
+    failed, after logging the claim, the run, the exception's class and the
+    runtime's status (never a body). The claim's move stands either way."""
+    try:
+        run = resume_run(http, tenant, claim_id, run_id, END_RUN_TIMEOUT_SECONDS)
+    except RuntimeCallError as exc:
+        logger.error(
+            "ending run %s of claim %s failed: %s (runtime status %s)",
+            run_id,
+            claim_id,
+            type(exc).__name__,
+            exc.status_code,
+        )
+        return None
+    if run.status != "Completed":
+        logger.warning(
+            "ending run %s of claim %s: run status %s", run_id, claim_id, run.status
+        )
+    return run.status
 
 
 def triage_outcome(run: RunResponse) -> tuple[TriageProposal, Transition]:
@@ -281,16 +351,20 @@ def store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> None:
 
 def take_triage(
     dsn: str, tenant: str, claim_id: str
-) -> tuple[datetime | None, LifecycleState]:
+) -> tuple[datetime | None, LifecycleState, tuple[str, ...]]:
     """Move the claim to ``triaging`` if it may be triaged now.
 
     Returns the moment it moved (the request keeps it: its closing update
-    matches on it) or ``None``, and the state the claim was found in.
+    matches on it) or ``None``, the state the claim was found in and the names
+    of the documents that arrived for it, read in the same transaction after the
+    move (none for a claim that was never waiting for any). A claim that has
+    been triaged ``MAX_TRIAGES_PER_CLAIM`` times is refused with 409.
     """
     with connect(dsn, SERVICE_NAME) as conn:
         row = conn.execute(
             "SELECT state, state_changed_at, "
-            "state_changed_at < clock_timestamp() - make_interval(secs => %s) "
+            "state_changed_at < clock_timestamp() - make_interval(secs => %s), "
+            "triages "
             "FROM claims.claims WHERE claim_id = %s AND tenant = %s "
             "FOR NO KEY UPDATE",
             (TRIAGE_LEASE_SECONDS, claim_id, tenant),
@@ -298,7 +372,7 @@ def take_triage(
         if row is None:
             # Not this tenant's (``store_claim`` refuses that first) or gone.
             raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
-        state, changed_at, lapsed = row
+        state, changed_at, lapsed, triages = row
         if state == "submitted":
             transition = TRIAGE_STARTED
         elif state == "triage_failed":
@@ -306,11 +380,34 @@ def take_triage(
         elif state == "triaging" and lapsed:
             transition = TRIAGE_RECLAIMED
         else:
-            return None, state
-        moved_at = move_claim(
-            conn, transition, claim_id=claim_id, tenant=tenant, changed_at=changed_at
+            return None, state, ()
+        at_cap = triages >= MAX_TRIAGES_PER_CLAIM
+        if at_cap and transition is TRIAGE_RECLAIMED:
+            # A triage that died at the cap cannot be taken over (``move_claim``
+            # refuses a move into triaging there), so it fails, committed before
+            # the 409: an adjuster decides a claim whose triage failed.
+            move_claim(
+                conn,
+                TRIAGE_FAILED,
+                claim_id=claim_id,
+                tenant=tenant,
+                changed_at=changed_at,
+            )
+        moved_at = (
+            None
+            if at_cap
+            else move_claim(
+                conn,
+                transition,
+                claim_id=claim_id,
+                tenant=tenant,
+                changed_at=changed_at,
+            )
         )
-    return moved_at, state
+        arrived = () if moved_at is None else arrived_documents(conn, claim_id)
+    if at_cap:
+        raise HTTPException(409, TRIAGE_CAP_DETAIL)
+    return moved_at, state, arrived
 
 
 def _insert_proposal(
@@ -399,13 +496,14 @@ def triage_claim(
     http: httpx.Client,
     span: Span,
     claim_id: str,
-    facts: dict[str, Any],
+    submission: ClaimSubmission,
 ) -> ClaimResponse | JSONResponse:
     """Take the claim's triage, run it and close it. ``span`` is the caller's
     open span; the run's ID is set on it. A refusal (409) is raised as
-    ``HTTPException``; a failure is answered with the claim's ID."""
+    ``HTTPException``; a failure is answered with the claim's ID. The run is
+    sent the submission's facts and the documents that arrived for the claim."""
     try:
-        taken_at, found_in = take_triage(dsn, tenant, claim_id)
+        taken_at, found_in, arrived = take_triage(dsn, tenant, claim_id)
     except psycopg.Error as exc:
         mark_error(span, exc)
         return answer(*database_failure(exc), claim_id)
@@ -414,6 +512,35 @@ def triage_claim(
             409,
             BEING_TRIAGED_DETAIL if found_in == "triaging" else HAS_PROPOSAL_DETAIL,
         )
+    result = run_taken_triage(
+        dsn,
+        tenant,
+        http,
+        span,
+        claim_id,
+        facts_for_run(submission, arrived),
+        taken_at,
+    )
+    if isinstance(result, DecisionFailure):
+        return answer(result.status, result.detail, claim_id, result.run_id)
+    return result
+
+
+def run_taken_triage(
+    dsn: str,
+    tenant: str,
+    http: httpx.Client,
+    span: Span,
+    claim_id: str,
+    facts: dict[str, Any],
+    taken_at: datetime,
+) -> ClaimResponse | DecisionFailure:
+    """Run the triage this request took and close it: start the run, read its
+    outcome, store the proposal and move the claim on, or move it to
+    ``triage_failed``. A failure is a ``DecisionFailure`` (a status, a fixed
+    text and the run's ID when there is one); a triage taken over by another
+    request is a 409 raised as ``HTTPException``. ``span`` is the caller's open
+    span; the run's ID is set on it."""
     try:
         run = start_run(http, tenant, claim_id, facts)
         proposal, transition = triage_outcome(run)
@@ -427,10 +554,9 @@ def triage_claim(
         )
         mark_error(span, exc)
         fail_triage(dsn, tenant, claim_id, exc.run_id, taken_at)
-        return answer(
+        return DecisionFailure(
             HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502,
             RUN_TIMEOUT_DETAIL if exc.timed_out else RUN_FAILED_DETAIL,
-            claim_id,
             exc.run_id,
         )
     set_span_attributes(span, {"meridian.run_id": str(run.run_id)})
@@ -450,7 +576,7 @@ def triage_claim(
         )
         mark_error(span, exc)
         fail_triage(dsn, tenant, claim_id, run.run_id, taken_at)
-        return answer(503, PROPOSAL_LOST_DETAIL, claim_id, run.run_id)
+        return DecisionFailure(503, PROPOSAL_LOST_DETAIL, run.run_id)
     if not closed:
         logger.warning(
             "triage of %s (run %s) was taken over; its proposal is dropped",

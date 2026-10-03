@@ -1,0 +1,311 @@
+"""The routes that move a claim a person's way (S048): triage again, withdrawal
+and the arrival of documents.
+
+Each is one transaction with the claim locked (``FOR NO KEY UPDATE``, filtered
+by tenant): a compare-and-set from the states the lifecycle allows, audited in
+the same transaction (T-74). What happens after the commit is best effort or
+the triage itself: a paused run is ended through ``end_run`` (the claim's move
+stands if that fails), and a triage runs through ``run_taken_triage``, the code
+``POST /claims`` runs. Each function returns ``ClaimMoveResponse`` or a
+``DecisionFailure`` (a status and a fixed text, which the JSON route answers and
+the adjuster's page renders) and raises ``HTTPException`` for 404, 409 and 422.
+No document name, description or claimant field reaches a log line or a span
+attribute (T-03).
+"""
+
+from collections.abc import Sequence
+from datetime import datetime
+from typing import Any, NamedTuple
+from uuid import UUID
+
+import httpx
+import psycopg
+from fastapi import HTTPException
+from opentelemetry.trace import Tracer
+
+from meridian.platform.common.db import connect
+from meridian.platform.common.http import database_failure
+from meridian.platform.common.telemetry import (
+    mark_error,
+    set_span_attributes,
+    start_span,
+)
+from meridian.workloads.claims_triage.adjuster import NO_SUCH_CLAIM_DETAIL
+from meridian.workloads.claims_triage.lifecycle import (
+    ADJUSTER_SENT_BACK,
+    CLAIMANT_WITHDREW_DOCUMENTS,
+    CLAIMANT_WITHDREW_WAITING,
+    DOCUMENTS_ARRIVED,
+    DOCUMENTS_AT_CAP,
+    MAX_TRIAGES_PER_CLAIM,
+    SERVICE_NAME,
+    TRIAGE_RETRIED,
+    LifecycleState,
+    Transition,
+    move_claim,
+)
+from meridian.workloads.claims_triage.models import (
+    MAX_DOCUMENTS,
+    ClaimMoveResponse,
+    ClaimResponse,
+    ClaimSubmission,
+    DecisionFailure,
+    Outcome,
+)
+from meridian.workloads.claims_triage.triaging import (
+    BEING_TRIAGED_DETAIL,
+    TRIAGE_CAP_DETAIL,
+    arrived_documents,
+    end_run,
+    facts_for_run,
+    run_taken_triage,
+)
+
+NOT_TRIAGEABLE_DETAIL = "the claim cannot be triaged again in its state"
+NOT_WITHDRAWABLE_DETAIL = "the claim cannot be withdrawn in its state"
+NOT_AWAITING_DOCUMENTS_DETAIL = "the claim does not wait for documents"
+TOO_MANY_DOCUMENTS_DETAIL = f"the claim would hold more than {MAX_DOCUMENTS} documents"
+
+LOCK_CLAIM_SQL = (
+    "SELECT state, run_id, triages FROM claims.claims "
+    "WHERE claim_id = %s AND tenant = %s FOR NO KEY UPDATE"
+)
+SUBMISSION_SQL = "SELECT submission FROM claims.claims WHERE claim_id = %s"
+# One row per run, so an outcome is recorded once for it; ``run_id`` is NULL only
+# for the adjuster's decision on a claim that has no paused run.
+RECORD_OUTCOME_SQL = (
+    "INSERT INTO claims.decisions (claim_id, run_id, decision) VALUES (%s, %s, %s)"
+)
+WITHDRAWN_RUN_SQL = (
+    "SELECT 1 FROM claims.decisions "
+    "WHERE claim_id = %s AND run_id = %s AND decision = 'withdrawn'"
+)
+RECORD_DOCUMENT_SQL = (
+    "INSERT INTO claims.claim_documents (claim_id, name) VALUES (%s, %s) "
+    "ON CONFLICT DO NOTHING"
+)
+TRIAGEABLE_AGAIN: tuple[LifecycleState, ...] = ("awaiting_adjuster", "triage_failed")
+
+
+class _Taken(NamedTuple):
+    """A triage this request took: the run it ends first (a paused one), the
+    moment the claim moved to ``triaging`` and the facts to run it with."""
+
+    old_run: UUID | None
+    taken_at: datetime
+    facts: dict[str, Any]
+
+
+def _lock_claim(
+    conn: psycopg.Connection, tenant: str, claim_id: str
+) -> tuple[LifecycleState, UUID | None, int]:
+    """The tenant's claim, locked: its state, run and the triages it has had."""
+    row = conn.execute(LOCK_CLAIM_SQL, (claim_id, tenant)).fetchone()
+    if row is None:
+        raise HTTPException(404, NO_SUCH_CLAIM_DETAIL)
+    state, run_id, triages = row
+    return state, run_id, triages
+
+
+def _submission(conn: psycopg.Connection, claim_id: str) -> ClaimSubmission:
+    ((stored,),) = conn.execute(SUBMISSION_SQL, (claim_id,)).fetchall()
+    return ClaimSubmission.model_validate(stored)
+
+
+def _move_answer(
+    result: ClaimResponse | DecisionFailure,
+) -> ClaimMoveResponse | DecisionFailure:
+    """A triage's answer as the moves' answer."""
+    if isinstance(result, DecisionFailure):
+        return result
+    return ClaimMoveResponse(
+        claim_id=result.claim_id,
+        state=result.state,
+        run_id=result.run_id,
+        run_status=result.run_status,
+        proposal=result.proposal,
+    )
+
+
+def _refuse_move(moved_at: datetime | None, detail: str) -> datetime:
+    """The moment a claim moved. A claim that did not move under this request's
+    lock (not expected) is a 409 and the transaction rolls back."""
+    if moved_at is None:
+        raise HTTPException(409, detail)
+    return moved_at
+
+
+# ── triage again ────────────────────────────────────────────────────────────
+def _take_again(dsn: str, tenant: str, claim_id: str) -> _Taken:
+    with connect(dsn, SERVICE_NAME) as conn:
+        state, run_id, triages = _lock_claim(conn, tenant, claim_id)
+        if state == "triaging":
+            raise HTTPException(409, BEING_TRIAGED_DETAIL)
+        if state not in TRIAGEABLE_AGAIN:
+            raise HTTPException(409, NOT_TRIAGEABLE_DETAIL)
+        if triages >= MAX_TRIAGES_PER_CLAIM:
+            raise HTTPException(409, TRIAGE_CAP_DETAIL)
+        old_run: UUID | None = None
+        transition: Transition = TRIAGE_RETRIED
+        if state == "awaiting_adjuster":
+            transition = ADJUSTER_SENT_BACK
+            if run_id is not None:
+                # The word that ends the paused run, recorded with the move.
+                word: Outcome = "send_back"
+                conn.execute(RECORD_OUTCOME_SQL, (claim_id, run_id, word))
+                old_run = run_id
+        taken_at = _refuse_move(
+            move_claim(conn, transition, claim_id=claim_id, tenant=tenant),
+            NOT_TRIAGEABLE_DETAIL,
+        )
+        submission = _submission(conn, claim_id)
+        facts = facts_for_run(submission, arrived_documents(conn, claim_id))
+    return _Taken(old_run, taken_at, facts)
+
+
+def triage_again(
+    dsn: str, tenant: str, http: httpx.Client, tracer: Tracer, claim_id: str
+) -> ClaimMoveResponse | DecisionFailure:
+    """Triage the claim again: a claim waiting for an adjuster is sent back (its
+    paused run is ended), a claim whose triage failed is tried again."""
+    with start_span(tracer, "claims.triage_again") as span:
+        set_span_attributes(
+            span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
+        )
+        try:
+            taken = _take_again(dsn, tenant, claim_id)
+        except psycopg.Error as exc:
+            mark_error(span, exc)
+            return DecisionFailure(*database_failure(exc))
+        if taken.old_run is not None:
+            end_run(http, tenant, claim_id, taken.old_run)
+        return _move_answer(
+            run_taken_triage(
+                dsn, tenant, http, span, claim_id, taken.facts, taken.taken_at
+            )
+        )
+
+
+# ── withdrawal ──────────────────────────────────────────────────────────────
+def _record_withdrawal(dsn: str, tenant: str, claim_id: str) -> UUID | None:
+    """Withdraw the claim; the run to end after the commit, if any. A claim
+    already withdrawn moves nowhere, and its run is ended again when the
+    withdrawal is what ended it."""
+    with connect(dsn, SERVICE_NAME) as conn:
+        state, run_id, _ = _lock_claim(conn, tenant, claim_id)
+        if state == "awaiting_adjuster":
+            if run_id is not None:
+                word: Outcome = "withdrawn"
+                conn.execute(RECORD_OUTCOME_SQL, (claim_id, run_id, word))
+            _refuse_move(
+                move_claim(
+                    conn,
+                    CLAIMANT_WITHDREW_WAITING,
+                    claim_id=claim_id,
+                    tenant=tenant,
+                    run_id=run_id,
+                ),
+                NOT_WITHDRAWABLE_DETAIL,
+            )
+            return run_id
+        if state == "documents_requested":
+            # Its run has ended; the claim keeps it.
+            _refuse_move(
+                move_claim(
+                    conn,
+                    CLAIMANT_WITHDREW_DOCUMENTS,
+                    claim_id=claim_id,
+                    tenant=tenant,
+                    run_id=run_id,
+                ),
+                NOT_WITHDRAWABLE_DETAIL,
+            )
+            return None
+        if state == "withdrawn":
+            if run_id is None:
+                return None
+            word_recorded = conn.execute(WITHDRAWN_RUN_SQL, (claim_id, run_id))
+            return run_id if word_recorded.fetchone() is not None else None
+        raise HTTPException(409, NOT_WITHDRAWABLE_DETAIL)
+
+
+def withdraw(
+    dsn: str, tenant: str, http: httpx.Client, tracer: Tracer, claim_id: str
+) -> ClaimMoveResponse | DecisionFailure:
+    """Withdraw the claim, from ``awaiting_adjuster`` or ``documents_requested``.
+    Idempotent: a withdrawal posted again answers the same and ends the run
+    again (a resume of an ended run answers its status and runs nothing)."""
+    with start_span(tracer, "claims.withdraw") as span:
+        set_span_attributes(
+            span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
+        )
+        try:
+            to_end = _record_withdrawal(dsn, tenant, claim_id)
+        except psycopg.Error as exc:
+            mark_error(span, exc)
+            return DecisionFailure(*database_failure(exc))
+        run_status = None
+        if to_end is not None:
+            set_span_attributes(span, {"meridian.run_id": str(to_end)})
+            run_status = end_run(http, tenant, claim_id, to_end)
+        return ClaimMoveResponse(
+            claim_id=claim_id, state="withdrawn", run_id=to_end, run_status=run_status
+        )
+
+
+# ── documents ───────────────────────────────────────────────────────────────
+def _store_arrival(
+    dsn: str, tenant: str, claim_id: str, documents: Sequence[str]
+) -> tuple[datetime, dict[str, Any]] | None:
+    """Store the names and move the claim: to ``triaging`` with the moment it
+    moved and the facts to triage it with, or, when it has been triaged as often
+    as the cap allows, to ``awaiting_adjuster`` (``None``)."""
+    with connect(dsn, SERVICE_NAME) as conn:
+        state, _, triages = _lock_claim(conn, tenant, claim_id)
+        if state != "documents_requested":
+            raise HTTPException(409, NOT_AWAITING_DOCUMENTS_DETAIL)
+        submission = _submission(conn, claim_id)
+        held = {*submission.documents, *arrived_documents(conn, claim_id)}
+        if len(held | set(documents)) > MAX_DOCUMENTS:
+            raise HTTPException(422, TOO_MANY_DOCUMENTS_DETAIL)
+        for name in documents:
+            conn.execute(RECORD_DOCUMENT_SQL, (claim_id, name))
+        if triages >= MAX_TRIAGES_PER_CLAIM:
+            _refuse_move(
+                move_claim(conn, DOCUMENTS_AT_CAP, claim_id=claim_id, tenant=tenant),
+                NOT_AWAITING_DOCUMENTS_DETAIL,
+            )
+            return None
+        taken_at = _refuse_move(
+            move_claim(conn, DOCUMENTS_ARRIVED, claim_id=claim_id, tenant=tenant),
+            NOT_AWAITING_DOCUMENTS_DETAIL,
+        )
+        return taken_at, facts_for_run(submission, arrived_documents(conn, claim_id))
+
+
+def add_documents(
+    dsn: str,
+    tenant: str,
+    http: httpx.Client,
+    tracer: Tracer,
+    claim_id: str,
+    documents: Sequence[str],
+) -> ClaimMoveResponse | DecisionFailure:
+    """Take the names of documents that arrived for a claim that waits for them
+    and triage it with all it holds. At the triage cap the names are stored and
+    the claim is referred to an adjuster, with no run."""
+    with start_span(tracer, "claims.documents") as span:
+        set_span_attributes(
+            span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
+        )
+        try:
+            arrival = _store_arrival(dsn, tenant, claim_id, documents)
+        except psycopg.Error as exc:
+            mark_error(span, exc)
+            return DecisionFailure(*database_failure(exc))
+        if arrival is None:
+            return ClaimMoveResponse(claim_id=claim_id, state="awaiting_adjuster")
+        taken_at, facts = arrival
+        return _move_answer(
+            run_taken_triage(dsn, tenant, http, span, claim_id, facts, taken_at)
+        )

@@ -44,6 +44,7 @@ from meridian.platform.common.telemetry import (
 )
 from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME
 from meridian.workloads.claims_triage.models import (
+    ClaimMoveResponse,
     Decision,
     DecisionFailure,
     DecisionResponse,
@@ -100,6 +101,7 @@ SECURITY_HEADERS = {
 
 ClaimId = Annotated[str, Path(pattern=CLAIM_ID_PATTERN)]
 DecideFn = Callable[[str, Decision], DecisionResponse | DecisionFailure]
+TriageAgainFn = Callable[[str], ClaimMoveResponse | DecisionFailure]
 
 TEMPLATES = Environment(
     loader=FileSystemLoader(PACKAGE_DIR / "templates"),
@@ -408,7 +410,13 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
 
 # ── the routes ──────────────────────────────────────────────────────────────
 def add_adjuster_pages(
-    app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer, decide: DecideFn
+    app: FastAPI,
+    *,
+    dsn: str,
+    tenant: str,
+    tracer: Tracer,
+    decide: DecideFn,
+    triage_again: TriageAgainFn,
 ) -> None:
     """Add the queue, the claim, the decision form and the stylesheet to the
     Claims API. ``decide`` is the API's one decision path."""
