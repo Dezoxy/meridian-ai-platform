@@ -52,14 +52,14 @@ which for this project is always in the EU.
 
 | Data | Class | Stored in | Notes |
 |---|---|---|---|
-| Claims | `personal` | Platform Database, claims schema | Synthetic in every environment of this project |
+| Claims | `personal` | Platform Database, claims schema | Synthetic in every environment of this project; entered through `POST /claims` or the claimant's form (S049), whose banner asks for fictional data (T-04). The claimant's status page shows the claim's ID, state and documents, never the name, email or description (T-65) |
 | Policies and claim history | `personal` (pseudonymous) | Platform Database, policy schema | Cover, dates and amounts by policy number, loaded from the synthetic data; no holder, address or insured object (T-51), but a policy number still points at a person |
 | Claim free text | `personal`, or `special` when detected | Platform Database | The field where a claimant can volunteer special-category data |
 | Uploaded documents | Not designed | Not designed | Metadata only until a step designs uploads (T-38) |
 | Names of documents that arrived | `personal` | Platform Database, claims schema (`claims.claim_documents`, S048) | The names a claimant reported after the submission, at most twenty distinct per claim and 100 characters each; the claimant's own words, sent to the run with the claim's facts and shown to the adjuster; never logged (T-03, T-38) |
 | Prompts and completions | Class of the request | Not stored on their own; inside checkpoints | Redacted before leaving the gateway |
 | Graph checkpoints | `personal` | Platform Database, runtime schema (S015) | Hold a run's state while it runs or waits for an adjuster: the claim's facts without the claimant's name and email, the tool results and the model's answer. Only the runtime's role may read or write them (T-63); they are deleted when the run ends; they are keyed by a thread ID that no caller sees, and a resume must name the run's tenant and claim (T-10) |
-| Triage proposals, fraud indicators, claim notes, approval requests | `personal` | Platform Database, claims schema | Fraud indicators are shown to adjusters only; whether they count as offence data under Art. 10 is a legal question outside this project |
+| Triage proposals, fraud indicators, claim notes, approval requests | `personal` | Platform Database, claims schema | Fraud indicators are shown to adjusters only; of a proposal the claimant's status page reads the missing documents and nothing else (S049, T-65); whether they count as offence data under Art. 10 is a legal question outside this project |
 | Approval decisions | `personal` | Platform Database, claims schema, written by the Claims Triage App (S015) | The decision word, its time and the paused run whose proposal it answers, or no run for a claim referred without one; from S048 also the words that end a paused run, `send_back` and `withdrawn`; no free text. The adjuster's identity is designed (T-32, S021) |
 | Audit records | `personal` (pseudonymous) | Platform Database, audit schema, insert-only | Identifiers and routing facts, no prompt text; a claim ID still points at a person |
 | Usage and cost records | `personal` (pseudonymous) | Platform Database | Per tenant, agent, model and claim ID |
