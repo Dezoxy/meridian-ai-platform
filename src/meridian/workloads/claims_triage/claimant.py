@@ -10,10 +10,14 @@ claim form runs the code of ``POST /claims`` (``store_claim`` then
 T-70's origin check.
 
 A claim that is stored is answered by its status page whatever its triage did:
-the claim's state is the answer (T-65). Only a refusal before anything is stored
-(another submission under the ID, a form that does not validate) shows the form
-again. The status page tells the claimant what happens next and lists the
-documents asked for and those that arrived; it reads one expression of the
+the claim's state is the answer (T-65). The form is shown again after a refusal
+before anything is stored (another submission under the ID, a form that does not
+validate), and, filled in with a 503, for a stored claim that no adjuster's queue
+lists after a failure (``submitted`` or ``triaging``) or whose state could not be
+read after it: only the identical submission is accepted under the ID, so the
+claimant sends the form again unchanged. The status page tells the claimant what
+happens next and lists the documents asked for and those that arrived; it reads
+one expression of the
 latest proposal, its missing documents, and never the proposal, the claimant's
 name or e-mail address or the description. A message about a form that does not
 validate names the field and the rule, never the value (T-03). Nothing here logs
@@ -136,6 +140,10 @@ STATE_SENTENCES: Mapping[LifecycleState, str] = {
 }
 # A claimant may take back a claim that waits for an adjuster or for documents.
 WITHDRAWABLE: tuple[LifecycleState, ...] = ("awaiting_adjuster", "documents_requested")
+# The two states the adjuster's queue lists (its QUEUE_SQL).
+IN_ADJUSTERS_QUEUE: tuple[LifecycleState, ...] = ("awaiting_adjuster", "triage_failed")
+# A claim whose triage failed and that is in one of these is in no queue.
+UNQUEUED_AFTER_FAILURE: tuple[LifecycleState, ...] = ("submitted", "triaging")
 
 # Only the latest proposal's missing documents: never the document itself.
 STATUS_SQL = (
@@ -363,9 +371,10 @@ def add_claimant_pages(
         answers or refuses (409: being triaged, or it already has a proposal), the
         claim's state is the answer (T-65); an audit failure is not swallowed.
 
-        ``True`` when the triage failed and the claim is still ``submitted``: the
-        triage never started, nothing will triage it and no queue lists it, so
-        only the claimant sending the form again can."""
+        ``True`` when the triage failed and the claim is still ``submitted`` (it
+        never started) or ``triaging`` (it failed and the move to
+        ``triage_failed`` did too): no queue lists it, so only the claimant
+        sending the form again can, once a lease that lapsed lets it."""
         with start_span(tracer, "claims.claimant.submit") as span:
             set_span_attributes(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
@@ -382,19 +391,21 @@ def add_claimant_pages(
         if isinstance(result, ClaimResponse):
             return False
         view = load_status(dsn, tenant, claim_id)
-        if view is None or view.state != "submitted":
+        if view is None or view.state not in UNQUEUED_AFTER_FAILURE:
             return False
         logger.error(
-            "triage of claim %s did not start: %s (the claim is still submitted)",
+            "triage of claim %s failed: %s (the claim is still %s)",
             claim_id,
             result.status_code,
+            view.state,
         )
         return True
 
-    def left_documents_wait(claim_id: str) -> bool:
-        """Whether the claim no longer waits for documents: its state is the
-        answer, as for a submission whose triage failed. A claim that cannot be
-        read, or is none, is not: the notice then has the answer's own text."""
+    def in_adjusters_queue(claim_id: str) -> bool:
+        """Whether an adjuster's queue lists the claim now: its state is the
+        answer, as for a submission whose triage failed. A claim still waiting
+        for documents or left ``triaging``, one that cannot be read and none are
+        not: the notice then has the answer's own text."""
         try:
             view = load_status(dsn, tenant, claim_id)
         except psycopg.Error as exc:
@@ -405,7 +416,7 @@ def add_claimant_pages(
                 exc.sqlstate or "none",
             )
             return False
-        return view is not None and view.state != "documents_requested"
+        return view is not None and view.state in IN_ADJUSTERS_QUEUE
 
     def answered(
         claim_id: str,
@@ -416,9 +427,10 @@ def add_claimant_pages(
         """Run a post's one action: a redirect to the status page when it
         succeeds, the status page with the answer's status and text when it
         does not. A failure of the documents post (``stored_names``) that left
-        the claim no longer waiting for documents stored the names, and the
-        claim's state is the answer; a refusal (``HTTPException``) stored
-        nothing and keeps the notice."""
+        the claim in an adjuster's queue stored the names, and the claim's state
+        is the answer; one that left it waiting for documents or ``triaging``
+        keeps the notice, as does a refusal (``HTTPException``), which stored
+        nothing."""
         try:
             result = call()
         except HTTPException as exc:
@@ -427,7 +439,7 @@ def add_claimant_pages(
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         if isinstance(result, DecisionFailure):
-            if stored_names and left_documents_wait(claim_id):
+            if stored_names and in_adjusters_queue(claim_id):
                 return to_status(claim_id)
             return status_response(
                 claim_id,
@@ -503,14 +515,19 @@ def add_claimant_pages(
             return claimant_error(*database_failure(exc))
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
+        # From here the claim is stored, and only the identical submission is
+        # accepted under its ID (409): a failure shows the form again, filled in,
+        # so that sending it unchanged is what the notice asks.
+        unassessed = Notice(HTTP_UNAVAILABLE, UNASSESSED_DETAIL)
         try:
             unseen = await run_in_threadpool(triage_stored, claim_id, submission)
         except psycopg.Error as exc:
-            return claimant_error(*database_failure(exc))
+            database_failure(exc)  # logs the class and SQLSTATE, nothing else
+            return render_start(values, notice=unassessed, status=HTTP_UNAVAILABLE)
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         if unseen:
-            return claimant_error(HTTP_UNAVAILABLE, UNASSESSED_DETAIL)
+            return render_start(values, notice=unassessed, status=HTTP_UNAVAILABLE)
         return to_status(claim_id)
 
     @app.get(

@@ -53,6 +53,7 @@ from workloads.claims_triage.test_claims_app import (
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.workloads.claims_triage import claimant, triaging
+from meridian.workloads.claims_triage.lifecycle import TRIAGE_FAILED
 from meridian.workloads.claims_triage.models import MAX_DOCUMENTS, DecisionFailure
 from meridian.workloads.claims_triage.moves import (
     NOT_AWAITING_DOCUMENTS_DETAIL,
@@ -119,6 +120,8 @@ NAME_SENTINEL = "Sentinelname Sentinelfamily"
 EMAIL_SENTINEL = "sentinel.mail77@example.com"
 BAD_EMAIL_SENTINEL = "sentinelmail-88-without-an-at-sign"
 DESCRIPTION_SENTINEL = "description-sentinel-55"
+DOCUMENTS_SENTINEL = "documents-sentinel-61\ndocuments-sentinel-62"
+TEXTAREAS = ("description", "documents")
 ALL_STATES = {
     "submitted": "We have received your claim and are assessing it.",
     "triaging": "We have received your claim and are assessing it.",
@@ -704,21 +707,135 @@ def test_a_post_when_the_database_is_down_is_the_503_claimant_page() -> None:
     assert "/adjuster/claims" not in page.links()
 
 
-def test_a_database_failure_in_the_triage_step_is_the_503_claimant_page(
-    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def database_down(*_: object) -> None:
-        raise psycopg.OperationalError("the connection was lost")
-
-    monkeypatch.setattr(f"{CLAIMANT_MODULE}.triage_claim", database_down)
-
-    response = post_claim(
-        client_for(fresh_database, Runtime()), form_of(claim_with_id("CLM-9501"))
+def sentinel_form(claim_id: str = "CLM-9501") -> dict[str, str]:
+    """A claim form whose free-text fields hold sentinels to find again."""
+    return form_of(
+        claim_with_id(claim_id),
+        claimant_name=NAME_SENTINEL,
+        claimant_email=EMAIL_SENTINEL,
+        description=DESCRIPTION_SENTINEL,
+        documents=DOCUMENTS_SENTINEL,
     )
 
+
+def assert_filled_in_form(response: httpx.Response, form: dict[str, str]) -> None:
+    """The response is the claim form with every value of ``form`` in its input,
+    as a 503 that says the claim is stored."""
+    page = refused_page(response, 503)
+    assert UNASSESSED_TEXT in page.text
+    assert {"method": "post", "action": START_URL} in [
+        {k: v for k, v in f.items() if k in ("method", "action")}
+        for f in page.attributes("form")
+    ]
+    # By id: the lookup form's input is also named ``claim_id``.
+    inputs = {str(i["id"]): i.get("value") for i in page.attributes("input")}
+    in_inputs = [n for n in FORM_FIELDS if n not in TEXTAREAS and n != "peril"]
+    assert {name: inputs[name] for name in in_inputs} == {
+        name: form[name] for name in in_inputs
+    }
+    assert [str(o["value"]) for o in page.attributes("option") if "selected" in o] == [
+        form["peril"]
+    ]
+    needles = (DESCRIPTION_SENTINEL, *DOCUMENTS_SENTINEL.splitlines())
+    found = Where(response.text, needles).found
+    assert sorted(found) == sorted((needle, "textarea") for needle in needles)
+
+
+def raising_once(
+    real: Callable[..., Any], error: Exception
+) -> tuple[Callable[..., Any], list[object]]:
+    """A stand-in for ``real`` that raises ``error`` on its first call only."""
+    calls: list[object] = []
+
+    def once(*args: Any) -> Any:
+        calls.append(args)
+        if len(calls) == 1:
+            raise error
+        return real(*args)
+
+    return once, calls
+
+
+def test_a_database_failure_in_the_triage_step_is_the_filled_in_form_503(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    form = sentinel_form()
+    runtime = Runtime()
+    client = client_for(db, runtime)
+    once, _ = raising_once(
+        claimant.triage_claim, psycopg.OperationalError("the connection was lost")
+    )
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.triage_claim", once)
+
+    response = post_claim(client, form)
+
+    # The claim is stored: the form comes back as it was sent, so that sending it
+    # again unchanged (the only submission the ID accepts) is one click.
+    assert_filled_in_form(response, form)
+    assert DATABASE_DOWN not in response.text
+    assert claims_held(db) == 1
+    assert claim_state(db, "CLM-9501") == ("submitted", None)
+
+    again = post_claim(client, form)
+
+    assert again.status_code == 303
+    assert again.headers["location"] == status_url("CLM-9501")
+    assert claim_state(db, "CLM-9501")[0] == "awaiting_adjuster"
+    assert len(runtime.requests) == 1
+
+
+def test_a_database_failure_reading_the_state_after_the_triage_is_the_filled_in_form(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    form = sentinel_form()
+    client = client_for(db, failing_runtime())
+    once, _ = raising_once(
+        claimant.load_status, psycopg.OperationalError("the connection was lost")
+    )
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.load_status", once)
+
+    response = post_claim(client, form)
+
+    assert_filled_in_form(response, form)
+    assert claim_state(db, "CLM-9501")[0] == "triage_failed"
+
+    again = post_claim(client, form)
+
+    assert again.status_code == 303
+    assert again.headers["location"] == status_url("CLM-9501")
+
+
+def test_a_database_failure_storing_the_claim_is_still_the_error_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def store_down(*_: object) -> None:
+        raise psycopg.OperationalError("the connection was lost")
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.store_claim", store_down)
+
+    response = post_claim(make_client(), sentinel_form())
+
+    # Nothing is stored: there is nothing to send again, so no form and no
+    # promise that the claim is stored.
     page = refused_page(response, 503)
     assert DATABASE_DOWN in page.text
-    assert claims_held(fresh_database) == 1
+    assert UNASSESSED_TEXT not in page.text
+    assert page.attributes("form") == []
+
+
+def fail_triage_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the move to ``triage_failed`` fail with a database error, as
+    ``fail_triage`` meets it: the claim then stays ``triaging``."""
+    real_move = triaging.move_claim
+
+    def move(conn: Any, transition: Any, **kwargs: Any) -> Any:
+        if transition is TRIAGE_FAILED:
+            raise psycopg.OperationalError("the connection was lost")
+        return real_move(conn, transition, **kwargs)
+
+    monkeypatch.setattr(f"{TRIAGING_MODULE}.move_claim", move)
 
 
 def test_a_stored_claim_whose_triage_never_started_is_not_left_unseen(
@@ -727,11 +844,7 @@ def test_a_stored_claim_whose_triage_never_started_is_not_left_unseen(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     db = fresh_database
-    form = form_of(
-        claim_with_id("CLM-9501"),
-        claimant_name=NAME_SENTINEL,
-        claimant_email=EMAIL_SENTINEL,
-    )
+    form = sentinel_form()
     runtime = Runtime()
     client = client_for(db, runtime)
     real_take_triage = triaging.take_triage
@@ -750,9 +863,9 @@ def test_a_stored_claim_whose_triage_never_started_is_not_left_unseen(
 
     # Nothing will triage it and no queue lists it: the claimant is told to send
     # the form again, not shown a status page that says it is being assessed.
-    page = refused_page(response, 503)
-    assert UNASSESSED_TEXT in page.text
-    assert START_URL in page.links()
+    # The form itself, filled in: only the identical submission is accepted.
+    assert_filled_in_form(response, form)
+    assert START_URL in Page(response.text).links()
     assert claim_state(db, "CLM-9501") == ("submitted", None)
     assert runtime.requests == []
     logged = [r.getMessage() for r in caplog.records if r.name == CLAIMANT_MODULE]
@@ -766,6 +879,32 @@ def test_a_stored_claim_whose_triage_never_started_is_not_left_unseen(
     assert again.headers["location"] == status_url("CLM-9501")
     assert claim_state(db, "CLM-9501")[0] == "awaiting_adjuster"
     assert len(runtime.requests) == 1
+
+
+def test_a_claim_left_triaging_by_a_failure_is_not_answered_as_assessed(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db = fresh_database
+    form = sentinel_form()
+    client = client_for(db, failing_runtime())
+    fail_triage_down(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        response = post_claim(client, form)
+
+    # The run failed and so did the move to triage_failed: no queue lists the
+    # claim, so the claimant is told, not shown "we are assessing it".
+    assert_filled_in_form(response, form)
+    assert claim_state(db, "CLM-9501")[0] == "triaging"
+    logged = [r.getMessage() for r in caplog.records if r.name == CLAIMANT_MODULE]
+    assert any(
+        "CLM-9501" in message and "502" in message and "triaging" in message
+        for message in logged
+    )
+    for needle in (NAME_SENTINEL, EMAIL_SENTINEL):
+        assert needle not in caplog.text
 
 
 # ── the status page ─────────────────────────────────────────────────────────
@@ -1213,6 +1352,52 @@ def test_a_documents_failure_with_nothing_stored_is_the_status_page_with_the_not
     assert "We need more documents before we can go on." in page.text
     assert documents_url() in [str(f.get("action")) for f in page.attributes("form")]
     assert arrived_names(db, DOCUMENTS_ID) == []
+
+
+def test_a_documents_failure_that_left_the_claim_in_an_adjusters_queue_is_303(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    waiting_for_documents(db)
+
+    def stored_and_referred(*_: object) -> DecisionFailure:
+        owner_rows(
+            db,
+            "UPDATE claims.claims SET state = 'awaiting_adjuster' "
+            "WHERE claim_id = %s RETURNING 1",
+            (DOCUMENTS_ID,),
+        )
+        return DecisionFailure(503, DATABASE_DOWN)
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", stored_and_referred)
+
+    response = post_to(
+        client_for(db, MoveRuntime()), documents_url(), {"documents": "police report"}
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == status_url(DOCUMENTS_ID)
+
+
+def test_a_documents_failure_that_left_the_claim_triaging_is_the_notice_not_303(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    waiting_for_documents(db)
+    runtime = MoveRuntime(start_http=502, start_body={"run_id": str(uuid.uuid4())})
+    fail_triage_down(monkeypatch)
+
+    response = post_to(
+        client_for(db, runtime), documents_url(), {"documents": "police report"}
+    )
+
+    # The names are stored but the run failed and the claim could not be moved to
+    # triage_failed: no queue lists it, so the page keeps the notice.
+    page = refused_page(response, 502)
+    assert RUN_FAILED in page.text
+    assert "We have received your claim and are assessing it." in page.text
+    assert claim_state(db, DOCUMENTS_ID)[0] == "triaging"
+    assert arrived_names(db, DOCUMENTS_ID) == ["police report"]
 
 
 def test_a_documents_failure_and_then_the_database_down_is_the_answers_error_page(
