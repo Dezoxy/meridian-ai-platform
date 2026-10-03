@@ -1,6 +1,6 @@
 """The claim submission mirrors data/synthetic/claims.json."""
 
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -10,9 +10,15 @@ from meridian.workloads.claims_triage.models import (
     MAX_RUN_DESCRIPTION_CHARS,
     MAX_SUBMISSION_DESCRIPTION_CHARS,
     Claimant,
+    ClaimDecision,
     ClaimFacts,
+    ClaimMoveResponse,
     ClaimSubmission,
+    Decision,
+    DecisionResponse,
+    DocumentsArrival,
     DraftedBy,
+    Outcome,
     ProposalSummary,
 )
 
@@ -218,3 +224,108 @@ def test_the_submission_adds_only_the_claimant_to_the_facts() -> None:
     assert set(ClaimSubmission.model_fields) - set(ClaimFacts.model_fields) == {
         "claimant"
     }
+
+
+# -- S048: the documents that arrive, and the answers that may have no run ----
+@pytest.mark.parametrize(
+    "documents",
+    [["a"], ["x" * 100], [f"d{n}" for n in range(20)], ["same", "same"]],
+    ids=["one", "name-of-100", "twenty", "a-repeated-name"],
+)
+def test_documents_arriving_take_one_to_twenty_names(documents: list[str]) -> None:
+    arrival = DocumentsArrival.model_validate({"documents": documents})
+
+    assert arrival.documents == tuple(documents)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"documents": []}, id="empty"),
+        pytest.param({"documents": [f"d{n}" for n in range(21)]}, id="twenty-one"),
+        pytest.param({"documents": ["x" * 101]}, id="name-of-101"),
+        pytest.param({"documents": [""]}, id="empty-name"),
+        pytest.param({"documents": ["a\x00b"]}, id="nul"),
+        pytest.param({"documents": [1]}, id="number"),
+        pytest.param({"documents": [None]}, id="null-name"),
+        pytest.param({"documents": [b"a"]}, id="bytes-under-strict"),
+        pytest.param({"documents": "a"}, id="a-bare-string"),
+        pytest.param({}, id="no-documents"),
+        pytest.param({"documents": ["a"], "claim_id": "CLM-0001"}, id="extra-field"),
+    ],
+)
+def test_documents_arriving_that_do_not_fit_are_refused(body: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        DocumentsArrival.model_validate(body)
+
+
+def test_documents_arriving_are_read_from_a_json_array() -> None:
+    arrival = DocumentsArrival.model_validate_json('{"documents": ["a", "b"]}')
+
+    assert arrival.documents == ("a", "b")
+
+
+def test_a_move_response_may_carry_the_state_alone() -> None:
+    answer = ClaimMoveResponse.model_validate(
+        {"claim_id": "CLM-0001", "state": "withdrawn"}
+    )
+
+    assert (answer.run_id, answer.run_status, answer.proposal) == (None, None, None)
+
+
+def test_a_move_response_carries_the_run_and_the_proposal_when_a_triage_ran() -> None:
+    run_id = "00000000-0000-4000-8000-000000000001"
+
+    answer = ClaimMoveResponse.model_validate(
+        {
+            "claim_id": "CLM-0001",
+            "state": "awaiting_adjuster",
+            "run_id": run_id,
+            "run_status": "AwaitingApproval",
+            "proposal": SUMMARY,
+        }
+    )
+
+    assert str(answer.run_id) == run_id
+    assert answer.proposal == ProposalSummary.model_validate(SUMMARY)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"state": "done"},
+        {"run_status": "Dancing"},
+        {"proposal": {**SUMMARY, "reason": "over_threshold"}},  # T-65
+        {"unknown": 1},
+    ],
+)
+def test_a_move_response_that_does_not_fit_is_refused(broken: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        ClaimMoveResponse.model_validate(
+            {"claim_id": "CLM-0001", "state": "withdrawn"} | broken
+        )
+
+
+def test_a_decision_response_may_have_no_run() -> None:
+    answer = DecisionResponse.model_validate(
+        {"claim_id": "CLM-0001", "state": "approved"}
+    )
+
+    assert (answer.run_id, answer.run_status) == (None, None)
+    assert answer.model_dump(mode="json") == {
+        "claim_id": "CLM-0001",
+        "state": "approved",
+        "run_id": None,
+        "run_status": None,
+    }
+
+
+def test_the_decision_route_s_body_still_has_three_words_and_the_outcome_five() -> None:
+    assert set(get_args(Decision)) == {"approve", "reject", "request_documents"}
+    assert set(get_args(Outcome)) == set(get_args(Decision)) | {
+        "send_back",
+        "withdrawn",
+    }
+    for word in ("send_back", "withdrawn"):
+        with pytest.raises(ValidationError):
+            ClaimDecision.model_validate({"decision": word})

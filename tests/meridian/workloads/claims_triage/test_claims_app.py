@@ -1780,6 +1780,10 @@ def test_a_post_of_a_claim_that_another_tenant_holds_is_409_and_starts_no_run(
     "body",
     [
         {"decision": "maybe"},
+        # The words that end a run without a decision are recorded by their own
+        # routes, never by this one (S048, T-74).
+        {"decision": "send_back"},
+        {"decision": "withdrawn"},
         {"decision": "Approve"},
         {"decision": "APPROVE"},
         {"decision": "approve ", "extra": "x"},

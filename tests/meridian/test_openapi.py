@@ -257,12 +257,8 @@ def test_the_claims_answers_name_the_claims_state() -> None:
     schemas = SPECS["claims"]["components"]["schemas"]
 
     assert "state" in schemas["ClaimResponse"]["required"]
-    assert set(schemas["DecisionResponse"]["required"]) == {
-        "claim_id",
-        "state",
-        "run_id",
-        "run_status",
-    }
+    # The run is absent when a claim was referred with no paused run (S048).
+    assert set(schemas["DecisionResponse"]["required"]) == {"claim_id", "state"}
 
 
 def test_the_claim_response_run_id_is_a_uuid() -> None:

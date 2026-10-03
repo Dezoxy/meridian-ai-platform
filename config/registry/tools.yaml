@@ -178,8 +178,9 @@ tools:
   - id: approval_outcome
     server: claims-mcp
     description: >-
-      The outcome an adjuster recorded for this run's approval request. The
-      answer has no outcome while none is recorded.
+      The outcome recorded for this run's approval request: a decision, or that
+      the claim was sent back or withdrawn. The answer has no outcome while
+      none is recorded.
     effect: read
     scope: claims:approval:read
     input_schema:
@@ -193,6 +194,6 @@ tools:
       properties:
         outcome:
           type: string
-          enum: [approve, reject, request_documents]
+          enum: [approve, reject, request_documents, send_back, withdrawn]
       required: []
       additionalProperties: false

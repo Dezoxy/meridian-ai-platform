@@ -1,11 +1,14 @@
-"""The claim's lifecycle as the Claims API keeps it (S015).
+"""The claim's lifecycle as the Claims API keeps it (S015, S048).
 
 ``TRANSITIONS`` is the implemented half of the lifecycle: the edges of the
 "Claim lifecycle" diagram in ``docs/architecture/overview/
 01-meridian-ai-platform.md`` that the API moves a claim along today, each with
-the trigger word its audit event carries. The diagram is in the overview, and a
-test (``test_claims_lifecycle.py``) keeps the two equal: every implemented edge
-is in the diagram, and the edges not implemented are listed there by name.
+the trigger word its audit event carries. S015's edges are the triage's and the
+adjuster's decision; S048's are the ones a person drives: sending a claim back
+to triage, referring a claim whose triage failed, withdrawing a claim and the
+arrival of documents. The diagram is in the overview, and a test
+(``test_claims_lifecycle.py``) keeps the two equal: every implemented edge is in
+the diagram, and the edges not implemented are listed there by name.
 
 Every change of state goes through ``move_claim``, in the caller's transaction.
 """
@@ -19,6 +22,10 @@ import psycopg
 from meridian.platform.common.audit import AuditEvent, record_event
 
 SERVICE_NAME = "claims-api"
+# How many times a claim may be taken for triage, whatever starts one (a post, a
+# retry, a send-back, documents, a lease taken over): each is a model call, and a
+# loop of them is a bill (T-38).
+MAX_TRIAGES_PER_CLAIM = 5
 
 LifecycleState = Literal[
     "submitted",
@@ -55,6 +62,20 @@ ADJUSTER_REJECTED = Transition("awaiting_adjuster", "rejected", "adjuster-reject
 ADJUSTER_REQUESTED_DOCUMENTS = Transition(
     "awaiting_adjuster", "documents_requested", "adjuster-requested-documents"
 )
+# A decision on a claim whose triage failed refers it first (S048).
+TRIAGE_REFERRED = Transition("triage_failed", "awaiting_adjuster", "triage-referred")
+ADJUSTER_SENT_BACK = Transition("awaiting_adjuster", "triaging", "adjuster-sent-back")
+CLAIMANT_WITHDREW_WAITING = Transition(
+    "awaiting_adjuster", "withdrawn", "claimant-withdrew"
+)
+CLAIMANT_WITHDREW_DOCUMENTS = Transition(
+    "documents_requested", "withdrawn", "claimant-withdrew"
+)
+DOCUMENTS_ARRIVED = Transition("documents_requested", "triaging", "documents-arrived")
+# Documents that arrive after the last triage the cap allows refer the claim.
+DOCUMENTS_AT_CAP = Transition(
+    "documents_requested", "awaiting_adjuster", "triage-cap-reached"
+)
 
 TRANSITIONS: frozenset[Transition] = frozenset(
     {
@@ -68,14 +89,22 @@ TRANSITIONS: frozenset[Transition] = frozenset(
         ADJUSTER_APPROVED,
         ADJUSTER_REJECTED,
         ADJUSTER_REQUESTED_DOCUMENTS,
+        TRIAGE_REFERRED,
+        ADJUSTER_SENT_BACK,
+        CLAIMANT_WITHDREW_WAITING,
+        CLAIMANT_WITHDREW_DOCUMENTS,
+        DOCUMENTS_ARRIVED,
+        DOCUMENTS_AT_CAP,
     }
 )
 
 MOVE_CLAIM = """
 UPDATE claims.claims
-SET state = %(target)s, state_changed_at = clock_timestamp(), run_id = %(run_id)s
+SET state = %(target)s, state_changed_at = clock_timestamp(), run_id = %(run_id)s,
+    triages = triages + (%(target)s::text = 'triaging')::int
 WHERE claim_id = %(claim_id)s AND tenant = %(tenant)s AND state = %(source)s
     AND (%(changed_at)s::timestamptz IS NULL OR state_changed_at = %(changed_at)s)
+    AND (%(target)s::text <> 'triaging' OR triages < %(max_triages)s)
 RETURNING state_changed_at
 """
 
@@ -100,6 +129,13 @@ def move_claim(
     run the change is about, ``None`` while none is known; it replaces the
     claim's.
 
+    A move whose target is ``triaging`` raises the claim's ``triages`` by one in
+    the same ``UPDATE``, and is refused (``None``, like any other compare-and-set
+    that does not match) when the claim has been triaged ``MAX_TRIAGES_PER_CLAIM``
+    times already, so a claim cannot exceed the cap (T-38) even for a caller that
+    does not check it first; callers check under their lock to choose an answer.
+    A move to any other state leaves ``triages`` alone.
+
     Raises ``ValueError`` before any SQL for a transition not in the table.
     """
     if transition not in TRANSITIONS:
@@ -113,6 +149,7 @@ def move_claim(
             "tenant": tenant,
             "source": transition.source,
             "changed_at": changed_at,
+            "max_triages": MAX_TRIAGES_PER_CLAIM,
         },
     ).fetchone()
     if row is None:

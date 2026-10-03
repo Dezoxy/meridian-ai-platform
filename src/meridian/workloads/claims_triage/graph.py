@@ -48,7 +48,7 @@ from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
 
 from .assessment import Assessed, assess
-from .models import DECISION_NOTES, ClaimFacts, Decision, DraftedBy
+from .models import DECISION_NOTES, ClaimFacts, DraftedBy, Outcome
 from .proposal import Citation, TriageProposal
 from .rules import (
     Assessment,
@@ -82,13 +82,13 @@ class ApprovalRequested(WireModel):
 
 
 class ApprovalOutcome(WireModel):
-    """The answer of ``approval_outcome``: the decision word the Claims API
+    """The answer of ``approval_outcome``: the outcome word the Claims API
     recorded for this run, none while there is none. Strict, so no type is
     coerced into a word."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    outcome: Decision | None = None
+    outcome: Outcome | None = None
 
 
 class NoteAdded(WireModel):

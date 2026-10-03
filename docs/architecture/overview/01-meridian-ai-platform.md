@@ -31,18 +31,16 @@ The states a claim passes through in the reference workload. The triage run
 drafts a proposal. Below the risk threshold and without a fraud flag the
 workload approves the claim itself; otherwise a claims adjuster decides
 (C-02). Triage and the adjuster can both ask the claimant for documents, and
-arriving documents trigger a new triage run. The adjuster can send a claim
-back to triage. A claim whose triage run fails can be triaged again, or be
-referred to an adjuster. A claimant can withdraw while the claim waits, and a
-claim whose documents miss the deadline is closed as rejected. Approved,
-Rejected and Withdrawn are final.
+arriving documents trigger a new triage run. A claim is triaged at most five
+times; documents that arrive after that refer it to an adjuster. The adjuster
+can send a claim back to triage. A claim whose triage run fails can be triaged
+again, or be referred to an adjuster. A claimant can withdraw while the claim
+waits, and a claim whose documents miss the deadline is closed as rejected.
+Approved, Rejected and Withdrawn are final.
 
-Implemented in part (S015): the Claims API keeps every claim in one of these
-states and moves it only along these edges. The edges out of Submitted and
-Triaging, a new triage of a claim whose triage failed, and the adjuster's
-three decisions are implemented; sending back, withdrawing, arriving
-documents, the deadline and the referral of a failed triage are designed
-(S048).
+Implemented in part (S015, S048): the Claims API keeps every claim in one of
+these states and moves it only along these edges. Every edge is implemented
+except the deadline, which a scheduled job closes (S052).
 
 ```mermaid
 stateDiagram-v2
@@ -63,6 +61,7 @@ stateDiagram-v2
     AwaitingAdjuster --> Triaging: sends back
     AwaitingAdjuster --> Withdrawn: withdraws
     DocumentsRequested --> Triaging: documents arrive
+    DocumentsRequested --> AwaitingAdjuster: documents at the triage cap
     DocumentsRequested --> Rejected: deadline passes
     DocumentsRequested --> Withdrawn: withdraws
 ```

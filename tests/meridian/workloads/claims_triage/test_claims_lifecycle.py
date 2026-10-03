@@ -11,8 +11,13 @@ from dbsupport import DatabaseHandle
 from servicesupport import REPO_ROOT, owner_rows
 
 from meridian.platform.common.db import connect
+from meridian.workloads.claims_triage import lifecycle
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
+    DOCUMENTS_ARRIVED,
+    DOCUMENTS_AT_CAP,
+    MAX_TRIAGES_PER_CLAIM,
+    MOVE_CLAIM,
     RULES_APPROVED,
     TRANSITIONS,
     TRIAGE_RECLAIMED,
@@ -37,14 +42,10 @@ DIAGRAM_NAMES = {
 # The diagram's edges that are designed, not implemented (the overview says
 # which step builds each); [*] --> Submitted is the claim's creation.
 DESIGNED_EDGES = {
-    ("AwaitingAdjuster", "Triaging"),
-    ("AwaitingAdjuster", "Withdrawn"),
-    ("DocumentsRequested", "Triaging"),
-    ("DocumentsRequested", "Rejected"),
-    ("DocumentsRequested", "Withdrawn"),
-    ("TriageFailed", "AwaitingAdjuster"),  # S048
+    ("DocumentsRequested", "Rejected"),  # the deadline, a scheduled job: S052
 }
 START = "[*]"
+WITHDRAWAL = "claimant-withdrew"  # the one trigger two transitions share
 CLAIM_ID = "CLM-9301"
 TENANT = "claims-triage"
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000009301")
@@ -99,11 +100,17 @@ def test_the_diagram_has_no_edge_for_the_lease_takeover() -> None:
     assert TRIAGE_RECLAIMED in TRANSITIONS
 
 
-def test_a_trigger_word_belongs_to_one_transition() -> None:
-    triggers = [t.trigger for t in TRANSITIONS]
+def test_a_trigger_word_belongs_to_one_transition_out_of_a_state() -> None:
+    # Withdrawal is one trigger from two states (S048), so the word names the
+    # transition together with its source: the audit event's reason and its
+    # outcome (the target) say the rest.
+    keys = [(t.source, t.trigger) for t in TRANSITIONS]
 
+    assert len(set(keys)) == len(keys)
+    assert all(re.fullmatch(r"[a-z]+(-[a-z]+)+", t.trigger) for t in TRANSITIONS)
+    triggers = [t.trigger for t in TRANSITIONS if t.trigger != WITHDRAWAL]
     assert len(set(triggers)) == len(triggers)
-    assert all(re.fullmatch(r"[a-z]+(-[a-z]+)+", word) for word in triggers)
+    assert {t.target for t in TRANSITIONS if t.trigger == WITHDRAWAL} == {"withdrawn"}
 
 
 # ── the function that changes a state ───────────────────────────────────────
@@ -288,3 +295,125 @@ def test_a_decision_move_keeps_the_run_it_is_given(claim: DatabaseHandle) -> Non
     move(claim, ADJUSTER_APPROVED, run_id=RUN_ID)
 
     assert state_of(claim)[:2] == ("approved", RUN_ID)
+
+
+# ── the triage cap (T-38) ───────────────────────────────────────────────────
+INTO_TRIAGING = sorted(t for t in TRANSITIONS if t.target == "triaging")
+ELSEWHERE = sorted(t for t in TRANSITIONS if t.target != "triaging")
+TRIAGES_SO_FAR = 2
+
+
+def put_claim_in(db: DatabaseHandle, state: str, triages: int) -> None:
+    owner_rows(
+        db,
+        "UPDATE claims.claims SET state = %s, triages = %s RETURNING 1",
+        (state, triages),
+    )
+
+
+def triages_of(db: DatabaseHandle) -> int:
+    ((triages,),) = owner_rows(
+        db, "SELECT triages FROM claims.claims WHERE claim_id = %s", (CLAIM_ID,)
+    )
+    return triages
+
+
+def test_the_cap_is_five_and_every_start_of_a_triage_is_under_it() -> None:
+    assert MAX_TRIAGES_PER_CLAIM == 5
+    assert {t.trigger for t in INTO_TRIAGING} == {
+        "triage-started",
+        "triage-retried",
+        "triage-reclaimed",
+        "adjuster-sent-back",
+        "documents-arrived",
+    }
+
+
+@pytest.mark.parametrize("transition", INTO_TRIAGING, ids=lambda t: t.trigger)
+def test_a_move_into_triaging_raises_the_count_by_one(
+    claim: DatabaseHandle, transition: Transition
+) -> None:
+    put_claim_in(claim, transition.source, TRIAGES_SO_FAR)
+
+    moved = move(claim, transition)
+
+    assert moved is not None
+    assert triages_of(claim) == TRIAGES_SO_FAR + 1
+
+
+def test_the_lease_takeover_counts_as_a_triage(claim: DatabaseHandle) -> None:
+    move(claim, TRIAGE_STARTED)
+    assert triages_of(claim) == 1
+
+    assert move(claim, TRIAGE_RECLAIMED) is not None
+
+    assert triages_of(claim) == 2
+
+
+@pytest.mark.parametrize("transition", ELSEWHERE, ids=lambda t: t.trigger + t.source)
+def test_a_move_elsewhere_leaves_the_count_alone(
+    claim: DatabaseHandle, transition: Transition
+) -> None:
+    put_claim_in(claim, transition.source, TRIAGES_SO_FAR)
+
+    moved = move(claim, transition)
+
+    assert moved is not None
+    assert triages_of(claim) == TRIAGES_SO_FAR
+
+
+@pytest.mark.parametrize("transition", INTO_TRIAGING, ids=lambda t: t.trigger)
+def test_the_last_triage_under_the_cap_is_allowed(
+    claim: DatabaseHandle, transition: Transition
+) -> None:
+    put_claim_in(claim, transition.source, MAX_TRIAGES_PER_CLAIM - 1)
+
+    moved = move(claim, transition)
+
+    assert moved is not None
+    assert triages_of(claim) == MAX_TRIAGES_PER_CLAIM
+
+
+@pytest.mark.parametrize("triages", [MAX_TRIAGES_PER_CLAIM, MAX_TRIAGES_PER_CLAIM + 3])
+@pytest.mark.parametrize("transition", INTO_TRIAGING, ids=lambda t: t.trigger)
+def test_at_the_cap_a_move_into_triaging_is_refused_and_leaves_the_claim_as_it_was(
+    claim: DatabaseHandle, transition: Transition, triages: int
+) -> None:
+    put_claim_in(claim, transition.source, triages)
+    before = state_of(claim)
+
+    moved = move(claim, transition, run_id=RUN_ID)
+
+    assert moved is None
+    assert state_of(claim) == before
+    assert triages_of(claim) == triages
+    assert audit_rows(claim) == []
+
+
+def test_a_claim_at_the_cap_still_moves_to_every_other_state(
+    claim: DatabaseHandle,
+) -> None:
+    put_claim_in(claim, "documents_requested", MAX_TRIAGES_PER_CLAIM)
+
+    refused_at_the_cap = move(claim, DOCUMENTS_ARRIVED)
+    referred = move(claim, DOCUMENTS_AT_CAP)
+
+    assert refused_at_the_cap is None
+    assert referred is not None
+    assert state_of(claim)[0] == "awaiting_adjuster"
+    assert triages_of(claim) == MAX_TRIAGES_PER_CLAIM
+
+
+def test_the_cap_the_sql_uses_is_the_constant(
+    claim: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert "%(max_triages)s" in MOVE_CLAIM
+    assert str(MAX_TRIAGES_PER_CLAIM) not in MOVE_CLAIM
+    put_claim_in(claim, "triage_failed", 1)
+
+    monkeypatch.setattr(lifecycle, "MAX_TRIAGES_PER_CLAIM", 1)
+    assert move(claim, lifecycle.TRIAGE_RETRIED) is None
+    monkeypatch.setattr(lifecycle, "MAX_TRIAGES_PER_CLAIM", 2)
+
+    assert move(claim, lifecycle.TRIAGE_RETRIED) is not None
+    assert triages_of(claim) == 2
