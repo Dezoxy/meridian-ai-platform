@@ -175,7 +175,7 @@ and Pydantic, at the cost of one dependency.
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
 | S052 | Scheduled sweep | A scheduled job closes a claim whose documents miss the deadline as rejected (Part D question 3), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
-| S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | todo | S049 |
+| S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | doing | S049 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
 ### M2 — Azure, identity, delivery
@@ -4797,6 +4797,51 @@ commit that changes `src/` or `tests/`.
 - No step yet: HTML pages for the shared JSON answers under `/claimant/`;
   the query string in the server span's `http.url`; a documents failure
   racing another move; running the tests in parallel.
+
+### S054 — Parallel tests
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** the suite runs in parallel with `pytest-xdist` in `make pytest`,
+`make pytest-db` and CI, so the python job stops growing towards its limit
+and a coverage gate becomes affordable.
+**Decisions:**
+
+- A probe before any change (`-n 4`, xdist added for one run only) ran the
+  suite in 108 s, against 9 min 53 s serially, and failed 1,139 tests with
+  one cause: two workers' `db_passwords` both found no `meridian_owner` and
+  both ran `CREATE ROLE` (`UniqueViolation` on `pg_authid_rolname_index`).
+  The losing worker's session fixture failed, and with it every database
+  test on that worker. Nothing else failed.
+- The role setup runs under a transaction-level advisory lock on the admin
+  connection. Every worker connects to the same admin database, so the lock
+  is shared, although advisory locks are per database. Catching
+  `UniqueViolation` alone was rejected: concurrent `ALTER ROLE` on one row
+  can also fail ("tuple concurrently updated").
+- One set of passwords per run, not per worker: the xdist controller
+  generates them and hands them to the workers in `workerinput`, so they
+  stay in memory, as the fixture's docstring says. A shared file under a
+  `filelock` (xdist's documented pattern) was rejected: one more dependency,
+  and the passwords on disk. Both test servers use `trust` authentication,
+  which hides this half today; without it, each worker's `ALTER ROLE` would
+  invalidate the others' DSNs.
+- `-n` lives in the Makefile (`PYTEST_WORKERS ?= auto`), not in `addopts`,
+  so `uv run pytest path::test` stays a single process; `make eval` and
+  `make eval-baseline` run one test file with `PYTEST_WORKERS=0`.
+- Two clauses of the done-when needed no change: the stack tests run
+  in-process (`TestClient` and httpx transports, no socket; the `41999`
+  ports in `test_kind_manifests.py` are text a stub script prints), and the
+  migration runner's concurrency test already takes `empty_database`, a
+  database of its own; every test database has a random name.
+- No threat model run: this is test infrastructure. The only change near a
+  boundary is the test roles' passwords crossing from the controller to
+  its workers over execnet's local pipes, against a throwaway server on
+  the loopback.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
