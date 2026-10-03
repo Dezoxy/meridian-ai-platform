@@ -179,7 +179,7 @@ and Pydantic, at the cost of one dependency.
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | done | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
-| S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
+| S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | doing | S047 |
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
@@ -4925,6 +4925,99 @@ unexplained 53 errors, `unused_port()`, the remaining wall-clock limits,
 `ensure_roles`' lock timeout, a coverage gate (now affordable; the owner's
 decision), template databases, the CI limit of 15 minutes, and skipping
 the tests for a pull request that changes only files no test reads.
+
+### S051 — Structured outputs
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** a caller may ask the Model Gateway for an answer in the shape of a
+JSON schema, the gateway passes the schema to a provider that honours it
+(Azure OpenAI's structured outputs) and to no other, and the triage
+assessment asks for its three-field answer that way and reads it as strictly
+as before.
+**Decisions:**
+
+- The threat model, before the code (the `feature-threat-model` skill):
+  - **Flow.** The workload builds the schema beside its prompt (TB-7), the
+    runtime's client sends it with the messages across TB-4, and the gateway
+    passes it to the provider across TB-5. The answer comes back the same
+    way as before, as text.
+  - **Assets.** The claimant's text and the redaction that guards it (T-20),
+    the tenant's budget (QA-12), the fallback (QA-04), and the proposal's
+    strict reading (T-28).
+  - **Threats.** T-75 is new: a response schema is a second thing a caller
+    sends to the provider. Its names and enum values are text the model
+    reads and that redaction does not pass over; a large one costs tokens
+    nobody reserved; a deployment that cannot honour it answers free text
+    as if nothing had been asked; and a shape the provider guarantees
+    invites trusting the content. T-28 and T-67 change status.
+  - **Invariants.** They hold: the schema reaches the provider only through
+    the gateway, the SDK stays in the adapter, nothing under `platform/`
+    imports the agent framework, and no data is added.
+- The schema travels in the request; the registry declares who may send one
+  and which deployment honours one. `ChatRequest.response_schema` is an
+  optional JSON Schema; `agents.yaml` and `models.yaml` each get
+  `structured_outputs` (default false). Rejected, though it was the
+  session's first design: the schema itself in the registry and the caller
+  naming it, as for an embedding's dimensions (T-54). The triage stamps
+  each proposal with a hash of what it decides the model is sent
+  (`PROMPT_VERSION`); a registry is deployed apart from the workload's
+  image, so the hash could name one schema while another was sent. In the
+  request, what is hashed is what is sent.
+- The gateway takes a schema only in a closed, bounded subset, stricter
+  than the tool schemas' (`registry/tool_schema.py`): an object whose
+  every property is required and that allows no other; the types, `enum`,
+  `items` and a nullable type, nothing else; property names and enum values
+  short lower-case words, a form no identifier that `redact` knows can
+  take; bounded in properties, depth and enum values. Anything else is a
+  422. So the schema carries no free text (no `description`), and Azure's
+  strict mode accepts every schema the gateway lets through. The length
+  limit of the rationale stays in the prompt and in `read_answer`'s cut:
+  strict mode has no string lengths.
+- Refusals are the route decision's, before any redaction or reservation
+  (403, audited, throttled like the others): `schema-not-allowed` for an
+  agent the registry does not declare, and `no-schema-deployment` when no
+  candidate left by the class filter honours a schema. A candidate that
+  cannot honour one is left out before the walk, as for residency (T-44),
+  so a fallback never downgrades a request to free text. `make registry`
+  is the first line: when an agent declares structured outputs, every
+  candidate of the chat route and the replay chat deployment must honour
+  them, so the gateway's refusal is a backstop and the fallback keeps both
+  candidates. A refusal is a platform condition, so it fails the run
+  loudly (S014's line).
+- The schema's text counts in the estimate the limiter admits and the
+  ledger reserves (QA-12): Azure bills it as prompt tokens.
+- The gateway does not read the answer against the schema: that would be
+  reading content (T-56), and the provider's guarantee covers the shape
+  only. The workload's `read_answer` is unchanged: a clause that was not
+  sent, `unsure`, a cut-off answer and a non-JSON answer are still
+  unavailable.
+- A model's refusal (Azure's `message.refusal`, with no content) is the
+  provider error kind `filtered`, like the content filter: a condition of
+  the request's content, so no fallback and no circuit, the gateway's 400
+  with its header, and an assessment that is unavailable (T-67). Rejected:
+  a new word, which would add a header value, a runtime error and a reason
+  on the proposal for a case that reads the same to an adjuster.
+- Replay accepts a schema and ignores it, as it ignores
+  `max_output_tokens`: its text is fixed and is not JSON, so the triage on
+  kind still reads `not-json` and sends the claim to an adjuster.
+  `replay-chat` is declared as honouring structured outputs so that the
+  gateway's controls run in replay mode as in live mode. Rejected: an
+  instance generated from the schema, which would be a made-up verdict
+  (`none` approves a claim automatically).
+- The schema is part of the prompt's version, so the evaluation baseline's
+  prompt fingerprint moves and the baseline is regenerated in this change.
+  The scripted model stands in for the gateway and answers from the
+  oracle, so no grade should move.
+- No migration: the audit row's `reason` is free text, and the span gets a
+  boolean, never the schema.
+- kind: not run. The gateway on kind is in replay mode, which shows nothing
+  of a provider's structured outputs.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 

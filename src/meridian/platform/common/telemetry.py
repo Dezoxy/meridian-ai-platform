@@ -48,6 +48,7 @@ SPAN_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
         "meridian.data_class",
         "meridian.refusal",
         "meridian.redactions",
+        "meridian.response_schema",
         "meridian.attempt",
         "meridian.attempts",
         "meridian.skipped",
