@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import uuid
+from typing import get_args
 
 import httpx
 import pytest
@@ -17,10 +18,18 @@ from meridian.platform.common.telemetry import (
     configure_propagation,
     make_tracer_provider,
 )
+from meridian.platform.gateway.app import (
+    REFUSAL_CONTENT_FILTER as GATEWAY_REFUSAL_CONTENT_FILTER,
+)
+from meridian.platform.gateway.app import REFUSAL_HEADER as GATEWAY_REFUSAL_HEADER
 from meridian.platform.gateway.models import ChatOutput, ChatResponse, Usage
+from meridian.platform.registry.models import DataClass
 from meridian.runtime.model_client import (
+    REFUSAL_CONTENT_FILTER,
+    REFUSAL_HEADER,
     ChatResult,
     ModelCallError,
+    ModelCallFilteredError,
     ModelCallLimitError,
     ModelCallTimeoutError,
     ModelClient,
@@ -160,6 +169,123 @@ def test_a_non_2xx_answer_raises_with_the_status_code_only() -> None:
     assert raised.value.status_code == 403
     assert "secret claimant text" not in str(raised.value)
     assert str(raised.value) == "model gateway answered 403"
+
+
+@pytest.mark.parametrize("data_class", get_args(DataClass))
+def test_the_data_class_is_sent_as_a_header_when_given(data_class: str) -> None:
+    http, seen = client_for()
+
+    model(http).chat([{"role": "user", "content": "hi"}], data_class=data_class)
+
+    (request,) = seen
+    assert request.headers["X-Meridian-Data-Class"] == data_class
+    assert request.headers["X-Meridian-Tenant"] == "claims-triage"
+    assert json.loads(request.content) == {
+        "messages": [{"role": "user", "content": "hi"}]
+    }
+
+
+def test_no_data_class_header_is_sent_when_none_is_given() -> None:
+    http, seen = client_for()
+    client = model(http)
+
+    client.chat([{"role": "user", "content": "hi"}])
+    client.chat([{"role": "user", "content": "hi"}], data_class=None)
+
+    assert all("X-Meridian-Data-Class" not in request.headers for request in seen)
+    assert len(seen) == 2
+
+
+FILTER_HEADERS = {REFUSAL_HEADER: REFUSAL_CONTENT_FILTER}
+
+
+def test_the_runtime_marker_of_a_filtered_400_is_the_gateways() -> None:
+    # The runtime does not import the gateway, so it keeps its own copy.
+    assert (REFUSAL_HEADER, REFUSAL_CONTENT_FILTER) == (
+        GATEWAY_REFUSAL_HEADER,
+        GATEWAY_REFUSAL_CONTENT_FILTER,
+    )
+    assert (REFUSAL_HEADER, REFUSAL_CONTENT_FILTER) == (
+        "X-Meridian-Refusal",
+        "content-filter",
+    )
+
+
+def test_a_400_with_the_refusal_header_is_a_filtered_call_and_a_model_call_error() -> (
+    None
+):
+    http = httpx.Client(
+        base_url="http://gateway.invalid",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(400, json={}, headers=FILTER_HEADERS)
+        ),
+    )
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(http).chat([{"role": "user", "content": "hi"}])
+
+    assert isinstance(raised.value, ModelCallError)
+    assert raised.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {REFUSAL_HEADER: "something-else"},
+        {REFUSAL_HEADER: ""},
+        {REFUSAL_HEADER: "Content-Filter"},
+        {"X-Other": REFUSAL_CONTENT_FILTER},
+    ],
+)
+def test_a_400_without_the_exact_refusal_header_is_a_plain_model_call_error(
+    headers: dict[str, str],
+) -> None:
+    http = httpx.Client(
+        base_url="http://gateway.invalid",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(400, json={}, headers=headers)
+        ),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        model(http).chat([{"role": "user", "content": "hi"}])
+
+    assert type(raised.value) is ModelCallError
+    assert raised.value.status_code == 400
+
+
+def test_a_filtered_call_keeps_no_body_message_or_cause() -> None:
+    canary = "CANARY claimant text"
+    http = httpx.Client(
+        base_url="http://gateway.invalid",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                400, json={"detail": canary}, headers=FILTER_HEADERS
+            )
+        ),
+    )
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(http).chat([{"role": "user", "content": "hi"}])
+
+    error = raised.value
+    assert canary not in str(error)
+    assert canary not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert error.__suppress_context__
+
+
+@pytest.mark.parametrize("status", [403, 413, 422, 429, 500, 502, 503, 504])
+def test_every_other_non_2xx_stays_a_plain_model_call_error(status: int) -> None:
+    http, _ = client_for(status=status)
+
+    with pytest.raises(ModelCallError) as raised:
+        model(http).chat([{"role": "user", "content": "hi"}])
+
+    assert type(raised.value) is ModelCallError
+    assert raised.value.status_code == status
 
 
 def reply_client(reply: dict) -> httpx.Client:

@@ -9,6 +9,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
 from meridian.platform.common.env import SettingsError
+from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.knowledge_mcp import SERVICE_NAME
 from meridian.platform.knowledge_mcp.settings import (
     GATEWAY_URL_ENV,
@@ -81,4 +82,5 @@ def create_app(
 
 def create_app_from_env() -> Starlette:
     """The ASGI app, for ``uvicorn --factory``."""
+    install_log_redaction()
     return create_app(KnowledgeServerSettings.from_env()).app

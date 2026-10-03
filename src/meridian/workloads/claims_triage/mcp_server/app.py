@@ -6,6 +6,7 @@ from collections.abc import Callable
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
+from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.toolserver.server import ToolApp, create_tool_app
 from meridian.platform.toolserver.settings import ToolServerSettings
 from meridian.workloads.claims_triage.mcp_server import SERVICE_NAME
@@ -30,4 +31,5 @@ def create_app(
 
 def create_app_from_env() -> Starlette:
     """The ASGI app, for ``uvicorn --factory``."""
+    install_log_redaction()
     return create_app(ToolServerSettings.from_env()).app

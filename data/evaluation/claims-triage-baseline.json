@@ -261,14 +261,14 @@
         "missing_documents": true,
         "payable_amount": true,
         "reason": true,
-        "recommendation": true,
+        "recommendation": false,
         "route": true
       },
       "observed": {
-        "assessment": "none_applies",
+        "assessment": "unavailable",
         "payable_amount": 2470,
         "reason": "fraud_indicator",
-        "recommendation": "approve",
+        "recommendation": null,
         "route": "adjuster"
       }
     },

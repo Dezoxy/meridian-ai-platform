@@ -42,6 +42,13 @@ DECISION_NOTES: Mapping[Decision, str] = MappingProxyType(
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=100), NoNul]
 MAX_DOCUMENTS = 20
+# What a claimant may submit, and what the run is sent. The run's copy of the
+# description has the claimant's name and identifiers replaced by placeholders
+# that can be longer than what they replace (``[name]`` for a three-letter part,
+# ``[email]`` for a six-character address), so its bound is wider: a copy that
+# no longer validates would fail every node of the graph, for good.
+MAX_SUBMISSION_DESCRIPTION_CHARS = 5000
+MAX_RUN_DESCRIPTION_CHARS = 3 * MAX_SUBMISSION_DESCRIPTION_CHARS
 
 
 class LossLocation(WireModel):
@@ -50,7 +57,13 @@ class LossLocation(WireModel):
 
 
 class Claimant(WireModel):
-    name: Annotated[str, StringConstraints(min_length=1, max_length=200), NoNul]
+    # Stripped, so a blank name is no name: the run's copy of the description
+    # replaces the name, and an empty one would match at every boundary.
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+        NoNul,
+    ]
     email: Annotated[
         str,
         StringConstraints(min_length=3, max_length=254, pattern=EMAIL_PATTERN),
@@ -70,7 +83,11 @@ class ClaimFacts(WireModel):
     peril: Peril
     claimed_amount: Annotated[int, Field(ge=1, le=1_000_000, strict=True)]
     loss_location: LossLocation
-    description: Annotated[str, StringConstraints(min_length=1, max_length=5000), NoNul]
+    description: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=MAX_RUN_DESCRIPTION_CHARS),
+        NoNul,
+    ]
     documents: tuple[ShortText, ...] = Field(max_length=MAX_DOCUMENTS)
 
     @model_validator(mode="after")
@@ -81,8 +98,14 @@ class ClaimFacts(WireModel):
 
 
 class ClaimSubmission(ClaimFacts):
-    """What ``POST /claims`` takes and ``claims.claims`` stores."""
+    """What ``POST /claims`` takes and ``claims.claims`` stores. Its description
+    is held to the submission's limit; ``ClaimFacts`` takes the wider one."""
 
+    description: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=MAX_SUBMISSION_DESCRIPTION_CHARS),
+        NoNul,
+    ]
     claimant: Claimant
 
 

@@ -28,9 +28,19 @@ Rationale = Annotated[
     str, StringConstraints(min_length=1, max_length=MAX_RATIONALE_CHARS), NoNul
 ]
 AssessmentStatus = Literal["not_needed", "none_applies", "applies", "unavailable"]
-# Why the assessment is unavailable: one word, never the model's text.
+# Why the assessment is unavailable: one word, never the model's text. The last
+# three are the guardrails' (S047): the claimant's text holds special-category
+# data or addresses the model, or the provider's content filter refused it.
 UnavailableBecause = Literal[
-    "truncated", "not-json", "not-the-format", "unknown-clause", "unsure", "too-long"
+    "truncated",
+    "not-json",
+    "not-the-format",
+    "unknown-clause",
+    "unsure",
+    "too-long",
+    "special-data",
+    "injection-suspected",
+    "filtered",
 ]
 # The model said something about the exclusions, in its own words.
 ASSESSED = ("none_applies", "applies")
@@ -107,7 +117,8 @@ class TriageProposal(WireModel):
 
     def _check_model_call(self) -> None:
         # An unavailable assessment may follow a call or not: a user message
-        # over the gateway's limit is never sent.
+        # over the gateway's limit is never sent, a guardrail stops the call
+        # and a filtered one gets no answer.
         if self.assessment == "not_needed" and self.drafted_by is not None:
             raise ValueError("drafted_by is empty when no assessment was needed")
         if self.assessment in ASSESSED and self.drafted_by is None:

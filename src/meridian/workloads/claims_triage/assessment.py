@@ -11,6 +11,16 @@ policy number, dates, amount, location or documents (data minimisation, T-03).
 The user message is one JSON document, so no text in the description can close
 its own string (T-26, T-27). A log line names a reason and never repeats the
 model's text or the claim (T-03).
+
+Three guardrails (S047) make the assessment unavailable without an answer, each
+a condition of the claim's own data and so a claim for a person, never a failed
+run (T-67): a description that holds special-category data (``special-data``),
+a description that addresses the model (``injection-suspected``), and a request
+the provider's content filter refuses (``filtered``). The first two make no call
+at all. A candidate clause that addresses the model is different: the wording is
+platform data, so the run fails (``GraphFailure``) and is loud. The call carries
+the data class ``personal``, and the rationale is redacted before it is
+returned: the model saw only redacted text, but it can make an identifier up.
 """
 
 import hashlib
@@ -22,7 +32,14 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from meridian.runtime.model_client import ModelClient
+from meridian.platform.guardrails import (
+    addresses_the_model,
+    holds_special_category,
+    redact,
+)
+from meridian.platform.registry.models import DataClass
+from meridian.runtime.failures import GraphFailure
+from meridian.runtime.model_client import ModelCallFilteredError, ModelClient
 
 from .models import ClaimFacts, DraftedBy
 from .proposal import MAX_RATIONALE_CHARS, UnavailableBecause
@@ -32,6 +49,11 @@ from .wording import Clause
 logger = logging.getLogger(__name__)
 
 ASSESSMENT_OUTPUT_TOKENS = 400
+# The data class the call names: the model reads the claimant's own words. The
+# gateway uses the higher of this and the tenant's (it can only be raised).
+PERSONAL_DATA: DataClass = "personal"
+# The code of the failure of a run whose candidate clause addresses the model.
+WORDING_ADDRESSES_THE_MODEL = "wording-addresses-the-model"
 # The longest user message the Model Gateway takes: its MAX_CONTENT_CHARS
 # (platform/gateway/models.py), copied because nothing outside the gateway
 # imports it. A test keeps the two equal. A longer message is never sent: the
@@ -73,7 +95,9 @@ SYSTEM_MESSAGE = (
 class Assessed:
     assessment: Assessment
     rationale: str | None  # set only for none_applies and applies
-    drafted_by: DraftedBy | None  # None when no call was made (too-long)
+    # None means no answer: no call was made (a guardrail or too-long) or the
+    # provider's content filter refused it.
+    drafted_by: DraftedBy | None
     unavailable_because: UnavailableBecause | None  # set only for unavailable
 
 
@@ -153,6 +177,12 @@ def _unavailable(
     return Assessment("unavailable"), None, reason
 
 
+def _without_an_answer(reason: UnavailableBecause) -> Assessed:
+    """The assessment of a call that was not made or got no answer."""
+    assessment, rationale, because = _unavailable(reason)
+    return Assessed(assessment, rationale, None, because)
+
+
 def _unfenced(text: str) -> str:
     stripped = text.strip()
     fenced = FENCE.fullmatch(stripped)
@@ -203,8 +233,9 @@ def read_answer(
 ) -> tuple[Assessment, str | None, UnavailableBecause | None]:
     """The assessment the model's ``text`` states, its rationale and, for an
     unavailable assessment, the word that says why. Anything not to be trusted
-    is ``unavailable`` with no rationale. A rationale over the limit is cut to
-    it: it is commentary, and the verdict is the fact."""
+    is ``unavailable`` with no rationale. The rationale is redacted, then cut to
+    the limit when it is over it: it is commentary, and the verdict is the
+    fact."""
     if finish_reason != "stop":
         return _unavailable("truncated")
     answer = _parse_object(text)
@@ -219,7 +250,9 @@ def read_answer(
     )
     if verdict == "unsure":
         return _unavailable("unsure")
-    cut = rationale[:MAX_RATIONALE_CHARS]
+    # Redacted before the cut: a cut inside an identifier would leave digits
+    # that no longer pass its check and would be kept.
+    cut = redact(rationale).text[:MAX_RATIONALE_CHARS]
     if verdict == "none":
         return Assessment("none_applies"), cut, None
     if clause not in {c.clause for c in candidates}:
@@ -234,17 +267,43 @@ def assess(
     wording_version: str,
     candidates: Sequence[Clause],
 ) -> Assessed:
-    """Ask the model once, unless the user message is over the gateway's limit:
-    then no call is made and the assessment is unavailable (``too-long``).
-    Raises ``ValueError`` without candidates (the caller asks only when there is
-    one); an error of the model client propagates."""
+    """Ask the model once, unless a guardrail or the length limit stops the call:
+    then none is made and the assessment is unavailable, in this order, because
+    the description holds special-category data (``special-data``), the
+    description addresses the model (``injection-suspected``) or the user message
+    is over the gateway's limit (``too-long``). The provider's content filter
+    refusing the call is ``filtered``. A candidate clause that addresses the
+    model is no claim for a person: it raises ``GraphFailure`` with
+    ``wording-addresses-the-model``, after the two checks of the description and
+    before any call. Raises ``ValueError`` without candidates (the caller asks
+    only when there is one); any other error of the model client propagates.
+
+    The special-category screen is for the claimant's words only: the wordings
+    themselves name an injury."""
     if not candidates:
         raise ValueError("there is no candidate exclusion clause to assess")
+    if holds_special_category(claim.description):
+        return _without_an_answer("special-data")
+    if addresses_the_model(claim.description):
+        return _without_an_answer("injection-suspected")
+    if any(
+        addresses_the_model(c.title) or addresses_the_model(c.body) for c in candidates
+    ):
+        # The wording is platform data, not the claim's: a poisoned one is a
+        # platform condition, so the run fails (S014's line). Nothing of the
+        # clause is repeated.
+        raise GraphFailure(WORDING_ADDRESSES_THE_MODEL)
     messages = build_messages(claim, product, wording_version, candidates)
     if len(messages[1]["content"]) > MAX_USER_MESSAGE_CHARS:
-        assessment, rationale, because = _unavailable("too-long")
-        return Assessed(assessment, rationale, None, because)
-    result = model.chat(messages, max_output_tokens=ASSESSMENT_OUTPUT_TOKENS)
+        return _without_an_answer("too-long")
+    try:
+        result = model.chat(
+            messages,
+            max_output_tokens=ASSESSMENT_OUTPUT_TOKENS,
+            data_class=PERSONAL_DATA,
+        )
+    except ModelCallFilteredError:
+        return _without_an_answer("filtered")
     assessment, rationale, because = read_answer(
         result.text, result.finish_reason, candidates
     )

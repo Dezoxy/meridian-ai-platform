@@ -6,8 +6,16 @@ from typing import Literal, Protocol
 from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
 from meridian.platform.registry.models import Deployment
 
+# ``filtered``: the provider's content filter refused the prompt (a 400) or
+# withheld the completion (no status). It says nothing of the deployment.
 ProviderErrorKind = Literal[
-    "timeout", "rate-limited", "unavailable", "rejected", "auth", "bad-response"
+    "timeout",
+    "rate-limited",
+    "unavailable",
+    "rejected",
+    "filtered",
+    "auth",
+    "bad-response",
 ]
 
 

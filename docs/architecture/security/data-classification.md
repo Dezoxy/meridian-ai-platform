@@ -15,9 +15,10 @@ document owns the classes and the inventory; the
 ### Classes
 
 A data class is a label on a tenant, and through it on every request the
-tenant makes. The tenant's class is the minimum for its requests: the runtime
-raises a request's class when it finds more sensitive content, and nothing
-can lower it (T-13).
+tenant makes. The tenant's class is the minimum for its requests: a request
+may name a higher class (the gateway's header `X-Meridian-Data-Class`), and
+nothing can lower it. A workload that finds special-category content in a
+claimant's text makes no model call at all (S047, T-13).
 
 | Class | Meaning | Examples here | Allowed residency labels | Handling |
 |---|---|---|---|---|

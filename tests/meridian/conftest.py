@@ -9,6 +9,7 @@ afterwards. Without the variable the tests skip, unless
 ``MERIDIAN_REQUIRE_DB=1`` (CI), where a missing database is a failure.
 """
 
+import logging
 import os
 import secrets
 import shutil
@@ -41,6 +42,18 @@ TEST_DATABASE_URL_ENV = "MERIDIAN_TEST_DATABASE_URL"
 REQUIRE_DB_ENV = "MERIDIAN_REQUIRE_DB"
 SKIP_REASON = "set MERIDIAN_TEST_DATABASE_URL (make pytest-db)"
 PASSWORD_BYTES = 24
+
+
+@pytest.fixture(autouse=True)
+def _keep_the_log_record_factory() -> Iterator[None]:
+    """A test that calls a service's production factory installs the log
+    redaction for the process (S047); put the factory back after every test, so
+    no later test sees it."""
+    saved = logging.getLogRecordFactory()
+    try:
+        yield
+    finally:
+        logging.setLogRecordFactory(saved)
 
 
 @pytest.fixture(scope="session")

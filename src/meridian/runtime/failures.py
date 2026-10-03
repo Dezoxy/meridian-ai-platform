@@ -12,6 +12,7 @@ import re
 
 from meridian.runtime.model_client import (
     ModelCallError,
+    ModelCallFilteredError,
     ModelCallLimitError,
     ModelCallTimeoutError,
 )
@@ -50,7 +51,8 @@ class GraphFailure(Exception):
 
 def failure_reason(error: BaseException) -> str:
     """The reason word of the exception that failed a run. A subclass is checked
-    before its base: the call limit and the timeout are model call errors."""
+    before its base: the call limit, the timeout and the content filter are model
+    call errors."""
     if isinstance(error, ModelCallLimitError):
         return "model-call-limit"
     if isinstance(error, ToolCallLimit):
@@ -63,6 +65,8 @@ def failure_reason(error: BaseException) -> str:
         return "tool-unavailable"
     if isinstance(error, ModelCallTimeoutError):
         return "model-timeout"
+    if isinstance(error, ModelCallFilteredError):
+        return "model-filtered"
     if isinstance(error, ModelCallError):
         return "model-error"
     if isinstance(error, GraphFailure):

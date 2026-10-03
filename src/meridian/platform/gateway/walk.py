@@ -9,7 +9,8 @@ call the provider and what the answer is, and nothing else differs.
 A reservation the tenant's budget refuses ends the walk, because the token
 reservation is the same for every candidate (the cost differs with the price;
 both candidates have one price today). A deployment's own failure moves the
-walk to the next candidate; a request the provider rejects ends it (T-45).
+walk to the next candidate; a request the provider rejects, or whose prompt or
+completion its content filter refuses, ends it (T-45, T-67).
 Every candidate touched leaves one audit row, and the audit write is part of the
 answer (QA-05), unless the ledger's close fails: then the request answers 503
 and the usage row, written before the call, is the record. There is no retry of

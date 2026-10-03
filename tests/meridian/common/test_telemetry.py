@@ -90,6 +90,7 @@ def test_the_allowlist_holds_exactly_the_named_keys() -> None:
                 "meridian.tool_outcome",
                 "meridian.tool_server",
                 "meridian.reason",
+                "meridian.redactions",
                 "error.type",
                 "gen_ai.request.model",
                 "gen_ai.response.model",

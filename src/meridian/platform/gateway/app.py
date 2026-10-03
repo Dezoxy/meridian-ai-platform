@@ -1,17 +1,25 @@
 """The Model Gateway app: ``POST /v1/chat`` and ``POST /v1/embeddings``, replay
-and live (S009, S010, S011, S045).
+and live (S009, S010, S011, S045, S047).
 
 One path for both modes and both purposes. A call gets its ID first, so every
-audit row of the request carries it. Then the route of its purpose is decided
-and refused (403) and audited when nothing is allowed. The tenant's rate windows
-come next, one set for both purposes: a request over them is refused (429, or
-413 when it alone is larger than the tenant's token limit) before any circuit,
-reservation or provider is touched. Then the allowed candidates are walked in
+audit row of the request carries it. The route of its purpose is decided next,
+with the higher of the tenant's data class and the one the request's optional
+``X-Meridian-Data-Class`` header names (T-11), and refused (403) and audited
+when nothing is allowed or the class is ``special`` (T-13). Only a request that
+passes has its text redacted (T-20), whatever its class, so nothing below sees
+an e-mail address, an IBAN or a card number, and a request policy refuses costs
+no redaction (one a tenant limit or the budget refuses has been redacted). The
+tenant's rate windows come next, one set for both purposes: a request over them
+is refused (429, or 413 when it alone is larger than the tenant's token limit)
+before any circuit, reservation or provider is touched. Then the allowed
+candidates are walked in
 order under one deadline (S042), each one reserved in the ledger before it is
 called (QA-12). A candidate whose circuit is open, or that the deadline leaves
 no time for, is skipped; a deployment's own failure moves the walk to the next
-candidate; a rejected request ends it; a reservation the tenant's budget
-refuses ends it too (429, or the earlier attempt's answer).
+candidate; a rejected request ends it, and so does a request the provider's
+content filter refuses, which the gateway answers 400 with the
+``X-Meridian-Refusal`` header (T-67); a reservation the
+tenant's budget refuses ends it too (429, or the earlier attempt's answer).
 Every candidate touched leaves one audit row, except that a refusal, whether
 policy's 403 or a tenant limit's 429 or 413, leaves at most one row per tenant
 and reason per minute, and that row says how many refusals it stands in for, so
@@ -43,9 +51,11 @@ from meridian.platform.common.http import (
     HTTP_PAYLOAD_TOO_LARGE,
     REFUSED,
     BoundedEntityId,
+    ErrorBody,
     create_service_app,
     error_responses,
 )
+from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import set_span_attributes, start_span
 from meridian.platform.common.throttle import RefusalAuditThrottle
@@ -63,8 +73,14 @@ from meridian.platform.gateway.models import (
     EmbeddingResponse,
 )
 from meridian.platform.gateway.operations import chat_operation, embedding_operation
-from meridian.platform.gateway.providers.base import ModelProvider, ProviderError
+from meridian.platform.gateway.providers.base import (
+    EmbeddingReply,
+    ModelProvider,
+    ProviderError,
+    ProviderReply,
+)
 from meridian.platform.gateway.ratelimit import RateRefusalReason, TenantRateLimiter
+from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
@@ -79,7 +95,7 @@ from meridian.platform.gateway.walk import (
     route_facts,
 )
 from meridian.platform.registry import Registry, load_registry
-from meridian.platform.registry.models import Deployment
+from meridian.platform.registry.models import DataClass, Deployment
 
 SERVICE_NAME = "model-gateway"
 CHAT_PURPOSE = "chat"
@@ -91,12 +107,23 @@ LIVE_ENVIRONMENT = "local"
 AZURE_KIND = "azure-openai"
 REPLAY_KIND = "replay"
 
+HTTP_BAD_REQUEST = 400
+# The mark of the gateway's own 400: FastAPI answers 400 too, for a body it
+# cannot decode, and the runtime must not read that as a content-filter refusal.
+# ``runtime/model_client.py`` keeps a copy of both (a test compares them).
+REFUSAL_HEADER = "X-Meridian-Refusal"
+REFUSAL_CONTENT_FILTER = "content-filter"
 HTTP_BAD_GATEWAY = 502
 HTTP_SERVICE_UNAVAILABLE = 503
 HTTP_GATEWAY_TIMEOUT = 504
 # One fixed text per status: the provider's own words can echo a prompt (T-18).
 PROVIDER_TIMED_OUT = "the model provider did not answer in time"
 PROVIDER_FAILED = "the model provider failed"
+# What the gateway itself answers 400 for, with the refusal header: the
+# provider's content filter refused the prompt or withheld the completion
+# (T-67). A malformed request is a 422; FastAPI's own 400, for a body that is not
+# UTF-8, has no such header.
+PROVIDER_FILTERED = "the model provider's content filter refused the request"
 # No attempt was made: every candidate was skipped.
 PROVIDER_UNAVAILABLE = "the model provider is unavailable"
 # The reason on the calls counter of a request no candidate was called for.
@@ -118,6 +145,9 @@ EMBEDDINGS_TOO_LARGE = CHAT_TOO_LARGE
 TenantHeader = Annotated[BoundedEntityId, Header(alias="X-Meridian-Tenant")]
 AgentHeader = Annotated[BoundedEntityId, Header(alias="X-Meridian-Agent")]
 RunHeader = Annotated[uuid.UUID, Header(alias="X-Meridian-Run")]
+# The class of the request, when it is higher than its tenant's (T-11). FastAPI
+# refuses a value that is not one of the four classes, with a 422.
+DataClassHeader = Annotated[DataClass | None, Header(alias="X-Meridian-Data-Class")]
 # One fixed text per refusal for a tenant limit; the reason is in the audit row.
 TENANT_RATE_LIMIT_REACHED = "the tenant's rate limit is reached"
 TENANT_BUDGET_USED_UP = "the tenant's budget is used up"
@@ -264,11 +294,18 @@ def _live_providers(
 
 
 def _unanswered(result: Unanswered) -> NoReturn:
-    """The status when no candidate answered: the last attempt's kind, or 503
-    when none was called. Never a word of the provider's (T-18)."""
+    """The status when no candidate answered: the last attempt's kind (400 for a
+    content filter, 504 for a timeout, 502 for the rest), or 503 when none was
+    called. Never a word of the provider's (T-18)."""
     if result.attempts == 0:
         raise HTTPException(
             status_code=HTTP_SERVICE_UNAVAILABLE, detail=PROVIDER_UNAVAILABLE
+        )
+    if result.last_attempt_kind == "filtered":
+        raise HTTPException(  # the one 400 the gateway gives, marked by its header
+            status_code=HTTP_BAD_REQUEST,
+            detail=PROVIDER_FILTERED,
+            headers={REFUSAL_HEADER: REFUSAL_CONTENT_FILTER},
         )
     timed_out = result.last_attempt_kind == "timeout"
     raise HTTPException(
@@ -443,6 +480,21 @@ def create_app(
         responses = error_responses(403, 413, 429, 500, 502, 503, 504)
         responses[HTTP_SERVICE_UNAVAILABLE]["description"] = unavailable
         responses[HTTP_PAYLOAD_TOO_LARGE]["description"] = too_large
+        # The gateway's own 400, the one with the refusal header: the shared
+        # descriptions have none.
+        responses[HTTP_BAD_REQUEST] = {
+            "model": ErrorBody,
+            "description": PROVIDER_FILTERED.capitalize() + ".",
+            "headers": {
+                REFUSAL_HEADER: {
+                    "description": (
+                        "Marks this 400 as the content filter's refusal; a 400 "
+                        "without it is not."
+                    ),
+                    "schema": {"type": "string", "enum": [REFUSAL_CONTENT_FILTER]},
+                }
+            },
+        }
         return responses
 
     @app.post(
@@ -456,12 +508,16 @@ def create_app(
         tenant_id: TenantHeader,
         agent_id: AgentHeader,
         run_id: RunHeader,
+        data_class: DataClassHeader = None,
     ) -> ChatResponse:
         # The call ID exists before anything can refuse the request.
         caller = Caller(uuid.uuid4(), tenant_id, agent_id, run_id)
-        return handle(
-            "gateway.chat", routes[CHAT_PURPOSE], caller, chat_operation(body)
-        )
+
+        def build() -> tuple[Operation[ProviderReply, ChatResponse], int]:
+            redacted, redactions = redact_chat(body)
+            return chat_operation(redacted), redactions
+
+        return handle("gateway.chat", routes[CHAT_PURPOSE], caller, build, data_class)
 
     @app.post(
         "/v1/embeddings",
@@ -474,27 +530,33 @@ def create_app(
         tenant_id: TenantHeader,
         agent_id: AgentHeader,
         run_id: RunHeader,
+        data_class: DataClassHeader = None,
     ) -> EmbeddingResponse:
         caller = Caller(uuid.uuid4(), tenant_id, agent_id, run_id)
+
+        def build() -> tuple[Operation[EmbeddingReply, EmbeddingResponse], int]:
+            redacted, redactions = redact_embeddings(body)
+            return embedding_operation(redacted), redactions
+
         return handle(
-            "gateway.embeddings",
-            routes[EMBEDDING_PURPOSE],
-            caller,
-            embedding_operation(body),
+            "gateway.embeddings", routes[EMBEDDING_PURPOSE], caller, build, data_class
         )
 
     def handle[ResponseT](
         span_name: str,
         route: _Route,
         caller: Caller,
-        operation: Operation[Any, ResponseT],
+        build: Callable[[], tuple[Operation[Any, ResponseT], int]],
+        requested: DataClass | None,
     ) -> ResponseT:
         """One request of either purpose: a span of its own, counted once by its
-        outcome."""
+        outcome. ``build`` redacts the request's text and builds the operation
+        from it; ``answer`` calls it once policy has not refused the request.
+        ``requested`` is the class the request's header names, if any."""
         record = meters.call_record()
         try:
             with start_span(tracer, span_name) as span:
-                response = answer(span, record, caller, route, operation)
+                response = answer(span, record, caller, route, build, requested)
         except Exception:
             record.end("failed")  # a refusal counted itself first and stays one
             raise
@@ -520,10 +582,13 @@ def create_app(
         record: CallRecord,
         caller: Caller,
         route: _Route,
-        operation: Operation[Any, ResponseT],
+        build: Callable[[], tuple[Operation[Any, ResponseT], int]],
+        requested: DataClass | None,
     ) -> ResponseT:
         describe_call(span, caller, route)
-        decision = decide(registry, route.considered, caller.tenant, caller.agent)
+        decision = decide(
+            registry, route.considered, caller.tenant, caller.agent, requested
+        )
         limits = decision.limits  # None exactly for an unknown tenant, refused here
         if decision.refusal is not None or limits is None:
             refuse(
@@ -536,7 +601,13 @@ def create_app(
             )
         record.known(caller.tenant, caller.agent)  # registry IDs from here on
         if decision.data_class is not None:
+            # The class used, never the tenant's alone: a header may raise it.
             set_span_attributes(span, {"meridian.data_class": decision.data_class})
+        # Redaction costs time in proportion to the text, so a request policy
+        # refuses is never redacted (T-20); nothing below sees the original.
+        operation, redactions = build()
+        if redactions > 0:  # a count only: never a kind, never a value
+            set_span_attributes(span, {"meridian.redactions": redactions})
         # The same number the ledger reserves, for either purpose.
         rate_refusal = limiter.admit(caller.tenant, limits, operation.estimate.tokens)
         if rate_refusal is not None:
@@ -572,4 +643,5 @@ def create_app(
 
 def create_app_from_env() -> FastAPI:
     """The factory S041 runs under ``uvicorn --factory``."""
+    install_log_redaction()
     return create_app(GatewaySettings.from_env())
