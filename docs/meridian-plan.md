@@ -9,7 +9,7 @@
   the same region and holds each tenant to its rate limits and budgets
   (a Grafana dashboard on kind shows what each tenant, agent, model and
   provider used), it answers embedding requests under the same controls (in replay mode
-  and against a mocked Azure; not yet run against Azure), three MCP tool
+  and against Azure from a laptop), three MCP tool
   servers and the runtime's client for them run on kind, where the policy
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
@@ -157,13 +157,14 @@ and Pydantic, at the cost of one dependency.
 | S013 | Policy and claims MCP servers | Tool contracts in `api/mcp/`; policy and claims MCP servers; per-agent allowlists from the registry; mutating tools require an idempotency key; every call audited (split on 2026-10-01: in-process, as S009 was; the servers on kind are S044) | done | S008, S009 |
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | done | S013, S041 |
 | S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
-| S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
+| S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated (split on 2026-10-03: the provider's structured outputs are S051) | doing | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017 |
+| S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
 ### M2 — Azure, identity, delivery
@@ -2523,6 +2524,15 @@ reason to reach a provider itself (hard rule 4).
 - The owner, once the Azure login works: `make gateway-live`, and record
   the model string Azure reports for an embedding, so the gateway can
   compare it with the registry's (T-54).
+  Done on 2026-10-03, after the owner's login worked again (recorded in
+  S047's pull request): `make gateway-live` printed `3 passed`; Azure
+  accepted `dimensions` and `encoding_format` on API version
+  `2024-10-21`, answered two vectors of 1,024 dimensions and reported
+  the model `text-embedding-3-large`, the registry's `model`. The
+  gateway does not compare the two yet (T-54). The same day
+  `make azure-plan` answered "No changes", `make registry` "3
+  deployments match" on a fresh snapshot, and `make azure-smoke` passed
+  its eight checks.
 - S012: the store keeps deployment, model and dimensions with each vector
   and compares only vectors of one deployment (T-54); ingestion has no
   run, so who it is as a caller (tenant, agent, run header) is to decide,
@@ -4117,6 +4127,115 @@ changed without a reviewed new baseline.
   holds, which may be stale; a file in the golden set's directory that the
   manifest does not list is not noticed.
 
+### S047 — Guardrails
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** before a model reads claimant text, personal identifiers are
+redacted, special-category data and injected instructions stop the call and
+send the claim to a person, a request carries a data class that can only be
+raised, and the gateway tells a content-filter refusal from an outage.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request: the provider's structured outputs, which S014 had left to this
+  step, become S051, new, depending on S047. They are a change to the
+  gateway's contract, not a guardrail, and they can now be tried live.
+- The threat model, before the code (the `feature-threat-model` skill):
+  - **Flow.** Claimant text crosses TB-2 into the Claims API, TB-3 into
+    the run, TB-7 into the prompt, TB-4 into the gateway and TB-5 to the
+    provider. The guardrails sit at three of those crossings: the Claims
+    API removes what it knows (the claimant's name and email), the
+    workload decides whether a call may happen at all, and the gateway
+    redacts what any caller sends.
+  - **Assets.** Claimant text and identifiers, the residency promise (C-02),
+    the automatic approval (T-26) and the claim's way to a person (T-67).
+  - **Threats, new or changed:** T-03, T-11, T-13, T-16, T-20, T-26, T-27
+    and T-67 change status; T-73 is new: a guardrail misfires. Too eager,
+    and it sends claims to people and costs adjusters' time. Too lax, and
+    a call carries what it should not. Or a pattern that backtracks lets
+    one long text stall a process.
+  - **Invariants.** The checks hold: every model call still goes through
+    the gateway, and the guardrails module imports no agent framework. No
+    provider SDK is imported outside the gateway, and no data, real or
+    synthetic, is added beyond the generator's.
+- S014's line between refusal and failure decides all three new outcomes.
+  A condition of the claim's own data becomes a proposal for a person. So
+  special-category text, suspected injection and the provider's content
+  filter each make the assessment `unavailable`, with a new reason word
+  (`special-data`, `injection-suspected`, `filtered`), and an unavailable
+  assessment is a gap that sends the claim to an adjuster. The gateway's
+  refusal of a `special` request is a backstop for any other caller, not
+  the triage path. Rejected: failing the run, which T-67 shows never
+  reaches a person.
+- One platform module, `meridian.platform.guardrails`, pure and without I/O,
+  the standard library's `re` only:
+  - `redact`: e-mail addresses, IBANs (checksum-valid), payment card
+    numbers (Luhn-valid) and international phone numbers (a `+` prefix),
+    each replaced by a fixed placeholder that is safe inside a JSON
+    string;
+  - `classify`: whether text holds special-category data (GDPR Art. 9),
+    a short conservative list led by health;
+  - `screen`: whether text addresses the model with instructions;
+  - the order of the four data classes and the higher of two.
+  Its patterns are linear (no nested quantifiers) and its inputs are
+  bounded by the gateway's limits.
+  Rejected: Presidio or a spaCy model, a dependency of hundreds of
+  megabytes whose English entity model is weak on Hungarian names and
+  whose results change with its version. Rejected: a model as the
+  classifier or the screen, a second call per claim that is itself
+  injectable and that nothing measures until S032.
+- The gateway redacts the content of every chat message and every
+  embedding input, whatever the class, after the body limit and before
+  routing, so the token estimate, the ledger and the provider see the
+  redacted text. The wordings hold none of the patterns, and a test
+  proves that ingesting them is unchanged. It does not move the prompt's
+  version: that hash is computed in the workload before any call.
+- Names cannot be found by a pattern. The Claims API knows the claimant's
+  name and email: in the copy of the description it hands the run it
+  replaces them, whole and ignoring case, with placeholders. The stored
+  submission keeps the claimant's own text.
+- A request's data class: an optional header `X-Meridian-Data-Class`. The
+  class used is the higher of the tenant's and the header's, in the order
+  `synthetic` < `internal` < `personal` < `special`, so a header can raise
+  the class and never lower it. An unknown class is an invalid request.
+  A `special` request is refused (403) and audited with the reason
+  `special-data` before the rate windows and the budget. The class used
+  goes into the audit row and the span. The runtime's `ModelClient` sends
+  the class a graph names for each call, and triage names `personal`.
+  T-60 does not close: a class that can only be raised cannot record the
+  ingestion as `internal`.
+- The content filter: Azure answers a filtered prompt with a 400 whose
+  error code is `content_filter`, and a filtered completion with that
+  finish reason. The adapter keeps that one code, as a fixed word, never
+  the provider's message, and both cases become the provider error kind
+  `filtered`. It is not a deployment failure: no fallback, which would
+  be filtered again and charged twice, and no circuit. The gateway answers
+  400, a status it gives nothing else (its own validation answers 422),
+  so the runtime's `ModelClient`, which keeps only the status, raises its
+  own error for it and the assessment becomes `unavailable`. The
+  reservation follows the existing rule: released for the refused prompt,
+  kept for the withheld completion.
+- The golden set: one claim, CLM-0012, says "I was in hospital for several
+  weeks" (a late-report reason of the generator), and its peril has a
+  circumstance exclusion (MOTOR-TPL 3.2, racing), so the model would be
+  asked. The generator, which knows that it wrote that sentence, labels
+  the claim and its oracle expects no call, an unavailable assessment and
+  no recommendation. Rejected: the oracle calling the workload's
+  classifier, which would grade the classifier against itself. The
+  manifest changes, so the golden-set fingerprint does, and the
+  evaluation baseline is regenerated in this change (T-72).
+- Log records: a filter on every handler of the root logger at a
+  service's start redacts the formatted message. Rejected: a filter on a
+  logger, which a record from a child logger passes by.
+- The model's rationale is redacted before it is stored, although the
+  model saw only redacted text: a model can make an identifier up.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -4197,3 +4316,6 @@ changed without a reviewed new baseline.
   comparing two prompt versions become S050, new, depending on S017; S030
   depends on S050 as well. The Developer CLI section says the harness
   reaches workloads through the Claims API.
+- **v0.19, 2026-10-03:** S047 split by the session, for the owner to
+  accept at its pull request: the provider's structured outputs, which
+  S014 had left to S047, become S051, new, depending on S047.
