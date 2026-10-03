@@ -56,9 +56,9 @@ which for this project is always in the EU.
 | Claim free text | `personal`, or `special` when detected | Platform Database | The field where a claimant can volunteer special-category data |
 | Uploaded documents | Not designed | Not designed | Metadata only until a step designs uploads (T-38) |
 | Prompts and completions | Class of the request | Not stored on their own; inside checkpoints | Redacted before leaving the gateway |
-| Graph checkpoints | `personal` | Platform Database, runtime schema | Hold the run's state, including prompt content; keyed by tenant (T-10) |
+| Graph checkpoints | `personal` | Platform Database, runtime schema (S015) | Hold a run's state while it runs or waits for an adjuster: the claim's facts without the claimant's name and email, the tool results and the model's answer. Only the runtime's role may read or write them (T-63); they are deleted when the run ends; they are keyed by a thread ID that no caller sees, and a resume must name the run's tenant and claim (T-10) |
 | Triage proposals, fraud indicators, claim notes, approval requests | `personal` | Platform Database, claims schema | Fraud indicators are shown to adjusters only; whether they count as offence data under Art. 10 is a legal question outside this project |
-| Approval decisions | `personal` | Platform Database, written by the Claims Triage App | Adjuster identity, time and proposal version (T-32) |
+| Approval decisions | `personal` | Platform Database, claims schema, written by the Claims Triage App (S015) | The decision word, its time and the paused run whose proposal it answers; no free text. The adjuster's identity is designed (T-32, S021) |
 | Audit records | `personal` (pseudonymous) | Platform Database, audit schema, insert-only | Identifiers and routing facts, no prompt text; a claim ID still points at a person |
 | Usage and cost records | `personal` (pseudonymous) | Platform Database | Per tenant, agent, model and claim ID |
 | Traces, metrics and logs | `personal` (pseudonymous) | Observability Stack | Claim IDs allowed, content not (T-03) |

@@ -14,7 +14,9 @@
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
   a fixed order and lets rules decide each claim's route (no real model
-  has answered its one question), and no service runs in Azure yet.
+  has answered its one question), a claim it refers to an adjuster waits
+  with its run paused in PostgreSQL until the Claims API records the
+  decision and resumes it, and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -149,10 +151,11 @@ and Pydantic, at the cost of one dependency.
 | S044 | Tool servers on kind | The tool servers that exist run in namespace `meridian` under their own database roles, a job seeds the policy tables from the synthetic data, and the runtime reaches the servers by their cluster names; `make smoke` calls one tool through the runtime's client and `make demo` stays green | done | S013, S041 |
 | S014 | Triage graph ~~and guardrails~~ | Triage validates the policy, retrieves terms, screens fraud with rules and drafts a schema-validated proposal; ~~PII redaction and injection detection in place;~~ threat model updated (split on 2026-10-02: the guardrails are S047) | done | S011, S013, S046 |
 | S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
-| S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; the claim lifecycle from the architecture overview implemented and tested; approval decisions audited | todo | S014 |
+| S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
+| S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; time-boxed to two sessions | todo | S015 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
 
 ### M2 — Azure, identity, delivery
 
@@ -3572,13 +3575,227 @@ Run by the main session on the kind cluster built in S044.
   dashboards as code start from this one.
 - S021: who may see which tenant's cost, by sign-in role.
 
+### S015 — Human approval
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** a claim the rules send to an adjuster pauses its run in a
+PostgreSQL checkpoint, the adjuster's decision is recorded and audited by
+the Claims API, and the run resumes on it; the Claims API keeps each claim
+in a state of the designed lifecycle.
+**Decisions:**
+
+- Split by the session on 2026-10-03, for the owner to accept at the pull
+  request: this step is the checkpointer, the pause and the resume, and
+  the claim states that a run and an adjuster's decision drive; S048, new,
+  takes sending back, withdrawing, documents that arrive, the documents'
+  deadline, an adjuster's decision on a claim whose triage failed, the
+  report date stamped by the API and the claim history (T-66).
+- S009 left "a reconcile path for a run left `Running` when its final
+  write fails twice" to this step. Half of it is here: a resume takes over
+  a run left `Running` for longer than ten minutes, so a recorded decision
+  can still complete it, and a run with no pause left ends `Failed`. The
+  sweep that finds such runs without a resume moves to S048, with the
+  paused runs that no claim points to any more (the Claims API timed out,
+  or a triage was taken over) and the checkpoints a failed delete left:
+  S048 needs a scheduled job for the documents' deadline anyway, and one
+  sweep serves them all. Until then such a run keeps its checkpoint, which
+  holds claim text; `runtime.runs` still lists the run with its status.
+- The report date stays the claimant's until S048: the golden set runs on
+  the dataset's own clock, so a stamp of today would mark all 40 claims
+  late. From this step an automatic approval completes, so a claimant who
+  writes a false report date is approved within the threshold (T-66).
+- The checkpointer is `langgraph-checkpoint-postgres` 3.1.2, the
+  library's own saver for this LangGraph (it brings `psycopg-pool`).
+  Rejected: a saver of our own, which would have to track LangGraph's
+  checkpoint format. Its tables come from migration 0008, the final shape
+  of the library's migrations copied with attribution (`NOTICE`): the
+  runtime never calls `setup()`, its role cannot create tables, and a test
+  builds the library's own tables in a scratch schema and compares them, so
+  a version bump that changes the shape fails. Only `agent_runtime` may
+  read or write them (T-63). The saver has a connection of its own per
+  request (autocommit, which the library needs, and `search_path=runtime`);
+  with the services' usual connection nothing it wrote would be committed.
+- The checkpoints hold claim text: the claim's facts without the
+  claimant's name and email, while a run runs or waits. A run's thread is
+  deleted when it ends, after its status is recorded; a failed delete is
+  logged and leaves the rows behind.
+- `POST /runs/{run_id}/resume` takes the run's tenant and reference and a
+  value for the pause. A run that is not there and one under another tenant
+  or reference get the same 404 (T-10). One conditional update moves the
+  run from `AwaitingApproval` to `Running` and writes `run.resumed`, so a
+  decision resumes a run once; a later resume answers the run's status and
+  runs nothing. The value goes to the one pending pause by its ID: LangGraph
+  reads a value whose keys all look like interrupt IDs (an empty object
+  among them) as a map of pauses, and the run would pause again. The call
+  limits apply per leg. A resumed leg that fails leaves the run paused
+  with its checkpoint (`run.resume_failed`, with the reason), so the same
+  decision can be sent again; only a thread with no pause, or several,
+  ends the run `Failed`. `GET /runs/{run_id}` needs the tenant and
+  reference too, as T-10 says of reads.
+- The graph pauses only on the route `adjuster`, in two nodes after
+  `propose`: `request_approval` calls the write tool with the proposal's
+  reason code (never claim text, and read back from the checkpoint, so a
+  rerun sends the same payload and gets the stored ID, T-23), and
+  `await_decision` pauses with nothing before the pause, because LangGraph
+  runs a paused node again from its start. On resume it ignores what the
+  resume carries and reads the decision the Claims API recorded for this
+  run through `approval_outcome`, a read tool of the claims server bound to
+  the run's own ID and claim (migration 0010 lets `claims_mcp` read three
+  columns of `claims.decisions`); with none recorded it fails before any
+  write and the run stays paused. Then it adds a note from a fixed table
+  keyed by the decision word. The name keeps the registry's T-31 rule: a
+  tool whose name or scope says it decides is refused, and this one reads
+  the outcome of the graph's own approval request. Rejected: the decision
+  in the resume request, which first shipped here and which reviewers
+  showed anything able to call the runtime could forge (T-10, T-69). No
+  free text from the adjuster reaches the graph, the note or the database.
+- The claim's state is a column of `claims.claims` (migration 0009), one
+  of the lifecycle's eight words, with the time it last changed and the
+  claim's latest run. The transitions the Claims API implements are one
+  table in `lifecycle.py`, and every change is one compare-and-set update
+  with its audit event (`claim.<state>`, the trigger word as the reason) in
+  the same transaction; a test keeps the table equal to the overview's
+  diagram. Rejected: a trigger in the database that enforces the
+  transitions, a second copy of the table.
+- New state `triage_failed`, not in the designed lifecycle (T-67): a run
+  that fails, times out or answers outside the contract leaves the claim
+  there, and posting the claim again triages it, as S014 allowed. Rejected:
+  `awaiting_adjuster` with no proposal and no paused run, which would send
+  every claim of a provider outage to a person and has no run to resume.
+  Referring such a claim to an adjuster is S048's.
+- One triage of a claim at a time: the post that moves the claim to
+  `triaging` owns it, a second gets 409. A claim left `triaging` by an API
+  that died is taken over after a lease of twice the runtime timeout (120
+  s); the owner's closing update matches on the time it took the claim, so
+  a request whose lease was taken over stores nothing (409). Proposals: one
+  per run, and a claim may have several over its life (a new triage after
+  a failure; after documents arrive in S048).
+- `POST /claims/{claim_id}/decision` takes one word. In one transaction,
+  with the claim locked, it records the decision for the claim's paused run
+  (`claims.decisions`, one per run), moves the claim and writes the audit
+  event; then it resumes the run with an empty value. Record first, resume
+  second is load-bearing: the run reads the row this transaction
+  committed. The answer is 200 only when the run completed; anything else
+  is 502 with the decision kept, and the same decision posted again only
+  resumes; another word is 409. A claim stored under another tenant is
+  answered as unknown, and every state change filters by tenant. The
+  Claims API now writes audit events, which 0001 said it never would;
+  0009's header says so.
+
+**Work log:**
+
+- Seventh step of one session, after `/compact`, on the owner's word
+  ("S015"). Pull request 33 (S043) was first confirmed on `main`: its 11
+  files are identical there.
+- The advisor before the design asked for the split in the plan first,
+  the checkpointer's DDL pinned by a test, a state for a failed triage and
+  record first, resume second. The `implementer` subagent worked in nine
+  contracts: the checkpointer; the resume; the graph's pause; the claim
+  states and the decision; the stack, the restart test and the demo; and
+  four of review fixes. It found that LangGraph reads an empty resume
+  value as a map of pauses (the value is now addressed to the pause by its
+  ID), and that after a failed resumed leg the pause is still pending with
+  the first leg's value kept. It broke the rule against editing through
+  scripts once (a heredoc appended a block of tests) and said so.
+- Reviews by `security-reviewer`, `database-reviewer`,
+  `silent-failure-hunter` and `platform-boundary-reviewer` on the first
+  complete source: no critical finding. Two found that the graph acted on
+  the decision carried by the resume request, so anything able to call
+  the runtime could complete a paused run with a decision the Claims API
+  never recorded, or kill it with a value that did not fit; three found
+  that a failed resumed leg ended the run for good and a retry answered
+  200. Both are fixed: the run reads the record, a failed leg stays
+  paused, and the answer is 200 only on completion. Also fixed: the
+  decision's lookup bound to the API's tenant, a tenant filter on every
+  state change, a lock that does not block the tool servers' foreign-key
+  checks, a second try at a failed checkpoint delete, the leg in the
+  failure log, the index the decisions' foreign key lacked, and
+  `GET /runs/{run_id}` bound like the resume. The security reviewer read
+  the fixes again: the three findings are closed; a run whose pause-back
+  write failed would have stayed `Running` for good, and a resume now
+  takes it over after the lease.
+- The `docs-sync` skill: the plan (the split, S048, Part D question 3),
+  the README, the kind README, `api/mcp/README.md`, the threat model (T-10,
+  T-23, T-25, T-30, T-31, T-32, T-50, T-63, T-67, new T-69), the data
+  classification, QA-05 and QA-08, the overview's lifecycle and its new
+  state, the Claims MCP server's description in the model and the
+  overview, and the ClaimsApproval view, whose run now reads the recorded
+  decision (`make check` ends with no ERROR line; `make mermaid-render`
+  rendered the four diagrams; no derived block shows the changed views).
+  ADR 2 still says S015 would choose between deleting a run's checkpoints
+  and keeping them free of claim text, and would take the adjuster's
+  identity from the sign-in; it records its moment, and this section says
+  what S015 chose (delete) and moved (identity to S021).
+
+**Result / verification:** run by the main session on the final code
+(contracts 1 to 6c, uncommitted at the time, then committed unchanged).
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4304 passed, 3 skipped` (the
+  three are the opt-in live Azure tests). `make lint`: `Contracts: 4 kept,
+  0 broken.` `make registry`: `registry OK: 2 providers, 5 deployments, 6
+  tools, 2 agents, 3 tenants`, `schemas OK`, `contracts OK`. `make test`:
+  `OK`. `make docs`: `13 checks passed`. `make check`: no ERROR line.
+  `shellcheck infra/kind/*.sh`: clean.
+- In tests, through the real services: the 40 golden claims with the
+  gateway's replay text, the 29 referred ones paused and decided (8
+  approve, 9 reject, 12 request documents), 29 approval requests, notes
+  and decisions, and no checkpoint row left; a runtime replaced between
+  the pause and the decision; a resume of the runtime that bypasses the
+  Claims API with no decision recorded leaves the run paused and writes
+  nothing; a note that fails once is written once when the same decision
+  is posted again; the claimant's description is found in the checkpoint
+  while the claim waits and nowhere but the claim after the decision.
+- On kind (the cluster S044 built; not recreated): `make deploy` applied
+  migrations 0008, 0009 and 0010; the six claims triaged before were
+  backfilled by their latest route (four `awaiting_adjuster`, one
+  `documents_requested`, one `approved`). `make demo` posted CLM-0007,
+  which paused (`awaiting_adjuster`), approved it (`approved`, run
+  `Completed`), and found both traces: the triage across six services
+  and the decision across claims-api, agent-runtime and claims-mcp. Its
+  audit trail, in order: `claim.triaging`, `run.started`, the approval
+  request, `run.awaiting_approval`, `claim.awaiting_adjuster`,
+  `claim.approved`, `run.resumed`, `approval_outcome`, `add_claim_note`,
+  `run.completed`, each row with the role that wrote it; no checkpoint row
+  was left. QA-08 on the cluster: CLM-0008 was posted and paused (39
+  checkpoint rows), the runtime was restarted with `kubectl rollout
+  restart`, and the decision `reject` sent to the new pod answered 200
+  `Completed`, one note, no checkpoint row; `approve` posted after it was
+  409. `make smoke`: eleven PASS lines.
+- Not run: anything against Azure (the login is still blocked), so no
+  real model has answered; the dashboard, which is unchanged; a cold
+  `make up` from no cluster.
+
+**Follow-ups:**
+
+- The owner: accept the split (S048) and the move of the sweep; T-69,
+  which leaves recording a decision open to anyone who reaches the Claims
+  API until the sign-in (S021); the report date that stays the claimant's
+  (T-66); the four claims on kind backfilled to `awaiting_adjuster`,
+  whose runs ended before this step, so a decision on them is recorded and
+  answered `Completed` with no note.
+- S048: the sweep (runs left `Running` that no resume takes over, paused
+  runs no claim points to, checkpoints a failed delete left); referring a
+  failed triage to an adjuster; sending back; withdrawing; documents and
+  their deadline; the report date; the claim history.
+- S016: the queue lists `awaiting_adjuster` and `triage_failed`, and the
+  UI posts the decision; an index on the claim's state for the queue.
+- S019: a connection limit for `agent_runtime` (a run now holds a second
+  connection for its checkpoints); service identity and a network policy,
+  so that only the Claims API can resume a run (T-10); a throttle on the
+  audit rows a looped resume writes.
+- S021: who decided, from the sign-in (T-32, T-69).
+- No step yet: a migration that adds columns takes a lock on
+  `claims.claims` for its backfill (fine at this size); after a failed
+  resumed leg LangGraph keeps the first leg's value, which the claims
+  graph ignores but another workload's graph would read.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
 |---|---|---|---|
 | 1 | How many hours per week, and when do interviews start? | S002 | Plan in two-week increments; cut M3 before M2 |
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
-| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | S015 | Keep, recorded as a procedural closure in C-02 |
+| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? | ~~S015~~ S048 (moved with the deadline, 2026-10-03) | Keep, recorded as a procedural closure in C-02 |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
 | 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 
