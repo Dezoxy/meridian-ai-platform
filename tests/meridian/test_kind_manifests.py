@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -715,16 +716,25 @@ def test_the_sweep_never_runs_two_passes_at_once_and_a_failed_pass_is_not_retrie
 
 
 def test_a_sweep_pass_ends_well_before_the_next_one_is_due() -> None:
-    spec = sweep_cronjob()["spec"]
     deadline = sweep_job_spec()["activeDeadlineSeconds"]
 
     # Forbid skips a run while the last one is alive, so a hung pass would
     # silence the sweep: the deadline ends it, with room to spare.
     assert 0 < deadline <= SWEEP_PERIOD_SECONDS // 2
-    assert 0 < spec["startingDeadlineSeconds"] <= SWEEP_PERIOD_SECONDS
-    assert spec["successfulJobsHistoryLimit"] <= 3
-    assert 1 <= spec["failedJobsHistoryLimit"] <= 5
-    assert sweep_job_spec()["ttlSecondsAfterFinished"] > 0
+
+
+def test_the_sweep_keeps_one_success_three_failures_and_a_day_of_history() -> None:
+    spec = sweep_cronjob()["spec"]
+
+    # A run the controller cannot start within two minutes is skipped; the next
+    # one is five minutes away.
+    assert spec["startingDeadlineSeconds"] == 120
+    # The last success is the one `make smoke` reads; a success is removed when
+    # the next one finishes, so a failure (three kept) is what the TTL, one day,
+    # leaves to read in the morning, and the last success of a suspended CronJob.
+    assert spec["successfulJobsHistoryLimit"] == 1
+    assert spec["failedJobsHistoryLimit"] == 3
+    assert sweep_job_spec()["ttlSecondsAfterFinished"] == 24 * 60 * 60
 
 
 def test_the_sweep_cronjob_carries_the_labels_of_the_other_manifests() -> None:
@@ -2747,28 +2757,73 @@ def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:
     # Same skip rule as the tool check: only when no Meridian Deployment exists,
     # and the lookups are read-only kubectl through kctl.
     assert "$(deployed_services)" in body
-    assert "meridian-sweep" in SMOKE_SH
+    # The script reads the CronJob the manifest defines, by the one constant, and
+    # the freshness rule counts in the schedule's own period.
+    (name,) = re.findall(r"^readonly SWEEP_CRONJOB=(\S+)$", SMOKE_SH, re.MULTILINE)
+    (period,) = re.findall(
+        r"^readonly SWEEP_PERIOD_SECONDS=(\d+)$", SMOKE_SH, re.MULTILINE
+    )
+    assert name == sweep_cronjob()["metadata"]["name"]
+    assert "${SWEEP_CRONJOB}" in body
+    assert int(period) == SWEEP_PERIOD_SECONDS
     assert not re.search(r"kctl[^\n]*\b(create|apply|delete|patch|replace)\b", body)
 
 
-SWEEP_CRONJOB_ANSWER = {"metadata": {"name": "meridian-sweep"}, "spec": {}}
+SWEEP_CREATED = "2026-10-03T09:00:00Z"
+SWEEP_SCHEDULED = "2026-10-03T10:10:00Z"
+SWEEP_TOLERANCE_SECONDS = 3 * SWEEP_PERIOD_SECONDS  # three periods
+
+
+def sweep_cronjob_answer(
+    *, scheduled: str | None = SWEEP_SCHEDULED, created: str = SWEEP_CREATED, active=0
+) -> dict:
+    """The CronJob as the API returns it: the server's own timestamps only."""
+    status: dict = {"active": [{"name": f"meridian-sweep-{i}"} for i in range(active)]}
+    if scheduled is not None:
+        status["lastScheduleTime"] = scheduled
+    return {
+        "metadata": {"name": "meridian-sweep", "creationTimestamp": created},
+        "spec": {},
+        "status": status,
+    }
 
 
 def sweep_job(
-    name: str, finished: str | None = None, *, kind: str = "Complete"
+    name: str,
+    finished: str | None = None,
+    *,
+    kind: str = "Complete",
+    reason: str | None = None,
+    completed: str | None = None,
 ) -> dict:
-    """A Job the CronJob made (``finished`` None: still running)."""
-    conditions = (
-        []
-        if finished is None
-        else [{"type": kind, "status": "True", "lastTransitionTime": finished}]
-    )
+    """A Job the CronJob made (``finished`` None: still running). A Complete
+    Job carries ``completionTime`` too, as the API sets it (``completed`` when
+    it differs from the condition's time)."""
+    condition = {"type": kind, "status": "True", "lastTransitionTime": finished}
+    if reason is not None:
+        condition["reason"] = reason
+    status: dict = {"conditions": [] if finished is None else [condition]}
+    if finished is not None and kind == "Complete":
+        status["completionTime"] = completed or finished
     return {
         "metadata": {
             "name": name,
+            "creationTimestamp": "2026-10-03T09:30:00Z",
             "ownerReferences": [{"kind": "CronJob", "name": "meridian-sweep"}],
         },
-        "status": {"conditions": conditions},
+        "status": status,
+    }
+
+
+def other_job(created: str) -> dict:
+    """A Job of something else (a migration, say): only its time counts."""
+    return {
+        "metadata": {
+            "name": "meridian-migrate-abc",
+            "creationTimestamp": created,
+            "ownerReferences": [],
+        },
+        "status": {"conditions": []},
     }
 
 
@@ -2786,7 +2841,7 @@ def run_sweep_check(
     asked = tmp_path / "kctl-calls"
     asked.touch()
     if cronjob is None:
-        cronjob = SWEEP_CRONJOB_ANSWER
+        cronjob = sweep_cronjob_answer()
     if jobs is None:
         jobs = []
     script = "\n".join(
@@ -2815,7 +2870,7 @@ def run_sweep_check(
             "  esac",
             "}",
             function_definition(SMOKE_SH, "deployed_services"),
-            function_definition(SMOKE_SH, "sweep_last_finished"),
+            function_definition(SMOKE_SH, "sweep_verdict"),
             function_definition(SMOKE_SH, "check_sweep"),
             "check_sweep",
         ]
@@ -2909,6 +2964,23 @@ def test_the_sweep_check_passes_on_the_newest_finished_job_that_succeeded(
     assert line.startswith("PASS  sweep:")
     assert "meridian-sweep-3" in line
     assert "succeeded" in line
+    assert "2026-10-03T10:10:00Z" in line  # when it finished, as the API says
+
+
+@requires_jq
+def test_the_sweep_check_prints_the_completion_time_of_a_job_that_completed(
+    tmp_path: Path,
+) -> None:
+    jobs = [
+        sweep_job(
+            "meridian-sweep-1", "2026-10-03T10:10:09Z", completed="2026-10-03T10:10:07Z"
+        )
+    ]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
+
+    assert line.startswith("PASS  sweep:")
+    assert "2026-10-03T10:10:07Z" in line
 
 
 @requires_jq
@@ -2917,7 +2989,12 @@ def test_the_sweep_check_fails_when_the_newest_finished_job_failed(
 ) -> None:
     jobs = [
         sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z"),
-        sweep_job("meridian-sweep-2", "2026-10-03T10:05:00Z", kind="Failed"),
+        sweep_job(
+            "meridian-sweep-2",
+            "2026-10-03T10:05:00Z",
+            kind="Failed",
+            reason="DeadlineExceeded",
+        ),
     ]
 
     (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
@@ -2925,6 +3002,24 @@ def test_the_sweep_check_fails_when_the_newest_finished_job_failed(
     assert line.startswith("FAIL  sweep:")
     assert "meridian-sweep-2" in line
     assert "failed" in line
+    assert "2026-10-03T10:05:00Z" in line
+    # A Job that hit its deadline, or whose pod never started, has no pod log:
+    # the reason and `describe` are what show why.
+    assert "DeadlineExceeded" in line
+    assert "kubectl -n meridian describe job/meridian-sweep-2" in line
+    assert "logs job/meridian-sweep-2" in line
+
+
+@requires_jq
+def test_the_sweep_check_says_so_when_a_failed_job_gives_no_reason(
+    tmp_path: Path,
+) -> None:
+    jobs = [sweep_job("meridian-sweep-2", "2026-10-03T10:05:00Z", kind="Failed")]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs)[0]
+
+    assert line.startswith("FAIL  sweep:")
+    assert "no reason" in line
 
 
 @requires_jq
@@ -2950,9 +3045,163 @@ def test_the_sweep_check_fails_when_the_jobs_cannot_be_read(tmp_path: Path) -> N
     assert line.startswith("FAIL  sweep: could not read the Jobs")
 
 
-@requires_jq
-def test_the_sweep_check_only_reads(tmp_path: Path) -> None:
-    _, asked = run_sweep_check(tmp_path, jobs=[])
+SWEEP_FINISHED = "2026-10-03T10:10:00Z"
 
+
+def seconds_after(stamp: str, seconds: int) -> str:
+    moment = datetime.fromisoformat(stamp) + timedelta(seconds=seconds)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@requires_jq
+def test_the_sweep_check_fails_when_the_schedule_ran_on_without_a_run_finishing(
+    tmp_path: Path,
+) -> None:
+    # Last scheduled more than three periods after the newest finished Job
+    # finished, and nothing running: the schedule makes Jobs that never finish.
+    scheduled = seconds_after(SWEEP_FINISHED, SWEEP_TOLERANCE_SECONDS + 1)
+    cronjob = sweep_cronjob_answer(scheduled=scheduled)
+
+    (line,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=[sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+    )[0]
+
+    assert line.startswith("FAIL  sweep: the schedule is not producing finished runs")
+    assert scheduled in line
+    assert SWEEP_FINISHED in line
+
+
+@requires_jq
+def test_the_sweep_check_passes_at_exactly_three_periods_after_the_newest_finish(
+    tmp_path: Path,
+) -> None:
+    scheduled = seconds_after(SWEEP_FINISHED, SWEEP_TOLERANCE_SECONDS)
+    cronjob = sweep_cronjob_answer(scheduled=scheduled)
+
+    (line,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=[sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+    )[0]
+
+    assert line.startswith("PASS  sweep:")
+
+
+@requires_jq
+def test_the_sweep_check_passes_past_three_periods_while_a_job_is_running(
+    tmp_path: Path,
+) -> None:
+    scheduled = seconds_after(SWEEP_FINISHED, SWEEP_TOLERANCE_SECONDS + 1)
+    cronjob = sweep_cronjob_answer(scheduled=scheduled, active=1)
+
+    (line,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=[sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+    )[0]
+
+    assert line.startswith("PASS  sweep:")
+
+
+@requires_jq
+def test_the_sweep_check_skips_a_cronjob_that_has_not_been_scheduled_yet(
+    tmp_path: Path,
+) -> None:
+    # Created at 09:00:00; the newest timestamp the API holds is 600 s later:
+    # fewer than three periods, so it cannot be told from a young CronJob.
+    cronjob = sweep_cronjob_answer(scheduled=None)
+    jobs = [other_job(seconds_after(SWEEP_CREATED, 600))]
+
+    (line,) = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs)[0]
+
+    assert line.startswith("SKIP  sweep: cronjob/meridian-sweep has not been scheduled")
+    assert SWEEP_CREATED in line
+    assert "600 s" in line
+
+
+@requires_jq
+def test_the_sweep_check_says_it_has_no_clock_when_nothing_is_newer_than_the_cronjob(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_sweep_check(
+        tmp_path, cronjob=sweep_cronjob_answer(scheduled=None), jobs=[]
+    )[0]
+
+    assert line.startswith("SKIP  sweep: cronjob/meridian-sweep has not been scheduled")
+    assert "no server-side clock" in line
+
+
+@requires_jq
+def test_the_sweep_check_skips_at_exactly_three_periods_and_fails_one_second_after(
+    tmp_path: Path,
+) -> None:
+    cronjob = sweep_cronjob_answer(scheduled=None)
+    at = seconds_after(SWEEP_CREATED, SWEEP_TOLERANCE_SECONDS)
+    past = seconds_after(SWEEP_CREATED, SWEEP_TOLERANCE_SECONDS + 1)
+
+    (kept,) = run_sweep_check(tmp_path, cronjob=cronjob, jobs=[other_job(at)])[0]
+    (late,) = run_sweep_check(tmp_path, cronjob=cronjob, jobs=[other_job(past)])[0]
+
+    assert kept.startswith("SKIP  sweep:")
+    assert late.startswith(
+        "FAIL  sweep: cronjob/meridian-sweep has never been scheduled"
+    )
+    assert f"{SWEEP_TOLERANCE_SECONDS + 1} s" in late
+
+
+@requires_jq
+def test_a_finished_job_made_by_hand_does_not_hide_a_cronjob_that_never_fired(
+    tmp_path: Path,
+) -> None:
+    cronjob = sweep_cronjob_answer(scheduled=None)
+    jobs = [sweep_job("meridian-sweep-manual", "2026-10-03T10:00:00Z")]
+
+    (line,) = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs)[0]
+
+    assert line.startswith(
+        "FAIL  sweep: cronjob/meridian-sweep has never been scheduled"
+    )
+
+
+@requires_jq
+def test_the_sweep_check_skips_while_the_first_job_is_running(tmp_path: Path) -> None:
+    cronjob = sweep_cronjob_answer(active=1)
+
+    (line,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=[sweep_job("meridian-sweep-1", None)]
+    )[0]
+
+    assert line.startswith("SKIP  sweep: no Job of cronjob/meridian-sweep has finished")
+    assert "running" in line
+
+
+@requires_jq
+@pytest.mark.parametrize(
+    ("outcome", "cronjob", "jobs"),
+    [
+        (
+            "PASS",
+            sweep_cronjob_answer(),
+            [sweep_job("meridian-sweep-1", SWEEP_FINISHED)],
+        ),
+        (
+            "FAIL",
+            sweep_cronjob_answer(),
+            [sweep_job("meridian-sweep-1", SWEEP_FINISHED, kind="Failed")],
+        ),
+        (
+            "FAIL",
+            sweep_cronjob_answer(scheduled="2026-10-03T11:00:00Z"),
+            [sweep_job("meridian-sweep-1", SWEEP_FINISHED)],
+        ),
+        ("SKIP", sweep_cronjob_answer(), []),
+    ],
+    ids=["pass", "failed-job", "stale-schedule", "skip"],
+)
+def test_the_sweep_check_only_reads(
+    tmp_path: Path, outcome: str, cronjob: dict, jobs: list[dict]
+) -> None:
+    lines, asked = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs)
+
+    # Every path gets its verdict from `get` calls alone.
+    assert lines[0].startswith(outcome), lines
+    assert asked.splitlines(), "kubectl was never asked"
     for call in asked.splitlines():
         assert " get " in call, call
+        assert not re.search(r"\b(create|apply|delete|patch|replace|exec)\b", call)

@@ -7,19 +7,26 @@
 # deploy.sh replaces @IMAGE@ and applies this file with the services. Unlike a
 # Job's, a CronJob's spec can change in place, and the next Job it starts
 # carries the change, so its name has no image tag.
-#   concurrencyPolicy Forbid  a pass that is still alive is not joined by
-#                             another: the sweep's moves are compare-and-set,
-#                             but two passes would only fight over the same rows
+#   concurrencyPolicy Forbid  governs only what the schedule starts: a scheduled
+#                             pass is skipped while another is running. A Job
+#                             made by hand (`kubectl create job
+#                             --from=cronjob/meridian-sweep`) runs beside a
+#                             scheduled one, which is why the role's connection
+#                             limit allows two pods; the CronJob owns it, so the
+#                             next scheduled pass is skipped while it runs
 #   activeDeadlineSeconds     120, under half the period: a hung connection ends
 #                             the pass, because Forbid would otherwise skip
 #                             every later run behind it
 #   startingDeadlineSeconds   a run the controller could not start within 120 s
 #                             is skipped; the next one is five minutes away
 #   backoffLimit 0            the next run is the retry
-#   history limits            the last success and the last three failures stay
-#                             for `kubectl logs`; make smoke reads the last one
-#   ttlSecondsAfterFinished   a day, so a failure in the night is still there in
-#                             the morning
+#   history limits            one success and the last three failures; a by-hand
+#                             Job counts, as the CronJob owns it. A success is
+#                             removed when the next one finishes, about five
+#                             minutes later; make smoke reads the last finished
+#   ttlSecondsAfterFinished   a day: what keeps a failure for the morning, and
+#                             the last success of a suspended CronJob, which no
+#                             later Job pushes out
 # The pod takes the migration Job's shape: the 'db-ca' volume holds only the
 # CA's public certificate, no service-account token, no extra privilege.
 apiVersion: v1

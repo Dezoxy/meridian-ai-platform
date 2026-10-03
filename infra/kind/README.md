@@ -189,9 +189,18 @@ node image, Kubernetes components and the platform).
    changes no claim. Before `make deploy` this check prints SKIP.
 7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, is
    not suspended, and the last of its Jobs to finish, scheduled or made by
-   hand, succeeded. Before `make deploy`, and while no Job of it has finished
-   yet, this line prints SKIP; it fails when the CronJob is missing or
-   suspended or the last finished Job failed.
+   hand, succeeded; the line says when it finished. It fails when the CronJob
+   is missing or suspended, when the last finished Job failed (the line gives
+   its reason, and `describe` and `logs` commands: a Job that hit its deadline
+   or whose pod never started has no log), when the CronJob was last
+   scheduled more than 15 minutes (three periods) after that Job finished
+   with nothing running, and when it was never scheduled although the API
+   holds a timestamp more than 15 minutes after its creation. Before
+   `make deploy`, while no Job of it has finished yet and while a CronJob that
+   never ran is younger than that, this line prints SKIP. Only timestamps the
+   API server set are compared, never this laptop's clock, so a schedule that
+   stopped after a success keeps printing PASS with that success's finish
+   time: read the time against `date -u`.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -338,19 +347,30 @@ A CronJob `meridian-sweep` (S052, in
 [`manifests/meridian/sweep-cronjob.yaml`](manifests/meridian/sweep-cronjob.yaml))
 runs `python -m meridian.workloads.claims_triage.sweep` every five minutes,
 in the image `make deploy` built, as the database role `claims_sweep` (Secret
-`claims-sweep-db`, never the owner's). One pass refers
-a claim whose documents are overdue to an adjuster, fails a claim stranded in
-`submitted` or `triaging`, ends a run no resume takes over and deletes the
-checkpoints a finished run left. It needs PostgreSQL only: no call to any
-service and no model. The deadline for documents is
-`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days.
+`claims-sweep-db`, never the owner's).
 
-`concurrencyPolicy: Forbid` means a pass that is still running is never
-joined by another. A pass is cut off after 120 seconds and is not retried
+Status: **implemented** in S052 (the plan's section for the step says what
+the code does). This is what the job is written to do, not behaviour this page
+observed; `make smoke`'s seventh line is the check that it ran and finished on
+your cluster. One pass is meant to refer a claim whose documents are overdue
+to an adjuster, fail a claim stranded in `submitted` or `triaging`, end a run
+no resume takes over and delete the checkpoints a finished run left. It needs
+PostgreSQL only: no call to any service and no model. The deadline for
+documents is `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days.
+
+`concurrencyPolicy: Forbid` governs only what the schedule starts: a scheduled
+pass is skipped while another is running. A Job made by hand (below) runs
+beside a scheduled one, which is why the role may hold 4 connections, and,
+because the CronJob owns it, the next scheduled pass is skipped while it
+runs. A pass is cut off after 120 seconds and is not retried
 (`backoffLimit: 0`): the next run, five minutes later, is the retry. The
-last Job that succeeded and the last three that failed are kept, and
-Kubernetes removes each a day after it finishes. A pod has no service-account
-token, no extra privilege and mounts only the CA's public certificate.
+CronJob keeps one succeeded and three failed Jobs, and a by-hand Job counts
+toward those limits because the CronJob owns it. A succeeded Job is removed when the next one finishes,
+about five minutes later. Kubernetes removes any Job a day after it finishes
+(`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
+the morning, and the last success of a suspended CronJob. A pod has no
+service-account token, no extra privilege and mounts only the CA's public
+certificate.
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
 

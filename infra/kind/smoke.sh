@@ -35,9 +35,17 @@
 #                 while the Meridian services are not deployed (`make deploy`).
 #   7. sweep:     one line, read-only. The CronJob meridian-sweep exists, is not
 #                 suspended, and the last of its Jobs to finish (the scheduled
-#                 ones and any made by hand) succeeded. Skipped while the
-#                 Meridian services are not deployed (`make deploy`) or while
-#                 no Job of it has finished yet; fails when the last one failed.
+#                 ones and any made by hand) succeeded; the line prints when it
+#                 finished. It fails when the last one failed (with its reason),
+#                 when the CronJob was last scheduled more than three periods
+#                 (15 minutes) after that Job finished with nothing running, and
+#                 when it was never scheduled although the API holds a timestamp
+#                 more than three periods after its creation. Skipped while the
+#                 Meridian services are not deployed (`make deploy`), while no
+#                 Job of it has finished yet, and while a CronJob that never ran
+#                 is too young to judge. Only the API server's timestamps are
+#                 compared; a PASS says when it finished, and a schedule that
+#                 stopped since cannot be seen without a clock the script trusts.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -50,6 +58,9 @@ readonly ADJUSTER_DECISION_URL=http://claims.meridian.localhost:8088/adjuster/cl
 # The first sentence of the banner every page carries (templates/base.html).
 readonly ADJUSTER_BANNER="Synthetic data only."
 readonly SWEEP_CRONJOB=meridian-sweep
+# The CronJob's schedule is every five minutes; a run is overdue after three.
+readonly SWEEP_PERIOD_SECONDS=300
+readonly SWEEP_STALE_PERIODS=3
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
@@ -656,26 +667,58 @@ check_adjuster_pages() {
 }
 
 # ── 7. sweep ─────────────────────────────────────────────────────────────────
-# sweep_last_finished JOBS_JSON: "succeeded <job>" or "failed <job>" for the Job
-# of the CronJob that finished last (by the time of its Complete or Failed
-# condition, the name breaking a tie), or nothing when none has finished. A Job
-# made by hand with `kubectl create job --from=cronjob/...` has the same owner.
-sweep_last_finished() {
-  jq -r --arg cronjob "${SWEEP_CRONJOB}" '
-    [.items[]
-      | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cronjob))
-      | . as $job
-      | ([$job.status.conditions[]? | select(.status == "True" and (.type == "Complete" or .type == "Failed"))] | first // empty) as $done
-      | {name: $job.metadata.name, type: $done.type, at: ($done.lastTransitionTime // "")}]
-    | sort_by([.at, .name]) | last // empty
-    | "\(if .type == "Complete" then "succeeded" else "failed" end) \(.name)"
-  ' <<<"$1"
+# Only timestamps the API server set are compared (the CronJob's creation and
+# lastScheduleTime, a Job's completionTime, creation and conditions): this
+# laptop's clock is not the node's (see deploy.sh), so there is no "now". The
+# newest of those timestamps is a lower bound of the server's now.
+#
+# sweep_verdict CRONJOB_JSON JOBS_JSON: one line, fields separated by "|":
+#   succeeded|JOB|FINISHED_AT          the newest finished Job of the CronJob
+#   failed|JOB|FINISHED_AT|REASON      (scheduled or made by hand with
+#                                      `kubectl create job --from=cronjob/...`,
+#                                      which has the same owner) and how it ended
+#   stale|SCHEDULED_AT|FINISHED_AT     last scheduled more than three periods
+#                                      after that Job finished, nothing running:
+#                                      the schedule makes no finished runs
+#   never|SECONDS                      never scheduled, and a timestamp the API
+#                                      holds is more than three periods after
+#                                      the CronJob's creation
+#   unscheduled|SECONDS|CREATED_AT     never scheduled, no proof it is overdue
+#   running                            no Job has finished; one is running
+#   none|SCHEDULED_AT                  no Job has finished, none is running
+sweep_verdict() {
+  jq -nr --arg cronjob "${SWEEP_CRONJOB}" --argjson cj "$1" --argjson jobs "$2" \
+    --argjson tolerance "$((SWEEP_PERIOD_SECONDS * SWEEP_STALE_PERIODS))" '
+    def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+    ($cj.status.lastScheduleTime // null) as $scheduled
+    | (($cj.status.active // []) | length) as $active
+    | [$jobs.items[]
+        | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cronjob))
+        | . as $job
+        | ([$job.status.conditions[]? | select(.status == "True" and (.type == "Complete" or .type == "Failed"))] | first // empty) as $done
+        | {name: $job.metadata.name, type: $done.type, reason: ($done.reason // ""),
+           at: ((if $done.type == "Complete" then ($job.status.completionTime // $done.lastTransitionTime) else $done.lastTransitionTime end) // "")}]
+    | (sort_by([.at, .name]) | last) as $newest
+    | ([$cj.metadata.creationTimestamp, $scheduled,
+        ($jobs.items[] | .metadata.creationTimestamp, .status.startTime, .status.completionTime, (.status.conditions[]? | .lastTransitionTime))]
+       | map(select(. != null and . != "") | epoch) | max) as $latest
+    | ($latest - ($cj.metadata.creationTimestamp | epoch)) as $age
+    | if $scheduled == null and $age > $tolerance then "never|\($age)"
+      elif $newest == null then
+        if $active > 0 then "running"
+        elif $scheduled == null then "unscheduled|\($age)|\($cj.metadata.creationTimestamp)"
+        else "none|\($scheduled)" end
+      elif $scheduled != null and $active == 0 and (($scheduled | epoch) - ($newest.at | epoch)) > $tolerance then
+        "stale|\($scheduled)|\($newest.at)"
+      elif $newest.type == "Complete" then "succeeded|\($newest.name)|\($newest.at)"
+      else "failed|\($newest.name)|\($newest.at)|\($newest.reason)" end
+  '
 }
 
 # Same skip rule as the tool check: only when no Meridian Deployment exists. Only
 # reads; the Jobs of the whole namespace are listed and filtered by owner.
 check_sweep() {
-  local found cronjob jobs last outcome job
+  local found cronjob jobs verdict kind first second third
   if ! found="$(deployed_services)"; then
     fail "sweep: could not look for the Meridian deployments (kubectl's error is above)"
     return
@@ -700,21 +743,40 @@ check_sweep() {
     fail "sweep: could not read the Jobs in meridian (kubectl's error is above)"
     return
   fi
-  if ! last="$(sweep_last_finished "${jobs}")"; then
-    fail "sweep: could not read the Jobs' conditions"
+  if ! verdict="$(sweep_verdict "${cronjob}" "${jobs}")"; then
+    fail "sweep: could not read the CronJob's and the Jobs' timestamps and conditions"
     return
   fi
-  if [[ -z "${last}" ]]; then
-    skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (it runs every five minutes)"
-    return
-  fi
-  outcome="${last%% *}"
-  job="$(clean_lines "${last#* }")"
-  if [[ "${outcome}" == succeeded ]]; then
-    pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${job}, succeeded"
-  else
-    fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${job}, failed (kubectl -n meridian logs job/${job})"
-  fi
+  IFS='|' read -r kind first second third <<<"${verdict}"
+  first="$(clean_lines "${first}")"
+  second="$(clean_lines "${second}")"
+  third="$(clean_lines "${third}")"
+  case "${kind}" in
+    succeeded)
+      pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}"
+      ;;
+    failed)
+      fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, failed at ${second} (${third:-no reason given}); kubectl -n meridian describe job/${first} shows why, and kubectl -n meridian logs job/${first} what its pod printed, if a pod started"
+      ;;
+    stale)
+      fail "sweep: the schedule is not producing finished runs: cronjob/${SWEEP_CRONJOB} was last scheduled at ${first}, more than $((SWEEP_PERIOD_SECONDS * SWEEP_STALE_PERIODS)) s after its newest finished Job finished at ${second}, and no Job is running"
+      ;;
+    never)
+      fail "sweep: cronjob/${SWEEP_CRONJOB} has never been scheduled, although the API holds a timestamp ${first} s after its creation (more than three periods): the schedule is not producing runs"
+      ;;
+    unscheduled)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} has not been scheduled yet (created ${second}); there is no server-side clock to say how long that has been, and the newest timestamp the API holds is ${first} s after its creation, within the $((SWEEP_PERIOD_SECONDS * SWEEP_STALE_PERIODS)) s it allows"
+      ;;
+    running)
+      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet; the first one is running"
+      ;;
+    none)
+      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (last scheduled at ${first})"
+      ;;
+    *)
+      fail "sweep: unexpected verdict from the timestamps"
+      ;;
+  esac
 }
 
 trap cleanup EXIT
