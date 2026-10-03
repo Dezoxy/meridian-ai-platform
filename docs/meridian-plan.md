@@ -24,7 +24,8 @@
   decided by an adjuster, a claim can be withdrawn or get the documents it
   was asked for, at most five triages each, a claimant submits a claim
   (the API stamps its report date, and a decided claim counts in the
-  policy's claim history), reads its status, reports documents and withdraws it on server-rendered
+  policy's claim history), reads its status, reports documents and
+  withdraws it on server-rendered
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
   proposals with rules against a reviewed baseline (with a scripted model,
   simulated), and no service runs in Azure yet.
