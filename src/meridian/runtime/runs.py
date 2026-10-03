@@ -24,6 +24,7 @@ from meridian.runtime.failures import GraphFailure
 from meridian.runtime.graphs import GraphFactory
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.models import RunState, RunStatus
+from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
 from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.tracing import NodeSpans
 
@@ -53,11 +54,6 @@ RESUME_FAILED_EVENT = ("run.resume_failed", "paused")
 NO_PENDING_PAUSE = "no-pending-pause"
 SEVERAL_PENDING_PAUSES = "several-pending-pauses"
 NOTHING_TO_RESUME = frozenset({NO_PENDING_PAUSE, SEVERAL_PENDING_PAUSES})
-# How long a run may stay ``Running`` before a resume may take it over: a leg
-# that died, or whose last status write failed twice, leaves the run so. Well
-# above the longest a live leg can take (four model calls at the gateway's
-# 30 s timeout, sixteen tool calls), so a live leg is not taken over.
-RUNNING_LEASE_SECONDS = 600
 # The ``reason`` of the ``run.resumed`` event of such a takeover.
 STALE_RUNNING_REASON = "stale-running"
 

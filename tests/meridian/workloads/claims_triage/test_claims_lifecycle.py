@@ -16,10 +16,15 @@ from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
     DOCUMENTS_ARRIVED,
     DOCUMENTS_AT_CAP,
+    DOCUMENTS_DEADLINE_DAYS,
+    DOCUMENTS_OVERDUE,
     MAX_TRIAGES_PER_CLAIM,
     MOVE_CLAIM,
     RULES_APPROVED,
     TRANSITIONS,
+    TRIAGE_ABANDONED,
+    TRIAGE_FAILED,
+    TRIAGE_NOT_STARTED,
     TRIAGE_RECLAIMED,
     TRIAGE_STARTED,
     LifecycleState,
@@ -40,10 +45,9 @@ DIAGRAM_NAMES = {
     "Withdrawn": "withdrawn",
 }
 # The diagram's edges that are designed, not implemented (the overview says
-# which step builds each); [*] --> Submitted is the claim's creation.
-DESIGNED_EDGES = {
-    ("DocumentsRequested", "Rejected"),  # the deadline, a scheduled job: S052
-}
+# which step builds each); [*] --> Submitted is the claim's creation. None is
+# left: the deadline of S052 refers a claim to an adjuster and rejects none.
+DESIGNED_EDGES: set[tuple[str, str]] = set()
 START = "[*]"
 WITHDRAWAL = "claimant-withdrew"  # the one trigger two transitions share
 CLAIM_ID = "CLM-9301"
@@ -98,6 +102,29 @@ def test_the_edges_of_the_diagram_that_are_not_implemented_are_the_designed_ones
 def test_the_diagram_has_no_edge_for_the_lease_takeover() -> None:
     assert ("Triaging", "Triaging") not in diagram_edges()
     assert TRIAGE_RECLAIMED in TRANSITIONS
+
+
+def test_the_sweep_has_three_transitions_and_each_has_its_own_word() -> None:
+    assert [
+        (t.source, t.target, t.trigger)
+        for t in (DOCUMENTS_OVERDUE, TRIAGE_NOT_STARTED, TRIAGE_ABANDONED)
+    ] == [
+        ("documents_requested", "awaiting_adjuster", "documents-overdue"),
+        ("submitted", "triage_failed", "triage-not-started"),
+        ("triaging", "triage_failed", "triage-abandoned"),
+    ]
+    assert {DOCUMENTS_OVERDUE, TRIAGE_NOT_STARTED, TRIAGE_ABANDONED} <= TRANSITIONS
+    # Two words for one pair of states are allowed: the audit event's reason says
+    # which of them moved the claim.
+    assert (TRIAGE_FAILED.source, TRIAGE_FAILED.target) == (
+        TRIAGE_ABANDONED.source,
+        TRIAGE_ABANDONED.target,
+    )
+
+
+def test_the_deadline_for_documents_is_fourteen_days() -> None:
+    # The owner's decision of 2026-10-03.
+    assert DOCUMENTS_DEADLINE_DAYS == 14
 
 
 def test_a_trigger_word_belongs_to_one_transition_out_of_a_state() -> None:
@@ -207,6 +234,23 @@ def test_every_listed_transition_moves_the_claim_and_audits_it(
             "claims_api",
         )
     ]
+
+
+def test_the_audit_event_carries_the_service_the_caller_names(
+    claim: DatabaseHandle,
+) -> None:
+    with connect(claim.dsn("claims_api"), "test") as conn:
+        moved = move_claim(
+            conn,
+            TRIAGE_STARTED,
+            claim_id=CLAIM_ID,
+            tenant=TENANT,
+            service="claims-sweep",
+        )
+        conn.commit()
+
+    assert moved is not None
+    assert [row[0] for row in audit_rows(claim)] == ["claims-sweep"]
 
 
 def test_a_claim_in_another_state_does_not_move_and_nothing_is_audited(

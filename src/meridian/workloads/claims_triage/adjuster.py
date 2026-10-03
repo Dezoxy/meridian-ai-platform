@@ -47,6 +47,7 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.workloads.claims_triage.lifecycle import (
+    DOCUMENTS_OVERDUE,
     MAX_TRIAGES_PER_CLAIM,
     SERVICE_NAME,
 )
@@ -180,7 +181,7 @@ REASON_SQL = (
     "ORDER BY recorded_at DESC LIMIT 1"
 )
 # The reason of the sweep's move of a claim whose documents did not come.
-DOCUMENTS_OVERDUE_REASON = "documents-overdue"
+DOCUMENTS_OVERDUE_REASON = DOCUMENTS_OVERDUE.trigger
 
 
 class TrailRow(NamedTuple):
