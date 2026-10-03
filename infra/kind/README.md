@@ -140,7 +140,7 @@ node image, Kubernetes components and the platform).
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks five things:
+`make smoke` checks six things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -171,6 +171,12 @@ node image, Kubernetes components and the platform).
    nothing since it started, this line prints SKIP; `make demo` sends a
    claim. Grafana's rights: its service account may not read Secrets in
    `meridian` or `observability`.
+6. **Adjuster pages.** Two lines. The queue at
+   `http://claims.meridian.localhost:8088/adjuster/claims` answers 200 with
+   a `Content-Security-Policy` that forbids framing and every script, and
+   carries the synthetic-data line. A decision posted with another site's
+   `Origin` is refused with 403 before any claim is looked up (threat model
+   T-70). Before `make deploy` this check prints SKIP.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -304,7 +310,12 @@ records the decision and resumes the run, which reads the recorded decision
 and writes a note through the claims tool server. A claim that is not
 referred needs no decision. A claim left waiting (the demo was stopped
 between the two posts) answers 409 to the next `make demo`, which moves on;
-decide it by posting to its decision endpoint yourself.
+decide it on the adjuster's pages (S016): open
+`http://claims.meridian.localhost:8088/adjuster/claims` in a browser on the
+laptop, which lists the claims that wait for an adjuster and those whose
+triage failed; a claim's page shows its proposal, citations and audit trail
+and records the decision. The pages have no sign-in yet (threat model
+T-69), and the edge serves them only to the laptop.
 
 ## The cost dashboard
 

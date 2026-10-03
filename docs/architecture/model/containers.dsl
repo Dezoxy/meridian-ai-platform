@@ -20,7 +20,7 @@ meridian = softwareSystem "Meridian AI Platform" "Builds, runs and governs LLM a
     }
 
     group "Workload plane" {
-        claimsApp = container "Claims Triage App" "Claims API and adjuster queue UI for the reference workload; owns the claims-triage graph package." "Python, FastAPI, Jinja, HTMX" "Layer Workload"
+        claimsApp = container "Claims Triage App" "Claims API and adjuster queue UI for the reference workload; owns the claims-triage graph package." "Python, FastAPI, Jinja" "Layer Workload"
         claimsMcp = container "Claims MCP Server" "Claim notes, approval requests and the outcome recorded for a request as MCP tools. Adjuster decisions are recorded by the Claims Triage App, never through a tool." "Python, MCP SDK" "Layer Workload"
     }
 }

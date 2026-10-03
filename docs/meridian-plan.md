@@ -15,8 +15,9 @@
   servers (with a simulated embedding), a triage graph calls the tools in
   a fixed order and lets rules decide each claim's route (no real model
   has answered its one question), a claim it refers to an adjuster waits
-  with its run paused in PostgreSQL until the Claims API records the
-  decision and resumes it, and no service runs in Azure yet.
+  with its run paused in PostgreSQL until the adjuster decides it on a
+  server-rendered page and the Claims API records the decision and resumes
+  it, and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -153,7 +154,7 @@ and Pydantic, at the cost of one dependency.
 | S047 | Guardrails | Personal data is redacted before a model call and in logs; claimant text is screened for injected instructions before the model reads it; a request carries its own data class, which can only be raised above the tenant's, and a `special` request makes no model call and goes to the adjuster; threat model updated | todo | S014 |
 | S015 | Human approval | Interrupt and resume with the PostgreSQL checkpointer; ~~the claim lifecycle from the architecture overview implemented and tested~~ the claim states that a triage run and an adjuster's decision drive, one triage of a claim at a time, and a state for a claim whose triage failed; approval decisions audited (split on 2026-10-03: the rest of the lifecycle is S048) | done | S014 |
 | S048 | Claim lifecycle, the rest | An adjuster sends a claim back to triage; a claim whose triage failed is referred to an adjuster, who decides it with no paused run; a claimant withdraws; documents that arrive (metadata only, T-38) start a new triage; a claim whose documents miss the deadline is closed as rejected; the Claims API stamps the report date and a decided claim enters the claim history (T-66); a scheduled sweep ends runs left `Running`, paused runs that no claim points to, and checkpoints a failed delete left (T-63) | todo | S015 |
-| S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | doing | S015 |
+| S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | todo | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule and LLM-judge graders (tool choice, arguments, groundedness, completion, latency, cost); a report per prompt version; a CI gate on prompt or tool changes; `meridian eval run` and `meridian eval compare` drive it locally and in CI | todo | S003, S014 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048 |
@@ -3793,7 +3794,7 @@ in a state of the designed lifecycle.
 
 ### S016 — Adjuster UI
 
-**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
 **Goal:** an adjuster lists the claims that wait for a person, reads a
 claim's proposal next to its citations, fraud indicators and audit trail,
 and records approve, reject or request documents from the page, through
@@ -3836,7 +3837,9 @@ the same code as the JSON decision.
     request's own host or whose `Sec-Fetch-Site` names another site; the
     pages send `Content-Security-Policy` with no script source and
     `frame-ancestors 'none'`. A client that is not a browser passes, as on
-    the JSON route (T-69).
+    the JSON route (T-69). Changed after the security review (see the work
+    log): `Sec-Fetch-Site`, when the browser sends it, decides alone, and
+    the `Origin` comparison applies only without it.
   - **T-71, new:** reading the audit trail. The Claims API gets one view of
     `audit.events`, a claim's rows and five columns, never the table.
   - **T-07:** autoescaping on; the description, the model's rationale and
@@ -3851,9 +3854,114 @@ the same code as the JSON decision.
 
 **Work log:**
 
-**Result / verification:**
+- Contract 1 (`implementer`): migration 0011, an index for the queue and
+  the view `audit.claim_trail`, which `claims_api` may read instead of
+  `audit.events`. The `database-reviewer` read it: the view joined the
+  claim's runs with `OR` and a subquery, which no index serves; one
+  claim's trail over 400,000 events had not finished after 120 s. Contract
+  1b rewrote it as two branches under `UNION ALL` (the second leaves out
+  the first's rows with `IS DISTINCT FROM`, so a NULL does not drop a row
+  from both), indexed the claims' runs by reference, made the two other
+  indexes partial (the queue's two states; the Claims API's own rows), and
+  added tests: the plan uses the three indexes on 3,000 seeded claims, and
+  the trail's edge cases. It also found that `security_barrier` on a view
+  whose own query is the `UNION ALL` did not hold: a function of the
+  caller ran on rows of the log inside each branch, before the joins
+  dropped them, while `reloptions` still said `security_barrier`. The two
+  branches now sit in a derived table under a plain `SELECT`, and a test
+  with a function of the caller's proves the barrier (it fails with the
+  barrier off). The implementer edited the test file with heredocs three
+  times, against its contract; the file is formatted and passes.
+- Contract 2 (`implementer`): the pages (`adjuster.py`, four templates,
+  one stylesheet), the decision extracted into `_decide`, which both routes
+  call, Jinja2 3.1.6 as a new dependency and `python-multipart` made a
+  direct one; the templates ship in the wheel with `uv_build`'s defaults.
+  Contract 3: two lines in `make smoke`. The implementer of contract 2
+  edited two files once each through a script, against its contract.
+- Reviews by `security-reviewer`, `fastapi-reviewer` and
+  `platform-boundary-reviewer`: no critical finding, one high. With
+  `Referrer-Policy: no-referrer`, Chrome sends `Origin: null` on the page's
+  own form post, with `Sec-Fetch-Site: same-origin`, so the origin check
+  refused every decision from a browser; the unit tests had encoded
+  "`null` is refused" and no browser had run them. Contract 4 lets
+  `Sec-Fetch-Site` decide when it is sent and sets `Referrer-Policy:
+  same-origin`. Also from the reviews: a second post while the first still
+  resumes answers 409 instead of a failed resume, on both routes; the
+  claim page offers to send a recorded decision again until the run has
+  completed, not only right after a failure; a failed audit write renders
+  a page; a post that names the decision twice is refused; a refused post
+  is logged with the claim's ID only; `X-Frame-Options`. Not taken: a list
+  of the pages' own host names (T-70's residual, S019 and S021); keeping
+  the Claims API's own rows out of a run's part of the trail, because that
+  role can already write a row naming the claim and the page shows the
+  role the database stamped; HTML pages for the shared JSON errors under
+  `/adjuster/`; stripping bidirectional control characters. Contract 4's
+  premise that a failed audit write raises `AuditUnavailable` was wrong: a
+  decision's audit write raises a database error, which the existing
+  database answer already renders; the page's own catch stays as a
+  defence. The test that pinned a `Running` run to 502 now covers `Failed`
+  and `AwaitingApproval` only.
+- The `docs-sync` skill: the plan (the split, S049, the status line,
+  changelog v0.17), the README (status, an Adjuster UI row, `make smoke`),
+  the kind README (`make smoke`'s sixth check, the pages), the `Makefile`'s
+  help line, the threat model (T-01, T-04, T-65 and T-66 now cite S049;
+  T-07, T-25, T-33 updated; T-70 and T-71 new), the model's and the
+  overview's technology for the Claims Triage App (Jinja, no HTMX).
+
+**Result / verification:** run by the main session on the final code.
+
+- `GITHUB_ACTIONS=true make pytest-db`: `4465 passed, 3 skipped` (the
+  three are the opt-in live Azure tests). `make lint`: `Contracts: 4 kept,
+  0 broken.` `make test`: `OK`. `make registry`: `schemas OK`, `contracts
+  OK`. `make docs`: `13 checks passed`. `make check`: no ERROR line.
+  `ruff check` and `ruff format --check`: clean. `shellcheck
+  infra/kind/*.sh`: clean. The templates and the stylesheet are in the
+  built wheel.
+- In tests: the queue (states, tenant, order, at most 100); the claim
+  page (proposal, citations, indicators, the trail from the view, no
+  claimant, draft-only and invalid proposals); markup in a description, a
+  rationale and a clause escaped; a form decision that moves the claim and
+  writes the same audit rows as the JSON one; the refusals and a failed
+  resume rendered with the API's status and text; the origin check's
+  cases, Chrome's `Origin: null` with `Sec-Fetch-Site: same-origin`
+  among them; the headers on every answer under `/adjuster/`; no
+  description or claimant name in the log; through the stack, a referred
+  golden claim decided from the form completes its run and writes its
+  note.
+- On kind (the cluster S044 built; not recreated): `make deploy` applied
+  migration 0011 and rolled out the image with the pages; `make smoke`
+  printed 13 PASS lines, the two new ones among them (the queue answers
+  200 with its policy and the synthetic-data line; a post with another
+  site's `Origin` is 403, and the Claims API logged the refusal). In the
+  built-in browser: the queue listed the four claims backfilled in S015;
+  CLM-0001's page showed its facts without the claimant, the proposal,
+  two citations, the gap and the trail with each row's role; no console
+  error, so the policy blocked nothing the page needs. With the owner's
+  yes, "Approve" was clicked: the browser's post answered 303, the claim
+  moved to `approved`, and `claim.approved` joined the trail as
+  `claims_api`. `make demo` passed with CLM-0009 (`documents_requested`,
+  no decision needed).
+- Not run: Firefox and Safari (the Chrome pair is what the fix was found
+  with); anything against Azure; a cold `make up`.
 
 **Follow-ups:**
+
+- The owner: accept the split (S049) and T-70's residual (no list of the
+  pages' host names until S019 or S021).
+- On kind, CLM-0002, CLM-0004 and CLM-0006 still wait, and CLM-0001's page
+  offers to send its decision again for good: their runs ended in S014,
+  before any decision, so no `run.completed` follows one. Sending it again
+  answers `Completed`, so this is cosmetic and ends with those claims.
+- S048: deciding a claim whose triage failed, which the page lists
+  without buttons.
+- S019 or S021: the pages' own host names, checked on every request under
+  `/adjuster/` (T-70); the edge keeping the `Host`, which the check
+  trusts.
+- S021: the sign-in, the adjuster role and who decided (T-32, T-69);
+  keep the origin check when cookies arrive and set `SameSite` on them.
+- S049: the claimant's pages (T-01, T-04, T-65).
+- No step yet: reads of a claim's page are not audited; the queue shows at
+  most 100 claims with no next page.
 
 ## Part D — Open questions
 
@@ -3924,3 +4032,8 @@ the same code as the JSON decision.
   the report date and the claim history, and the sweep of runs and
   checkpoints that S009 had left to S015. S018 depends on S048; Part D
   question 3 is needed by S048.
+- **v0.17, 2026-10-03:** S016 split by the session, for the owner to
+  accept at its pull request: the claimant's pages, which the threat
+  model had given S016 (T-01, T-04, T-65), become S049, new, depending on
+  S016; S018 does not wait for them. S016 keeps one session instead of
+  two.
