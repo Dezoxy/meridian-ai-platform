@@ -18,6 +18,7 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,9 @@ from meridian.workloads.claims_triage.wording import select_terms
 # Seconds that clear the gateway's windows (10 requests per 10 seconds and 10,000
 # tokens per minute for the claims-triage tenant) before the next claim.
 WINDOW_SECONDS = 61
+# The date the API stamps before a test moves it: a form posted with
+# ``submit_in_page`` sets it to the claim's own report date first.
+STAMP_AT_START = date(2026, 9, 1)
 
 
 def load(name: str) -> Any:
@@ -146,13 +150,27 @@ def new_runtime(
     )
 
 
+@dataclass(slots=True)
+class Stamp:
+    """The date the Claims API stamps on a claim the claimant's form submits
+    (T-66): a test moves it by setting ``day``. The stack holds one, so the date
+    survives a restart of the runtime and the Claims API."""
+
+    day: date
+
+    def today(self) -> date:
+        return self.day
+
+
 def claims_api_over_new_runtime(
     db: DatabaseHandle,
     exporter: InMemorySpanExporter,
     tool_servers: dict[str, Any],
     model_http: httpx.Client,
+    stamp: Stamp,
 ) -> TestClient:
-    """A Claims API client on a Claims API over a newly built Agent Runtime."""
+    """A Claims API client on a Claims API over a newly built Agent Runtime,
+    whose claimant's pages stamp the date ``stamp`` holds."""
     runtime = new_runtime(db, exporter, tool_servers, model_http)
     claims = create_claims_api(
         ClaimsSettings(
@@ -161,6 +179,7 @@ def claims_api_over_new_runtime(
         ),
         tracer_provider=make_tracer_provider("claims-api", exporter),
         http_client=TestClient(runtime),
+        today=stamp.today,
     )
     return TestClient(claims)
 
@@ -175,6 +194,7 @@ class Stack:
     exporter: InMemorySpanExporter
     tool_servers: dict[str, Any] = field(repr=False)
     model_http: httpx.Client = field(repr=False)
+    stamp: Stamp = field(repr=False)
 
     def post(self, claim: dict[str, Any], *, advance: bool = True) -> httpx.Response:
         """Post a claim; by default the clock moves first, so the claim finds
@@ -229,21 +249,28 @@ class Stack:
         )
 
     def submit_in_page(
-        self, claim: dict[str, Any], *, advance: bool = True
+        self,
+        claim: dict[str, Any],
+        *,
+        advance: bool = True,
+        today: date | None = None,
     ) -> httpx.Response:
         """The claim as the claimant's form posts it (S049): the nested location
         and claimant flattened, the documents one per line, the amount and the
-        dates as text. It is posted from the page's own origin and the redirect
-        is not followed. A triage runs, so by default the clock moves first, as
-        in ``post``."""
+        date of loss as text; the form has no report date, the API stamps it
+        (T-66). The stamp is set to the claim's own ``reported_on`` first, so a
+        golden claim keeps the dataset's clock and its oracle outcome, or to
+        ``today``. It is posted from the page's own origin and the redirect is
+        not followed. A triage runs, so by default the clock moves first, as in
+        ``post``."""
         if advance:
             self.clock.advance(WINDOW_SECONDS)
+        self.stamp.day = today or date.fromisoformat(claim["reported_on"])
         fields = {
             "claim_id": claim["claim_id"],
             "policy_number": claim["policy_number"],
             "peril": claim["peril"],
             "loss_date": claim["loss_date"],
-            "reported_on": claim["reported_on"],
             "claimed_amount": str(claim["claimed_amount"]),
             "city": claim["loss_location"]["city"],
             "country": claim["loss_location"]["country"],
@@ -301,7 +328,7 @@ class Stack:
         restarted pod would be. Nothing the old runtime held in memory
         survives."""
         self.client = claims_api_over_new_runtime(
-            self.db, self.exporter, self.tool_servers, self.model_http
+            self.db, self.exporter, self.tool_servers, self.model_http, self.stamp
         )
 
 
@@ -320,9 +347,10 @@ def build_stack(
         "claims-mcp": claims_server(world, exporter),
     }
     model_http = runtime_http or gateway.http
-    client = claims_api_over_new_runtime(db, exporter, tool_servers, model_http)
+    stamp = Stamp(STAMP_AT_START)
+    client = claims_api_over_new_runtime(db, exporter, tool_servers, model_http, stamp)
     exporter.clear()  # the spans of the ingestion are not a claim's trace
-    return Stack(client, db, gateway.clock, exporter, tool_servers, model_http)
+    return Stack(client, db, gateway.clock, exporter, tool_servers, model_http, stamp)
 
 
 def service_of(span: ReadableSpan) -> str:

@@ -74,7 +74,7 @@ tools:
           items:
             type: object
             properties:
-              history_id: {type: string, pattern: "^HIST-[0-9]{4}$", maxLength: 9}
+              history_id: {type: string, pattern: "^(HIST|CLM)-[0-9]{4}$", maxLength: 9}
               loss_date: {type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", maxLength: 10}
               peril: {type: string, maxLength: 64}
               paid_amount: {type: integer, minimum: 0, maximum: 1000000000}

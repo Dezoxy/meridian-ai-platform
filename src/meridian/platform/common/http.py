@@ -16,11 +16,12 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.trace import Tracer
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.trace import Span, Tracer
 from pydantic import StringConstraints
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException
+from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meridian.platform.common.audit import AuditUnavailable
@@ -49,6 +50,13 @@ SMALL_BODY_LIMIT_BYTES = 64 * 1024
 GATEWAY_BODY_LIMIT_BYTES = 4 * 1024 * 1024
 HTTP_PAYLOAD_TOO_LARGE = 413
 HEALTH_PATH = "/healthz"
+# The span attributes the FastAPI instrumentation fills from the request's URL,
+# under the old and the new HTTP semantic conventions (T-03).
+URL_ATTRIBUTES = ("http.url", "http.target", "url.full")
+QUERY_ATTRIBUTE = "url.query"
+
+# The answer for a request whose declared body is over the limit, by its scope.
+type ScopeAnswer = Callable[[Scope], Response]
 
 # Only a database that cannot be reached or has dropped the connection is
 # "unavailable"; every other error is ours, so a constraint or data error must
@@ -105,16 +113,27 @@ def database_failure(exc: psycopg.Error) -> tuple[int, str]:
     return 500, INTERNAL_ERROR
 
 
+def invalid_request_answer(exc: RequestValidationError) -> JSONResponse:
+    """The 422 of the JSON routes: locations, messages and error types, never
+    the input."""
+    problems = [
+        {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
+        for e in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": problems})
+
+
+def body_too_large(_: Scope) -> Response:
+    """The 413 of the JSON routes."""
+    return error_answer(HTTP_PAYLOAD_TOO_LARGE, BODY_TOO_LARGE)
+
+
 def install_error_handlers(app: FastAPI) -> None:
     """Replace the default answers that would echo input or internals."""
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
-        problems = [
-            {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
-            for e in exc.errors()
-        ]
-        return JSONResponse(status_code=422, content={"detail": problems})
+        return invalid_request_answer(exc)
 
     @app.exception_handler(AuditUnavailable)
     async def audit_unavailable(_: Request, exc: AuditUnavailable) -> JSONResponse:
@@ -132,11 +151,18 @@ class BodyLimitMiddleware:
     A Content-Length over the limit is refused before the app runs. A body
     without one (chunked) is counted as it is read, so the header cannot be
     used to get round the limit.
+
+    ``too_large`` gives the answer to a declared length over the limit for the
+    request's scope (the JSON answer by default); a body counted as it is read
+    goes through the app's ``HTTPException`` handler.
     """
 
-    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+    def __init__(
+        self, app: ASGIApp, max_bytes: int, too_large: ScopeAnswer = body_too_large
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.too_large = too_large
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -148,9 +174,7 @@ class BodyLimitMiddleware:
             and declared.isdigit()
             and int(declared) > self.max_bytes
         ):
-            await error_answer(HTTP_PAYLOAD_TOO_LARGE, BODY_TOO_LARGE)(
-                scope, receive, send
-            )
+            await self.too_large(scope)(scope, receive, send)
             return
         received = 0
 
@@ -199,6 +223,28 @@ class UnexpectedErrorMiddleware:
             await error_answer(500, INTERNAL_ERROR)(scope, receive, send)
 
 
+def drop_query_from_span(span: Span, scope: Scope) -> None:
+    """The server span's URL attributes without the query string (T-03).
+
+    The instrumentation sets ``http.url`` with the query (and, under the new
+    conventions, ``url.full`` and ``url.query``) before it calls this hook. The
+    query is what a person typed or what a link carried, and a span leaves the
+    process; the path stays. An attribute cannot be removed from a started
+    span, so each is overwritten by its value without the query (``url.query``
+    by the empty string). The ASGI scope is untouched: the route still reads
+    the query.
+    """
+    if not isinstance(span, ReadableSpan):  # not recording: no attributes
+        return
+    attributes = span.attributes or {}
+    for key in URL_ATTRIBUTES:
+        value = attributes.get(key)
+        if isinstance(value, str) and "?" in value:
+            span.set_attribute(key, value.partition("?")[0])
+    if QUERY_ATTRIBUTE in attributes:
+        span.set_attribute(QUERY_ATTRIBUTE, "")
+
+
 @dataclass(frozen=True, slots=True)
 class ServiceApp:
     app: FastAPI
@@ -214,6 +260,7 @@ def create_service_app(
     max_body_bytes: int,
     tracer_provider: TracerProvider | None = None,
     close: Callable[[], None] | None = None,
+    too_large: ScopeAnswer = body_too_large,
 ) -> ServiceApp:
     """What the three services set up the same way.
 
@@ -221,6 +268,9 @@ def create_service_app(
     down, flushing its spans, when the lifespan ends; an injected one is the
     caller's), the error handlers, the body limit, the FastAPI instrumentation
     and ``GET /healthz``, which touches nothing. ``close`` runs at shutdown.
+    ``too_large`` is the answer to a declared body over the limit (see
+    ``BodyLimitMiddleware``). No server span keeps a query string (see
+    ``drop_query_from_span``).
     """
     configure_propagation()
     provider = tracer_provider or make_tracer_provider(service_name)
@@ -253,8 +303,12 @@ def create_service_app(
     # The last one added is the outermost: the limit answers 413 before the
     # app runs, and this one sits closest to the routes.
     app.add_middleware(UnexpectedErrorMiddleware)
-    app.add_middleware(BodyLimitMiddleware, max_bytes=max_body_bytes)
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+    app.add_middleware(
+        BodyLimitMiddleware, max_bytes=max_body_bytes, too_large=too_large
+    )
+    FastAPIInstrumentor.instrument_app(
+        app, tracer_provider=provider, server_request_hook=drop_query_from_span
+    )
 
     @app.get(
         HEALTH_PATH,

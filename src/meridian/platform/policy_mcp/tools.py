@@ -4,6 +4,14 @@ Both are bound to the run's own policy number: the kit has already refused a
 call whose argument names another. Neither returns a holder, an address or an
 insured object, because the store keeps none (a tool result enters a prompt,
 TB-7).
+
+``claim_history`` answers from two sources in one query (S053): the seeded
+``policy.claim_history``, and ``claims.decided_claims``, a read-only view of
+the platform's own approved and rejected claims. A decided claim's entry has
+its claim ID as ``history_id`` and its state as ``status``. The view's rows are
+the run's tenant's and never the run's own claim, which the run is deciding;
+the view carries no word of the claimant, so neither does an entry. The Claims
+API writes nothing to the policy store (the owner's decision, T-66, T-75).
 """
 
 import psycopg
@@ -24,11 +32,26 @@ FROM policy.policies
 WHERE policy_number = %s
 """
 
-# One row more than the limit, to know whether the answer was cut.
+# Both sources in one order and one cut: %s are the policy number, the policy
+# number, the run's tenant, the run's claim and the limit, in that order. One
+# row more than the limit, to know whether the answer was cut. A decided claim
+# whose submission held no usable loss date or peril is not an entry: the view
+# gives NULL there, and an entry needs both.
 SELECT_HISTORY = """
 SELECT history_id, loss_date, peril, paid_amount, status
-FROM policy.claim_history
-WHERE policy_number = %s
+FROM (
+    SELECT history_id, loss_date, peril, paid_amount, status
+    FROM policy.claim_history
+    WHERE policy_number = %s
+    UNION ALL
+    SELECT claim_id, loss_date, peril, paid_amount, state
+    FROM claims.decided_claims
+    WHERE policy_number = %s
+        AND tenant = %s
+        AND claim_id <> %s
+        AND loss_date IS NOT NULL
+        AND peril IS NOT NULL
+) AS entries
 ORDER BY loss_date DESC, history_id
 LIMIT %s
 """
@@ -68,8 +91,16 @@ def policy_lookup(conn: psycopg.Connection, call: ToolCall) -> Completed | Refus
 
 
 def claim_history(conn: psycopg.Connection, call: ToolCall) -> Completed | Refused:
+    policy_number = call.arguments["policy_number"]
     rows = conn.execute(
-        SELECT_HISTORY, (call.arguments["policy_number"], HISTORY_LIMIT + 1)
+        SELECT_HISTORY,
+        (
+            policy_number,
+            policy_number,
+            call.binding.tenant,
+            call.binding.claim_id,
+            HISTORY_LIMIT + 1,
+        ),
     ).fetchall()
     entries = [
         {

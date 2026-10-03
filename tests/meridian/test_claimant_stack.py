@@ -8,16 +8,19 @@ a word of the stored proposal, and that the page's two other forms end a run and
 change the rules' answer as S048's JSON routes do.
 
 The claims are the golden set's: CLM-0002 (the lapsed policy, referred to an
-adjuster by the rules without asking the model) and CLM-0030 (a burglary that
-came without its police report).
+adjuster by the rules without asking the model), CLM-0030 (a burglary that
+came without its police report) and CLM-0019 (a flood the rules approve
+automatically, and the model is not asked).
 """
 
+from datetime import date, timedelta
 from typing import get_args
 
 import httpx
 import pytest
 from dbsupport import DatabaseHandle
-from stacksupport import CLAIMS, Stack, build_stack
+from servicesupport import owner_rows
+from stacksupport import CLAIMS, EXPECTED, Stack, build_stack
 from test_lifecycle_stack import (
     DOCUMENTS_REQUESTED,
     ROUTE_WITH_THE_DOCUMENTS,
@@ -28,13 +31,18 @@ from test_lifecycle_stack import (
 from test_triage_stack import AFTER_TRIAGE, LAPSED_POLICY, run_status, states
 
 from meridian.workloads.claims_triage.models import DECISION_NOTES
-from meridian.workloads.claims_triage.rules import FraudIndicator
+from meridian.workloads.claims_triage.rules import (
+    REPORTING_WINDOW_DAYS,
+    FraudIndicator,
+)
 
 STATUS_PATH = "/claimant/claims/{}"
 REVIEWING = "An adjuster is reviewing your claim."
 APPROVED = "Your claim is approved."
 ASKED_FOR = "Documents asked for:"
 ARRIVED = "Documents that arrived"
+# Reported the day after the loss, in the dataset: the rules approve it.
+AUTO_APPROVED = "CLM-0019"
 
 
 @pytest.fixture
@@ -130,3 +138,56 @@ def test_the_documents_reported_from_the_page_change_the_rules_answer(
     assert ASKED_FOR not in after
     for name in missing:
         assert f"<li>{name}</li>" in after.split(ARRIVED)[1]
+
+
+# ── 3. the report date is the API's (T-66) ──────────────────────────────────
+@pytest.mark.parametrize(
+    ("days_after_loss", "route", "state", "indicators"),
+    [
+        (REPORTING_WINDOW_DAYS, "auto_approve", "approved", []),
+        (REPORTING_WINDOW_DAYS + 1, "adjuster", "awaiting_adjuster", ["late_report"]),
+    ],
+    ids=["at the window's end", "a day after it"],
+)
+def test_the_report_date_the_api_stamps_decides_whether_the_report_is_late(
+    stack: Stack,
+    fresh_database: DatabaseHandle,
+    days_after_loss: int,
+    route: str,
+    state: str,
+    indicators: list[str],
+) -> None:
+    claim = CLAIMS[AUTO_APPROVED]
+    stamp = date.fromisoformat(claim["loss_date"]) + timedelta(days=days_after_loss)
+
+    submitted = stack.submit_in_page(claim, today=stamp)
+
+    assert_redirects_to_status(submitted, AUTO_APPROVED)
+    assert states(fresh_database)[AUTO_APPROVED] == state
+    ((_, proposal),) = proposals_of(fresh_database, AUTO_APPROVED)
+    assert proposal.route == route
+    assert list(proposal.fraud_indicators) == indicators
+    stored = owner_rows(
+        fresh_database,
+        "SELECT submission ->> 'reported_on' FROM claims.claims WHERE claim_id = %s",
+        (AUTO_APPROVED,),
+    )
+    assert stored == [(stamp.isoformat(),)]
+
+
+def test_a_golden_claim_posted_through_the_page_keeps_the_datasets_clock(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    claim = CLAIMS[AUTO_APPROVED]
+
+    submitted = stack.submit_in_page(claim)
+
+    # As the oracle says: approved by the rules, no indicator, the dataset's date.
+    assert_redirects_to_status(submitted, AUTO_APPROVED)
+    expected = EXPECTED[AUTO_APPROVED]
+    assert expected["route"] == "auto_approve"
+    assert states(fresh_database)[AUTO_APPROVED] == "approved"
+    ((_, proposal),) = proposals_of(fresh_database, AUTO_APPROVED)
+    assert proposal.route == expected["route"]
+    assert list(proposal.fraud_indicators) == expected["fraud_indicators"]
+    assert APPROVED in status_page(stack, AUTO_APPROVED)

@@ -9,6 +9,15 @@ claim form runs the code of ``POST /claims`` (``store_claim`` then
 ``withdraw``: the code of the JSON routes, not a copy of it. Every post takes
 T-70's origin check.
 
+The report date is the API's, not the claimant's (T-66): the form has no such
+field and a ``reported_on`` posted anyway is ignored. The API stamps the date
+now in the insurer's time zone, read once per request, and the first stamp
+stands: ``store_claim`` takes the stored submission as the same one when only
+the stamp differs, so the form sent again later (as the 503 notice asks) keeps
+its first date and is triaged with it. A loss dated after today is a message on
+the form. The JSON route ``POST /claims`` keeps ``reported_on`` as the intake's
+date and stamps nothing.
+
 A claim that is stored is answered by its status page whatever its triage did:
 the claim's state is the answer (T-65). The form is shown again after a refusal
 before anything is stored (another submission under the ID, a form that does not
@@ -24,31 +33,48 @@ validate names the field and the rule, never the value (T-03). Nothing here logs
 or puts on a span anything of the claim but its ID. There is no sign-in yet:
 anyone who reaches the pages reads any claim's status by its ID (T-01, S021).
 
-What under ``/claimant/`` is not a page: a claim ID in the path that is not one
-(422), a path with no route (404), a route with another method (405), a body over
-the limit (413) and a body that cannot be parsed (400) are answered by the shared
-handlers, as the JSON body of the Claims API, with the pages' headers.
+What under ``/claimant/`` is not a route of its own is a page too: a claim ID in
+the path that is not one (422), a path with no route (404), a route with another
+method (405), a body over the limit (413, declared or streamed) and a body that
+cannot be parsed (400) are answered with the claimant's error page, with the same
+status and the pages' headers, not the JSON of the Claims API. The text is fixed
+for each status, never the exception's detail or anything of the request (T-03).
+The handlers here take the path and give any other path the shared JSON answer;
+the 413 for a declared length is the one the body limit asks ``claimant_too_large``
+for (``create_app`` passes it).
 """
 
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, get_args
+from zoneinfo import ZoneInfo
 
 import httpx
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Scope
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.platform.common.db import connect
-from meridian.platform.common.http import AUDIT_UNAVAILABLE, database_failure
+from meridian.platform.common.http import (
+    AUDIT_UNAVAILABLE,
+    HTTP_PAYLOAD_TOO_LARGE,
+    body_too_large,
+    database_failure,
+    invalid_request_answer,
+)
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -56,6 +82,7 @@ from meridian.platform.common.telemetry import (
 )
 from meridian.workloads.claims_triage.adjuster import (
     CLAIM_ID_PATTERN,
+    CLAIMANT_PREFIX,
     HTTP_NOT_FOUND,
     HTTP_SEE_OTHER,
     HTTP_UNAVAILABLE,
@@ -86,14 +113,38 @@ from meridian.workloads.claims_triage.triaging import (
 logger = logging.getLogger(__name__)
 
 START_PATH = "/claimant/claims"
+# The insurer's time zone: the report date is the date there, not in UTC (with
+# UTC a loss dated today would be after the report for two hours after local
+# midnight).
+REPORT_TIME_ZONE = ZoneInfo("Europe/Vienna")
+HTTP_BAD_REQUEST = 400
+HTTP_METHOD_NOT_ALLOWED = 405
 HTTP_UNPROCESSABLE = 422
 ONCE_TEXT = "send this field exactly once, as text"
 LOOKUP_MESSAGE = "A claim ID is CLM- and four digits, for example CLM-0001."
+# What an error page says for the shared answers, by status: fixed text, never
+# the exception's detail and nothing of the request (T-03).
+NOT_FOUND_TEXT = "There is no such page."
+METHOD_TEXT = "This page does not take that kind of request."
+TOO_LARGE_TEXT = "What you sent is too large."
+UNREADABLE_TEXT = "We could not read what you sent."
+SHARED_ANSWER_TEXTS: Mapping[int, str] = {
+    HTTP_BAD_REQUEST: UNREADABLE_TEXT,
+    HTTP_NOT_FOUND: NOT_FOUND_TEXT,
+    HTTP_METHOD_NOT_ALLOWED: METHOD_TEXT,
+    HTTP_PAYLOAD_TOO_LARGE: TOO_LARGE_TEXT,
+}
 UNASSESSED_DETAIL = (
     "Your claim is stored but could not be assessed now. Send the same form again."
 )
-# The label of an error that belongs to no one field (the loss after the report).
+# The label of an error that belongs to no one field.
 CLAIM_LABEL = "Claim"
+# The model's own error for a loss dated after the report date, which the pages
+# stamp: on the page it is the loss dated after today.
+LOSS_AFTER_REPORT = "loss_date is after reported_on"
+LOSS_AFTER_TODAY = "the date of loss is after today"
+# What the claimant's route lets the first submission keep (``store_claim``).
+STAMPED_KEYS = ("reported_on",)
 DOCUMENTS_LABEL = "Documents"
 # The claim form's fields, in the order of the page, with their labels.
 FIELD_LABELS: Mapping[str, str] = {
@@ -101,7 +152,6 @@ FIELD_LABELS: Mapping[str, str] = {
     "policy_number": "Policy number",
     "peril": "Peril",
     "loss_date": "Date of loss",
-    "reported_on": "Date reported",
     "claimed_amount": "Claimed amount",
     "city": "City",
     "country": "Country",
@@ -116,7 +166,6 @@ ERROR_LABELS: Mapping[str, str] = {
     "policy_number": FIELD_LABELS["policy_number"],
     "peril": FIELD_LABELS["peril"],
     "loss_date": FIELD_LABELS["loss_date"],
-    "reported_on": FIELD_LABELS["reported_on"],
     "claimed_amount": FIELD_LABELS["claimed_amount"],
     "loss_location.city": FIELD_LABELS["city"],
     "loss_location.country": FIELD_LABELS["country"],
@@ -155,6 +204,12 @@ MISSING_SQL = (
 )
 
 type Problems = Sequence[tuple[str, str]]
+
+
+def today_in_vienna() -> date:
+    """The date now in the insurer's time zone: the report date the Claims API
+    stamps on a claim the claimant's form submits."""
+    return datetime.now(REPORT_TIME_ZONE).date()
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,8 +278,9 @@ def read_form(form: FormData) -> tuple[dict[str, str], list[tuple[str, str]]]:
     return values, problems
 
 
-def submission_data(values: Mapping[str, str]) -> dict[str, Any]:
-    """The dict ``ClaimSubmission`` takes, from the form's values."""
+def submission_data(values: Mapping[str, str], reported_on: date) -> dict[str, Any]:
+    """The dict ``ClaimSubmission`` takes, from the form's values and the report
+    date the API stamps."""
     typed = values["claimed_amount"]
     amount = int(typed) if re.fullmatch(AMOUNT_PATTERN, typed) else typed
     return {
@@ -232,7 +288,7 @@ def submission_data(values: Mapping[str, str]) -> dict[str, Any]:
         "policy_number": values["policy_number"],
         "peril": values["peril"],
         "loss_date": values["loss_date"],
-        "reported_on": values["reported_on"],
+        "reported_on": reported_on.isoformat(),
         "claimed_amount": amount,
         "loss_location": {"city": values["city"], "country": values["country"]},
         "description": values["description"],
@@ -244,21 +300,20 @@ def submission_data(values: Mapping[str, str]) -> dict[str, Any]:
     }
 
 
+def _message_of(error: ErrorDetails) -> tuple[str, str]:
+    """The field's label and the model's text; the loss dated after the report
+    date, which is today's, is the date of loss's."""
+    if not error["loc"] and LOSS_AFTER_REPORT in error["msg"]:
+        return FIELD_LABELS["loss_date"], LOSS_AFTER_TODAY
+    location = ".".join(part for part in error["loc"] if isinstance(part, str))
+    return ERROR_LABELS.get(location, CLAIM_LABEL), error["msg"]
+
+
 def messages_of(exc: ValidationError) -> list[tuple[str, str]]:
     """One message per error, as the field's label and the model's text: no
     input, no URL, no context, so no value of the claimant's is in one."""
     errors = exc.errors(include_url=False, include_input=False, include_context=False)
-    shown = (
-        (
-            ERROR_LABELS.get(
-                ".".join(part for part in error["loc"] if isinstance(part, str)),
-                CLAIM_LABEL,
-            ),
-            error["msg"],
-        )
-        for error in errors
-    )
-    return list(dict.fromkeys(shown))
+    return list(dict.fromkeys(_message_of(error) for error in errors))
 
 
 # ── what the pages show, as text ────────────────────────────────────────────
@@ -308,10 +363,30 @@ def claimant_error(status: int, detail: str) -> HTMLResponse:
     return render_error(status, detail, for_claimant=True)
 
 
+def is_claimant_path(path: str) -> bool:
+    return path.startswith(CLAIMANT_PREFIX)
+
+
+def claimant_too_large(scope: Scope) -> Response:
+    """The 413 the body limit sends for a declared length: the claimant's page
+    under ``/claimant/``, the shared JSON answer elsewhere."""
+    if is_claimant_path(scope["path"]):
+        return claimant_error(HTTP_PAYLOAD_TOO_LARGE, TOO_LARGE_TEXT)
+    return body_too_large(scope)
+
+
 def audit_unavailable(exc: AuditUnavailable) -> HTMLResponse:
     """What the shared handler of the JSON routes answers, as a claimant's page."""
     logger.error("audit write failed: %s", exc)
     return claimant_error(HTTP_UNAVAILABLE, AUDIT_UNAVAILABLE)
+
+
+def store_stamped(dsn: str, tenant: str, submission: ClaimSubmission) -> dict[str, Any]:
+    """The code of ``POST /claims``'s store, with the report date the first stamp
+    stands for: the submission as it is stored."""
+    return store_claim(
+        dsn, tenant, submission.model_dump(mode="json"), stamped=STAMPED_KEYS
+    )
 
 
 def to_status(claim_id: str) -> RedirectResponse:
@@ -326,11 +401,34 @@ def add_claimant_pages(
     tenant: str,
     http: httpx.Client,
     tracer: Tracer,
+    today: Callable[[], date] | None = None,
 ) -> None:
     """Add the start page, the claim form, the status page and the documents and
     withdrawal forms to the Claims API. Called after ``add_adjuster_pages``,
     whose middleware adds the headers and whose handler refuses a post another
-    site made (it picks the claimant's page by the path)."""
+    site made (it picks the claimant's page by the path). It also answers the
+    shared errors of a path under ``/claimant/`` as the claimant's pages and
+    gives every other path the shared JSON answer. ``today`` is the clock of the
+    report date the claim form's submissions are stamped with (the date now in
+    the insurer's time zone by default)."""
+    clock = today or today_in_vienna
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_path(request: Request, exc: RequestValidationError) -> Response:
+        # Every form here is read by hand, so what fails to validate under the
+        # prefix is the claim ID in the path.
+        if is_claimant_path(request.url.path):
+            return claimant_error(HTTP_UNPROCESSABLE, LOOKUP_MESSAGE)
+        return invalid_request_answer(exc)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def shared_error(request: Request, exc: StarletteHTTPException) -> Response:
+        text = SHARED_ANSWER_TEXTS.get(exc.status_code)
+        if text is None or not is_claimant_path(request.url.path):
+            return await http_exception_handler(request, exc)
+        page = claimant_error(exc.status_code, text)
+        page.headers.update(exc.headers or {})  # a 405 names the methods allowed
+        return page
 
     def status_response(
         claim_id: str,
@@ -366,7 +464,7 @@ def add_claimant_pages(
         page = render_status(view, notice=notice, errors=errors, typed=typed)
         return HTMLResponse(page, status_code=status)
 
-    def triage_stored(claim_id: str, submission: ClaimSubmission) -> bool:
+    def triage_stored(claim_id: str, stored: dict[str, Any]) -> bool:
         """Triage a stored claim in a span, in one thread. Whatever the triage
         answers or refuses (409: being triaged, or it already has a proposal), the
         claim's state is the answer (T-65); an audit failure is not swallowed.
@@ -374,7 +472,9 @@ def add_claimant_pages(
         ``True`` when the triage failed and the claim is still ``submitted`` (it
         never started) or ``triaging`` (it failed and the move to
         ``triage_failed`` did too): no queue lists it, so only the claimant
-        sending the form again can, once a lease that lapsed lets it."""
+        sending the form again can, once a lease that lapsed lets it. The triage
+        takes the submission as it is stored, with its first report date."""
+        submission = ClaimSubmission.model_validate(stored)
         with start_span(tracer, "claims.claimant.submit") as span:
             set_span_attributes(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
@@ -493,7 +593,9 @@ def add_claimant_pages(
         if problems:
             return render_start(values, errors=problems, status=HTTP_UNPROCESSABLE)
         try:
-            submission = ClaimSubmission.model_validate(submission_data(values))
+            submission = ClaimSubmission.model_validate(
+                submission_data(values, clock())
+            )
         except ValidationError as exc:
             # Never ``str(exc)``, and nothing logged: it quotes the values.
             return render_start(
@@ -501,9 +603,7 @@ def add_claimant_pages(
             )
         claim_id = submission.claim_id
         try:
-            await run_in_threadpool(
-                store_claim, dsn, tenant, submission.model_dump(mode="json")
-            )
+            stored = await run_in_threadpool(store_stamped, dsn, tenant, submission)
         except HTTPException as exc:
             # Another submission under this ID: nothing is stored, nothing runs.
             return render_start(
@@ -520,7 +620,7 @@ def add_claimant_pages(
         # so that sending it unchanged is what the notice asks.
         unassessed = Notice(HTTP_UNAVAILABLE, UNASSESSED_DETAIL)
         try:
-            unseen = await run_in_threadpool(triage_stored, claim_id, submission)
+            unseen = await run_in_threadpool(triage_stored, claim_id, stored)
         except psycopg.Error as exc:
             database_failure(exc)  # logs the class and SQLSTATE, nothing else
             return render_start(values, notice=unassessed, status=HTTP_UNAVAILABLE)

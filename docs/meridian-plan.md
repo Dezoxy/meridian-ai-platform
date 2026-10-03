@@ -181,7 +181,7 @@ and Pydantic, at the cost of one dependency.
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | todo | S047 |
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
-| S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
+| S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | doing | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
@@ -4925,6 +4925,65 @@ unexplained 53 errors, `unused_port()`, the remaining wall-clock limits,
 `ensure_roles`' lock timeout, a coverage gate (now affordable; the owner's
 decision), template databases, the CI limit of 15 minutes, and skipping
 the tests for a pull request that changes only files no test reads.
+
+### S053 — The claimant's word checked
+
+**Status:** doing · **Started:** 2026-10-03 · **Finished:** —
+**Goal:** the report date of a claim a claimant submits is the server's, a
+decided claim counts in the claim history, the claimant's pages answer
+every refusal with a page, and no server span keeps a query string.
+**Decisions:**
+
+- The owner, 2026-10-03, asked in chat before anything was built on it:
+  - The report date is stamped by channel. The claimant's pages have no
+    report-date field and the Claims API stamps the date; the JSON route
+    `POST /claims` keeps `reported_on` as the intake's date, so the
+    evaluation and `make demo` keep the dataset's clock and the API's
+    contract does not change. Accepted residual of T-66: until callers are
+    identified (S021), whoever reaches the JSON route chooses the date, as
+    whoever reaches it decides a claim (T-69). Rejected: both routes
+    stamping with a clock the evaluation moves per claim (a breaking
+    contract change, and on kind every golden claim would be late unless
+    the deployed service took a clock from its caller, which is the hole
+    again); the same with a deployment switch (two behaviours to keep).
+  - A decided claim enters the claim history through a read-only view
+    that the policy server's `claim_history` tool reads next to the seeded
+    history. Rejected: the Claims API writing rows into
+    `policy.claim_history` (a write grant on the store the rules trust, the
+    seed deletes what its source does not list on every deploy, and the
+    foreign key to the policy could fail a decision).
+  - Approved and rejected claims both count towards `frequent_claims`, a
+    rejected one with a paid amount of 0: the indicator screens how often a
+    policy claims. Withdrawn and undecided claims do not count.
+- The session's:
+  - The stamp is the date in the insurer's time zone, `Europe/Vienna`
+    (Meridian Insurance operates in AT, HR, SI and SK, one zone), not UTC:
+    with UTC a loss dated today is "after the report" for two hours after
+    local midnight. The pinned base image has the zone data (checked with
+    `docker run`).
+  - The first stamp stands. A claimant who sends the same form again after
+    midnight (the 503 notice asks for exactly that) is not a different
+    submission: the comparison leaves out the stamped field, and the triage
+    runs on the stored submission.
+  - `create_app` takes `today`, a function, as it takes `http_client`: the
+    tests set it, and the stack tests set it to a golden claim's own report
+    date before posting the claim through the page.
+  - An entry of a decided claim has the claim's ID as its `history_id`, so
+    the tool's contract takes `CLM-` as well as `HIST-`. The tools
+    fingerprint changes and the evaluation baseline is regenerated (T-72).
+  - The loss date stays the claimant's word; documents and an adjuster
+    check it. Recorded in T-66, not solved here.
+- Threat model before the code (`feature-threat-model`): T-66 refreshed and
+  T-75 new (the history from another schema: personal columns, another
+  tenant's claims, a run counting its own claim, claims planted on a policy
+  that is not the claimant's). No tension with a hard rule: no model call,
+  no new tool, one tool's contract widened by a reviewed change.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 

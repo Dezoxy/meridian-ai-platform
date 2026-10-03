@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 from fastapi import HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 from opentelemetry import _logs, metrics, trace
 from opentelemetry._logs._internal import ProxyLoggerProvider
@@ -22,10 +23,12 @@ from meridian.platform.common.audit import AuditUnavailable
 from meridian.platform.common.http import (
     SMALL_BODY_LIMIT_BYTES,
     create_service_app,
+    drop_query_from_span,
 )
 from meridian.platform.common.telemetry import make_tracer_provider, start_span
 
 CANARY = "canary-claimant@example.invalid"
+QUERY_CANARY = "query-canary-7731"
 LIMIT = 100
 SIGNALS = ("TRACES", "METRICS", "LOGS")
 
@@ -53,6 +56,10 @@ def build(
     @app.post("/model")
     def model(body: dict[str, str]) -> dict[str, int]:
         return {"keys": len(body)}
+
+    @app.get("/query")
+    def query(canary: str) -> dict[str, str]:
+        return {"seen": canary}
 
     @app.get("/unexpected")
     def unexpected() -> None:
@@ -269,3 +276,85 @@ def test_an_unexpected_exception_reaches_no_span_and_no_answer(
         assert CANARY not in (span.status.description or "")
     assert "RuntimeError" in caplog.text
     assert CANARY not in caplog.text
+
+
+# ── no server span keeps a query string (T-03) ──────────────────────────────
+def span_attribute_values(exporter: InMemorySpanExporter) -> list[str]:
+    return [
+        str(value)
+        for span in exporter.get_finished_spans()
+        for value in (span.attributes or {}).values()
+    ]
+
+
+def test_no_span_attribute_of_a_request_holds_its_query_string() -> None:
+    exporter = InMemorySpanExporter()
+    provider = make_tracer_provider("test-service", exporter)
+
+    response = build(provider=provider).get(f"/healthz?canary={QUERY_CANARY}")
+
+    assert response.status_code == 200
+    values = span_attribute_values(exporter)
+    # Not vacuous: the request was traced and its path is still on the span.
+    assert any(value.endswith("/healthz") for value in values)
+    assert [v for v in values if QUERY_CANARY in v or "?" in v] == []
+
+
+def test_the_query_string_still_reaches_the_route() -> None:
+    exporter = InMemorySpanExporter()
+    provider = make_tracer_provider("test-service", exporter)
+
+    response = build(provider=provider).get(f"/query?canary={QUERY_CANARY}")
+
+    assert response.json() == {"seen": QUERY_CANARY}
+    assert [v for v in span_attribute_values(exporter) if QUERY_CANARY in v] == []
+
+
+@pytest.mark.parametrize("key", ["http.url", "http.target", "url.full", "url.query"])
+def test_the_hook_removes_the_query_from_each_attribute_either_convention_sets(
+    key: str,
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = make_tracer_provider("test-service", exporter)
+    value = f"http://testserver/healthz?canary={QUERY_CANARY}"
+    if key == "url.query":
+        value = f"canary={QUERY_CANARY}"
+    if key == "http.target":
+        value = f"/healthz?canary={QUERY_CANARY}"
+    span = provider.get_tracer("t").start_span("GET", attributes={key: value})
+
+    drop_query_from_span(span, {})
+    span.end()
+
+    (finished,) = exporter.get_finished_spans()
+    kept = str((finished.attributes or {}).get(key, ""))
+    assert QUERY_CANARY not in kept and "?" not in kept
+
+
+# ── the body limit's 413 answer is the caller's to give (a page, say) ───────
+def test_a_declared_length_over_the_limit_is_answered_as_the_caller_gives_it() -> None:
+    seen: list[str] = []
+
+    def too_large(scope: dict) -> PlainTextResponse:
+        seen.append(scope["path"])
+        return PlainTextResponse("too big", status_code=413)
+
+    service = create_service_app(
+        title="Test",
+        description="A test service.",
+        service_name="test-service",
+        tracer_name="meridian.test",
+        max_body_bytes=LIMIT,
+        too_large=too_large,
+    )
+
+    @service.app.post("/echo")
+    async def echo(request: Request) -> dict[str, int]:
+        return {"bytes": len(await request.body())}
+
+    client = TestClient(service.app, raise_server_exceptions=False)
+    response = client.post("/echo", content=b"x" * (LIMIT + 1))
+
+    assert (response.status_code, response.text) == (413, "too big")
+    assert seen == ["/echo"]
+    assert client.post("/echo", content=b"x" * LIMIT).json() == {"bytes": LIMIT}

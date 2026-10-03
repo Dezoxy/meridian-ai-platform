@@ -234,6 +234,9 @@ def test_the_output_schemas_name_the_agreed_fields(real_registry: Path) -> None:
             "status",
         }
     )
+    id_schema = entry["properties"]["history_id"]
+    assert id_schema["pattern"] == "^(HIST|CLM)-[0-9]{4}$"
+    assert id_schema["maxLength"] == 9
     for tool_id, key in [
         ("add_claim_note", "note_id"),
         ("request_approval", "request_id"),

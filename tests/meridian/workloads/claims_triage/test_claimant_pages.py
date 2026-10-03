@@ -10,10 +10,11 @@ made is refused with the claimant's page (T-70).
 """
 
 import asyncio
+import json
 import logging
 import uuid
-from collections.abc import Callable
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any
 
@@ -53,6 +54,7 @@ from workloads.claims_triage.test_claims_app import (
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.workloads.claims_triage import claimant, triaging
+from meridian.workloads.claims_triage.claimant import REPORT_TIME_ZONE
 from meridian.workloads.claims_triage.lifecycle import TRIAGE_FAILED
 from meridian.workloads.claims_triage.models import MAX_DOCUMENTS, DecisionFailure
 from meridian.workloads.claims_triage.moves import (
@@ -95,7 +97,6 @@ FORM_FIELDS = (
     "policy_number",
     "peril",
     "loss_date",
-    "reported_on",
     "claimed_amount",
     "city",
     "country",
@@ -134,6 +135,9 @@ ALL_STATES = {
 }
 CAN_WITHDRAW = ("awaiting_adjuster", "documents_requested")
 RECEIVED_AT = datetime(2026, 10, 1, 12, 30, 5, tzinfo=UTC)
+# The date the claims the tests post were reported on in the dataset (the first
+# claim of ``claims.json``): the clock of ``dated_client`` unless it is moved.
+REPORT_DATE = date(2026, 7, 13)
 WITHDRAW_BUTTON = "Withdraw this claim"
 VOID_TAGS = ("input", "meta", "link", "br", "hr", "img")
 
@@ -149,7 +153,6 @@ def form_of(claim: dict[str, Any], **changes: str) -> dict[str, str]:
         "policy_number": claim["policy_number"],
         "peril": claim["peril"],
         "loss_date": claim["loss_date"],
-        "reported_on": claim["reported_on"],
         "claimed_amount": str(claim["claimed_amount"]),
         "city": claim["loss_location"]["city"],
         "country": claim["loss_location"]["country"],
@@ -159,6 +162,13 @@ def form_of(claim: dict[str, Any], **changes: str) -> dict[str, str]:
         "claimant_email": claim["claimant"]["email"],
     }
     return form | changes
+
+
+def dated_client(
+    db: DatabaseHandle, runtime: Runtime | None = None, today: date = REPORT_DATE
+) -> TestClient:
+    """A Claims API whose clock, the report date it stamps, is ``today``."""
+    return make_client(claims_dsn(db), runtime, today=lambda: today)
 
 
 def post_claim(
@@ -334,7 +344,7 @@ def test_the_start_page_has_the_banner_every_field_with_its_label_and_the_header
         {k: v for k, v in f.items() if k in ("method", "action")} for f in forms
     ]
     inputs = {str(i.get("id")): i for i in page.attributes("input")}
-    assert inputs["loss_date"]["type"] == inputs["reported_on"]["type"] == "date"
+    assert inputs["loss_date"]["type"] == "date"
     assert inputs["claimed_amount"]["type"] == "number"
     # Every peril, none preselected: an empty option comes first.
     assert options.options[0] == ("", False)
@@ -373,7 +383,7 @@ def test_a_valid_post_is_303_and_stores_what_the_json_route_stores(
     claim = claim_with_id("CLM-9501")
     page_runtime, json_runtime = Runtime(), Runtime()
 
-    response = post_claim(client_for(db, page_runtime), form_of(claim))
+    response = post_claim(dated_client(db, page_runtime), form_of(claim))
     json_response = client_for(db, json_runtime).post(
         "/claims", json=claim_with_id("CLM-9502")
     )
@@ -395,6 +405,140 @@ def test_a_valid_post_is_303_and_stores_what_the_json_route_stores(
     assert kinds == [row[:3] for row in claim_audit(db, "CLM-9502")]
     assert len(kinds) == 2
     assert len(page_runtime.requests) == len(json_runtime.requests) == 1
+
+
+def test_the_start_page_has_no_report_date_field() -> None:
+    page = Page(make_client().get(START_URL).text)
+
+    assert "reported_on" not in [i.get("name") for i in page.attributes("input")]
+    assert "reported_on" not in [i.get("id") for i in page.attributes("input")]
+    assert "reported" not in page.text.lower()
+
+
+def stored_report_date(db: DatabaseHandle, claim_id: str) -> str:
+    return stored_submission(db, claim_id)["reported_on"]
+
+
+def test_a_claim_is_stored_with_the_date_the_api_stamps(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    claim = claim_with_id("CLM-9501")
+    stamp = date(2026, 7, 20)
+
+    response = post_claim(dated_client(db, today=stamp), form_of(claim))
+
+    assert response.status_code == 303
+    assert stored_submission(db, "CLM-9501") == claim | {"reported_on": "2026-07-20"}
+
+
+def test_a_report_date_posted_anyway_is_ignored(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    runtime = Runtime()
+    form = form_of(claim_with_id("CLM-9501")) | {"reported_on": "2020-01-01"}
+
+    response = post_claim(dated_client(db, runtime, date(2026, 7, 20)), form)
+
+    assert response.status_code == 303
+    assert stored_report_date(db, "CLM-9501") == "2026-07-20"
+    sent = json.loads(runtime.requests[0].content)["input"]["claim"]
+    assert sent["reported_on"] == "2026-07-20"
+
+
+def test_a_loss_dated_after_the_stamp_is_the_422_page_and_stores_nothing(
+    fresh_database: DatabaseHandle,
+) -> None:
+    runtime = Runtime()
+    claim = claim_with_id("CLM-9501")  # lost on 2026-07-13
+    form = form_of(claim)
+
+    response = post_claim(
+        dated_client(fresh_database, runtime, REPORT_DATE - timedelta(days=1)), form
+    )
+
+    page = refused_page(response, 422)
+    assert "Date of loss: the date of loss is after today" in page.text
+    assert "reported_on" not in page.text
+    assert claims_held(fresh_database) == 0
+    assert runtime.requests == []
+
+
+def test_a_loss_dated_the_day_of_the_stamp_is_accepted(
+    fresh_database: DatabaseHandle,
+) -> None:
+    claim = claim_with_id("CLM-9501")  # lost on 2026-07-13
+
+    response = post_claim(dated_client(fresh_database), form_of(claim))
+
+    assert response.status_code == 303
+    assert stored_report_date(fresh_database, "CLM-9501") == claim["loss_date"]
+
+
+def test_the_form_sent_again_a_day_later_is_the_same_submission_with_the_first_date(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    form = form_of(claim_with_id("CLM-9501"))
+    first_day = date(2026, 7, 20)
+    # The first triage failed: the claim is stored and its triage must run again.
+    assert (
+        post_claim(dated_client(db, failing_runtime(), first_day), form).status_code
+        == 303
+    )
+    runtime = Runtime()
+
+    response = post_claim(
+        dated_client(db, runtime, first_day + timedelta(days=1)), form
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == status_url("CLM-9501")
+    assert stored_report_date(db, "CLM-9501") == "2026-07-20"
+    # The triage is sent the first date, not the day the form was sent again.
+    (request,) = runtime.requests
+    assert json.loads(request.content)["input"]["claim"]["reported_on"] == "2026-07-20"
+    assert claim_state(db, "CLM-9501") == ("awaiting_adjuster", runtime.run_id)
+
+
+def test_the_form_sent_again_a_day_later_with_another_field_changed_is_still_409(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    claim = claim_with_id("CLM-9501")
+    first_day = date(2026, 7, 20)
+    assert (
+        post_claim(dated_client(db, today=first_day), form_of(claim)).status_code == 303
+    )
+    runtime = Runtime()
+
+    response = post_claim(
+        dated_client(db, runtime, first_day + timedelta(days=1)),
+        form_of(claim, claimed_amount="9999"),
+    )
+
+    page = refused_page(response, 409)
+    assert DIFFERENT_SUBMISSION in page.text
+    assert stored_submission(db, "CLM-9501") == claim | {"reported_on": "2026-07-20"}
+    assert runtime.requests == []
+
+
+def test_the_default_clock_is_the_date_in_the_insurers_time_zone(
+    fresh_database: DatabaseHandle,
+) -> None:
+    client = make_client(claims_dsn(fresh_database), Runtime())
+
+    before = datetime.now(REPORT_TIME_ZONE).date()
+    response = post_claim(client, form_of(claim_with_id("CLM-9501")))
+    after = datetime.now(REPORT_TIME_ZONE).date()
+
+    assert response.status_code == 303
+    assert str(REPORT_TIME_ZONE) == "Europe/Vienna"
+    assert stored_report_date(fresh_database, "CLM-9501") in {
+        before.isoformat(),
+        after.isoformat(),
+    }
 
 
 def test_the_triage_runs_in_a_span_with_the_claim_and_the_tenant_only(
@@ -439,14 +583,14 @@ def recording_thread(
     """``original``, noting whether it ran with an event loop running in its
     thread: ``asyncio.get_running_loop()`` raises ``RuntimeError`` off the loop."""
 
-    def wrapper(*args: Any) -> Any:
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             seen.append("thread")
         else:
             seen.append("event loop")
-        return original(*args)
+        return original(*args, **kwargs)
 
     return wrapper
 
@@ -487,9 +631,9 @@ INVALID_POSTS = {
         {"claimed_amount": "1000001"},
         "Claimed amount: Input should be less than or equal to 1000000",
     ),
-    "a loss after the report": (
-        {"loss_date": "2026-07-14", "reported_on": "2026-07-13"},
-        "Claim: Value error, loss_date is after reported_on",
+    "a loss after today": (
+        {"loss_date": "2999-12-31"},
+        "Date of loss: the date of loss is after today",
     ),
     "an e-mail address that is not one": (
         {"claimant_email": BAD_EMAIL_SENTINEL},
@@ -614,12 +758,12 @@ def test_another_submission_under_a_stored_id_is_the_form_again_409_and_the_row_
 ) -> None:
     db = fresh_database
     claim = claim_with_id("CLM-9501")
-    client = client_for(db, Runtime())
+    client = dated_client(db, Runtime())
     assert post_claim(client, form_of(claim)).status_code == 303
     runtime = Runtime()
 
     response = post_claim(
-        client_for(db, runtime), form_of(claim, claimed_amount="9999")
+        dated_client(db, runtime), form_of(claim, claimed_amount="9999")
     )
 
     page = refused_page(response, 409)
@@ -667,7 +811,7 @@ def test_a_triage_that_fails_is_303_and_the_status_page_says_an_adjuster_reviews
 def test_a_failed_audit_write_on_the_submission_is_the_503_claimant_page(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    def audit_down(*_: object) -> None:
+    def audit_down(*_: object, **__: object) -> None:
         raise AuditUnavailable("OperationalError")
 
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.store_claim", audit_down)
@@ -810,7 +954,7 @@ def test_a_database_failure_reading_the_state_after_the_triage_is_the_filled_in_
 def test_a_database_failure_storing_the_claim_is_still_the_error_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def store_down(*_: object) -> None:
+    def store_down(*_: object, **__: object) -> None:
         raise psycopg.OperationalError("the connection was lost")
 
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.store_claim", store_down)
@@ -1728,3 +1872,170 @@ def test_nothing_of_the_claimant_is_logged_for_any_post_of_the_claim_form(
     assert caplog.records
     assert leaks(caplog, needles) == []
     assert not any(needle in caplog.text for needle in needles)
+
+
+# ── the shared answers under /claimant/ are the claimant's pages ────────────
+PATH_CANARY = "path-canary-4417"
+HEADER_CANARY = "header-canary-5528"
+BODY_CANARY = "body-canary-6639"
+NOT_FOUND_TEXT = "There is no such page."
+METHOD_TEXT = "This page does not take that kind of request."
+TOO_LARGE_TEXT = "What you sent is too large."
+UNREADABLE_TEXT = "We could not read what you sent."
+CANARIES = (PATH_CANARY, HEADER_CANARY, BODY_CANARY)
+CANARY_HEADERS = {"X-Canary": HEADER_CANARY}
+FORM_TYPE = {"Content-Type": "application/x-www-form-urlencoded"}
+OVER_LIMIT = 70 * 1024
+
+
+def assert_claimant_error_page(
+    response: httpx.Response, status: int, text: str
+) -> Page:
+    """The claimant's error page: status, HTML, the claimant's layout (its
+    banner and its way back, nothing of the adjuster's), the one fixed text, a
+    page header, and nothing of what the request carried."""
+    page = refused_page(response, status)
+    assert BANNER in page.text
+    assert START_URL in page.links()
+    assert not [link for link in page.links() if link.startswith("/adjuster/claims")]
+    assert str(status) in page.text
+    assert text in page.text
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["cache-control"] == "no-store"
+    for canary in CANARIES:
+        assert canary not in response.text
+        assert canary not in str(response.headers)
+    return page
+
+
+def chunked_form() -> Iterator[bytes]:
+    yield b"a=" + BODY_CANARY.encode() + b"x" * 40_000
+    yield b"x" * 40_000
+
+
+def test_a_claim_id_in_the_path_that_is_not_one_is_the_422_claimant_page() -> None:
+    response = make_client().get(
+        f"/claimant/claims/not-an-id-{PATH_CANARY}", headers=CANARY_HEADERS
+    )
+
+    page = assert_claimant_error_page(response, 422, LOOKUP_MESSAGE)
+    assert "string_pattern_mismatch" not in page.text
+
+
+def test_a_path_under_the_claimant_prefix_with_no_route_is_the_404_claimant_page() -> (
+    None
+):
+    response = make_client().get(
+        f"/claimant/nothing-{PATH_CANARY}?q={BODY_CANARY}", headers=CANARY_HEADERS
+    )
+
+    page = assert_claimant_error_page(response, 404, NOT_FOUND_TEXT)
+    assert "Not Found" not in page.text
+
+
+def test_another_method_on_a_claimant_route_is_the_405_claimant_page_with_allow() -> (
+    None
+):
+    response = make_client().put(
+        f"{START_URL}", content=BODY_CANARY.encode(), headers=CANARY_HEADERS
+    )
+
+    page = assert_claimant_error_page(response, 405, METHOD_TEXT)
+    assert "Method Not Allowed" not in page.text
+    # The header the JSON answer carried (the router names the first route that
+    # matched the path).
+    assert response.headers["allow"] == "GET"
+
+
+def test_a_declared_length_over_the_limit_is_the_413_claimant_page() -> None:
+    response = make_client().post(
+        START_URL,
+        content=BODY_CANARY.encode() + b"x" * OVER_LIMIT,
+        headers=SAME_ORIGIN | FORM_TYPE | CANARY_HEADERS,
+    )
+
+    assert_claimant_error_page(response, 413, TOO_LARGE_TEXT)
+
+
+def test_a_streamed_body_over_the_limit_is_the_413_claimant_page() -> None:
+    response = make_client().post(
+        START_URL,
+        content=chunked_form(),
+        headers=SAME_ORIGIN | FORM_TYPE | CANARY_HEADERS,
+    )
+
+    assert_claimant_error_page(response, 413, TOO_LARGE_TEXT)
+
+
+def test_a_body_that_cannot_be_parsed_is_the_400_claimant_page() -> None:
+    # No boundary: the parser's own message ("Missing boundary in multipart.")
+    # must not be what the page says.
+    response = make_client().post(
+        START_URL,
+        content=b"--x\r\n" + BODY_CANARY.encode(),
+        headers=SAME_ORIGIN | CANARY_HEADERS | {"Content-Type": "multipart/form-data"},
+    )
+
+    page = assert_claimant_error_page(response, 400, UNREADABLE_TEXT)
+    assert "boundary" not in page.text
+
+
+# ── and everywhere else they stay the JSON they were ────────────────────────
+def test_outside_the_claimant_prefix_a_claim_id_that_is_not_one_is_still_json() -> None:
+    response = make_client().post("/claims/not-an-id/triage", json={})
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/json"
+    assert response.json()["detail"][0]["loc"] == ["path", "claim_id"]
+
+
+def test_outside_the_claimant_prefix_a_path_with_no_route_is_still_json() -> None:
+    response = make_client().get("/nothing")
+
+    assert (response.status_code, response.json()) == (404, {"detail": "Not Found"})
+    assert response.headers["content-type"] == "application/json"
+
+
+def test_outside_the_claimant_prefix_another_method_is_still_json_with_allow() -> None:
+    response = make_client().put("/claims")
+
+    assert response.status_code == 405
+    assert response.json() == {"detail": "Method Not Allowed"}
+    assert response.headers["allow"] == "POST"
+
+
+def test_outside_the_claimant_prefix_a_body_over_the_limit_is_still_json() -> None:
+    client = make_client()
+    declared = client.post("/claims", content=b"x" * OVER_LIMIT)
+    streamed = client.post("/claims", content=chunked_form(), headers=FORM_TYPE)
+
+    for response in (declared, streamed):
+        assert response.status_code == 413
+        assert response.headers["content-type"] == "application/json"
+        assert response.json() == {"detail": "the request body is too large"}
+
+
+def test_outside_the_claimant_prefix_a_body_that_cannot_be_parsed_is_still_json() -> (
+    None
+):
+    response = make_client().post(
+        "/adjuster/claims/CLM-0001/decision",
+        content=b"--x\r\n",
+        headers=SAME_ORIGIN | {"Content-Type": "multipart/form-data"},
+    )
+
+    assert response.status_code == 400
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"detail": "Missing boundary in multipart."}
+
+
+def test_the_adjusters_shared_answers_are_still_json() -> None:
+    client = make_client()
+
+    missing = client.get("/adjuster/nothing")
+    wrong_method = client.put("/adjuster/claims")
+    bad_id = client.get("/adjuster/claims/not-an-id")
+
+    assert [r.status_code for r in (missing, wrong_method, bad_id)] == [404, 405, 422]
+    for response in (missing, wrong_method, bad_id):
+        assert response.headers["content-type"] == "application/json"
