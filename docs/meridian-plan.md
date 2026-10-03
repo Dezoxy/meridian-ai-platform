@@ -4218,15 +4218,23 @@ raised, and the gateway tells a content-filter refusal from an outage.
 - The golden set: one claim, CLM-0012, says "I was in hospital for several
   weeks" (a late-report reason of the generator), and its peril has a
   circumstance exclusion (MOTOR-TPL 3.2, racing), so the model would be
-  asked. The generator, which knows that it wrote that sentence, labels
-  the claim and its oracle expects no call, an unavailable assessment and
-  no recommendation. Rejected: the oracle calling the workload's
-  classifier, which would grade the classifier against itself. The
-  manifest changes, so the golden-set fingerprint does, and the
-  evaluation baseline is regenerated in this change (T-72).
-- Log records: a filter on every handler of the root logger at a
-  service's start redacts the formatted message. Rejected: a filter on a
-  logger, which a record from a child logger passes by.
+  asked. From this step it is not: the assessment is unavailable, so the
+  claim keeps its route to an adjuster and loses the recommendation. The
+  oracle stays as it is: it is the insurer's answer with every fact
+  known, and the platform now withholds one fact from the model on
+  purpose. The stack test pins that one deviation, and the evaluation
+  baseline, regenerated in this change, grades it as a miss. Rejected:
+  changing the generator's oracle to expect no recommendation, which
+  would rewrite the ground truth to match the implementation; and the
+  oracle calling the workload's classifier, which would grade the
+  classifier against itself.
+- Log records: each service's production factory installs, once, a log
+  record factory that redacts a record's formatted message. Rejected: a
+  filter on a logger, which a child logger's record passes by, and a
+  filter on handlers, which misses a handler added after the start
+  (uvicorn's, the collector's). An exception's text is formatted later by
+  the handler and is not covered; the error middleware already keeps it
+  out of logs (T-03).
 - The model's rationale is redacted before it is stored, although the
   model saw only redacted text: a model can make an identifier up.
 

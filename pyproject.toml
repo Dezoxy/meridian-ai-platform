@@ -116,6 +116,7 @@ source_modules = [
     "meridian.platform.cli",
     "meridian.platform.common",
     "meridian.platform.evaluation",
+    "meridian.platform.guardrails",
     "meridian.platform.knowledge_mcp",
     "meridian.platform.migrations",
     "meridian.platform.policy_mcp",
