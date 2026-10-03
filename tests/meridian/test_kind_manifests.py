@@ -60,6 +60,9 @@ from meridian.runtime.settings import (
 )
 from meridian.workloads.claims_triage.mcp_server import SERVICE_NAME as CLAIMS_SERVER
 from meridian.workloads.claims_triage.settings import RUNTIME_URL_ENV, ClaimsSettings
+from meridian.workloads.claims_triage.sweep import (
+    DOCUMENTS_DEADLINE_ENV as SWEEP_DEADLINE_ENV,
+)
 
 KIND_DIR = REPO_ROOT / "infra" / "kind"
 MANIFESTS = KIND_DIR / "manifests" / "meridian"
@@ -70,9 +73,6 @@ JOB_FILES = (MIGRATE_JOB_FILE, SEED_JOB_FILE, INGEST_JOB_FILE)
 SWEEP_FILE = MANIFESTS / "sweep-cronjob.yaml"
 SWEEP_MODULE = "meridian.workloads.claims_triage.sweep"
 SWEEP_ROLE = "claims_sweep"
-# The job's own setting (S052), whole calendar days; the code's settings class
-# is the Python contract's, so the name is pinned here as the manifest sets it.
-SWEEP_DEADLINE_ENV = "MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS"
 TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
 SERVER_PORT = 8000
 # The tenant whose limits the ingestion's embedding calls count against.
