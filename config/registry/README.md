@@ -87,8 +87,8 @@ job. Beyond the schemas, validation refuses:
   returns, 1 to 2000, the most pgvector can index in its `vector` type; its
   `halfvec` type indexes up to 4000) and a chat deployment with it;
 - `structured_outputs: true` on an embedding deployment, and, once an agent
-  declares it, a chat route candidate or the chat replay deployment that does
-  not (see below);
+  declares it, a chat route candidate, the chat replay deployment or the chat
+  recorded one that does not (see below);
 - an embedding route whose candidates differ from the first in model, version
   or `dimensions`, and a replay embedding deployment whose `dimensions`
   differ from a candidate's: vectors of different models or sizes are not

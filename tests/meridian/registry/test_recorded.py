@@ -455,6 +455,100 @@ def test_a_recorded_deployment_without_an_entry_is_not_a_problem(
     assert registry.has_deployment("recorded-chat")
 
 
+# ── structured outputs (S051) ──────────────────────────────────────────────
+DECLARED = "    structured_outputs: true\n"
+RECORDED_ROLE = "this deployment is a recorded deployment (deployment 'recorded-chat')"
+JUDGE_STOPS_ASKING: Edit = (
+    "agents.yaml",
+    "    tools: []\n" + DECLARED,
+    "    tools: []\n",
+)
+TRIAGE_STOPS_ASKING: Edit = (
+    "agents.yaml",
+    "    description: Triages a new claim and prepares it for an adjuster.\n"
+    + DECLARED,
+    "    description: Triages a new claim and prepares it for an adjuster.\n",
+)
+
+
+def undeclare_recorded(directory: Path) -> Path:
+    """Take the declaration off the recorded deployment of the copy."""
+    path = directory / "models.yaml"
+    head, found, tail = path.read_text(encoding="utf-8").partition(
+        "  - id: recorded-chat\n"
+    )
+    assert found
+    assert DECLARED in tail, "recorded-chat declares nothing to take off"
+    path.write_text(head + found + tail.replace(DECLARED, "", 1), encoding="utf-8")
+    return directory
+
+
+def test_the_committed_recorded_deployment_declares_structured_outputs(
+    real_registry: Path,
+) -> None:
+    deployment = load_registry(real_registry).deployment("recorded-chat")
+
+    assert deployment is not None
+    assert deployment.structured_outputs is True
+
+
+def test_a_recorded_chat_deployment_without_it_is_refused_when_an_agent_asks(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    errors = load_errors(undeclare_recorded(plant()))
+
+    (error,) = errors
+    assert error.startswith(f"{WHERE}.structured_outputs: required because ")
+    assert " declare structured_outputs and " + RECORDED_ROLE in error
+
+
+def test_a_recorded_chat_deployment_without_it_is_refused_for_one_agent_alone(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    errors = load_errors(undeclare_recorded(plant(JUDGE_STOPS_ASKING)))
+
+    assert errors == (
+        f"{WHERE}.structured_outputs: required because agent 'claims-triage' "
+        f"declares structured_outputs and {RECORDED_ROLE}",
+    )
+
+
+def test_a_recorded_chat_deployment_with_it_is_accepted_when_an_agent_asks(
+    plant: Plant,
+) -> None:
+    registry = load_registry(plant())
+
+    assert any(agent.structured_outputs for agent in registry.agents)
+    deployment = registry.recorded_deployment("chat")
+    assert deployment is not None
+    assert deployment.structured_outputs is True
+
+
+def test_a_recorded_chat_deployment_without_it_is_accepted_when_no_agent_asks(
+    plant: Plant,
+) -> None:
+    directory = plant(TRIAGE_STOPS_ASKING, JUDGE_STOPS_ASKING)
+
+    registry = load_registry(undeclare_recorded(directory))
+
+    assert not any(agent.structured_outputs for agent in registry.agents)
+    deployment = registry.recorded_deployment("chat")
+    assert deployment is not None
+    assert deployment.structured_outputs is False
+
+
+def test_a_recorded_deployment_without_an_entry_is_not_asked_to_declare_it(
+    plant: Plant,
+) -> None:
+    # Only the deployment the `recorded` list names can answer in recorded mode.
+    directory = plant(("policies.yaml", RECORDED_BLOCK, ""))
+
+    registry = load_registry(undeclare_recorded(directory))
+
+    assert any(agent.structured_outputs for agent in registry.agents)
+    assert registry.recorded_deployment("chat") is None
+
+
 # ── Terraform knows nothing of it ──────────────────────────────────────────
 def test_terraform_is_not_asked_about_the_recorded_deployment(
     real_registry: Path,

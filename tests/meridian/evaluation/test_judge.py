@@ -8,6 +8,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,6 +19,8 @@ from stacksupport import replay_gateway
 
 from meridian.platform.evaluation import judge
 from meridian.platform.evaluation.judge import (
+    ANSWER_FIELDS,
+    ANSWER_SCHEMA,
     GRADER,
     JUDGE_AGENT,
     JUDGE_OUTPUT_TOKENS,
@@ -29,6 +32,7 @@ from meridian.platform.evaluation.judge import (
     read_answer,
 )
 from meridian.platform.gateway.models import MAX_CONTENT_CHARS
+from meridian.platform.gateway.response_schema import response_schema_errors
 from meridian.platform.guardrails import PLACEHOLDERS
 
 SOURCE = {"rationale": "Hail damaged the roof.", "clauses": ["4.2", "4.3"]}
@@ -100,6 +104,7 @@ def test_the_call_names_the_tenant_the_agent_the_run_and_the_budget() -> None:
     assert json.loads(request.content) == {
         "messages": build_messages(SOURCE, STATEMENT),
         "max_output_tokens": 200,
+        "response_schema": ANSWER_SCHEMA,
     }
 
 
@@ -341,6 +346,41 @@ def test_the_output_budget_changes_the_prompt_version(
     assert judge._prompt_version() != JUDGE_PROMPT_VERSION
 
 
+def test_the_answer_schema_changes_the_prompt_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    changed = {**ANSWER_SCHEMA, "required": ["reason", "grounded"]}
+    assert changed != ANSWER_SCHEMA
+    monkeypatch.setattr(judge, "ANSWER_SCHEMA", changed)
+
+    assert judge._prompt_version() != JUDGE_PROMPT_VERSION
+
+
+# ── the answer schema (S051) ────────────────────────────────────────────────
+def test_the_answer_schema_is_inside_the_gateways_subset() -> None:
+    assert response_schema_errors(ANSWER_SCHEMA) == []
+
+
+def test_the_answer_schema_asks_for_exactly_the_two_fields() -> None:
+    assert ANSWER_SCHEMA == {
+        "type": "object",
+        "properties": {
+            "grounded": {"type": "boolean"},
+            "reason": {"type": "string"},
+        },
+        "required": ["grounded", "reason"],
+        "additionalProperties": False,
+    }
+    assert set(ANSWER_SCHEMA["properties"]) == ANSWER_FIELDS
+    assert set(ANSWER_SCHEMA["required"]) == ANSWER_FIELDS
+
+
+def test_a_schema_does_not_make_the_reader_any_less_strict() -> None:
+    # The schema makes the shape likely; read_answer still decides.
+    for text in (answer("true"), answer(True, ""), '{"grounded": true}'):
+        assert read_answer(text, "stop") == Judgement("unreadable", None)
+
+
 def test_the_system_message_states_the_contract() -> None:
     message = judge.SYSTEM_MESSAGE
 
@@ -400,6 +440,28 @@ def test_the_gateway_accepts_the_judge_for_the_evaluation_tenant(
     )
     assert (event["tenant"], event["agent"]) == ("evaluation", "evaluation-judge")
     assert event["data_class"] == "personal"
+
+
+def test_the_gateway_refuses_the_schema_when_the_registry_judge_does_not_declare_it(
+    fresh_database: DatabaseHandle, plant: Callable[..., Path]
+) -> None:
+    directory = plant(
+        (
+            "agents.yaml",
+            "    tools: []\n    structured_outputs: true\n",
+            "    tools: []\n",
+        )
+    )
+    gateway = replay_gateway(fresh_database, registry_dir=directory)
+
+    result = judge.judge(
+        gateway.http, run_id=RUN_ID, source=SOURCE, statement=STATEMENT
+    )
+
+    assert result == Judgement("unanswered", None)
+    (event,) = audit_events(fresh_database, RUN_ID)
+    assert (event["outcome"], event["reason"]) == ("refused", "schema-not-allowed")
+    assert (event["tenant"], event["agent"]) == ("evaluation", "evaluation-judge")
 
 
 def test_the_gateway_refuses_the_judge_for_a_tenant_that_may_not_run_it(

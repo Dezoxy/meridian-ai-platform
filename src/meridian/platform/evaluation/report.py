@@ -6,6 +6,7 @@ opaque id; the workload decides what each one means. The file is canonical
 """
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -21,6 +22,7 @@ from pydantic import (
     StrictStr,
     StringConstraints,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -84,11 +86,37 @@ class Fingerprints(WireModel):
 Count = Annotated[StrictInt, Field(ge=0)]
 
 
+def _has_a_number_that_is_not_finite(value: JsonValue) -> bool:
+    """Whether ``NaN`` or an infinity is anywhere in ``value``, at any depth.
+    Iterative: the depth is the caller's."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, float) and not math.isfinite(item):
+            return True
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
+
+
 class ToolCall(WireModel):
     """A call the agent made, as the workload logged it."""
 
     tool: GraderName
     arguments: dict[str, JsonValue]
+
+    @field_validator("arguments")
+    @classmethod
+    def _arguments_are_finite(
+        cls, arguments: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        # json.dumps writes NaN and Infinity, which are not JSON: refuse them
+        # here so that dump_report can only write standard JSON.
+        if _has_a_number_that_is_not_finite(arguments):
+            raise ValueError("an argument is not a finite number")
+        return arguments
 
 
 class Measured(WireModel):

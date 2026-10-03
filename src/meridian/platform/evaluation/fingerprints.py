@@ -112,7 +112,9 @@ def _verify_no_unlisted_file(manifest_path: Path, files: Mapping[str, str]) -> N
 
 def golden_set_of(manifest_path: Path) -> GoldenSet:
     """The version, seed and file hashes of a golden set's ``manifest.json``,
-    after checking the files themselves, and the hash of the whole manifest."""
+    after checking the files themselves and that the manifest leaves out no
+    file (a regular file of a listed suffix in a directory that holds a listed
+    file), and the hash of the whole manifest."""
     manifest = read_json_file(manifest_path)
     if not isinstance(manifest, dict):
         raise ReportError("the manifest is not a JSON object")

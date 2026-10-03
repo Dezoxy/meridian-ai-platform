@@ -113,6 +113,10 @@ deployments:
     purpose: chat
     model: recorded-chat
     version: "1"
+    # The deployment that answered the recording honoured the schema, and the
+    # schema is part of the request's key, so a changed schema finds no
+    # recording.
+    structured_outputs: true
     residency: eu-region
     data_classes: [synthetic, internal, personal]
     recorded_from: aoai-sdc-gpt-4o

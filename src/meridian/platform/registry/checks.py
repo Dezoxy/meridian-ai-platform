@@ -724,8 +724,9 @@ def check_tenant_coverage(registry: Registry) -> list[str]:
 
 
 def _chat_deployments(registry: Registry) -> list[tuple[Deployment, str]]:
-    """The chat route's candidates and the chat replay deployment, each with
-    how to say its role; a name that resolves to nothing is skipped."""
+    """The chat route's candidates, the chat replay deployment and the chat
+    recorded one, each with how to say its role; a name that resolves to
+    nothing is skipped."""
     found: list[tuple[Deployment, str]] = []
     route = registry.route(CHAT_PURPOSE)
     for name in () if route is None else route.candidates:
@@ -733,6 +734,8 @@ def _chat_deployments(registry: Registry) -> list[tuple[Deployment, str]]:
             found.append((dep, f"a candidate of the {CHAT_PURPOSE!r} route"))
     if dep := registry.replay_deployment(CHAT_PURPOSE):
         found.append((dep, f"the replay deployment for purpose {CHAT_PURPOSE!r}"))
+    if dep := registry.recorded_deployment(CHAT_PURPOSE):
+        found.append((dep, "a recorded deployment"))
     return found
 
 
@@ -740,8 +743,8 @@ def check_structured_outputs(registry: Registry) -> list[str]:
     """A schema for the answer needs a deployment that can honour it (S051).
 
     An embedding deployment has no answer to shape. When an agent may send a
-    schema, every chat deployment the gateway could pick, replay included,
-    must declare it, or a run would meet the refusal only at the call.
+    schema, every chat deployment the gateway could pick, replay and recorded
+    included, must declare it, or a run would meet the refusal only at the call.
     """
     index = {dep.id: i for i, dep in enumerate(registry.deployments)}
     errors = [

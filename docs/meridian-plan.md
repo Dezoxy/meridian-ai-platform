@@ -5137,6 +5137,78 @@ an LLM judge for groundedness, the cost and the tool calls of each run kept
 with the grades, and a way to run it against a deployed stack.
 **Decisions:**
 
+- A recorded model is a gateway mode, `recorded`, with a provider and a
+  deployment (`recorded-chat`) of its own, as replay is. It starts only in
+  the `test`, `ci` and `local` environments and is never a route candidate
+  (T-76). Rejected: answering from a recording inside the replay provider,
+  which would label a real model's answer `replay`, simulated.
+- An entry is found by the SHA-256 of the request the provider is given:
+  the messages after the gateway's redaction, the output budget and, since
+  S051, the response schema; never the tenant, the agent or the run. So a
+  changed prompt or schema finds no entry, the gateway answers 502 with a
+  fixed text that names `make eval-record`, the run fails and the
+  evaluation says how many requests have no recording and for which prompt
+  the file was made. The request itself is not stored.
+- The evaluation's stack has two gateways over one database. The first
+  stays in replay mode for the ingestion and the wording search; the second
+  answers chat, live when recording and from the file in CI, and is what the
+  runtime calls the model through (`build_stack`'s `runtime_http`, the seam
+  the scripted model already used). Embeddings are therefore simulated in
+  both runs, so the clauses found and each chat request are the same when
+  recording and when replaying, and the live spend is the chat calls only.
+  What a real embedding does to retrieval stays unmeasured. Rejected: live
+  embeddings in the recording run, which would make a replay depend on two
+  embedding models finding the same clauses.
+- `recorded-chat` carries the price of the deployment that answered
+  (`recorded_from`, checked by the registry), so the ledger of a recorded
+  run charges what the live run was charged and the `cost` grade means
+  something in CI. No budget of a running platform is touched: the mode
+  does not start on a cluster.
+- Latency is graded only in a live run (the ledger's `reserved_at` to
+  `closed_at` of the chat rows). In a recorded run the ledger times a file
+  read, so the report leaves the latency unset rather than print a number
+  that means nothing. Each recording entry keeps the live call's latency.
+- The judge is generic and lives in the platform
+  (`meridian.platform.evaluation.judge`): whether a statement is supported
+  by a source. The workload decides what the two are (the peril, the
+  description and the candidate clauses; the verdict and the rationale). It
+  calls the gateway over HTTP as the registry agent `evaluation-judge`, a
+  `job` with no tool, allowed only for the tenant `evaluation`. Its verdict
+  is the one grader `groundedness`, in neither the absolute graders nor a
+  target; the ten rule grades are computed without it (T-29, T-77). Any
+  answer but a strict `{"grounded": true, ...}` is the grade false.
+- `--live` in this step's row became `make eval-record`. The CLI imports
+  only platform packages, so it cannot build the in-process stack; the
+  recording run is a pytest run with the live environment, as
+  `make gateway-live` is.
+- `meridian eval run` is HTTP only. It finds a workload's submissions and
+  graders through an entry-point group, `meridian.evaluations`, as the
+  runtime finds a graph through `meridian.graphs`, so the platform still
+  imports no workload. It reads a proposal at
+  `GET /adjuster/claims/{id}/proposal`: under the adjuster's path, JSON of
+  what the adjuster's page already shows and nothing of the claimant, so
+  S021's staff sign-in will cover both and T-65 holds for `/claims` and
+  `/claimant` (T-78). Over HTTP there is no judge, no ledger and no tool
+  capture: it grades the ten rules.
+- Tool names and arguments are kept by the in-process run only, taken from
+  the calls themselves. The audit log and the spans still hold no argument
+  (T-03, T-25).
+- No results table in the Platform Database (S017 passed that on): the
+  reports and the recording live in Git, where a change is a reviewed diff,
+  and three other sessions were adding migrations.
+- The three backlog rows proposed for this step: `make eval-compare` now
+  refuses a report older than a tracked file it is made from, and
+  `golden_set_of` refuses a file the manifest does not list (both taken).
+  `drafted_by` on a completion the filter withheld but the provider billed
+  is left: it needs the gateway's 400 to name the deployment, a change to
+  the gateway's contract and the runtime's client that S051 was editing at
+  the same time; it stays in the backlog with no home.
+- The live spend was estimated before any call from the real prompts: 14
+  triage calls of about 530 input tokens each and at most 400 output
+  tokens, the same again for a variant prompt, 28 judge calls and one probe
+  at the output cap, at most about EUR 0.30 in all. Under the one euro the
+  owner set, so it was not asked.
+
 **Work log:**
 
 **Result / verification:**

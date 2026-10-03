@@ -25,9 +25,17 @@ AGENT_DECLARED: Edit = (
     + DECLARED,
     "    description: Triages a new claim and prepares it for an adjuster.\n",
 )
+JUDGE_DECLARED: Edit = (
+    "agents.yaml",
+    "    tools: []\n" + DECLARED,
+    "    tools: []\n",
+)
+# Both agents that declare it, taken off: nobody asks.
+NO_AGENT_ASKS = (AGENT_DECLARED, JUDGE_DECLARED)
 GPT4O = "aoai-sdc-gpt-4o"
 GPT4O_B = "aoai-sdc-gpt-4o-b"
 REPLAY_CHAT = "replay-chat"
+RECORDED_CHAT = "recorded-chat"
 
 
 def undeclare(directory: Path, *deployments: str) -> Path:
@@ -44,20 +52,21 @@ def undeclare(directory: Path, *deployments: str) -> Path:
 
 def strip_every_declaration(plant: Plant) -> Path:
     """A registry in which nothing declares structured outputs."""
-    directory = plant(AGENT_DECLARED)
-    return undeclare(directory, GPT4O, GPT4O_B, REPLAY_CHAT)
+    directory = plant(*NO_AGENT_ASKS)
+    return undeclare(directory, GPT4O, GPT4O_B, REPLAY_CHAT, RECORDED_CHAT)
 
 
 ROUTE_ROLE = "a candidate of the 'chat' route"
 REPLAY_ROLE = "the replay deployment for purpose 'chat'"
 
 
-def required_error(
-    index: int, deployment: str, role: str, agent: str = "claims-triage"
-) -> str:
+ASKING = "agents 'claims-triage' and 'evaluation-judge' declare"
+
+
+def required_error(index: int, deployment: str, role: str, asking: str = ASKING) -> str:
     return (
         f"models.yaml: deployments[{index}].structured_outputs: required because "
-        f"agent {agent!r} declares structured_outputs and this deployment is "
+        f"{asking} structured_outputs and this deployment is "
         f"{role} (deployment {deployment!r})"
     )
 
@@ -68,7 +77,7 @@ def test_the_fields_default_to_false() -> None:
     assert Agent.model_fields["structured_outputs"].default is False
 
 
-def test_the_real_registry_declares_it_for_the_chat_deployments_and_one_agent(
+def test_the_real_registry_declares_it_for_the_chat_deployments_and_two_agents(
     real_registry: Path,
 ) -> None:
     registry = load_registry(real_registry)
@@ -79,10 +88,12 @@ def test_the_real_registry_declares_it_for_the_chat_deployments_and_one_agent(
         "aoai-sdc-text-embedding-3-large": False,
         "replay-chat": True,
         "replay-embedding": False,
+        "recorded-chat": True,
     }
     assert {a.id: a.structured_outputs for a in registry.agents} == {
         "claims-triage": True,
         "knowledge-ingestion": False,
+        "evaluation-judge": True,
     }
 
 
@@ -173,7 +184,7 @@ def test_no_agent_and_no_deployment_declaring_it_is_accepted(plant: Plant) -> No
 def test_deployments_declaring_it_with_no_agent_asking_are_accepted(
     plant: Plant,
 ) -> None:
-    directory = plant(AGENT_DECLARED)
+    directory = plant(*NO_AGENT_ASKS)
 
     registry = load_registry(directory)
 

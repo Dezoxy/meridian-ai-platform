@@ -277,6 +277,33 @@ def tool_arguments_that_are_a_list() -> dict[str, Any]:
     return data
 
 
+def with_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "lookup", "arguments": arguments}]
+    return data
+
+
+def a_nan_argument() -> dict[str, Any]:
+    return with_arguments({"amount": float("nan")})
+
+
+def an_infinite_argument() -> dict[str, Any]:
+    return with_arguments({"amount": float("inf")})
+
+
+def a_negative_infinite_argument() -> dict[str, Any]:
+    return with_arguments({"amount": float("-inf")})
+
+
+def a_nan_argument_in_a_list() -> dict[str, Any]:
+    return with_arguments({"n": [1, None, [float("nan")]]})
+
+
+def an_infinite_argument_in_a_nested_object() -> dict[str, Any]:
+    return with_arguments({"a": {"b": [{"c": float("inf")}]}})
+
+
 def an_extra_tool_key() -> dict[str, Any]:
     data = report_data()
     for case in data["cases"]:
@@ -345,6 +372,14 @@ INVALID = [
     pytest.param(a_tool_name_over_64_characters, id="tool-name-too-long"),
     pytest.param(tool_arguments_that_are_a_list, id="tool-arguments-a-list"),
     pytest.param(an_extra_tool_key, id="extra-tool-key"),
+    pytest.param(a_nan_argument, id="nan-argument"),
+    pytest.param(an_infinite_argument, id="infinite-argument"),
+    pytest.param(a_negative_infinite_argument, id="negative-infinite-argument"),
+    pytest.param(a_nan_argument_in_a_list, id="nan-argument-in-a-list"),
+    pytest.param(
+        an_infinite_argument_in_a_nested_object,
+        id="infinite-argument-in-a-nested-object",
+    ),
     pytest.param(a_bad_judge_digest, id="bad-judge-digest"),
     pytest.param(a_bad_recording_digest, id="bad-recording-digest"),
     pytest.param(recorded_but_simulated, id="recorded-labelled-simulated"),
@@ -367,6 +402,62 @@ def test_load_report_refuses_an_invalid_file_with_a_report_error(
 
     with pytest.raises(ReportError):
         load_report(path)
+
+
+def test_a_non_finite_argument_is_refused_with_a_fixed_sentence() -> None:
+    with pytest.raises(ValidationError, match="not a finite number") as raised:
+        Report.model_validate(a_nan_argument())
+
+    assert "cases.0.tools.0.arguments" in str(raised.value)
+
+
+def test_a_non_finite_argument_in_a_file_is_refused_without_quoting_it(
+    tmp_path: Path,
+) -> None:
+    path = write_data(tmp_path / "report.json", a_nan_argument())
+    assert "NaN" in path.read_text(encoding="utf-8")  # json.dumps wrote the token
+
+    with pytest.raises(ReportError, match="not a finite number") as raised:
+        load_report(path)
+
+    assert "NaN" not in str(raised.value)
+
+
+def test_a_number_too_large_for_a_float_is_refused_as_not_finite(
+    tmp_path: Path,
+) -> None:
+    # json.loads reads 1e999 as infinity.
+    text = json.dumps(with_arguments({"amount": 0})).replace(
+        '"amount": 0', '"amount": 1e999'
+    )
+    assert "1e999" in text
+    path = tmp_path / "report.json"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ReportError, match="not a finite number"):
+        load_report(path)
+
+
+def test_the_largest_and_smallest_finite_numbers_are_arguments() -> None:
+    arguments = {"big": 1.7976931348623157e308, "small": -5e-324, "n": [0, -1, 2.5]}
+
+    report = Report.model_validate(with_arguments(arguments))
+
+    assert report.cases[0].tools is not None
+    assert report.cases[0].tools[0].arguments == arguments
+
+
+def test_a_dump_is_standard_json_for_any_report_the_model_accepts() -> None:
+    def refuse(token: str) -> None:
+        raise AssertionError(f"non-standard JSON token {token}")
+
+    report = Report.model_validate(
+        with_arguments({"amount": 1e308, "n": [0.1, {"z": -2.5}]})
+    )
+
+    parsed = json.loads(dump_report(report), parse_constant=refuse)
+
+    assert parsed["cases"][0]["tools"][0]["arguments"]["amount"] == 1e308
 
 
 def test_a_recorded_run_is_labelled_real() -> None:

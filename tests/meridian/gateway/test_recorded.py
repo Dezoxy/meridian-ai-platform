@@ -648,6 +648,71 @@ def test_an_unrecorded_chat_is_a_502_with_the_fixed_detail_and_nothing_is_billed
     assert [amount for (amount,) in counters] == [0] * len(counters)
 
 
+def schema_of(field: str) -> dict:
+    """A closed one-field object, inside the gateway's subset."""
+    return {
+        "type": "object",
+        "properties": {field: {"type": "string"}},
+        "required": [field],
+        "additionalProperties": False,
+    }
+
+
+def test_a_recorded_request_with_a_schema_is_answered_by_the_recorded_deployment(
+    fresh_database: DatabaseHandle, tmp_path: Path
+) -> None:
+    # The triage and the judge always send a schema; recorded-chat declares that
+    # it honours one, so the gateway routes the request to it.
+    body = BODY | {"response_schema": schema_of("verdict")}
+    path = tmp_path / "schema.json"
+    key = request_key(ChatRequest.model_validate(body))
+    write_recording(recording_of({key: answer()}), path)
+    client = recorded_client(fresh_database.dsn("model_gateway"), path)
+
+    response = client.post("/v1/chat", json=body, headers=headers())
+
+    assert response.status_code == 200
+    reply = response.json()
+    assert (reply["mode"], reply["deployment"]) == ("recorded", RECORDED_DEPLOYMENT)
+    assert reply["output"] == {"text": ANSWER_TEXT, "finish_reason": "stop"}
+
+
+@pytest.mark.parametrize(
+    "asked",
+    [
+        pytest.param(BODY | {"response_schema": schema_of("other")}, id="other-schema"),
+        pytest.param(BODY, id="no-schema"),
+    ],
+)
+def test_the_schema_is_part_of_the_key_so_a_changed_or_missing_one_finds_nothing(
+    fresh_database: DatabaseHandle, tmp_path: Path, asked: dict
+) -> None:
+    recorded = BODY | {"response_schema": schema_of("verdict")}
+    path = tmp_path / "schema.json"
+    write_recording(
+        recording_of({request_key(ChatRequest.model_validate(recorded)): answer()}),
+        path,
+    )
+    client = recorded_client(fresh_database.dsn("model_gateway"), path)
+
+    response = client.post("/v1/chat", json=asked, headers=headers())
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": NOT_RECORDED_DETAIL}
+
+
+def test_a_schema_changes_the_key_of_the_same_messages() -> None:
+    plain = request_key(REQUEST)
+    verdict = request_key(
+        ChatRequest.model_validate(BODY | {"response_schema": schema_of("verdict")})
+    )
+    other = request_key(
+        ChatRequest.model_validate(BODY | {"response_schema": schema_of("other")})
+    )
+
+    assert len({plain, verdict, other}) == 3
+
+
 def test_misses_open_no_circuit_and_a_recorded_request_after_them_is_answered(
     fresh_database: DatabaseHandle, recordings: Path
 ) -> None:

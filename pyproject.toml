@@ -35,6 +35,11 @@ meridian = "meridian.platform.cli:app"
 [project.entry-points."meridian.graphs"]
 claims-triage = "meridian.workloads.claims_triage.graph:build"
 
+# `meridian eval run` finds a workload's evaluation plugin here by the workload's
+# name and accepts only entry points published by this distribution (T-78).
+[project.entry-points."meridian.evaluations"]
+claims-triage = "meridian.workloads.claims_triage.evaluation_http:EVALUATION"
+
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13"]
 build-backend = "uv_build"

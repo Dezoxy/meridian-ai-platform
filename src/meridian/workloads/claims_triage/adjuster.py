@@ -1,6 +1,7 @@
 """The adjuster's pages of the Claims API (S016): the queue of the claims that
 wait for a person, one claim with its proposal and audit trail, and the form
-that records a decision.
+that records a decision. One JSON route, ``GET /adjuster/claims/{claim_id}/proposal``,
+answers the stored proposal for ``meridian eval run`` (S050, T-78).
 
 The pages are server-rendered with Jinja2 (autoescape on, no ``|safe``), carry
 no script and one stylesheet from the app itself, and are out of the OpenAPI
@@ -31,7 +32,7 @@ from uuid import UUID
 
 import psycopg
 from fastapi import Depends, FastAPI, Form, HTTPException, Path, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
@@ -40,7 +41,11 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.platform.common.db import connect
-from meridian.platform.common.http import AUDIT_UNAVAILABLE, database_failure
+from meridian.platform.common.http import (
+    AUDIT_UNAVAILABLE,
+    database_failure,
+    error_answer,
+)
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -144,6 +149,7 @@ PROPOSAL_SQL = (
     "SELECT proposal FROM claims.triage_proposals "
     "WHERE claim_id = %s ORDER BY created_at DESC LIMIT 1"
 )
+STATE_SQL = "SELECT state FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 # The decision that moved the claim into its state: a word of the three, for
 # the claim's own run (``IS NOT DISTINCT FROM``: a decision with no run belongs
 # to a claim with no run). ``send_back`` and ``withdrawn`` end a run; they are
@@ -472,6 +478,20 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
     )
 
 
+def load_proposal(
+    dsn: str, tenant: str, claim_id: str
+) -> tuple[str, TriageProposal | None] | None:
+    """The claim's state and its latest proposal, which is ``None`` when it has
+    none or it cannot be read; ``None`` when ``tenant`` has no such claim. It
+    reads nothing of the claimant: no submission, no trail, no run."""
+    with connect(dsn, SERVICE_NAME) as conn:
+        claim = conn.execute(STATE_SQL, (claim_id, tenant)).fetchone()
+        if claim is None:
+            return None
+        proposal_row = conn.execute(PROPOSAL_SQL, (claim_id,)).fetchone()
+    return claim[0], _proposal_of(claim_id, proposal_row)[0]
+
+
 # ── the routes ──────────────────────────────────────────────────────────────
 def add_adjuster_pages(
     app: FastAPI,
@@ -534,6 +554,33 @@ def add_adjuster_pages(
         if view is None:
             return render_error(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
         return HTMLResponse(render_claim(view))
+
+    # The proposal the page above shows, as JSON, for ``meridian eval run``
+    # (T-78): the claim's ID, its state and the proposal, and nothing of the
+    # claimant. A read: no audit row, as the page writes none (S021).
+    @app.get(QUEUE_PATH + "/{claim_id}/proposal", include_in_schema=False)
+    def adjuster_proposal(claim_id: ClaimId) -> JSONResponse:
+        with start_span(tracer, "claims.adjuster.proposal") as span:
+            set_span_attributes(
+                span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
+            )
+            try:
+                found = load_proposal(dsn, tenant, claim_id)
+            except psycopg.Error as exc:
+                mark_error(span, exc)
+                return error_answer(*database_failure(exc))
+        if found is None:
+            return error_answer(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
+        state, proposal = found
+        return JSONResponse(
+            {
+                "claim_id": claim_id,
+                "state": state,
+                "proposal": (
+                    None if proposal is None else proposal.model_dump(mode="json")
+                ),
+            }
+        )
 
     def failure_page(failure: DecisionFailure, claim_id: str) -> Response:
         if failure.status not in PAGE_STATUSES:

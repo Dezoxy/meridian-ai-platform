@@ -49,6 +49,20 @@ DATA_CLASS_HEADER = "X-Meridian-Data-Class"
 MAX_USER_MESSAGE_CHARS = 20_000
 
 ANSWER_FIELDS = frozenset({"grounded", "reason"})
+# The JSON Schema the call asks the answer in (S051), as the triage does.
+# Read-only: it is sent as it is and hashed into the prompt's version. It has no
+# length for the reason, which the gateway's subset does not take: the system
+# message states it and read_answer cuts it. The schema makes the shape likely;
+# read_answer still decides what is read (T-77).
+ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "grounded": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["grounded", "reason"],
+    "additionalProperties": False,
+}
 # One Markdown code fence around the whole answer, with or without ``json``.
 FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.DOTALL)
 
@@ -112,8 +126,8 @@ PROMPT_PROBE_STATEMENT = "A probe statement."
 def _prompt_version() -> str:
     """The SHA-256, as 64 hex digits, of what the judge is sent: the system
     message, the format of the user message (built from the fixed probe), the
-    output budget and the length limit of the user message. A change to any of
-    them changes it.
+    output budget, the length limit of the user message and the answer schema.
+    A change to any of them changes it.
 
     It does not cover the model, the deployment, or the answer parser
     ``read_answer``."""
@@ -121,6 +135,7 @@ def _prompt_version() -> str:
         "messages": build_messages(PROMPT_PROBE_SOURCE, PROMPT_PROBE_STATEMENT),
         "max_output_tokens": JUDGE_OUTPUT_TOKENS,
         "max_user_message_chars": MAX_USER_MESSAGE_CHARS,
+        "response_schema": ANSWER_SCHEMA,
     }
     encoded = json.dumps(
         document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -237,7 +252,11 @@ def judge(
     }
     if data_class is not None:
         headers[DATA_CLASS_HEADER] = data_class
-    body = {"messages": messages, "max_output_tokens": JUDGE_OUTPUT_TOKENS}
+    body = {
+        "messages": messages,
+        "max_output_tokens": JUDGE_OUTPUT_TOKENS,
+        "response_schema": ANSWER_SCHEMA,
+    }
     try:
         response = http.post(CHAT_PATH, json=body, headers=headers)
     except httpx.HTTPError:
