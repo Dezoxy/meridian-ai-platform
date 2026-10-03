@@ -462,7 +462,9 @@ def test_only_the_first_choice_is_read(deployment: Deployment) -> None:
     )
 
 
-def test_content_filter_is_rejected(deployment: Deployment) -> None:
+def test_a_completion_the_content_filter_withheld_is_filtered(
+    deployment: Deployment,
+) -> None:
     choice = {
         "index": 0,
         "finish_reason": "content_filter",
@@ -472,7 +474,7 @@ def test_content_filter_is_rejected(deployment: Deployment) -> None:
 
     error = error_of(provider, deployment)
 
-    assert (error.kind, error.status_code) == ("rejected", None)
+    assert (error.kind, error.status_code) == ("filtered", None)
 
 
 def bad_choice(**changes: Any) -> dict[str, Any]:
@@ -683,6 +685,88 @@ def test_a_status_maps_to_its_kind_and_keeps_the_status(
     error = error_of(provider, deployment)
 
     assert (error.kind, error.status_code) == (kind, status)
+
+
+def azure_error(
+    status: int = 400,
+    code: object = "content_filter",
+    *,
+    inner: object = "ResponsibleAIPolicyViolation",
+) -> Handler:
+    """An answer as Azure OpenAI gives for a prompt its content filter refused,
+    with a canary where the provider's message, which echoes the prompt, is."""
+    error = {
+        "message": CANARY,
+        "type": None,
+        "param": "prompt",
+        "code": code,
+        "status": status,
+        "innererror": {"code": inner, "content_filter_result": {"hate": CANARY}},
+    }
+    return lambda _request: httpx.Response(status, json={"error": error})
+
+
+def test_an_azure_400_with_the_content_filter_code_is_filtered(
+    deployment: Deployment,
+) -> None:
+    error = error_of(make_provider(azure_error()), deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("filtered", 400, True)
+
+
+def test_the_provider_text_of_a_filtered_400_is_nowhere(
+    deployment: Deployment, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    error = error_of(make_provider(azure_error()), deployment)
+
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert CANARY not in str(error) + repr(error) + repr(error.args)
+    assert CANARY not in caplog.text + " ".join(r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        pytest.param(azure_error(code="context_length_exceeded"), id="other-code"),
+        pytest.param(azure_error(code=None), id="no-code"),
+        pytest.param(azure_error(code="Content_Filter"), id="other-case"),
+        pytest.param(azure_error(code="content_filter "), id="trailing-space"),
+        pytest.param(
+            azure_error(code="invalid_prompt", inner="content_filter"),
+            id="only-the-inner-code",
+        ),
+        pytest.param(
+            lambda _request: httpx.Response(400, content=b"content_filter"),
+            id="not-json",
+        ),
+        pytest.param(
+            lambda _request: httpx.Response(400, json={"error": "content_filter"}),
+            id="error-is-a-string",
+        ),
+        pytest.param(
+            lambda _request: httpx.Response(400, json=["content_filter"]),
+            id="body-is-a-list",
+        ),
+    ],
+)
+def test_any_other_400_stays_rejected(deployment: Deployment, handler: Handler) -> None:
+    error = error_of(make_provider(handler), deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("rejected", 400, True)
+    assert error.__context__ is None
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 422, 429, 500])
+def test_the_content_filter_code_on_another_status_is_not_filtered(
+    deployment: Deployment, status: int
+) -> None:
+    error = error_of(make_provider(azure_error(status)), deployment)
+
+    assert error.kind != "filtered"
+    assert error.status_code == status
 
 
 @pytest.mark.parametrize("status", [500, 429])
@@ -913,7 +997,7 @@ FILTERED_CHOICE = {
 @pytest.mark.parametrize(
     ("reply", "kind"),
     [
-        (answer(choices=[FILTERED_CHOICE]), "rejected"),
+        (answer(choices=[FILTERED_CHOICE]), "filtered"),
         (answer(choices=[]), "bad-response"),
         (lambda _request: httpx.Response(200, content=b"not json"), "bad-response"),
     ],
@@ -1615,6 +1699,26 @@ def test_an_embedding_status_maps_to_its_kind_and_keeps_the_status(
     error = embed_error_of(make_provider(raise_status(status)), embedding_deployment)
 
     assert (error.kind, error.status_code, error.sent) == (kind, status, True)
+
+
+def test_an_embedding_400_with_the_content_filter_code_is_filtered(
+    embedding_deployment: Deployment,
+) -> None:
+    error = embed_error_of(make_provider(azure_error()), embedding_deployment)
+
+    assert (error.kind, error.status_code, error.sent) == ("filtered", 400, True)
+    assert error.__context__ is None
+    assert CANARY not in str(error) + repr(error) + repr(error.args)
+
+
+def test_an_embedding_400_with_another_code_stays_rejected(
+    embedding_deployment: Deployment,
+) -> None:
+    handler = azure_error(code="context_length_exceeded")
+
+    error = embed_error_of(make_provider(handler), embedding_deployment)
+
+    assert (error.kind, error.status_code) == ("rejected", 400)
 
 
 @pytest.mark.parametrize(

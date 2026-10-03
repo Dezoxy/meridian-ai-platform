@@ -35,6 +35,7 @@ from meridian.platform.common.http import (
     error_answer,
     error_responses,
 )
+from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -524,4 +525,5 @@ def create_app(
 
 def create_app_from_env() -> FastAPI:
     """The factory S041 runs under ``uvicorn --factory``."""
+    install_log_redaction()
     return create_app(RuntimeSettings.from_env())

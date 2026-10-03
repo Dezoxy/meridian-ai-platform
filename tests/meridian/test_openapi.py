@@ -159,6 +159,8 @@ def test_both_gateway_routes_take_the_same_three_caller_headers() -> None:
         ("header", "X-Meridian-Tenant", True),
         ("header", "X-Meridian-Agent", True),
         ("header", "X-Meridian-Run", True),
+        # Optional: it can only raise the tenant's class (S047, T-13).
+        ("header", "X-Meridian-Data-Class", False),
     }
 
 

@@ -59,7 +59,9 @@ PROVIDER_MODEL = "gpt-4o-2024-11-20"  # what a provider says; the registry says 
 BODY = {"messages": [{"role": "user", "content": CLAIM_TEXT}]}
 EU_DEPLOYMENT = "aoai-sdc-gpt-4o"
 GLOBAL_DEPLOYMENT = "aoai-sdc-gpt-4o-global"
-ERROR_KINDS = get_args(ProviderErrorKind)
+# Every kind answers 502 or 504 but the content filter's, which is a 400 of its
+# own (tested in test_gateway_guardrails.py).
+ERROR_KINDS = tuple(k for k in get_args(ProviderErrorKind) if k != "filtered")
 
 
 class CrashingProvider:

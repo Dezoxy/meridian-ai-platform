@@ -5,6 +5,7 @@ import pytest
 from meridian.runtime.failures import GraphFailure, failure_reason
 from meridian.runtime.model_client import (
     ModelCallError,
+    ModelCallFilteredError,
     ModelCallLimitError,
     ModelCallTimeoutError,
 )
@@ -29,6 +30,8 @@ MAX_CODE = "a" * 40
         (ToolRefused("policy_lookup", "unknown"), "tool-refused"),
         (ToolUnavailable("policy_lookup"), "tool-unavailable"),
         (ModelCallTimeoutError(), "model-timeout"),
+        (ModelCallFilteredError(), "model-filtered"),
+        (ModelCallError(400), "model-error"),
         (ModelCallError(502), "model-error"),
         (ModelCallError(0), "model-error"),
         (GraphFailure("missing-policy"), "missing-policy"),
@@ -47,6 +50,7 @@ def test_the_limit_and_the_timeout_are_not_called_a_plain_model_error() -> None:
     # give them its word.
     assert failure_reason(ModelCallLimitError()) != failure_reason(ModelCallError(0))
     assert failure_reason(ModelCallTimeoutError()) != failure_reason(ModelCallError(0))
+    assert failure_reason(ModelCallFilteredError()) != failure_reason(ModelCallError(0))
 
 
 def test_a_graph_failure_message_is_its_code() -> None:

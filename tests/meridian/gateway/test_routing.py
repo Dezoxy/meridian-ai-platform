@@ -4,11 +4,13 @@ import pytest
 from servicesupport import REGISTRY_DIR
 
 from meridian.platform.gateway.routing import RouteDecision, decide, deployment_allows
+from meridian.platform.guardrails import DATA_CLASS_ORDER
 from meridian.platform.registry import Registry, load_registry
-from meridian.platform.registry.models import Deployment, TenantLimits
+from meridian.platform.registry.models import DataClass, Deployment, TenantLimits
 
 PERSONAL_TENANT = "claims-triage"
 SYNTHETIC_TENANT = "development"
+CLASS_TENANT = "class-tenant"
 AGENT = "claims-triage"
 
 
@@ -165,24 +167,123 @@ def test_no_considered_deployment_is_no_route(registry: Registry) -> None:
     )
 
 
-def test_a_class_no_label_allows_is_no_allowed_deployment(
+def with_tenant_class(registry: Registry, data_class: DataClass) -> Registry:
+    """The registry plus a tenant, ``class-tenant``, of ``data_class``."""
+    tenant = registry.tenants[0].model_copy(
+        update={"id": CLASS_TENANT, "data_class": data_class}
+    )
+    return registry.model_copy(update={"tenants": (*registry.tenants, tenant)})
+
+
+def test_a_special_tenant_is_special_data_even_where_a_deployment_lists_special(
     registry: Registry, eu_deployment: Deployment
 ) -> None:
-    special_tenant = registry.tenants[0].model_copy(
-        update={"id": "special-tenant", "data_class": "special"}
-    )
-    with_special = registry.model_copy(
-        update={"tenants": (*registry.tenants, special_tenant)}
-    )
+    with_special = with_tenant_class(registry, "special")
     listed = eu_deployment.model_copy(update={"data_classes": ("special",)})
 
-    decision = decide(with_special, (listed,), "special-tenant", AGENT)
+    decision = decide(with_special, (listed,), CLASS_TENANT, AGENT)
 
     assert decision == RouteDecision(
-        "special",
-        (),
+        "special", (), "special-data", limits_of(with_special, CLASS_TENANT)
+    )
+
+
+# ── a request's own class: a header may raise the tenant's class, never lower it
+@pytest.mark.parametrize("requested", [None, *DATA_CLASS_ORDER])
+@pytest.mark.parametrize("tenant_class", DATA_CLASS_ORDER)
+def test_the_class_used_is_the_higher_of_the_tenants_and_the_requests(
+    registry: Registry,
+    eu_deployment: Deployment,
+    tenant_class: DataClass,
+    requested: DataClass | None,
+) -> None:
+    with_class = with_tenant_class(registry, tenant_class)
+    expected = max(
+        (tenant_class, requested or tenant_class), key=DATA_CLASS_ORDER.index
+    )
+
+    decision = decide(with_class, (eu_deployment,), CLASS_TENANT, AGENT, requested)
+
+    assert decision.data_class == expected
+    if expected == "special":
+        assert (decision.candidates, decision.refusal) == ((), "special-data")
+    else:
+        assert decision.candidates == (eu_deployment,)
+        assert decision.refusal is None
+
+
+def test_a_lower_request_class_is_not_an_error_and_the_tenants_class_is_used(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry, (eu_deployment,), PERSONAL_TENANT, AGENT, requested="synthetic"
+    )
+
+    assert decision.data_class == "personal"
+    assert decision.refusal is None
+
+
+def test_no_request_class_is_the_tenants_class(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    assert decide(registry, (eu_deployment,), PERSONAL_TENANT, AGENT, None) == decide(
+        registry, (eu_deployment,), PERSONAL_TENANT, AGENT
+    )
+
+
+def test_a_synthetic_tenant_that_sends_personal_is_filtered_as_personal(
+    registry: Registry, eu_deployment: Deployment, global_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry,
+        (global_deployment, eu_deployment),
+        SYNTHETIC_TENANT,
+        AGENT,
+        requested="personal",
+    )
+
+    assert decision.data_class == "personal"
+    assert decision.candidates == (eu_deployment,)  # the global one is skipped
+
+
+def test_a_synthetic_tenant_that_sends_personal_to_a_global_route_is_refused(
+    registry: Registry, global_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry, (global_deployment,), SYNTHETIC_TENANT, AGENT, requested="personal"
+    )
+
+    assert (decision.data_class, decision.refusal) == (
+        "personal",
         "no-allowed-deployment",
-        limits_of(with_special, "special-tenant"),
+    )
+
+
+def test_a_special_request_from_a_known_tenant_is_special_data_before_the_filter(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    decision = decide(
+        registry, (eu_deployment,), SYNTHETIC_TENANT, AGENT, requested="special"
+    )
+
+    assert decision == RouteDecision(
+        "special", (), "special-data", limits_of(registry, SYNTHETIC_TENANT)
+    )
+
+
+def test_who_is_refused_comes_before_special_data(
+    registry: Registry, eu_deployment: Deployment
+) -> None:
+    unknown = decide(registry, (eu_deployment,), "nobody", AGENT, "special")
+    other_agent = decide(
+        registry, (eu_deployment,), PERSONAL_TENANT, "other-agent", "special"
+    )
+
+    assert unknown == RouteDecision(None, (), "unknown-tenant")
+    # The class used is still said, so the audit row shows what was asked.
+    assert (other_agent.data_class, other_agent.refusal) == (
+        "special",
+        "agent-not-allowed",
     )
 
 

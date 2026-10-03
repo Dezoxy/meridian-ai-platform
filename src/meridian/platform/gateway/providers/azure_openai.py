@@ -13,6 +13,11 @@ and tests pin that a provider's message, which can echo a prompt, appears in
 none of them (T-18). Chat and embeddings share the one mapping from the SDK's
 exceptions to that error.
 
+Azure's content filter is told apart from any other refusal of a request: a 400
+whose error code is exactly ``content_filter``, or a completion whose
+``finish_reason`` is ``content_filter``, is ``filtered``. Only the result of that
+comparison is kept (T-67).
+
 An embeddings answer is trusted only when it holds exactly one vector of the
 registry's length per input, in index order, of finite numbers (T-54); anything
 else is a bad response.
@@ -76,6 +81,11 @@ STATUS_KINDS: Mapping[int, ProviderErrorKind] = {
     429: "rate-limited",
 }
 CLIENT_ERRORS = range(400, 500)
+# Azure answers 400 with this error code for a prompt its content filter
+# refused; every other 400 stays ``rejected``. A completion the filter withheld
+# comes as a 200 whose ``finish_reason`` is this word.
+BAD_REQUEST = 400
+CONTENT_FILTER_CODE = "content_filter"
 
 
 def kind_of_status(status: int) -> ProviderErrorKind:
@@ -299,7 +309,11 @@ def _call_sdk[T](create: Callable[[], T]) -> T:
         failure = ("unavailable", None, sent)
     except openai.APIStatusError as error:
         status = error.status_code
-        failure = (kind_of_status(status), status, True)
+        # Only the comparison's result is kept: the code and the body can echo
+        # the prompt, and the SDK reads the code from the body's own ``error``.
+        refused_by_filter = status == BAD_REQUEST and error.code == CONTENT_FILTER_CODE
+        kind = "filtered" if refused_by_filter else kind_of_status(status)
+        failure = (kind, status, True)
     except openai.APIResponseValidationError:
         failure = ("bad-response", None, True)
     except json.JSONDecodeError:
@@ -364,7 +378,7 @@ def _read(completion: ChatCompletion) -> ProviderReply:
         raise ProviderError("bad-response")
     match choice.finish_reason:
         case "content_filter":
-            raise ProviderError("rejected")
+            raise ProviderError("filtered")
         case "stop" | "length" as finish_reason:
             pass
         case _:

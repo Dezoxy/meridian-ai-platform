@@ -7,13 +7,17 @@ graph code neither sets headers nor knows the gateway's address (T-08).
 import threading
 import uuid
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any, Literal
 
 import httpx
 from opentelemetry import propagate
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from meridian.platform.registry.models import DataClass
+
 CHAT_PATH = "/v1/chat"
+DATA_CLASS_HEADER = "X-Meridian-Data-Class"
 
 
 class ModelCallError(Exception):
@@ -39,6 +43,14 @@ class ModelCallTimeoutError(ModelCallError):
     def __init__(self) -> None:
         super().__init__(0)
         self.args = ("model gateway did not answer in time",)
+
+
+class ModelCallFilteredError(ModelCallError):
+    """The provider's content filter refused the request or withheld the
+    completion: the gateway answers 400 for that and for nothing else."""
+
+    def __init__(self) -> None:
+        super().__init__(HTTPStatus.BAD_REQUEST)
 
 
 class ModelCallLimitError(ModelCallError):
@@ -120,9 +132,17 @@ class ModelClient:
         }
 
     def chat(
-        self, messages: list[dict[str, str]], *, max_output_tokens: int | None = None
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_output_tokens: int | None = None,
+        data_class: DataClass | None = None,
     ) -> ChatResult:
-        """Raises ``ModelCallLimitError`` past ``max_calls``, before any send."""
+        """Raises ``ModelCallLimitError`` past ``max_calls``, before any send.
+
+        ``data_class`` is the class of the content of this call; the gateway
+        uses the higher of it and the tenant's. Raises
+        ``ModelCallFilteredError`` when the provider's content filter refused."""
         with self._lock:  # a graph's parallel nodes share this client
             if self._calls >= self._max_calls:
                 raise ModelCallLimitError
@@ -131,6 +151,8 @@ class ModelClient:
         if max_output_tokens is not None:
             body["max_output_tokens"] = max_output_tokens
         headers = dict(self._headers)
+        if data_class is not None:
+            headers[DATA_CLASS_HEADER] = data_class
         propagate.inject(headers)
         try:
             response = self._http.post(CHAT_PATH, json=body, headers=headers)
@@ -139,6 +161,8 @@ class ModelClient:
             raise ModelCallTimeoutError from None
         except httpx.HTTPError:
             raise ModelCallError(0) from None
+        if response.status_code == HTTPStatus.BAD_REQUEST:
+            raise ModelCallFilteredError from None
         if not 200 <= response.status_code < 300:
             raise ModelCallError(response.status_code)
         try:
