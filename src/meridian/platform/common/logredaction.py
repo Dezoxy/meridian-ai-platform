@@ -2,25 +2,70 @@
 T-03).
 
 ``install_log_redaction`` wraps the logging module's record factory: once a
-record is built, its message is formatted, run through the guardrails'
-``redact`` and, only when something was found, stored back as the record's
-message with no arguments.
+record is built, its message, each of its arguments and its exception text are
+run through the guardrails' ``redact``. The record keeps the shape it had, so a
+handler or formatter that unpacks the arguments (uvicorn's access log reads
+five) still works; only the values that held an identifier change.
 
 Why a record factory and not a filter: a filter on a logger misses the records
 of its children, and a filter on handlers misses the handlers added after
 start (uvicorn's, the test harness's, the collector's). The factory sees every
 record of the process once, whoever handles it.
 
-Not covered: the text of an exception in ``exc_info`` is formatted by the
-handler, after the factory has run. The services' error middleware already
-keeps exception messages out of logs (T-03).
+The message and the arguments are redacted one by one, not the formatted line,
+because the line is built later, by the handler. An identifier cut in two by
+the template (``"%s@example.com"``) is not found; log the whole value as one
+argument. A record that cannot be redacted is withheld: its message becomes a
+fixed text with no arguments and no exception, because the logging module
+prints a record it cannot format to stderr with its arguments as they are. The
+factory never raises.
 """
 
 import logging
+from collections.abc import Mapping
 
 from meridian.platform.guardrails import redact
 
 _MARK = "_meridian_log_redaction"
+WITHHELD = "log record withheld: it could not be redacted"
+
+
+def _redacted_value(value: object) -> object:
+    """``value`` itself when nothing in its text is found, else the redacted
+    text: a string is redacted as it is, any other object by its ``str()``."""
+    text = value if isinstance(value, str) else str(value)
+    redacted = redact(text)
+    return redacted.text if redacted.found else value
+
+
+def _redacted_args(args: object) -> object:
+    """The arguments with the same type and shape; the same object when no
+    value changed."""
+    if isinstance(args, tuple):
+        items = tuple(_redacted_value(item) for item in args)
+        unchanged = all(new is old for new, old in zip(items, args, strict=True))
+        return args if unchanged else items
+    if isinstance(args, Mapping):
+        values = {key: _redacted_value(item) for key, item in args.items()}
+        unchanged = all(values[key] is item for key, item in args.items())
+        return args if unchanged else values
+    return args
+
+
+def _redact_record(record: logging.LogRecord) -> None:
+    record.msg = _redacted_value(record.msg)
+    record.args = _redacted_args(record.args)  # type: ignore[assignment]
+    if record.exc_info:
+        # The handler's formatter reuses ``exc_text`` instead of formatting.
+        traceback = logging.Formatter().formatException(record.exc_info)
+        record.exc_text = redact(traceback).text
+
+
+def _withhold(record: logging.LogRecord) -> None:
+    record.msg = WITHHELD
+    record.args = ()
+    record.exc_info = None
+    record.exc_text = None
 
 
 def install_log_redaction() -> None:
@@ -33,15 +78,10 @@ def install_log_redaction() -> None:
     def factory(*args: object, **kwargs: object) -> logging.LogRecord:
         record = inner(*args, **kwargs)  # type: ignore[arg-type]
         try:
-            message = record.getMessage()
+            _redact_record(record)
         except Exception:
-            # Leave the record as it is: the logging module reports its own
-            # formatting errors when a handler formats it.
-            return record
-        redacted = redact(message)
-        if redacted.found:
-            record.msg = redacted.text
-            record.args = ()
+            # Nothing of the cause: it can quote the text that was being redacted.
+            _withhold(record)
         return record
 
     setattr(factory, _MARK, True)

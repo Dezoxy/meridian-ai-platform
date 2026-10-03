@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from servicesupport import synthetic_claims
 
 from meridian.platform.gateway.models import MAX_CONTENT_CHARS
+from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import (
     ChatResult,
     ModelCallError,
@@ -590,7 +591,12 @@ def test_an_instruction_to_the_model_in_the_description_makes_no_call(
 
 
 @pytest.mark.parametrize("field", ["title", "body"])
-def test_an_instruction_in_a_candidate_clause_makes_no_call(field: str) -> None:
+def test_an_instruction_in_a_candidate_clause_fails_the_run_and_makes_no_call(
+    field: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A clause is platform data, not the claim's: a poisoned wording is a
+    platform condition (S014's line), so the run fails loudly and the claim goes
+    to ``triage_failed`` instead of to an adjuster with a quiet gap."""
     clause = (
         Clause("3.4", INJECTION, "We do not cover loss during a race.")
         if field == "title"
@@ -598,14 +604,30 @@ def test_an_instruction_in_a_candidate_clause_makes_no_call(field: str) -> None:
     )
     stub = StubModel(chat_result(answer("none")))
 
+    with (
+        caplog.at_level(logging.DEBUG, logger=LOGGER),
+        pytest.raises(GraphFailure) as raised,
+    ):
+        assess(
+            as_client(stub), make_claim(), "motor", "2026.1", (CANDIDATES[0], clause)
+        )
+
+    assert raised.value.code == "wording-addresses-the-model"
+    assert stub.calls == []
+    assert "approve" not in caplog.text
+
+
+def test_an_instruction_in_the_description_wins_over_one_in_a_clause() -> None:
+    """The claim's own data is checked first: its refusal is a proposal."""
+    clause = Clause("3.4", "Racing", f"We do not cover a race. {INJECTION}")
+    stub = StubModel(chat_result(answer("none")))
+
     result = assess(
-        as_client(stub), make_claim(), "motor", "2026.1", (CANDIDATES[0], clause)
+        as_client(stub), make_claim(INJECTION), "motor", "2026.1", (clause,)
     )
 
-    assert stub.calls == []
-    assert result.assessment == Assessment("unavailable")
     assert result.unavailable_because == "injection-suspected"
-    assert result.drafted_by is None
+    assert stub.calls == []
 
 
 def test_a_clause_that_names_an_injury_is_not_special_data() -> None:

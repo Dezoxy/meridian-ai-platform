@@ -27,7 +27,9 @@ no tool or model error is caught here. Only two things become a proposal for a
 person: no such policy, and an assessment that is unavailable: a model answer
 that cannot be trusted, a description that holds special-category data or
 addresses the model, or a request the provider's content filter refused (S047;
-``assessment.py`` turns each into an assessment). No log line, exception message
+``assessment.py`` turns each into an assessment). A wording clause that
+addresses the model is platform data, not the claim's: it fails the run
+(``wording-addresses-the-model``). No log line, exception message
 or span attribute of the graph holds claim text, a tool result or model text:
 a tool result that does not fit its model raises a ``GraphFailure`` whose code
 says which answer, not what it held (the graph's own violations all do).

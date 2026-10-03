@@ -21,31 +21,58 @@ PLACEHOLDERS: Mapping[str, str] = MappingProxyType(
     }
 )
 
+# What may sit between the groups of a card, an IBAN or a phone number besides
+# a hyphen where the rule allows one: a space, a no-break space, a narrow
+# no-break space, a thin space and a tab. Built from code points, so that the
+# source holds no invisible character.
+SPACE_CHARS = " " + "".join(chr(code) for code in (0xA0, 0x202F, 0x2009)) + "\t"
+JOINING_HYPHEN = "-"
+
+# A line break, a tab, a carriage return, a backspace or a form feed as
+# ``json.dumps`` writes it: a backslash and a letter. The letter is a token
+# character, so on its own it would join the value after it to a word; the
+# escape ends a token instead.
+JSON_ESCAPE_LETTERS = "ntrbf"
+JSON_ESCAPE_BEFORE = rf"\\[{JSON_ESCAPE_LETTERS}]"
+
 # Every pattern below is linear: no quantifier sits inside a repeated group
 # that can match the same text two ways, and every repeat is bounded or
 # anchored by a character the repeated part cannot match. A pattern only finds
 # a candidate; the checksum or the structure test decides.
-MAX_EMAIL_LOCAL_PART = 64
+#
+# The local part of an e-mail address is letters, digits and ``._%+-`` of any
+# script (and a combining mark of U+0300 to U+036F, so that a decomposed "e
+# acute" is not cut). It starts where such a run starts, or right after a JSON
+# escape, whose letter is not part of it. It has no upper bound: the pattern
+# starts only where a local part starts, so one of any length costs one scan,
+# and it is redacted whole, never in part.
+EMAIL_LOCAL_CHAR = r"[\w.%+\-̀-ͯ]"
 EMAIL = re.compile(
-    rf"[A-Za-z0-9._%+-]{{1,{MAX_EMAIL_LOCAL_PART}}}"
+    rf"(?:(?<!{EMAIL_LOCAL_CHAR})(?!(?<=\\)[{JSON_ESCAPE_LETTERS}])"
+    rf"|(?<={JSON_ESCAPE_BEFORE}))"
+    rf"{EMAIL_LOCAL_CHAR}+"
     r"@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}"
 )
 
 # Two letters, two digits, then 11 to 30 letters or digits: groups of four
-# with an optional space before each, and a last group of one to three.
+# with an optional space before each, and a last group of one to three. The
+# start is not inside a longer word, unless a JSON escape sits right before it.
 IBAN = re.compile(
-    r"(?<![A-Za-z0-9])[A-Za-z]{2}[0-9]{2}"
-    r"(?: ?[A-Za-z0-9]{4}){2,7}(?: ?[A-Za-z0-9]{1,3})?"
+    rf"(?:(?<![A-Za-z0-9])|(?<={JSON_ESCAPE_BEFORE}))[A-Za-z]{{2}}[0-9]{{2}}"
+    rf"(?:[{SPACE_CHARS}]?[A-Za-z0-9]{{4}}){{2,7}}"
+    rf"(?:[{SPACE_CHARS}]?[A-Za-z0-9]{{1,3}})?"
 )
+IBAN_SPACE = re.compile(rf"[{SPACE_CHARS}]")
 IBAN_MIN_LENGTH = 15
 IBAN_MAX_LENGTH = 34
 IBAN_MODULUS = 97
 
-# 13 to 19 digits with a single space or hyphen between any two of them. A
-# "+" before the run leaves it to the phone rule.
-CARD = re.compile(r"(?<![0-9+])[0-9](?:[ -]?[0-9]){12,18}(?![0-9])")
+# A run of digit groups with a single space or hyphen between two groups. A
+# "+" before the run leaves it to the phone rule. A card is a window of whole
+# groups holding 13 to 19 digits inside a run, so that a number before the card
+# ("Claim 2025 4111 1111 1111 1111") does not hide it.
+CARD_RUN = re.compile(rf"(?<![0-9+])[0-9]+(?:[{SPACE_CHARS}-][0-9]+)*")
 DIGIT_GROUP = re.compile(r"[0-9]+")
-SEPARATOR = re.compile(r"[ -]")
 CARD_MIN_DIGITS = 13
 CARD_MAX_DIGITS = 19
 
@@ -54,12 +81,12 @@ CARD_MAX_DIGITS = 19
 # forms ("06 30 123 4567") are not matched: written without the "+", a phone
 # number cannot be told from an amount, a claim number or a date, and a rule
 # that redacts those costs the model the facts it needs.
-PHONE = re.compile(r"\+[0-9(][0-9 ()-]{6,32}")
+PHONE = re.compile(rf"\+[0-9(][0-9{SPACE_CHARS}()-]{{6,32}}")
 PHONE_MIN_DIGITS = 8
 PHONE_MAX_DIGITS = 17
-PHONE_SHAPE = re.compile(r"\+[0-9]+(?:[ -][0-9]+)*")
+PHONE_SHAPE = re.compile(rf"\+[0-9]+(?:[{SPACE_CHARS}-][0-9]+)*")
 PAREN_GROUP = re.compile(r"\([0-9]+\)")
-SEPARATORS = " -"
+PHONE_SEPARATORS = SPACE_CHARS + JOINING_HYPHEN
 
 # The span to replace in a candidate, as offsets within the text, or None. It
 # gets the text and the offsets of the candidate in it, to see what surrounds
@@ -70,7 +97,6 @@ Chooser = Callable[[str, int, int], tuple[int, int] | None]
 # longer identifier such as a UUID, a trace ID or a digest, where a run of
 # digits or hex characters can pass a checksum by chance.
 TOKEN_CHARS = frozenset(string.ascii_letters + string.digits + "_")
-JOINING_HYPHEN = "-"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,11 +123,20 @@ def redact(text: str) -> Redaction:
     one is left alone. An IBAN, a card or a phone number is also replaced only
     as a whole token, not as a piece of a longer identifier: the character on
     each side is the edge of the text or not a letter, a digit, ``_`` or a
-    hyphen that joins it to one of those. An IBAN written without spaces is
-    replaced only when its country code is uppercase, so an all-lowercase
-    unspaced IBAN is missed (T-73's residual). Text that is not matched is
-    returned unchanged, byte for byte. It does not find names, addresses or
-    national phone numbers, and it does not log or keep the text it is given."""
+    hyphen that joins it to one of those. A JSON escape (a backslash and
+    ``n``, ``t``, ``r``, ``b`` or ``f``) right before a value ends a token, so
+    a value after a line break in ``json.dumps`` output is found. The groups of
+    a card, an IBAN or a phone number may be joined by a space, a no-break
+    space, a narrow no-break space, a thin space or a tab (a card and a phone
+    number also by a hyphen); a separator that JSON writes as an escape is not
+    one. In a run of digit groups, a card is any window of whole groups holding
+    13 to 19 digits: from the earliest start, the longest window that passes
+    Luhn and is a whole token is replaced, then the search resumes after it. An
+    IBAN written without spaces is replaced only when its country code is
+    uppercase, so an all-lowercase unspaced IBAN is missed (T-73's residual).
+    Text that is not matched is returned unchanged, byte for byte. It does not
+    find names, addresses or national phone numbers, and it does not log or
+    keep the text it is given."""
     found: dict[str, int] = {}
     # Order matters: an address can carry digits that look like a card, and a
     # card is not to be half-taken as a phone number.
@@ -109,7 +144,7 @@ def redact(text: str) -> Redaction:
     text = _replace_candidates(
         text, "iban", IBAN, _choose_iban_span, found, rescan_failed=True
     )
-    text = _replace_candidates(text, "card", CARD, _choose_card_span, found)
+    text = _replace_cards(text, found)
     text = _replace_candidates(text, "phone", PHONE, _choose_phone_span, found)
     return Redaction(text=text, found=found)
 
@@ -132,11 +167,11 @@ def _replace_candidates(
 ) -> str:
     """Replace the span ``choose`` accepts in each candidate ``pattern`` finds.
 
-    A candidate with no accepted span is skipped whole: a card or phone
-    candidate is bounded in size and ``choose`` has already looked at every
-    span of it. With ``rescan_failed`` the search resumes one character on,
-    so that a valid IBAN that starts inside a failed candidate is still found;
-    the pattern's lookbehind keeps that to a few starts per word."""
+    A candidate with no accepted span is skipped whole: a phone candidate is
+    bounded in size and ``choose`` has already looked at every span of it. With
+    ``rescan_failed`` the search resumes one character on, so that a valid
+    IBAN that starts inside a failed candidate is still found; the pattern's
+    lookbehind keeps that to a few starts per word."""
     parts: list[str] = []
     copied_to = 0
     position = 0
@@ -158,10 +193,20 @@ def _replace_candidates(
     return "".join(parts)
 
 
+def _follows_json_escape(text: str, start: int) -> bool:
+    """Whether a JSON escape (a backslash and one of ``JSON_ESCAPE_LETTERS``)
+    ends right before ``start``."""
+    return (
+        start >= 2
+        and text[start - 2] == "\\"
+        and text[start - 1] in JSON_ESCAPE_LETTERS
+    )
+
+
 def _joins_before(text: str, start: int) -> bool:
     """Whether the text before ``start`` joins to it: a token character, or a
-    hyphen that follows one."""
-    if start == 0:
+    hyphen that follows one. A JSON escape before it joins nothing."""
+    if start == 0 or _follows_json_escape(text, start):
         return False
     before = text[start - 1]
     if before in TOKEN_CHARS:
@@ -171,7 +216,8 @@ def _joins_before(text: str, start: int) -> bool:
 
 def _joins_after(text: str, end: int) -> bool:
     """Whether the text from ``end`` joins to what comes before it: a token
-    character, or a hyphen that precedes one."""
+    character, or a hyphen that precedes one. (A JSON escape starts with a
+    backslash, which is neither, so it never joins.)"""
     if end >= len(text):
         return False
     after = text[end]
@@ -199,16 +245,16 @@ def _choose_iban_span(text: str, start: int, end: int) -> tuple[int, int] | None
     lowercase hex identifier that passes mod-97 by chance is left alone."""
     if _joins_before(text, start):
         return None
-    groups = text[start:end].split(" ")
+    groups = IBAN_SPACE.split(text[start:end])
     for count in range(len(groups), 0, -1):
-        prefix = " ".join(groups[:count])
-        compact = prefix.replace(" ", "")
+        compact = "".join(groups[:count])
         if not IBAN_MIN_LENGTH <= len(compact) <= IBAN_MAX_LENGTH:
             continue
-        if " " not in prefix and not prefix[:2].isupper():
+        if count == 1 and not compact[:2].isupper():
             continue
-        if not _joins_after(text, start + len(prefix)) and _mod97_holds(compact):
-            return start, start + len(prefix)
+        stop = start + len(compact) + count - 1
+        if not _joins_after(text, stop) and _mod97_holds(compact):
+            return start, stop
     return None
 
 
@@ -224,27 +270,73 @@ def _luhn_holds(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _choose_card_span(text: str, start: int, end: int) -> tuple[int, int] | None:
-    """The longest run of whole digit groups in the candidate, of 13 to 19
-    digits, that is a whole token and passes the Luhn check; the earliest of
-    equals. Neighbouring numbers can join a card into one candidate
-    ("13 4111 1111 1111 1111")."""
-    groups = [(m.start(), m.end()) for m in DIGIT_GROUP.finditer(text, start, end)]
-    best: tuple[int, int, int] | None = None
-    for first in range(len(groups)):
-        run_start = groups[first][0]
-        if _joins_before(text, run_start):
+def _replace_cards(text: str, found: dict[str, int]) -> str:
+    spans = [
+        span
+        for run in CARD_RUN.finditer(text)
+        for span in _card_spans(text, run.start(), run.end())
+    ]
+    if not spans:
+        return text
+    parts: list[str] = []
+    copied_to = 0
+    for start, end in spans:
+        parts.append(text[copied_to:start])
+        parts.append(CARD_PLACEHOLDER)
+        copied_to = end
+    parts.append(text[copied_to:])
+    found["card"] = len(spans)
+    return "".join(parts)
+
+
+def _card_spans(text: str, run_start: int, run_end: int) -> list[tuple[int, int]]:
+    """The cards in a run of digit groups, left to right and apart.
+
+    From each group start, in order, the window is the longest run of whole
+    groups holding 13 to 19 digits that is a whole token and passes Luhn. The
+    first start that has one wins, so of two overlapping valid windows the
+    earliest start is taken, then the longest from it; the search resumes at
+    the group after it. A window never starts with a zero: Luhn ignores leading
+    zeros, so "000" before a valid card would otherwise swallow the zeros and
+    pull a valid window in front of the card, and no card number starts with
+    zero. Each start looks at 19 digits at most, so a run costs
+    time linear in its length: there is no rescan of a failed candidate."""
+    groups = [
+        (m.start(), m.end()) for m in DIGIT_GROUP.finditer(text, run_start, run_end)
+    ]
+    spans: list[tuple[int, int]] = []
+    first = 0
+    while first < len(groups):
+        window = _longest_card_window(text, groups, first)
+        if window is None:
+            first += 1
             continue
-        for last in range(len(groups) - 1, first - 1, -1):
-            run_end = groups[last][1]
-            digits = SEPARATOR.sub("", text[run_start:run_end])
-            if not CARD_MIN_DIGITS <= len(digits) <= CARD_MAX_DIGITS:
-                continue
-            if _joins_after(text, run_end) or not _luhn_holds(digits):
-                continue
-            if best is None or len(digits) > best[0]:
-                best = (len(digits), run_start, run_end)
-    return None if best is None else (best[1], best[2])
+        end, last = window
+        spans.append((groups[first][0], end))
+        first = last + 1
+    return spans
+
+
+def _longest_card_window(
+    text: str, groups: list[tuple[int, int]], first: int
+) -> tuple[int, int] | None:
+    """The end offset and last group index of the longest valid card window
+    that starts at group ``first``, or None."""
+    start = groups[first][0]
+    if text[start] == "0" or _joins_before(text, start):
+        return None
+    digits = ""
+    best: tuple[int, int] | None = None
+    for last in range(first, len(groups)):
+        group_start, group_end = groups[last]
+        digits += text[group_start:group_end]
+        if len(digits) > CARD_MAX_DIGITS:
+            break
+        if len(digits) < CARD_MIN_DIGITS or _joins_after(text, group_end):
+            continue
+        if _luhn_holds(digits):
+            best = (group_end, last)
+    return best
 
 
 def _phone_shape_holds(text: str) -> bool:
@@ -265,23 +357,29 @@ def _phone_shape_holds(text: str) -> bool:
 def _without_trailing_marks(text: str) -> str:
     """The text without trailing separators, an opening parenthesis, and a
     closing one that closes nothing (the "(" before the number is outside it)."""
-    text = text.rstrip(" -(")
+    text = text.rstrip(PHONE_SEPARATORS + "(")
     while text.endswith(")") and text.count(")") > text.count("("):
-        text = text[:-1].rstrip(" -(")
+        text = text[:-1].rstrip(PHONE_SEPARATORS + "(")
     return text
 
 
 def _choose_phone_span(text: str, start: int, end: int) -> tuple[int, int] | None:
     """The longest prefix of the candidate, cut after a digit or a closing
     parenthesis, whose shape is an international number and that is a whole
-    token: the "+" is not preceded by a letter, a digit or "_"."""
-    if start > 0 and text[start - 1] in TOKEN_CHARS:
+    token: the "+" is not preceded by a letter, a digit or "_", unless a JSON
+    escape sits between."""
+    joined_before = (
+        start > 0
+        and text[start - 1] in TOKEN_CHARS
+        and not _follows_json_escape(text, start)
+    )
+    if joined_before:
         return None
     trimmed = text[start:end]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed)
         if not _joins_after(text, start + len(trimmed)) and _phone_shape_holds(trimmed):
             return start, start + len(trimmed)
-        cut = max(trimmed.rfind(sep) for sep in SEPARATORS)
+        cut = max(trimmed.rfind(sep) for sep in PHONE_SEPARATORS)
         trimmed = trimmed[:cut] if cut > 0 else ""
     return None

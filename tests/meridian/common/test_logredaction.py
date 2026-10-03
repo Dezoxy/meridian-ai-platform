@@ -6,11 +6,15 @@ installed here.
 
 import importlib
 import inspect
+import io
 import logging
+import sys
 from collections.abc import Iterator
 
 import pytest
+from uvicorn.logging import AccessFormatter
 
+from meridian.platform.common import logredaction
 from meridian.platform.common.logredaction import install_log_redaction
 
 EMAIL = "ana.kovacs@example.com"
@@ -62,12 +66,22 @@ def test_a_child_logger_record_is_redacted_too(
     assert [r.getMessage() for r in caplog.records] == ["mail [email]"]
 
 
-def test_a_redacted_record_has_no_arguments_left() -> None:
+def test_a_redacted_record_keeps_the_shape_of_its_arguments() -> None:
     install_log_redaction()
 
-    record = _build("claimant %s wrote", (EMAIL,))
+    record = _build("claimant %s wrote %d times", (EMAIL, 3))
 
-    assert record.msg == "claimant [email] wrote"
+    assert record.msg == "claimant %s wrote %d times"
+    assert record.args == ("[email]", 3)
+    assert record.getMessage() == "claimant [email] wrote 3 times"
+
+
+def test_an_address_in_the_message_itself_is_replaced() -> None:
+    install_log_redaction()
+
+    record = _build(f"mail from {EMAIL}", ())
+
+    assert record.msg == "mail from [email]"
     assert record.args == ()
 
 
@@ -83,17 +97,171 @@ def test_a_record_with_nothing_to_redact_is_untouched() -> None:
     assert record.getMessage() == "claim c-1 moved to review"
 
 
-def test_a_record_whose_formatting_fails_is_left_as_it_is() -> None:
+def _handler_output(logger_name: str) -> tuple[io.StringIO, logging.Logger]:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(logger_name)
+    logger.addHandler(handler)
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    return stream, logger
+
+
+def test_a_record_whose_formatting_fails_leaks_nothing_to_the_handler_or_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     install_log_redaction()
-    msg = "count %d"
-    args = (EMAIL,)
+    stream, logger = _handler_output("meridian.test.fails")
 
-    record = _build(msg, args)
+    # Built in two parts: the traceback stderr gets quotes the line of this call.
+    leaking = "anna@" + "example.com"
 
-    assert record.msg is msg
-    assert record.args is args
-    with pytest.raises(TypeError):
-        record.getMessage()
+    logger.error("value %d", leaking)  # %d cannot format text
+
+    captured = capsys.readouterr()
+    assert "anna@" not in stream.getvalue()
+    assert "anna@" not in captured.err
+    assert "anna@" not in captured.out
+    assert "TypeError" in captured.err  # the failure itself is still reported
+
+
+def test_a_mapping_of_arguments_keeps_its_keys() -> None:
+    install_log_redaction()
+    stream, logger = _handler_output("meridian.test.mapping")
+
+    logger.warning("claimant %(who)s wrote %(n)d times", {"who": EMAIL, "n": 3})
+
+    assert stream.getvalue() == "claimant [email] wrote 3 times\n"
+
+
+def test_an_object_whose_text_holds_an_address_is_replaced_by_the_redacted_text() -> (
+    None
+):
+    install_log_redaction()
+
+    class Holder:
+        def __str__(self) -> str:
+            return f"holder of {EMAIL}"
+
+    record = _build("got %s", (Holder(),))
+
+    assert record.args == ("holder of [email]",)
+
+
+def test_an_object_with_nothing_to_redact_stays_the_object_it_was() -> None:
+    install_log_redaction()
+    number = 200
+    marker = object()
+
+    record = _build("%d %s", (number, marker))
+
+    assert record.args[0] is number
+    assert record.args[1] is marker
+
+
+def test_the_access_log_of_uvicorn_still_formats_and_carries_no_address() -> None:
+    install_log_redaction()
+    args = ("127.0.0.1:51234", "GET", f"/claims/{EMAIL}", "1.1", 200)
+    record = logging.getLogRecordFactory()(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        args,
+        None,
+    )
+
+    line = AccessFormatter(use_colors=False).format(record)
+
+    assert line == '127.0.0.1:51234 - "GET /claims/[email] HTTP/1.1" 200'
+
+
+def test_a_logged_exception_writes_its_traceback_redacted() -> None:
+    install_log_redaction()
+    stream, logger = _handler_output("meridian.test.exception")
+
+    try:
+        raise ValueError(f"cannot reach {EMAIL}")
+    except ValueError:
+        logger.exception("failed")
+
+    written = stream.getvalue()
+    assert "Traceback (most recent call last)" in written
+    assert "ValueError: cannot reach [email]" in written
+    assert "ana.kovacs" not in written
+
+
+def test_the_redacted_traceback_is_what_the_record_carries() -> None:
+    install_log_redaction()
+
+    try:
+        raise ValueError(f"cannot reach {EMAIL}")
+    except ValueError:
+        record = logging.getLogRecordFactory()(
+            "meridian.test",
+            logging.ERROR,
+            __file__,
+            1,
+            "failed",
+            (),
+            sys.exc_info(),
+        )
+
+    assert record.exc_text is not None
+    assert "ValueError: cannot reach [email]" in record.exc_text
+    assert "ana.kovacs" not in record.exc_text
+
+
+def test_a_record_without_exception_info_gets_no_exception_text() -> None:
+    install_log_redaction()
+
+    record = _build("plain", ())
+
+    assert record.exc_text is None
+
+
+def test_a_redaction_that_fails_withholds_the_record_and_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_log_redaction()
+
+    def explode(text: str) -> object:
+        raise RuntimeError(f"redaction broke on {text}")
+
+    monkeypatch.setattr(logredaction, "redact", explode)
+
+    try:
+        raise ValueError(f"cannot reach {EMAIL}")
+    except ValueError:
+        record = _build_with_exception_info(f"claimant {EMAIL}", (EMAIL,))
+
+    assert record.msg == "log record withheld: it could not be redacted"
+    assert record.args == ()
+    assert record.exc_info is None
+    assert record.exc_text is None
+    assert EMAIL not in record.getMessage()
+
+
+def _build_with_exception_info(
+    msg: object, args: tuple[object, ...]
+) -> logging.LogRecord:
+    return logging.getLogRecordFactory()(
+        "meridian.test", logging.ERROR, __file__, 1, msg, args, sys.exc_info()
+    )
+
+
+def test_an_argument_whose_text_cannot_be_read_withholds_the_record() -> None:
+    install_log_redaction()
+
+    class Unreadable:
+        def __str__(self) -> str:
+            raise RuntimeError("no text")
+
+    record = _build("got %s", (Unreadable(),))
+
+    assert record.msg == "log record withheld: it could not be redacted"
+    assert record.args == ()
 
 
 def test_installing_twice_wraps_once() -> None:

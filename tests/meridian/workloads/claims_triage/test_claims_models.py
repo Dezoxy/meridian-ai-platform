@@ -7,6 +7,9 @@ from pydantic import ValidationError
 from servicesupport import claim_with_id, synthetic_claims
 
 from meridian.workloads.claims_triage.models import (
+    MAX_RUN_DESCRIPTION_CHARS,
+    MAX_SUBMISSION_DESCRIPTION_CHARS,
+    Claimant,
     ClaimFacts,
     ClaimSubmission,
     DraftedBy,
@@ -44,6 +47,9 @@ def valid(**overrides: Any) -> dict[str, Any]:
         {"loss_location": {"city": "Linz", "country": "at"}},
         {"loss_location": {"city": "Linz", "country": "AUT"}},
         {"claimant": {"name": "", "email": "a@b.example"}},
+        # A blank name would make an empty alternative in the run's name pass.
+        {"claimant": {"name": " ", "email": "a@b.example"}},
+        {"claimant": {"name": " \t\n", "email": "a@b.example"}},
         {"claimant": {"name": "n" * 201, "email": "a@b.example"}},
         {"claimant": {"name": "N", "email": "no-at-sign"}},
         {"claimant": {"name": "N", "email": "a@b"}},
@@ -83,6 +89,36 @@ def test_an_invalid_submission_is_refused(overrides: dict[str, Any]) -> None:
 )
 def test_the_limits_themselves_are_accepted(overrides: dict[str, Any]) -> None:
     ClaimSubmission.model_validate(valid(**overrides))
+
+
+def test_a_claimant_name_is_stripped() -> None:
+    claimant = Claimant.model_validate({"name": "  Ana Kovacs\n", "email": "a@b.co"})
+
+    assert claimant.name == "Ana Kovacs"
+
+
+def test_a_name_of_200_characters_after_the_strip_is_accepted() -> None:
+    claimant = Claimant.model_validate({"name": f" {'n' * 200} ", "email": "a@b.co"})
+
+    assert claimant.name == "n" * 200
+
+
+def test_the_run_s_description_may_be_three_times_the_submission_s() -> None:
+    """``ClaimSubmission`` is a ``ClaimFacts``, so the field was one shared
+    constraint. The run's copy may outgrow the submission's text (a three-letter
+    name part becomes ``[name]``), so ``ClaimFacts`` takes three times as much and
+    the submission is narrowed again."""
+    assert MAX_RUN_DESCRIPTION_CHARS == 3 * MAX_SUBMISSION_DESCRIPTION_CHARS
+    assert MAX_SUBMISSION_DESCRIPTION_CHARS == 5000
+    ClaimSubmission.model_validate(valid(description="x" * 5000))
+    with pytest.raises(ValidationError):
+        ClaimSubmission.model_validate(valid(description="x" * 5001))
+    facts = {k: v for k, v in valid().items() if k != "claimant"}
+    ClaimFacts.model_validate(facts | {"description": "x" * MAX_RUN_DESCRIPTION_CHARS})
+    with pytest.raises(ValidationError):
+        ClaimFacts.model_validate(
+            facts | {"description": "x" * (MAX_RUN_DESCRIPTION_CHARS + 1)}
+        )
 
 
 def test_a_submission_is_frozen() -> None:

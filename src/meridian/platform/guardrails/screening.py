@@ -45,11 +45,20 @@ _SPECIAL_CATEGORY = re.compile(
             r"doctors?",
             r"pregnan(?:t|cy|cies)",
             r"disabilit(?:y|ies)",
-            r"disabled",
             r"therap(?:y|ies|ist|ists)",
             r"cancers?",
-            _phrase("mental", "health"),
+            r"mental(?:\s+|-)health",
             r"depress(?:ion|ed)",
+            r"whiplash",
+            r"fracture[sd]?",
+            r"ambulances?",
+            r"wheelchairs?",
+            r"diabetes",
+            r"asthma",
+            r"psychiatrists?",
+            r"surgeons?",
+            r"chemotherapy",
+            r"hiv",
             # The other Article 9 categories, as unambiguous words only.
             r"religio(?:n|ns|us)",
             _phrase("ethnic", "origin"),
@@ -86,16 +95,19 @@ _ADDRESSES_THE_MODEL = tuple(
     re.compile(pattern, re.MULTILINE)
     for pattern in (
         # Orders to drop what the model was told.
-        r"\b(?:ignore|disregard|forget|override)\s+(?:(?:all|any|the)\s+)?"
+        r"\b(?:ignore|disregard|forget|override)\s+"
+        r"(?:(?:all|any|the)\s+(?:of\s+the\s+)?)?"
         r"(?:(?:previous|prior|above|earlier|preceding|your)\s+)?"
-        r"(?:instructions?|rules|prompts?|messages|guidelines)\b",
+        r"(?:instructions?|rules|prompts?|messages|guidelines|directions)\b",
+        rf"\b{_phrase('disregard', 'everything', '(?:above|before)')}\b",
+        rf"\b{_phrase('forget', 'everything')}\b",
         # Phrases that give the model a new role. "act as" counts only before
         # a word that starts a role or a pretence: "I could not act as quickly"
         # is a claimant's sentence.
         rf"\b{_phrase('you', 'are', 'now')}\b",
         rf"\b{_phrase('act', 'as')}\s+(?:a|an|the|my|your|if|though)\b",
         rf"\b{_phrase('pretend', 'to', 'be')}\b",
-        rf"\b{_phrase('from', 'now', 'on', 'you')}\b",
+        rf"\b{_phrase('from', 'now', 'on')},?\s+you\b",
         rf"\b{_phrase('new', 'instructions?')}\b",
         rf"\b{_phrase('system', 'prompt')}\b",
         rf"\b{_phrase('developer', 'message')}\b",

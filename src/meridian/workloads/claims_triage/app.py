@@ -120,28 +120,58 @@ NAME_PLACEHOLDER = "[name]"
 MIN_NAME_PART_LETTERS = 3
 
 
+CURLY_APOSTROPHE = chr(0x2019)
+# The characters a name is split on into the parts that are replaced on their
+# own: white space, hyphens, apostrophes (straight and curly) and dots.
+NAME_PART_SEPARATORS = re.compile(r"[\s\-'" + CURLY_APOSTROPHE + r".]+")
+# A name is matched as a whole word, and never next to a square bracket: a
+# placeholder is "[word]", and a part that is that word ("Name", "Email") must
+# not turn it into "[[name]]".
+NAME_BOUNDARY_BEFORE = r"(?<![\w\[\]])"
+NAME_BOUNDARY_AFTER = r"(?![\w\[\]])"
+
+
+def _name_alternatives(name: str) -> list[str]:
+    """The patterns for a claimant's name, the longest first: the full name (any
+    white space between its words), then each part, each with at least three
+    letters. No alternative is empty: an empty one matches at every boundary.
+    The minimum also bounds the copy's growth: a one-letter name would turn
+    every "A" into ``[name]``."""
+    alternatives = (
+        [r"\s+".join(re.escape(word) for word in name.split())]
+        if sum(char.isalpha() for char in name) >= MIN_NAME_PART_LETTERS
+        else []
+    )
+    parts = {part for part in NAME_PART_SEPARATORS.split(name) if part}
+    alternatives += [
+        re.escape(part)
+        for part in sorted(parts, key=len, reverse=True)
+        if sum(char.isalpha() for char in part) >= MIN_NAME_PART_LETTERS
+    ]
+    return [alternative for alternative in alternatives if alternative]
+
+
 def description_for_run(description: str, claimant: Claimant) -> str:
-    """The description the run is sent (S047): the claimant's e-mail address,
-    ignoring case, becomes ``[email]``, the full name (any white space between
-    its parts) and then each part of at least three letters become ``[name]``,
-    each as a whole word and ignoring case, and what ``redact`` finds is
-    replaced too. A pattern cannot find a name, and this API is the one place
-    that knows it. The claimant's values are escaped: they are matched, never
-    read as a pattern. The name is replaced in one pass, so a part that is the
-    placeholder's own word ("Name") does not match a placeholder."""
+    """The description the run is sent (S047), in three steps: the claimant's
+    e-mail address, ignoring case, becomes ``[email]``; ``redact`` replaces what
+    it finds (so a third party's address that shares the claimant's surname is
+    one address, not cut by a name); then the full name and each part of it of
+    at least three letters become ``[name]``, each as a whole word and ignoring
+    case. A pattern cannot find a name, and this API is the one place that knows
+    it. The claimant's values are escaped: they are matched, never read as a
+    pattern. The name is replaced in one pass, and never next to a square
+    bracket, so no placeholder is matched or nested. The copy can be longer than
+    the submission (``MAX_RUN_DESCRIPTION_CHARS``)."""
     emailless = re.sub(
         re.escape(claimant.email), EMAIL_PLACEHOLDER, description, flags=re.IGNORECASE
     )
-    parts = claimant.name.split()
-    alternatives = [r"\s+".join(re.escape(part) for part in parts)]
-    alternatives += [
-        re.escape(part)
-        for part in sorted(set(parts), key=len, reverse=True)
-        if sum(char.isalpha() for char in part) >= MIN_NAME_PART_LETTERS
-    ]
-    pattern = r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)"
-    nameless = re.sub(pattern, NAME_PLACEHOLDER, emailless, flags=re.IGNORECASE)
-    return redact(nameless).text
+    redacted = redact(emailless).text
+    alternatives = _name_alternatives(claimant.name)
+    if not alternatives:
+        return redacted
+    whole = "(?:" + "|".join(alternatives) + ")"
+    pattern = NAME_BOUNDARY_BEFORE + whole + NAME_BOUNDARY_AFTER
+    return re.sub(pattern, NAME_PLACEHOLDER, redacted, flags=re.IGNORECASE)
 
 
 class RuntimeCallError(Exception):

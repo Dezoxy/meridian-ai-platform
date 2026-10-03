@@ -18,6 +18,12 @@ from meridian.platform.registry.models import DataClass
 
 CHAT_PATH = "/v1/chat"
 DATA_CLASS_HEADER = "X-Meridian-Data-Class"
+# The gateway marks its content-filter 400 with this header and value. A copy:
+# the runtime does not import the gateway (ADR 2), and a test keeps the two
+# equal. A 400 without the mark is FastAPI's own (an undecodable body), not a
+# refusal by the provider's filter.
+REFUSAL_HEADER = "X-Meridian-Refusal"
+REFUSAL_CONTENT_FILTER = "content-filter"
 
 
 class ModelCallError(Exception):
@@ -47,7 +53,8 @@ class ModelCallTimeoutError(ModelCallError):
 
 class ModelCallFilteredError(ModelCallError):
     """The provider's content filter refused the request or withheld the
-    completion: the gateway answers 400 for that and for nothing else."""
+    completion: the gateway answers 400 with the ``X-Meridian-Refusal`` header
+    for that. A 400 without it is a plain ``ModelCallError``."""
 
     def __init__(self) -> None:
         super().__init__(HTTPStatus.BAD_REQUEST)
@@ -142,7 +149,8 @@ class ModelClient:
 
         ``data_class`` is the class of the content of this call; the gateway
         uses the higher of it and the tenant's. Raises
-        ``ModelCallFilteredError`` when the provider's content filter refused."""
+        ``ModelCallFilteredError`` when the gateway answers 400 with the
+        content-filter header; any other 400 is a ``ModelCallError``."""
         with self._lock:  # a graph's parallel nodes share this client
             if self._calls >= self._max_calls:
                 raise ModelCallLimitError
@@ -161,7 +169,10 @@ class ModelClient:
             raise ModelCallTimeoutError from None
         except httpx.HTTPError:
             raise ModelCallError(0) from None
-        if response.status_code == HTTPStatus.BAD_REQUEST:
+        if (
+            response.status_code == HTTPStatus.BAD_REQUEST
+            and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
+        ):
             raise ModelCallFilteredError from None
         if not 200 <= response.status_code < 300:
             raise ModelCallError(response.status_code)

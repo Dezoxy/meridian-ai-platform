@@ -6,6 +6,7 @@ import random
 import re
 import time
 import uuid
+from collections.abc import Callable
 
 import pytest
 
@@ -24,8 +25,14 @@ IBANS = ["GB82 WEST 1234 5698 7654 32", "HU42 1177 3016 1111 1018 0000 0000"]
 UNSPACED_IBAN = "GB82WEST12345698765432"
 CARDS = ["4111 1111 1111 1111", "5555 5555 5555 4444"]
 PHONES = ["+44 20 7946 0958", "+1 (202) 555-0123", "+36301234567"]
-MAX_SECONDS = 0.5
-ADVERSARIAL_LENGTH = 20_000
+# A linear redaction takes four times as long on a text four times as long; a
+# quadratic one sixteen times. The limit sits between them, at twice the linear
+# growth, so that timer noise does not fail a linear run. The best of RUNS
+# runs is taken at each size.
+SMALL_LENGTH = 10_000
+LARGE_LENGTH = 40_000
+MAX_GROWTH = 8
+RUNS = 3
 
 VALID = {
     "email": (
@@ -453,55 +460,68 @@ def test_a_value_set_off_by_a_separator_or_a_mark_is_still_redacted(
     assert redact(text).text == expected
 
 
-ADVERSARIAL = {
+Shape = Callable[[int], str]
+# Each shape builds a text of about the given length.
+ADVERSARIAL: dict[str, list[Shape]] = {
     "email": [
-        "a" * ADVERSARIAL_LENGTH + "@",
-        "a" * ADVERSARIAL_LENGTH,
-        "a@" + "a." * (ADVERSARIAL_LENGTH // 2),
-        "a@" * (ADVERSARIAL_LENGTH // 2),
-        "a.b" * (ADVERSARIAL_LENGTH // 3) + "@x",
+        lambda n: "a" * n + "@",
+        lambda n: "a" * n,
+        lambda n: "a@" + "a." * (n // 2),
+        lambda n: "a@" * (n // 2),
+        lambda n: "a.b" * (n // 3) + "@x",
     ],
     "iban": [
-        "GB82" + " abcd" * (ADVERSARIAL_LENGTH // 5),
-        "GB82" + "A" * ADVERSARIAL_LENGTH,
-        "AB12 " * (ADVERSARIAL_LENGTH // 5),
-        "ab1" * (ADVERSARIAL_LENGTH // 3),
+        lambda n: "GB82" + " abcd" * (n // 5),
+        lambda n: "GB82" + "A" * n,
+        lambda n: "AB12 " * (n // 5),
+        lambda n: "AB12 CD34 " * (n // 10),
+        lambda n: "ab1" * (n // 3),
     ],
     "card": [
-        "1" * ADVERSARIAL_LENGTH,
-        "1 " * (ADVERSARIAL_LENGTH // 2),
-        "1-" * (ADVERSARIAL_LENGTH // 2),
-        "1  " * (ADVERSARIAL_LENGTH // 3),
-        "4111 1111 1111 111 " * (ADVERSARIAL_LENGTH // 19),
+        lambda n: "1" * n,
+        lambda n: "1 " * (n // 2),
+        lambda n: "1-" * (n // 2),
+        lambda n: "1  " * (n // 3),
+        lambda n: "4111 1111 1111 111 " * (n // 19),
+        lambda n: "4111 1111 1111 1112 " * (n // 20),
     ],
     "phone": [
-        "+" + "1 " * (ADVERSARIAL_LENGTH // 2),
-        "+" * ADVERSARIAL_LENGTH,
-        "+1" + " (" * (ADVERSARIAL_LENGTH // 2),
-        "+1 " + "(1" * (ADVERSARIAL_LENGTH // 2),
-        "+1" + "-" * ADVERSARIAL_LENGTH,
+        lambda n: "+" + "1 " * (n // 2),
+        lambda n: "+" * n,
+        lambda n: "+1" + " (" * (n // 2),
+        lambda n: "+1 " + "(1" * (n // 2),
+        lambda n: "+1" + "-" * n,
     ],
     "mixed": [
-        "1 a" * (ADVERSARIAL_LENGTH // 3),
-        " " * ADVERSARIAL_LENGTH,
-        "\n" * ADVERSARIAL_LENGTH,
+        lambda n: "1 a" * (n // 3),
+        lambda n: " " * n,
+        lambda n: "\n" * n,
     ],
 }
 
 
+def _best_time(text: str) -> float:
+    best = float("inf")
+    for _ in range(RUNS):
+        started = time.perf_counter()
+        redact(text)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
 @pytest.mark.parametrize(
-    "text",
+    "shape",
     [
-        pytest.param(text, id=f"{kind}-{index}")
-        for kind, texts in ADVERSARIAL.items()
-        for index, text in enumerate(texts)
+        pytest.param(shape, id=f"{kind}-{index}")
+        for kind, shapes in ADVERSARIAL.items()
+        for index, shape in enumerate(shapes)
     ],
 )
-def test_an_adversarial_text_is_redacted_in_linear_time(text: str) -> None:
-    assert len(text) >= ADVERSARIAL_LENGTH - 20
+def test_an_adversarial_text_is_redacted_in_linear_time(shape: Shape) -> None:
+    small, large = shape(SMALL_LENGTH), shape(LARGE_LENGTH)
+    assert len(small) >= SMALL_LENGTH - 20
+    assert len(large) >= LARGE_LENGTH - 20
 
-    started = time.perf_counter()
-    redact(text)
-    elapsed = time.perf_counter() - started
+    growth = _best_time(large) / _best_time(small)
 
-    assert elapsed < MAX_SECONDS
+    assert growth < MAX_GROWTH

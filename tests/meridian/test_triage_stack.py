@@ -796,7 +796,9 @@ def test_the_third_claim_in_a_window_fails_when_a_search_is_refused(
 
 
 # ── 6. no claimant text in spans, audit rows, run rows or log records ───────
-CANARY_NAME = "CANARY-name-5d2e"
+# No part of the name (split on hyphens, S047) may be a word of the other
+# canaries: the run's copy of the description replaces each part of the name.
+CANARY_NAME = "Zorblax-5d2e"
 CANARY_EMAIL = "CANARY-mail-5d2e@example.com"
 CANARY_TEXT = "CANARY-text-5d2e"
 

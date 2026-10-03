@@ -38,11 +38,22 @@ HEALTH_WORDS = [
     "pregnancy",
     "disability",
     "disabilities",
-    "disabled",
     "therapy",
     "cancer",
     "depression",
     "depressed",
+    "whiplash",
+    "fracture",
+    "fractured",
+    "fractures",
+    "ambulance",
+    "wheelchair",
+    "diabetes",
+    "asthma",
+    "psychiatrist",
+    "surgeon",
+    "chemotherapy",
+    "HIV",
 ]
 OTHER_WORDS = [
     "religion",
@@ -74,6 +85,12 @@ def test_each_listed_phrase_is_special_category(phrase: str) -> None:
     assert holds_special_category(phrase.title())
     assert holds_special_category(phrase.replace(" ", "   "))
     assert holds_special_category(phrase.replace(" ", "\n"))
+
+
+def test_a_hyphenated_mental_health_is_special_category() -> None:
+    assert holds_special_category("my mental-health leave")
+    assert holds_special_category("Mental-Health")
+    assert holds_special_category("mental health")
 
 
 def test_a_mixed_case_word_is_special_category() -> None:
@@ -113,6 +130,9 @@ def test_a_word_inside_another_word_is_not_special_category() -> None:
         "the church roof leaked",
         "the other driver was angry",
         "a pipe burst in the kitchen",
+        "the alarm was disabled",
+        "the burglar disabled the alarm and took the laptop",
+        "the hive was empty",
         "",
     ],
 )

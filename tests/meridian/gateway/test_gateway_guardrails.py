@@ -38,7 +38,13 @@ from servicesupport import (
 from meridian.platform.common.http import REFUSED
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import make_tracer_provider
-from meridian.platform.gateway.app import PROVIDER_FILTERED, create_app
+from meridian.platform.gateway import redaction as redaction_module
+from meridian.platform.gateway.app import (
+    PROVIDER_FILTERED,
+    REFUSAL_CONTENT_FILTER,
+    REFUSAL_HEADER,
+    create_app,
+)
 from meridian.platform.gateway.budget import chat_estimate, embedding_estimate
 from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
 from meridian.platform.gateway.providers.base import (
@@ -49,9 +55,15 @@ from meridian.platform.gateway.providers.base import (
 from meridian.platform.gateway.resilience import FAILURE_THRESHOLD
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.gateway.walk import closing_for
+from meridian.platform.guardrails import Redaction
 from meridian.platform.registry import Registry, load_registry
 from meridian.platform.registry.checks import run_checks
 from meridian.platform.registry.models import Deployment
+from meridian.runtime.model_client import (
+    ModelCallError,
+    ModelCallFilteredError,
+    ModelClient,
+)
 
 CHAT = "/v1/chat"
 EMBEDDINGS = "/v1/embeddings"
@@ -90,6 +102,8 @@ PII_BODY = {
 # Four values in two messages.
 REDACTIONS_IN_PII_BODY = REDACTIONS_IN_USER_TEXT + 1
 EMBEDDING_BODY = {"inputs": [f"Mail {EMAIL} or pay {CARD}", "A storm hit the roof."]}
+# 0xff is never valid UTF-8: FastAPI's body parse answers 400 for it.
+NOT_UTF_8_BODY = b'{"messages": "\xff\xfe"}'
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,12 +180,13 @@ class Gateway:
         body: object | None = None,
         *,
         tenant: str = PERSONAL_TENANT,
+        agent: str = "claims-triage",
         data_class: str | None = None,
     ) -> tuple[httpx.Response, uuid.UUID]:
         run_id = uuid.uuid4()
         headers = {
             "X-Meridian-Tenant": tenant,
-            "X-Meridian-Agent": "claims-triage",
+            "X-Meridian-Agent": agent,
             "X-Meridian-Run": str(run_id),
         }
         if data_class is not None:
@@ -577,15 +592,66 @@ def test_no_redaction_count_is_set_when_nothing_was_redacted(two: Gateway) -> No
     assert "meridian.redactions" not in two.span("gateway.chat").attributes
 
 
-def test_a_refused_request_still_says_how_many_values_were_redacted(
+@pytest.fixture
+def redact_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The texts the gateway's redaction was asked to redact, where the gateway
+    looks ``redact`` up."""
+    calls: list[str] = []
+    real = redaction_module.redact
+
+    def spy(text: str) -> Redaction:
+        calls.append(text)
+        return real(text)
+
+    monkeypatch.setattr(redaction_module, "redact", spy)
+    return calls
+
+
+@pytest.mark.parametrize("path", [CHAT, EMBEDDINGS])
+@pytest.mark.parametrize(
+    ("tenant", "agent", "data_class", "reason"),
+    [
+        ("no-such-tenant", "claims-triage", None, "unknown-tenant"),
+        (PERSONAL_TENANT, "some-other-agent", None, "agent-not-allowed"),
+        (PERSONAL_TENANT, "claims-triage", "special", "special-data"),
+    ],
+)
+def test_a_refused_request_is_never_redacted(
     two: Gateway,
+    redact_calls: list[str],
+    path: str,
+    tenant: str,
+    agent: str,
+    data_class: str | None,
+    reason: str,
 ) -> None:
-    response, _ = two.post(CHAT, PII_BODY, tenant="no-such-tenant")
+    body = PII_BODY if path == CHAT else EMBEDDING_BODY
+
+    response, _ = two.post(
+        path, body, tenant=tenant, agent=agent, data_class=data_class
+    )
 
     assert response.status_code == 403
+    assert redact_calls == []
     assert two.provider.called == []
-    span = two.span("gateway.chat")
-    assert span.attributes["meridian.redactions"] == REDACTIONS_IN_PII_BODY
+    span = two.span("gateway." + path.rsplit("/", 1)[1])
+    assert span.attributes["meridian.refusal"] == reason
+    assert "meridian.redactions" not in span.attributes
+
+
+@pytest.mark.parametrize("path", [CHAT, EMBEDDINGS])
+def test_an_admitted_request_is_redacted_once_per_text_before_the_provider(
+    two: Gateway, redact_calls: list[str], path: str
+) -> None:
+    body = PII_BODY if path == CHAT else EMBEDDING_BODY
+    texts = [m["content"] for m in body["messages"]] if path == CHAT else body["inputs"]
+
+    response, _ = two.post(path, body)
+
+    assert response.status_code == 200
+    assert redact_calls == texts
+    sent = two.provider.chats if path == CHAT else two.provider.embeds
+    assert len(sent) == 1
 
 
 @pytest.mark.parametrize("scenario", ["completed", "failed", "refused"])
@@ -664,6 +730,7 @@ def test_a_filtered_first_attempt_is_a_400_with_no_second_attempt(
 
     assert response.status_code == 400
     assert response.json() == {"detail": PROVIDER_FILTERED}
+    assert response.headers[REFUSAL_HEADER] == REFUSAL_CONTENT_FILTER
     assert gateway.provider.called == [FIRST if path == CHAT else EMBEDDING]
     (row,) = gateway.rows(run_id)
     assert (row["outcome"], row["reason"], row["http_status"]) == (
@@ -724,6 +791,85 @@ def test_a_malformed_body_is_still_a_422_and_never_a_400(two: Gateway) -> None:
     assert statuses == [422, 422, 422, 422]
 
 
+def test_a_body_that_is_not_utf_8_is_a_400_without_the_refusal_header(
+    two: Gateway,
+) -> None:
+    # FastAPI's own body parse answers 400 for it; the content filter's 400 is
+    # the one that carries the header, so a caller can tell them apart.
+    headers = {
+        "X-Meridian-Tenant": PERSONAL_TENANT,
+        "X-Meridian-Agent": "claims-triage",
+        "X-Meridian-Run": str(uuid.uuid4()),
+        "Content-Type": "application/json",
+    }
+
+    response = two.client.post(CHAT, content=NOT_UTF_8_BODY, headers=headers)
+
+    assert response.status_code == 400
+    assert REFUSAL_HEADER not in response.headers
+    assert two.provider.called == []
+
+
+def model_client(gateway: Gateway) -> ModelClient:
+    """The runtime's own client, over the real gateway app."""
+    return ModelClient(
+        gateway.client,
+        tenant=PERSONAL_TENANT,
+        agent="claims-triage",
+        run_id=uuid.uuid4(),
+        max_calls=5,
+    )
+
+
+def test_the_runtime_reads_the_gateways_filtered_400_as_a_filtered_call(
+    two: Gateway,
+) -> None:
+    two.provider.outcomes[FIRST] = filtered()
+
+    with pytest.raises(ModelCallFilteredError):
+        model_client(two).chat([{"role": "user", "content": "A storm hit the roof."}])
+
+
+def test_the_runtime_reads_a_400_without_the_header_as_a_plain_error(
+    two: Gateway,
+) -> None:
+    # A 400 the content filter did not give: the runtime's request is replaced
+    # in transit by one whose body is not UTF-8, so the real gateway answers it.
+    def replace_body(request: httpx.Request) -> httpx.Response:
+        answer = two.client.post(
+            request.url.path,
+            content=NOT_UTF_8_BODY,
+            headers={
+                "X-Meridian-Tenant": request.headers["X-Meridian-Tenant"],
+                "X-Meridian-Agent": request.headers["X-Meridian-Agent"],
+                "X-Meridian-Run": request.headers["X-Meridian-Run"],
+                "Content-Type": "application/json",
+            },
+        )
+        # The test client is not an ``httpx.Client``: hand its answer over as one.
+        return httpx.Response(
+            answer.status_code, headers=dict(answer.headers), content=answer.content
+        )
+
+    client = httpx.Client(
+        base_url="http://gateway.invalid",
+        transport=httpx.MockTransport(replace_body),
+    )
+    model = ModelClient(
+        client,
+        tenant=PERSONAL_TENANT,
+        agent="claims-triage",
+        run_id=uuid.uuid4(),
+        max_calls=1,
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        model.chat([{"role": "user", "content": "hi"}])
+
+    assert type(raised.value) is ModelCallError
+    assert raised.value.status_code == 400
+
+
 @pytest.mark.parametrize("path", [CHAT, EMBEDDINGS])
 def test_both_routes_list_400_for_the_content_filter(two: Gateway, path: str) -> None:
     responses = two.app.openapi()["paths"][path]["post"]["responses"]
@@ -732,6 +878,9 @@ def test_both_routes_list_400_for_the_content_filter(two: Gateway, path: str) ->
     assert responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/ErrorBody"
     )
+    header = responses["400"]["headers"][REFUSAL_HEADER]
+    assert header["schema"] == {"type": "string", "enum": [REFUSAL_CONTENT_FILTER]}
+    assert header["description"]
 
 
 def test_a_header_value_is_listed_as_an_optional_header_of_both_routes(
