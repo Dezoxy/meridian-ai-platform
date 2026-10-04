@@ -13,7 +13,7 @@ STRUCTURIZR_IMAGE ?= structurizr/structurizr:2026.09.19
 PANDOC_IMAGE      ?= pandoc/extra:3.11.0.0-debian
 # Mermaid CLI, for `make mermaid-render` and `make pdf`: draws Mermaid blocks
 # as PNG. The mature 11.x line; runs as your user (~630 MB).
-MERMAID_IMAGE     ?= minlag/mermaid-cli:11.17.1
+MERMAID_IMAGE     ?= minlag/mermaid-cli:12.0.1
 
 # ── paths ────────────────────────────────────────────────────────────────────
 ARCH_DIR  ?= docs/architecture
