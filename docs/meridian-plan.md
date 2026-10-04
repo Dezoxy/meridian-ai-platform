@@ -6880,7 +6880,8 @@ cluster's field manager, Azure's private endpoints and the size of
   is closed.
 - **v0.33, 2026-10-04:** Renovate's first run, asked for by the owner from
   the Dependency Dashboard the day the app was installed, not on the
-  schedule: eleven pull requests (61 to 71). The owner merged ten that day.
+  schedule: eleven pull requests (61 to 71). Ten merged that day on green
+  checks, set to by the owner (66 by this session too).
   The eleventh, which pins every action to a commit hash, failed `python`:
   a test asked for `azure/setup-helm` at a major tag. Its commit is replayed
   here with the test changed, each of the six hashes compared with its
