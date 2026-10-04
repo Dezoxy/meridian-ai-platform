@@ -1,4 +1,4 @@
-"""The JSON file reader the gateway and the evaluation share (S050, T-76).
+"""The JSON file reader the gateway and the evaluation share (S050, T-77).
 
 It lives in ``common`` so that the gateway needs nothing from the evaluation
 package. Its errors are fixed sentences that quote nothing of the file.

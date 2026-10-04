@@ -36,7 +36,7 @@ meridian = "meridian.platform.cli:app"
 claims-triage = "meridian.workloads.claims_triage.graph:build"
 
 # `meridian eval run` finds a workload's evaluation plugin here by the workload's
-# name and accepts only entry points published by this distribution (T-78).
+# name and accepts only entry points published by this distribution (T-79).
 [project.entry-points."meridian.evaluations"]
 claims-triage = "meridian.workloads.claims_triage.evaluation_http:EVALUATION"
 
@@ -171,7 +171,7 @@ ignore_imports = [
 name = "the gateway imports neither the evaluation package nor the CLI"
 type = "forbidden"
 # A deployed service must not depend on the package that loads workloads and
-# holds a client of the gateway (S050, T-76). What both need, the JSON file
+# holds a client of the gateway (S050, T-77). What both need, the JSON file
 # reader, lives in meridian.platform.common.jsonfile. Indirect imports count.
 source_modules = ["meridian.platform.gateway"]
 forbidden_modules = [

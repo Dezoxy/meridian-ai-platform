@@ -1,4 +1,4 @@
-"""The claims workload's side of ``meridian eval run`` (S050, T-78): which
+"""The claims workload's side of ``meridian eval run`` (S050, T-79): which
 claims to post, where to read each proposal and how to grade the answers.
 
 The platform's command posts the golden set's claims to a deployed Claims API

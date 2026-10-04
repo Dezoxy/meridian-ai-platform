@@ -1,4 +1,4 @@
-"""Run a workload's golden set against a deployed stack (S050, T-78).
+"""Run a workload's golden set against a deployed stack (S050, T-79).
 
 ``run_cases`` posts each of the workload's submissions, one at a time, and reads
 the answer of each case that ran. It sends nothing else: no decision, no

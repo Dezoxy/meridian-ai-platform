@@ -1,7 +1,7 @@
 """The adjuster's pages of the Claims API (S016): the queue of the claims that
 wait for a person, one claim with its proposal and audit trail, and the form
 that records a decision. One JSON route, ``GET /adjuster/claims/{claim_id}/proposal``,
-answers the stored proposal for ``meridian eval run`` (S050, T-78).
+answers the stored proposal for ``meridian eval run`` (S050, T-79).
 
 The pages are server-rendered with Jinja2 (autoescape on, no ``|safe``), carry
 no script and one stylesheet from the app itself, and are out of the OpenAPI
@@ -556,7 +556,7 @@ def add_adjuster_pages(
         return HTMLResponse(render_claim(view))
 
     # The proposal the page above shows, as JSON, for ``meridian eval run``
-    # (T-78): the claim's ID, its state and the proposal, and nothing of the
+    # (T-79): the claim's ID, its state and the proposal, and nothing of the
     # claimant. A read: no audit row, as the page writes none (S021).
     @app.get(QUEUE_PATH + "/{claim_id}/proposal", include_in_schema=False)
     def adjuster_proposal(claim_id: ClaimId) -> JSONResponse:

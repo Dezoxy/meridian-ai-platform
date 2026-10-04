@@ -38,7 +38,7 @@ DEFAULT_REGISTRY_DIR = Path("config/registry")
 MANIFEST_FILE = "manifest.json"
 # A triage runs inside the POST, behind a model call.
 REQUEST_TIMEOUT_SECONDS = 120.0
-# The tenant's window is ten seconds (T-78): one case at a time, paced.
+# The tenant's window is ten seconds (T-79): one case at a time, paced.
 DEFAULT_PACE_SECONDS = 10.0
 BASE_URL_REFUSED = (
     "must be an http or https address with no credentials, query or fragment"
@@ -165,7 +165,7 @@ def _prepare(
     golden set, or exit 2: nothing is sent before all three can be read. The
     golden set is checked against its manifest first (every file's hash, and no
     file the manifest leaves out), so only the golden set's own claims are ever
-    posted (T-78)."""
+    posted (T-79)."""
     try:
         evaluation = load_evaluation(workload)
     except ReportError as exc:

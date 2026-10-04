@@ -5,7 +5,7 @@ T-29: the route and the payable amount are decided by rules, so a rule can say
 whether they are right; whether a rationale is good is a judgement. The ten rule
 graders are computed by ``grade`` from the proposal and the oracle alone: it
 takes no judgement, and the judge's verdict is added afterwards, in its own
-grader, never to override a rule (T-29, T-77). That grader is in neither
+grader, never to override a rule (T-29, T-78). That grader is in neither
 ``ABSOLUTE`` nor ``TARGETS``. With a scripted model the grades are the
 pipeline's, not a real model's (T-72); a recorded run replays a real model's
 answers, a live run asks it.

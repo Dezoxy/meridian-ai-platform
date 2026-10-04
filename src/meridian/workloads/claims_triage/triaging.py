@@ -11,7 +11,7 @@ claimant's name nor e-mail address (S047).
 import logging
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, NamedTuple
 from uuid import UUID, uuid4
@@ -344,9 +344,19 @@ def triage_outcome(run: RunResponse) -> tuple[TriageProposal, Transition]:
     return proposal, transition
 
 
-def store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> None:
-    """Store the claim. An existing one under this ID is left as it is; it is a
-    409 unless it is the same submission."""
+def store_claim(
+    dsn: str,
+    tenant: str,
+    claim: dict[str, Any],
+    *,
+    stamped: Collection[str] = (),
+) -> dict[str, Any]:
+    """Store the claim and return the submission as it is stored. An existing
+    one under this ID is left as it is; it is a 409 unless it is the same
+    submission in every key not in ``stamped``, and then the stored one is
+    returned: the keys the API stamped (the report date of the claimant's
+    pages) keep their first value, so a form sent again later is the same
+    submission."""
     with connect(dsn, SERVICE_NAME) as conn:
         cursor = conn.execute(
             "INSERT INTO claims.claims (claim_id, tenant, submission) "
@@ -354,15 +364,26 @@ def store_claim(dsn: str, tenant: str, claim: dict[str, Any]) -> None:
             (claim["claim_id"], tenant, Jsonb(claim)),
         )
         if cursor.rowcount == 1:
-            return
+            return claim
         row = conn.execute(
             "SELECT submission, tenant FROM claims.claims WHERE claim_id = %s",
             (claim["claim_id"],),
         ).fetchone()
     # A claim of another tenant answers as a different submission does, so no
     # answer tells a caller that another tenant has the ID.
-    if row is None or row[1] != tenant or row[0] != claim:
+    if row is None or row[1] != tenant or not _same_but(row[0], claim, stamped):
         raise HTTPException(409, DIFFERENT_SUBMISSION_DETAIL)
+    stored: dict[str, Any] = row[0]
+    return stored
+
+
+def _same_but(
+    stored: Mapping[str, Any], claim: Mapping[str, Any], stamped: Collection[str]
+) -> bool:
+    """Whether the two submissions are equal in every key not in ``stamped``."""
+    return {k: v for k, v in stored.items() if k not in stamped} == {
+        k: v for k, v in claim.items() if k not in stamped
+    }
 
 
 class LapsedTriage(NamedTuple):

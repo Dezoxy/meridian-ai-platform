@@ -413,7 +413,7 @@ ENTRY_FIELDS = {
     "output_tokens",
     "latency_ms",
 }
-# T-76: nothing in the file but what a model answered. The first group is
+# T-77: nothing in the file but what a model answered. The first group is
 # matched whatever the case; the scheme "Bearer " is matched as it is written.
 FORBIDDEN = {
     "an Azure OpenAI host": re.compile(r"\.openai\.azure\.com", re.IGNORECASE),
@@ -461,7 +461,7 @@ def test_a_committed_report_and_the_comparison_hold_nothing_of_the_service(
     path: Path, command: str
 ) -> None:
     """The reports hold tool arguments and the comparison holds observed values:
-    the same text a recording may not hold is kept out of them too (T-76)."""
+    the same text a recording may not hold is kept out of them too (T-77)."""
     if not path.is_file():
         pytest.fail(f"no {path.name}: {command}")
     text = path.read_text(encoding="utf-8")

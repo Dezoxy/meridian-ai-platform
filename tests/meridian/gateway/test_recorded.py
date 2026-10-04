@@ -1,4 +1,4 @@
-"""The gateway answers chat from a recording (S050, T-76).
+"""The gateway answers chat from a recording (S050, T-77).
 
 The key, the file, the two providers, and the app in recorded mode on the
 throwaway PostgreSQL. Nothing here reaches a network.
@@ -855,7 +855,7 @@ def test_recorded_mode_is_refused_outside_test_ci_and_local(
     with pytest.raises(
         SettingsError,
         match=r"recorded mode is refused outside the test, ci and local "
-        r"environments \(T-76\)",
+        r"environments \(T-77\)",
     ):
         create_app(recorded_settings(environment, recordings), providers=providers)
 
@@ -946,7 +946,7 @@ def test_a_live_gateway_refuses_a_chat_route_candidate_of_provider_kind_recorded
         create_app(settings, providers={"azure-openai": Silent(), "recorded": Silent()})
 
 
-# ── the recorder stays out of the service (T-76) ────────────────────────────
+# ── the recorder stays out of the service (T-77) ────────────────────────────
 SOURCE_ROOT = Path(__file__).resolve().parents[3] / "src" / "meridian"
 RECORDER_HOME = SOURCE_ROOT / "platform" / "gateway" / "providers" / "recorded.py"
 RECORDER_NAMES = ("RecordingProvider", "write_recording")
