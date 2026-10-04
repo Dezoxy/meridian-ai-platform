@@ -8,6 +8,7 @@ second request, which claims it once and runs the next leg.
 """
 
 import logging
+import ssl
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -50,6 +51,7 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.platform.common.throttle import RefusalAuditThrottle
+from meridian.platform.common.tls import verify_of
 from meridian.platform.registry import Registry, load_registry
 from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.checkpoints import open_saver
@@ -222,6 +224,21 @@ def _log_delete_failure(identity: RunIdentity, error: Exception) -> None:
     )
 
 
+def make_gateway_client(
+    settings: RuntimeSettings, verify: ssl.SSLContext | bool
+) -> httpx.Client:
+    """The client of the Model Gateway. ``verify`` is ``verify_of`` the settings'
+    ``client_tls``: the context that presents the runtime's certificate and
+    trusts the gateway's CA, or the default verification when there is none."""
+    # trust_env=False: a proxy variable must not reroute claimant data.
+    return httpx.Client(
+        base_url=settings.gateway_url,
+        timeout=GATEWAY_TIMEOUT_SECONDS,
+        trust_env=False,
+        verify=verify,
+    )
+
+
 def tool_client_for(
     servers: Mapping[str, ToolTarget],
     *,
@@ -230,6 +247,7 @@ def tool_client_for(
     tracer: Tracer,
     identity: RunIdentity,
     throttle: RefusalAuditThrottle,
+    verify: ssl.SSLContext | bool = True,
 ) -> ToolClient:
     """The run's tool client. A call its allowlist refuses is audited here,
     with the tool's registry ID or none, at most one row per tenant and tool per
@@ -271,6 +289,7 @@ def tool_client_for(
         tracer=tracer,
         on_refusal=audit_refusal,
         max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
+        verify=verify,
     )
 
 
@@ -310,12 +329,10 @@ def create_app(
         for agent in registry.agents
         if agent.kind == "graph"
     }
-    # trust_env=False: a proxy variable must not reroute claimant data.
-    http = http_client or httpx.Client(
-        base_url=settings.gateway_url,
-        timeout=GATEWAY_TIMEOUT_SECONDS,
-        trust_env=False,
-    )
+    # One context for the gateway client and every tool call, built once: a
+    # certificate or key that cannot be loaded stops the start.
+    verify = verify_of(settings.client_tls)
+    http = http_client or make_gateway_client(settings, verify)
     dsn = settings.database_url
 
     # An injected checkpointer (tests) serves every request; otherwise each
@@ -403,6 +420,7 @@ def create_app(
                 tracer=tracer,
                 identity=identity,
                 throttle=refusal_throttle,
+                verify=verify,
             )
             outcome = runs.execute(
                 factory, saver, http, tools, tracer, identity, run_input, resume=resume
@@ -561,8 +579,16 @@ def create_app(
         responses=error_responses(401, 403, 404, 500, 503),
     )
     def read_run(
-        run_id: uuid.UUID, tenant: BoundedEntityId, reference: Reference
+        run_id: uuid.UUID,
+        tenant: BoundedEntityId,
+        reference: Reference,
+        request: Request,
     ) -> RunStatus:
+        # As for a resume: the tenant is checked before the run is read, so a
+        # caller that may not name it learns nothing of a run under it (T-10).
+        calling = caller_service(request)
+        if calling is not None and tenant not in calling.tenants:
+            raise refuse(tenant, None, reference, NAME_REFUSAL_REASON)
         found = runs.fetch_run(dsn, run_id)
         # Bound like the resume: the same 404 for a run that is not there and
         # one under another tenant or reference (T-10).

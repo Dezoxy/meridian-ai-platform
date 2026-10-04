@@ -544,3 +544,50 @@ def test_resuming_what_the_caller_may_name_gets_the_ordinary_answer(
     answer = resume(client, uuid.uuid4(), "claims-triage")
 
     assert (answer.status_code, answer.json()) == (404, {"detail": "no such run"})
+
+
+def read(client: TestClient, run_id: uuid.UUID, tenant: str) -> httpx.Response:
+    return client.get(
+        f"/runs/{run_id}", params={"tenant": tenant, "reference": "CLM-0001"}
+    )
+
+
+def test_reading_a_run_of_a_tenant_the_caller_may_not_name_does_not_say_it_exists(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id = add_run(
+        fresh_database,
+        status="AwaitingApproval",
+        tenant="evaluation",
+        agent="claims-triage",
+    )
+    client = client_of("agent-runtime", "claims-api", fresh_database)
+
+    existing = read(client, run_id, "evaluation")
+    absent = read(client, uuid.uuid4(), "evaluation")
+
+    # The same answer: no answer tells that a run of that tenant exists (T-10).
+    assert (existing.status_code, existing.json()) == (403, REFUSED)
+    assert (absent.status_code, absent.json()) == (403, REFUSED)
+    assert (
+        owner_rows(
+            fresh_database,
+            "SELECT event, tenant, agent, run_id FROM audit.events WHERE reason = %s",
+            (NAME_REASON,),
+        )
+        == [("run.refused", "evaluation", None, None)] * 2
+    )
+
+
+def test_reading_a_run_of_a_tenant_the_caller_may_name_gets_the_ordinary_answer(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id = add_run(fresh_database, status="AwaitingApproval")
+    client = client_of("agent-runtime", "claims-api", fresh_database)
+
+    found = read(client, run_id, "claims-triage")
+    absent = read(client, uuid.uuid4(), "claims-triage")
+
+    assert (found.status_code, found.json()["run_id"]) == (200, str(run_id))
+    assert (absent.status_code, absent.json()) == (404, {"detail": "no such run"})
+    assert caller_rows(fresh_database) == []

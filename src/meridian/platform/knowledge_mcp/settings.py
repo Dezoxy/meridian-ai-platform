@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, field_validator
 
 from meridian.platform.common.env import HTTP_SCHEMES, SettingsError, require_env
+from meridian.platform.common.tls import ClientTls
 from meridian.platform.toolserver.settings import ToolServerSettings
 
 # The Model Gateway's address. The runtime reads the same variable (its own copy
@@ -46,6 +47,9 @@ def gateway_url_problem(value: str) -> str | None:
 
 class KnowledgeServerSettings(ToolServerSettings):
     gateway_url: str = Field(repr=False)
+    # The certificate this server presents to the Model Gateway, and the CA it
+    # trusts the gateway by (S055); none means the library's default verification.
+    client_tls: ClientTls | None = None
 
     @field_validator("gateway_url")
     @classmethod
@@ -68,4 +72,8 @@ class KnowledgeServerSettings(ToolServerSettings):
         problem = gateway_url_problem(gateway_url)
         if problem is not None:
             raise SettingsError(f"{GATEWAY_URL_ENV} {problem}")
-        return cls(**dict(base), gateway_url=gateway_url)
+        return cls(
+            **dict(base),
+            gateway_url=gateway_url,
+            client_tls=ClientTls.from_env(environ),
+        )

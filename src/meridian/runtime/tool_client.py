@@ -29,6 +29,7 @@ client is asynchronous, so each call drives it with ``anyio.run``.
 import hashlib
 import logging
 import re
+import ssl
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -186,9 +187,13 @@ def _call_id(answer: types.CallToolResult) -> str | None:
 
 
 @asynccontextmanager
-async def _open(target: ToolTarget) -> AsyncIterator[Client]:
+async def _open(
+    target: ToolTarget, verify: ssl.SSLContext | bool
+) -> AsyncIterator[Client]:
     """An SDK client on ``target``: an address, or (tests) a server or a
-    transport the SDK accepts."""
+    transport the SDK accepts. ``verify`` is for an address: the context that
+    presents the runtime's certificate and trusts the server's CA, or the
+    default verification (never off)."""
     if not isinstance(target, str):
         async with Client(target, mode=CONNECT_MODE, cache=None) as client:
             yield client
@@ -196,7 +201,7 @@ async def _open(target: ToolTarget) -> AsyncIterator[Client]:
     # trust_env=False: a proxy variable must not reroute claimant data. A client
     # passed to the transport is not closed by it, so it is closed here.
     async with httpx2.AsyncClient(
-        trust_env=False, timeout=TOOL_TIMEOUT_SECONDS
+        trust_env=False, timeout=TOOL_TIMEOUT_SECONDS, verify=verify
     ) as http:
         transport = streamable_http_client(
             target.rstrip("/") + MCP_PATH, http_client=http
@@ -206,14 +211,18 @@ async def _open(target: ToolTarget) -> AsyncIterator[Client]:
 
 
 async def _exchange(
-    target: ToolTarget, tool: str, arguments: dict[str, Any], meta: dict[str, Any]
+    target: ToolTarget,
+    tool: str,
+    arguments: dict[str, Any],
+    meta: dict[str, Any],
+    verify: ssl.SSLContext | bool,
 ) -> types.CallToolResult:
     request = types.CallToolRequest(
         params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=meta)
     )
     # Read at call time, so the bound is the constant's current value.
     with anyio.fail_after(TOOL_TIMEOUT_SECONDS):
-        async with _open(target) as client:
+        async with _open(target, verify) as client:
             # One request. ``Client.call_tool`` goes through the session's
             # ``call_tool``, which ends in ``validate_tool_result``: with no
             # output schema cached for the tool (and a client lives for one
@@ -235,7 +244,10 @@ class ToolClient:
     registry ID, or ``None``, before a call the allowlist refuses; it writes the
     runtime's audit row, and an exception from it propagates. ``max_calls``
     bounds the calls of this client, so of one run: every call counts, a refused
-    one too, and the one past it raises ``ToolCallLimit`` before the allowlist."""
+    one too, and the one past it raises ``ToolCallLimit`` before the allowlist.
+    ``verify`` is how a call to an address is made over TLS (S055): the context
+    of the runtime's own certificate and CA, or the default verification, never
+    off."""
 
     def __init__(
         self,
@@ -247,8 +259,10 @@ class ToolClient:
         tracer: Tracer,
         on_refusal: Callable[[str | None], None],
         max_calls: int,
+        verify: ssl.SSLContext | bool = True,
     ) -> None:
         prepare_sdk()
+        self._verify = verify
         self._max_calls = max_calls
         self._calls = 0
         self._lock = threading.Lock()
@@ -358,7 +372,9 @@ class ToolClient:
         # The SDK does not carry the trace; the server reads it from ``_meta``.
         propagate.inject(meta)
         try:
-            answer = anyio.run(_exchange, target, spec.id, dict(arguments), meta)
+            answer = anyio.run(
+                _exchange, target, spec.id, dict(arguments), meta, self._verify
+            )
         except Exception as error:
             # An exception group of ordinary exceptions is an ``Exception``; a
             # group holding a cancellation or ``SystemExit`` is not, and goes on.
