@@ -47,6 +47,7 @@ from meridian.platform.gateway.providers.base import (
     ProviderError,
     ProviderReply,
 )
+from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.registry import load_registry
 from meridian.platform.registry.models import Deployment
@@ -190,6 +191,49 @@ def test_an_embedding_input_count_out_of_bounds_is_a_bad_response(
         embedding_call(provider)
 
     assert (raised.value.kind, raised.value.sent) == ("bad-response", True)
+
+
+# ── the factor leaves room for the worst true count ─────────────────────────
+# The most a byte-level tokenizer can count is one token per byte of the text
+# the provider gets: the redacted one, here a seventh longer than the text the
+# estimate is of. A factor of three would refuse these true counts.
+ADDRESSES = "a@b.cd " * 100  # each address is one byte longer once redacted
+
+
+def test_one_token_per_byte_of_a_redacted_text_is_within_the_chat_bound() -> None:
+    sent = ChatRequest.model_validate(
+        {"messages": [{"role": "user", "content": ADDRESSES}]}
+    )
+    redacted, _ = redact_chat(sent)
+    worst = len(redacted.messages[0].content.encode())
+    assert worst > 3 * chat_estimate(sent).input_tokens
+    reply = chat_reply(input_tokens=worst)
+    operation = chat_operation(redacted, chat_estimate(sent))
+
+    answered = operation.call(
+        FakeProvider({FIRST: reply}),  # type: ignore[arg-type]
+        deployment_of(FIRST),
+        1.0,
+    )
+
+    assert answered == reply
+
+
+def test_one_token_per_byte_of_a_redacted_text_is_within_the_embedding_bound() -> None:
+    sent = EmbeddingRequest.model_validate({"inputs": [ADDRESSES]})
+    redacted, _ = redact_embeddings(sent)
+    worst = len(redacted.inputs[0].encode())
+    assert worst > 3 * embedding_estimate(sent).input_tokens
+    reply = embedding_reply(input_tokens=worst, inputs=1)
+    operation = embedding_operation(redacted, embedding_estimate(sent))
+
+    answered = operation.call(
+        FakeProvider(embedding_replies={EMBEDDER: reply}),  # type: ignore[arg-type]
+        deployment_of(EMBEDDER),
+        1.0,
+    )
+
+    assert answered == reply
 
 
 # ── through the app ─────────────────────────────────────────────────────────
