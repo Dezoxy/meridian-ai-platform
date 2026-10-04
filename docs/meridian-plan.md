@@ -33,7 +33,10 @@
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
   proposals with rules and an LLM judge against a reviewed baseline (the
   model's answers recorded from Azure OpenAI and replayed through the
-  gateway), and no service runs in Azure yet.
+  gateway), alert rules, a health dashboard and five runbooks exist as
+  files checked offline and not yet applied to a cluster, with service
+  level objectives nobody has measured (S024), and no service runs in
+  Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -294,7 +297,7 @@ and Pydantic, at the cost of one dependency.
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
-| S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | doing | S011, S019 |
+| S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent | todo | S020 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
@@ -6719,7 +6722,7 @@ cluster's field manager, Azure's private endpoints and the size of
 
 ### S024 — Operations baseline
 
-**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
 **Goal:** the platform has service level objectives written as proposals
 nobody has measured, alert rules and dashboards as files in this
 repository, and runbooks for a provider outage, a used-up budget, a
@@ -6922,6 +6925,10 @@ database failure, a rollback and a secret rotation.
   - Into the threat register: forged series, steering by a caller,
     silence that looks like health, the runbook as something executed,
     and the unrecorded superuser.
+- The numbers, taken late: after `git fetch`, `main` had no new commit
+  and no pull request was open, so the threats are T-86 (alerts that
+  mislead) and T-87 (a runbook is run with admin credentials), the
+  register counts 87, and the changelog entry is v0.34.
 
 **Result / verification:**
 
@@ -7160,3 +7167,12 @@ required check.
   passed. `Docs / Architecture PDF` passed on the Mermaid 12 pull request.
   Not run: `make azure-plan` (backlog). Part A and T-36 now say what the
   one-week hold covers; three backlog rows are new. No step changes.
+- **v0.34, 2026-10-04:** S024 done, beside S055 and without the cluster:
+  `docs/operations/` with seven service level objectives (proposals,
+  four with an indicator on kind), eight alert rules in one
+  `PrometheusRule` checked by `make alerts` in CI, a second dashboard and
+  five runbooks, none exercised. Alertmanager, which three files had
+  promised for S024, stays off: routing and notification are proposed
+  for S028. Three backlog rows that named S024 are re-homed with their
+  reasons, fourteen are new, among them the cluster proof this step
+  leaves to the session that owns the cluster. T-86 and T-87 are new.

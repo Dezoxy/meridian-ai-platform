@@ -33,7 +33,10 @@ referred to an adjuster waits with its run paused in
 PostgreSQL until the adjuster decides it on a server-rendered page and
 the recorded decision resumes it, a scheduled sweep refers a claim whose
 documents are overdue to an adjuster and cleans up what a failed request
-left behind, and no service runs in Azure yet.
+left behind, alert rules, a health dashboard and five runbooks exist as
+files that were checked offline and are not yet applied to a cluster, with
+service level objectives nobody has measured, and no service runs in Azure
+yet.
 Every capability below is labelled implemented, simulated or designed;
 an unlabelled claim is a documentation defect.
 
@@ -89,7 +92,7 @@ graph LR
 | Engineering harness: reviewers, skills, hooks, slash commands, an MCP server, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `.mcp.json`, `scripts/` |
 | Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
 | Synthetic data and golden set: policies, claim history, four policy wordings and 40 first-notice-of-loss claims with expected outcomes, from a seeded generator whose reruns are identical | Implemented | `data/synthetic/` |
-| Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Implemented as registers. The threat model is version 1 (S018), with 85 threats since S019, S032 and S039: each row's status was compared with the plan's steps and the code for version 1, and each control is labelled in its row. The quality attributes' targets are designed: none is measured before M3 | `docs/architecture/security/`, `docs/architecture/requirements/` |
+| Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Implemented as registers. The threat model is version 1 (S018), with 87 threats since S019, S032, S039 and S024: each row's status was compared with the plan's steps and the code for version 1, and each control is labelled in its row. The quality attributes' targets are designed: none is measured before M3 | `docs/architecture/security/`, `docs/architecture/requirements/` |
 | Agent framework spike: one claim flow with an approval pause in Microsoft Agent Framework and in LangGraph under one test suite, and the decision matrix in ADR 2 | Implemented as a spike, never deployed | `spikes/` |
 | Local platform on kind: a Gateway API edge (Envoy Gateway), PostgreSQL 17 with pgvector (CloudNativePG), OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts, with Grafana's rights confined to its namespace; `make up`, `make smoke`, `make down` | Implemented, laptop only | `infra/kind/` |
 | Azure foundation: Terraform with its state in Azure Storage (Entra ID only), a 60-euro monthly budget with alerts at 50, 80 and 100 %, Key Vault, and Azure OpenAI `gpt-4o`, deployed twice as the gateway's two chat candidates, and `text-embedding-3-large` on regional deployments in Sweden Central with key authentication disabled; the West Europe fallback waits for the subscription's upgrade to pay-as-you-go | Implemented, persistent in a free-trial subscription of its own | `infra/terraform/` |
