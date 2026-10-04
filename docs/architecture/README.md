@@ -63,6 +63,7 @@ style of `Designed`.
 - [0001 Run on Azure and kind, design AWS](decisions/0001-run-on-azure-and-kind-design-aws.md)
 - [0002 Run LangGraph behind a framework-agnostic platform contract](decisions/0002-langgraph-behind-a-framework-agnostic-contract.md)
 - [0003 Build a thin model gateway instead of adopting LiteLLM](decisions/0003-build-a-thin-model-gateway.md)
+- [0004 Prove a service's identity with mutual TLS and cert-manager](decisions/0004-prove-service-identity-with-mutual-tls.md)
 
 New ADR: copy [templates/adr.md](templates/adr.md) to
 `decisions/NNNN-short-title.md`. Keep this index current; there is
