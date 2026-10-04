@@ -360,10 +360,10 @@ def test_a_service_takes_its_own_roles_connection_string_and_the_ca_certificate(
     reference = env_of(container)[DATABASE_URL_ENV]["valueFrom"]["secretKeyRef"]
 
     assert reference == {"name": f"{name}-db", "key": "uri"}
-    (mount,) = container["volumeMounts"]
+    (mount,) = [m for m in container["volumeMounts"] if m["name"] == "db-ca"]
     assert mount["mountPath"] == "/etc/meridian/db-ca"
     assert mount["readOnly"] is True
-    (volume,) = pod["volumes"]
+    (volume,) = [v for v in pod["volumes"] if v["name"] == "db-ca"]
     # Only the public certificate: the Secret also holds the CA's private key.
     assert volume["secret"]["secretName"] == "platform-db-ca"
     assert volume["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
@@ -448,7 +448,7 @@ def test_every_container_runs_the_image_of_the_values_and_never_pulls() -> None:
     for workload in pod_workloads():
         for container in pod_spec(workload)["containers"]:
             assert container["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
-            assert container["imagePullPolicy"] == "IfNotPresent"
+            assert container["imagePullPolicy"] == "Never"
 
 
 def test_only_the_jobs_names_end_in_the_tag_and_no_placeholder_is_left() -> None:
@@ -668,9 +668,9 @@ def test_the_sweep_reads_its_own_secret_and_the_ca_and_never_the_owners() -> Non
     assert secrets_referenced_by(pod) == {"claims-sweep-db", "platform-db-ca"}
     assert OWNER_SECRET not in yaml.dump(sweep_cronjob())
     # Only the public certificate of the CA's Secret, as the Jobs mount it.
-    (volume,) = pod["volumes"]
+    (volume,) = [v for v in pod["volumes"] if v["name"] == "db-ca"]
     assert volume["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
-    (mount,) = sweep_container()["volumeMounts"]
+    (mount,) = [m for m in sweep_container()["volumeMounts"] if m["name"] == "db-ca"]
     assert mount == {
         "name": volume["name"],
         "mountPath": "/etc/meridian/db-ca",
@@ -714,7 +714,7 @@ def test_the_sweeps_pod_is_hardened_like_the_jobs_pods() -> None:
     assert {"cpu", "memory"} <= set(resources["requests"])
     assert "memory" in resources["limits"]
     assert sweep_container()["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
-    assert sweep_container()["imagePullPolicy"] == "IfNotPresent"
+    assert sweep_container()["imagePullPolicy"] == "Never"
     for flag in ("hostNetwork", "hostPID", "hostIPC"):
         assert not pod.get(flag), flag
 
@@ -956,9 +956,11 @@ def test_no_pod_is_privileged_or_shares_the_nodes_namespaces() -> None:
 
 def test_the_manifests_run_the_user_the_dockerfile_sets() -> None:
     (user,) = dockerfile_instructions("USER")
-    uid = int(user.split(":")[0])
+    uid, gid = (int(part) for part in user.split(":"))
 
     for workload in pod_workloads():
+        context = pod_spec(workload)["securityContext"]
+        assert (context["runAsUser"], context["runAsGroup"]) == (uid, gid)
         for container in pod_spec(workload)["containers"]:
             assert container["securityContext"]["runAsUser"] == uid
 

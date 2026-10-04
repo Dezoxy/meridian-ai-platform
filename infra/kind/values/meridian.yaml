@@ -2,6 +2,13 @@
 # what is kind's. deploy.sh passes the image. No secret belongs here: Helm keeps
 # a release's values in a Secret and this repository is public.
 
+# `make deploy` loads the image into the node and tags it with the first 12 hex
+# digits of its image ID, so the tag is the content's own name. Never: a missing
+# image fails the pod instead of being looked up on Docker Hub under the same
+# name.
+image:
+  pullPolicy: Never
+
 # Traces go to the collector's HTTP port (4317 is gRPC; the exporter speaks
 # HTTP).
 telemetry:

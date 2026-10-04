@@ -9,15 +9,43 @@ them (`--take-ownership`). Selectors are immutable, so a selector is the
 no release name, no chart version, or a version bump would roll every pod.
 */ -}}
 
-{{- /* image: <repository>:<tag>; both are required. */ -}}
+{{- /*
+image: the reference every container runs; takes the root. A digest gives
+<repository>@<digest> and the tag is no part of it. Without one the reference is
+<repository>:<tag>, only when the pull policy is Never: a tag names an image
+loaded into the node, which is never pulled, and a tag in a registry can be
+moved.
+*/ -}}
 {{- define "meridian.image" -}}
 {{- $repository := required "image.repository is required: pass --set-string image.repository=<repository>" .Values.image.repository -}}
+{{- $digest := toString (.Values.image.digest | default "") -}}
+{{- if $digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail (printf "image.digest must match ^sha256:[0-9a-f]{64}$ (sha256: and 64 lower-case hex digits); got %q" $digest) -}}
+{{- end -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else if eq .Values.image.pullPolicy "Never" -}}
 {{- printf "%s:%s" $repository (include "meridian.tag" .) -}}
+{{- else -}}
+{{- fail (printf "a tag is accepted only with image.pullPolicy Never, for an image loaded into the node, which is never pulled; an image from a registry needs image.digest: pass --set-string image.digest=sha256:<64 hex digits> (image.pullPolicy is %q)" .Values.image.pullPolicy) -}}
+{{- end -}}
 {{- end -}}
 
 {{- /* tag: the image tag as a string (twelve digits are a number to --set). */ -}}
 {{- define "meridian.tag" -}}
-{{- toString (required "image.tag is required: pass --set-string image.tag=<tag>" .Values.image.tag) -}}
+{{- toString (required "image.tag is required (or image.digest): pass --set-string image.tag=<tag> or --set-string image.digest=sha256:<64 hex digits>" .Values.image.tag) -}}
+{{- end -}}
+
+{{- /*
+jobSuffix: what a Job's name ends in, the tag, or without one the first twelve
+hex digits of the digest; takes the root.
+*/ -}}
+{{- define "meridian.jobSuffix" -}}
+{{- if or .Values.image.tag (not .Values.image.digest) -}}
+{{- include "meridian.tag" . -}}
+{{- else -}}
+{{- trimPrefix "sha256:" (toString .Values.image.digest) | trunc 12 -}}
+{{- end -}}
 {{- end -}}
 
 {{- /* labels NAME: the labels of an object and of its pod template. */ -}}
@@ -91,8 +119,41 @@ key. Takes the root.
 {{- end -}}
 
 {{- /*
+podSecurityContext: the pod's; takes the root. The user and the group are
+runAsId, which wins over a value of the same name in podSecurityContext.
+*/ -}}
+{{- define "meridian.podSecurityContext" -}}
+{{- toYaml (merge (dict "runAsUser" (int64 .Values.runAsId) "runAsGroup" (int64 .Values.runAsId)) .Values.podSecurityContext) -}}
+{{- end -}}
+
+{{- /*
+containerSecurityContext: the container's; takes the root. The user is runAsId,
+the pod's too, so the two levels cannot disagree.
+*/ -}}
+{{- define "meridian.containerSecurityContext" -}}
+{{- toYaml (merge (dict "runAsUser" (int64 .Values.runAsId)) .Values.securityContext) -}}
+{{- end -}}
+
+{{- /* tmpMount: the pod's one writable path (the root filesystem is read-only). */ -}}
+{{- define "meridian.tmpMount" -}}
+- name: tmp
+  mountPath: /tmp
+{{- end -}}
+
+{{- /*
+tmpVolume: an emptyDir on the default medium (a memory-backed one would count
+against the container's memory limit), with a size limit. Takes the root.
+*/ -}}
+{{- define "meridian.tmpVolume" -}}
+- name: tmp
+  emptyDir:
+    sizeLimit: {{ .Values.tmpSizeLimit | quote }}
+{{- end -}}
+
+{{- /*
 job: a Job and its ServiceAccount, each Job its own account; takes root, name
-(migrate, seed or ingest) and job (its values). The Job's name ends in the tag.
+(migrate, seed or ingest) and job (its values). The Job's name ends in the
+tag, or in the digest's first twelve digits.
 */ -}}
 {{- define "meridian.job" -}}
 {{- $root := .root -}}
@@ -110,7 +171,7 @@ automountServiceAccountToken: false
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $app }}-{{ include "meridian.tag" $root }}
+  name: {{ $app }}-{{ include "meridian.jobSuffix" $root }}
   namespace: {{ $root.Release.Namespace }}
   labels:
     {{- include "meridian.labels" $app | nindent 4 }}
@@ -128,6 +189,8 @@ spec:
       restartPolicy: Never
       serviceAccountName: {{ $app }}
       automountServiceAccountToken: false
+      securityContext:
+        {{- include "meridian.podSecurityContext" $root | nindent 8 }}
       containers:
         - name: {{ .name }}
           image: {{ include "meridian.image" $root | quote }}
@@ -142,9 +205,11 @@ spec:
           resources:
             {{- toYaml $job.resources | nindent 12 }}
           securityContext:
-            {{- toYaml $root.Values.securityContext | nindent 12 }}
+            {{- include "meridian.containerSecurityContext" $root | nindent 12 }}
           volumeMounts:
             {{- include "meridian.caMount" . | nindent 12 }}
+            {{- include "meridian.tmpMount" . | nindent 12 }}
       volumes:
         {{- include "meridian.caVolume" $root | nindent 8 }}
+        {{- include "meridian.tmpVolume" $root | nindent 8 }}
 {{- end -}}

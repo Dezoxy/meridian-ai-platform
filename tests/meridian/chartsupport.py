@@ -21,6 +21,10 @@ NAMESPACE = "meridian"
 IMAGE_REPOSITORY = "meridian"
 # Twelve characters, as deploy.sh cuts them from the image ID.
 TEST_TAG = "0123456789ab"
+# An image digest, as `docker inspect` or a registry prints it: sha256 and 64
+# hex digits. Its first twelve digits (a Job's name suffix) differ from the
+# tag's.
+TEST_DIGEST = "sha256:" + "fedcba9876543210" * 4
 JOBS = ("migrate", "seed", "ingest")
 HELM_MISSING = (
     "helm is not on PATH: install Helm v4.3.0 (https://helm.sh/docs/intro/install/); "

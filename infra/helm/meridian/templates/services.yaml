@@ -1,13 +1,19 @@
 {{- /*
-One ServiceAccount, Deployment and Service per entry of `services` in
-values.yaml, all named after the service (no release prefix: the cluster holds
-objects of these names already). The pod takes no service-account token. Each
-reads its own database role's Secret and the CA's public certificate, and sets
-the variables its values list. No NetworkPolicy, PodDisruptionBudget or
-read-only root filesystem here yet.
+One ServiceAccount, Deployment, Service and PodDisruptionBudget per entry of
+`services` in values.yaml, all named after the service (no release prefix: the
+cluster holds objects of these names already). The pod takes no service-account
+token. Each reads its own database role's Secret and the CA's public
+certificate, and sets the variables its values list. The root filesystem is
+read-only; the pod's /tmp is the one writable path. No NetworkPolicy here yet.
 tests/meridian/test_kind_manifests.py ties every name below to the code.
+
+The Model Gateway keeps its rate windows in one process: with a second replica
+each one would allow the full limits (threat model T-45), so the chart fails.
 */ -}}
 {{- range $name, $service := .Values.services }}
+{{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) }}
+{{- fail (printf "services.model-gateway.replicas is %v, but the gateway keeps its rate windows in one process, so each replica would allow the full limits (threat model T-45): it runs one replica" $service.replicas) }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -26,7 +32,7 @@ metadata:
   labels:
     {{- include "meridian.labels" $name | nindent 4 }}
 spec:
-  replicas: {{ $.Values.replicas }}
+  replicas: {{ $service.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ $name }}
@@ -37,6 +43,8 @@ spec:
     spec:
       serviceAccountName: {{ $name }}
       automountServiceAccountToken: false
+      securityContext:
+        {{- include "meridian.podSecurityContext" $ | nindent 8 }}
       containers:
         - name: {{ $name }}
           image: {{ include "meridian.image" $ | quote }}
@@ -62,11 +70,13 @@ spec:
           resources:
             {{- toYaml $service.resources | nindent 12 }}
           securityContext:
-            {{- toYaml $.Values.securityContext | nindent 12 }}
+            {{- include "meridian.containerSecurityContext" $ | nindent 12 }}
           volumeMounts:
             {{- include "meridian.caMount" . | nindent 12 }}
+            {{- include "meridian.tmpMount" . | nindent 12 }}
       volumes:
         {{- include "meridian.caVolume" $ | nindent 8 }}
+        {{- include "meridian.tmpVolume" $ | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service
@@ -83,4 +93,23 @@ spec:
     - name: http
       port: {{ $.Values.port }}
       targetPort: http
+{{- /*
+The budget: with one replica, maxUnavailable 1 permits the one pod's eviction,
+so it does not block a node drain and protects nothing yet; it starts to matter
+with a second replica. minAvailable 1 on a single replica would block every
+drain, which on AKS blocks a node upgrade.
+*/}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" $name | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
 {{- end }}

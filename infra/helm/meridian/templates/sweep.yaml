@@ -29,8 +29,9 @@ no image tag.
                             the last success of a suspended CronJob, which no
                             later Job pushes out
 The pod takes the migration Job's shape: the 'db-ca' volume holds only the CA's
-public certificate, no service-account token, no extra privilege. The schedule,
-the deadline and the documents' deadline are values.
+public certificate, no service-account token, no extra privilege, a read-only
+root filesystem and a writable /tmp. No PodDisruptionBudget, as for the Jobs. The
+schedule, the deadline and the documents' deadline are values.
 */ -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -70,6 +71,8 @@ spec:
           restartPolicy: Never
           serviceAccountName: meridian-sweep
           automountServiceAccountToken: false
+          securityContext:
+            {{- include "meridian.podSecurityContext" . | nindent 12 }}
           containers:
             - name: sweep
               image: {{ include "meridian.image" . | quote }}
@@ -82,8 +85,10 @@ spec:
               resources:
                 {{- toYaml .Values.sweep.resources | nindent 18 }}
               securityContext:
-                {{- toYaml .Values.securityContext | nindent 18 }}
+                {{- include "meridian.containerSecurityContext" . | nindent 18 }}
               volumeMounts:
                 {{- include "meridian.caMount" . | nindent 16 }}
+                {{- include "meridian.tmpMount" . | nindent 16 }}
           volumes:
             {{- include "meridian.caVolume" . | nindent 12 }}
+            {{- include "meridian.tmpVolume" . | nindent 12 }}

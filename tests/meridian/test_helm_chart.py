@@ -21,6 +21,7 @@ from chartsupport import (
     JOBS,
     NAMESPACE,
     RELEASE,
+    TEST_DIGEST,
     TEST_TAG,
     VALUES_FILE,
     helm_arguments,
@@ -210,6 +211,8 @@ def test_the_route_renders_only_when_enabled_and_kind_enables_it() -> None:
             f"image.repository={IMAGE_REPOSITORY}",
             "--set-string",
             f"image.tag={TEST_TAG}",
+            "--set-string",
+            "image.pullPolicy=Never",  # a tag needs it (the image rules below)
         ]
     )
 
@@ -393,3 +396,257 @@ def test_make_helm_lint_lints_the_chart_strictly_with_kinds_values_and_every_job
     assert "image.tag=" in recipe
     for name in JOBS:
         assert f"jobs.{name}.enabled=true" in recipe
+
+
+# ---------------------------------------------------------------------------
+# Container hardening (S019): a read-only root filesystem with one small
+# writable /tmp, a pod-level security context, a PodDisruptionBudget per
+# service, a pinned image and the one-replica rule of the gateway.
+# ---------------------------------------------------------------------------
+
+USER_ID = 10001  # the Dockerfile's USER; test_kind_manifests.py ties them
+TMP_SIZE_LIMIT = "16Mi"
+SHA256_HEX_DIGITS = 64
+DIGEST_PREFIX_LENGTH = 12
+MALFORMED_DIGESTS = {
+    "no algorithm": "0123456789abcdef" * 4,
+    "another algorithm": "md5:" + "0" * 32,
+    "63 digits": "sha256:" + "a" * 63,
+    "65 digits": "sha256:" + "a" * 65,
+    "upper case": "sha256:" + "A" * 64,
+    "not hex": "sha256:" + "g" * 64,
+    "a tag in its place": "sha256:latest",
+}
+
+
+def pod_spec(workload: dict) -> dict:
+    if workload["kind"] == "CronJob":
+        return workload["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    return workload["spec"]["template"]["spec"]
+
+
+def pod_workloads(documents: list[dict]) -> list[dict]:
+    """The objects that run a pod: Deployments, Jobs and the CronJob."""
+    return [d for d in documents if d["kind"] in POD_KINDS]
+
+
+def pod_labels(workload: dict) -> dict[str, str]:
+    if workload["kind"] == "CronJob":
+        return workload["spec"]["jobTemplate"]["spec"]["template"]["metadata"]["labels"]
+    return workload["spec"]["template"]["metadata"]["labels"]
+
+
+def images_of(documents: list[dict]) -> set[str]:
+    return {
+        container["image"]
+        for workload in pod_workloads(documents)
+        for container in pod_spec(workload)["containers"]
+    }
+
+
+def test_the_chart_renders_the_six_deployments_the_three_jobs_and_the_sweep() -> None:
+    # Pins what the hardening tests below range over: a test that ranged over
+    # nothing would pass.
+    workloads = pod_workloads(list(rendered_chart()))
+
+    assert sorted(w["kind"] for w in workloads) == (
+        ["CronJob"] + ["Deployment"] * len(SERVICES) + ["Job"] * len(JOBS)
+    )
+
+
+def test_every_container_has_a_read_only_root_filesystem() -> None:
+    for workload in pod_workloads(list(rendered_chart())):
+        for container in pod_spec(workload)["containers"]:
+            context = container["securityContext"]
+            where = f"{workload['metadata']['name']}/{container['name']}"
+            assert context["readOnlyRootFilesystem"] is True, where
+
+
+def test_every_pod_has_a_writable_tmp_of_16mi_and_no_other_writable_path() -> None:
+    for workload in pod_workloads(list(rendered_chart())):
+        name = workload["metadata"]["name"]
+        pod = pod_spec(workload)
+        volumes = {v["name"]: v for v in pod["volumes"]}
+
+        # The one emptyDir, named tmp, on the default medium (a memory-backed
+        # one would count against the container's memory limit).
+        assert [n for n, v in volumes.items() if "emptyDir" in v] == ["tmp"], name
+        assert volumes["tmp"]["emptyDir"] == {"sizeLimit": TMP_SIZE_LIMIT}, name
+        # Every other volume is a Secret mounted read-only: no hostPath, no
+        # ConfigMap, no second emptyDir.
+        for volume_name, volume in volumes.items():
+            if volume_name != "tmp":
+                assert set(volume) == {"name", "secret"}, (name, volume_name)
+        for container in pod["containers"]:
+            mounts = {m["name"]: m for m in container["volumeMounts"]}
+            assert set(mounts) == set(volumes), name
+            assert mounts["tmp"]["mountPath"] == "/tmp", name  # noqa: S108
+            assert not mounts["tmp"].get("readOnly"), name
+            for mount_name, mount in mounts.items():
+                if mount_name != "tmp":
+                    assert mount["readOnly"] is True, (name, mount_name)
+            writable = [
+                m["mountPath"] for m in mounts.values() if not m.get("readOnly")
+            ]
+            assert writable == ["/tmp"], name  # noqa: S108
+
+
+def test_every_pod_has_the_pod_level_security_context() -> None:
+    for workload in pod_workloads(list(rendered_chart())):
+        pod = pod_spec(workload)
+
+        assert pod["securityContext"] == {
+            "runAsNonRoot": True,
+            "runAsUser": USER_ID,
+            "runAsGroup": USER_ID,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }, workload["metadata"]["name"]
+
+
+def test_the_user_and_group_of_both_levels_come_from_one_value() -> None:
+    # The pod and its containers must not disagree: one value sets all three.
+    for workload in pod_workloads(
+        render([*helm_arguments(), "--set", "runAsId=20000"])
+    ):
+        pod = pod_spec(workload)
+
+        assert pod["securityContext"]["runAsUser"] == 20000
+        assert pod["securityContext"]["runAsGroup"] == 20000
+        for container in pod["containers"]:
+            assert container["securityContext"]["runAsUser"] == 20000
+
+
+def test_a_pod_disruption_budget_per_service_and_none_for_a_job_or_the_cronjob() -> (
+    None
+):
+    documents = list(rendered_chart())
+    deployments = {
+        d["metadata"]["name"]: d for d in documents if d["kind"] == "Deployment"
+    }
+    budgets = [d for d in documents if d["kind"] == "PodDisruptionBudget"]
+
+    assert sorted(b["metadata"]["name"] for b in budgets) == sorted(deployments)
+    for budget in budgets:
+        name = budget["metadata"]["name"]
+        assert budget["apiVersion"] == "policy/v1"
+        assert budget["metadata"]["namespace"] == NAMESPACE
+        assert budget["spec"]["selector"] == deployments[name]["spec"]["selector"]
+        assert budget["spec"]["selector"] == {
+            "matchLabels": {"app.kubernetes.io/name": name}
+        }
+        assert budget["spec"]["maxUnavailable"] == 1
+        assert "minAvailable" not in budget["spec"]
+        # A budget on a Job's or the CronJob's pods would block their eviction.
+        for workload in pod_workloads(documents):
+            if workload["kind"] != "Deployment":
+                selected = budget["spec"]["selector"]["matchLabels"].items()
+                assert not selected <= pod_labels(workload).items(), workload["kind"]
+
+
+def test_every_service_runs_one_replica_by_default_and_a_value_sets_one_service() -> (
+    None
+):
+    default = {
+        d["metadata"]["name"]: d["spec"]["replicas"]
+        for d in rendered_chart()
+        if d["kind"] == "Deployment"
+    }
+    scaled = {
+        d["metadata"]["name"]: d["spec"]["replicas"]
+        for d in render([*helm_arguments(), "--set", "services.claims-api.replicas=2"])
+        if d["kind"] == "Deployment"
+    }
+
+    assert default == dict.fromkeys(SERVICES, 1)
+    assert scaled == default | {"claims-api": 2}
+
+
+def test_the_gateway_renders_with_one_replica_and_fails_with_two() -> None:
+    one = run_helm(
+        [*helm_arguments(), "--set", "services.model-gateway.replicas=1"],
+    )
+    two = run_helm([*helm_arguments(), "--set", "services.model-gateway.replicas=2"])
+
+    assert one.returncode == 0, one.stderr
+    assert two.returncode != 0
+    assert "model-gateway" in two.stderr
+    assert "T-45" in two.stderr
+    assert "rate" in two.stderr and "each replica" in two.stderr
+
+
+def test_every_container_runs_the_digest_when_one_is_given() -> None:
+    # The tag is not needed, and not part of the reference.
+    for pull_policy in ("IfNotPresent", "Never", "Always"):
+        documents = render(
+            [
+                *helm_arguments(tag=None),
+                "--set-string",
+                f"image.digest={TEST_DIGEST}",
+                "--set-string",
+                f"image.pullPolicy={pull_policy}",
+            ]
+        )
+
+        assert images_of(documents) == {f"{IMAGE_REPOSITORY}@{TEST_DIGEST}"}
+        assert len(pod_workloads(documents)) == len(SERVICES) + len(JOBS) + 1
+
+
+def test_a_digest_wins_over_a_tag_in_the_reference_and_the_tag_names_the_jobs() -> None:
+    documents = render(
+        [*helm_arguments(), "--set-string", f"image.digest={TEST_DIGEST}"]
+    )
+
+    assert images_of(documents) == {f"{IMAGE_REPOSITORY}@{TEST_DIGEST}"}
+    assert {d["metadata"]["name"] for d in documents if d["kind"] == "Job"} == {
+        f"meridian-{name}-{TEST_TAG}" for name in JOBS
+    }
+
+
+def test_a_job_without_a_tag_is_named_with_the_first_twelve_digits_of_the_digest() -> (
+    None
+):
+    documents = render(
+        [*helm_arguments(tag=None), "--set-string", f"image.digest={TEST_DIGEST}"]
+    )
+    suffix = TEST_DIGEST.removeprefix("sha256:")[:DIGEST_PREFIX_LENGTH]
+
+    assert suffix != TEST_TAG
+    assert {d["metadata"]["name"] for d in documents if d["kind"] == "Job"} == {
+        f"meridian-{name}-{suffix}" for name in JOBS
+    }
+
+
+@pytest.mark.parametrize("digest", MALFORMED_DIGESTS.values(), ids=MALFORMED_DIGESTS)
+def test_a_malformed_digest_fails_and_says_the_format(digest: str) -> None:
+    done = run_helm([*helm_arguments(), "--set-string", f"image.digest={digest}"])
+
+    assert done.returncode != 0
+    assert "image.digest" in done.stderr
+    assert "sha256:" in done.stderr
+
+
+def test_a_tag_without_a_digest_fails_unless_the_image_is_never_pulled() -> None:
+    for pull_policy in ("IfNotPresent", "Always"):
+        done = run_helm(
+            [*helm_arguments(), "--set-string", f"image.pullPolicy={pull_policy}"]
+        )
+
+        assert done.returncode != 0, pull_policy
+        assert "never pulled" in done.stderr
+        assert "image.digest" in done.stderr
+    never = run_helm([*helm_arguments(), "--set-string", "image.pullPolicy=Never"])
+    assert never.returncode == 0, never.stderr
+
+
+def test_the_chart_default_pulls_if_not_present_and_kind_never_pulls() -> None:
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+    kind = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))
+
+    assert chart["image"]["pullPolicy"] == "IfNotPresent"
+    assert chart["image"]["digest"] == ""
+    assert kind["image"]["pullPolicy"] == "Never"
+    # kind's values render the loaded image by its tag, and never pull it.
+    for workload in pod_workloads(list(rendered_chart())):
+        for container in pod_spec(workload)["containers"]:
+            assert container["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
+            assert container["imagePullPolicy"] == "Never"

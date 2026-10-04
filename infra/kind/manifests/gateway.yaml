@@ -6,7 +6,8 @@
 #
 # On kind a LoadBalancer Service stays Pending forever, so the proxy Service is
 # a NodePort with a fixed port. kind maps 127.0.0.1:8088 on the laptop to that
-# node port (infra/kind/cluster.yaml). Plain HTTP for now; TLS is S019.
+# node port (infra/kind/cluster.yaml). Plain HTTP on loopback; TLS at the edge
+# has no step yet (the plan's follow-up backlog).
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyProxy
 metadata:
