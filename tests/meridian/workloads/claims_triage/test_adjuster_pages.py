@@ -103,6 +103,9 @@ SWEEP_ROLE = "claims_sweep"
 SWEEP_SERVICE = "claims-sweep"
 OVERDUE_REASON = "documents-overdue"
 OVERDUE_LINE = "The documents asked for did not arrive in time"
+ABANDONED_REASON = "abandoned"
+CLEAN_UP_LINE = "The decision is recorded and stands"
+CLEAN_UP_REST = "ended by the scheduled clean-up"
 # A proposal that shows every part the page lists: an exclusion the model found,
 # a fraud indicator, a gap, a citation and the model's rationale.
 RICH_PROPOSAL = OUTPUT | {
@@ -250,15 +253,20 @@ def put_trail(db: DatabaseHandle, claim_id: str, events: list[str]) -> None:
 
 
 def put_sweep_event(
-    db: DatabaseHandle, claim_id: str, event: str, reason: str | None
+    db: DatabaseHandle,
+    claim_id: str,
+    event: str,
+    reason: str | None,
+    run_id: uuid.UUID | None = None,
 ) -> None:
     """An audit event as the sweep writes one: by its own role, which names the
-    claim and its tenant and no run. The database stamps ``db_role``."""
+    claim and its tenant, and the run when the event is about one. The database
+    stamps ``db_role``."""
     with connect(db.dsn(SWEEP_ROLE), SWEEP_SERVICE) as conn:
         conn.execute(
-            "INSERT INTO audit.events (service, event, outcome, tenant, reference, "
-            "reason) VALUES (%s, %s, 'ok', %s, %s, %s)",
-            (SWEEP_SERVICE, event, TENANT, claim_id, reason),
+            "INSERT INTO audit.events (service, event, outcome, tenant, run_id, "
+            "reference, reason) VALUES (%s, %s, 'ok', %s, %s, %s, %s)",
+            (SWEEP_SERVICE, event, TENANT, run_id, claim_id, reason),
         )
         conn.commit()
 
@@ -2015,6 +2023,140 @@ def test_a_run_that_failed_before_the_decision_still_shows_the_resend_button(
     response = client_for(db).get(url_of("CLM-9301"))
 
     assert RESEND_TEXT in Page(response.text).text
+
+
+# ── a run the sweep ended after the decision ───────────────────────────────
+def decided_claim_whose_run_the_sweep_ended(
+    db: DatabaseHandle, claim_id: str = "CLM-9301", reason: str | None = None
+) -> uuid.UUID:
+    """An approved claim with its decision, then the sweep's ``run.failed`` of
+    the run with ``reason`` (the sweep's own word by default)."""
+    run_id = uuid.uuid4()
+    put_claim(db, claim_id, "approved", run_id=run_id)
+    put_decision(db, claim_id, "approve", run_id)
+    put_sweep_event(
+        db, claim_id, "run.failed", reason or ABANDONED_REASON, run_id=run_id
+    )
+    return run_id
+
+
+def test_a_run_the_sweep_ended_after_the_decision_is_explained_beside_it(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    decided_claim_whose_run_the_sweep_ended(db)
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    page = Page(response.text)
+    text = page.text
+    assert response.status_code == 200
+    assert "Decision recorded: approve" in text
+    assert CLEAN_UP_LINE in text
+    assert CLEAN_UP_REST in text
+    assert "nothing needs to be sent again" in text
+    # Next to the decision, above the claim's facts; and no resend button.
+    assert response.text.index("Decision recorded") < response.text.index(CLEAN_UP_LINE)
+    assert response.text.index(CLEAN_UP_LINE) < response.text.index("Audit trail")
+    assert RESEND_TEXT not in text
+    assert not page.attributes("form")
+    # The reason word is the trail's column's, not echoed in the sentence.
+    assert ABANDONED_REASON not in text.replace(f"failed ok {ABANDONED_REASON}", "")
+
+
+@pytest.mark.parametrize("reason", [None, "boom", MARKUP])
+def test_a_run_that_failed_for_another_reason_is_not_explained_as_the_clean_up(
+    fresh_database: DatabaseHandle, reason: str | None
+) -> None:
+    db = fresh_database
+    run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
+    put_decision(db, "CLM-9301", "approve", run_id)
+    put_sweep_event(db, "CLM-9301", "run.failed", reason, run_id=run_id)
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    page = Page(response.text)
+    assert response.status_code == 200
+    assert "Decision recorded: approve" in page.text
+    assert CLEAN_UP_LINE not in page.text
+    assert MARKUP not in response.text
+
+
+def test_an_abandoned_run_that_ended_before_the_decision_is_not_explained(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
+    put_sweep_event(db, "CLM-9301", "run.failed", ABANDONED_REASON, run_id=run_id)
+    put_decision(db, "CLM-9301", "approve", run_id)
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    page = Page(response.text)
+    assert CLEAN_UP_LINE not in page.text
+    # The run did not end after the decision: it can still be sent again.
+    assert RESEND_TEXT in page.text
+
+
+def test_an_abandoned_run_of_a_claim_with_no_decision_is_not_explained(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
+    put_sweep_event(db, "CLM-9301", "run.failed", ABANDONED_REASON, run_id=run_id)
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    assert "Decision recorded" not in response.text
+    assert CLEAN_UP_LINE not in Page(response.text).text
+
+
+def test_a_clean_up_beyond_the_trail_limit_is_still_explained(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    run_id = uuid.uuid4()
+    put_claim(db, "CLM-9301", "approved", run_id=run_id)
+    put_decision(db, "CLM-9301", "approve", run_id)
+    owner_rows(
+        db,
+        "INSERT INTO runtime.runs (run_id, thread_id, agent, tenant, reference, "
+        "status) VALUES (%s, %s, 'claims-triage', %s, 'CLM-9301', 'Failed') "
+        "RETURNING 1",
+        (run_id, uuid.uuid4(), TENANT),
+    )
+    owner_rows(
+        db,
+        "INSERT INTO audit.events (service, event, outcome, run_id) "
+        "SELECT 'agent-runtime', 'tool.called', 'ok', %s "
+        "FROM generate_series(1, 250) RETURNING 1",
+        (run_id,),
+    )
+    put_sweep_event(db, "CLM-9301", "run.failed", ABANDONED_REASON, run_id=run_id)
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    page = Page(response.text)
+    assert ABANDONED_REASON not in page.text  # beyond what the page lists
+    assert CLEAN_UP_LINE in page.text
+    assert RESEND_TEXT not in page.text
+
+
+def test_the_claimants_page_says_nothing_of_a_run_the_sweep_ended(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    decided_claim_whose_run_the_sweep_ended(db)
+
+    response = client_for(db).get("/claimant/claims/CLM-9301")
+
+    assert response.status_code == 200
+    text = Page(response.text).text.lower()
+    for word in ("clean-up", "run", "sweep", "recorded and stands", "resumed"):
+        assert word not in text, word
 
 
 def test_a_claim_with_no_decision_has_no_resend_button(

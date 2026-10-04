@@ -63,6 +63,9 @@
 {% if decision %}
 <h2>Decision</h2>
 <p>Decision recorded: {{ decision[0] }} ({{ decision[1] }})</p>
+{% if swept %}
+<p>The decision is recorded and stands. The run that would have noted it was ended by the scheduled clean-up because it could not be resumed in time; nothing needs to be sent again.</p>
+{% endif %}
 {% endif %}
 
 {% if waiting or failed %}

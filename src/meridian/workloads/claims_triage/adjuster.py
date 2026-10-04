@@ -46,6 +46,7 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
+from meridian.runtime.sweep import ABANDONED_REASON
 from meridian.workloads.claims_triage.lifecycle import (
     DOCUMENTS_OVERDUE,
     MAX_TRIAGES_PER_CLAIM,
@@ -164,14 +165,18 @@ TRAIL_SQL = (
     "FROM audit.claim_trail "
     "WHERE claim_id = %s AND tenant = %s ORDER BY recorded_at, event LIMIT %s"
 )
-# Whether the run ended, completed or failed, at or after the decision (the
-# resend button's test): the sweep ends an abandoned run Failed, and sending
-# the decision again could not complete it.
-COMPLETED_SQL = (
-    "SELECT EXISTS (SELECT 1 FROM audit.claim_trail "
+# How the run ended, completed or failed, at or after the decision: its event
+# and reason, or no row while it has not ended (the resend button's test): the
+# sweep ends an abandoned run Failed, and sending the decision again could not
+# complete it. The first end is the one that counts.
+ENDED_SQL = (
+    "SELECT event, reason FROM audit.claim_trail "
     "WHERE claim_id = %s AND tenant = %s "
-    "AND event IN ('run.completed', 'run.failed') AND recorded_at >= %s)"
+    "AND event IN ('run.completed', 'run.failed') AND recorded_at >= %s "
+    "ORDER BY recorded_at LIMIT 1"
 )
+# The end the page explains: the sweep's, for a run that could not be resumed.
+SWEPT_END = ("run.failed", ABANDONED_REASON)
 # Why the claim is in its present state: the reason of the latest ``claim.<state>``
 # event, the move that brought it there. Asked of the database, not read off the
 # listed rows, which are at most TRAIL_LIMIT.
@@ -209,10 +214,13 @@ class ClaimView:
     ``decision`` is the one that moved the claim into its state, if it is in a
     state a decision leads to. ``resend_due`` is true when that decision has a
     run and no ``run.completed`` or ``run.failed`` event was recorded at or
-    after it. ``run_id`` is the claim's run (``None`` when it has none) and
-    ``triages`` the number of times it has been triaged. ``referral_reason`` is
-    the reason of the move that brought a waiting claim to the adjuster (``None``
-    for a claim in another state, or a move with no reason)."""
+    after it. ``swept`` is true when that end was the sweep's (``run.failed``
+    with the reason ``abandoned``): the decision stands, its run was ended
+    before it could note it. ``run_id`` is the claim's run (``None`` when it has
+    none) and ``triages`` the number of times it has been triaged.
+    ``referral_reason`` is the reason of the move that brought a waiting claim
+    to the adjuster (``None`` for a claim in another state, or a move with no
+    reason)."""
 
     claim_id: str
     state: str
@@ -224,6 +232,7 @@ class ClaimView:
     decision: tuple[str, datetime] | None
     trail: tuple[TrailRow, ...]
     resend_due: bool = False
+    swept: bool = False
     run_id: UUID | None = None
     triages: int = 0
     referral_reason: str | None = None
@@ -400,6 +409,7 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         cap_words=NUMBER_WORDS[MAX_TRIAGES_PER_CLAIM],
         notice=notice,
         resend=resend,
+        swept=view.swept,
         # Jinja would print ``None``: a claim with no run is the empty string.
         run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
@@ -468,14 +478,13 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
             decision = conn.execute(DECISION_SQL, (claim_id, run_id)).fetchone()
         trail = conn.execute(TRAIL_SQL, (claim_id, tenant, TRAIL_LIMIT)).fetchall()
         # A decision with no run has nothing to resume, so nothing to send again.
-        # Whether the run completed is asked of the database, not read off the
-        # listed rows: the page lists at most TRAIL_LIMIT of them.
-        resend_due = False
+        # How the run ended is asked of the database, not read off the listed
+        # rows: the page lists at most TRAIL_LIMIT of them.
+        resend_due = swept = False
         if decision is not None and run_id is not None:
-            completed = conn.execute(
-                COMPLETED_SQL, (claim_id, tenant, decision[1])
-            ).fetchone()
-            resend_due = not completed[0]
+            ended = conn.execute(ENDED_SQL, (claim_id, tenant, decision[1])).fetchone()
+            resend_due = ended is None
+            swept = ended == SWEPT_END
         referral_reason = None
         if state == "awaiting_adjuster":
             referral = conn.execute(
@@ -494,6 +503,7 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         decision=None if decision is None else (decision[0], decision[1]),
         trail=tuple(TrailRow(*row) for row in trail),
         resend_due=resend_due,
+        swept=swept,
         run_id=run_id,
         triages=triages,
         referral_reason=referral_reason,
