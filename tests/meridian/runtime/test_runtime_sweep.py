@@ -8,6 +8,11 @@ from typing import Any
 
 import pytest
 from dbsupport import DatabaseHandle
+from servicesupport import audit_events, owner_rows
+
+from meridian.platform.common.db import connect
+from meridian.runtime import runs
+from meridian.runtime import sweep as runtime_sweep
 from meridian.runtime.sweep import (
     ABANDONED_REASON,
     RUN_FAILED_EVENT,
@@ -16,11 +21,6 @@ from meridian.runtime.sweep import (
     end_abandoned_run,
     leftover_threads,
 )
-from servicesupport import audit_events, owner_rows
-
-from meridian.platform.common.db import connect
-from meridian.runtime import runs
-from meridian.runtime import sweep as runtime_sweep
 
 SWEEP_ROLE = "claims_sweep"
 SERVICE = "claims-sweep"
@@ -109,10 +109,10 @@ def add_run(
 
 
 def add_checkpoints(db: DatabaseHandle, thread: str) -> None:
-    for table in CHECKPOINT_TABLES:
-        with connect(db.dsn("agent_runtime"), "test") as conn:
+    with connect(db.dsn("agent_runtime"), "test") as conn:
+        for table in CHECKPOINT_TABLES:
             conn.execute(INSERT_CHECKPOINT[table], (thread,))
-            conn.commit()
+        conn.commit()
 
 
 def checkpoint_counts(db: DatabaseHandle, thread: str) -> dict[str, int]:
@@ -285,7 +285,10 @@ def test_the_listing_of_leftovers_is_bounded(fresh_database: DatabaseHandle) -> 
 
     found = as_the_sweep(fresh_database, lambda c: leftover_threads(c, limit=3))
 
-    assert found == ["orphan-0", "orphan-1", "orphan-2"]
+    # A sample, not the first three: which threads a pass takes is random, so
+    # that threads whose delete fails every time cannot fill every pass.
+    assert len(set(found)) == 3
+    assert set(found) <= {f"orphan-{number}" for number in range(5)}
 
 
 def test_deleting_a_leftover_thread_removes_its_rows_from_all_three_tables(
@@ -321,6 +324,46 @@ def test_the_checkpoints_of_a_live_run_are_never_deleted(
     assert deleted == 0
     assert checkpoint_counts(fresh_database, thread) == PRESENT
     assert status_of(fresh_database, run_id) == status
+
+
+def test_the_delete_of_a_thread_compares_run_threads_as_uuids_to_use_their_index() -> (
+    None
+):
+    assert "::text" not in runtime_sweep.GUARDED_DELETE
+    assert "r.thread_id = %(run_thread)s" in runtime_sweep.GUARDED_DELETE
+
+
+def test_a_thread_that_is_no_uuid_belongs_to_no_run_and_its_rows_go(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id, thread = add_run(fresh_database, "Running", idle_seconds=0)
+    # The same uuid in another spelling is not the run's thread: the saver writes
+    # str(uuid), so no checkpoint of the run is under this text.
+    other_spelling = thread.upper()
+    add_checkpoints(fresh_database, other_spelling)
+    add_checkpoints(fresh_database, "not-a-uuid")
+
+    deleted = [
+        as_the_sweep(fresh_database, lambda c, t=name: delete_thread_checkpoints(c, t))
+        for name in (other_spelling, "not-a-uuid")
+    ]
+
+    assert deleted == [len(CHECKPOINT_TABLES)] * 2
+    assert checkpoint_counts(fresh_database, thread) == PRESENT
+    assert status_of(fresh_database, run_id) == "Running"
+
+
+def test_a_uuid_thread_with_no_run_has_its_rows_deleted(
+    fresh_database: DatabaseHandle,
+) -> None:
+    thread = str(uuid.uuid4())
+    add_checkpoints(fresh_database, thread)
+
+    deleted = as_the_sweep(
+        fresh_database, lambda c: delete_thread_checkpoints(c, thread)
+    )
+
+    assert deleted == len(CHECKPOINT_TABLES)
 
 
 def test_deleting_a_thread_twice_deletes_nothing_the_second_time(

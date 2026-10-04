@@ -44,7 +44,11 @@ WHERE run_id = %(run_id)s AND status = ANY(%(statuses)s)
 RETURNING thread_id, agent, tenant, reference
 """
 # A thread is a leftover when no run of it is unfinished. The checkpoint tables
-# hold the thread as text and ``runtime.runs`` as a uuid.
+# hold the thread as text and ``runtime.runs`` as a uuid. This comparison casts
+# the run's thread to text, so it cannot use the index on ``runs.thread_id``; it
+# is one statement per pass, over the runs of one database, and it takes a
+# sample: the order is random, so that threads whose delete fails every pass
+# cannot fill every pass (every leftover thread is due, none is more so).
 LEFTOVER_THREADS = """
 SELECT held.thread_id FROM (
     SELECT thread_id FROM runtime.checkpoints
@@ -55,31 +59,45 @@ WHERE NOT EXISTS (
     SELECT 1 FROM runtime.runs AS r
     WHERE r.thread_id::text = held.thread_id AND r.status = ANY(%(statuses)s)
 )
-ORDER BY held.thread_id
+ORDER BY random()
 LIMIT %(limit)s
 """
-DELETE_THREAD = sql.SQL(
-    """
+# One delete per thread and table, so these compare as uuids and use the index of
+# ``runs.thread_id``. A thread that is not the canonical text of a uuid cannot be
+# any run's (the saver writes ``str(thread_id)``), so its rows go unguarded.
+GUARDED_DELETE = """
 DELETE FROM runtime.{table}
 WHERE thread_id = %(thread)s AND NOT EXISTS (
     SELECT 1 FROM runtime.runs AS r
-    WHERE r.thread_id::text = %(thread)s AND r.status = ANY(%(statuses)s)
+    WHERE r.thread_id = %(run_thread)s AND r.status = ANY(%(statuses)s)
 )
 """
-)
+UNGUARDED_DELETE = "DELETE FROM runtime.{table} WHERE thread_id = %(thread)s"
+
+
+def _run_thread(thread_id: str) -> uuid.UUID | None:
+    """The uuid whose canonical text is ``thread_id``, or ``None`` if there is none."""
+    try:
+        parsed = uuid.UUID(thread_id)
+    except ValueError:
+        return None
+    return parsed if str(parsed) == thread_id else None
 
 
 def delete_thread_checkpoints(conn: psycopg.Connection, thread_id: str) -> int:
     """Delete the thread's rows in the three checkpoint tables, unless a run of
     the thread is unfinished (the check is in each ``DELETE``, so it holds when
     the rows go). Returns how many rows went."""
+    run_thread = _run_thread(thread_id)
+    params: dict[str, object] = {"thread": thread_id}
+    template = UNGUARDED_DELETE
+    if run_thread is not None:
+        template = GUARDED_DELETE
+        params |= {"run_thread": run_thread, "statuses": list(SWEPT_STATUSES)}
     deleted = 0
     for table in CHECKPOINT_TABLES:
-        cursor = conn.execute(
-            DELETE_THREAD.format(table=sql.Identifier(table)),
-            {"thread": thread_id, "statuses": list(SWEPT_STATUSES)},
-        )
-        deleted += cursor.rowcount
+        statement = sql.SQL(template).format(table=sql.Identifier(table))
+        deleted += conn.execute(statement, params).rowcount
     return deleted
 
 

@@ -15,6 +15,7 @@ from dbsupport import DatabaseHandle
 from servicesupport import owner_rows
 
 from meridian.platform.common.db import connect
+from meridian.runtime import sweep as runtime_sweep
 from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
 from meridian.workloads.claims_triage import sweep, triaging
 from meridian.workloads.claims_triage.lifecycle import DOCUMENTS_DEADLINE_DAYS
@@ -43,7 +44,8 @@ NOTHING = PassResult(0, 0, 0, 0, 0, 0)
 # The two shapes a log record of a pass may have: an ID with a class and a
 # sqlstate, and the counts.
 FAILURE_LINE = re.compile(
-    r"^(claim|run|thread) \S+: the sweep could not finish it: \w+ \(sqlstate \w+\)$"
+    r"^(claim|run|thread|step) \S+: the sweep could not finish it: "
+    r"\w+ \(sqlstate \w+\)$"
 )
 SUMMARY_LINE = re.compile(
     r"^sweep pass: (\d+) claims referred as overdue, (\d+) claims failed as not "
@@ -140,10 +142,10 @@ def add_run(
 
 
 def add_checkpoints(db: DatabaseHandle, thread: str) -> None:
-    for table in CHECKPOINT_TABLES:
-        with connect(db.dsn("agent_runtime"), "test") as conn:
+    with connect(db.dsn("agent_runtime"), "test") as conn:
+        for table in CHECKPOINT_TABLES:
             conn.execute(INSERT_CHECKPOINT[table], (thread,))
-            conn.commit()
+        conn.commit()
 
 
 def checkpoint_rows(db: DatabaseHandle, thread: str) -> int:
@@ -400,22 +402,70 @@ def test_a_second_pass_does_nothing(fresh_database: DatabaseHandle) -> None:
     assert checkpoint_rows(fresh_database, thread) == 0
 
 
-def test_no_more_claims_than_the_bound_are_moved_in_a_pass_oldest_first(
+def test_no_more_claims_than_the_bound_are_moved_by_a_listing_in_a_pass(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(sweep, "MAX_CLAIMS_PER_PASS", 2)
-    for number, age in enumerate((300, 900, 600), start=1):
-        add_claim(fresh_database, f"CLM-500{number}", "submitted", age_seconds=age)
+    monkeypatch.setattr(sweep, "MAX_CLAIMS_PER_LISTING", 2)
+    for number in (1, 2, 3):
+        add_claim(
+            fresh_database,
+            f"CLM-500{number}",
+            "submitted",
+            age_seconds=TRIAGE_LEASE_SECONDS + MINUTE,
+        )
 
-    first = one_pass(fresh_database)
-
-    assert first.moved_claims == 2
-    assert [claim_row(fresh_database, f"CLM-500{n}")[0] for n in (1, 2, 3)] == [
-        "submitted",
-        "triage_failed",
-        "triage_failed",
-    ]
+    assert one_pass(fresh_database).moved_claims == 2
     assert one_pass(fresh_database).moved_claims == 1
+    assert one_pass(fresh_database).moved_claims == 0
+
+
+def test_a_backlog_of_overdue_documents_does_not_hold_back_a_stranded_claim(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sweep, "MAX_CLAIMS_PER_LISTING", 2)
+    for number in range(5):
+        add_claim(
+            fresh_database,
+            f"CLM-600{number}",
+            "documents_requested",
+            age_seconds=DEADLINE_SECONDS + 60 * DAY,
+        )
+    add_claim(
+        fresh_database,
+        "CLM-5001",
+        "triaging",
+        age_seconds=TRIAGE_LEASE_SECONDS + MINUTE,
+    )
+    add_claim(
+        fresh_database,
+        "CLM-5002",
+        "submitted",
+        age_seconds=TRIAGE_LEASE_SECONDS + MINUTE,
+    )
+
+    result = one_pass(fresh_database)
+
+    assert (result.not_started, result.abandoned) == (1, 1)
+    assert result.overdue == 2  # its own bound
+    assert claim_row(fresh_database, "CLM-5001")[0] == "triage_failed"
+    assert claim_row(fresh_database, "CLM-5002")[0] == "triage_failed"
+
+
+def test_the_stranded_claims_are_listed_before_the_overdue_documents(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listed: list[str] = []
+    real = sweep.stale_claims
+
+    def record(conn: psycopg.Connection, transition: Any, seconds: float) -> Any:
+        listed.append(transition.trigger)
+        return real(conn, transition, seconds)
+
+    monkeypatch.setattr(sweep, "stale_claims", record)
+
+    one_pass(fresh_database)
+
+    assert listed == ["triage-not-started", "triage-abandoned", "documents-overdue"]
 
 
 # ── runs ────────────────────────────────────────────────────────────────────
@@ -680,13 +730,17 @@ def test_no_more_threads_than_the_bound_are_cleaned_in_a_pass(
 
 
 # ── a failure on one item ───────────────────────────────────────────────────
-def breaking(real: Callable[..., Any], bad: str, key: str) -> Callable[..., Any]:
-    """``real``, except that it aborts the transaction for the item ``bad``
-    (a division by zero, which is a ``psycopg.Error`` with no data in it)."""
+def breaking(
+    real: Callable[..., Any], bad: str | set[str], key: str
+) -> Callable[..., Any]:
+    """``real``, except that it aborts the transaction for the item ``bad`` (or
+    for each of them): a division by zero, which is a ``psycopg.Error`` with no
+    data in it."""
+    failing = {bad} if isinstance(bad, str) else bad
 
     def wrapper(conn: psycopg.Connection, *args: Any, **kwargs: Any) -> Any:
         identifier = kwargs[key] if key in kwargs else args[0]
-        if str(identifier) == bad:
+        if str(identifier) in failing:
             conn.execute("SELECT 1 / 0")
         return real(conn, *args, **kwargs)
 
@@ -962,3 +1016,239 @@ def test_every_log_record_of_a_pass_holds_ids_counts_classes_and_sqlstates_only(
         message = record.getMessage()
         assert FAILURE_LINE.match(message) or SUMMARY_LINE.match(message), message
         assert record.exc_info is None
+
+
+# ── an item that fails every pass does not starve the others ────────────────
+# A pass takes a random sample of the stale items, up to the bound, so items
+# that fail every time cannot fill every pass. With the numbers below the chance
+# that thirty passes in a row sample no good item is under one in 10**9.
+PASSES_TO_PROGRESS = 30
+
+
+def passes_until(db: DatabaseHandle, progress: Callable[[PassResult], int]) -> int:
+    """How many items ``progress`` counted over passes, stopping at the first
+    pass that made any."""
+    for _ in range(PASSES_TO_PROGRESS):
+        done = progress(one_pass(db))
+        if done:
+            return done
+    return 0
+
+
+def test_claims_that_fail_every_pass_do_not_stop_the_good_ones_behind_them(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sweep, "MAX_CLAIMS_PER_LISTING", 5)
+    bad = {f"CLM-60{n:02d}" for n in range(20)}
+    for claim_id in sorted(bad) + [f"CLM-70{n:02d}" for n in range(5)]:
+        add_claim(
+            fresh_database,
+            claim_id,
+            "submitted",
+            age_seconds=TRIAGE_LEASE_SECONDS + MINUTE,
+        )
+    monkeypatch.setattr(
+        sweep, "move_claim", breaking(sweep.move_claim, bad, "claim_id")
+    )
+
+    assert passes_until(fresh_database, lambda r: r.not_started) >= 1
+
+
+def test_runs_that_fail_every_pass_do_not_stop_the_good_ones_behind_them(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sweep, "MAX_RUNS_PER_PASS", 3)
+    runs = [add_run(fresh_database, "Running")[0] for _ in range(15)]
+    monkeypatch.setattr(
+        sweep,
+        "end_abandoned_run",
+        breaking(sweep.end_abandoned_run, {str(r) for r in runs[:12]}, "run_id"),
+    )
+
+    assert passes_until(fresh_database, lambda r: r.runs_ended) >= 1
+
+
+def test_threads_that_fail_every_pass_do_not_stop_the_good_ones_behind_them(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sweep, "MAX_THREADS_PER_PASS", 3)
+    threads = [f"orphan-{n:02d}" for n in range(15)]
+    for thread in threads:
+        add_checkpoints(fresh_database, thread)
+    monkeypatch.setattr(
+        sweep,
+        "delete_thread_checkpoints",
+        breaking(sweep.delete_thread_checkpoints, set(threads[:12]), "thread_id"),
+    )
+
+    assert passes_until(fresh_database, lambda r: r.threads_cleaned) >= 1
+
+
+# ── one step that fails does not skip the others (T-63) ─────────────────────
+# A statement that raises, in place of a listing's.
+ABORT = "SELECT 1 / 0"
+
+
+def test_a_claims_listing_that_fails_leaves_the_runs_and_the_checkpoints_to_be_swept(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_id, thread = add_run(fresh_database, "AwaitingApproval")
+    add_checkpoints(fresh_database, "orphan")
+    add_claim(
+        fresh_database, "CLM-5001", "submitted", age_seconds=TRIAGE_LEASE_SECONDS * 2
+    )
+    monkeypatch.setattr(sweep, "STALE_CLAIMS", ABORT)
+    caplog.set_level(logging.INFO, logger=LOGGER)
+
+    result = one_pass(fresh_database)
+
+    assert result == PassResult(0, 0, 0, 1, 1, 3)  # the three claims' listings
+    assert status_of(fresh_database, run_id) == "Failed"
+    assert checkpoint_rows(fresh_database, thread) == 0
+    assert checkpoint_rows(fresh_database, "orphan") == 0
+    assert claim_row(fresh_database, "CLM-5001")[0] == "submitted"
+    failures = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert sorted(failures) == sorted(
+        f"step {step}: the sweep could not finish it: DivisionByZero (sqlstate 22012)"
+        for step in ("triage-not-started", "triage-abandoned", "documents-overdue")
+    )
+
+
+def test_one_claims_listing_that_fails_leaves_the_other_listings_to_run(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_claim(
+        fresh_database, "CLM-5001", "submitted", age_seconds=TRIAGE_LEASE_SECONDS * 2
+    )
+    add_claim(
+        fresh_database, "CLM-5002", "triaging", age_seconds=TRIAGE_LEASE_SECONDS * 2
+    )
+    real = sweep.stale_claims
+
+    def listing(conn: psycopg.Connection, transition: Any, *args: Any) -> Any:
+        if transition is sweep.TRIAGE_NOT_STARTED:
+            conn.execute("SELECT 1 / 0")
+        return real(conn, transition, *args)
+
+    monkeypatch.setattr(sweep, "stale_claims", listing)
+
+    assert one_pass(fresh_database) == PassResult(0, 0, 1, 0, 0, 1)
+    assert claim_row(fresh_database, "CLM-5001")[0] == "submitted"
+    assert claim_row(fresh_database, "CLM-5002")[0] == "triage_failed"
+
+
+def test_a_runs_listing_that_fails_leaves_the_checkpoints_to_be_swept(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_checkpoints(fresh_database, "orphan")
+    monkeypatch.setattr(sweep, "ABANDONED_RUNS", ABORT)
+
+    assert one_pass(fresh_database) == PassResult(0, 0, 0, 0, 1, 1)
+    assert checkpoint_rows(fresh_database, "orphan") == 0
+
+
+def test_a_checkpoint_listing_that_fails_is_counted_and_the_pass_ends_normally(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_claim(
+        fresh_database, "CLM-5001", "submitted", age_seconds=TRIAGE_LEASE_SECONDS * 2
+    )
+    monkeypatch.setattr(runtime_sweep, "LEFTOVER_THREADS", ABORT)
+
+    assert one_pass(fresh_database) == PassResult(0, 1, 0, 0, 0, 1)
+
+
+def test_a_broken_connection_ends_the_pass_and_main_exits_one(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    real = sweep.stale_claims
+
+    def listing(conn: psycopg.Connection, *args: Any) -> Any:
+        ((pid,),) = conn.execute("SELECT pg_backend_pid()").fetchall()
+        with psycopg.connect(fresh_database.admin_dsn, autocommit=True) as admin:
+            admin.execute("SELECT pg_terminate_backend(%s)", (pid,))
+        return real(conn, *args)  # the connection is gone
+
+    monkeypatch.setattr(sweep, "stale_claims", listing)
+    caplog.set_level(logging.INFO, logger=LOGGER)
+
+    assert main(environ_of(fresh_database)) == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].startswith("the sweep pass could not run: ")
+
+
+# ── the keep rule is the claim's own tenant's ───────────────────────────────
+def test_a_claim_of_another_tenant_that_names_a_run_does_not_keep_it(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id, thread = add_run(fresh_database, "AwaitingApproval")
+    add_claim(
+        fresh_database,
+        "CLM-5001",
+        "awaiting_adjuster",
+        age_seconds=MINUTE,
+        tenant=OTHER_TENANT,
+        run_id=run_id,
+    )
+
+    result = one_pass(fresh_database)
+
+    assert result.runs_ended == 1
+    assert status_of(fresh_database, run_id) == "Failed"
+    assert checkpoint_rows(fresh_database, thread) == 0
+
+
+def test_a_claim_of_another_tenant_that_names_a_run_by_the_update_does_not_keep_it(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id, _ = add_run(fresh_database, "AwaitingApproval")
+    with connect(fresh_database.dsn(ROLE), SERVICE_NAME) as conn:
+        assert sweep.list_abandoned_runs(conn) == [run_id]
+        conn.rollback()
+    add_claim(
+        fresh_database,
+        "CLM-5001",
+        "awaiting_adjuster",
+        age_seconds=MINUTE,
+        tenant=OTHER_TENANT,
+        run_id=run_id,
+    )
+
+    with connect(fresh_database.dsn(ROLE), SERVICE_NAME) as conn:
+        ended = sweep.end_run_unless_kept(conn, run_id)
+        conn.commit()
+
+    assert ended is True
+    assert status_of(fresh_database, run_id) == "Failed"
+
+
+# ── what is not a database error ends the pass with a class name ────────────
+def test_an_error_that_is_not_the_databases_ends_the_pass_with_its_class_name_only(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    def refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("secret text")
+
+    monkeypatch.setattr(sweep, "leftover_threads", refuse)
+    caplog.set_level(logging.DEBUG)
+
+    code = main(environ_of(fresh_database))
+
+    assert code == 1
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert [r.getMessage() for r in errors] == [
+        "the sweep pass could not run: RuntimeError"
+    ]
+    assert all(r.exc_info is None for r in errors)
+    assert "secret text" not in caplog.text
+    captured = capfd.readouterr()
+    assert "secret text" not in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err

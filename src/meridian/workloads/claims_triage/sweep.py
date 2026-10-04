@@ -70,9 +70,14 @@ DOCUMENTS_DEADLINE_ENV = "MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS"
 MIN_DEADLINE_DAYS = 1
 MAX_DEADLINE_DAYS = 365
 SECONDS_PER_DAY = 24 * 60 * 60
-# What one pass takes, oldest first; the rest wait for the next pass. The CronJob
-# gives a pass 120 s, and every statement runs under the connection's 10 s limit.
-MAX_CLAIMS_PER_PASS = 200
+# What one pass takes: at most this many claims from each listing (one per move),
+# runs and threads; the rest wait for the next pass. The CronJob gives a pass
+# 120 s, and every statement runs under the connection's 10 s limit. A listing is
+# a random sample of the stale items, not the oldest: every stale item is due, so
+# nothing needs the order, and an item that fails every pass (a row the audit
+# table refuses, say) would otherwise keep its place at the head of the listing
+# and block everything behind it for good. The sample finds the others.
+MAX_CLAIMS_PER_LISTING = 100
 MAX_RUNS_PER_PASS = 100
 MAX_THREADS_PER_PASS = 100
 EXIT_CLEAN = 0
@@ -84,10 +89,11 @@ SUMMARY_LOG = (
     "sweep pass: %d claims referred as overdue, %d claims failed as not started, "
     "%d claims failed as abandoned, %d runs ended, %d threads cleaned, %d failures"
 )
-# The claim's states the sweep looks at, and the move out of each.
-MOVE_FROM_STATE: Mapping[str, Transition] = {
-    t.source: t for t in (DOCUMENTS_OVERDUE, TRIAGE_NOT_STARTED, TRIAGE_ABANDONED)
-}
+# The claims' moves, in the order of their listings. A claim stranded in a state
+# the system should have left is moved before one whose documents are overdue, so
+# a backlog of the second cannot hold back the first (each listing has its own
+# bound as well).
+MOVES = (TRIAGE_NOT_STARTED, TRIAGE_ABANDONED, DOCUMENTS_OVERDUE)
 # An adjuster's queue holds the claim; the run it names is theirs to resume.
 WAITING_STATE = "awaiting_adjuster"
 RUNS_ENDED = "runs-ended"
@@ -95,35 +101,36 @@ THREADS_CLEANED = "threads-cleaned"
 FAILURES = "failures"
 
 STALE_CLAIMS = """
-SELECT claim_id, tenant, state, state_changed_at FROM claims.claims
-WHERE state = ANY(%(states)s) AND state_changed_at < now() - make_interval(
-    secs => CASE WHEN state = %(documents_state)s
-        THEN %(documents_seconds)s ELSE %(lease_seconds)s END)
-ORDER BY state_changed_at
+SELECT claim_id, tenant, state_changed_at FROM claims.claims
+WHERE state = %(state)s
+    AND state_changed_at < now() - make_interval(secs => %(seconds)s)
+ORDER BY random()
 LIMIT %(limit)s
 """
 # A claim keeps the run it names while an adjuster waits on it, and while it has
 # moved so lately that the request which moved it may still be ending or resuming
-# the run. The listing and the check below say it in the same words.
+# the run. Only a claim of the run's own tenant keeps it, as ``audit.claim_trail``
+# links a claim to a run. The listing and the check below say it in the same
+# words.
 ABANDONED_RUNS = """
 SELECT r.run_id FROM runtime.runs AS r
 WHERE r.agent = %(agent)s AND r.status = ANY(%(statuses)s)
     AND r.updated_at < now() - make_interval(secs => %(lease)s)
     AND NOT EXISTS (
         SELECT 1 FROM claims.claims AS c
-        WHERE c.run_id = r.run_id AND (
+        WHERE c.run_id = r.run_id AND c.tenant = r.tenant AND (
             c.state = %(waiting_state)s
             OR c.state_changed_at > now() - make_interval(secs => %(lease)s)
         )
     )
-ORDER BY r.updated_at
+ORDER BY random()
 LIMIT %(limit)s
 """
-LOCK_RUN = "SELECT 1 FROM runtime.runs WHERE run_id = %s FOR UPDATE SKIP LOCKED"
+LOCK_RUN = "SELECT tenant FROM runtime.runs WHERE run_id = %s FOR UPDATE SKIP LOCKED"
 IS_KEPT = """
 SELECT EXISTS (
     SELECT 1 FROM claims.claims AS c
-    WHERE c.run_id = %(run_id)s AND (
+    WHERE c.run_id = %(run_id)s AND c.tenant = %(tenant)s AND (
         c.state = %(waiting_state)s
         OR c.state_changed_at > now() - make_interval(secs => %(lease)s)
     )
@@ -134,7 +141,6 @@ SELECT EXISTS (
 class StaleClaim(NamedTuple):
     claim_id: str
     tenant: str
-    state: str
     changed_at: datetime
 
 
@@ -211,29 +217,50 @@ def _tally(tally: Counter[str], key: str, outcome: bool | None) -> None:
         tally[key] += 1
 
 
-def _stale_claims(conn: psycopg.Connection, deadline_days: int) -> list[StaleClaim]:
+def _step(
+    conn: psycopg.Connection, name: str, tally: Counter[str], step: Callable[[], None]
+) -> None:
+    """Run one listing and the moves it leads to; a database error that ends it
+    is logged by the step's name, the class and the sqlstate, counted, and rolled
+    back, and the next step runs: a claims listing that fails must not leave the
+    runs and the checkpoints unswept (T-63). A broken connection ends the pass."""
+    try:
+        step()
+    except psycopg.Error as exc:
+        if conn.broken:
+            raise
+        conn.rollback()
+        logger.error(
+            FAILURE_LOG, "step", name, type(exc).__name__, exc.sqlstate or "none"
+        )
+        tally[FAILURES] += 1
+
+
+def stale_claims(
+    conn: psycopg.Connection, transition: Transition, seconds: float
+) -> list[StaleClaim]:
+    """A random sample, at most ``MAX_CLAIMS_PER_LISTING``, of the claims that
+    have been in the transition's source state for longer than ``seconds``."""
     rows = conn.execute(
         STALE_CLAIMS,
         {
-            "states": list(MOVE_FROM_STATE),
-            "documents_state": DOCUMENTS_OVERDUE.source,
-            "documents_seconds": float(deadline_days * SECONDS_PER_DAY),
-            "lease_seconds": TRIAGE_LEASE_SECONDS,
-            "limit": MAX_CLAIMS_PER_PASS,
+            "state": transition.source,
+            "seconds": seconds,
+            "limit": MAX_CLAIMS_PER_LISTING,
         },
     ).fetchall()
     conn.commit()
     return [StaleClaim(*row) for row in rows]
 
 
-def _move(conn: psycopg.Connection, claim: StaleClaim) -> bool:
+def _move(conn: psycopg.Connection, transition: Transition, claim: StaleClaim) -> bool:
     """Move the claim if it is still as the listing found it: the move is a
     compare-and-set on the moment the pass read, so a claim another request
     changed since is left alone. The claim's run is cleared: no triage is
     waiting on it."""
     moved = move_claim(
         conn,
-        MOVE_FROM_STATE[claim.state],
+        transition,
         claim_id=claim.claim_id,
         tenant=claim.tenant,
         changed_at=claim.changed_at,
@@ -242,17 +269,36 @@ def _move(conn: psycopg.Connection, claim: StaleClaim) -> bool:
     return moved is not None
 
 
+def _sweep_transition(
+    conn: psycopg.Connection,
+    transition: Transition,
+    seconds: float,
+    tally: Counter[str],
+) -> None:
+    for claim in stale_claims(conn, transition, seconds):
+        moved = _attempt(
+            conn, "claim", claim.claim_id, partial(_move, conn, transition, claim)
+        )
+        _tally(tally, transition.trigger, moved)
+
+
 def _sweep_claims(
     conn: psycopg.Connection, deadline_days: int, tally: Counter[str]
 ) -> None:
-    for claim in _stale_claims(conn, deadline_days):
-        moved = _attempt(conn, "claim", claim.claim_id, partial(_move, conn, claim))
-        _tally(tally, MOVE_FROM_STATE[claim.state].trigger, moved)
+    for transition in MOVES:
+        seconds = (
+            float(deadline_days * SECONDS_PER_DAY)
+            if transition is DOCUMENTS_OVERDUE
+            else TRIAGE_LEASE_SECONDS
+        )
+        step = partial(_sweep_transition, conn, transition, seconds, tally)
+        _step(conn, transition.trigger, tally, step)
 
 
 def list_abandoned_runs(conn: psycopg.Connection) -> list[UUID]:
-    """The runs, at most ``MAX_RUNS_PER_PASS``, oldest first, of this workload's
-    agent that are unfinished, idle past the lease and kept by no claim. The
+    """A random sample, at most ``MAX_RUNS_PER_PASS``, of the runs of this
+    workload's agent that are unfinished, idle past the lease and kept by no claim.
+    The
     claims are in the listing, not only in the check, so that runs a claim keeps
     cannot fill the bound and starve the runs that are abandoned."""
     rows = conn.execute(
@@ -278,12 +324,14 @@ def end_run_unless_kept(conn: psycopg.Connection, run_id: UUID) -> bool:
     again, so the keep rule holds at the moment of the update and not only when
     the run was listed; the update itself still compares status and age.
     """
-    if conn.execute(LOCK_RUN, (run_id,)).fetchone() is None:
+    locked = conn.execute(LOCK_RUN, (run_id,)).fetchone()
+    if locked is None:
         return False
     kept = conn.execute(
         IS_KEPT,
         {
             "run_id": run_id,
+            "tenant": locked[0],
             "waiting_state": WAITING_STATE,
             "lease": float(RUNNING_LEASE_SECONDS),
         },
@@ -294,6 +342,10 @@ def end_run_unless_kept(conn: psycopg.Connection, run_id: UUID) -> bool:
 
 
 def _sweep_runs(conn: psycopg.Connection, tally: Counter[str]) -> None:
+    _step(conn, "runs", tally, partial(_end_listed_runs, conn, tally))
+
+
+def _end_listed_runs(conn: psycopg.Connection, tally: Counter[str]) -> None:
     for run_id in list_abandoned_runs(conn):
         ended = _attempt(
             conn, "run", str(run_id), partial(end_run_unless_kept, conn, run_id)
@@ -306,6 +358,10 @@ def _delete(conn: psycopg.Connection, thread_id: str) -> bool:
 
 
 def _sweep_threads(conn: psycopg.Connection, tally: Counter[str]) -> None:
+    _step(conn, "threads", tally, partial(_clean_listed_threads, conn, tally))
+
+
+def _clean_listed_threads(conn: psycopg.Connection, tally: Counter[str]) -> None:
     threads = leftover_threads(conn, limit=MAX_THREADS_PER_PASS)
     conn.commit()
     for thread_id in threads:
@@ -316,8 +372,9 @@ def _sweep_threads(conn: psycopg.Connection, tally: Counter[str]) -> None:
 def run_pass(conn: psycopg.Connection, documents_deadline_days: int) -> PassResult:
     """One pass: claims, then abandoned runs, then leftover checkpoints.
 
-    ``conn`` is the sweep role's. Logs one line with the counts. A listing that
-    fails raises ``psycopg.Error``; a failure of one item does not.
+    ``conn`` is the sweep role's. Logs one line with the counts. A failure of one
+    item, or of one step's listing, is logged and counted and does not stop the
+    others; only a broken connection raises ``psycopg.Error``.
     """
     tally: Counter[str] = Counter()
     _sweep_claims(conn, documents_deadline_days, tally)
@@ -363,6 +420,11 @@ def main(environ: Mapping[str, str] = os.environ) -> int:
             type(exc).__name__,
             exc.sqlstate or "none",
         )
+        return EXIT_FAILED
+    except Exception as exc:  # whatever else, so that no traceback is printed
+        # The class only: the message, and the traceback a crash would print to
+        # stderr, are outside the redacted log line and can hold anything.
+        logger.error("the sweep pass could not run: %s", type(exc).__name__)
         return EXIT_FAILED
     return EXIT_CLEAN if result.failures == 0 else EXIT_FAILED
 
