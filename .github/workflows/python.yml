@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # setup-uv has published no floating major tag since v8, so the pin is a
-      # full version. Dependabot's actions group bumps it.
+      # full version. Renovate's actions group bumps it.
       - uses: astral-sh/setup-uv@v10.2.0
       # --locked fails when uv.lock is out of date with pyproject.toml.
       - name: Install the locked environment

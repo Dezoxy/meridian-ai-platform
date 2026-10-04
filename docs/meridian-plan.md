@@ -140,6 +140,31 @@ says:
 A session does not see the others: it fetches and reads the open pull
 requests before it assumes anything about them.
 
+**Version updates.** Renovate (`.github/renovate.json`) opens grouped pull
+requests on the first day of a month, from the day the owner installs the
+app, and merges none. A session merges one like any other, once its
+required checks pass, except where CI never runs what changed; the pull
+request's body says so:
+
+- `kind platform` and `postgresql images`: `make up` and `make smoke` on the
+  branch, by the session that owns the cluster, and the versions table in
+  `infra/kind/README.md`.
+- `base images`: `make deploy` on the branch, by that session. No job
+  builds the image.
+- `terraform`: `make azure-plan`, and the plan read.
+- `tooling`: the result of `Docs / Architecture PDF`, the one job that
+  runs Pandoc and Mermaid. It is not a required check.
+- `mcp server`: the owner reads the release and merges, not a session.
+  That package runs on the owner's laptop with control of a browser.
+
+A release is proposed once it is a week old. A Python minor, a Kubernetes
+minor and a PostgreSQL major are switched off there: each is a step's
+decision. Advisories stay with GitHub's own security updates. A line
+added to `infra/kind/pins.env`, an `_IMAGE` variable in the `Makefile` or
+a `_VERSION` value in a workflow needs a reader in that file, and
+`make test` fails without one; a pin of another shape needs a line in
+`tests/test_renovate_config.py` too.
+
 Cost rules:
 
 - Docker-heavy targets (`make pdf`, `make mermaid-render`) run when their
@@ -322,7 +347,7 @@ that day; the rest stand as their step recorded them.
 | An upper bound on a provider's token counts | S045 | open | none |
 | A purpose on the gateway's refusal rows | S045 | open | none |
 | 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | open | none |
-| Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | open | none |
+| Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | closed on 2026-10-04 outside a step: Renovate reads it in the `Makefile` and in `python.yml` and moves both in one pull request, once the owner installs the app | none |
 | After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
 | Ingestion tests that run without a database | S012 | open | none |
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
@@ -1028,6 +1053,8 @@ test trace reaches Grafana, and one command removes it.
   owner's laptop only.
 - The chart pins in `pins.env` are not watched by Dependabot; bumping them
   is manual until a step adds Renovate or similar.
+  *2026-10-04:* Renovate's configuration reads them (changelog v0.32); it
+  opens pull requests once the owner installs the app.
 
 ### S007 — Azure foundation
 **Status:** done · **Started:** 2026-09-30 · **Finished:** 2026-09-30
@@ -1870,6 +1897,8 @@ posts a claim and finds its one trace in Tempo.
   laptop and the node until `make down`.
 - Dependabot now watches the Dockerfile's base images; the kind pins in
   `pins.env` are still bumped by hand (S006).
+  *2026-10-04:* Renovate replaces Dependabot and reads both (changelog
+  v0.32).
 - S012: decide whether pgvector moves to the `meridian` database.
 
 ### S010 — Gateway routing
@@ -3008,7 +3037,8 @@ for a query, and a check says how well.
 - S014 and S017: a proposal's citations must be clauses the run retrieved;
   the evaluation harness needs a job identity of its own for a judge model.
 - No step yet: nothing watches the test image's pin (Dependabot reads
-  Dockerfiles only); after a PostgreSQL major upgrade the store must be
+  Dockerfiles only; *2026-10-04:* Renovate's configuration reads it,
+  changelog v0.32); after a PostgreSQL major upgrade the store must be
   ingested again, because the stored lexemes come from that version's
   dictionary; ingestion tests that run without a database.
 
@@ -6820,3 +6850,19 @@ cluster's field manager, Azure's private endpoints and the size of
   from what this repository's steps had taught, and come back here with
   this repository's own values in place of the template's blanks. No step
   changes.
+- **v0.32, 2026-10-04:** by the owner: Renovate replaces Dependabot's version
+  updates. The owner chose the hosted app (which the owner installs), no
+  merging by Renovate, GitHub Actions pinned to commit hashes, and the same
+  for development-base. `.github/renovate.json` reads what Dependabot read
+  and what nothing watched: `infra/kind/pins.env`, the images in the
+  `Makefile` and the scripts, the gitleaks version, the pinned MCP server
+  and the Terraform providers. Part A gains "Version updates": which of its
+  pull requests green checks do not prove. Until the app is installed
+  nothing opens update pull requests; Dependabot's security alerts are a
+  repository setting and stay on, and GitHub's security updates keep
+  opening the pull requests for advisories (Renovate's are off, so none
+  comes twice). A release is proposed once it is a week old. Checked
+  without installing anything, by Renovate's own dry run against the
+  working tree, and by an `infra-reviewer` whose findings are in the pull
+  request. No step changes; S012's follow-up about the test image's pin
+  is closed.

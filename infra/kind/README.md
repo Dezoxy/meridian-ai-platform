@@ -28,7 +28,11 @@ adjuster; the rules decide every other claim.
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.161.0) | `observability` |
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
-to change one. The values that override chart defaults are in
+to change one. `.github/renovate.json` reads them, so Renovate, once the
+owner has installed the app, proposes newer ones in grouped pull requests
+each month. CI does not start this platform: such a pull request needs
+`make up` and `make smoke` before it merges, and the table above follows
+by hand. The values that override chart defaults are in
 [`values/`](values/); the Gateway, the namespaces, Grafana's Role and the
 database's NetworkPolicy are in [`manifests/`](manifests/). The Meridian
 services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),

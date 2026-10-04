@@ -95,6 +95,13 @@ A change that violates one is wrong even if it works.
   session merges each pull request once its required checks pass, and asks
   the owner first about any decision that shapes what comes later (the
   plan's Part A).
+- **Version pins** are read by `.github/renovate.json`. Renovate, a hosted
+  app the owner installs, then opens grouped pull requests monthly and
+  merges none. A line added to `infra/kind/pins.env`, an `_IMAGE` variable
+  in the `Makefile` or a `_VERSION` value in a workflow needs a reader
+  there, and `make test` fails without one; a pin of another shape needs a
+  line in `tests/test_renovate_config.py` too. The plan's Part A says which
+  of Renovate's pull requests green checks do not prove.
 - Prose in Markdown wraps at 80 columns; tables, fences and single long
   tokens are exempt. Do not use a Markdown formatter to enforce it.
 

@@ -11,8 +11,8 @@ orchestration: the rules (`src/claimflow/rules.py`) are shared.
 - It is **spike code, not platform code**. It is never deployed and nothing
   under `src/meridian/` imports it.
 - It is its own uv project with its own `uv.lock`, not a workspace member.
-- Dependabot deliberately does not cover it: the root `uv` entry watches `/`
-  only. The pins are frozen evidence, so the observations below stay true of
+- Renovate deliberately does not cover it: `.github/renovate.json` ignores
+  `spikes/`. The pins are frozen evidence, so the observations below stay true of
   the versions they name.
 - **No model call, no network, no credentials.** Input is the synthetic golden
   set under `data/synthetic/`, read in place.
