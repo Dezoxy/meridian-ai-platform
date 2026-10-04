@@ -608,6 +608,39 @@ class AgentPromptWidth(TreeCase):
         self.assertEqual(self.failures(), [])
 
 
+class Twins(TreeCase):
+    """check_twins: the two instruction files are one text, or neither exists."""
+
+    def failures(self):
+        return self.run_check(self.check.check_twins)
+
+    def test_identical_files_pass(self):
+        self.write("AGENTS.md", "# Rules\n")
+        self.write("CLAUDE.md", "# Rules\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_differing_files_are_reported(self):
+        self.write("AGENTS.md", "# Rules\n")
+        self.write("CLAUDE.md", "# Other rules\n")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("differ", found[0])
+
+    def test_a_repository_with_neither_file_is_skipped(self):
+        # A repository on its first day: the check has no subject yet.
+        self.assertEqual(self.failures(), [])
+
+    def test_one_file_without_its_twin_is_reported_not_a_traceback(self):
+        for present, missing in (("CLAUDE.md", "AGENTS.md"), ("AGENTS.md", "CLAUDE.md")):
+            with self.subTest(present=present):
+                for name in ("AGENTS.md", "CLAUDE.md"):
+                    (self.repo / name).unlink(missing_ok=True)
+                self.write(present, "# Rules\n")
+                found = self.failures()
+                self.assertEqual(len(found), 1, found)
+                self.assertIn(f"{missing} is missing", found[0])
+
+
 class ShippedExamples(unittest.TestCase):
     """The base's own example documents must model the correct convention."""
 

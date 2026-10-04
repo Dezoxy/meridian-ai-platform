@@ -73,6 +73,9 @@ Use these agents for code review:
 | **silent-failure-hunter** | Swallowed errors, bad fallbacks |
 | **infra-reviewer** | Terraform, Helm, Dockerfiles, workflows |
 
+A repository ships the reviewers it needs. List `.claude/agents/` and skip a
+row whose agent is not there.
+
 ## Review Workflow
 
 ```
