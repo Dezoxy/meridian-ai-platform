@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The mechanical half of docs-sync, then the checker's and the harness's
       # own regression tests.
       - name: Check documentation against the tree
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Same pinned image as local runs (Makefile STRUCTURIZR_IMAGE).
       - name: Validate and inspect the Structurizr workspace
         run: make check
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Regenerates every view-derived Mermaid block from the model and fails
       # when a committed block differs: run `make mermaid-views` and commit.
       - name: Regenerate derived Mermaid blocks
@@ -61,14 +61,14 @@ jobs:
     timeout-minutes: 5
     steps:
       # Full history: gitleaks scans every commit, not only the tree.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       # The scanner version is pinned to the one used locally: .gitleaks.toml
       # uses the [[allowlists]] syntax, which gitleaks reads from 8.25 on, and
       # the action's bundled default was older.
       - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ github.token }}
           # renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v(?<version>.+)$

@@ -54,10 +54,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # setup-uv has published no floating major tag since v8, so the pin is a
       # full version. Renovate's actions group bumps it.
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       # --locked fails when uv.lock is out of date with pyproject.toml.
       - name: Install the locked environment
         run: uv sync --locked
@@ -66,7 +66,7 @@ jobs:
       # The chart tests render the chart and fail without helm (never skip), and
       # `make helm-lint` lints it. The version is the one infra/kind/README.md
       # documents (tests/meridian/test_helm_chart.py compares them).
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v4.3.0
       - name: Lint the Helm chart
