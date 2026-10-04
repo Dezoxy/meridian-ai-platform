@@ -152,13 +152,16 @@ def test_each_entry_point_follows_its_tables_last_key_line(root: Path) -> None:
     plan = plan_workload(root, NAME)
 
     new = plan.changed["pyproject.toml"]
-    graph_old = 'claims-triage = "meridian.workloads.claims_triage.graph:build"\n'
+    # The last key of each table as the file has it today, whatever workloads it
+    # lists: a tree with a second workload must not fail this test.
+    tables = tomllib.loads(old)["project"]["entry-points"]
+    last_graph, graph_value = list(tables[GRAPHS].items())[-1]
+    last_evaluation, evaluation_value = list(tables[EVALUATIONS].items())[-1]
+    graph_old = f'{last_graph} = "{graph_value}"\n'
     graph_new = f'{NAME} = "meridian.workloads.{MODULE}.graph:build"\n'
-    evaluation_old = (
-        'claims-triage = "meridian.workloads.claims_triage.'
-        'evaluation_http:EVALUATION"\n'
-    )
+    evaluation_old = f'{last_evaluation} = "{evaluation_value}"\n'
     evaluation_new = f'{NAME} = "meridian.workloads.{MODULE}.evaluation:EVALUATION"\n'
+    assert old.count(graph_old) == 1 and old.count(evaluation_old) == 1
     assert new == old.replace(graph_old, graph_old + graph_new).replace(
         evaluation_old, evaluation_old + evaluation_new
     )
