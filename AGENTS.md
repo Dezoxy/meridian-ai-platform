@@ -134,7 +134,7 @@ A change that violates one is wrong even if it works.
   plus `infra-reviewer` and `platform-boundary-reviewer` (this repository).
   `implementer` (this repository) takes delegated coding against a written
   contract. Codex twins are generated into `.codex/agents/` by
-  `scripts/codex_agents.py`.
+  `scripts/codex_agents.py`; `make test` fails on a stale one.
 - Project skills: `architecture-views`, `architecture-docs`, `docs-sync`,
   `feature-threat-model`, and copies of ECC skills for Python and pytest,
   FastAPI, PostgreSQL, Docker, Kubernetes, deployment, security review, TDD,
@@ -154,11 +154,10 @@ A change that violates one is wrong even if it works.
   and `.context/` are exempt. The session hooks save a summary to
   `~/.claude/session-data/` when a session stops and load this worktree's
   latest one at the next start; `ECC_SKIP_LLM_SUMMARY` keeps them from
-  running `claude -p` with this repository's permissions. Give
-  `/resume-session` this repository's session file: with no argument it
-  may pick another project's. The ECC plugin stays disabled here so no gate
-  fires twice. Codex
-  runs the shell hooks through `.codex/hooks.json`; GateGuard, the session
+  running `claude -p` with this repository's permissions.
+  `/resume-session` with no argument considers only this repository's
+  session files. The ECC plugin stays disabled here so no gate fires twice.
+  Codex runs the shell hooks through `.codex/hooks.json`; GateGuard, the session
   hooks and the slash commands are Claude Code only. Open `/hooks` once
   after a fresh clone to activate them.
 - Slash commands in `.claude/commands/`: `/save-session`, `/resume-session`

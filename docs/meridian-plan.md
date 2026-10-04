@@ -1467,6 +1467,17 @@ has turned the ECC plugin off, by copying it from development-base.
   learned skills, empty today, would be injected here too.
 - S009: when the FastAPI module path is chosen, widen `fastapi.md`'s path
   globs in the base first, then re-copy.
+- **2026-10-04:** the second follow-up is done. development-base took all
+  five (its pull requests 33 and 38) and they were re-copied here the same
+  day, outside any step: the reworked hook-bypass block with 77 new cases
+  (224 in all, this repository's own Azure, kind and Makefile rules carried
+  over unchanged), `/resume-session` limited to this repository's session
+  files, and the `code-review` rule's line on reviewers a repository
+  lacks. The summary child's switch and the chrome-devtools opt-outs were
+  already here. So "`/resume-session` with no argument can load another
+  project's session" under "known and left" no longer holds. The rework
+  went beyond the specification above after a second security review of
+  it found three regressions; the base's pull request 38 has the record.
 
 ### S009 — Walking skeleton
 
