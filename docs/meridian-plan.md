@@ -157,13 +157,18 @@ request's body says so:
 - `mcp server`: the owner reads the release and merges, not a session.
   That package runs on the owner's laptop with control of a browser.
 
-A release is proposed once it is a week old. A Python minor, a Kubernetes
-minor and a PostgreSQL major are switched off there: each is a step's
-decision. Advisories stay with GitHub's own security updates. A line
-added to `infra/kind/pins.env`, an `_IMAGE` variable in the `Makefile` or
-a `_VERSION` value in a workflow needs a reader in that file, and
-`make test` fails without one; a pin of another shape needs a line in
-`tests/test_renovate_config.py` too.
+On that schedule a release is proposed once it is a week old. The hold is
+advisory: a pull request asked for from the Dependency Dashboard arrives at
+once with a pending `renovate/stability-days` status, which is not a
+required check, and the monthly lock file refresh has no hold. Read that
+status before merging one. A Python minor, a Kubernetes minor and a
+PostgreSQL major are switched off there: each is a step's decision.
+Advisories stay with GitHub's own security updates. A line added to
+`infra/kind/pins.env`, an `_IMAGE` variable in the `Makefile` or a
+`_VERSION` value in a workflow needs a reader in that file, and `make test`
+fails without one; a pin of another shape needs a line in
+`tests/test_renovate_config.py` too. An action in a workflow is pinned to a
+commit hash, and the same test fails on a tag.
 
 Cost rules:
 
@@ -327,7 +332,7 @@ that day; the rest stand as their step recorded them.
 
 | Item | Raised in | Status | Home |
 |---|---|---|---|
-| `make up` waits on the Gateway's `Programmed` condition, which Envoy Gateway left `False` for hours while the edge served | S041 | open; left by S019 (not a chart change; `make up` passed the wait twice on 2026-10-04) | none |
+| `make up` waits on the Gateway's `Programmed` condition, which Envoy Gateway left `False` for hours while the edge served | S041 | open; left by S019 (not a chart change; `make up` passed the wait twice on 2026-10-04). It timed out again that afternoon on a two-hour-old cluster (`NoResources`, proxy pod ready); the README's remedy cleared it | none |
 | `make demo` passes as soon as each service has one span in Tempo, so it can pass on a trace that is not complete | S044 | closed by S018 (PASS needs every service and span counts unchanged in three readings, six seconds) | S018 |
 | Old `meridian:*` images and finished migrate and seed Jobs stay until `make down` | S041, S044 | open | none |
 | The wait after an interrupted deploy | S044 | open | none |
@@ -464,6 +469,9 @@ that day; the rest stand as their step recorded them.
 | A first `helm upgrade --install` that fails may leave a release Helm refuses to upgrade ("has no deployed releases"); `deploy.sh` names `status` and `history`, and the cure, an uninstall, needs the owner (not tried) | S019 | open | none |
 | GitHub Actions are pinned by version tag, not by commit, `azure/setup-helm@v5` among them (T-36) | S002, S019 | open | S022 |
 | Under a laptop load average of 50 to 90 the kubelet's probes time out and containers restart (the database five times on 2026-10-04, the services once or twice); seen before the network policies existed and after, and whether kindnet's enforcement adds to it is not measured | S019 | open | none |
+| Renovate's one-week hold is advisory: `renovate/stability-days` is not a required check, a pull request asked for from the Dependency Dashboard arrives before the week is up, and the lock file refresh has no hold (on 2026-10-04 it brought two Python packages a day or two old and the Terraform provider that the held pull request was waiting on) | changelog v0.33 | open; the owner's decision: require the status, drop the lock file refresh, or accept | none |
+| The test database's image has pgvector 0.8.7, the cluster's CloudNativePG image 0.8.6; both are PostgreSQL 17.11 on Debian trixie | changelog v0.33 | open; closes when the CloudNativePG image ships 0.8.7 and Renovate proposes it | none |
+| `azurerm` is locked at 5.8.0 and no plan has been read with it: `make azure-plan` stopped at the backend because the Azure CLI's account is not in the pinned tenant (`AADSTS50020`) | changelog v0.33 | open; needs the owner's `az login` | none |
 
 ## Part C — Step details
 
@@ -6870,3 +6878,19 @@ cluster's field manager, Azure's private endpoints and the size of
   working tree, and by an `infra-reviewer` whose findings are in the pull
   request. No step changes; S012's follow-up about the test image's pin
   is closed.
+- **v0.33, 2026-10-04:** Renovate's first run, asked for by the owner from
+  the Dependency Dashboard the day the app was installed, not on the
+  schedule: eleven pull requests (61 to 71). Ten merged that day on green
+  checks, set to by the owner (66 by this session too).
+  The eleventh, which pins every action to a commit hash, failed `python`:
+  a test asked for `azure/setup-helm` at a major tag. Its commit is replayed
+  here with the test changed, each of the six hashes compared with its
+  tag's commit first, and `tests/test_renovate_config.py` now fails on an
+  action that is not pinned to a hash. What Part A asks for beyond green
+  checks ran on `main` afterwards, on the cluster: `make up` (the collector
+  at 0.162.0; the Gateway's `Programmed` wait timed out once, see the
+  backlog), `make deploy` (the image built from the new base images, with
+  openai 3.24.0 and mcp 2.3.0 in it) and `make smoke`, 16 of 16 lines
+  passed. `Docs / Architecture PDF` passed on the Mermaid 12 pull request.
+  Not run: `make azure-plan` (backlog). Part A and T-36 now say what the
+  one-week hold covers; three backlog rows are new. No step changes.

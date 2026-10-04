@@ -132,9 +132,11 @@ these two shapes and no other, so read a plan before pasting it anywhere.
 ## Prerequisites
 
 `az` (signed in with a user account: `az login`), `terraform` 1.16, `jq`,
-`shasum` and `curl`. The provider is `hashicorp/azurerm` 5.7, locked in
-`foundation/.terraform.lock.hcl` for macOS on Apple silicon and Linux on
-amd64.
+`shasum` and `curl`. The provider is `hashicorp/azurerm` (`~> 5.7`), locked
+in `foundation/.terraform.lock.hcl` for macOS on Apple silicon and Linux on
+amd64. Since 2026-10-04 the lock file holds 5.8.0, from Renovate's lock
+file refresh; no plan has been read with it yet, so the table still names
+the version the last plan ran with.
 
 | Tool | Validated with |
 |---|---|

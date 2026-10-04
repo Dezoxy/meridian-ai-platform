@@ -25,7 +25,7 @@ adjuster; the rules decide every other claim.
 | Prometheus, Grafana, kube-state-metrics, node-exporter | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
 | Tempo (traces) | `tempo` | 3.1.0 | `observability` |
 | Loki (logs) | `loki` | 18.13.7 | `observability` |
-| OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.161.0) | `observability` |
+| OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
 to change one. `.github/renovate.json` reads them, so Renovate, once the
@@ -554,11 +554,13 @@ Rerunning `make up` is the first thing to try. If a release is stuck in a
 `pending-*` state, or the node was only half created, run `make down` and then
 `make up` again.
 
-If `make up` times out waiting for the Gateway to be programmed and
-`kubectl -n envoy-gateway-system get gateway edge` shows `AddressNotAssigned`,
-Envoy Gateway did not pick up the node's address (seen on 2026-10-01 on a
-cluster that had run for 18 hours; the edge served routes anyway). Restart the
-controller, wait for it, then touch the Gateway:
+If `make up` times out waiting for the Gateway to be programmed while the
+edge's proxy pod is ready, the condition is stale. Seen twice, with the edge
+serving routes both times: `AddressNotAssigned` on 2026-10-01, on a cluster
+that had run for 18 hours, and `NoResources` ("Envoy replicas unavailable")
+on 2026-10-04, on one that had run for two. `kubectl -n envoy-gateway-system
+get gateway edge -o yaml` shows the reason. Restart the controller, wait for
+it, then touch the Gateway:
 
 ```sh
 K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n envoy-gateway-system"
