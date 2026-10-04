@@ -1,4 +1,4 @@
-"""0013: the role of the scheduled sweep and what it may do (S052)."""
+"""0014: the role of the scheduled sweep and what it may do (S052)."""
 
 import uuid
 
@@ -215,7 +215,7 @@ def privileges(db: DatabaseHandle, role: str) -> frozenset[tuple]:
 
 # ── claims ──────────────────────────────────────────────────────────────────
 def set_state(db: DatabaseHandle, state: str, claim_id: str = CLAIM_ID) -> None:
-    """Put a claim in ``state`` as the owner, which no trigger of 0013 binds."""
+    """Put a claim in ``state`` as the owner, which no trigger of 0014 binds."""
     run(
         db,
         OWNER,
@@ -255,7 +255,7 @@ def claim(fresh_database: DatabaseHandle) -> DatabaseHandle:
     return fresh_database
 
 
-def test_the_migration_is_the_thirteenth_and_is_recorded(
+def test_the_migration_is_the_fourteenth_and_is_recorded(
     migrated_database: DatabaseHandle,
 ) -> None:
     names = [name for name, _ in migration_files()]
@@ -265,19 +265,19 @@ def test_the_migration_is_the_thirteenth_and_is_recorded(
         "SELECT name FROM public.meridian_migrations ORDER BY name",
     )
 
-    assert names[12] == "0013_scheduled_sweep.sql"
-    assert ("0013_scheduled_sweep.sql",) in recorded
+    assert names[13] == "0014_scheduled_sweep.sql"
+    assert ("0014_scheduled_sweep.sql",) in recorded
 
 
 def test_a_missing_sweep_role_fails_clearly_and_changes_nothing(
     empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     files = migration_files()
-    name, text = files[12]
+    name, text = files[13]
     broken = text.replace(f"ARRAY['{ROLE}']", "ARRAY['role_that_does_not_exist']")
     assert broken != text
     monkeypatch.setattr(
-        runner, "migration_files", lambda: [*files[:12], (name, broken)]
+        runner, "migration_files", lambda: [*files[:13], (name, broken)]
     )
 
     with connect(empty_database.dsn(OWNER), "test") as conn:
@@ -292,7 +292,7 @@ def test_a_missing_sweep_role_fails_clearly_and_changes_nothing(
         conn.rollback()
 
         # The role exists in the cluster, so the grants that follow the check
-        # would have worked: none of them ran, and no 0013 object exists.
+        # would have worked: none of them ran, and no 0014 object exists.
         assert conn.execute(
             "SELECT has_schema_privilege(%s, 'runtime', 'USAGE'), "
             "has_schema_privilege(%s, 'audit', 'USAGE')",
@@ -315,17 +315,17 @@ def test_the_migration_gives_the_sweep_everything_it_holds_and_changes_no_other_
     empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     files = migration_files()
-    assert files[12][0] == "0013_scheduled_sweep.sql"
-    monkeypatch.setattr(runner, "migration_files", lambda: files[:12])
+    assert files[13][0] == "0014_scheduled_sweep.sql"
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:13])
     with connect(empty_database.dsn(OWNER), "test") as conn:
         runner.apply_migrations(conn)
     before = {role: privileges(empty_database, role) for role in SERVICE_ROLES}
-    monkeypatch.setattr(runner, "migration_files", lambda: files[:13])
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:14])
 
     with connect(empty_database.dsn(OWNER), "test") as conn:
         applied = runner.apply_migrations(conn)
 
-    assert applied == ["0013_scheduled_sweep.sql"]
+    assert applied == ["0014_scheduled_sweep.sql"]
     assert before[ROLE] == frozenset()
     assert privileges(empty_database, ROLE) == SWEEP_HOLDS
     for role in OTHER_ROLES:

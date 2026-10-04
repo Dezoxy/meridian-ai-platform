@@ -12,7 +12,7 @@ behind, in this order, each step safe to repeat and safe beside another pass:
 3. checkpoints that no unfinished run needs: they are deleted.
 
 It connects as the database role ``claims_sweep`` (``MERIDIAN_DATABASE_URL``),
-which can do these things and no others (migration 0013). It starts no triage and
+which can do these things and no others (migration 0014). It starts no triage and
 raises no claim's ``triages``. It imports neither the Claims API nor LangGraph,
 and needs PostgreSQL only.
 

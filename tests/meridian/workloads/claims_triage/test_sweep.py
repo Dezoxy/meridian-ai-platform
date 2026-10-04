@@ -1,6 +1,6 @@
 """The scheduled sweep: what it moves, what it keeps, how it fails and how it
 starts (S052). The pass runs as the database role ``claims_sweep``, whose rights
-are the ones migration 0013 gives it and no more."""
+are the ones migration 0014 gives it and no more."""
 
 import logging
 import re

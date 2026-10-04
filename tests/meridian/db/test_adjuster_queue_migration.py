@@ -27,7 +27,7 @@ TRAIL_COLUMNS = (
     "service",
     "event",
     "outcome",
-    "reason",  # appended by 0013
+    "reason",  # appended by 0014
 )
 INSERT_CLAIM = (
     "INSERT INTO claims.claims (claim_id, tenant, submission) VALUES (%s, %s, '{}')"
@@ -205,7 +205,7 @@ def test_the_indexes_exist_on_those_columns_in_that_order(
         ),
         (
             "audit.events_reference_idx",
-            # Widened by 0013 to the Claims API's and the sweep's rows.
+            # Widened by 0014 to the Claims API's and the sweep's rows.
             "WHERE (db_role = ANY (ARRAY['claims_api'::name, 'claims_sweep'::name]))",
         ),
         ("runtime.runs_reference_idx", None),

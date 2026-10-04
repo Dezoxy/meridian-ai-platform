@@ -1,7 +1,7 @@
 """What the scheduled sweep does to the runtime's own tables (S052).
 
 The sweep is a job of the claims-triage workload, with a database role of its
-own (``claims_sweep``, migration 0013); the statements here are the ones that
+own (``claims_sweep``, migration 0014); the statements here are the ones that
 belong to ``runtime.runs`` and the checkpoint tables, so they live beside
 them. This module must stay free of LangGraph: the sweep job loads it, and the
 job needs PostgreSQL and nothing else. Its checkpoint clean-up is SQL for that

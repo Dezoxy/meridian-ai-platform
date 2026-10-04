@@ -14,6 +14,8 @@ the model, so its triage calls no gateway and repeats the same way every time.
 """
 
 import uuid
+from datetime import date
+from typing import Any
 
 import pytest
 from dbsupport import DatabaseHandle
@@ -447,3 +449,52 @@ def test_an_adjuster_decides_a_claim_whose_triage_failed_with_no_run_to_resume(
         if event in {"claim.awaiting_adjuster", "claim.approved"}
     }
     assert len(moments) == 1
+
+
+# ── the claims a policy has had: seeded history and the claims decided here ──
+# CLM-0019 is a flood on a policy whose seeded history holds one claim, three
+# months before its loss (2026-03-12); the rules approve it. A claim on the
+# same policy with a loss date after it, still inside the year, has two claims
+# behind it once CLM-0019 is decided, and the rules' count is two. The claims
+# built here come without their documents, so they wait for them and are
+# decided by nobody: only CLM-0019 is a decided claim of the policy.
+DECIDED_BY_THE_RULES = "CLM-0019"
+LATER_LOSS = date(2026, 7, 10)
+
+
+def later_claim_on_the_policy(claim_id: str) -> dict[str, Any]:
+    """A golden claim's synthetic values under a new ID, lost and reported
+    after the golden claim's loss, with no documents."""
+    return CLAIMS[DECIDED_BY_THE_RULES] | {
+        "claim_id": claim_id,
+        "loss_date": LATER_LOSS.isoformat(),
+        "reported_on": LATER_LOSS.isoformat(),
+        "documents": [],
+    }
+
+
+def indicators_of(db: DatabaseHandle, claim_id: str) -> list[str]:
+    ((_, proposal),) = proposals_of(db, claim_id)
+    return list(proposal.fraud_indicators)
+
+
+def test_a_claim_decided_here_counts_towards_the_next_claims_frequent_claims(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    # The seeded history alone is one claim in the year: no indicator.
+    without = stack.post(later_claim_on_the_policy("CLM-9101"))
+    assert without.status_code == 201, without.text
+    assert indicators_of(fresh_database, "CLM-9101") == []
+
+    # The golden claim on the policy is approved by the rules.
+    decided = stack.post(CLAIMS[DECIDED_BY_THE_RULES])
+    assert decided.status_code == 201, decided.text
+    assert states(fresh_database)[DECIDED_BY_THE_RULES] == "approved"
+
+    # The seeded claim and the decided one make two: the indicator. The claim
+    # that waited for its documents (not decided) did not count.
+    with_it = stack.post(later_claim_on_the_policy("CLM-9102"))
+    assert with_it.status_code == 201, with_it.text
+    assert indicators_of(fresh_database, "CLM-9102") == ["frequent_claims"]
+    assert states(fresh_database)["CLM-9101"] == "documents_requested"
+    assert states(fresh_database)["CLM-9102"] == "documents_requested"

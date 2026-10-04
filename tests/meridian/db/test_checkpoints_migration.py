@@ -17,7 +17,7 @@ from meridian.runtime.checkpoints import open_saver
 TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 # The library's own ledger: only its setup() uses it, so 0008 does not create it.
 LIBRARY_LEDGER = "checkpoint_migrations"
-# Since 0013 claims_sweep reads thread_id and DELETEs on the three tables.
+# Since 0014 claims_sweep reads thread_id and DELETEs on the three tables.
 OTHER_ROLES = tuple(
     role for role in SERVICE_ROLES if role not in ("agent_runtime", "claims_sweep")
 )
@@ -257,7 +257,7 @@ def test_only_the_runtime_the_sweep_and_the_owner_hold_a_privilege_on_a_table(
         (f"runtime.{table}",),
     )
 
-    # 0013 gave claims_sweep DELETE, to remove a thread's rows.
+    # 0014 gave claims_sweep DELETE, to remove a thread's rows.
     assert holders == [("agent_runtime",), ("claims_sweep",), (OWNER,)]
 
 
