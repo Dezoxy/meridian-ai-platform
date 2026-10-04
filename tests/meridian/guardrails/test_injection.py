@@ -1,8 +1,7 @@
 """Injected instructions: what addresses the model, and what only says "you"."""
 
-import time
-
 import pytest
+from cputime import MAX_GROWTH, growth
 
 from meridian.platform.guardrails import addresses_the_model
 
@@ -239,18 +238,19 @@ def test_no_policy_wording_addresses_the_model(
 
 
 def test_a_long_text_is_screened_in_linear_time() -> None:
-    texts = [
-        "ignore " * 10_000,
-        "ignore the " * 5_000,
-        "\n" * 20_000,
-        " \n" * 10_000,
-        "act " * 5_000,
-        "approve " * 5_000,
-        "verdict" + " " * 20_000,
-        "<" + " " * 20_000,
-        "x" * 20_000,
-    ]
-    for text in texts:
-        started = time.perf_counter()
-        addresses_the_model(text)
-        assert time.perf_counter() - started < 0.5
+    # Each shape builds a text of about the given length.
+    shapes = {
+        "ignore": lambda n: "ignore " * (n // 7),
+        "ignore-the": lambda n: "ignore the " * (n // 11),
+        "newlines": lambda n: "\n" * n,
+        "spaced-newlines": lambda n: " \n" * (n // 2),
+        "act": lambda n: "act " * (n // 4),
+        "approve": lambda n: "approve " * (n // 8),
+        "verdict-spaces": lambda n: "verdict" + " " * n,
+        "tag-spaces": lambda n: "<" + " " * n,
+        "letters": lambda n: "x" * n,
+    }
+    # CPU time at a small and a large length, not a limit on the wall clock.
+    for name, shape in shapes.items():
+        grown = growth(addresses_the_model, shape(20_000), shape(80_000))
+        assert grown < MAX_GROWTH, f"{name}: {grown:.1f} times"

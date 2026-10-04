@@ -9,6 +9,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from registrysupport import (
+    Change,
+    add_field,
+    apply_changes,
+    remove_field,
+    set_field,
+)
 
 from meridian.platform.registry import load_registry
 from meridian.platform.registry.checks import check_provider_fields
@@ -22,9 +29,10 @@ Edit = tuple[str, str, str]
 WHERE = "models.yaml: deployments[5]"
 ANCHOR = "    model: recorded-chat\n"
 RECORDED_FROM = "    recorded_from: aoai-sdc-gpt-4o\n"
-RECORDED_CLASSES = "    data_classes: [synthetic, internal, personal]\n" + RECORDED_FROM
-RECORDED_LABEL = "    residency: eu-region\n" + RECORDED_CLASSES
-RECORDED_LABEL_GLOBAL = RECORDED_LABEL.replace("eu-region", "global")
+# The entries these tests edit, found by their keys (registrysupport).
+RECORDED = "recorded-chat"
+GPT4O = "aoai-sdc-gpt-4o"
+GPT4O_B = "aoai-sdc-gpt-4o-b"
 RECORDED_ENTRY = "  - purpose: chat\n    deployment: recorded-chat\n"
 RECORDED_BLOCK = f"recorded:\n{RECORDED_ENTRY}"
 
@@ -125,13 +133,7 @@ def test_a_recorded_deployment_of_another_model_name_with_the_prefix_is_accepted
 def test_a_recorded_deployment_that_is_not_for_chat_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        (
-            "models.yaml",
-            "    provider: recorded\n    purpose: chat\n",
-            "    provider: recorded\n    purpose: embedding\n",
-        )
-    )
+    directory = apply_changes(plant(), set_field(RECORDED, "purpose", "embedding"))
 
     errors = load_errors(directory)
 
@@ -144,7 +146,7 @@ def test_a_recorded_deployment_that_is_not_for_chat_is_reported(
 def test_a_recorded_deployment_labelled_global_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(("models.yaml", RECORDED_LABEL, RECORDED_LABEL_GLOBAL))
+    directory = apply_changes(plant(), set_field(RECORDED, "residency", "global"))
 
     errors = load_errors(directory)
 
@@ -234,37 +236,29 @@ def test_a_recorded_from_that_is_another_real_chat_deployment_is_accepted(
 
 
 @pytest.mark.parametrize(
-    ("old", "new", "field"),
+    ("change", "field"),
     [
         pytest.param(
-            "input_per_million_tokens: 3.025\n      output_per_million_tokens: 12.10\n"
-            '      source: "The list price',
-            "input_per_million_tokens: 3.026\n      output_per_million_tokens: 12.10\n"
-            '      source: "The list price',
+            set_field(RECORDED, "price.input_per_million_tokens", "3.026"),
             "input_per_million_tokens",
             id="input-differs-by-one-digit",
         ),
         pytest.param(
-            "input_per_million_tokens: 3.025\n      output_per_million_tokens: 12.10\n"
-            '      source: "The list price',
-            "input_per_million_tokens: 3.025\n      output_per_million_tokens: 12.11\n"
-            '      source: "The list price',
+            set_field(RECORDED, "price.output_per_million_tokens", "12.11"),
             "output_per_million_tokens",
             id="output-differs-by-one-digit",
         ),
         pytest.param(
-            "input_per_million_tokens: 3.025\n      output_per_million_tokens: 12.10\n"
-            '      source: "The list price',
-            'input_per_million_tokens: 3.025\n      source: "The list price',
+            remove_field(RECORDED, "price.output_per_million_tokens"),
             "output_per_million_tokens",
             id="output-missing",
         ),
     ],
 )
 def test_a_recorded_price_that_differs_from_the_live_one_is_reported(
-    plant: Plant, load_errors: LoadErrors, old: str, new: str, field: str
+    plant: Plant, load_errors: LoadErrors, change: Change, field: str
 ) -> None:
-    errors = load_errors(plant(("models.yaml", old, new)))
+    errors = load_errors(apply_changes(plant(), change))
 
     assert any(
         e.startswith(f"{WHERE}.price.{field}: ") and "'aoai-sdc-gpt-4o'" in e
@@ -291,19 +285,6 @@ def test_a_recorded_price_has_its_own_source_and_the_live_numbers(
     )
 
 
-# The second live deployment's label and classes, unique by its deployment name.
-SECOND_LIVE = (
-    "    deployment_name: gpt-4o-b\n"
-    "    sku: Standard\n"
-    "    region: swedencentral\n"
-    "    residency: eu-region\n"
-)
-SECOND_LIVE_CLASSES = (
-    SECOND_LIVE + "    data_classes: [synthetic, internal, personal]\n"
-)
-POINT_AT_SECOND_LIVE = "    recorded_from: aoai-sdc-gpt-4o-b\n"
-
-
 @pytest.mark.parametrize(
     ("allowed", "extra"),
     [
@@ -315,10 +296,10 @@ POINT_AT_SECOND_LIVE = "    recorded_from: aoai-sdc-gpt-4o-b\n"
 def test_a_class_asserted_over_a_recording_its_source_never_allowed_is_reported(
     plant: Plant, load_errors: LoadErrors, allowed: str, extra: str
 ) -> None:
-    source_classes = SECOND_LIVE + f"    data_classes: {allowed}\n"
-    directory = plant(
-        ("models.yaml", SECOND_LIVE_CLASSES, source_classes),
-        ("models.yaml", RECORDED_FROM, POINT_AT_SECOND_LIVE),
+    directory = apply_changes(
+        plant(),
+        set_field(GPT4O_B, "data_classes", allowed),
+        set_field(RECORDED, "recorded_from", GPT4O_B),
     )
 
     errors = load_errors(directory)
@@ -383,23 +364,20 @@ def test_a_recorded_deployment_that_asserts_one_more_class_is_reported_by_the_ch
 
 
 @pytest.mark.parametrize(
-    ("anchor", "kind"),
+    ("deployment", "kind"),
     [
-        pytest.param("    model: gpt-4o\n", "azure-openai", id="azure"),
-        pytest.param("    model: replay-chat\n", "replay", id="replay"),
+        pytest.param(GPT4O, "azure-openai", id="azure"),
+        pytest.param("replay-chat", "replay", id="replay"),
     ],
 )
 def test_recorded_from_on_another_kind_of_deployment_is_reported(
-    plant: Plant, load_errors: LoadErrors, anchor: str, kind: str
+    plant: Plant, load_errors: LoadErrors, deployment: str, kind: str
 ) -> None:
-    directory = plant(
-        ("models.yaml", anchor, anchor + "    recorded_from: aoai-sdc-gpt-4o-b\n")
-    )
+    directory = apply_changes(plant(), add_field(deployment, "recorded_from", GPT4O_B))
 
     errors = load_errors(directory)
 
     index = 0 if kind == "azure-openai" else 3
-    deployment = "aoai-sdc-gpt-4o" if kind == "azure-openai" else "replay-chat"
     assert (
         f"models.yaml: deployments[{index}].recorded_from: must not be set for "
         f"provider kind '{kind}' (deployment '{deployment}')"
@@ -498,12 +476,8 @@ def test_recorded_rule_violation_is_reported(
 def test_a_recorded_deployment_that_does_not_allow_a_tenants_class_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        (
-            "models.yaml",
-            RECORDED_CLASSES,
-            "    data_classes: [synthetic]\n" + RECORDED_FROM,
-        )
+    directory = apply_changes(
+        plant(), set_field(RECORDED, "data_classes", "[synthetic]")
     )
 
     errors = load_errors(directory)
@@ -565,14 +539,7 @@ TRIAGE_STOPS_ASKING: Edit = (
 
 def undeclare_recorded(directory: Path) -> Path:
     """Take the declaration off the recorded deployment of the copy."""
-    path = directory / "models.yaml"
-    head, found, tail = path.read_text(encoding="utf-8").partition(
-        "  - id: recorded-chat\n"
-    )
-    assert found
-    assert DECLARED in tail, "recorded-chat declares nothing to take off"
-    path.write_text(head + found + tail.replace(DECLARED, "", 1), encoding="utf-8")
-    return directory
+    return apply_changes(directory, remove_field(RECORDED, "structured_outputs"))
 
 
 def test_the_committed_recorded_deployment_declares_structured_outputs(

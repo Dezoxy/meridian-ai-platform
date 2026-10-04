@@ -173,6 +173,7 @@ Terraform for the ephemeral Azure environment under `infra/`.
 
 ```bash
 make docs     # documentation gate: twins, mirrors, links, indexes, ADRs, IDs
+make secret-scan  # scan the commits a push would add for secrets, as CI's secret scan does (needs gitleaks)
 make check    # Structurizr validate + inspect with the pinned image (Docker)
 make view     # browse the model at http://localhost:8080/workspace/1
 make mermaid  # regenerate derived Mermaid blocks, render every fence (Docker)

@@ -26,9 +26,12 @@ jobs:
   python:
     name: python
     runs-on: ubuntu-26.04
-    # The tests run in parallel (make pytest, four workers): the job took 4 min 50 s
-    # on S054's pull request, against 8 to 9 minutes in one process. 15 is a
-    # wide margin, kept until more parallel runs are measured.
+    # The tests run in parallel (make pytest, four workers). Measured over the
+    # 47 successful runs of 2026-10-04 (S057): 4 min 59 s to 7 min 30 s, the
+    # median 6 min 47 s, of which the Tests step is all but half a minute. The
+    # limit is twice the slowest: it ends a job that hangs and is no budget, so
+    # a run that comes near it is a finding. The suite grew from 4 min 50 s to
+    # this in a day; measure again before the median passes 10 minutes.
     timeout-minutes: 15
     env:
       # The database tests (S009) run against the service container below;
@@ -78,6 +81,9 @@ jobs:
       - name: Tests
         run: make pytest
         env:
+          # make hands this to pytest, which then prints the slowest tests: what
+          # one test adds to the job can be read from any run (S057).
+          PYTEST_ARGS: --durations=25
           # The recorded evaluation test writes its report here (S017, S050).
           MERIDIAN_EVAL_REPORT: ${{ runner.temp }}/claims-triage-report.json
           # The injection stack test writes its report here (S032).

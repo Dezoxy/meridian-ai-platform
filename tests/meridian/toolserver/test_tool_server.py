@@ -7,8 +7,8 @@ real servers run where the audit or the transaction is the point.
 
 import json
 import logging
+import re
 import threading
-import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -555,29 +555,49 @@ BACKTRACKING = ("a" * 28) + "b"
 
 
 def test_a_string_over_its_maximum_is_refused_before_its_pattern_runs(
-    world: World, plant: Callable[..., Path]
+    world: World,
+    plant: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A clock cannot show that a pattern did not run: on a faster machine it
+    # would finish inside any limit. ``jsonschema`` runs a pattern with
+    # ``re.search``, so record which patterns that is asked for.
+    planted = "^(a+)+$"
     registry_dir = plant(
         (
             "tools.yaml",
             'policy_number: {type: string, pattern: "^POL-[0-9]{4}$", maxLength: 8}',
-            'policy_number: {type: string, pattern: "^(a+)+$", maxLength: 8}',
+            f'policy_number: {{type: string, pattern: "{planted}", maxLength: 8}}',
         )
     )
     spy = Spy()
     app = spy_app(world.db, "policy_lookup", spy, registry_dir=registry_dir)
+    searched: list[str] = []
+    real_search = re.search
 
-    started = time.monotonic()
-    result = run_call(
+    def recording_search(pattern: Any, string: Any, *args: Any, **kwargs: Any) -> Any:
+        searched.append(str(pattern))
+        return real_search(pattern, string, *args, **kwargs)
+
+    monkeypatch.setattr(re, "search", recording_search)
+
+    # The spy sees the pattern for a string within its maximum that fails it.
+    within = run_call(
+        app.server, "policy_lookup", {"policy_number": "aaab"}, run_id=world.run_id
+    )
+    assert_refused(within, "invalid-arguments")
+    assert planted in searched
+
+    searched.clear()
+    over = run_call(
         app.server,
         "policy_lookup",
         {"policy_number": BACKTRACKING},
         run_id=world.run_id,
     )
-    elapsed = time.monotonic() - started
 
-    assert_refused(result, "invalid-arguments")
-    assert elapsed < 5.0
+    assert_refused(over, "invalid-arguments")
+    assert planted not in searched
     assert spy.calls == []
 
 

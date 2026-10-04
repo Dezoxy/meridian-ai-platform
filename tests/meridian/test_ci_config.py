@@ -1,6 +1,7 @@
 """The CI job and ``make pytest-db`` must test against the same PostgreSQL."""
 
 import re
+import subprocess
 
 import yaml
 from servicesupport import REPO_ROOT
@@ -177,3 +178,57 @@ def test_the_python_workflow_never_enables_a_live_or_recording_run() -> None:
     assert "MERIDIAN_LIVE_AZURE" not in WORKFLOW_TEXT
     assert "eval-record" not in WORKFLOW_TEXT
     assert "gateway-live" not in WORKFLOW_TEXT
+
+
+# ── what the job costs can be read from a run (S057) ────────────────────────
+def test_the_tests_step_prints_its_slowest_tests() -> None:
+    # No run said what one test adds to the job; the limit and three backlog
+    # rows were guesses until S057 measured them.
+    tests = step_named("Tests")
+
+    # The command stays `make pytest` (the chart's tests look for it); make
+    # reads PYTEST_ARGS from the step's environment.
+    assert tests["run"] == "make pytest"
+    assert tests["env"]["PYTEST_ARGS"] == "--durations=25"
+    assert re.search(r"^PYTEST_ARGS\s*\?=\s*$", MAKEFILE, re.MULTILINE)
+    assert re.search(
+        r"^pytest:\n\tuv run pytest -n \$\(PYTEST_WORKERS\) \$\(PYTEST_ARGS\)$",
+        MAKEFILE,
+        re.MULTILINE,
+    )
+
+
+def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
+    # 47 successful runs on 2026-10-04: 4 min 59 s to 7 min 30 s. The limit
+    # ends a job that hangs; it is not a budget, and a run near it is a
+    # finding. Change the number and the workflow's comment together.
+    assert JOB["timeout-minutes"] == 15
+    assert "7 min 30 s" in WORKFLOW_TEXT
+
+
+# ── the secret scan a push needs (S057) ─────────────────────────────────────
+def test_make_secret_scan_scans_the_commits_a_push_would_add_and_redacts() -> None:
+    phony = next(
+        line for line in MAKEFILE.splitlines() if line.startswith(".PHONY:")
+    ).split()
+    recipe = MAKEFILE.split("\nsecret-scan:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert "secret-scan" in phony
+    assert re.search(r"^SECRET_SCAN_BASE\s*\?=\s*origin/main$", MAKEFILE, re.MULTILINE)
+    assert 'gitleaks git --log-opts="$(SECRET_SCAN_BASE)..HEAD" --redact' in recipe
+
+
+def test_make_secret_scan_refuses_a_base_that_does_not_exist() -> None:
+    # gitleaks answers a base git does not know with "0 commits scanned" and
+    # exit 0 (read on 8.30.1), so the target checks the base before it scans.
+    done = subprocess.run(
+        ["make", "secret-scan", "SECRET_SCAN_BASE=no-such-ref"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert done.returncode != 0
+    assert "no-such-ref" in done.stderr
+    assert "commits scanned" not in done.stdout + done.stderr
