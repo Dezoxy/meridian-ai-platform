@@ -41,7 +41,8 @@ singleBinary:
   persistence:
     enabled: true
     size: 2Gi
-  # Rules sidecar: not needed until alerting (S024).
+  # Rules sidecar: not needed. No alert rule reads a log (S024): no service
+  # exports its logs to Loki yet.
   sidecar: false
 
 # The chart still defaults these to 3 replicas; only the single binary runs.

@@ -167,6 +167,15 @@
       ]
     },
     {
+      "description": "promtool, the rule checker CI runs with make alerts, comes from the Prometheus image: it follows the Prometheus version the kube-prometheus-stack chart installs.",
+      "matchPackageNames": [
+        "quay.io/prometheus/prometheus"
+      ],
+      "prBodyNotes": [
+        "This image is the rule checker CI runs with `make alerts`. Keep it at the Prometheus version the kube-prometheus-stack chart in `infra/kind/pins.env` installs: a newer checker accepts rules the cluster's Prometheus may not."
+      ]
+    },
+    {
       "description": "The test database and the cluster's database carry the same PostgreSQL, pgvector and OS release, so they arrive together.",
       "matchPackageNames": [
         "pgvector/pgvector",

@@ -18,6 +18,7 @@ __pycache__/
 .mypy_cache/
 .import_linter_cache/
 .eval/
+.alerts/
 dist/
 
 # Local secrets and environment

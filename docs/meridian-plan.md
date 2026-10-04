@@ -33,7 +33,10 @@
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
   proposals with rules and an LLM judge against a reviewed baseline (the
   model's answers recorded from Azure OpenAI and replayed through the
-  gateway), and no service runs in Azure yet.
+  gateway), alert rules, a health dashboard and five runbooks exist as
+  files checked offline and not yet applied to a cluster, with service
+  level objectives nobody has measured (S024), and no service runs in
+  Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -294,7 +297,7 @@ and Pydantic, at the cost of one dependency.
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
-| S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | todo | S011, S019 |
+| S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent | todo | S020 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
@@ -358,7 +361,7 @@ that day; the rest stand as their step recorded them.
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
 | The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | open | none |
 | One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | open | none |
-| The count of a refusal flood's last window is never written | S046 | open | S024 |
+| The count of a refusal flood's last window is never written | S046 | open; left by S024 (the gateway's code, which S055 held while S024 ran) | none |
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | none |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open | none |
 | The tool-call limits are the same for every agent | S014 | open | S031 |
@@ -409,7 +412,7 @@ that day; the rest stand as their step recorded them.
 | Documents posted after the deadline are refused (409) and the adjuster does not see that they were tried | S052 | open | none |
 | The adjuster's queue shows a referred claim's last proposal reason, not that its documents are overdue (the claim's page says it) | S052 | open | none |
 | `make smoke` cannot see a schedule that stopped after a success: it has no server clock to compare with (the controller manager's Lease would be one) | S052 | open | none |
-| No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | open | S024 |
+| No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | partly closed by S024: an alert on the CronJob's last success, from kube-state-metrics, checked offline and not yet on a cluster. Still open: a metric of the sweep's own (what a pass found is in its log line only) | none |
 | A NetworkPolicy for the sweep's pod: egress to DNS and the database only | S052 | done in S019 | S019 |
 | The sweep's listing of leftover threads reads every checkpoint row each pass (160 ms at 390,000 rows) | S052 | open | none |
 | The trigger that confines the sweep's role runs, and returns at once, for every role's update of a claim or a run | S052 | open | none |
@@ -432,7 +435,7 @@ that day; the rest stand as their step recorded them.
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
 | Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | closed on 2026-10-04 by the owner: a step of its own between S019 and S020, S055 | S055 |
 | A web application firewall in the Azure design (T-02) | threat model, S018 | open | none |
-| No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open | S024 |
+| No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open; left by S024 (the services' telemetry setup, or a log collector on the node, which a session without the cluster cannot try). So no alert rule reads a log | none |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open | none |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | none |
@@ -472,6 +475,20 @@ that day; the rest stand as their step recorded them.
 | Renovate's one-week hold is advisory: `renovate/stability-days` is not a required check, a pull request asked for from the Dependency Dashboard arrives before the week is up, and the lock file refresh has no hold (on 2026-10-04 it brought two Python packages a day or two old and the Terraform provider that the held pull request was waiting on) | changelog v0.33 | open; the owner's decision: require the status, drop the lock file refresh, or accept | none |
 | The test database's image has pgvector 0.8.7, the cluster's CloudNativePG image 0.8.6; both are PostgreSQL 17.11 on Debian trixie | changelog v0.33 | open; closes when the CloudNativePG image ships 0.8.7 and Renovate proposes it | none |
 | `azurerm` is locked at 5.8.0 and no plan has been read with it: `make azure-plan` stopped at the backend because the Azure CLI's account is not in the pinned tenant (`AADSTS50020`) | changelog v0.33 | open; needs the owner's `az login` | none |
+| The cluster proof of S024: `make up` on `main`, then the seven checks under "Not proved on a cluster" in `docs/operations/README.md` (the rule object, its three groups healthy, a `count()` per series the rules and the health dashboard name, no Meridian alert on a healthy cluster, the dashboard served) | S024 | open; the session that owns the cluster | none |
+| `make smoke` checks neither the alert rules nor the health dashboard; it reads the cost dashboard by name | S024 | open | none |
+| Alert routing and notification: kind runs no Alertmanager, so a firing alert is shown and nobody is told | S024 | open; the game day is the first time someone must be told | S028 |
+| Three objectives have no indicator: a duration metric for a triage run (QA-01) and for the gateway's own time (QA-02), and a count of runs by how they end | S024 | open | S027 |
+| Alerts on the rate an error budget burns at, which need measured targets | S024 | open | S027 |
+| A metric for a caller that cannot reach the gateway, and for the knowledge server's empty-store and stale-vector warnings (S046's hand-off): the runtime and the tool servers export traces only | S046, S024 | open; left by S024 (their code, held by S055) | none |
+| A metric of the assessment's outcomes by reason word, so a jump in `special-data`, `injection-suspected` or `filtered` is seen (S047's hand-off) | S047, S024 | open; left by S024 (the triage graph, which only one session changes at a time) | none |
+| Nothing credits a tenant, closes a reservation a dead process left `reserved`, or expires old ledger rows (S011's hand-off): the budget runbook says wait for the period or raise the limit by pull request, and forbids editing the ledger by hand; a command of the gateway's own, with its role and an audit row, is the fix | S011, S024 | open; left by S024 (the gateway's code) | none |
+| The cost dashboard's queries take a series as new after a gap in the data longer than five minutes (a laptop that slept) and show its lifetime total as the selected range; S024's review found the same form in the new rules, which carry the fix (the earlier value is looked for 24 hours back) as does the health dashboard | S043, S024 | open | none |
+| The runbooks are written from the code and none is exercised: the rollback is S022's, the provider outage, the used-up budget and the database failure are the game day's; the secret rotation has no step, and its database-password procedure (delete the Secret, `make up`, restart) should first run on a cluster that can be thrown away | S024 | open | S022, S028 |
+| CloudNativePG issues and renews the database's certificates; the repository records no expiry, and whether a renewed certificate authority needs the services restarted is not known | S024 | open | none |
+| The required `python` check pulls the `promtool` image from quay.io on every run, so a registry outage fails it (the test database's image has the same exposure); and Renovate moves that image and the chart's Prometheus under separate lines, with a note and no constraint | S024 | open | none |
+| The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | open | none |
+| Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | open; a rule on absent series and a NetworkPolicy for `observability` | none |
 
 ## Part C — Step details
 
@@ -6703,6 +6720,271 @@ open egress, a second replica, the platform charts' images, the adopted
 cluster's field manager, Azure's private endpoints and the size of
 `test_helm_chart.py`.
 
+### S024 — Operations baseline
+
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
+**Goal:** the platform has service level objectives written as proposals
+nobody has measured, alert rules and dashboards as files in this
+repository, and runbooks for a provider outage, a used-up budget, a
+database failure, a rollback and a secret rotation.
+
+**Decisions:**
+
+- **In parallel with S055, by the owner (2026-10-04).** That session owns
+  the kind cluster and the Azure environment, so this step runs nothing
+  against either; the rules and dashboards are proved offline, and the
+  cluster proof is a "not run" line below.
+- **An objective is written down even where nothing measures it.** Only
+  the Model Gateway records a metric, three counters; no service records
+  a duration, the database has no exporter and no service exports its
+  logs. So four objectives have an indicator Prometheus can compute on
+  kind (`model-calls` from the gateway's call counter, and
+  `service-availability`, `database-availability` and `sweep-freshness`
+  from kube-state-metrics, which needs no change to a service), and
+  three are designed: triage latency (QA-01), the gateway's overhead
+  (QA-02) and triage completion. Rejected: adding the missing metrics
+  here, which means editing the gateway, the runtime or the triage
+  graph, all S055's or the recorded answers' for the length of this
+  step. Every target is a proposal; S027 measures.
+- **Residency, audit, human oversight and the budget are not
+  objectives.** QA-03, QA-05, the first half of QA-06 and QA-12 are
+  absolute, and a share with an error budget is the wrong shape for a
+  rule one breach of which is a defect. `docs/operations/slo.md` says so.
+- **The rule file is the `PrometheusRule` itself**,
+  `infra/kind/alerts/meridian.yaml`, and `make up` applies it with one
+  `kubectl apply`, as it applies Grafana's Role. Rejected: plain
+  Prometheus rule files wrapped into the object by a script that
+  `make up` calls (the advisor's first proposal), which gives `make up`
+  a new prerequisite and a second place where the object is built. The
+  wrapping runs the other way, at development time: `make alerts` takes
+  the groups out of the manifest for `promtool`. Rejected too: a
+  template in the Meridian chart, which S055 owns for this step, and
+  whose rules would then arrive with `make deploy` although Prometheus
+  belongs to the platform (S043's reasoning for the dashboard).
+- **No `increase()` and no `rate()` on the gateway's counter**, S043's
+  hand-off. One recorded series, `meridian:gateway_calls:delta15m`,
+  subtracts each series' value 15 minutes ago from its latest and takes
+  zero for a series that did not exist then; the five gateway alerts
+  read only that. The other choice S043 offered, to accept that a
+  process's first export is lost, would lose exactly the failures of a
+  gateway that has just restarted. A unit test holds the case: a failed
+  series that first appears with 7 fires the alert, and with the
+  recorded series swapped for `increase()` nine unit tests fail.
+- **Meridian's file holds eight alerts and repeats none of the chart's.**
+  The chart's own rules, read from its rendering at 91.8.2, already
+  cover a pod that restarts in a loop, a Deployment whose replicas do
+  not match and a failed Job, in every namespace. Ours: five on the
+  gateway (calls failing at the provider, a refused credential, a
+  failure inside the gateway, a tenant's budget used up, refusals by
+  policy) and three on the workloads (a service with no available
+  replica, the database's pod not ready, the sweep's CronJob without a
+  success for 15 minutes, which closes the alert half of S052's
+  follow-up with no metric of the sweep's own). Each carries its
+  runbook's address, and the four objectives' alerts carry the
+  objective's name; tests hold both to the files.
+- **Alertmanager stays off.** Prometheus evaluates the rules and the
+  health dashboard shows what fires; nothing is notified. A laptop
+  cluster has nobody on call, and a receiver needs an address or a
+  webhook secret this repository does not hold. Three places said
+  "Alertmanager arrives with S024" (two values files and
+  `infra/kind/README.md`); they now say what is true. Routing and
+  notification are designed, proposed for the game day (S028), which is
+  the first time someone must be told. Decided here and not asked: it
+  costs nothing, crosses no boundary and is one value to reverse.
+- **`promtool` from the Prometheus image the chart runs**
+  (`quay.io/prometheus/prometheus:v3.15.0-distroless`, pinned by the
+  index digest in the `Makefile`), so a rule is checked by the parser
+  that will load it. The existing Renovate reader for a tag-and-digest
+  image in the `Makefile` reads it, and a package rule's note asks to
+  keep it at the chart's Prometheus version: Renovate moves the two
+  under separate lines. `make alerts` is a step of CI's `python` job,
+  which has `uv` and Docker.
+- **`make smoke` is not extended.** It checks the cost dashboard by
+  name and neither the rules nor the second dashboard. A smoke check
+  that this session cannot run would land untested on the one cluster
+  another session needs; the checks are written out for a person
+  instead (`docs/operations/README.md`), and the smoke line is a
+  backlog row.
+- **What the offline proof does not prove**, said in the operations
+  index too: `promtool check rules` proves the syntax, and the unit
+  tests prove the arithmetic on series the tests invent. Neither knows
+  whether the cluster has a series of that name. The gateway's series,
+  labels and reason words are held to the code's own constants by
+  tests; the four kube-state-metrics names are pinned from the chart's
+  own rules (two) and from kube-state-metrics' documentation at v2.20.0
+  (two), and are confirmed only on a cluster.
+
+- **The budget runbook forbids the hand edit S011 asked it to
+  describe.** S011's hand-off was "a sweep that closes reservations a
+  dead process left open and a way to credit a tenant; a reconciliation
+  query". The query is there and tested. Nothing in the platform credits
+  a tenant or closes a reservation, and a hand `UPDATE` of the ledger
+  alone breaks the rule the query checks, because the gateway's own
+  close moves both counters with the row, and a trigger makes a wrong
+  close final. So the runbook says: wait for the period, or raise the
+  limit by pull request; the command that would do it properly is the
+  gateway's and is in the backlog.
+- **The secret rotation writes down a procedure nobody has run.** The
+  repository had the restart command and no way to change a Secret. The
+  one the scripts allow is: delete the Secret, `make up` (which creates
+  a Secret only when it is absent), restart the workload. It is
+  labelled not exercised, the delete is the owner's, and the runbook
+  says to try it first on a cluster that can be thrown away. Rejected:
+  a `kubectl patch` of the two keys, which puts a password on a command
+  line or in a file.
+- **Runbook queries are tested, and only read.** Each `sql` block in a
+  runbook runs in a read-only transaction against a migrated database
+  in the suite; the reconciliation is checked on rows the gateway's own
+  ledger wrote, every way an attempt can end, and after a counter
+  changed by hand.
+
+**Work log:**
+
+- Branch `s024-operations-baseline` from `origin/main` at 91706e6; no
+  pull request of S055 was open then.
+- Orientation, read-only: an Explore agent listed every metric
+  instrument under `src/` (one meter, three counters, all the
+  gateway's), the export path and what kube-state-metrics offers. The
+  pinned Prometheus chart was rendered offline with kind's values
+  (`helm template`, no cluster): the Prometheus resource selects rules
+  by `release: kube-prometheus-stack`, the chart's own rules name
+  `job="kube-state-metrics"`, `kube_pod_status_ready` and
+  `kube_deployment_status_replicas_available`, and 29 rule objects
+  already cover pods, Deployments and Jobs. The two CronJob series and
+  the restart counter were read in kube-state-metrics' documentation at
+  v2.20.0, the chart's version.
+- Advisor before the contracts: render the chart first; do not repeat
+  the chart's alerts; name the offline proof's blind spot; decide
+  Alertmanager and say so in the three places that promised it; keep
+  "the provider is down" apart from "the gateway cannot be reached".
+- `feature-threat-model`: one new threat (alerting a caller can steer,
+  or that sees nothing) and notes on two existing ones; no conflict
+  with a hard rule.
+- `implementer`, five contracts, three agents. Contract 1: the rule
+  file, 22 promtool unit tests, `scripts/alert_rules.py`, `make alerts`,
+  the CI step, the Renovate note, two lines in `up.sh`, 20 tests on the
+  files. Contract 2, beside it: the health dashboard and 15 tests on
+  its file. Contract 3: the runbook queries' test, 27 cases. Contracts
+  1b and 1c: the two findings below.
+- The main session read every file the agents wrote, wrote the
+  documents (the objectives, the operations index, the five runbooks,
+  from a second Explore agent's facts with file and line) and ran the
+  gates. Found on the way:
+  - **`make alerts` failed one run in three** on the laptop
+    (`open meridian.rules.yaml: no such file or directory`, right after
+    the file was written): the script deleted and recreated the file,
+    and Docker Desktop's mount still answered "gone". It now rewrites a
+    file in place and removes only stale ones; 35 runs in a row passed
+    afterwards (20 by the agent, 15 by the main session).
+  - **The rule manifest against the chart's own CRD schema**, outside
+    the gates: valid, and two mutations (a `for` that is no duration, a
+    field the schema does not know) were refused.
+- `infra-reviewer`: fix-then-merge, one high finding, verified with
+  promtool. **A gap in the data made a series' lifetime count its last
+  15 minutes.** The baseline `... offset 15m` looks back Prometheus's
+  five minutes; after a longer gap (a laptop that slept, a Prometheus
+  restart) it found nothing, and the rule took a series that had
+  existed for hours as new. Two critical alerts would have fired on any
+  failure ever recorded. The expression was the main session's, copied
+  from the cost dashboard, where it had been measured right on a
+  cluster nobody closed. Fixed: the earlier value is looked for 24
+  hours back, which is what kind's Prometheus keeps; unit tests hold
+  the gap, a restart, the window's edge and an alert that clears.
+  Also taken: the sweep alert now sees a CronJob that never succeeded
+  (it had no series to be stale) and fires at 15 minutes as its text
+  says, not at 20; `promtool` runs with no network, a read-only root
+  and no capability; a test pins the alerts folder to the two files
+  `up.sh` and the `Makefile` name. Not taken, with reasons: the same
+  flaw in the cost dashboard of S043 (another step's file; backlog); a
+  retry around the image pull in CI (the test database's image has the
+  same exposure; backlog); a "No data" stat before the first deploy.
+- `security-reviewer` on the documents: fix-then-merge, no critical
+  finding; eleven claims about the platform's security were checked
+  against the code and held, one with an exception (a connection that
+  never opened is released, not kept). Fixed in the runbooks:
+  - **A control the runbook claimed and the harness does not have.** It
+    said the hooks deny printing a Secret. The reviewer ran the hook:
+    it denies only the bare command, not the one with a namespace flag
+    or a variable in front. The runbook now says not to rely on it; the
+    hook is a backlog row and development-base's to fix.
+  - **The password rotation's outage is minutes, not seconds**, because
+    `make up` runs on for minutes after it has made the Secret; the
+    restart now comes from a second terminal. `rollout status` proved
+    nothing, since a pod with a wrong password is ready; the check is a
+    request or the role's connections. The way back is to run `make up`
+    again, and a new cluster only last. `make up` runs from a clean
+    `main` only.
+  - A new password does not end an open session; a leaked owner
+    password makes the audit table and the ledger untrusted; the audit
+    query sees writes only; the counters have no trigger, only the
+    reconciliation; a rollback takes away the controls added since, and
+    the older tree must not run `make up`; logs can hold connection
+    strings and row values; the superuser `psql` is unrecorded and now
+    asks for a read-only session; evidence is copied out before a
+    cluster is deleted for a security reason.
+  - Into the threat register: forged series, steering by a caller,
+    silence that looks like health, the runbook as something executed,
+    and the unrecorded superuser.
+- Found by the main session after the pull request was open: every
+  command block in the runbooks set `K="kubectl ..."` and ran `$K get
+  ...`, which zsh, the laptop's shell, does not split: `command not
+  found`. They are shell functions now, and each of the six blocks ran
+  in zsh and in bash against stand-in binaries that print their
+  arguments: exit 0, no error. That proves the shell syntax and nothing
+  about a cluster.
+- The numbers, taken late: after `git fetch`, `main` had no new commit
+  and no pull request was open, so the threats are T-86 (alerts that
+  mislead) and T-87 (a runbook is run with admin credentials), the
+  register counts 87, and the changelog entry is v0.34.
+
+**Result / verification:**
+
+Run by the main session on the branch, 2026-10-04. No command touched
+the kind cluster or Azure.
+
+- `make alerts`: exit 0. `promtool check rules --lint=all --lint-fatal`
+  printed `SUCCESS: 9 rules found` and `promtool test rules` printed
+  `SUCCESS` for the 28 unit tests.
+- The mutations the unit tests were tried against, by the agents on
+  scratch copies: the recorded series swapped for `increase()` failed
+  nine tests; the 5 % threshold, the count of three, the
+  kube-state-metrics guard and the empty-reason alternative each failed
+  the test named for it; the old baseline failed the gap tests with
+  `5 model call(s) in the last 15 minutes` where none was expected.
+- `GITHUB_ACTIONS=true make pytest-db` with this session's own container
+  and three workers: exit 0, `8125 passed, 8 skipped` in 5 min 52 s.
+  Among them the 24 tests on the rule file, the 15 on the health
+  dashboard and the 27 on the runbook queries.
+- `make lint`: exit 0, `Contracts: 5 kept, 0 broken.` `make test`: exit
+  0, `Ran 152 tests`, `OK`; the Renovate test reads the new image pin
+  with the reader that was there. `make docs`: exit 0, `13 checks
+  passed`. `shellcheck infra/kind/up.sh` and `bash -n`: exit 0. The
+  model did not change, so `make check` did not run.
+- **Not run: anything on a cluster.** Neither the rule object nor the
+  health dashboard has been applied; `up.sh`'s two new lines have not
+  run. The session that owns the cluster runs `make up` and `make
+  smoke` on `main` and goes through the seven checks under "Not proved
+  on a cluster" in `docs/operations/README.md`: the object exists, its
+  three groups are healthy in Prometheus, a `count()` returns a number
+  for each of the seven series the rules and the dashboard name, no
+  Meridian alert fires on a healthy cluster, Grafana serves the
+  dashboard, and `make smoke` still passes 16 of 16. A series that is
+  missing there is a wrong name here.
+- Not run either: any runbook as a procedure (S022 and S028 exercise
+  four of the five; the secret rotation has no step); the dashboard in
+  a browser; `make azure-plan`.
+
+**Follow-ups:** in Part B's backlog. Re-homed, each with its reason
+there: the refusal flood's last count, the sweep's own metric, the
+services' logs. New: the cluster proof, the smoke line, alert routing,
+the three objectives without an indicator, burn-rate alerts, the
+metrics S046 and S047 asked for, a command that credits a tenant or
+closes a reservation, the cost dashboard's baseline, the runbooks'
+exercise, the database's certificates, the image pull in the required
+check, the harness's hook that should deny printing a Secret and does
+so only for the bare command, and alerts on missing data with a network
+policy for `observability`.
+
 ### S055 — Service-to-service identity
 **Status:** doing · **Started:** 2026-10-04 · **Finished:** —
 **Goal:** on kind, each service proves which service it is to the one it
@@ -6729,6 +7011,7 @@ a call with no identity or from a service the registry does not map.
 **Result / verification:**
 
 **Follow-ups:**
+
 
 ## Part D — Open questions
 
@@ -6921,3 +7204,12 @@ a call with no identity or from a service the registry does not map.
   passed. `Docs / Architecture PDF` passed on the Mermaid 12 pull request.
   Not run: `make azure-plan` (backlog). Part A and T-36 now say what the
   one-week hold covers; three backlog rows are new. No step changes.
+- **v0.34, 2026-10-04:** S024 done, beside S055 and without the cluster:
+  `docs/operations/` with seven service level objectives (proposals,
+  four with an indicator on kind), eight alert rules in one
+  `PrometheusRule` checked by `make alerts` in CI, a second dashboard and
+  five runbooks, none exercised. Alertmanager, which three files had
+  promised for S024, stays off: routing and notification are proposed
+  for S028. Three backlog rows that named S024 are re-homed with their
+  reasons, fourteen are new, among them the cluster proof this step
+  leaves to the session that owns the cluster. T-86 and T-87 are new.

@@ -39,6 +39,13 @@ PYTEST_ARGS         ?=
 # as CI's runner has: with ten on a laptop, connections to the database
 # container were dropped before PostgreSQL saw them (Docker Desktop, S054).
 PYTEST_WORKERS      ?= 4
+# promtool for `make alerts` (S024): the one of the Prometheus that the
+# kube-prometheus-stack chart in infra/kind/pins.env runs (chart 91.8.2 runs
+# v3.15.0), so a rule is checked by the parser that will load it. The digest is
+# the multi-arch index's, so the same line pulls on a laptop and on CI's runner;
+# := so a command line does not override it. .github/renovate.json reads it as
+# it reads PYTEST_DB_IMAGE.
+PROMTOOL_IMAGE      := quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
@@ -62,7 +69,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline eval-record synthetic up deploy helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -141,6 +148,12 @@ lint:
 ## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process)
 pytest:
 	uv run pytest -n $(PYTEST_WORKERS)
+
+## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests (needs Docker and uv)
+alerts:
+	uv run python scripts/alert_rules.py extract .alerts
+	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml
 
 ## pytest-db       pytest in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
 pytest-db:

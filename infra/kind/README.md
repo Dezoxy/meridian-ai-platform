@@ -64,7 +64,8 @@ a Secret in the `cert-manager` namespace, outside `meridian`; `make up` waits
 for the issuer to be Ready before it installs the database.
 
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
-ConfigMap each in `observability` (below).
+ConfigMap each in `observability`, and applies Meridian's alert rules in
+[`alerts/`](alerts/), one `PrometheusRule` (both below).
 
 The database is a CloudNativePG `Cluster` named `platform-db` with one
 instance and 2 Gi of storage. CloudNativePG generates the `app` credentials
@@ -154,9 +155,10 @@ node image, Kubernetes components and the platform).
 
 | Command | What it does |
 |---|---|
-| `make up` | Create the cluster if absent, install every release and provision the Grafana dashboards. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
+| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
+| `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross and its span counts have settled (unchanged for three readings, six seconds). |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
@@ -624,6 +626,34 @@ What the numbers are, which the dashboard also says on its first panel:
   ledger: 18,512 tokens, 37 calls, EUR 0.
 - Choose a range of at least two minutes; a shorter one can hold no export.
 
+## The alert rules and the health dashboard
+
+[`alerts/meridian.yaml`](alerts/meridian.yaml) is one `PrometheusRule`
+(S024): a recorded series for the gateway's calls of the last 15 minutes,
+five alerts on it and three on the workloads, from kube-state-metrics. It
+carries the label `release: kube-prometheus-stack`, which the chart's
+Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
+Alertmanager, so nothing is notified, and the dashboard **Meridian:
+platform health**
+([`dashboards/platform-health.json`](dashboards/platform-health.json))
+shows what fires, beside the services, the database, the sweep and the
+share of model calls answered.
+
+`make alerts` checks the rules without a cluster: it takes the rule groups
+out of the manifest, runs `promtool check rules` on them and then the unit
+tests in [`alerts/meridian.test.yaml`](alerts/meridian.test.yaml). The
+checker is the `promtool` of the Prometheus version the chart installs.
+The gateway's counter is read without `increase()` or `rate()`, for the
+cost dashboard's reason (above); a unit test holds the case those would
+lose.
+
+Neither the rules nor the health dashboard has been applied to a cluster
+yet: S024 ran beside the step that owned it. What to look for on the
+first `make up` is in
+[the operations index](../../docs/operations/README.md#not-proved-on-a-cluster),
+which also links the objectives the rules watch and the runbooks they
+point to. `make smoke` checks neither.
+
 ## If `make up` was interrupted
 
 Rerunning `make up` is the first thing to try. If a release is stuck in a
@@ -691,7 +721,9 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
   it (CloudNativePG's init Job) was not tried; in the backlog.
 - A second replica of any service, and so a budget that protects one:
   whether each service is safe to run twice is not measured (S027).
-- Alertmanager: S024. Its Grafana datasource is off too.
+- Alertmanager: Prometheus evaluates the alert rules and nothing is
+  notified (S024). Routing and notification are designed, with the game
+  day (S028) as their first use. Its Grafana datasource is off too.
 - Persistence beyond the node: PostgreSQL, Loki and Tempo use small volumes on
   the node's disk, Prometheus and Grafana use none. `make down` removes all of
   it.

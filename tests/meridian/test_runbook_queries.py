@@ -1,0 +1,298 @@
+"""The SQL in the operations runbooks runs, and only reads (S024).
+
+An operator runs these queries during an incident, so each one is run here
+against a migrated database, in a transaction that may only read. The
+reconciliation query is also checked for what it says: zero drift after the
+gateway's own ledger has closed attempts every way, and a non-zero drift after
+a counter is changed by hand.
+"""
+
+import re
+import uuid
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+import psycopg
+import pytest
+from dbsupport import OWNER, DatabaseHandle
+from servicesupport import REGISTRY_DIR
+
+from meridian.platform.common.db import connect
+from meridian.platform.gateway.budget import (
+    COST_KIND,
+    TOKENS_KIND,
+    BudgetRefusal,
+    Caller,
+    Ledger,
+    Reservation,
+    TokenEstimate,
+)
+from meridian.platform.registry import load_registry
+from meridian.platform.registry.models import Deployment, ExchangeRate, TenantLimits
+
+OPERATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "operations"
+# Fewer than this means a fence was renamed or a runbook lost a query.
+EXPECTED_QUERIES = 7
+FENCE_OPEN = re.compile(r"^(?P<indent>[ \t]*)```sql[ \t]*$")
+FENCE_CLOSE = re.compile(r"^[ \t]*```[ \t]*$")
+# Data-changing keywords, as whole words, in any case.
+FORBIDDEN_KEYWORDS = (
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "ALTER",
+    "DROP",
+    "CREATE",
+    "GRANT",
+    "COPY",
+)
+FORBIDDEN = re.compile(r"\b(?:" + "|".join(FORBIDDEN_KEYWORDS) + r")\b", re.IGNORECASE)
+
+TENANT = "development"
+AGENT = "claims-triage"
+EXCHANGE = ExchangeRate(
+    usd_per_eur=Decimal("1.1355"), source="a test fixture", checked=date(2026, 9, 30)
+)
+LIMITS = TenantLimits(
+    requests_per_10_seconds=10,
+    tokens_per_minute=10_000,
+    tokens_per_day=10**9,
+    cost_per_month_eur=Decimal(1000),
+)
+ESTIMATE = TokenEstimate(input_tokens=100, max_output_tokens=400)
+HAND_EDIT = 7
+
+
+@dataclass(frozen=True)
+class Query:
+    location: str
+    sql: str
+
+
+def _source_files() -> list[Path]:
+    return [
+        *sorted((OPERATIONS_DIR / "runbooks").glob("*.md")),
+        OPERATIONS_DIR / "README.md",
+    ]
+
+
+def extract_queries(path: Path, base: Path = OPERATIONS_DIR) -> list[Query]:
+    """The ``sql`` fences of a Markdown file, each with its fence's line number.
+
+    A fence inside a list item is indented; the indent of its opening line is
+    removed from every line of the block.
+    """
+    found: list[Query] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        opening = FENCE_OPEN.match(lines[index])
+        if opening is None:
+            index += 1
+            continue
+        start = index
+        indent = opening.group("indent")
+        body: list[str] = []
+        index += 1
+        while index < len(lines) and not FENCE_CLOSE.match(lines[index]):
+            body.append(lines[index].removeprefix(indent))
+            index += 1
+        assert index < len(lines), f"{path.name}:{start + 1} has no closing fence"
+        location = f"{path.relative_to(base)}:{start + 1}"
+        found.append(Query(location, "\n".join(body)))
+        index += 1
+    return found
+
+
+def all_queries() -> list[Query]:
+    return [query for path in _source_files() for query in extract_queries(path)]
+
+
+QUERIES = all_queries()
+QUERY_PARAMS = [pytest.param(query, id=query.location) for query in QUERIES]
+
+
+def shape_problems(sql: str) -> list[str]:
+    """What is wrong with a runbook query before a database sees it."""
+    problems: list[str] = []
+    text = sql.strip()
+    if not re.match(r"SELECT\b", text, re.IGNORECASE):
+        problems.append("does not start with SELECT")
+    if ";" in text.removesuffix(";"):
+        problems.append("holds a semicolon before its end")
+    words = sorted({word.upper() for word in FORBIDDEN.findall(text)})
+    if words:
+        problems.append(f"names {', '.join(words)}")
+    return problems
+
+
+def run_read_only(db: DatabaseHandle, sql: str) -> tuple[list[str], list[tuple]]:
+    """Run one query as the owner in ``BEGIN TRANSACTION READ ONLY``, then roll
+    back; return the column names and the rows."""
+    with connect(db.dsn(OWNER), "runbook-query-test") as conn:
+        conn.autocommit = True
+        conn.execute("BEGIN TRANSACTION READ ONLY")
+        try:
+            assert conn.execute("SHOW transaction_read_only").fetchone() == ("on",)
+            cursor = conn.execute(sql)
+            columns = [column.name for column in cursor.description or ()]
+            return columns, cursor.fetchall()
+        finally:
+            conn.execute("ROLLBACK")
+
+
+def runbook_query(file: str, marker: str) -> str:
+    """The one query of a runbook that holds ``marker``."""
+    matches = [
+        query.sql
+        for query in QUERIES
+        if query.location.startswith(f"{file}:") and marker in query.sql
+    ]
+    assert len(matches) == 1, (file, marker, len(matches))
+    return matches[0]
+
+
+# ── collection and shape: no database ───────────────────────────────────────
+def test_every_sql_fence_of_the_runbooks_is_found() -> None:
+    assert len(QUERIES) >= EXPECTED_QUERIES
+    assert len({query.location for query in QUERIES}) == len(QUERIES)
+
+
+@pytest.mark.parametrize("query", QUERY_PARAMS)
+def test_a_runbook_query_is_one_select_that_names_no_write(query: Query) -> None:
+    assert shape_problems(query.sql) == []
+
+
+@pytest.mark.parametrize(
+    ("sql", "problem"),
+    [
+        ("UPDATE gateway.budget_counters SET amount = 0", "does not start with"),
+        ("WITH x AS (SELECT 1) SELECT * FROM x", "does not start with"),
+        ("SELECT 1; SELECT 2", "semicolon"),
+        ("SELECT 1; DROP TABLE audit.events;", "semicolon"),
+        ("SELECT 1 FROM t WHERE a = 1 AND b IN (DELETE)", "names DELETE"),
+        ("select 1; ", None),
+        ("SELECT updated_at, created FROM t", None),
+    ],
+)
+def test_the_shape_check_refuses_what_it_should_and_only_that(
+    sql: str, problem: str | None
+) -> None:
+    problems = shape_problems(sql)
+    if problem is None:
+        assert problems == []
+    else:
+        assert any(problem in found for found in problems), problems
+
+
+def test_an_indented_fence_loses_its_indent(tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    note.write_text(
+        "1. Step:\n\n   ```sql\n   SELECT a\n     FROM t;\n   ```\n", encoding="utf-8"
+    )
+    (query,) = extract_queries(note, tmp_path)
+    assert query.sql == "SELECT a\n  FROM t;"
+
+
+# ── every query runs, and only reads ────────────────────────────────────────
+@pytest.mark.parametrize("query", QUERY_PARAMS)
+def test_a_runbook_query_runs_in_a_read_only_transaction(
+    migrated_database: DatabaseHandle, query: Query
+) -> None:
+    columns, _rows = run_read_only(migrated_database, query.sql)
+    assert columns
+
+
+def test_the_read_only_transaction_refuses_a_write(
+    migrated_database: DatabaseHandle,
+) -> None:
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        run_read_only(
+            migrated_database,
+            "UPDATE gateway.budget_counters SET amount = amount",
+        )
+
+
+# ── the reconciliation and the open reservations, on real ledger rows ───────
+@pytest.fixture(scope="module")
+def deployment() -> Deployment:
+    found = load_registry(REGISTRY_DIR).deployment("aoai-sdc-gpt-4o")
+    assert found is not None
+    return found
+
+
+@dataclass(frozen=True)
+class LedgerRun:
+    db: DatabaseHandle
+    open_attempt: uuid.UUID
+
+
+def reserve_one(ledger: Ledger, deployment: Deployment) -> Reservation:
+    outcome = ledger.reserve(
+        Caller(call_id=uuid.uuid4(), tenant=TENANT, agent=AGENT, run_id=uuid.uuid4()),
+        deployment,
+        LIMITS,
+        ESTIMATE,
+    )
+    assert not isinstance(outcome, BudgetRefusal), outcome
+    return outcome
+
+
+@pytest.fixture
+def ledger_run(fresh_database: DatabaseHandle, deployment: Deployment) -> LedgerRun:
+    """One tenant, four attempts through the gateway's own ledger: settled (for
+    fewer tokens than reserved), kept, released and left open."""
+    ledger = Ledger(fresh_database.dsn("model_gateway"), exchange=EXCHANGE)
+    ledger.settle(reserve_one(ledger, deployment), deployment, 30, 20)
+    ledger.keep(reserve_one(ledger, deployment))
+    ledger.release(reserve_one(ledger, deployment))
+    still_open = reserve_one(ledger, deployment)
+    return LedgerRun(fresh_database, still_open.attempt_id)
+
+
+def drift_rows(db: DatabaseHandle) -> list[dict]:
+    sql = runbook_query("runbooks/budget-exhaustion.md", "drift")
+    columns, rows = run_read_only(db, sql)
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def test_the_reconciliation_reports_no_drift_after_every_way_to_close(
+    ledger_run: LedgerRun,
+) -> None:
+    rows = drift_rows(ledger_run.db)
+
+    assert {row["kind"] for row in rows} == {TOKENS_KIND, COST_KIND}
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    # The ledger column is a real sum, not a default of zero.
+    assert all(row["ledger"] > 0 for row in rows)
+
+
+def test_the_reconciliation_reports_a_counter_changed_by_hand(
+    ledger_run: LedgerRun,
+) -> None:
+    with connect(ledger_run.db.dsn(OWNER), "runbook-query-test-edit") as conn:
+        conn.execute(
+            "UPDATE gateway.budget_counters SET amount = amount + %s "
+            "WHERE tenant = %s AND kind = %s",
+            (HAND_EDIT, TENANT, TOKENS_KIND),
+        )
+        conn.commit()
+
+    drift = {row["kind"]: row["drift"] for row in drift_rows(ledger_run.db)}
+
+    assert drift == {TOKENS_KIND: HAND_EDIT, COST_KIND: 0}
+
+
+def test_the_open_reservations_query_returns_the_one_attempt_left_open(
+    ledger_run: LedgerRun,
+) -> None:
+    sql = runbook_query("runbooks/budget-exhaustion.md", "state = 'reserved'")
+    columns, rows = run_read_only(ledger_run.db, sql)
+
+    found = [dict(zip(columns, row, strict=True)) for row in rows]
+
+    assert [row["attempt_id"] for row in found] == [ledger_run.open_attempt]
+    assert found[0]["tenant"] == TENANT

@@ -1,0 +1,197 @@
+# Meridian's alert rules, one PrometheusRule (S024).
+#
+# Prometheus evaluates them; there is no Alertmanager on kind, so nothing is
+# notified: an alert is read on Prometheus's Alerts page or in Grafana. Every
+# threshold, window and `for` here is a proposal nobody measured (see
+# docs/operations/slo.md). `make alerts` checks the rules with promtool and runs
+# the unit tests in meridian.test.yaml; it needs no cluster.
+#
+# The rules the kube-prometheus-stack chart already ships (KubePodCrashLooping,
+# KubeDeploymentReplicasMismatch, KubeJobFailed, KubePodNotReady) are not
+# repeated here.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: meridian
+  namespace: observability
+  labels:
+    # The Prometheus the chart renders (91.8.2) selects rules by this label
+    # (ruleSelector.matchLabels.release); without it the rules are ignored.
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: meridian
+spec:
+  groups:
+    - name: meridian.gateway.recording
+      rules:
+        # What each series of the gateway's call counter gained in the last 15
+        # minutes. Not increase() or rate(): the gateway pushes cumulative
+        # counters over OTLP once a minute, and a process's first export already
+        # holds what it counted, so increase() would lose it. The value at the
+        # start of the window is the series' last value at or before it, however
+        # long ago inside the 24 hours kind's Prometheus keeps: a bare
+        # `offset 15m` looks back only 5 minutes, so after a gap in the data (a
+        # laptop that slept, a Prometheus restart) it would find nothing and
+        # count a long-lived series' whole value as new. A series with no sample
+        # before the window still counts from zero.
+        - record: meridian:gateway_calls:delta15m
+          expr: |
+            last_over_time(meridian_gateway_calls_total{job="model-gateway"}[15m])
+            - (
+              last_over_time(meridian_gateway_calls_total{job="model-gateway"}[24h] offset 15m)
+              or last_over_time(meridian_gateway_calls_total{job="model-gateway"}[15m]) * 0
+            )
+
+    # Alerts over the recorded series only. A "provider" failure is one of the
+    # four reasons a provider can be at fault for.
+    - name: meridian.gateway
+      rules:
+        - alert: MeridianModelCallsFailing
+          expr: |
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="failed", meridian_reason=~"timeout|unavailable|rate-limited|bad-response"})
+            / sum(meridian:gateway_calls:delta15m{meridian_outcome=~"completed|failed"})
+            > 0.05
+            and
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="failed", meridian_reason=~"timeout|unavailable|rate-limited|bad-response"}) >= 3
+          for: 2m
+          labels:
+            severity: critical
+            platform: meridian
+            slo: model-calls
+          annotations:
+            summary: The Model Gateway's calls are failing on the provider's side.
+            description: >-
+              {{ $value | humanizePercentage }} of the model calls that ended in
+              the last 15 minutes failed with a timeout, an unavailable
+              provider, a rate limit or a bad response (proposed threshold: more
+              than 5 percent and at least 3 calls).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md
+
+        - alert: MeridianModelCredentialRefused
+          expr: |
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="failed", meridian_reason="auth"}) > 0
+          for: 0m
+          labels:
+            severity: critical
+            platform: meridian
+            slo: model-calls
+          annotations:
+            summary: A provider refused the gateway's credential.
+            description: >-
+              {{ $value }} model call(s) in the last 15 minutes failed because a
+              provider refused the credential. The gateway holds no key: an
+              expired login or a removed role assignment is the usual cause.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/secret-rotation.md
+
+        - alert: MeridianGatewayInternalErrors
+          # The empty alternative matches a call that ended with no reason.
+          expr: |
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="failed", meridian_reason=~"internal|"}) > 0
+          for: 0m
+          labels:
+            severity: critical
+            platform: meridian
+            slo: model-calls
+          annotations:
+            summary: The Model Gateway failed a call for a reason of its own.
+            description: >-
+              {{ $value }} model call(s) in the last 15 minutes failed inside
+              the gateway, not at a provider. A code or configuration fault is
+              the usual cause; a recent release is the first suspect.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md
+
+        - alert: MeridianTenantBudgetUsedUp
+          expr: |
+            sum by (meridian_tenant, meridian_reason) (meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason=~"tenant-token-budget|tenant-cost-budget"}) > 0
+          for: 0m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: A tenant's budget is used up and the gateway refuses its calls.
+            description: >-
+              Tenant {{ $labels.meridian_tenant }} had {{ $value }} call(s)
+              refused in the last 15 minutes with {{ $labels.meridian_reason }}.
+              The refusal is the budget working; the question is whether the
+              budget is right.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/budget-exhaustion.md
+
+        - alert: MeridianGatewayRefusingByPolicy
+          expr: |
+            sum by (meridian_reason) (meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason=~"unknown-tenant|agent-not-allowed|schema-not-allowed|no-route|no-allowed-deployment|no-schema-deployment"}) >= 5
+          for: 0m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: The Model Gateway keeps refusing calls by policy.
+            description: >-
+              {{ $value }} call(s) in the last 15 minutes were refused with
+              {{ $labels.meridian_reason }} (proposed threshold: 5). A caller
+              the registry does not know, or a registry change that left a
+              route without a deployment, would look like this.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md
+
+    # From kube-state-metrics.
+    - name: meridian.workloads
+      rules:
+        - alert: MeridianServiceUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace="meridian"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            platform: meridian
+            slo: service-availability
+          annotations:
+            summary: A Meridian service has no available replica.
+            description: >-
+              Deployment {{ $labels.deployment }} in {{ $labels.namespace }}
+              has had no available replica for 5 minutes (proposed threshold).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md
+
+        # The `up` guard keeps this quiet while kube-state-metrics itself is
+        # down: with no series at all, absent() would fire for a database nobody
+        # looked at.
+        - alert: MeridianDatabaseNotReady
+          expr: |
+            absent(kube_pod_status_ready{namespace="meridian", pod=~"platform-db-[0-9]+", condition="true"} == 1)
+            and on() up{job="kube-state-metrics"} == 1
+          for: 2m
+          labels:
+            severity: critical
+            platform: meridian
+            slo: database-availability
+          annotations:
+            summary: No platform-db pod is ready.
+            description: >-
+              None of the platform-db pods has been ready for 2 minutes
+              (proposed threshold), or kube-state-metrics reports none. Every
+              service that needs the database fails with it.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md
+
+        # 900 s is three missed five-minute runs of the sweep's CronJob, and
+        # that is the tolerance, so there is no `for`. The second arm is a
+        # CronJob that has existed for 15 minutes and never succeeded, which has
+        # no last-success series; the chart's own KubeJobFailed covers a failed
+        # Job.
+        - alert: MeridianSweepStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"} > 900
+            or
+            (
+              time() - kube_cronjob_created{namespace="meridian", cronjob="meridian-sweep"} > 900
+              unless on (namespace, cronjob)
+              kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"}
+            )
+          for: 0m
+          labels:
+            severity: warning
+            platform: meridian
+            slo: sweep-freshness
+          annotations:
+            summary: The scheduled sweep has not succeeded for a quarter of an hour.
+            description: >-
+              The sweep has not succeeded for {{ $value | humanizeDuration }},
+              counted from its last success or, if it never succeeded, from its
+              creation (proposed threshold: 15 minutes, three missed runs).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md
