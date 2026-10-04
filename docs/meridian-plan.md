@@ -289,7 +289,7 @@ and Pydantic, at the cost of one dependency.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
-| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | todo | S019 |
+| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | doing | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
@@ -6702,6 +6702,33 @@ outside `meridian`, DNS and the collector as channels, the database's
 open egress, a second replica, the platform charts' images, the adopted
 cluster's field manager, Azure's private endpoints and the size of
 `test_helm_chart.py`.
+
+### S055 — Service-to-service identity
+**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Goal:** on kind, each service proves which service it is to the one it
+calls, and the Agent Runtime, the Model Gateway and the tool servers refuse
+a call with no identity or from a service the registry does not map.
+
+**Decisions:**
+
+- **The mechanism, by the owner (2026-10-04): mutual TLS, with
+  certificates from cert-manager.** The session laid out four options:
+  ServiceAccount tokens checked by the callee (nothing to install, proves
+  the caller, encrypts nothing; the session's recommendation), mutual TLS
+  with cert-manager (proves the caller and encrypts the call, at the cost
+  of certificates in every service), a service mesh (the same outside the
+  code, with a proxy beside every pod and S019's policies and pod settings
+  reworked) and a shared secret per service (weakest, rotated by hand). The
+  owner asked for the differences and when each fits, then chose mutual
+  TLS.
+- **In parallel with S024, by the owner (2026-10-04).** This session owns
+  the kind cluster; the S024 session runs no command against it.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
