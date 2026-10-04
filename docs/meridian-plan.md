@@ -5,7 +5,10 @@
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, from one hardened Helm chart under a default-deny
-  network policy (S019), the gateway routes a call to Azure OpenAI by data
+  network policy (S019), where the runtime, the gateway and the tool servers
+  know the calling service from its certificate (mutual TLS, S055) and
+  refuse a tenant or agent the registry does not let it name, the gateway
+  routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
   the same region and holds each tenant to its rate limits and budgets
   (a Grafana dashboard on kind shows what each tenant, agent, model and
@@ -34,7 +37,7 @@
   proposals with rules and an LLM judge against a reviewed baseline (the
   model's answers recorded from Azure OpenAI and replayed through the
   gateway), alert rules, a health dashboard and five runbooks exist as
-  files checked offline and not yet applied to a cluster, with service
+  files, applied to the kind cluster and none exercised, with service
   level objectives nobody has measured (S024), and no service runs in
   Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
@@ -292,7 +295,7 @@ and Pydantic, at the cost of one dependency.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
-| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | doing | S019 |
+| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
@@ -433,7 +436,7 @@ that day; the rest stand as their step recorded them.
 | Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | open; left by S019 (application code) | none |
 | The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open; left by S019 (application code) | S021 |
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
-| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | closed on 2026-10-04 by the owner: a step of its own between S019 and S020, S055 | S055 |
+| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | done in S055 (mutual TLS, ADR 4): a call with no identity, from an unmapped service or naming a tenant or agent outside the caller's registry entry is refused | S055 |
 | A web application firewall in the Azure design (T-02) | threat model, S018 | open | none |
 | No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open; left by S024 (the services' telemetry setup, or a log collector on the node, which a session without the cluster cannot try). So no alert rule reads a log | none |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
@@ -455,7 +458,7 @@ that day; the rest stand as their step recorded them.
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once | none |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | open | none |
 | TLS at the edge: `infra/kind/README.md` had named S019 for it, and no step's "done when" holds it; on kind the edge listens on loopback only | S006, S019 | open | S020 |
-| TLS between the services inside the cluster (T-61) | S019 | open; S055's mechanism may bring it | S055 |
+| TLS between the services inside the cluster (T-61) | S019 | closed by S055 for the five services that are called: mutual TLS with the server's name verified. The edge's hop to the Claims API stays plain HTTP, with the row above | S055 |
 | `enforce` for Pod Security Admission on the `meridian` namespace, which has `warn` and `audit` at `restricted` since S019: a server-side dry run of `enforce=restricted` reported no violation, but a cold `make up` under it (CloudNativePG's init Job) was not tried (T-85) | S019 | open | S020 |
 | The Model Gateway's egress rule towards the providers and Key Vault, with FQDN-aware egress or private endpoints (T-19); the chart has none, because on kind the gateway calls nothing outside | S019 | open | S020 |
 | No NetworkPolicy outside `meridian`: the collector accepts a push from any pod of another namespace (T-68, T-84) | S019 | open | none |
@@ -475,7 +478,7 @@ that day; the rest stand as their step recorded them.
 | Renovate's one-week hold is advisory: `renovate/stability-days` is not a required check, a pull request asked for from the Dependency Dashboard arrives before the week is up, and the lock file refresh has no hold (on 2026-10-04 it brought two Python packages a day or two old and the Terraform provider that the held pull request was waiting on) | changelog v0.33 | open; the owner's decision: require the status, drop the lock file refresh, or accept | none |
 | The test database's image has pgvector 0.8.7, the cluster's CloudNativePG image 0.8.6; both are PostgreSQL 17.11 on Debian trixie | changelog v0.33 | open; closes when the CloudNativePG image ships 0.8.7 and Renovate proposes it | none |
 | `azurerm` is locked at 5.8.0 and no plan has been read with it: `make azure-plan` stopped at the backend because the Azure CLI's account is not in the pinned tenant (`AADSTS50020`) | changelog v0.33 | open; needs the owner's `az login` | none |
-| The cluster proof of S024: `make up` on `main`, then the seven checks under "Not proved on a cluster" in `docs/operations/README.md` (the rule object, its three groups healthy, a `count()` per series the rules and the health dashboard name, no Meridian alert on a healthy cluster, the dashboard served) | S024 | open; the session that owns the cluster | none |
+| The cluster proof of S024: `make up` on `main`, then the seven checks under "Not proved on a cluster" in `docs/operations/README.md` (the rule object, its three groups healthy, a `count()` per series the rules and the health dashboard name, no Meridian alert on a healthy cluster, the dashboard served) | S024 | done on 2026-10-04 by the S055 session, on its branch after merging `main`: `make up` exit 0 with both log lines, the rule object exists, the three groups are healthy (the alert group read `unknown` until its first evaluation), the seven counts are 6, 1, 1, 1, 11, 1 and 4, and no Meridian alert fires. Not done: the health dashboard was not opened in Grafana | none |
 | `make smoke` checks neither the alert rules nor the health dashboard; it reads the cost dashboard by name | S024 | open | none |
 | Alert routing and notification: kind runs no Alertmanager, so a firing alert is shown and nobody is told | S024 | open; the game day is the first time someone must be told | S028 |
 | Three objectives have no indicator: a duration metric for a triage run (QA-01) and for the gateway's own time (QA-02), and a count of runs by how they end | S024 | open | S027 |
@@ -489,6 +492,13 @@ that day; the rest stand as their step recorded them.
 | The required `python` check pulls the `promtool` image from quay.io on every run, so a registry outage fails it (the test database's image has the same exposure); and Renovate moves that image and the chart's Prometheus under separate lines, with a note and no constraint | S024 | open | none |
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | open | none |
 | Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | open; a rule on absent series and a NetworkPolicy for `observability` | none |
+| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one (T-89) | S055 | open | S020 |
+| Nothing revokes a service's certificate, nothing restricts who may ask the cluster's issuer for one, and the CA's key is kept at renewal (T-88) | S055 | open; a policy on certificate requests is designed for AKS | S020 |
+| Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | open | none |
+| `meridian workload new` adds a new agent to the registry but not to the Agent Runtime's entry in `services.yaml`, so on a cluster the gateway would refuse the scaffolded workload's calls (S055's name rule); the tests build apps without the check and do not see it | S055 | open | none |
+| The audit has no column for the calling service: a refused caller's ID is written to `reference`, which a run's rows use for the claim | S055 | open | S033 |
+| A pod's certificate Secret is mounted with the default file mode, so the key is readable by any user in the container; each container runs one process as one user | S055 | open | none |
+| Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
 
 ## Part C — Step details
 
@@ -6970,6 +6980,8 @@ the kind cluster or Azure.
   Meridian alert fires on a healthy cluster, Grafana serves the
   dashboard, and `make smoke` still passes 16 of 16. A series that is
   missing there is a wrong name here.
+  Added on 2026-10-04 by the S055 session, which owned the cluster: the
+  checks ran and passed; the backlog row holds the numbers.
 - Not run either: any runbook as a procedure (S022 and S028 exercise
   four of the five; the secret rotation has no step); the dashboard in
   a browser; `make azure-plan`.

@@ -353,8 +353,9 @@ A `ClusterIP` Service means unrouted, not protected. Since S019 the
 namespace's network policies are the protection: the Agent Runtime, the
 Model Gateway and the tool servers accept a connection only from the pods
 the next section lists. That is a rule about pods' labels, not about who a
-caller is: the services still trust the tenant and agent headers they are
-sent, until service identity (S055). A tool server gives a caller less than
+caller is: since S055 each of them also reads the calling service from
+its certificate and refuses a tenant or agent that service may not name
+("Who a service is" below). A tool server gives a caller less than
 the others do: it answers only for the run ID of a running run and only with
 that run's claim (T-50). The database boundary above does not depend on any
 of that.

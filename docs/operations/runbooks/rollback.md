@@ -18,10 +18,11 @@ exercises this runbook; the game day (S028) exercises it again.
   or `unknown-tenant`.
 - `make deploy` or `make smoke` fails after a change that passed CI.
 
-`MeridianGatewayRefusingByPolicy` can also be raised by a caller on
-purpose: until callers are identified (S055, S021), five requests that
-name an unknown tenant are enough. Look at what changed before rolling
-anything back.
+`MeridianGatewayRefusingByPolicy` could be raised by a caller on purpose
+before S055, with five requests that name an unknown tenant; now a caller
+needs a certificate the registry maps, and a tenant outside its entry is
+refused with a reason this alert does not count. Look at what changed
+before rolling anything back.
 
 ## First, is it the release
 
