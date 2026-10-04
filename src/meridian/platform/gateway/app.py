@@ -443,8 +443,8 @@ def create_app(
 
     def close_all() -> None:
         """Only what this function built: an injected provider is its caller's.
-        The count of a refusal flood's last window is written first, so a clean
-        shutdown loses none."""
+        The counts of refusal floods are written first; with the database
+        unreachable they are lost with the process, and the shutdown goes on."""
         try:
             refusals.write_ended(everything=True)
             if close is not None:

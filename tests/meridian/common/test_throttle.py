@@ -330,19 +330,50 @@ def test_a_flood_that_goes_on_has_its_count_in_its_own_row(clock: FakeClock) -> 
     assert throttle.take_ended() == []  # and nothing is left to summarise
 
 
-def test_a_restored_count_comes_out_again_and_the_next_row_carries_it(
-    clock: FakeClock,
-) -> None:
-    throttle = RefusalAuditThrottle(clock=clock)
+def restored_count(throttle: RefusalAuditThrottle, clock: FakeClock) -> None:
+    """A flood of three, its summary handed out after two windows, and put back
+    because it could not be written."""
     flood(throttle, 3)
     clock.advance(REFUSAL_SUMMARY_SECONDS)
     (tenant, reason, count), *_ = throttle.take_ended()
-
     throttle.restore(tenant, reason, count)
+
+
+def test_a_restored_count_is_not_handed_out_inside_two_windows(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    restored_count(throttle, clock)
+
+    assert throttle.take_ended() == []
+    clock.advance(REFUSAL_SUMMARY_SECONDS - 0.5)
+    assert throttle.take_ended() == []
+
+
+def test_a_restored_count_is_handed_out_two_windows_after_the_restore(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    restored_count(throttle, clock)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
 
     assert throttle.take_ended() == [(TENANT, REASON, 2)]
-    throttle.restore(tenant, reason, count)
+    assert throttle.take_ended() == []
+
+
+def test_after_a_restore_due_carries_the_count_at_once(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    restored_count(throttle, clock)
+
     assert throttle.due(TENANT, REASON) == 2
+    assert throttle.take_ended() == []
+
+
+def test_after_a_restore_everything_takes_the_count_at_once(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    restored_count(throttle, clock)
+
+    assert throttle.take_ended(everything=True) == [(TENANT, REASON, 2)]
 
 
 def test_a_restore_adds_to_what_arrived_meanwhile(clock: FakeClock) -> None:
@@ -363,7 +394,9 @@ def test_a_restore_of_an_unknown_key_makes_it_a_key(clock: FakeClock) -> None:
 
     throttle.restore(None, "unknown-tenant", 4)
 
-    # Never claimed a row, so nothing keeps the count back.
+    # It never claimed a row, but the restore backs it off like a release.
+    assert throttle.take_ended() == []
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
     assert throttle.take_ended() == [(None, "unknown-tenant", 4)]
 
 

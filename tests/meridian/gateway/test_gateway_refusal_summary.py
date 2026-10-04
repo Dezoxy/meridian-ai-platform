@@ -53,6 +53,7 @@ EXCEPTION_TEXT = "the-text-of-the-exception"
 BODY = {"messages": [{"role": "user", "content": "A storm hit the roof."}]}
 HTTP_FORBIDDEN = 403
 HTTP_UNAVAILABLE = 503
+SPACING_SECONDS = 2.0  # 11 requests, 22 s in all: inside the two windows
 FLOOD = 3
 SUPPRESSED_BY_THE_FLOOD = FLOOD - 1
 NOT_ALLOWED_CALLER = "policy-mcp"  # a service that does not call the gateway
@@ -267,11 +268,55 @@ def test_a_summary_write_that_fails_leaves_the_answer_and_the_count_alone(
     assert warnings[0].exc_info is None
     summary_write_fails.clear()  # the database is back
 
+    # Inside the two windows after the failure: no attempt, so no row and no
+    # warning, however well the database is.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert gateway.post(tenant=OTHER_TENANT).status_code == 200
+    assert gateway.summaries() == []
+    assert caplog.records == []
+    gateway.clock.advance(REFUSAL_SUMMARY_SECONDS)
+
     assert gateway.post(tenant=OTHER_TENANT).status_code == 200
 
     assert [row[:3] for row in gateway.summaries()] == [
         (TENANT, REASON, SUPPRESSED_BY_THE_FLOOD)
     ]
+
+
+def test_a_summary_that_keeps_failing_is_tried_once_per_two_windows(
+    gateway_with: Callable[..., Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gateway = gateway_with()
+    real = audit_module.write_audit
+    attempts: list[AuditEvent] = []
+
+    def write(database_url: str, event: AuditEvent) -> None:
+        if event.outcome == "suppressed":
+            attempts.append(event)
+            raise RuntimeError(EXCEPTION_TEXT)
+        real(database_url, event)
+
+    monkeypatch.setattr(app_module, "write_audit", write)
+    gateway.flood()
+    gateway.clock.advance(REFUSAL_SUMMARY_SECONDS)
+
+    with caplog.at_level(logging.WARNING):
+        # The first request tries and fails; the ten after it, inside the two
+        # windows, make no attempt. They alternate between two tenants and are
+        # spaced out, to stay under the tenants' own limits.
+        for n in range(11):
+            tenant = OTHER_TENANT if n % 2 else TENANT
+            assert gateway.post(tenant=tenant).status_code == 200
+            gateway.clock.advance(SPACING_SECONDS)
+
+    assert len(attempts) == 1
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert EXCEPTION_TEXT not in caplog.text
+    assert gateway.summaries() == []
 
 
 def test_closing_the_app_writes_the_count_of_a_window_that_has_not_ended(

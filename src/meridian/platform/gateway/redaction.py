@@ -1,4 +1,4 @@
-"""Redaction of a request's text before the gateway does anything with it (T-20).
+"""Redaction of a request's text before the gateway sends it anywhere (T-20).
 
 Every chat message and every embedding input has its personal identifiers
 replaced (``meridian.platform.guardrails.redact``), whatever the request's data

@@ -21,9 +21,10 @@ REFUSAL_SUMMARY_SECONDS = 2 * REFUSAL_AUDIT_SECONDS
 class _RefusalWindow:
     last_audited_at: float | None = None
     suppressed: int = 0  # refusals since the last row that left no row
-    # When a row's write failed (``release``): ``take_ended`` waits two windows
-    # from then, as from a row, for the next refusal of the flood to carry the
-    # count. ``due`` never reads it.
+    # When a write failed (``release`` of a row, ``restore`` of a summary):
+    # ``take_ended`` waits two windows from then, as from a row, so the next
+    # refusal of the flood carries the count and a database that is down is not
+    # tried with every request. ``due`` never reads it.
     released_at: float | None = None
 
 
@@ -45,8 +46,10 @@ class RefusalAuditThrottle:
     caller that wants them written calls ``take_ended`` now and then (with
     ``everything`` at shutdown), writes one row per ``(tenant, reason, count)``
     it gets back, and calls ``restore`` with that count if a write fails. A
-    count waits two windows after the key's last row, or its last release, so
-    the next refusal of a flood still carries it in its own row. A caller that
+    count waits two windows after the key's last row, its last release or its
+    last restore, so the next refusal of a flood still carries it in its own
+    row, and a summary that cannot be written is tried again after two windows,
+    not with every request. A caller that
     never calls ``take_ended`` sees no change.
     """
 
@@ -90,11 +93,12 @@ class RefusalAuditThrottle:
     ) -> list[tuple[str | None, str, int]]:
         """The counts no row carries yet, as ``(tenant, reason, count)``, and
         each one is handed out once: its count restarts at zero. A key's count
-        is handed out when the later of its last row's claim and its last
-        release is ``REFUSAL_SUMMARY_SECONDS`` ago (a key with neither is
-        quiet at once), because until then the next row of its flood carries
-        the count. With ``everything`` every count above zero is handed out,
-        for a shutdown. The window of a row is not changed."""
+        is handed out when the latest of its last row's claim, its last
+        release and its last restore is ``REFUSAL_SUMMARY_SECONDS`` ago (a key
+        with none is quiet at once), because until then the next row of its
+        flood carries the count, and a summary that failed is not tried with
+        every request. With ``everything`` every count above zero is handed
+        out, for a shutdown. The window of a row is not changed."""
         with self._lock:
             now = self._clock()
             ended: list[tuple[str | None, str, int]] = []
@@ -109,8 +113,10 @@ class RefusalAuditThrottle:
 
     def restore(self, tenant: str | None, reason: str, count: int) -> None:
         """A count ``take_ended`` handed out could not be written: count it
-        again, so a later ``due`` or ``take_ended`` carries it. The window of
-        the key's row is not changed."""
+        again, so a later ``due`` carries it at once, and ``take_ended`` hands
+        it out again after two windows (``everything`` at once). The restore is
+        noted like a release. The window of the key's row is not changed."""
         with self._lock:
             window = self._windows.setdefault((tenant, reason), _RefusalWindow())
+            window.released_at = self._clock()
             window.suppressed += count

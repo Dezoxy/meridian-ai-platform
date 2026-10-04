@@ -8,8 +8,13 @@ summary row (``suppressed``) stands for those and for nothing else: it names the
 tenant and the reason and the count, and no agent, run, call or purpose, because
 it counts refusals of both purposes and is not itself a refusal. It is written
 once the flood has been quiet for two windows, with the next request of any
-tenant, or when the app closes. All the refusals of a key are therefore the
-``refused`` rows plus the ``suppressed`` counts of both kinds of row.
+tenant, or when the app closes. A summary that cannot be written is tried again
+after two windows, not with every request. All the refusals of a key are
+therefore the ``refused`` rows plus the ``suppressed`` counts of both kinds of
+row. The key of a request whose tenant the registry does not hold is the reason
+alone, so its summary row has no tenant, while its ``refused`` rows carry the
+name the caller sent: the sum holds per key, and for that key by reason, not by
+the ``tenant`` column.
 """
 
 import logging
