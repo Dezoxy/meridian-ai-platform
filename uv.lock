@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.13.*"
 
 [[package]]
@@ -597,7 +597,7 @@ wheels = [
 
 [[package]]
 name = "langsmith"
-version = "0.14.2"
+version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -615,9 +615,9 @@ dependencies = [
     { name = "xxhash" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/15/e0/d21f5bf6248575d358b388bc60808ad36f3cb02305ab3265137a27ad52e4/langsmith-0.14.2.tar.gz", hash = "sha256:2df33ebe2ff20461b1f818895b8f15cbfd6e5b95be9d9e754ab3045cc6fe6f53", size = 4966727, upload-time = "2026-09-30T14:41:33.472Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/15/b9/10243797b942e7475ae21545fde1be484958672ae5c2f377f781c761a375/langsmith-0.14.4.tar.gz", hash = "sha256:a340199fcd2af60358f09dd1d7011bf7282f0d46a98aaa101bc7a521746da764", size = 4968005, upload-time = "2026-10-02T17:16:37.074Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/bd/5ca2364649170fce2fa7a5db22de6b7b375d0e320162bb62c2837368c3de/langsmith-0.14.2-py3-none-any.whl", hash = "sha256:9e3dda3df013514b919acf3b147fcecc1758b8ef04a764b6cb61052991617ee2", size = 813720, upload-time = "2026-09-30T14:41:31.669Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/1f/5c2919fef6e3cf15167699abeb069a371d68da14a0e5cab89eeea11261d7/langsmith-0.14.4-py3-none-any.whl", hash = "sha256:ae0d98c2b0f9292ef7e12451d480937d79a0e7dcf2412ba847de6f053391b44a", size = 813097, upload-time = "2026-10-02T17:16:34.724Z" },
 ]
 
 [[package]]
@@ -1439,11 +1439,11 @@ wheels = [
 
 [[package]]
 name = "tzdata"
-version = "2026.4"
+version = "2026.5"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e4/31/3d74fa778a63b98b7374323befcc0be5ab3bd94afd4096a0124e7379152c/tzdata-2026.4.tar.gz", hash = "sha256:f1b8bd365d8d210c55353f4d7f8d6d8561c0ba50d704b700d195a9424bba0d79", size = 199350, upload-time = "2026-09-12T12:56:03.251Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/68/f1b440335057bfce71b6e50a9d09445aa2ecbd08359a337976627b8409e7/tzdata-2026.5.tar.gz", hash = "sha256:8cc73c0a0bfca7dbfa59235d60b2eff82231dee33f53d206db1acd9173cfc0a7", size = 200404, upload-time = "2026-10-03T09:23:14.143Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/bc/8737e8d54cf51106118039b83f485a4783112fab49ea9d044b234978a46e/tzdata-2026.4-py2.py3-none-any.whl", hash = "sha256:c2169a8b0a7a5e9674da5a135ccdfb2b3e671b333ed9fed17b41f73c34476e81", size = 347494, upload-time = "2026-09-12T12:56:01.67Z" },
+    { url = "https://files.pythonhosted.org/packages/94/21/1e5995a1c920cce14e4bffae20c665ec10e7ed03ab25e006cd741092b718/tzdata-2026.5-py2.py3-none-any.whl", hash = "sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac", size = 347996, upload-time = "2026-10-03T09:23:12.535Z" },
 ]
 
 [[package]]
