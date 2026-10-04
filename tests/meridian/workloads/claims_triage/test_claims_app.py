@@ -7,6 +7,7 @@ import unicodedata
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from typing import Any
 
 import httpx
@@ -162,6 +163,7 @@ def make_client(
     dsn: str = UNUSED_DSN,
     runtime: Runtime | None = None,
     exporter: InMemorySpanExporter | None = None,
+    today: Callable[[], date] | None = None,
 ) -> TestClient:
     app = create_app(
         ClaimsSettings(
@@ -171,6 +173,7 @@ def make_client(
         ),
         tracer_provider=make_tracer_provider("claims-api", exporter),
         http_client=(runtime or Runtime()).client,
+        today=today,
     )
     return TestClient(app, raise_server_exceptions=False)
 
@@ -853,6 +856,43 @@ def test_a_repeated_claim_with_a_different_body_is_409_and_starts_no_run(
     assert len(runtime.requests) == 1
     ((stored,),) = owner_rows(fresh_database, "SELECT submission FROM claims.claims")
     assert stored == claim  # the first submission stays
+
+
+def test_a_repeated_claim_that_differs_only_in_reported_on_is_409_and_starts_no_run(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # The JSON route's ``reported_on`` is the intake's date and is part of the
+    # submission: only the claimant's pages let the first stamp stand. The first
+    # triage failed, so only the 409 keeps the claim from being triaged again.
+    runtime = failing_runtime()
+    client = make_client(claims_dsn(fresh_database), runtime)
+    claim = claim_with_id("CLM-9103")
+    client.post("/claims", json=claim)  # stored, triage failed: no proposal yet
+
+    second = client.post("/claims", json=claim | {"reported_on": "2026-08-30"})
+
+    assert second.status_code == 409
+    assert len(runtime.requests) == 1
+    ((stored,),) = owner_rows(fresh_database, "SELECT submission FROM claims.claims")
+    assert stored == claim
+
+
+def test_the_json_route_stores_the_callers_reported_on_whatever_the_clock(
+    fresh_database: DatabaseHandle,
+) -> None:
+    runtime = Runtime()
+    client = make_client(
+        claims_dsn(fresh_database), runtime, today=lambda: date(2031, 1, 1)
+    )
+    claim = claim_with_id("CLM-9103")
+
+    response = client.post("/claims", json=claim)
+
+    assert response.status_code == 201
+    ((stored,),) = owner_rows(fresh_database, "SELECT submission FROM claims.claims")
+    assert stored["reported_on"] == claim["reported_on"] != "2031-01-01"
+    sent = json.loads(runtime.requests[0].content)["input"]["claim"]
+    assert sent["reported_on"] == claim["reported_on"]
 
 
 def test_a_repeated_identical_claim_whose_triage_failed_runs_triage_again(

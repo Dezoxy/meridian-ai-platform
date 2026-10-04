@@ -137,7 +137,7 @@
               "properties": {
                 "history_id": {
                   "type": "string",
-                  "pattern": "^HIST-[0-9]{4}$",
+                  "pattern": "^(HIST|CLM)-[0-9]{4}$",
                   "maxLength": 9
                 },
                 "loss_date": {

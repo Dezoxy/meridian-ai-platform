@@ -34,7 +34,8 @@ with no body never checks the content type, and a cross-site form could reach it
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
@@ -63,7 +64,10 @@ from meridian.workloads.claims_triage.adjuster import (
     ClaimId,
     add_adjuster_pages,
 )
-from meridian.workloads.claims_triage.claimant import add_claimant_pages
+from meridian.workloads.claims_triage.claimant import (
+    add_claimant_pages,
+    claimant_too_large,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
     ADJUSTER_REJECTED,
@@ -283,6 +287,7 @@ def create_app(
     *,
     tracer_provider: TracerProvider | None = None,
     http_client: httpx.Client | None = None,
+    today: Callable[[], date] | None = None,
 ) -> FastAPI:
     # trust_env=False: a proxy variable must not reroute claimant data.
     http = http_client or httpx.Client(
@@ -302,6 +307,7 @@ def create_app(
         max_body_bytes=SMALL_BODY_LIMIT_BYTES,
         tracer_provider=tracer_provider,
         close=http.close if http_client is None else None,
+        too_large=claimant_too_large,
     )
     app, tracer = service.app, service.tracer
 
@@ -397,7 +403,9 @@ def create_app(
             dsn, tenant, http, tracer, claim_id, page_run=page_run
         ),
     )
-    add_claimant_pages(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
+    add_claimant_pages(
+        app, dsn=dsn, tenant=tenant, http=http, tracer=tracer, today=today
+    )
     return app
 
 

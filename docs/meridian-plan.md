@@ -22,8 +22,10 @@
   server-rendered page and the Claims API records the decision and resumes
   it (or sends the claim back to triage), a claim whose triage failed is
   decided by an adjuster, a claim can be withdrawn or get the documents it
-  was asked for, at most five triages each, a claimant submits a claim,
-  reads its status, reports documents and withdraws it on server-rendered
+  was asked for, at most five triages each, a claimant submits a claim
+  (the API stamps its report date, and a decided claim counts in the
+  policy's claim history), reads its status, reports documents and
+  withdraws it on server-rendered
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
   proposals with rules against a reviewed baseline (with a scripted model,
   simulated), and no service runs in Azure yet.
@@ -182,7 +184,7 @@ and Pydantic, at the cost of one dependency.
 | S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | done | S047 |
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | todo | S048 |
-| S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | todo | S048, S049 |
+| S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | done | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
 | S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
@@ -281,8 +283,8 @@ that day; the rest stand as their step recorded them.
 | A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | open; not seen in S054's parallel runs | none |
 | The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
 | Running the tests in parallel | S049 | done in S054 | none |
-| HTML pages for the shared JSON answers under `/claimant/` | S049 | moved to S053 | S053 |
-| The server span's `http.url` keeps a query string | S049 | moved to S053 | S053 |
+| HTML pages for the shared JSON answers under `/claimant/` | S049 | closed by S053 (422, 404, 405, 413, 400) | none |
+| The server span's `http.url` keeps a query string | S049 | closed by S053 | none |
 | A documents failure whose cause races with another move | S049 | moved to S052 | S052 |
 | Two resume-race tests in `test_runtime_app.py` rest on a 0.3 s sleep for their overlap | S054 | open | none |
 | One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | open | none |
@@ -296,6 +298,15 @@ that day; the rest stand as their step recorded them.
 | A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open | S032 |
 | The estimate of a response schema's tokens (its compact JSON's bytes over three) rests on one live measurement, 43 counted against 64 reserved | S051 | open | S050 |
 | Registry tests anchor on adjacent lines of `models.yaml`, so a field added inside a deployment's entry breaks them | S051 | open | none |
+| S053 on kind: the stamped report date, the error pages, migration 0013 and the history view, and no query string on a span in Tempo (the cluster was held by S052 while S053 ran) | S053 | open | S018 |
+| The JSON route `POST /claims` takes its caller's report date until callers are identified (T-66) | S053 | open, the owner's accepted residual | S021 |
+| The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | none |
+| `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-76) | S053 | open | S021 |
+| Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | open | none |
+| A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | open | none |
+| The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | open | S019 |
+| The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | open | none |
+| The claimant's status page picks the latest proposal by `created_at` with no tie-break; the decided-claims view and 0009 break a tie by `proposal_id` | S053 | open | none |
 
 ## Part C — Step details
 
@@ -5127,6 +5138,159 @@ commit that changes `src/`, `tests/` or `data/`.
 - No step yet: the estimate of a schema's tokens rests on one live
   measurement; registry tests that anchor on adjacent YAML lines break
   when a field is added inside an entry. Both are in Part B's backlog.
+
+### S053 — The claimant's word checked
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-03
+**Goal:** the report date of a claim a claimant submits is the server's, a
+decided claim counts in the claim history, the claimant's pages answer
+every refusal with a page, and no server span keeps a query string.
+**Decisions:**
+
+- The owner, 2026-10-03, asked in chat before anything was built on it:
+  - The report date is stamped by channel. The claimant's pages have no
+    report-date field and the Claims API stamps the date; the JSON route
+    `POST /claims` keeps `reported_on` as the intake's date, so the
+    evaluation and `make demo` keep the dataset's clock and the API's
+    contract does not change. Accepted residual of T-66: until callers are
+    identified (S021), whoever reaches the JSON route chooses the date, as
+    whoever reaches it decides a claim (T-69). Rejected: both routes
+    stamping with a clock the evaluation moves per claim (a breaking
+    contract change, and on kind every golden claim would be late unless
+    the deployed service took a clock from its caller, which is the hole
+    again); the same with a deployment switch (two behaviours to keep).
+  - A decided claim enters the claim history through a read-only view
+    that the policy server's `claim_history` tool reads next to the seeded
+    history. Rejected: the Claims API writing rows into
+    `policy.claim_history` (a write grant on the store the rules trust, the
+    seed deletes what its source does not list on every deploy, and the
+    foreign key to the policy could fail a decision).
+  - Approved and rejected claims both count towards `frequent_claims`, a
+    rejected one with a paid amount of 0: the indicator screens how often a
+    policy claims. Withdrawn and undecided claims do not count.
+- The session's:
+  - The stamp is the date in the insurer's time zone, `Europe/Vienna`
+    (Meridian Insurance operates in AT, HR, SI and SK, one zone), not UTC:
+    with UTC a loss dated today is "after the report" for two hours after
+    local midnight. The pinned base image has the zone data (checked with
+    `docker run`).
+  - The first stamp stands. A claimant who sends the same form again after
+    midnight (the 503 notice asks for exactly that) is not a different
+    submission: the comparison leaves out the stamped field, and the triage
+    runs on the stored submission.
+  - `create_app` takes `today`, a function, as it takes `http_client`: the
+    tests set it, and the stack tests set it to a golden claim's own report
+    date before posting the claim through the page.
+  - An entry of a decided claim has the claim's ID as its `history_id`, so
+    the tool's contract takes `CLM-` as well as `HIST-`. The tools
+    fingerprint changes and the evaluation baseline is regenerated (T-72).
+  - The loss date stays the claimant's word; documents and an adjuster
+    check it. Recorded in T-66, not solved here.
+- Threat model before the code (`feature-threat-model`): T-66 refreshed and
+  T-76 new (the history from another schema: personal columns, another
+  tenant's claims, a run counting its own claim, claims planted on a policy
+  that is not the claimant's). No tension with a hard rule: no model call,
+  no new tool, one tool's contract widened by a reviewed change.
+  S051 merged first and took T-75, so this step's threat is T-76.
+- Reviewed and not done, with reasons:
+  - a filter that keeps future-dated claims out of the history's window
+    (`security-reviewer`): claims planted with today's date fill the 100
+    newest entries just as well, so it closes nothing. The window bound by
+    the claim's own loss date, or a cap of claims per policy, is in the
+    backlog; the answer today is `truncated`, which goes to a person;
+  - `--no-access-log` for uvicorn (`security-reviewer`): a manifest change
+    that could not be checked on kind, and the pages make no query string;
+  - a page for a 500 or 503 under `/claimant/` (`fastapi-reviewer`): the
+    step's list is 422, 404, 405, 413 and 400.
+
+**Work log:**
+
+- Branch `s053-claimants-word` off `origin/main` at `98f35ae`, S054 `done`.
+  Three other sessions ran at the same time (S050, S051, S052).
+- Four contracts to `implementer`, each with its own test database
+  (containers `meridian-s053-*`, ports 55491 to 55495, three workers):
+  1. no query string on a server span (a `server_request_hook` on the one
+     `instrument_app` call, which overwrites `http.url`, `http.target`,
+     `url.full` and `url.query`), and the claimant's error pages (two
+     handlers in `add_claimant_pages` that give every other path the shared
+     JSON answer, and a `too_large` parameter on the body limit, so the
+     platform package does not name `/claimant/`);
+  2. migration `0013_decided_claims.sql` (the view `claims.decided_claims`,
+     seven columns, `security_barrier`, one grant to `policy_mcp`, a partial
+     index), the `claim_history` tool reading both sources in one order and
+     one cut, and the contract's `history_id` taking `CLM-`;
+  3. the stamp: `today` on `create_app`, the form field gone,
+     `store_claim` returning the stored submission and leaving out the
+     stamped key when it compares, the test stack's settable stamp;
+  4. the reviews' fixes.
+  Contracts 1 and 2 ran side by side on files that do not overlap.
+- Reviews on the committed tree by `security-reviewer`, `fastapi-reviewer`
+  and `database-reviewer` (the last on a PostgreSQL 17 of its own with
+  600,000 claims): no critical or high finding. Found by them, fixed here:
+  - a decided claim the view could not read was left out of the history
+    silently, so the rules counted less; the answer is now `truncated`;
+  - an over-long peril in a stored submission would have failed the tool's
+    output check for the policy; the view bounds it;
+  - the view's tests read a flag and a predicate's text; they now run a
+    function that leaks what it is given against the view, read the plan
+    of the tool's own query for the index, pin the predicate exactly and
+    the tie-break between two proposals created together;
+  - the default clock's test passed for a clock in UTC 22 hours a day; it
+    stands at 23:30 UTC now, where Vienna is a day ahead;
+  - the injected 413 answer ran outside the opaque-500 guard; if it raises,
+    the JSON 413 is sent and only the exception's class is logged;
+  - no test for a claim stored on one route and sent again on the other.
+- The evaluation baseline regenerated twice (`make eval-baseline`): after
+  the contract changed, and after merging S051, which changed the agent's
+  entry. Each time the diff against its base was one line, the tools
+  fingerprint. Before the first, `make eval` failed with "the tools'
+  contracts changed: regenerate the baseline in this change" (T-72).
+- `git merge origin/main` once, for S051 (pull request 43): conflicts in
+  the plan, the threat model, the README and the baseline; both sides kept,
+  the baseline regenerated.
+- The `docs-sync` skill: the plan (this section, the row, nine backlog
+  rows, two closed), the threat model (T-03, T-25, T-66, T-76 new, the
+  residual risk), the README (the claimant pages' and the tool servers'
+  rows), the data classification (the claim history). The model did not
+  change: the Policy MCP Server still reads its claim history from the
+  Platform Database.
+- GateGuard: two implementers made source edits through scripts in Bash,
+  which the edit hook does not see, and one stated the facts late. The
+  facts were in each contract; the session read every source diff.
+
+**Result / verification:**
+
+- The gates on the merged tree, run by the session, exit code 0 each:
+  - `make lint`: `Contracts: 4 kept, 0 broken.`
+  - the suite, `GITHUB_ACTIONS=true make pytest-db` with three workers:
+    `6608 passed, 5 skipped, 7 warnings in 337.03s (0:05:37)`
+  - `make eval`: `eval compare: passed` (route 40/40, recommendation 39/40,
+    as the baseline before this step)
+  - `make registry`: `contracts OK: up to date`
+  - `make test`: `Ran 124 tests` and `OK`
+  - `make docs`: `docs consistency: 13 checks passed`
+- Through the real services (`test_claimant_stack.py`,
+  `test_lifecycle_stack.py`): a golden claim posted through the page with a
+  stamp 31 days after its loss is referred with `late_report`, and with a
+  stamp 30 days after it is approved; a claim decided here makes the next
+  claim on its policy carry `frequent_claims`, and without it that claim
+  does not.
+- A decided claim in the history leaves the golden set's outcomes as they
+  were: no policy has two golden claims, and `make eval` passes.
+- Not run: `make check` (no model or ADR change); kind (the cluster is held
+  by S052; a backlog row); a browser on the pages; anything against Azure.
+
+**Follow-ups:**
+
+- The owner accepted T-66's residual: the JSON route's report date until
+  S021.
+- S018: this step on kind, once S052 and S053 are both merged.
+- S021: the JSON route's report date; a claimant tied to a policy, or a
+  cap of claims per policy (T-76).
+- S019: the access logs' query strings.
+- No step yet, in the backlog: the loss date as the claimant's word;
+  claims open at the same time; a page for a 500 or 503 under
+  `/claimant/`; a span processor added later; the status page's tie-break.
 
 ## Part D — Open questions
 
