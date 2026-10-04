@@ -193,7 +193,7 @@ and Pydantic, at the cost of one dependency.
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | done | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | done | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | doing | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | done | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
 ### M2 — Azure, identity, delivery
 
@@ -5796,7 +5796,7 @@ with the grades, and a way to run it against a deployed stack.
 
 ### S018 — M1 exit
 
-**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
 **Goal:** the first milestone closes: the views say what the code does, the
 threat model's statuses are true of `main`, and a reader who clones the
 repository reaches the fifteen-minute demo with `make`.
@@ -5805,12 +5805,144 @@ repository reaches the fifteen-minute demo with `make`.
 - By the owner, 2026-10-04: the session deletes the kind cluster and
   creates it again for this step (`make down`, hard rule 8), and the step
   runs in the session that checked S050 to S054 together.
+- A clean checkout is a fresh `git clone` in a new directory. Rejected: this
+  worktree, which holds a virtual environment, caches and the cluster's
+  credentials, so a pass there proves nothing about a reader's clone.
+- One teardown. The cold path ran once, on `main` at 731f9ec. The branch
+  then changed `infra/kind/demo.sh` and the kind README and nothing else
+  under `infra/`, so its tip was proven from a second fresh clone against
+  the cluster the first had made. A second teardown would have needed the
+  owner's yes again.
+- The model shows the platform as built, and what no code implements
+  carries a new tag, `Designed`, drawn dotted and faded (C-07, hard rule
+  7). Rejected: a second, "target" set of views beside an as-built set,
+  ten views for one reader; and leaving the target model with a note in
+  the register, which the diagrams themselves would contradict. Protocols
+  say what kind runs (plain HTTP), not what M2 will run.
+- The two runtime views keep eight and six steps, the skill's budget. The
+  steps the comparison found missing (the claim stored first, each search
+  query embedded through the gateway, the approval request before the
+  pause) are in the register's "omitted on purpose" column.
+- Four views are over the skill's starting budgets and none was split:
+  each export was read at full size and is legible. The register records
+  the sizes and names the view to split first.
+- Threat model v1 changes no row's label. It defines the six labels the
+  register uses, corrects what was false and counts the rows. A row that
+  says "Implemented" with a residual a later step ends stays so: the label
+  is about the mitigation the row names.
+- A home the threat model names that no step's "done when" covers is a
+  backlog row now, eight of them. One is not the session's to place:
+  service-to-service identity, which the README gave to S019 and no step
+  holds. It is in the backlog as the owner's decision.
+- The demo script is `docs/demo.md`, reached from the docs index, the
+  README and the architecture README. The fifteen minutes are the showing;
+  the cluster is made before the viewer arrives (about seven minutes,
+  measured), and the script says so. Rejected: fifteen minutes from
+  `git clone`, half of which a viewer would watch images download.
+- `make demo` gets no reset of the golden claims: it would delete claims
+  and their audit rows, which the roles forbid by design. A new cluster is
+  the reset. The backlog row is closed as not built.
 
 **Work log:**
 
+- `make down`, then a fresh clone of `main` (731f9ec) in a scratch
+  directory: `make up`, `make demo`, `make smoke`, all passing first time.
+  The cold path that S009 left untested (the Secrets, then the roles, then
+  the database) needed no change.
+- What S053 left unchecked on kind, on that cluster: a golden claim posted
+  through the claimant's form with a report date of 1999-01-01 and a query
+  string; the stored report date, the `claims.decided_claims` view, three
+  error pages and both traces read back.
+- Two read-only audits by subagents, each given the files and no
+  conclusion: the model against the code, and every threat row's status
+  against the plan's steps with one or two claims per implemented row
+  against the code. The session checked the findings it used against the
+  code before editing (the telemetry exporters, the tables, the decision's
+  columns, the three clients' headers, the lock in `take_triage`).
+- The model, by the session: the descriptions, the protocol and technology
+  strings and the six telemetry arrows the comparison showed to be false,
+  six steps of the runtime views, the tag and its style. Every view was
+  exported and read, before the change and after.
+- The threat model, by the session: the status and the labels, the table's
+  blank line before T-72 (there since S017: T-72 and every later row
+  rendered outside the table, and `make docs` cannot see that), sixteen
+  statements in T-15, T-18, T-21, T-25, T-30, T-42, T-65, T-66, T-74, T-75,
+  two boundary rows and three residual risks. The data classification's
+  mock issuer key is labelled designed.
+- The demo script, written from a walk through the pages on the cluster.
+  The walk found two things. A golden claim ID submitted through the form
+  made the next `make demo` stop on "409 the claim exists with a different
+  submission". Three claims in ten seconds trip the tenant's rate window,
+  and the claim becomes `triage_failed` with the refusal in its audit
+  trail: the script uses it as a thing to try.
+- One contract to the `implementer`, with an addendum: `make demo` prints
+  PASS only when every service has spans and the counts are unchanged in
+  three readings (six seconds, longer than the exporters' five-second
+  batch delay), says "still growing" when they never settle, and skips a
+  claim ID that exists with another submission. Eight tests, written
+  first, against the stubs the file already had.
+- The first full suite failed one of the tests the implementer had
+  adjusted: it gave the script one second for three readings, which four
+  workers sharing the CPU do not always allow. The session gave the three
+  tests of that kind six seconds and a one-second interval; the file then
+  passed three times with eight workers.
+- The `docs-sync` skill: the README (the status, four rows, the layout,
+  the documentation list), the docs index, the architecture README (the
+  status, the register, the sizes), the overview page's status, the kind
+  README (by the implementer), this plan.
+
 **Result / verification:**
 
+Run by the session; exit code 0 unless said.
+
+- The cold path, a fresh clone of `main` at 731f9ec with no cluster:
+  `make up` 283 s, `make demo` 103 s (CLM-0001, `awaiting_adjuster`,
+  approved, `PASS trace` and `PASS decision trace`), `make smoke` 40 s
+  with 14 PASS and one SKIP (the sweep had not been scheduled yet; 15 PASS
+  in a later run).
+- The branch's tip, a fresh clone at a1094f3 against that cluster:
+  `make up` 42 s, `make demo` 51 s (CLM-0001 and CLM-0003 skipped as
+  triaged, CLM-0002 skipped as "exists with a different submission",
+  CLM-0004 referred and approved, both traces PASS with settled counts),
+  `make smoke` 41 s with 15 PASS.
+- S053 on kind: the form's post answered 303; the stored `reported_on` was
+  2026-10-04, the day in the insurer's time zone, not the 1999-01-01
+  posted; the view listed CLM-0001 as approved with EUR 2,740 paid; a
+  claim that does not exist, a path that does not exist and a form with a
+  bad field answered 404, 404 and 422 as HTML pages; neither trace (31 and
+  4 spans) held the query string's marker or `note=`.
+- Tried for the demo script: a description that addresses the model gave
+  `injection-suspected` and one with a hospital stay `special-data`, both
+  with no model call; the third of three claims in a few seconds was
+  refused with `tenant-request-rate`, became `triage_failed` and was
+  approved by the rules when posted again; the script's example claim on
+  POL-0038 went to an adjuster as `over_threshold` with EUR 4,500 payable
+  and, after "request documents", the claimant's page asked for them.
+- `make check`: no ERROR line. `make mermaid`: four blocks rendered.
+  `make docs`: `docs consistency: 13 checks passed`. `make test`:
+  `Ran 124 tests`, `OK`. `make lint`: `Contracts: 5 kept, 0 broken.`
+  `shellcheck infra/kind/demo.sh`: no finding. `make registry`:
+  `contracts OK: up to date`. `make eval`: `recommendation: 38/40 ->
+  38/40`, `route: 40/40 -> 40/40`, `eval compare: passed`.
+- The suite, `GITHUB_ACTIONS=true make pytest-db` with four workers:
+  first `1 failed, 7614 passed, 8 skipped` (the test above), then
+  `7615 passed, 8 skipped, 7 warnings in 351.62s (0:05:51)`.
+- Not run: a second cold start on the branch's tip (see the decisions);
+  `make pdf`; anything against Azure; a browser submitting a form (the
+  posts were made with `curl`, the pages read in a browser); the demo
+  script timed in front of a person.
+
 **Follow-ups:**
+
+- The owner: which step builds service-to-service identity (the backlog's
+  row; S019's "done when" does not hold it, and the README had named
+  S019). The cluster made in this step is running, with 36 golden claims
+  left; `make down` is the owner's call.
+- In Part B's backlog, new: the eight homes from the threat model, a web
+  application firewall, logs that no service exports, `make docs` blind to
+  a split table, and the wording of a failed trace that alternated.
+- Closed in the backlog: S053 on kind; `make demo` on an incomplete trace;
+  the golden claims' reset (not built).
 
 ## Part D — Open questions
 
@@ -5930,3 +6062,9 @@ repository reaches the fifteen-minute demo with `make`.
   because S051, S053 and S052 merged first, and it adds no migration.
   Three backlog rows it was offered: two closed, `drafted_by` on a
   withheld completion left with no home.
+- **v0.26, 2026-10-04:** S018 done: milestone M1 is complete, on a laptop.
+  By the owner: the session deleted and re-created the kind cluster for
+  the clean-checkout run. The model is as built, with a `Designed` tag for
+  what is not; the threat model is version 1; `docs/demo.md` is the demo.
+  The backlog gains the homes the threat model named that no step holds;
+  where service-to-service identity is built is the owner's to decide.
