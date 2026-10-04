@@ -61,8 +61,8 @@ file that tree lacks. For one role, here `claims_api`, in a first
 terminal:
 
 ```sh
-K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian"
-$K delete secret claims-api-db
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }
+k delete secret claims-api-db
 make up
 ```
 
@@ -70,9 +70,9 @@ and in a second terminal, as soon as `make up` logs
 `platform-db is ready`:
 
 ```sh
-K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian"
-$K rollout restart deploy/claims-api
-$K rollout status deploy/claims-api
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }
+k rollout restart deploy/claims-api
+k rollout status deploy/claims-api
 ```
 
 - The `delete` is the owner's to run, and it cannot be taken back: the
@@ -209,8 +209,8 @@ is not fixed by a later one.
   yaml`, no `echo` of a password, no password as a command-line argument.
   Do not rely on the harness to stop it. Its hook denies only the bare
   form of that command, and not the same command with a namespace flag
-  or a variable in front, as every command on this page has (the plan's
-  backlog). The rule is the operator's to keep.
+  in front or behind a shell function, as every command on this page is
+  (the plan's backlog). The rule is the operator's to keep.
 - **Do not edit `password` without `uri`**, or the other way round. The
   services read `uri`; CloudNativePG reads `password`.
 - **Do not rotate while the database is down.** CloudNativePG cannot

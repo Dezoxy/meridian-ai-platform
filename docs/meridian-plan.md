@@ -6925,6 +6925,13 @@ database failure, a rollback and a secret rotation.
   - Into the threat register: forged series, steering by a caller,
     silence that looks like health, the runbook as something executed,
     and the unrecorded superuser.
+- Found by the main session after the pull request was open: every
+  command block in the runbooks set `K="kubectl ..."` and ran `$K get
+  ...`, which zsh, the laptop's shell, does not split: `command not
+  found`. They are shell functions now, and each of the six blocks ran
+  in zsh and in bash against stand-in binaries that print their
+  arguments: exit 0, no error. That proves the shell syntax and nothing
+  about a cluster.
 - The numbers, taken late: after `git fetch`, `main` had no new commit
   and no pull request was open, so the threats are T-86 (alerts that
   mislead) and T-87 (a runbook is run with admin credentials), the

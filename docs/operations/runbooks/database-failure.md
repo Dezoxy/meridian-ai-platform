@@ -28,11 +28,11 @@ measures (S029). The game day (S028) exercises this runbook.
 ## Confirm
 
 ```sh
-K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian"
-$K get cluster platform-db
-$K get pod -l cnpg.io/cluster=platform-db
-$K describe pod -l cnpg.io/cluster=platform-db
-$K logs -l cnpg.io/cluster=platform-db -c postgres --tail=50
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }
+k get cluster platform-db
+k get pod -l cnpg.io/cluster=platform-db
+k describe pod -l cnpg.io/cluster=platform-db
+k logs -l cnpg.io/cluster=platform-db -c postgres --tail=50
 ```
 
 These only read. `describe` shows restarts and failed probes; the
@@ -121,10 +121,10 @@ succeeded. The database is the usual cause, which is why this alert leads
 here. The sweep says why:
 
 ```sh
-K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian"
-$K get cronjob meridian-sweep
-$K get job -l app.kubernetes.io/name=meridian-sweep
-$K logs job/<the newest job's name>
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }
+k get cronjob meridian-sweep
+k get job -l app.kubernetes.io/name=meridian-sweep
+k logs job/<the newest job's name>
 ```
 
 It writes one summary line per pass and exits 0 when the pass was clean,

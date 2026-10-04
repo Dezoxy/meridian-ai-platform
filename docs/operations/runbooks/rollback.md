@@ -31,12 +31,12 @@ anything back.
 2. Did anything change? These only read:
 
    ```sh
-   H="helm --kubeconfig infra/kind/kubeconfig --kube-context kind-meridian -n meridian"
-   K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian"
-   $H history meridian
-   $H status meridian
-   $K get deploy -o wide
-   $K logs deploy/<the failing service> --tail=50
+   h() { helm --kubeconfig infra/kind/kubeconfig --kube-context kind-meridian -n meridian "$@"; }
+   k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }
+   h history meridian
+   h status meridian
+   k get deploy -o wide
+   k logs deploy/<the failing service> --tail=50
    ```
 
    `history` lists each revision with its time; `get deploy -o wide`

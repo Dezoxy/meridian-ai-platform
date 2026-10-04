@@ -87,10 +87,10 @@ that only read, and the command asks PostgreSQL for a session that only
 reads, which stops a wrong paste and not a person who means to write:
 
 ```sh
-K="kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian"
-POD="$($K get pod -o name \
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }
+POD="$(k get pod -o name \
   -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary)"
-$K exec "$POD" -c postgres -- \
+k exec "$POD" -c postgres -- \
   env PGOPTIONS='-c default_transaction_read_only=on' \
   psql -d meridian -c 'SELECT now()'
 ```
