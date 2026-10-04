@@ -6,6 +6,13 @@ token. Each reads its own database role's Secret and the CA's public
 certificate, and sets the variables its values list. The root filesystem is
 read-only; the pod's /tmp is the one writable path. Their NetworkPolicies are in
 networkpolicy.yaml.
+
+Each pod also mounts its own certificate (the Secret <name>-tls that
+certificates.yaml asks cert-manager for) at /etc/meridian/tls, read-only (S055).
+A service with `tls: true` in the values serves TLS and asks its callers for a
+certificate: the template, not the values, appends uvicorn's flags to its
+command and sets the probes' scheme to HTTPS. The port, the container's port
+name and the Service do not change.
 tests/meridian/test_kind_manifests.py ties every name below to the code.
 
 The Model Gateway keeps its rate windows in one process: with a second replica
@@ -56,6 +63,9 @@ spec:
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           command:
             {{- toYaml $service.command | nindent 12 }}
+            {{- if $service.tls }}
+            {{- include "meridian.tlsFlags" $ | nindent 12 }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ $.Values.port }}
@@ -68,10 +78,13 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ . | quote }}
             {{- end }}
+            {{- with include "meridian.tlsEnv" (dict "root" $ "env" $service.env "serves" $service.tls) | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
           readinessProbe:
-            {{- toYaml $.Values.probes.readiness | nindent 12 }}
+            {{- include "meridian.probe" (dict "probe" $.Values.probes.readiness "tls" $service.tls) | nindent 12 }}
           livenessProbe:
-            {{- toYaml $.Values.probes.liveness | nindent 12 }}
+            {{- include "meridian.probe" (dict "probe" $.Values.probes.liveness "tls" $service.tls) | nindent 12 }}
           resources:
             {{- toYaml $service.resources | nindent 12 }}
           securityContext:
@@ -79,9 +92,11 @@ spec:
           volumeMounts:
             {{- include "meridian.caMount" . | nindent 12 }}
             {{- include "meridian.tmpMount" . | nindent 12 }}
+            {{- include "meridian.tlsMount" $ | nindent 12 }}
       volumes:
         {{- include "meridian.caVolume" $ | nindent 8 }}
         {{- include "meridian.tmpVolume" $ | nindent 8 }}
+        {{- include "meridian.tlsVolume" $name | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

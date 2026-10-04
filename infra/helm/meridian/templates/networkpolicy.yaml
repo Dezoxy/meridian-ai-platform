@@ -19,6 +19,14 @@ helper meridian.job), because deploy.sh applies the Job outside the release.
                 policy still names Ingress, so nothing reaches it
   the sweep     DNS and the database, no ingress
 
+TLS (S055) changes none of this. A service that serves TLS listens on the same
+port, so every rule names the same peers and the same port as before: the
+policies decide which pod may reach which, the certificates decide which
+service a reachable caller is. The two agree on purpose (a test renders the
+chart with TLS off and compares the policies byte for byte, and another checks
+that the registry's `calls` are the chart's callers); neither replaces the
+other.
+
 No rule is written without the peer's pod labels and a port, and none names an
 address range: the peers are pods. The kubelet's probes are not blocked by a
 policy. The Model Gateway has no rule for a provider: on kind it runs in replay

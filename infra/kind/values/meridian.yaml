@@ -14,6 +14,15 @@ image:
 telemetry:
   otlpEndpoint: http://otel-collector.observability.svc.cluster.local:4318
 
+# Who a service is, to the one it calls: the trust domain of the certificates'
+# URIs and the issuer `make up` installs with cert-manager (manifests/service-
+# ca.yaml). The chart fails without either.
+identity:
+  trustDomain: meridian.kind
+  issuer:
+    name: meridian-services
+    kind: ClusterIssuer
+
 # Who the policies name outside the chart (the chart's networkPolicy.peers).
 # The labels are the ones the cluster's own pods carry.
 networkPolicy:

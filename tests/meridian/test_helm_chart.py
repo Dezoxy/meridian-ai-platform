@@ -65,6 +65,16 @@ CREDENTIAL_KEYS = {"password", "passwd", "uri", "token", "key", "apikey", "secre
 SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-db(-ca)?")
 SECRET_KEY_NAMES = {"uri", "ca.crt"}
 CONNECTION_STRING = re.compile(r"postgres(ql)?://", re.IGNORECASE)
+# The identity values kind's file sets (S055): a rendering without kind's values
+# needs them too, because the chart refuses to render without them.
+IDENTITY_ARGUMENTS = [
+    "--set-string",
+    "identity.trustDomain=meridian.kind",
+    "--set-string",
+    "identity.issuer.name=meridian-services",
+    "--set-string",
+    "identity.issuer.kind=ClusterIssuer",
+]
 
 
 def kinds_of(documents: list[dict]) -> list[str]:
@@ -230,6 +240,7 @@ def test_the_route_renders_only_when_enabled_and_kind_enables_it() -> None:
             f"image.tag={TEST_TAG}",
             "--set-string",
             "image.pullPolicy=Never",  # a tag needs it (the image rules below)
+            *IDENTITY_ARGUMENTS,
             # kind's values name the peers of the policies; without them the
             # chart refuses to render a policy (tested below).
             "--set",
@@ -918,9 +929,13 @@ def test_ingress_is_the_exact_inverse_of_egress_among_the_workloads() -> None:
 
 def test_the_release_admits_the_ingestion_job_before_deploy_applies_it() -> None:
     # The release never holds a Job, and the gateway's policy is in the release.
+    # It does hold the ingestion Job's Certificate, which carries the Job's name
+    # (S055): its Secret must exist before deploy.sh applies the Job.
     release = render(helm_arguments(jobs=()))
 
-    assert not {d["metadata"]["name"] for d in release} & set(JOB_PODS)
+    assert not {
+        d["metadata"]["name"] for d in release if d["kind"] != "Certificate"
+    } & set(JOB_PODS)
     assert "meridian-ingest" in allowed_services(
         network_policies(release)["model-gateway"], "ingress"
     )
@@ -1132,6 +1147,7 @@ def test_without_kinds_values_the_chart_asks_for_the_database_peer() -> None:
             f"image.tag={TEST_TAG}",
             "--set-string",
             "image.pullPolicy=Never",
+            *IDENTITY_ARGUMENTS,
         ]
     )
 

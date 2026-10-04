@@ -73,9 +73,15 @@ app.kubernetes.io/part-of: meridian
 {{ .name }}.{{ .root.Release.Namespace }}.svc:{{ .root.Values.port }}
 {{- end -}}
 
-{{- /* url: http://<host>; takes root, name. */ -}}
+{{- /*
+url: <scheme>://<host>; takes root, name. The scheme is https for a service whose
+values say `tls: true` and http for any other, the Claims API's included: the
+address is read from the target's own entry, so it cannot disagree with what the
+target serves.
+*/ -}}
 {{- define "meridian.url" -}}
-http://{{ include "meridian.host" . }}
+{{- $target := get .root.Values.services .name | default dict -}}
+{{ if $target.tls }}https{{ else }}http{{ end }}://{{ include "meridian.host" . }}
 {{- end -}}
 
 {{- /* secretEnv: a variable read from the key `uri` of a Secret; takes name, secret. */ -}}
@@ -178,6 +184,156 @@ against the container's memory limit), with a size limit. Takes the root.
 - name: tmp
   emptyDir:
     sizeLimit: {{ .Values.tmpSizeLimit | quote }}
+{{- end -}}
+
+{{- /*
+identity: the chart's identity values, checked, as JSON (trustDomain, issuerName,
+issuerKind); takes the root. Each is required and there is no value that turns
+identity off, so a chart without them does not render: a service would otherwise
+start without a certificate and refuse every call, or serve with none.
+*/ -}}
+{{- define "meridian.identity" -}}
+{{- $identity := .Values.identity | default dict -}}
+{{- $issuer := $identity.issuer | default dict -}}
+{{- $trustDomain := required "identity.trustDomain is required: the SPIFFE trust domain of the services' certificates (kind's is in infra/kind/values/meridian.yaml)" $identity.trustDomain -}}
+{{- $name := required "identity.issuer.name is required: the cert-manager issuer that signs the services' certificates (kind's is in infra/kind/values/meridian.yaml)" $issuer.name -}}
+{{- $kind := required "identity.issuer.kind is required: ClusterIssuer or Issuer (kind's is in infra/kind/values/meridian.yaml)" $issuer.kind -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" (toString $trustDomain)) -}}
+{{- fail (printf "identity.trustDomain must be a lower-case DNS name (no scheme, no path); got %q" $trustDomain) -}}
+{{- end -}}
+{{- if not (has $kind (list "ClusterIssuer" "Issuer")) -}}
+{{- fail (printf "identity.issuer.kind must be ClusterIssuer or Issuer; got %q" $kind) -}}
+{{- end -}}
+{{- dict "trustDomain" $trustDomain "issuerName" $name "issuerKind" $kind | toJson -}}
+{{- end -}}
+
+{{- /*
+identityPrefix: the start of every service's URI, up to and including /sa/; what
+a service that serves TLS is given to read its callers' identity with. Takes the
+root.
+*/ -}}
+{{- define "meridian.identityPrefix" -}}
+{{- $identity := include "meridian.identity" . | fromJson -}}
+spiffe://{{ $identity.trustDomain }}/ns/{{ .Release.Namespace }}/sa/
+{{- end -}}
+
+{{- /* tlsDirectory: where a pod reads its certificate, key and the CA. A literal. */ -}}
+{{- define "meridian.tlsDirectory" -}}
+/etc/meridian/tls
+{{- end -}}
+
+{{- /* tlsMount: the pod's own certificate Secret, read-only. */ -}}
+{{- define "meridian.tlsMount" -}}
+- name: tls
+  mountPath: {{ include "meridian.tlsDirectory" . }}
+  readOnly: true
+{{- end -}}
+
+{{- /*
+tlsVolume: the Secret cert-manager makes for the workload's Certificate
+(<name>-tls: tls.crt, tls.key and ca.crt). Takes the workload's name: a pod
+mounts its own and no other.
+*/ -}}
+{{- define "meridian.tlsVolume" -}}
+- name: tls
+  secret:
+    secretName: {{ . }}-tls
+{{- end -}}
+
+{{- /*
+tlsFlags: what uvicorn is given to serve TLS and to ask for a client
+certificate; the same for every service that sets `tls`, so it is written once.
+--ssl-cert-reqs 1 is CERT_OPTIONAL: the kubelet's probe presents no certificate,
+and a certificate from another CA still fails the handshake. --http selects the
+protocol that puts the verified certificate's URIs in the request's scope. Takes
+the root.
+*/ -}}
+{{- define "meridian.tlsFlags" -}}
+{{- $directory := include "meridian.tlsDirectory" . -}}
+- --ssl-certfile
+- {{ $directory }}/tls.crt
+- --ssl-keyfile
+- {{ $directory }}/tls.key
+- --ssl-ca-certs
+- {{ $directory }}/ca.crt
+- --ssl-cert-reqs
+- "1"
+- --http
+- "meridian.platform.common.peercert:PeerCertProtocol"
+- --ws
+- none
+{{- end -}}
+
+{{- /*
+tlsEnv: the variables a workload's identity needs; takes root, env (its values
+`env` list) and serves (it serves TLS). One that calls another service gets its
+client's files; one that serves TLS gets the prefix its callers' URIs start with.
+*/ -}}
+{{- define "meridian.tlsEnv" -}}
+{{- $directory := include "meridian.tlsDirectory" .root -}}
+{{- if include "meridian.callees" .env | fromJsonArray }}
+- name: MERIDIAN_TLS_CERT_FILE
+  value: {{ $directory }}/tls.crt
+- name: MERIDIAN_TLS_KEY_FILE
+  value: {{ $directory }}/tls.key
+- name: MERIDIAN_TLS_CA_FILE
+  value: {{ $directory }}/ca.crt
+{{- end }}
+{{- if .serves }}
+- name: MERIDIAN_IDENTITY_PREFIX
+  value: {{ include "meridian.identityPrefix" .root | quote }}
+{{- end }}
+{{- end -}}
+
+{{- /*
+certificate: one workload's Certificate, after a `---`; takes root, identity (the
+output of meridian.identity, as a dict), name (the workload's, also its
+ServiceAccount's) and server (it serves TLS: it also gets a DNS name and the
+server usage). templates/certificates.yaml says what each field is for. No
+duration: cert-manager's default, 90 days renewed at 60.
+*/ -}}
+{{- define "meridian.certificate" -}}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .name }}
+  namespace: {{ .root.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" .name | nindent 4 }}
+spec:
+  secretName: {{ .name }}-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - digital signature
+    - client auth
+    {{- if .server }}
+    - server auth
+    {{- end }}
+  uris:
+    - spiffe://{{ .identity.trustDomain }}/ns/{{ .root.Release.Namespace }}/sa/{{ .name }}
+  {{- if .server }}
+  dnsNames:
+    - {{ .name }}.{{ .root.Release.Namespace }}.svc
+  {{- end }}
+  issuerRef:
+    name: {{ .identity.issuerName }}
+    kind: {{ .identity.issuerKind }}
+    group: cert-manager.io
+{{- end -}}
+
+{{- /*
+probe: a probe of the values, with scheme HTTPS when the service serves TLS; takes
+probe (the values') and tls.
+*/ -}}
+{{- define "meridian.probe" -}}
+{{- $probe := deepCopy .probe -}}
+{{- if .tls -}}
+{{- $_ := set $probe.httpGet "scheme" "HTTPS" -}}
+{{- end -}}
+{{- toYaml $probe -}}
 {{- end -}}
 
 {{- /*
@@ -300,7 +456,9 @@ database; nothing else unless its environment names it.
 
 {{- /*
 job: a Job, its ServiceAccount and its NetworkPolicy, each Job its own account
-and policy; takes root, name (migrate, seed or ingest) and job (its values). The
+and policy; takes root, name (migrate, seed or ingest) and job (its values). A Job
+that calls a service mounts the Secret of its Certificate (certificates.yaml,
+rendered in the release, which holds no Job: the Secret exists before the Job). The
 Job's name ends in the tag, or in the digest's first twelve digits; the policy's
 does not, so a later deploy replaces it instead of adding one. It lives here,
 not in the release, because deploy.sh applies it with the Job: the policy is
@@ -310,6 +468,7 @@ never one deploy behind its Job.
 {{- $root := .root -}}
 {{- $job := .job -}}
 {{- $app := printf "meridian-%s" .name -}}
+{{- $hasIdentity := include "meridian.callees" $job.env | fromJsonArray -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -370,6 +529,9 @@ spec:
             {{- range $job.env }}
             {{- include "meridian.envItem" (dict "root" $root "item" .) | nindent 12 }}
             {{- end }}
+            {{- with include "meridian.tlsEnv" (dict "root" $root "env" $job.env "serves" false) | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml $job.resources | nindent 12 }}
           securityContext:
@@ -377,7 +539,13 @@ spec:
           volumeMounts:
             {{- include "meridian.caMount" . | nindent 12 }}
             {{- include "meridian.tmpMount" . | nindent 12 }}
+            {{- if $hasIdentity }}
+            {{- include "meridian.tlsMount" $root | nindent 12 }}
+            {{- end }}
       volumes:
         {{- include "meridian.caVolume" $root | nindent 8 }}
         {{- include "meridian.tmpVolume" $root | nindent 8 }}
+        {{- if $hasIdentity }}
+        {{- include "meridian.tlsVolume" $app | nindent 8 }}
+        {{- end }}
 {{- end -}}

@@ -23,8 +23,25 @@ image:
   pullPolicy: IfNotPresent
 
 # The port every service listens on, and its Service answers on. The
-# in-cluster addresses are http://<service>.<release namespace>.svc:<port>.
+# in-cluster addresses are <scheme>://<service>.<release namespace>.svc:<port>,
+# https for a service that sets `tls` below, http for the others.
 port: 8000
+
+# Who a service is, to the one it calls (S055, templates/certificates.yaml).
+# Each workload that has an identity gets one cert-manager Certificate, in the
+# Secret <name>-tls, with the URI spiffe://<trustDomain>/ns/<namespace>/sa/<name>.
+# Both values are required and empty here: a cluster's values file sets them
+# (kind's is infra/kind/values/meridian.yaml), and the chart fails while either
+# is empty. There is no value that turns identity off.
+#   trustDomain   the SPIFFE trust domain, a DNS name; no scheme, no path
+#   issuer        the cert-manager issuer that signs the certificates:
+#                   name   the issuer's name
+#                   kind   ClusterIssuer or Issuer
+identity:
+  trustDomain: ""
+  issuer:
+    name: ""
+    kind: ""
 
 # Where a service sends its traces (OTLP over HTTP). Empty: no variable.
 telemetry:
@@ -57,7 +74,9 @@ runAsId: 10001
 # container's memory limit). A pod that fills it is evicted.
 tmpSizeLimit: 16Mi
 
-# The probes of every service: /healthz on the service's port.
+# The probes of every service: /healthz on the service's port. A service with
+# `tls: true` is probed with scheme HTTPS (the template sets it): the kubelet
+# presents no certificate, which the service accepts on /healthz alone.
 probes:
   readiness:
     httpGet:
@@ -85,12 +104,23 @@ probes:
 # a process that outgrows it must die instead of taking the node's memory.
 # An item takes one of:
 #   value        the string as it is
-#   serviceUrl   http://<that service>.<release namespace>.svc:<port>
+#   serviceUrl   <scheme>://<that service>.<release namespace>.svc:<port>
 #   serviceHost  <that service>.<release namespace>.svc:<port>, the Host
 #                header a caller sends (DNS rebinding protection)
 #   serviceMap   {"<service>": <its serviceUrl>, ...}, in the order listed:
 #                the registry's server IDs and where each is served (base URLs;
 #                the client appends /mcp)
+# The scheme is https for a service with `tls: true` and http for the others;
+# the template reads it from the target's entry, so an address cannot disagree
+# with what the service serves.
+#
+# `tls: true` says a service serves TLS and asks its callers for a certificate
+# (S055). It is one value and nothing else: the template adds the uvicorn
+# flags, the probes' scheme, the DNS name in the certificate and the prefix the
+# service reads its callers' identity with. The Claims API has none: the edge
+# calls it over plain HTTP (TLS at the edge is a backlog row), and it is a
+# client only. Every service gets a certificate and a mount; the ones that call
+# another service also get the client's variables (MERIDIAN_TLS_*).
 services:
   # Takes a claim and has the Agent Runtime triage it. Reached from the edge
   # (the route below) and inside the cluster.
@@ -122,6 +152,7 @@ services:
   agent-runtime:
     dbSecret: agent-runtime-db
     replicas: 1
+    tls: true
     command:
       - uvicorn
       - --factory
@@ -150,6 +181,7 @@ services:
   model-gateway:
     dbSecret: model-gateway-db
     replicas: 1
+    tls: true
     command:
       - uvicorn
       - --factory
@@ -178,6 +210,7 @@ services:
   policy-mcp:
     dbSecret: policy-mcp-db
     replicas: 1
+    tls: true
     command:
       - uvicorn
       - --factory
@@ -201,6 +234,7 @@ services:
   claims-mcp:
     dbSecret: claims-mcp-db
     replicas: 1
+    tls: true
     command:
       - uvicorn
       - --factory
@@ -224,6 +258,7 @@ services:
   knowledge-mcp:
     dbSecret: knowledge-mcp-db
     replicas: 1
+    tls: true
     command:
       - uvicorn
       - --factory

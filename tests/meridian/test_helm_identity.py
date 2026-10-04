@@ -1,0 +1,751 @@
+"""The chart gives every workload its certificate and turns TLS on (S055).
+
+Each service holds one cert-manager certificate, in the Secret
+``<name>-tls``, mounted read-only at ``/etc/meridian/tls``. Five services serve
+TLS (``tls: true`` in the chart's values) and ask for a client certificate;
+the Claims API serves plain HTTP and is a client only. These tests render the
+chart (``helm template``; tests/meridian/chartsupport.py) and pin the
+certificates, the mounts, the flags, the probes, the addresses and the
+variables, and that the registry's ``services.yaml`` and the chart agree on who
+calls whom. What the code does with the certificate is tested with the code.
+"""
+
+import importlib
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+import yaml
+from chartsupport import (
+    CHART_DIR,
+    NAME_LABEL,
+    NAMESPACE,
+    VALUES_FILE,
+    helm_arguments,
+    network_policies,
+    render,
+    rendered_chart,
+    run_helm,
+)
+from servicesupport import REGISTRY_DIR, REPO_ROOT
+
+from meridian.platform.registry import load_registry
+
+TLS_SERVICES = (
+    "agent-runtime",
+    "model-gateway",
+    "policy-mcp",
+    "claims-mcp",
+    "knowledge-mcp",
+)
+PLAIN_SERVICES = ("claims-api",)
+INGEST_JOB = "meridian-ingest"
+ALL_WORKLOADS = (*PLAIN_SERVICES, *TLS_SERVICES, INGEST_JOB)
+# Workloads that call another service: they get a client context.
+CLIENTS = ("claims-api", "agent-runtime", "knowledge-mcp", INGEST_JOB)
+TLS_DIRECTORY = "/etc/meridian/tls"
+TLS_VARIABLES = {
+    "MERIDIAN_TLS_CERT_FILE": f"{TLS_DIRECTORY}/tls.crt",
+    "MERIDIAN_TLS_KEY_FILE": f"{TLS_DIRECTORY}/tls.key",
+    "MERIDIAN_TLS_CA_FILE": f"{TLS_DIRECTORY}/ca.crt",
+}
+PREFIX_VARIABLE = "MERIDIAN_IDENTITY_PREFIX"
+HTTP_PROTOCOL = "meridian.platform.common.peercert:PeerCertProtocol"
+SERVER_FLAGS = [
+    "--ssl-certfile",
+    f"{TLS_DIRECTORY}/tls.crt",
+    "--ssl-keyfile",
+    f"{TLS_DIRECTORY}/tls.key",
+    "--ssl-ca-certs",
+    f"{TLS_DIRECTORY}/ca.crt",
+    "--ssl-cert-reqs",
+    "1",
+    "--http",
+    HTTP_PROTOCOL,
+    "--ws",
+    "none",
+]
+SERVER_USAGES = ["digital signature", "client auth", "server auth"]
+CLIENT_USAGES = ["digital signature", "client auth"]
+TRUST_DOMAIN = "meridian.kind"
+ISSUER = {"name": "meridian-services", "kind": "ClusterIssuer"}
+PORT = 8000
+
+
+def of_kind(documents: list[dict] | tuple[dict, ...], kind: str) -> list[dict]:
+    return [d for d in documents if d["kind"] == kind]
+
+
+def by_name(documents: list[dict] | tuple[dict, ...], kind: str) -> dict[str, dict]:
+    return {d["metadata"]["name"]: d for d in of_kind(documents, kind)}
+
+
+def pod_of(workload: dict) -> dict:
+    return workload["spec"]["template"]["spec"]
+
+
+def workloads(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    """The Deployments and the ingestion Job by the name of their label."""
+    found = {}
+    for document in documents:
+        if document["kind"] in ("Deployment", "Job"):
+            label = document["spec"]["template"]["metadata"]["labels"][NAME_LABEL]
+            if document["kind"] == "Deployment" or label == INGEST_JOB:
+                found[label] = document
+    return found
+
+
+def container_of(workload: dict) -> dict:
+    (container,) = pod_of(workload)["containers"]
+    return container
+
+
+def env_of(workload: dict) -> dict[str, str]:
+    return {
+        item["name"]: item["value"]
+        for item in container_of(workload).get("env", [])
+        if "value" in item
+    }
+
+
+# ── the values ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "value", ["identity.trustDomain", "identity.issuer.name", "identity.issuer.kind"]
+)
+def test_the_chart_fails_while_an_identity_value_is_empty_and_names_it(
+    value: str,
+) -> None:
+    done = run_helm([*helm_arguments(), "--set-string", f"{value}="])
+
+    assert done.returncode != 0
+    assert value in done.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "bad"),
+    [
+        ("identity.trustDomain", "https://meridian.kind"),
+        ("identity.trustDomain", "Meridian.Kind"),
+        ("identity.trustDomain", "meridian.kind/path"),
+        ("identity.issuer.kind", "Foo"),
+        ("identity.issuer.kind", "clusterissuer"),
+    ],
+)
+def test_the_chart_refuses_a_malformed_trust_domain_or_issuer_kind_and_names_it(
+    value: str, bad: str
+) -> None:
+    done = run_helm([*helm_arguments(), "--set-string", f"{value}={bad}"])
+
+    assert done.returncode != 0
+    assert value in done.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "good"),
+    [
+        ("identity.trustDomain", "example.test"),
+        ("identity.trustDomain", "a"),
+        ("identity.issuer.kind", "Issuer"),
+    ],
+)
+def test_the_chart_accepts_a_well_formed_trust_domain_and_either_issuer_kind(
+    value: str, good: str
+) -> None:
+    done = run_helm([*helm_arguments(), "--set-string", f"{value}={good}"])
+
+    assert done.returncode == 0, done.stderr
+
+
+def test_there_is_no_value_that_turns_identity_off() -> None:
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+
+    assert chart["identity"] == {
+        "trustDomain": "",
+        "issuer": {"name": "", "kind": ""},
+    }
+    kind = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))
+    assert kind["identity"] == {"trustDomain": TRUST_DOMAIN, "issuer": ISSUER}
+    # Five services say so with one value of their own; the Claims API has none.
+    tls = {name: s.get("tls") for name, s in chart["services"].items()}
+    assert tls == {
+        "claims-api": None,
+        **dict.fromkeys(TLS_SERVICES, True),
+    }
+
+
+# ── the certificates ─────────────────────────────────────────────────────────
+
+
+def test_the_chart_renders_one_certificate_per_workload_that_has_an_identity() -> None:
+    certificates = by_name(rendered_chart(), "Certificate")
+
+    assert sorted(certificates) == sorted(ALL_WORKLOADS)
+    assert len(certificates) == 7
+
+
+@pytest.mark.parametrize("name", ALL_WORKLOADS)
+def test_a_certificate_names_its_secret_its_uri_and_the_issuer(name: str) -> None:
+    certificate = by_name(rendered_chart(), "Certificate")[name]
+    spec = certificate["spec"]
+
+    assert certificate["apiVersion"] == "cert-manager.io/v1"
+    assert certificate["metadata"]["namespace"] == NAMESPACE
+    assert spec["secretName"] == f"{name}-tls"
+    assert spec["privateKey"] == {"algorithm": "ECDSA", "size": 256}
+    assert spec["uris"] == [f"spiffe://{TRUST_DOMAIN}/ns/{NAMESPACE}/sa/{name}"]
+    assert spec["issuerRef"] == {**ISSUER, "group": "cert-manager.io"}
+    # cert-manager's own lifetime: 90 days, renewed at 60.
+    assert not {"duration", "renewBefore"} & set(spec)
+
+
+@pytest.mark.parametrize("name", TLS_SERVICES)
+def test_a_service_that_serves_tls_has_its_dns_name_and_the_server_usage(
+    name: str,
+) -> None:
+    spec = by_name(rendered_chart(), "Certificate")[name]["spec"]
+
+    assert spec["dnsNames"] == [f"{name}.{NAMESPACE}.svc"]
+    assert spec["usages"] == SERVER_USAGES
+
+
+@pytest.mark.parametrize("name", [*PLAIN_SERVICES, INGEST_JOB])
+def test_a_client_only_certificate_has_no_dns_name_and_no_server_usage(
+    name: str,
+) -> None:
+    spec = by_name(rendered_chart(), "Certificate")[name]["spec"]
+
+    assert "dnsNames" not in spec
+    assert spec["usages"] == CLIENT_USAGES
+    assert "server auth" not in spec["usages"]
+
+
+def test_the_certificates_follow_the_release_namespace_and_the_trust_domain() -> None:
+    documents = render(
+        [
+            *helm_arguments(namespace="elsewhere"),
+            "--set-string",
+            "identity.trustDomain=example.test",
+            "--set-string",
+            "identity.issuer.name=other-issuer",
+            "--set-string",
+            "identity.issuer.kind=Issuer",
+        ]
+    )
+    certificates = by_name(documents, "Certificate")
+
+    assert sorted(certificates) == sorted(ALL_WORKLOADS)
+    for name, certificate in certificates.items():
+        spec = certificate["spec"]
+        assert certificate["metadata"]["namespace"] == "elsewhere"
+        assert spec["uris"] == [f"spiffe://example.test/ns/elsewhere/sa/{name}"]
+        assert spec["issuerRef"]["name"] == "other-issuer"
+        assert spec["issuerRef"]["kind"] == "Issuer"
+        assert spec.get("dnsNames", []) in ([], [f"{name}.elsewhere.svc"])
+
+
+def test_the_certificates_are_in_the_release_because_deploy_applies_the_job_later() -> (
+    None
+):
+    # deploy.sh renders the ingestion Job alone (--show-only), so its Secret
+    # must come from the release: the Certificate is rendered with every Job off.
+    release = render(helm_arguments(jobs=()))
+
+    assert INGEST_JOB in by_name(release, "Certificate")
+    only_the_job = render(
+        [*helm_arguments(jobs=("ingest",)), "--show-only", "templates/job-ingest.yaml"]
+    )
+    assert of_kind(only_the_job, "Certificate") == []
+
+
+# ── the pods ─────────────────────────────────────────────────────────────────
+
+
+def tls_mounts(workload: dict) -> list[dict]:
+    return [
+        m
+        for m in container_of(workload)["volumeMounts"]
+        if m["mountPath"] != "/tmp"  # noqa: S108
+    ]
+
+
+@pytest.mark.parametrize("name", ALL_WORKLOADS)
+def test_a_pod_mounts_only_its_own_tls_secret_read_only(name: str) -> None:
+    workload = workloads(rendered_chart())[name]
+    pod = pod_of(workload)
+    secrets = {
+        v["name"]: v["secret"]["secretName"] for v in pod["volumes"] if "secret" in v
+    }
+    (tls_volume,) = [v for v in pod["volumes"] if v["name"] == "tls"]
+    (mount,) = [m for m in container_of(workload)["volumeMounts"] if m["name"] == "tls"]
+
+    assert tls_volume["secret"]["secretName"] == f"{name}-tls"
+    assert mount == {"name": "tls", "mountPath": TLS_DIRECTORY, "readOnly": True}
+    # No other service's TLS Secret is anywhere in the pod.
+    assert [s for s in secrets.values() if s.endswith("-tls")] == [f"{name}-tls"]
+
+
+def test_a_workload_without_an_identity_mounts_no_tls_secret() -> None:
+    documents = list(rendered_chart())
+    others = [
+        d
+        for d in documents
+        if d["kind"] in ("Deployment", "Job", "CronJob")
+        and d["metadata"]["name"] not in ALL_WORKLOADS
+        and not d["metadata"]["name"].startswith(f"{INGEST_JOB}-")
+    ]
+
+    assert others  # the migrate and seed Jobs and the sweep
+    assert "-tls" not in yaml.dump(others)
+    assert "/etc/meridian/tls" not in yaml.dump(others)
+
+
+@pytest.mark.parametrize("name", TLS_SERVICES)
+def test_the_commands_of_the_five_end_with_the_tls_flags(name: str) -> None:
+    command = container_of(workloads(rendered_chart())[name])["command"]
+
+    assert command[-len(SERVER_FLAGS) :] == SERVER_FLAGS
+    # What came before is the service's own command from the values.
+    assert command[0] == "uvicorn"
+    assert command[command.index("--port") + 1] == str(PORT)
+    assert command.count("--ssl-certfile") == 1
+
+
+def test_the_http_flag_names_a_class_that_imports() -> None:
+    for name in TLS_SERVICES:
+        command = container_of(workloads(rendered_chart())[name])["command"]
+        module, _, attribute = command[command.index("--http") + 1].partition(":")
+
+        protocol = getattr(importlib.import_module(module), attribute)
+
+        assert isinstance(protocol, type)
+        assert protocol.__name__ == "PeerCertProtocol"
+
+
+def test_the_flags_are_not_written_in_the_values() -> None:
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+
+    for service in chart["services"].values():
+        assert not [w for w in service["command"] if w.startswith("--ssl")]
+        assert "--http" not in service["command"]
+
+
+def test_the_claims_api_command_has_no_tls_flag() -> None:
+    command = container_of(workloads(rendered_chart())["claims-api"])["command"]
+
+    assert not [w for w in command if w.startswith("--ssl")]
+    assert "--http" not in command
+    assert "--ws" not in command
+
+
+@pytest.mark.parametrize("name", [*PLAIN_SERVICES, *TLS_SERVICES])
+def test_the_probes_are_https_for_the_five_and_http_for_the_claims_api(
+    name: str,
+) -> None:
+    deployment = workloads(rendered_chart())[name]
+    container = container_of(deployment)
+    scheme = "HTTPS" if name in TLS_SERVICES else None
+
+    for probe in ("readinessProbe", "livenessProbe"):
+        http_get = container[probe]["httpGet"]
+        assert http_get["path"] == "/healthz"
+        assert http_get["port"] == "http"
+        assert http_get.get("scheme") == scheme
+    # The Service keeps its port, and the container's named port is the one the
+    # probes and the Service point at.
+    (service,) = [
+        d for d in of_kind(rendered_chart(), "Service") if d["metadata"]["name"] == name
+    ]
+    assert [p["port"] for p in service["spec"]["ports"]] == [PORT]
+    assert container["ports"] == [{"name": "http", "containerPort": PORT}]
+
+
+# ── the addresses ────────────────────────────────────────────────────────────
+
+
+def service_addresses(workload: dict) -> list[str]:
+    """Every URL in the environment of a container that points at a service."""
+    addresses: list[str] = []
+    for value in env_of(workload).values():
+        if value.startswith("{"):
+            addresses += json.loads(value).values()
+        elif value.startswith(("http://", "https://")):
+            addresses.append(value)
+    return [
+        a for a in addresses if (urlsplit(a).hostname or "").endswith(".meridian.svc")
+    ]
+
+
+def test_every_address_has_the_scheme_the_service_it_points_at_serves() -> None:
+    documents = list(rendered_chart())
+    seen: set[str] = set()
+
+    for workload in workloads(documents).values():
+        for address in service_addresses(workload):
+            url = urlsplit(address)
+            target = (url.hostname or "").removesuffix(f".{NAMESPACE}.svc")
+            expected = "https" if target in TLS_SERVICES else "http"
+            assert url.scheme == expected, (workload["metadata"]["name"], address)
+            assert url.port == PORT
+            seen.add(target)
+
+    # The ingestion Job's address is checked too, and each of the five is called.
+    assert seen == set(TLS_SERVICES)
+    assert "http://agent-runtime" not in yaml.dump(documents)
+    assert "http://model-gateway" not in yaml.dump(documents)
+
+
+def test_the_claims_apis_runtime_address_and_the_ingestion_jobs_are_https() -> None:
+    documents = list(rendered_chart())
+    flows = workloads(documents)
+
+    assert env_of(flows["claims-api"])["MERIDIAN_RUNTIME_URL"] == (
+        f"https://agent-runtime.{NAMESPACE}.svc:{PORT}"
+    )
+    assert env_of(flows[INGEST_JOB])["MERIDIAN_GATEWAY_URL"] == (
+        f"https://model-gateway.{NAMESPACE}.svc:{PORT}"
+    )
+    tool_servers = json.loads(env_of(flows["agent-runtime"])["MERIDIAN_TOOL_SERVERS"])
+    assert tool_servers == {
+        name: f"https://{name}.{NAMESPACE}.svc:{PORT}"
+        for name in ("policy-mcp", "claims-mcp", "knowledge-mcp")
+    }
+
+
+def test_the_hosts_a_tool_server_allows_carry_no_scheme() -> None:
+    for name in ("policy-mcp", "claims-mcp", "knowledge-mcp"):
+        host = env_of(workloads(rendered_chart())[name])["MERIDIAN_ALLOWED_HOSTS"]
+
+        assert host == f"{name}.{NAMESPACE}.svc:{PORT}"
+
+
+# ── the variables ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ALL_WORKLOADS)
+def test_the_tls_files_go_to_the_workloads_that_call_another_service(
+    name: str,
+) -> None:
+    environment = env_of(workloads(rendered_chart())[name])
+    given = {k: v for k, v in environment.items() if k in TLS_VARIABLES}
+
+    assert given == (TLS_VARIABLES if name in CLIENTS else {})
+
+
+@pytest.mark.parametrize("name", ALL_WORKLOADS)
+def test_the_identity_prefix_goes_to_the_five_that_serve_tls(name: str) -> None:
+    environment = env_of(workloads(rendered_chart())[name])
+
+    if name in TLS_SERVICES:
+        assert environment[PREFIX_VARIABLE] == (
+            f"spiffe://{TRUST_DOMAIN}/ns/{NAMESPACE}/sa/"
+        )
+    else:
+        assert PREFIX_VARIABLE not in environment
+
+
+def test_the_prefix_follows_the_namespace_and_the_trust_domain() -> None:
+    documents = render(
+        [
+            *helm_arguments(namespace="elsewhere"),
+            "--set-string",
+            "identity.trustDomain=example.test",
+        ]
+    )
+
+    prefix = env_of(workloads(documents)["model-gateway"])[PREFIX_VARIABLE]
+
+    assert prefix == "spiffe://example.test/ns/elsewhere/sa/"
+
+
+def test_no_value_of_the_identity_is_a_secret() -> None:
+    # The variables carry paths and a URI prefix; the key is only in the Secret.
+    for workload in workloads(rendered_chart()).values():
+        for value in env_of(workload).values():
+            assert "BEGIN" not in value
+
+
+# ── the network policies ─────────────────────────────────────────────────────
+
+
+def test_turning_tls_off_changes_no_network_policy() -> None:
+    # TLS changes what is spoken on the port, not who may reach it: the same
+    # peers and the same port. Rendering the chart with every `tls` off must
+    # give byte-identical policies.
+    tls_off = [
+        item
+        for name in TLS_SERVICES
+        for item in ("--set", f"services.{name}.tls=false")
+    ]
+    with_tls = network_policies(rendered_chart())
+    without_tls = network_policies(render([*helm_arguments(), *tls_off]))
+
+    assert sorted(with_tls) == sorted(without_tls)
+    assert len(with_tls) == 11  # default-deny, six services, three Jobs, the sweep
+    for name, policy in with_tls.items():
+        assert yaml.safe_dump(policy) == yaml.safe_dump(without_tls[name]), name
+    # And the TLS was on in the first rendering and off in the second.
+    on = container_of(workloads(rendered_chart())["model-gateway"])["command"]
+    assert "--ssl-certfile" in on
+    gateway = container_of(
+        workloads(render([*helm_arguments(), *tls_off]))["model-gateway"]
+    )
+    assert "--ssl-certfile" not in gateway["command"]
+
+
+def test_every_policy_allows_the_port_the_services_listen_on_and_no_other() -> None:
+    for name, policy in network_policies(rendered_chart()).items():
+        service_ports = {
+            port["port"]
+            for direction in ("ingress", "egress")
+            for rule in policy["spec"].get(direction, [])
+            for port in rule["ports"]
+            if port["port"] not in (53, 5432, 4318)
+        }
+        assert service_ports <= {PORT}, name
+
+
+# ── the registry and the chart agree ─────────────────────────────────────────
+
+
+def chart_callers() -> dict[str, set[str]]:
+    """For each service, the workloads whose environment calls it, by the
+    registry's service ID (the Job's pod label is its ID)."""
+    callers: dict[str, set[str]] = {}
+    for caller, workload in workloads(rendered_chart()).items():
+        for address in service_addresses(workload):
+            target = (urlsplit(address).hostname or "").removesuffix(
+                f".{NAMESPACE}.svc"
+            )
+            callers.setdefault(target, set()).add(caller)
+    return callers
+
+
+def test_every_registry_service_has_a_certificate_of_its_name_and_no_other() -> None:
+    registry = load_registry(REGISTRY_DIR)
+
+    assert {s.id for s in registry.services} == set(
+        by_name(rendered_chart(), "Certificate")
+    )
+    assert {s.id for s in registry.services} == set(ALL_WORKLOADS)
+
+
+def test_the_callers_of_each_service_in_the_chart_are_the_services_that_list_it() -> (
+    None
+):
+    registry = load_registry(REGISTRY_DIR)
+    listed = {
+        service.id: {s.id for s in registry.services if service.id in s.calls}
+        for service in registry.services
+    }
+    called = chart_callers()
+
+    # The chart's callers (from every `env`, the Job's included) equal the
+    # registry's `calls`, one to one, for every service.
+    for service in registry.services:
+        assert called.get(service.id, set()) == listed[service.id], service.id
+    assert set(called) <= {s.id for s in registry.services}
+
+
+def test_the_registry_clients_and_the_charts_clients_are_the_same_workloads() -> None:
+    registry = load_registry(REGISTRY_DIR)
+    registry_clients = {s.id for s in registry.services if s.calls}
+
+    assert registry_clients == set(CLIENTS)
+    assert registry_clients == {c for names in chart_callers().values() for c in names}
+
+
+# ── deploy.sh ────────────────────────────────────────────────────────────────
+
+DEPLOY_SH = (REPO_ROOT / "infra" / "kind" / "deploy.sh").read_text(encoding="utf-8")
+
+
+def test_deploy_waits_for_the_certificates_before_it_waits_for_any_rollout() -> None:
+    # The ingestion Job mounts a Secret that cert-manager makes from the
+    # release's Certificate; a pod whose Secret is missing waits, and the
+    # Job's deadline would run down meanwhile.
+    calls = [
+        line.strip() for line in DEPLOY_SH.split("\nrequire_database\n")[1].splitlines()
+    ]
+    body = re.search(
+        r"^wait_for_certificates\(\) \{\n(.*?)^\}", DEPLOY_SH, re.MULTILINE | re.DOTALL
+    )
+
+    assert body, "no function wait_for_certificates"
+    assert calls.index("wait_for_certificates") == calls.index("install_release") + 1
+    assert calls.index("wait_for_certificates") < calls.index(
+        'wait_for_deployment "${GATEWAY_SERVICE}"'
+    )
+    assert calls.index("wait_for_certificates") < calls.index("ingest_corpus")
+    # Every Certificate of the release (and none of another namespace), Ready,
+    # with a timeout; a missing one fails, kubectl wait finds none to wait for.
+    assert "wait --for=condition=Ready certificate" in body.group(1)
+    assert "-l app.kubernetes.io/part-of=meridian" in body.group(1)
+    assert '--timeout="${CERTIFICATE_TIMEOUT}"' in body.group(1)
+    assert "|| die" in body.group(1) or "||\n    die" in body.group(1)
+    assert re.search(r"^readonly CERTIFICATE_TIMEOUT=\d+s$", DEPLOY_SH, re.MULTILINE)
+
+
+# ── smoke.sh ─────────────────────────────────────────────────────────────────
+
+SMOKE_SH = (REPO_ROOT / "infra" / "kind" / "smoke.sh").read_text(encoding="utf-8")
+GATEWAY_HOST = f"model-gateway.{NAMESPACE}.svc"
+
+
+def script_function(script: str, name: str) -> str:
+    match = re.search(
+        rf"^{name}\(\) \{{\n.*?^\}}\n", script, re.MULTILINE | re.DOTALL
+    ) or re.search(rf"^{name}\(\) .*$", script, re.MULTILINE)
+    assert match, f"no function {name}"
+    return match.group(0)
+
+
+def run_identity_check(
+    tmp_path: Path, *, deployed: str = "deployment.apps/claims-api", answers: str
+) -> tuple[list[str], str]:
+    """``check_service_identity`` from smoke.sh in bash against a stub ``kctl``.
+    ``answers`` is what the probe prints for each mode, as ``mode=answer`` pairs
+    (``mode=FAIL`` makes the probe exit non-zero with a traceback on stderr).
+    Returns the output lines and what ``kctl`` was asked."""
+    asked = tmp_path / "kctl-calls"
+    asked.touch()
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "failures=0; skips=0",
+            'pass() { echo "PASS  $*"; }',
+            'fail() { echo "FAIL  $*"; }',
+            'skip() { echo "SKIP  $*"; }',
+            re.search(r"^readonly IDENTITY_.*?\n\n", SMOKE_SH, re.M | re.S).group(0),
+            script_function(SMOKE_SH, "clean_lines"),
+            "kctl() {",
+            f'  echo "$*" >>"{asked}"',
+            '  case "$*" in',
+            '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            '    *" exec "*)',
+            '      mode="${@: -4:1}"',
+            "      for pair in ${ANSWERS}; do",
+            '        if [[ "${pair%%=*}" == "${mode}" ]]; then',
+            '          if [[ "${pair#*=}" == FAIL ]]; then',
+            '            echo "Traceback (most recent call last):" >&2; return 1',
+            "          fi",
+            '          echo "${pair#*=}"; return 0',
+            "        fi",
+            "      done ;;",
+            "  esac",
+            "}",
+            script_function(SMOKE_SH, "deployed_services"),
+            script_function(SMOKE_SH, "identity_status"),
+            script_function(SMOKE_SH, "expect_identity_status"),
+            script_function(SMOKE_SH, "check_service_identity"),
+            "check_service_identity",
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "DEPLOYED": deployed, "ANSWERS": answers},
+        check=True,
+    )
+    return done.stdout.splitlines(), asked.read_text()
+
+
+GOOD = "health=200 anonymous=401 foreign-tenant=403"
+
+
+def test_smoke_runs_the_identity_check_last_and_it_is_documented() -> None:
+    lines = SMOKE_SH.splitlines()
+    calls = [line for line in lines[lines.index("check_edge") :] if line]
+
+    assert calls[7:9] == ["check_network_policy", "check_service_identity"]
+    assert "9. service identity" in SMOKE_SH
+
+
+def test_the_identity_probe_is_python_that_compiles_and_reads_the_pods_own_files() -> (
+    None
+):
+    (probe,) = re.findall(
+        r"^readonly IDENTITY_PROBE='(.*?)'$", SMOKE_SH, re.MULTILINE | re.DOTALL
+    )
+    compile(probe, "identity_probe", "exec")  # a syntax error fails here
+
+    for variable in (
+        "MERIDIAN_TLS_CA_FILE",
+        "MERIDIAN_TLS_CERT_FILE",
+        "MERIDIAN_TLS_KEY_FILE",
+    ):
+        assert variable in probe
+    assert "check_hostname = False" not in probe
+    assert "CERT_NONE" not in probe
+
+
+def test_the_identity_check_passes_when_the_gateway_answers_200_401_403(
+    tmp_path: Path,
+) -> None:
+    lines, asked = run_identity_check(tmp_path, answers=GOOD)
+
+    assert [line.split("  ")[0] for line in lines] == ["PASS"] * 3
+    # From the runtime's pod: the only one that reaches the gateway and holds a
+    # certificate the registry lets call it.
+    assert asked.count("-n meridian exec deploy/agent-runtime -- python -c") == 3
+    assert "deploy/claims-api" not in asked
+
+
+@pytest.mark.parametrize(
+    ("answers", "failing"),
+    [
+        ("health=503 anonymous=401 foreign-tenant=403", 0),
+        ("health=200 anonymous=200 foreign-tenant=403", 1),
+        ("health=200 anonymous=403 foreign-tenant=403", 1),
+        ("health=200 anonymous=401 foreign-tenant=200", 2),
+        ("health=200 anonymous=401 foreign-tenant=401", 2),
+    ],
+)
+def test_the_identity_check_fails_on_any_other_status(
+    tmp_path: Path, answers: str, failing: int
+) -> None:
+    lines, _ = run_identity_check(tmp_path, answers=answers)
+
+    verdicts = [line.split("  ")[0] for line in lines]
+    assert verdicts == ["FAIL" if i == failing else "PASS" for i in range(3)]
+
+
+def test_a_probe_that_raises_is_a_failure_not_a_refusal(tmp_path: Path) -> None:
+    lines, _ = run_identity_check(
+        tmp_path, answers="health=FAIL anonymous=FAIL foreign-tenant=FAIL"
+    )
+
+    assert [line.split("  ")[0] for line in lines] == ["FAIL"] * 3
+    assert "Traceback" in lines[0]
+
+
+def test_the_identity_check_skips_while_the_services_are_not_deployed(
+    tmp_path: Path,
+) -> None:
+    lines, asked = run_identity_check(tmp_path, deployed="", answers=GOOD)
+
+    assert [line.split("  ")[0] for line in lines] == ["SKIP"]
+    assert " exec " not in asked
+
+
+def test_the_foreign_tenant_of_the_smoke_probe_is_real_but_not_the_runtimes() -> None:
+    # Only the identity rule can refuse it: the tenant exists and may run the
+    # agent the probe names, so a gateway without S055 would let it through. A
+    # made-up tenant would be refused with 403 by the gateway's own check too,
+    # and the line could not tell the two apart.
+    (tenant,) = re.findall(
+        r"^readonly IDENTITY_FOREIGN_TENANT=(\S+)$", SMOKE_SH, re.MULTILINE
+    )
+    registry = load_registry(REGISTRY_DIR)
+    runtime = registry.service("agent-runtime")
+
+    assert runtime is not None
+    assert "claims-triage" in runtime.agents
+    assert registry.tenant_may_run(tenant, "claims-triage")
+    assert tenant not in runtime.tenants

@@ -104,8 +104,16 @@ SERVICES = (
     CLAIMS_SERVER,
     KNOWLEDGE_SERVER,
 )
+# The identity variables (S055), named here by their text: the chart sets them
+# and tests/meridian/test_helm_identity.py says which workload gets which. A
+# workload that calls another service gets the client's three; one that serves
+# TLS gets the prefix.
+TLS_ENV = {"MERIDIAN_TLS_CERT_FILE", "MERIDIAN_TLS_KEY_FILE", "MERIDIAN_TLS_CA_FILE"}
+IDENTITY_PREFIX_ENV = "MERIDIAN_IDENTITY_PREFIX"
 # Every variable a manifest may set is one the code reads, named by its constant.
 KNOWN_ENV = {
+    *TLS_ENV,
+    IDENTITY_PREFIX_ENV,
     DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
     RUNTIME_URL_ENV,
@@ -301,7 +309,7 @@ def test_the_services_find_each_other_by_the_names_of_the_cluster_services() -> 
         (runtime[GATEWAY_URL_ENV], "model-gateway"),
     ):
         url = urlsplit(variable["value"])
-        assert url.scheme == "http"
+        assert url.scheme == "https"  # both targets serve TLS (S055)
         assert url.hostname == f"{target}.meridian.svc"
         assert url.port in services[target]
 
@@ -323,7 +331,7 @@ def test_the_runtime_reaches_each_registry_server_at_its_cluster_service() -> No
     assert set(servers) == set(TOOL_SERVERS)  # the server IDs are the names
     for server_id, address in servers.items():
         url = urlsplit(address)
-        assert url.scheme == "http"
+        assert url.scheme == "https"  # every tool server serves TLS (S055)
         assert url.hostname == f"{server_id}.meridian.svc"
         assert url.port == SERVER_PORT
         assert url.port in ports[server_id]
@@ -335,9 +343,14 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
     name: str,
 ) -> None:
     env = env_of(containers(deployment(name))[0])
-    expected = {DATABASE_URL_ENV, ALLOWED_HOSTS_ENV, OTLP_ENDPOINT_ENV}
+    expected = {
+        DATABASE_URL_ENV,
+        ALLOWED_HOSTS_ENV,
+        OTLP_ENDPOINT_ENV,
+        IDENTITY_PREFIX_ENV,
+    }
     if name == KNOWLEDGE_SERVER:
-        expected.add(GATEWAY_URL_ENV)
+        expected |= {GATEWAY_URL_ENV, *TLS_ENV}
 
     address = urlsplit(runtime_tool_servers()[name])
     # DNS rebinding protection compares the Host header, byte for byte.
@@ -610,7 +623,11 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
         synthetic_destination(),
     ]
     assert cli_command_words(container["command"][1:]) == ["knowledge", "ingest"]
-    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV, GATEWAY_URL_ENV}
+    assert set(env_of(container)) == {
+        MIGRATIONS_DATABASE_URL_ENV,
+        GATEWAY_URL_ENV,
+        *TLS_ENV,
+    }
     assert env_of(container)[GATEWAY_URL_ENV] == gateway
     # The finished Job is the record that this image's corpus is in the store:
     # deploy.sh skips the ingestion when it finds it, so it must not expire.
@@ -934,7 +951,8 @@ def test_a_deployment_reads_only_its_own_secrets_and_takes_no_env_from(
 ) -> None:
     pod = pod_spec(deployment(name))
 
-    assert secrets_referenced_by(pod) == {f"{name}-db", "platform-db-ca"}
+    # Its role's Secret, the database's CA and its own certificate (S055).
+    assert secrets_referenced_by(pod) == {f"{name}-db", "platform-db-ca", f"{name}-tls"}
     assert all("envFrom" not in c for c in pod["containers"])
 
 
@@ -1246,13 +1264,16 @@ def main_sequence() -> list[str]:
 def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -> None:
     # The seed runs before the services start: a claim that met an empty policy
     # table would get a stored proposal "policy not found", which is final. The
-    # ingestion calls the gateway, so it follows the gateway's rollout.
+    # ingestion calls the gateway, so it follows the gateway's rollout. The
+    # certificates come right after the release: the ingestion Job mounts a
+    # Secret that cert-manager makes from one of them (S055).
     assert main_sequence() == [
         "require_database",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
         "install_release",
+        "wait_for_certificates",
         'wait_for_deployment "${GATEWAY_SERVICE}"',
         "ingest_corpus",
         "wait_for_other_rollouts",
