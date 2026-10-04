@@ -1,0 +1,8 @@
+# Patterns of files a `helm package` leaves out.
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*~
+.git/
+.gitignore

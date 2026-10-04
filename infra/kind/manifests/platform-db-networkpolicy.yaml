@@ -1,0 +1,80 @@
+# The database's own NetworkPolicy (S019). It is kind's platform, not the Meridian
+# chart's: the pod is CloudNativePG's, and the chart's `default-deny` selects it
+# too, because it shares the namespace. `make up` applies this before the
+# database is installed; `make deploy` refuses to run without it, because
+# `default-deny` alone would cut the database off from its operator.
+#
+# Ingress, each rule on its own:
+#   5432  from the pods of this namespace labelled part-of=meridian: the six
+#         services, the three Jobs and the sweep. Nothing else reaches the
+#         database: not another namespace, not an unlabelled pod
+#   8000  from the CloudNativePG operator: its status extraction asks each
+#         instance manager over HTTP. Without this rule the Cluster turned
+#         "Instance Status Extraction Error: HTTP communication issue" within 40
+#         seconds (measured on the owner's cluster); with it, it stayed healthy
+#   any   from the pods of the same Cluster: a replica or a join Job, none today
+#
+# Egress, three rules and nothing else; the database pod cannot open a
+# connection to the internet (measured on the owner's cluster: 443 and 80 timed
+# out, the API server's Service answered, the Cluster stayed healthy):
+#   53    DNS: the cluster's DNS pods (UDP and TCP)
+#   6443  TCP to any address. The instance manager calls the Kubernetes API
+#         server, and 6443 is the API server's own port on the node. The policy
+#         is evaluated after the Service's address is translated to the node's,
+#         and that address changes when the cluster is re-created, so no ipBlock
+#         can name it: the rule names the port and no address
+#   any   the pods of the same Cluster: a replica or a join Job, none today
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-db
+  namespace: meridian
+  labels:
+    app.kubernetes.io/part-of: meridian
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: platform-db
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: meridian
+      ports:
+        - port: 5432
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - port: 8000
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: platform-db
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 6443
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: platform-db

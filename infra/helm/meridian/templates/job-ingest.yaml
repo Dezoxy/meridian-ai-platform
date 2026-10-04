@@ -1,0 +1,3 @@
+{{- if .Values.jobs.ingest.enabled }}
+{{- include "meridian.job" (dict "root" . "name" "ingest" "job" .Values.jobs.ingest) }}
+{{- end }}

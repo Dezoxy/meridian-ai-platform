@@ -46,6 +46,13 @@
 #                 is too young to judge. Only the API server's timestamps are
 #                 compared; a PASS says when it finished, and a schedule that
 #                 stopped since cannot be seen without a clock the script trusts.
+#   8. network policy: one line, read-only. From inside the Claims API's pod a
+#                 TCP connection to the Model Gateway, which no rule allows,
+#                 must time out: the namespace's default-deny is enforced. It
+#                 fails when the policy `default-deny` does not exist, and when
+#                 the connection succeeds (the cluster does not enforce
+#                 NetworkPolicy, or a rule is too wide). Skipped while the
+#                 Claims API is not deployed (`make deploy`).
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -61,6 +68,21 @@ readonly SWEEP_CRONJOB=meridian-sweep
 # The CronJob's schedule is every five minutes; a run is overdue after three.
 readonly SWEEP_PERIOD_SECONDS=300
 readonly SWEEP_STALE_PERIODS=3
+# The connection the network-policy check tries from the Claims API's pod: the
+# Model Gateway's Service, which only the Agent Runtime, the knowledge tool server
+# and the ingestion Job may reach. The image has no curl, so Python opens it. The
+# snippet prints "reached" or "blocked" and exits 0 either way; anything else (a
+# name that does not resolve, a refused connection) is a traceback and a non-zero
+# exit, which the check reports as a failure, not as "blocked".
+readonly NETWORK_PROBE_HOST=model-gateway.meridian.svc
+readonly NETWORK_PROBE_PORT=8000
+readonly NETWORK_PROBE_TIMEOUT=4
+readonly NETWORK_PROBE='import socket
+try:
+    socket.create_connection(("'"${NETWORK_PROBE_HOST}"'", '"${NETWORK_PROBE_PORT}"'), timeout='"${NETWORK_PROBE_TIMEOUT}"').close()
+    print("reached")
+except TimeoutError:
+    print("blocked")'
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
@@ -779,6 +801,38 @@ check_sweep() {
   esac
 }
 
+# ── 8. network policy ────────────────────────────────────────────────────────
+# The tool check above proves the paths the policies allow; this one proves a
+# path they do not. Skipped like it, when the Claims API is not deployed.
+check_network_policy() {
+  local found policy out err_file
+  if ! found="$(kctl -n meridian get deployment claims-api -o name --ignore-not-found)"; then
+    fail "network policy: could not look for deployment/claims-api (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "network policy: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+  if ! policy="$(kctl -n meridian get networkpolicy default-deny -o name --ignore-not-found)"; then
+    fail "network policy: could not look for networkpolicy/default-deny (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${policy}" ]]; then
+    fail "network policy: networkpolicy/default-deny does not exist in meridian: the chart was installed with networkPolicy.enabled=false, or not at all (make deploy)"
+    return
+  fi
+  err_file="$(mktemp)"
+  if out="$(kctl -n meridian exec deploy/claims-api -- python -c "${NETWORK_PROBE}" 2>"${err_file}")" && [[ "${out}" == blocked ]]; then
+    pass "network policy: the Claims API cannot reach the Model Gateway (${NETWORK_PROBE_HOST}:${NETWORK_PROBE_PORT}), which no rule allows"
+  elif [[ "${out}" == reached ]]; then
+    fail "network policy: the Claims API reached the Model Gateway, which no rule allows: the cluster does not enforce NetworkPolicy, or a rule is too wide"
+  else
+    fail "network policy: the probe in deployment/claims-api gave no answer of reached or blocked: stdout: $(clean_lines "${out}"); stderr: $(clean_lines "$(<"${err_file}")")"
+  fi
+  rm -f "${err_file}"
+}
+
 trap cleanup EXIT
 check_edge
 check_database
@@ -787,6 +841,7 @@ check_telemetry
 check_cost_panel
 check_adjuster_pages
 check_sweep
+check_network_policy
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

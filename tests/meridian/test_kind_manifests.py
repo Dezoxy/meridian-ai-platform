@@ -1,9 +1,10 @@
 """The kind manifests, the image and the cluster's roles agree with the code.
 
-No cluster and no Docker are needed: these tests read the files under
-``infra/kind/`` and the repository's ``Dockerfile`` and tie every name in them
-to a constant or an import in ``src/``, so a rename in the code fails here and
-not on the owner's laptop (S041).
+No cluster and no Docker are needed: these tests render the Helm chart under
+``infra/helm/meridian/`` with kind's values (``helm template``, as deploy.sh
+does), read the files under ``infra/kind/`` and the repository's ``Dockerfile``
+and tie every name in them to a constant or an import in ``src/``, so a rename
+in the code fails here and not on the owner's laptop (S041, S019).
 """
 
 import base64
@@ -21,6 +22,16 @@ from urllib.parse import urlsplit
 import pytest
 import typer.main
 import yaml
+from chartsupport import (
+    CHART_DIR,
+    IMAGE_REPOSITORY,
+    JOBS,
+    TEST_TAG,
+    helm_arguments,
+    peers,
+    render,
+    rendered_chart,
+)
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Metric, Sum
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
@@ -69,12 +80,6 @@ from meridian.workloads.claims_triage.triaging import (
 )
 
 KIND_DIR = REPO_ROOT / "infra" / "kind"
-MANIFESTS = KIND_DIR / "manifests" / "meridian"
-MIGRATE_JOB_FILE = MANIFESTS / "migrate-job.yaml"
-SEED_JOB_FILE = MANIFESTS / "seed-job.yaml"
-INGEST_JOB_FILE = MANIFESTS / "ingest-job.yaml"
-JOB_FILES = (MIGRATE_JOB_FILE, SEED_JOB_FILE, INGEST_JOB_FILE)
-SWEEP_FILE = MANIFESTS / "sweep-cronjob.yaml"
 SWEEP_MODULE = "meridian.workloads.claims_triage.sweep"
 SWEEP_ROLE = "claims_sweep"
 TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
@@ -137,9 +142,9 @@ def load_documents(path: Path) -> list[dict]:
 
 
 def all_documents() -> list[dict]:
-    return [
-        d for path in sorted(MANIFESTS.glob("*.yaml")) for d in load_documents(path)
-    ]
+    """Every object of the Meridian chart, rendered with deploy.sh's arguments
+    and the three Job flags on (tests/meridian/chartsupport.py)."""
+    return list(rendered_chart())
 
 
 def documents_of(kind: str) -> list[dict]:
@@ -152,11 +157,12 @@ def deployment(name: str) -> dict:
 
 
 def job_named(name: str) -> dict:
-    """The Job ``meridian-<name>-@TAG@``; deploy.sh fills the tag in."""
+    """The Job ``meridian-<name>-<tag>``, with the tag the chart was rendered
+    with."""
     (found,) = [
         d
         for d in documents_of("Job")
-        if d["metadata"]["name"] == f"meridian-{name}-@TAG@"
+        if d["metadata"]["name"] == f"meridian-{name}-{TEST_TAG}"
     ]
     return found
 
@@ -224,7 +230,7 @@ def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
         assert name in {d["metadata"]["name"] for d in documents_of("ServiceAccount")}
     accounts = documents_of("ServiceAccount")
     # each Job, and the sweep's CronJob, has its own
-    assert len(accounts) == len(SERVICES) + len(JOB_FILES) + 1
+    assert len(accounts) == len(SERVICES) + len(JOBS) + 1
     assert all(a["automountServiceAccountToken"] is False for a in accounts)
 
 
@@ -355,10 +361,10 @@ def test_a_service_takes_its_own_roles_connection_string_and_the_ca_certificate(
     reference = env_of(container)[DATABASE_URL_ENV]["valueFrom"]["secretKeyRef"]
 
     assert reference == {"name": f"{name}-db", "key": "uri"}
-    (mount,) = container["volumeMounts"]
+    (mount,) = [m for m in container["volumeMounts"] if m["name"] == "db-ca"]
     assert mount["mountPath"] == "/etc/meridian/db-ca"
     assert mount["readOnly"] is True
-    (volume,) = pod["volumes"]
+    (volume,) = [v for v in pod["volumes"] if v["name"] == "db-ca"]
     # Only the public certificate: the Secret also holds the CA's private key.
     assert volume["secret"]["secretName"] == "platform-db-ca"
     assert volume["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
@@ -427,7 +433,7 @@ def test_dockerignore_allows_the_seed_data_and_nothing_more_of_that_folder() -> 
 
 def test_every_container_runs_non_root_without_privileges() -> None:
     workloads = pod_workloads()
-    assert len(workloads) == len(SERVICES) + len(JOB_FILES) + 1  # the sweep
+    assert len(workloads) == len(SERVICES) + len(JOBS) + 1  # the sweep
 
     for workload in workloads:
         pod = pod_spec(workload)
@@ -439,25 +445,24 @@ def test_every_container_runs_non_root_without_privileges() -> None:
             assert context["seccompProfile"]["type"] == "RuntimeDefault"
 
 
-def test_every_container_uses_the_image_placeholder_and_never_pulls() -> None:
+def test_every_container_runs_the_image_of_the_values_and_never_pulls() -> None:
     for workload in pod_workloads():
         for container in pod_spec(workload)["containers"]:
-            assert container["image"] == "@IMAGE@"
-            assert container["imagePullPolicy"] == "IfNotPresent"
+            assert container["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
+            assert container["imagePullPolicy"] == "Never"
 
 
-def test_the_only_placeholders_are_the_image_and_the_tag_of_the_job_names() -> None:
-    found = {
-        path.name: set(re.findall(r"@[A-Z_]+@", path.read_text(encoding="utf-8")))
-        for path in MANIFESTS.glob("*.yaml")
-    }
-    job_file_names = {path.name for path in JOB_FILES}
-
-    for name, placeholders in found.items():
-        allowed = {"@IMAGE@", "@TAG@"} if name in job_file_names else {"@IMAGE@"}
-        assert placeholders <= allowed, name
-    for name in ("migrate", "seed", "ingest"):
-        assert job_named(name)["metadata"]["name"].endswith("@TAG@")
+def test_only_the_jobs_names_end_in_the_tag_and_no_placeholder_is_left() -> None:
+    for name in JOBS:
+        assert job_named(name)["metadata"]["name"].endswith(f"-{TEST_TAG}")
+    # A Job's spec cannot change, so a new image is a new Job; every other
+    # object (the CronJob, the Deployments) keeps its name from image to image.
+    for document in all_documents():
+        if document["kind"] != "Job":
+            assert TEST_TAG not in document["metadata"]["name"], document["kind"]
+    for path in CHART_DIR.rglob("*"):
+        if path.is_file():
+            assert not re.search(r"@[A-Z_]+@", path.read_text(encoding="utf-8")), path
 
 
 def test_there_is_one_http_route_for_the_claims_api_on_a_localhost_name() -> None:
@@ -515,9 +520,12 @@ def test_traces_go_to_the_collectors_http_port() -> None:
 
 
 def test_only_the_three_jobs_reference_the_owner_credentials() -> None:
-    for path in MANIFESTS.glob("*.yaml"):
-        text = path.read_text(encoding="utf-8")
-        assert (OWNER_SECRET in text) == (path in JOB_FILES), path.name
+    for workload in pod_workloads():
+        owner = OWNER_SECRET in secrets_referenced_by(pod_spec(workload))
+        assert owner == (workload["kind"] == "Job"), workload["metadata"]["name"]
+    for document in all_documents():
+        if document not in pod_workloads():
+            assert OWNER_SECRET not in yaml.dump(document), document["kind"]
 
 
 def only_container(job: dict) -> dict:
@@ -535,8 +543,8 @@ def test_each_job_runs_once_with_the_owner_credentials_and_its_own_account(
     ]
     accounts = {
         d["metadata"]["name"]: d
-        for d in load_documents(MANIFESTS / f"{name}-job.yaml")
-        if d["kind"] == "ServiceAccount"
+        for d in documents_of("ServiceAccount")
+        if d["metadata"]["name"] == f"meridian-{name}"
     }
 
     assert reference == {"name": OWNER_SECRET, "key": "uri"}
@@ -607,7 +615,8 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
     # The finished Job is the record that this image's corpus is in the store:
     # deploy.sh skips the ingestion when it finds it, so it must not expire.
     assert "ttlSecondsAfterFinished" not in job["spec"]
-    assert "ttlSecondsAfterFinished" in INGEST_JOB_FILE.read_text(encoding="utf-8")
+    values = (CHART_DIR / "values.yaml").read_text(encoding="utf-8")
+    assert "ttlSecondsAfterFinished" in values  # the comment that says why
 
 
 def test_the_ingestions_tenant_may_run_the_ingestion_agent() -> None:
@@ -658,11 +667,11 @@ def test_the_sweep_reads_its_own_secret_and_the_ca_and_never_the_owners() -> Non
     pod = pod_spec(sweep_cronjob())
 
     assert secrets_referenced_by(pod) == {"claims-sweep-db", "platform-db-ca"}
-    assert OWNER_SECRET not in SWEEP_FILE.read_text(encoding="utf-8")
+    assert OWNER_SECRET not in yaml.dump(sweep_cronjob())
     # Only the public certificate of the CA's Secret, as the Jobs mount it.
-    (volume,) = pod["volumes"]
+    (volume,) = [v for v in pod["volumes"] if v["name"] == "db-ca"]
     assert volume["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
-    (mount,) = sweep_container()["volumeMounts"]
+    (mount,) = [m for m in sweep_container()["volumeMounts"] if m["name"] == "db-ca"]
     assert mount == {
         "name": volume["name"],
         "mountPath": "/etc/meridian/db-ca",
@@ -673,8 +682,8 @@ def test_the_sweep_reads_its_own_secret_and_the_ca_and_never_the_owners() -> Non
 def test_the_sweep_has_an_account_of_its_own_with_no_service_account_token() -> None:
     accounts = {
         d["metadata"]["name"]: d
-        for d in load_documents(SWEEP_FILE)
-        if d["kind"] == "ServiceAccount"
+        for d in documents_of("ServiceAccount")
+        if d["metadata"]["name"] == "meridian-sweep"
     }
     pod = pod_spec(sweep_cronjob())
 
@@ -682,11 +691,15 @@ def test_the_sweep_has_an_account_of_its_own_with_no_service_account_token() -> 
     assert accounts["meridian-sweep"]["automountServiceAccountToken"] is False
     assert pod["serviceAccountName"] == "meridian-sweep"
     assert pod["automountServiceAccountToken"] is False
-    # Nothing in the file grants the account a right.
-    assert {d["kind"] for d in load_documents(SWEEP_FILE)} == {
-        "ServiceAccount",
-        "CronJob",
-    }
+    # Nothing in the chart grants an account a right, and the objects the sweep
+    # owns are its account, its CronJob and its NetworkPolicy.
+    assert not [d["kind"] for d in all_documents() if "Role" in d["kind"]]
+    assert {
+        d["kind"]
+        for d in all_documents()
+        if d["metadata"].get("labels", {}).get("app.kubernetes.io/name")
+        == "meridian-sweep"
+    } == {"ServiceAccount", "CronJob", "NetworkPolicy"}
 
 
 def test_the_sweeps_pod_is_hardened_like_the_jobs_pods() -> None:
@@ -701,8 +714,8 @@ def test_the_sweeps_pod_is_hardened_like_the_jobs_pods() -> None:
     assert pod["restartPolicy"] == "Never"
     assert {"cpu", "memory"} <= set(resources["requests"])
     assert "memory" in resources["limits"]
-    assert sweep_container()["image"] == "@IMAGE@"
-    assert sweep_container()["imagePullPolicy"] == "IfNotPresent"
+    assert sweep_container()["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
+    assert sweep_container()["imagePullPolicy"] == "Never"
     for flag in ("hostNetwork", "hostPID", "hostIPC"):
         assert not pod.get(flag), flag
 
@@ -756,17 +769,16 @@ def test_the_sweep_cronjob_carries_the_labels_of_the_other_manifests() -> None:
     )
 
 
-def test_deploy_applies_the_sweep_cronjob_with_the_image_and_no_tag() -> None:
-    skipped = re.findall(
-        r"^readonly \w+_MANIFEST=(\S+\.yaml)$", DEPLOY_SH, re.MULTILINE
-    )
-    placeholders = set(re.findall(r"@[A-Z_]+@", SWEEP_FILE.read_text(encoding="utf-8")))
+def test_the_release_holds_the_sweep_with_the_image_and_no_tag_in_its_name() -> None:
+    release = render(helm_arguments(jobs=()))
+    (cronjob,) = [d for d in release if d["kind"] == "CronJob"]
 
-    # Found by the glob, not skipped as a Job; a CronJob's name is fixed, so a
+    # Part of the release, not run by run_job; a CronJob's name is fixed, so a
     # new image changes its spec in place (a Job's spec cannot change).
-    assert SWEEP_FILE.name not in skipped
-    assert placeholders == {"@IMAGE@"}
-    assert sweep_cronjob()["metadata"]["name"] == "meridian-sweep"
+    assert cronjob["metadata"]["name"] == "meridian-sweep"
+    assert TEST_TAG not in cronjob["metadata"]["name"]
+    assert pod_spec(cronjob)["containers"][0]["image"].endswith(f":{TEST_TAG}")
+    assert "meridian-sweep" not in function_body(DEPLOY_SH, "run_job")
 
 
 def test_every_from_line_of_the_dockerfile_is_pinned_by_digest() -> None:
@@ -945,9 +957,11 @@ def test_no_pod_is_privileged_or_shares_the_nodes_namespaces() -> None:
 
 def test_the_manifests_run_the_user_the_dockerfile_sets() -> None:
     (user,) = dockerfile_instructions("USER")
-    uid = int(user.split(":")[0])
+    uid, gid = (int(part) for part in user.split(":"))
 
     for workload in pod_workloads():
+        context = pod_spec(workload)["securityContext"]
+        assert (context["runAsUser"], context["runAsGroup"]) == (uid, gid)
         for container in pod_spec(workload)["containers"]:
             assert container["securityContext"]["runAsUser"] == uid
 
@@ -978,24 +992,221 @@ def test_up_creates_a_secret_from_stdin_and_never_overwrites_one() -> None:
     assert "set +x" in body  # a `bash -x` run must not trace a password
 
 
-def test_deploy_applies_every_manifest_but_the_jobs_and_knows_the_services() -> None:
-    body = function_body(DEPLOY_SH, "apply_manifests")
-    (services,) = re.findall(r"^readonly SERVICES=\((.*)\)$", DEPLOY_SH, re.MULTILINE)
-    declared = dict(
-        re.findall(r"^readonly (\w+_MANIFEST)=(\S+\.yaml)$", DEPLOY_SH, re.MULTILINE)
-    )
-    job_files = {
-        path.name
-        for path in MANIFESTS.glob("*.yaml")
-        if any(d["kind"] == "Job" for d in load_documents(path))
+DB_POLICY_FILE = KIND_DIR / "manifests" / "platform-db-networkpolicy.yaml"
+
+
+def platform_db_policy() -> dict:
+    (policy,) = load_documents(DB_POLICY_FILE)
+    return policy
+
+
+def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() -> None:
+    policy = platform_db_policy()
+    spec = policy["spec"]
+    ingress = spec["ingress"]
+    peer = peers()["database"]
+
+    assert policy["kind"] == "NetworkPolicy"
+    assert policy["metadata"] == {
+        "name": "platform-db",
+        "namespace": "meridian",
+        "labels": {"app.kubernetes.io/part-of": "meridian"},
+    }
+    # The pod the chart's database peer names is the pod this policy selects.
+    assert spec["podSelector"] == {"matchLabels": peer["podLabels"]}
+    assert peer["namespace"] == policy["metadata"]["namespace"]
+    assert spec["policyTypes"] == ["Ingress", "Egress"]
+    assert ingress == [
+        {
+            "from": [
+                {
+                    "podSelector": {
+                        "matchLabels": {"app.kubernetes.io/part-of": "meridian"}
+                    }
+                }
+            ],
+            "ports": [{"port": 5432, "protocol": "TCP"}],
+        },
+        {
+            "from": [
+                {
+                    "namespaceSelector": {
+                        "matchLabels": {"kubernetes.io/metadata.name": "cnpg-system"}
+                    },
+                    "podSelector": {
+                        "matchLabels": {"app.kubernetes.io/name": "cloudnative-pg"}
+                    },
+                }
+            ],
+            "ports": [{"port": 8000, "protocol": "TCP"}],
+        },
+        {"from": [{"podSelector": {"matchLabels": peer["podLabels"]}}]},
+    ]
+    assert [p["port"] for p in peer["ports"]] == [5432]
+    # Egress is exactly three rules: DNS, the API server's port on the node (no
+    # address: the node's own changes with the cluster) and the Cluster's own
+    # pods. The database pod cannot open a connection to the internet.
+    dns_rule = {
+        "to": [
+            {
+                "namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": "kube-system"}
+                },
+                "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}},
+            }
+        ],
+        "ports": [
+            {"port": 53, "protocol": "UDP"},
+            {"port": 53, "protocol": "TCP"},
+        ],
+    }
+    api_server_rule = {"ports": [{"port": 6443, "protocol": "TCP"}]}
+    cluster_rule = {"to": [{"podSelector": {"matchLabels": peer["podLabels"]}}]}
+    assert spec["egress"] == [dns_rule, api_server_rule, cluster_rule]
+    assert {} not in spec["egress"]  # an empty rule allows everything
+    # The only rule without a destination is the one for port 6443: a rule
+    # without `to` allows its ports to any address.
+    assert [r for r in spec["egress"] if "to" not in r] == [api_server_rule]
+    header = DB_POLICY_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+    assert "6443" in header
+    assert "translated" in header
+    assert "internet" in header
+
+
+PSA = "pod-security.kubernetes.io/"
+
+
+def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces() -> (
+    None
+):
+    namespaces = {
+        d["metadata"]["name"]: d
+        for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
     }
 
-    assert '"${MANIFEST_DIR}"/*.yaml' in body
-    assert job_files == {path.name for path in JOB_FILES}
-    assert set(declared.values()) == job_files
-    for variable in declared:
-        assert f"${{{variable}}}" in body, variable  # each one is skipped
-    assert "continue" in body
+    assert set(namespaces) == {
+        "envoy-gateway-system",
+        "cnpg-system",
+        "observability",
+        "meridian",
+    }
+    labels = namespaces["meridian"]["metadata"].get("labels", {})
+    assert labels == {PSA + "warn": "restricted", PSA + "audit": "restricted"}
+    # `enforce` waits: a first `make up` under it was not tried.
+    assert PSA + "enforce" not in labels
+    for name, namespace in namespaces.items():
+        if name != "meridian":
+            assert "labels" not in namespace["metadata"], name
+
+
+def test_every_pod_the_chart_runs_may_reach_the_database_by_its_policy() -> None:
+    (rule,) = platform_db_policy()["spec"]["ingress"][:1]
+    (selector,) = rule["from"]
+    wanted = selector["podSelector"]["matchLabels"]
+
+    for workload in pod_workloads():
+        template = (
+            workload["spec"]["jobTemplate"]["spec"]["template"]
+            if workload["kind"] == "CronJob"
+            else workload["spec"]["template"]
+        )
+        assert wanted.items() <= template["metadata"]["labels"].items(), workload[
+            "metadata"
+        ]["name"]
+
+
+def test_up_applies_the_database_policy_before_the_database_is_installed() -> None:
+    lines = UP_SH.splitlines()
+    (namespaces,) = [
+        i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
+    ]
+    (applied,) = [
+        i
+        for i, line in enumerate(lines)
+        if "manifests/platform-db-networkpolicy.yaml" in line
+    ]
+    (operator,) = [
+        i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
+    ]
+    (database,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("install_release platform-db")
+    ]
+
+    assert namespaces < applied < operator < database
+    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
+    assert lines[applied - 1].startswith("log ")
+    assert DB_POLICY_FILE.is_file()
+
+
+def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
+    """``require_database`` from deploy.sh in bash against a stub ``kctl`` that
+    knows the Database, no Secret to check and, when ``policy``, the NetworkPolicy
+    ``platform-db``."""
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "NAMESPACE=meridian; DATABASE_ROLES=()",
+            'die() { echo "error: $*" >&2; exit 1; }',
+            "database_roles_reconciled() { return 0; }",
+            "kctl() {",
+            '  case "$*" in',
+            '    *"get database"*) printf true ;;',
+            '    *"get networkpolicy platform-db"*)',
+            '      [[ "${POLICY}" == yes ]] || return 1 ;;',
+            "  esac",
+            "}",
+            function_definition(DEPLOY_SH, "require_database"),
+            "require_database",
+            "echo passed",
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "POLICY": "yes" if policy else "no"},
+        check=False,
+    )
+
+
+def test_deploy_dies_with_make_up_when_the_database_policy_is_missing() -> None:
+    missing = run_require_database(policy=False)
+    present = run_require_database(policy=True)
+
+    assert missing.returncode != 0
+    assert "NetworkPolicy 'platform-db'" in missing.stderr
+    assert "default-deny" in missing.stderr
+    assert "run 'make up' first" in missing.stderr
+    assert "passed" not in missing.stdout
+    assert present.returncode == 0, present.stderr
+    assert "passed" in present.stdout
+
+
+def test_the_release_holds_no_job_a_flag_renders_one_and_deploy_knows_services() -> (
+    None
+):
+    release = render(helm_arguments(jobs=()))
+    (services,) = re.findall(r"^readonly SERVICES=\((.*)\)$", DEPLOY_SH, re.MULTILINE)
+
+    # The Jobs are run by deploy.sh (a Job's spec cannot change), so the release
+    # holds none by default.
+    assert not [d for d in release if d["kind"] == "Job"]
+    for name in JOBS:
+        flagged = render(helm_arguments(jobs=(name,)))
+        (job,) = [d for d in flagged if d["kind"] == "Job"]
+        added = [d for d in flagged if d not in release]
+        assert job["metadata"]["name"] == f"meridian-{name}-{TEST_TAG}"
+        # The Job's NetworkPolicy comes with it: deploy.sh applies what its
+        # template renders and nothing else of the chart.
+        assert sorted(d["kind"] for d in added) == [
+            "Job",
+            "NetworkPolicy",
+            "ServiceAccount",
+        ], name
+        (account,) = [d for d in added if d["kind"] == "ServiceAccount"]
+        assert account["metadata"]["name"] == f"meridian-{name}"
     assert set(services.split()) == set(SERVICES)
     assert {d["metadata"]["name"] for d in documents_of("Deployment")} == set(SERVICES)
     # Each service's database role, and so its Secret, is one deploy.sh checks.
@@ -1003,6 +1214,22 @@ def test_deploy_applies_every_manifest_but_the_jobs_and_knows_the_services() -> 
         r"^readonly DATABASE_ROLES=\((.*)\)$", COMMON_SH, re.MULTILINE
     )
     assert {s.replace("-", "_") for s in SERVICES} <= set(roles.split())
+
+
+def test_deploy_installs_the_release_and_leaves_the_waiting_to_its_own_rollouts() -> (
+    None
+):
+    body = function_body(DEPLOY_SH, "install_release")
+
+    for flag in ("--install", "--take-ownership", "--server-side=true"):
+        assert flag in body, flag
+    assert "--force-conflicts" in body
+    # The script's own rollout waits stay: Helm neither waits nor rolls back,
+    # and it never creates the namespace (make up does).
+    for flag in ("--wait", "--atomic", "--create-namespace"):
+        assert flag not in body, flag
+    assert ">/dev/null" in body
+    assert "status ${RELEASE}" in body  # how the owner finds out why it failed
 
 
 def main_sequence() -> list[str]:
@@ -1015,16 +1242,16 @@ def main_sequence() -> list[str]:
     ]
 
 
-def test_deploy_migrates_seeds_applies_ingests_and_then_waits_in_that_order() -> None:
+def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -> None:
     # The seed runs before the services start: a claim that met an empty policy
     # table would get a stored proposal "policy not found", which is final. The
     # ingestion calls the gateway, so it follows the gateway's rollout.
     assert main_sequence() == [
         "require_database",
         "build_image",
-        'run_job "meridian-migrate-${tag}" "${MIGRATE_MANIFEST}"',
-        'run_job "meridian-seed-${tag}" "${SEED_MANIFEST}"',
-        "apply_manifests",
+        'run_job "meridian-migrate-${tag}" migrate',
+        'run_job "meridian-seed-${tag}" seed',
+        "install_release",
         'wait_for_deployment "${GATEWAY_SERVICE}"',
         "ingest_corpus",
         "wait_for_other_rollouts",
@@ -1034,10 +1261,10 @@ def test_deploy_migrates_seeds_applies_ingests_and_then_waits_in_that_order() ->
     assert "run_migrations" not in DEPLOY_SH
 
 
-def test_deploy_names_each_job_as_its_manifest_does() -> None:
-    for name in ("migrate", "seed", "ingest"):
-        manifest_name = job_named(name)["metadata"]["name"]
-        assert manifest_name.replace("@TAG@", "${tag}") in DEPLOY_SH
+def test_deploy_names_each_job_as_the_chart_does() -> None:
+    for name in JOBS:
+        chart_name = job_named(name)["metadata"]["name"]
+        assert chart_name.replace(TEST_TAG, "${tag}") in DEPLOY_SH
 
 
 def test_deploy_runs_a_job_from_a_clean_slate_to_completion_and_shows_its_log() -> None:
@@ -1047,6 +1274,7 @@ def test_deploy_runs_a_job_from_a_clean_slate_to_completion_and_shows_its_log() 
         body.index(part)
         for part in (
             'delete "job/${job}" --ignore-not-found --wait',
+            "render_job",
             "kctl apply --server-side",
             'job_state "${job}"',
             'logs "job/${job}"',
@@ -1069,7 +1297,7 @@ def test_deploy_ingests_at_most_once_per_image_and_removes_the_other_ingestions(
             'job_state "${job}"',
             "already in the store",
             f"-l app.kubernetes.io/name={label}",
-            'run_job "${job}" "${INGEST_MANIFEST}"',
+            'run_job "${job}" ingest',
             "ingested_at=${SECONDS}",
         )
     ]
@@ -1119,7 +1347,6 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
         [
             "set -euo pipefail",
             "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
-            "INGEST_MANIFEST=ingest-job.yaml",
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
             "job_state() { echo succeeded; }",
@@ -1194,6 +1421,33 @@ def test_the_printable_ascii_filter_drops_escapes_and_other_bytes() -> None:
     )
 
     assert done.stdout == "ok [31mred[0mcaf\nnext\n"
+
+
+def test_the_printable_ascii_filter_redacts_a_postgresql_connection_string() -> None:
+    # Synthetic: the host is under .invalid and the password says what it is.
+    lines = (
+        "connect failed: postgresql://role:not-a-secret@db.invalid/x refused",
+        "also postgres://role:not-a-secret@db.invalid:5432/x?sslmode=require",
+        "plain line",
+    )
+    script = (
+        function_definition(DEPLOY_SH, "printable_ascii")
+        + "printf '%s\\n' "
+        + " ".join(f"'{line}'" for line in lines)
+        + " | printable_ascii"
+    )
+
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True
+    )
+
+    assert "not-a-secret" not in done.stdout
+    assert "db.invalid" not in done.stdout
+    assert done.stdout.splitlines() == [
+        "connect failed: postgresql://[redacted] refused",
+        "also postgresql://[redacted]",
+        "plain line",
+    ]
 
 
 def test_the_smoke_probe_reads_server_names_from_stdout_only() -> None:

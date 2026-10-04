@@ -261,8 +261,10 @@ owner runs it by hand from `infra/terraform/foundation` after
 - The West Europe account and the data-zone SKU: after the subscription's
   upgrade to pay-as-you-go, when the quota exists.
 - Private endpoints and IP rules for the vault, the account and the state
-  storage, and diagnostics settings: S020 adds the network and S019 the
-  hardening. Until then they are reachable from the internet, protected by
+  storage, and diagnostics settings: S020 adds the network; closing these
+  three to it is in the plan's follow-up backlog, with S020 as its proposed
+  home (S019 hardened the charts on kind, not these resources). Until then
+  they are reachable from the internet, protected by
   Entra ID and RBAC only. The laptop's IP changes, which is why an allow list
   is not used.
 - Terraform in CI and GitHub OIDC federation: S022. Nothing here stores a

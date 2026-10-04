@@ -1,0 +1,3 @@
+{{- if .Values.jobs.migrate.enabled }}
+{{- include "meridian.job" (dict "root" . "name" "migrate" "job" .Values.jobs.migrate) }}
+{{- end }}

@@ -8,22 +8,27 @@
 #      applied and the seed mirrors its source, so a rerun takes seconds). The
 #      seed comes before the services: a claim that met an empty policy table
 #      would get a stored proposal "policy not found", which is final.
-#   3. every manifest in manifests/meridian/ but the three Jobs: the six
-#      Deployments and Services (Claims API, Agent Runtime, Model Gateway and
-#      the policy, claims and knowledge tool servers), the one route (Claims
-#      API only) with its request-size limit, and the sweep's CronJob (S052).
-#      The CronJob's spec is mutable (a change reaches the Jobs it starts
-#      afterwards, none that is running), so the same server-side apply
-#      updates it in place; no rollout waits for it, as it runs on a schedule
+#   3. the Helm release `meridian` (infra/helm/meridian, with kind's values in
+#      values/meridian.yaml), installed or upgraded: the six Deployments and
+#      Services (Claims API, Agent Runtime, Model Gateway and the policy,
+#      claims and knowledge tool servers), the one route (Claims API only)
+#      with its request-size limit, and the sweep's CronJob (S052). The
+#      release never holds a Job (the chart renders those only on request, so
+#      step 2 and 4 can run them). The CronJob's spec is mutable (a change
+#      reaches the Jobs it starts afterwards, none that is running), so the
+#      upgrade updates it in place; no rollout waits for it, as it runs on a
+#      schedule. Objects a raw `kubectl apply` made before the chart existed
+#      are adopted (--take-ownership). Helm does not wait for the rollouts:
+#      the steps below do
 #   4. the Model Gateway's rollout, then the ingestion Job (it embeds the
 #      wordings through the gateway), at most once per image: a finished Job of
 #      this image's tag, and rows in knowledge.chunks, are the record that its
 #      corpus is in the store
 #   5. the other rollouts and the route, then, when an ingestion ran, a wait
 #      until its token reservation has left the tenant's one-minute window
-# The only text replaced in the manifests is @IMAGE@ (and @TAG@ in a Job's name;
-# the CronJob's name has none).
-# Nothing here prints a Secret's value.
+# The chart's only inputs from this script are the image's repository and tag
+# (a Job's name ends in the tag; the CronJob's name has none).
+# Nothing here prints a Secret's value, or a connection string of a Job's log.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -31,16 +36,15 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "${KIND_DIR}/../.." && pwd)"
 readonly REPO_ROOT
-readonly MANIFEST_DIR="${KIND_DIR}/manifests/meridian"
+readonly CHART_DIR="${REPO_ROOT}/infra/helm/meridian"
+readonly VALUES_FILE="${KIND_DIR}/values/meridian.yaml"
+readonly RELEASE=meridian
 readonly IMAGE_REPOSITORY=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
-readonly MIGRATE_MANIFEST=migrate-job.yaml
-readonly SEED_MANIFEST=seed-job.yaml
-readonly INGEST_MANIFEST=ingest-job.yaml
 # One list: each service is a Deployment of the same name, and each has a
 # Secret <service>-db (tests/meridian/test_kind_manifests.py checks the
-# manifests against it). The role Secrets come from DATABASE_ROLES (common.sh).
+# chart against it). The role Secrets come from DATABASE_ROLES (common.sh).
 readonly SERVICES=(claims-api agent-runtime model-gateway policy-mcp claims-mcp knowledge-mcp)
 # The ingestion calls this one, so it is waited for before the ingestion runs.
 readonly GATEWAY_SERVICE=model-gateway
@@ -62,7 +66,7 @@ readonly TOKEN_WINDOW_SECONDS=62
 # SECONDS at which this deploy saw its ingestion complete; empty when none ran.
 ingested_at=""
 
-need_tools docker kind kubectl jq sed
+need_tools docker kind kubectl helm jq
 require_local_docker
 need_cluster
 docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
@@ -73,6 +77,10 @@ require_database() {
   [[ "$(kctl -n "${NAMESPACE}" get database platform-db-meridian \
     -o jsonpath='{.status.applied}' 2>/dev/null)" == true ]] ||
     die "the Database 'meridian' is missing or not applied; run 'make up' first"
+  # The chart's default-deny selects the database pod too: without this policy
+  # (it admits the operator and the services) the Cluster would go unhealthy.
+  kctl -n "${NAMESPACE}" get networkpolicy platform-db >/dev/null 2>&1 ||
+    die "the NetworkPolicy 'platform-db' is missing, and the chart's default-deny would cut the database off from its operator; run 'make up' first"
   for role in "${DATABASE_ROLES[@]}"; do
     secret="$(role_secret_name "${role}")"
     kctl -n "${NAMESPACE}" get secret "${secret}" >/dev/null 2>&1 ||
@@ -105,9 +113,23 @@ build_image() {
   log "image ${image} loaded into cluster ${CLUSTER_NAME}"
 }
 
-# render FILE: the manifest with the image reference (and tag) filled in.
-render() {
-  sed -e "s|@IMAGE@|${image}|g" -e "s|@TAG@|${tag}|g" "$1"
+# helm_chart VERB [ARGUMENT...]: `helm VERB` on the release's chart with what
+# every call shares: the release, the chart, the namespace, kind's values and
+# the image just built (--set-string: twelve hex digits can be all digits, which
+# --set would turn into a number). The tests render the chart with these same
+# arguments (tests/meridian/chartsupport.py).
+helm_chart() {
+  local verb="$1"
+  shift
+  helmc "${verb}" "${RELEASE}" "${CHART_DIR}" --namespace "${NAMESPACE}" -f "${VALUES_FILE}" --set-string "image.repository=${IMAGE_REPOSITORY}" --set-string "image.tag=${tag}" "$@"
+}
+
+# render_job NAME: the manifest of the Job `migrate`, `seed` or `ingest` with
+# its ServiceAccount, from the chart with that Job's flag on. The release never
+# holds a Job: deploy.sh applies each one itself.
+render_job() {
+  local name="$1"
+  helm_chart template --set "jobs.${name}.enabled=true" --show-only "templates/job-${name}.yaml"
 }
 
 # job_state NAME: "succeeded", "failed" or "running", from the Job's conditions.
@@ -119,22 +141,26 @@ job_state() {
 }
 
 # printable_ascii: stdin without any byte that is not printable ASCII or a
-# newline. A Job's log can quote data of a checkout (a manifest key, a database
-# message), and an escape sequence in it must not reach the terminal.
+# newline, and with anything that looks like a PostgreSQL URL (postgres:// or
+# postgresql:// up to the next whitespace) replaced by postgresql://[redacted].
+# A Job's log can quote data of a checkout (a manifest key, a database message),
+# and an escape sequence in it must not reach the terminal; a driver's error can
+# quote the connection string, and its password must not reach the log.
 printable_ascii() {
-  LC_ALL=C tr -cd '[:print:]\n'
+  LC_ALL=C tr -cd '[:print:]\n' |
+    sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://[redacted]#g'
 }
 
-# run_job NAME MANIFEST: the Job NAME, from MANIFEST, run to completion; its log
-# is printed (through printable_ascii) when it ends, however it ends. A Job of
-# the same name from an earlier deploy (finished, or failed and not yet removed)
-# is deleted first: a Job's spec cannot change, and what the Jobs run is
-# idempotent.
+# run_job NAME CHART_JOB: the Job NAME, rendered by render_job CHART_JOB, run to
+# completion; its log is printed (through printable_ascii) when it ends, however
+# it ends. A Job of the same name from an earlier deploy (finished, or failed
+# and not yet removed) is deleted first: a Job's spec cannot change, and what
+# the Jobs run is idempotent.
 run_job() {
-  local job="$1" manifest="$2" state deadline
+  local job="$1" chart_job="$2" state deadline
   kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait >/dev/null
   log "job ${job}"
-  render "${MANIFEST_DIR}/${manifest}" | kctl apply --server-side --force-conflicts -f - >/dev/null
+  render_job "${chart_job}" | kctl apply --server-side --force-conflicts -f - >/dev/null
   deadline=$((SECONDS + JOB_TIMEOUT))
   while ((SECONDS < deadline)); do
     # A transient kubectl error is not a verdict: ask again.
@@ -155,17 +181,15 @@ run_job() {
   die "the job ${job} did not finish in ${JOB_TIMEOUT}s"
 }
 
-# Every manifest but the three Jobs, found by glob: a new file is applied
-# without editing this script.
-apply_manifests() {
-  local file
-  for file in "${MANIFEST_DIR}"/*.yaml; do
-    case "$(basename "${file}")" in
-      "${MIGRATE_MANIFEST}" | "${SEED_MANIFEST}" | "${INGEST_MANIFEST}") continue ;;
-    esac
-    log "applying $(basename "${file}" .yaml)"
-    render "${file}" | kctl apply --server-side --force-conflicts -f - >/dev/null
-  done
+# The release: everything in the chart but the three Jobs, installed, or
+# upgraded when it exists. Helm adopts the objects of an earlier raw apply
+# (--take-ownership) and applies server-side, forcing the conflict with the
+# field manager that made them. It does not wait: the rollouts below do, and it
+# does not create the namespace: make up did.
+install_release() {
+  log "installing release ${RELEASE}"
+  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts >/dev/null ||
+    die "helm could not install release ${RELEASE} (its error is above; to see why: helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${NAMESPACE} status ${RELEASE}, or history ${RELEASE})"
 }
 
 # stored_chunk_count: the number of rows in knowledge.chunks, read in the
@@ -206,7 +230,7 @@ ingest_corpus() {
     log "job ${job} succeeded, but knowledge.chunks holds no rows or could not be read; ingesting again"
   fi
   kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait >/dev/null
-  run_job "${job}" "${INGEST_MANIFEST}"
+  run_job "${job}" ingest
   ingested_at=${SECONDS}
 }
 
@@ -245,9 +269,9 @@ wait_for_token_window() {
 
 require_database
 build_image
-run_job "meridian-migrate-${tag}" "${MIGRATE_MANIFEST}"
-run_job "meridian-seed-${tag}" "${SEED_MANIFEST}"
-apply_manifests
+run_job "meridian-migrate-${tag}" migrate
+run_job "meridian-seed-${tag}" seed
+install_release
 wait_for_deployment "${GATEWAY_SERVICE}"
 ingest_corpus
 wait_for_other_rollouts

@@ -61,7 +61,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline eval-record synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline eval-record synthetic up deploy helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -212,7 +212,7 @@ synthetic:
 up:
 	infra/kind/up.sh
 
-## deploy          build the image, run the migrations, seed the policy store, put the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion)
+## deploy          build the image, run the migrations, seed the policy store, install the Helm release with the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion)
 deploy:
 	infra/kind/deploy.sh
 
@@ -220,7 +220,7 @@ deploy:
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages and the sweep's last Job
+## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that a connection no network policy allows is blocked
 smoke:
 	infra/kind/smoke.sh
 
@@ -231,6 +231,10 @@ grafana:
 ## grafana-password print the Grafana admin password
 grafana-password:
 	@infra/kind/grafana.sh password
+
+## helm-lint       lint the Meridian chart strictly, with kind's values and every Job on (needs helm)
+helm-lint:
+	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
 
 ## down            delete the kind cluster "meridian" and its credentials file (destructive; the owner runs it)
 down:

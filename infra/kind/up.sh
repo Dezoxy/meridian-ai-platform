@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
-#   2. namespaces, Envoy Gateway and the edge Gateway
+#   2. namespaces, the database's NetworkPolicy, Envoy Gateway and the edge Gateway
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its eight roles (the owner, six services and
 #      the scheduled sweep's); their password Secrets are created first, only if
@@ -155,6 +155,9 @@ create_cluster
 
 log "namespaces"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.yaml" >/dev/null
+
+log "network: the database's NetworkPolicy (before the database exists)"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/platform-db-networkpolicy.yaml" >/dev/null
 
 log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \

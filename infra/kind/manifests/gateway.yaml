@@ -1,12 +1,13 @@
 # The edge: GatewayClass "envoy", Gateway "edge" and the EnvoyProxy that shapes
 # the proxy Service. Applied by up.sh after Envoy Gateway is installed (the
 # CRDs come with its chart). The only route is the Claims API's, on
-# claims.meridian.localhost (manifests/meridian/route.yaml, S041); every other
-# host gets 404.
+# claims.meridian.localhost (infra/helm/meridian/templates/route.yaml, S041);
+# every other host gets 404.
 #
 # On kind a LoadBalancer Service stays Pending forever, so the proxy Service is
 # a NodePort with a fixed port. kind maps 127.0.0.1:8088 on the laptop to that
-# node port (infra/kind/cluster.yaml). Plain HTTP for now; TLS is S019.
+# node port (infra/kind/cluster.yaml). Plain HTTP on loopback; TLS at the edge
+# has no step yet (the plan's follow-up backlog).
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyProxy
 metadata:

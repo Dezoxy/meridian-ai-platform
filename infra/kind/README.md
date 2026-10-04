@@ -8,7 +8,7 @@ the policy wordings; `make demo` runs a claim through them. `make down`
 removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
 servers, S043 for the cost dashboard, S015 for the adjuster's decision,
-S016 for the adjuster's pages).
+S016 for the adjuster's pages, S019 for the Helm chart and its hardening).
 Nothing here is deployed anywhere but your laptop; the Azure side is S007
 onward. The services run in replay mode: no model is called, the model's
 text is canned and simulated, and so are the embeddings. A triage that asks
@@ -29,8 +29,10 @@ adjuster; the rules decide every other claim.
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
 to change one. The values that override chart defaults are in
-[`values/`](values/); the Gateway, the namespaces and Grafana's Role are in
-[`manifests/`](manifests/).
+[`values/`](values/); the Gateway, the namespaces, Grafana's Role and the
+database's NetworkPolicy are in [`manifests/`](manifests/). The Meridian
+services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
+which `make deploy` installs (below).
 
 How telemetry flows: an application sends OTLP to
 `otel-collector.observability:4317` (gRPC) or `:4318` (HTTP). The collector
@@ -69,7 +71,7 @@ broken one. The three tool-server roles may each hold at most 20
 connections: a tool server runs at most eight calls at once, one connection
 each and one more for a failure's audit row, and during a rollout two of its
 pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
-other roles have no such bound until they get a connection pool (S019). The `app`
+other roles have no such bound until they get a connection pool (S027). The `app`
 database, role and Secret are untouched. The `meridian` database declares the
 `vector` extension too (S012): migration 0005 needs it, and `meridian_owner`
 cannot create an extension PostgreSQL does not trust. `make up` waits until
@@ -139,14 +141,15 @@ node image, Kubernetes components and the platform).
 | Command | What it does |
 |---|---|
 | `make up` | Create the cluster if absent, install every release and provision the Grafana dashboards. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
-| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/` (the sweep's CronJob among them), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross and its span counts have settled (unchanged for three readings, six seconds). |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks seven things:
+`make smoke` checks eight things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -201,6 +204,13 @@ node image, Kubernetes components and the platform).
    API server set are compared, never this laptop's clock, so a schedule that
    stopped after a success keeps printing PASS with that success's finish
    time: read the time against `date -u`.
+8. **Network policy.** One line, read-only. From inside the Claims API's pod
+   a connection to the Model Gateway is tried, a path no rule allows, and it
+   must be blocked: that proves the cluster's network plugin enforces the
+   policies and not only stores them. The allowed paths are the tool check's
+   proof (line 3). It fails when the connection is made, and when the
+   NetworkPolicy `default-deny` is missing. Before `make deploy` this line
+   prints SKIP.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -212,7 +222,8 @@ One image, built from the [`Dockerfile`](../../Dockerfile) at the repository
 root, runs all six services and the three commands of the Jobs. It is based on
 `python:3.13-slim` and `uv`, both pinned by digest, installs the locked
 dependencies without the dev group and the package non-editable into a venv,
-runs as user 10001 and sets no command of its own (each manifest names it).
+runs as user 10001 and sets no command of its own (the chart names each
+workload's).
 It carries the registry and the seed data the Jobs load: the synthetic
 policies, their claim history, the four policy wordings and the generator's
 manifest (file hashes and counts), and nothing else of `data/synthetic`: not
@@ -245,11 +256,16 @@ gets 421. A test keeps the two values equal.
 In order, `make deploy`:
 
 1. Refuses with "run 'make up' first" if the `meridian` Database is not
-   applied, a role is not reconciled or a role Secret is missing.
+   applied, a role is not reconciled, a role Secret is missing or the
+   database's NetworkPolicy `platform-db` is absent (the chart's
+   `default-deny` would otherwise cut the database off from its operator).
 2. Builds and loads the image.
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
-   `meridian_owner`. Only the three Jobs read that Secret. Both must finish
+   `meridian_owner`. Only the three Jobs read that Secret. The script renders
+   each Job from the chart (`helm template --show-only`, with that Job's flag
+   on) and applies it with its ServiceAccount and its NetworkPolicy; the
+   release itself never holds a Job. Both must finish
    before anything else is applied; on failure the script prints the Job's
    log and exits non-zero. They run on every deploy (a Job of the same tag is
    deleted first; the runner skips what is applied and the seed mirrors its
@@ -257,10 +273,13 @@ In order, `make deploy`:
    seed comes before the services because a claim that meets an empty policy
    table gets a stored proposal "policy not found", and a stored proposal is
    final.
-4. Applies every other file in `manifests/meridian/` (found by glob: the
-   ServiceAccounts, Deployments, Services, the HTTPRoute, the
-   BackendTrafficPolicy and the sweep's CronJob). `@IMAGE@` (and `@TAG@` in a
-   Job's name) are the only text it substitutes.
+4. Installs or upgrades the Helm release `meridian` (`helm upgrade
+   --install`, server-side apply): the ServiceAccounts, Deployments,
+   Services, PodDisruptionBudgets and NetworkPolicies, the HTTPRoute, the
+   BackendTrafficPolicy and the sweep's CronJob. The image's repository and
+   tag are the only values the script passes; the rest is the chart's
+   `values.yaml` and [`values/meridian.yaml`](values/meridian.yaml). Helm
+   does not wait for the rollouts; the next steps do.
 5. Waits for the Model Gateway, then runs a Job `meridian-ingest-<tag>` with
    `meridian knowledge ingest`, which embeds the 85 clauses of the four
    wordings through the gateway and replaces the knowledge store in one
@@ -296,15 +315,118 @@ on the host `claims.meridian.localhost`. A request with any other `Host`
 header, such as `127.0.0.1:8088` or a page that rebinds its DNS name to
 loopback (threat model T-01), matches no route and gets 404 from Envoy.
 Envoy buffers each request to the Claims API and answers 413 above 64 KiB, the
-app's own limit, before the app sees it. TLS, NetworkPolicy and hardened
-charts are S019.
+app's own limit, before the app sees it. The edge speaks plain HTTP, on
+loopback only; TLS there has no step yet.
 
-A `ClusterIP` Service means unrouted, not protected: the Agent Runtime, the
-Model Gateway and the tool servers have no route at the edge, but any pod in
-the cluster can call them, over plain HTTP, until S019's NetworkPolicy lands.
-A tool server gives such a caller less than the others do: it answers only
-for the run ID of a running run and only with that run's claim (T-50). The
-database boundary above does not depend on any of that.
+A `ClusterIP` Service means unrouted, not protected. Since S019 the
+namespace's network policies are the protection: the Agent Runtime, the
+Model Gateway and the tool servers accept a connection only from the pods
+the next section lists. That is a rule about pods' labels, not about who a
+caller is: the services still trust the tenant and agent headers they are
+sent, until service identity (S055). A tool server gives a caller less than
+the others do: it answers only for the run ID of a running run and only with
+that run's claim (T-50). The database boundary above does not depend on any
+of that.
+
+## The chart and what it locks down
+
+`make deploy` installs one Helm release, `meridian`, from
+[`../helm/meridian/`](../helm/meridian/). Status: **implemented on kind**
+(S019); the same chart is meant for AKS (S020), where the values that are
+kind's here (the gateway's replay mode, the route's host, the policies'
+peers) will differ. Neither file holds a secret: Helm keeps a release's
+values in a Secret of the namespace, so a value names a Secret and never
+holds a password or a connection string.
+
+Every pod of the chart, the Jobs' and the sweep's included:
+
+- runs as user and group 10001, never root, with every capability dropped,
+  no privilege escalation, the runtime's default seccomp profile and no
+  service-account token. These settings are written in the chart, not in
+  its values, so a `--set` cannot loosen them, and the chart refuses user 0;
+- has a read-only root filesystem. `/tmp`, an `emptyDir` of at most 16 MiB
+  on the node's disk, is its one writable path;
+- has a memory limit and CPU and memory requests. There is no CPU limit on
+  purpose: a request reserves what a service needs, and a limit would
+  throttle it while the node has headroom;
+- runs the image under a pinned reference. The chart takes `image.digest`
+  and refuses a tag unless `imagePullPolicy` is `Never`; the tag `latest`
+  and a repository that carries a tag of its own are refused always. kind
+  has no
+  registry, so there is no repository digest to pin: `make deploy` loads the
+  image into the node under the first 12 hex digits of its image ID, a name
+  the content gives itself, and `Never` makes a missing image fail the pod
+  instead of being looked up on Docker Hub under the same name.
+
+Each service has readiness and liveness probes on `/healthz` and a
+PodDisruptionBudget with `maxUnavailable: 1`. With the one replica each
+service runs, that budget permits the pod's eviction: it blocks no node
+drain and protects nothing yet, and starts to matter with a second replica.
+The chart refuses a second replica of the Model Gateway, whose rate windows
+live in one process (threat model T-45).
+
+The namespace denies all traffic by default: the NetworkPolicy
+`default-deny` selects every pod in `meridian`, whatever its labels, and
+allows nothing. One policy per workload then allows what its configuration
+names:
+
+| Workload | May be called by | May call |
+|---|---|---|
+| Claims API | the edge (Envoy's proxy pods) | Agent Runtime |
+| Agent Runtime | Claims API | Model Gateway, the three tool servers |
+| Model Gateway | Agent Runtime, Knowledge tool server, the ingest Job | nothing (replay mode) |
+| Policy and Claims tool servers | Agent Runtime | nothing |
+| Knowledge tool server | Agent Runtime | Model Gateway |
+| The migrate and seed Jobs, the sweep | nobody | nothing |
+| The ingest Job | nobody | Model Gateway |
+
+Every workload may also reach DNS and the database, and the six services
+the collector; the Jobs and the sweep send no telemetry and may not. A test
+derives the table from each container's environment: a service address
+without a rule, or a rule without an address, fails it. A Job's policy is
+rendered and applied with the Job, so it is never one deploy behind.
+
+The database pod shares the namespace, and its policy is the platform's:
+[`manifests/platform-db-networkpolicy.yaml`](manifests/platform-db-networkpolicy.yaml),
+applied by `make up`. It admits the Meridian pods on 5432 and the
+CloudNativePG operator on 8000 (without that rule the operator reported
+`Instance Status Extraction Error` within 40 seconds, measured in S019). The
+database pod itself may reach DNS, the pods of its own Cluster and TCP port
+6443 at any address: its instance manager calls the API server, whose
+address is the node's own and changes with every new cluster, so the rule
+names the port and no address. From the database pod a connection to the
+internet timed out, and 40 of 40 to the API server were made (S019).
+
+What the policies do not do:
+
+- They are not identity. A pod created in `meridian` with a service's label
+  is admitted as that service; who may create pods there is the cluster's
+  access control, and proving which service calls is S055.
+- DNS and the collector are open to the pods that use them, and either
+  could carry data out slowly. The database pod may reach port 6443 at any
+  address, not only the API server's.
+- They are not enforced by admission. The namespace warns about and audits
+  a pod below the `restricted` Pod Security Standard
+  ([`manifests/namespaces.yaml`](manifests/namespaces.yaml)); it does not
+  refuse one yet (below).
+- The Model Gateway has no rule towards a provider: on kind it calls none.
+  The rule for Azure OpenAI is S020's.
+
+kind's network plugin, kindnet, enforces NetworkPolicy; `make smoke` checks
+that on every run (line 8). To look at the release and the policies:
+
+```sh
+export KUBECONFIG=$PWD/infra/kind/kubeconfig
+helm -n meridian status meridian
+kubectl -n meridian get networkpolicy,poddisruptionbudget
+```
+
+A cluster whose services were first applied as raw manifests (before S019)
+keeps them: Helm adopted the objects in place (`--take-ownership`) and no
+pod was replaced by the adoption. On such a cluster the old field manager,
+`kubectl`, still co-owns the fields it set, so a field a later chart version
+drops would stay until the object is re-created; a cluster made after S019
+has no such owner.
 
 `make demo` posts the claims in `data/synthetic/claims.json` in order to the
 Claims API through the edge, with a W3C `traceparent` header whose trace ID the
@@ -350,8 +472,8 @@ T-69), and the edge serves them only to the laptop.
 
 ## The scheduled sweep
 
-A CronJob `meridian-sweep` (S052, in
-[`manifests/meridian/sweep-cronjob.yaml`](manifests/meridian/sweep-cronjob.yaml))
+A CronJob `meridian-sweep` (S052, in the chart's
+[`templates/sweep.yaml`](../helm/meridian/templates/sweep.yaml))
 runs `python -m meridian.workloads.claims_triage.sweep` every five minutes,
 in the image `make deploy` built, as the database role `claims_sweep` (Secret
 `claims-sweep-db`, never the owner's).
@@ -375,8 +497,9 @@ CronJob owns it. A succeeded Job is removed when the next one finishes, about
 five minutes later. Kubernetes removes any Job a day after it finishes
 (`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
 the morning, and the last success of a suspended CronJob. A pod has no
-service-account token, no extra privilege and mounts only the CA's public
-certificate.
+service-account token, no extra privilege and a read-only root filesystem,
+mounts only the CA's public certificate, and may reach DNS and the database
+and nothing else (S019).
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
 
@@ -478,8 +601,14 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
 
 ## Deliberately not here yet
 
-- TLS on the gateway, NetworkPolicy, PodDisruptionBudgets, read-only root
-  filesystems and Helm charts for the Meridian services: S019.
+- TLS on the gateway: no step yet (the plan's follow-up backlog). The edge
+  listens on loopback only.
+- `enforce` for Pod Security Admission on the `meridian` namespace, which
+  has `warn` and `audit` at `restricted` since S019: a server-side dry run
+  of `enforce=restricted` reported no violation, but a cold `make up` under
+  it (CloudNativePG's init Job) was not tried; in the backlog.
+- A second replica of any service, and so a budget that protects one:
+  whether each service is safe to run twice is not measured (S027).
 - Alertmanager: S024. Its Grafana datasource is off too.
 - Persistence beyond the node: PostgreSQL, Loki and Tempo use small volumes on
   the node's disk, Prometheus and Grafana use none. `make down` removes all of

@@ -2,8 +2,8 @@
 # the policy, claims and knowledge tool servers) and for `meridian db migrate`,
 # `meridian db seed-policies` and `meridian knowledge ingest`. This file sets no
 # CMD or ENTRYPOINT (the base image's own CMD, `python3`, is inherited); each
-# manifest names its command.
-# Built by infra/kind/deploy.sh (`make deploy`); S019/S021 take over the build.
+# workload of the chart (infra/helm/meridian) names its command.
+# Built by infra/kind/deploy.sh (`make deploy`); S022 takes over the build.
 #
 # Base images are pinned by their multi-arch index digest. Looked up
 # 2026-10-01 with `docker buildx imagetools inspect`:

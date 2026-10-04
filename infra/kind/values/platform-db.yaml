@@ -79,7 +79,7 @@ cluster:
     # more. During a rollout two pods of a server run side by side, so 2 * (8 +
     # 1) = 18 is the most it can need; 20 is a bound it never reaches and a
     # runaway cannot pass. The other roles have no such bound until they get a
-    # pool (S019).
+    # pool (S027).
     - name: policy_mcp
       ensure: present
       login: true
