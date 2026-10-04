@@ -247,6 +247,18 @@ def test_the_alert_group_reads_only_the_recorded_series() -> None:
         assert series_named(alert["expr"]) == {RECORDED}, alert["alert"]
 
 
+def test_the_unit_tests_evaluate_the_recording_group_first() -> None:
+    # promtool evaluates the groups it is given no order for in a random one.
+    # An alert group that runs first reads the recorded series one step late,
+    # so a test on the minute an alert ends passes or fails by chance.
+    unit_tests = yaml.safe_load((ALERTS_DIR / "meridian.test.yaml").read_text())
+
+    order = unit_tests["group_eval_order"]
+
+    assert order[0] == "meridian.gateway.recording"
+    assert sorted(order) == sorted(groups())
+
+
 def test_every_label_matched_or_grouped_on_a_gateway_series_is_one_it_carries() -> None:
     for name, expression in expressions():
         if not series_named(expression) & {RECORDED, *GATEWAY_SERIES}:
