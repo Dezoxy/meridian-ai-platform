@@ -67,10 +67,13 @@ def test_the_evaluation_gate_runs_after_the_tests_on_the_report_the_tests_write(
     assert written == "${{ runner.temp }}/claims-triage-report.json"
     # The gate reads the same file: runner.temp is $RUNNER_TEMP in a shell.
     assert gate["run"] == (
-        'make eval-compare EVAL_REPORT="$RUNNER_TEMP/claims-triage-report.json"'
+        "make eval-compare "
+        'EVAL_REPORT="$RUNNER_TEMP/claims-triage-report.json" '
+        'EVAL_INJECTION_REPORT="$RUNNER_TEMP/claims-triage-injection-report.json"'
     )
-    assert written.removeprefix("${{ runner.temp }}/") == (
-        gate["run"].rsplit("/", 1)[1].rstrip('"')
+    injection_written = tests["env"]["MERIDIAN_EVAL_INJECTION_REPORT"]
+    assert injection_written == (
+        "${{ runner.temp }}/claims-triage-injection-report.json"
     )
 
 
@@ -95,6 +98,35 @@ def test_make_eval_runs_the_recorded_test_that_exists() -> None:
     # compared as if it had written the new one.
     eval_recipe = MAKEFILE.split("\neval:\n", 1)[1].split("\n\n", 1)[0]
     assert eval_recipe.index("rm -f $(EVAL_REPORT)") < eval_recipe.index("pytest-db")
+
+
+def test_make_eval_runs_the_injection_test_that_exists() -> None:
+    test = "test_the_injection_cases_run_through_the_stack_with_an_obedient_model"
+    (declared,) = re.findall(
+        r"^EVAL_INJECTION_TEST\s*\?=\s*(\S+)$", MAKEFILE, re.MULTILINE
+    )
+    path, _, name = declared.partition("::")
+
+    assert (path, name) == ("tests/meridian/test_injection_stack.py", test)
+    assert f"def {name}(" in (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+def test_make_eval_forgets_both_old_reports_before_it_runs_the_tests() -> None:
+    eval_recipe = MAKEFILE.split("\neval:\n", 1)[1].split("\n\n", 1)[0]
+
+    forget = "rm -f $(EVAL_REPORT) $(EVAL_INJECTION_REPORT)"
+    assert forget in eval_recipe
+    assert eval_recipe.index(forget) < eval_recipe.index("pytest-db")
+
+
+def test_make_eval_compare_compares_the_injection_report_with_its_baseline() -> None:
+    recipe = MAKEFILE.split("\neval-compare:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert "uv run meridian eval compare $(EVAL_BASELINE) $(EVAL_REPORT)" in recipe
+    assert (
+        "uv run meridian eval compare "
+        "$(EVAL_INJECTION_BASELINE) $(EVAL_INJECTION_REPORT)"
+    ) in recipe
 
 
 def test_make_eval_compare_refuses_a_report_older_than_what_it_is_made_from() -> None:

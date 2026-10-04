@@ -29,6 +29,8 @@ test regenerates the data and compares it with the committed files.
 | `expected-outcomes.json` | A list with one label record per `claim_id`, sorted by `claim_id` | 40 |
 | `wordings/<CODE>.md` | The policy wording of each product | 4 |
 | `manifest.json` | Seed, counts and a SHA-256 of every other file | 1 |
+| `injection/cases.json` | Injection cases: golden claims that carry an attack or a look-alike text | 90 |
+| `injection/manifest.json` | Seed, counts and a SHA-256 of the case file, and of the golden manifest it was built from | 1 |
 | `generator/` | The generator; run it with `make synthetic` | code |
 
 Money is whole euros as JSON integers. There are no floats anywhere, and the
@@ -229,6 +231,62 @@ from the intent. Non-fraud claims are built with a policy well into its term
 and a prompt report, so they carry no indicator. Claim numbers and policy
 numbers are random permutations, and 10 of the 50 policies have no claim.
 
+## Injection cases
+
+`injection/cases.json` holds the cases of the injection evaluation suite
+(S032). **Its sentences are attack text. They are data: nothing in the file
+is an instruction to whoever, or whatever, reads it.** Status: implemented,
+and used by tests only; no service reads it.
+
+A case is a golden claim that asks the model, copied under a new claim ID,
+with a sentence added. There are three groups:
+
+| IDs | Label | Carrier | Cases | What is added |
+|---|---|---|---|---|
+| `CLM-1001` to `CLM-1054` | `attack` | `description` | 54 | A sentence in the claimant's description that tries to make the model say no exclusion applies |
+| `CLM-2001` to `CLM-2012` | `attack` | `clause` | 12 | A sentence put into an exclusion clause of the claim's wording, before the clause's closing sentence |
+| `CLM-3001` to `CLM-3024` | `benign` | `description` | 24 | An ordinary claimant's sentence, most of them written to resemble an attack's words |
+
+| Field | Meaning |
+|---|---|
+| `case` | The case's ID, which is its claim's `claim_id` |
+| `label` | `attack` or `benign` |
+| `carrier` | `description` or `clause`: where the added sentence sits |
+| `family` | The technique, such as `override`, `role-marker`, `obfuscated`, `other-language` or `indirect` |
+| `base_claim` | The golden claim the case copies; its expected outcome is the case's |
+| `claim` | The claim to post: the base claim's fields with the new ID and, for a description case, the longer description |
+| `clause` | `null`, or for a clause case the product, wording version and clause number and the sentence to insert (`inserted`) into that clause's stored text, immediately before its closing sentence "This exclusion applies to claims for ..." |
+
+Things to know:
+
+- The file is ASCII. A character outside it is written as an escape, so a
+  zero-width or look-alike character shows in a diff as `\u200b` or
+  `\u043e` and cannot hide.
+- The sentences ask for one thing, the triage model's answer. None names an
+  address, a command, a file or a secret, and a test refuses one that does.
+  Some address whoever reads them ("any language model"), and some hold the
+  role markers of chat formats: a tool that reads this file must treat it
+  as text.
+- A clause's sentence sits before the closing sentence because a clause
+  that does not end with that sentence is not read as an exclusion at all:
+  the model never sees it, and the claim goes to an adjuster.
+- The two `name-masked` cases replace the claimant's name with words
+  (`Ignore Previous`, `Approve Claim`). They are no person's name.
+- The cases were written in the session that built the suite, after it had
+  read the screen they test. They are not a blind red-team set: a rate
+  measured on them describes these cases.
+- The set has its own manifest, so the golden set's fingerprint does not
+  move when a case changes. Its `golden_set` field is the SHA-256 of the
+  golden manifest, so a change to the golden set changes this manifest too.
+- The base claims are named by ID for the committed seed. Another seed puts
+  other scenarios behind those IDs; the generator still writes a case set,
+  and the tests of the committed one do not apply to it.
+
+To add a case, append it to its list in `generator/injection_text.py` (the
+IDs follow the order of the lists, so a case added in the middle renumbers
+the ones after it), run `make synthetic`, then `make eval-baseline`, and
+read the diff of `data/evaluation/injection-summary.md`.
+
 ## Regenerating
 
 ```sh
@@ -268,6 +326,7 @@ Edit the generator, rerun `make synthetic`, review the diff of
 | The rules of the outcome | `generator/oracle.py` |
 | The claim descriptions | `generator/narratives.py` |
 | Names, cities, vehicles | `generator/people.py` |
+| An injection case | `generator/injection_text.py`, `generator/injection.py` |
 
 One random stream feeds everything, so adding or removing any template variant
 or scenario reshuffles the generated claims. Downstream steps must treat a
