@@ -43,6 +43,7 @@ from servicesupport import REGISTRY_DIR, audit_events, owner_rows
 
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
+from meridian.platform.common.identity import IDENTITY_PREFIX_ENV
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.gateway.app import AZURE_KIND, create_app
 from meridian.platform.gateway.models import ChatRequest
@@ -70,6 +71,17 @@ LIVE_ENV = "MERIDIAN_LIVE_AZURE"
 PROMPT = "Reply with the single word: ready."
 INJECTED_KIND = "unavailable"
 
+
+def live_settings_from(environ: dict[str, str]) -> GatewaySettings:
+    """The settings of ``environ`` (``from_env`` now needs the identity prefix)
+    for an app that has no caller check: these tests call the gateway the way a
+    test does, and the check has its own tests."""
+    prefix = "spiffe://meridian.test/ns/meridian/sa/"
+    return GatewaySettings.from_env(
+        {**environ, IDENTITY_PREFIX_ENV: prefix}
+    ).model_copy(update={"identity_prefix": None})
+
+
 pytestmark = pytest.mark.skipif(
     os.environ.get(LIVE_ENV) != "1",
     reason=f"opt-in: set {LIVE_ENV}=1 (make gateway-live)",
@@ -79,7 +91,7 @@ pytestmark = pytest.mark.skipif(
 def test_one_synthetic_prompt_is_answered_by_the_routed_deployment_and_audited(
     fresh_database: DatabaseHandle,
 ) -> None:
-    settings = GatewaySettings.from_env(
+    settings = live_settings_from(
         {
             MODE_ENV: "live",
             ENVIRONMENT_ENV: "local",
@@ -180,7 +192,7 @@ def test_with_the_first_candidate_down_the_second_deployment_answers(
     first, second = route.candidates[:2]
     # This test builds the adapter itself, past the gateway's start checks.
     refuse_sdk_environment()
-    settings = GatewaySettings.from_env(
+    settings = live_settings_from(
         {
             MODE_ENV: "live",
             ENVIRONMENT_ENV: "local",
@@ -264,7 +276,7 @@ def test_an_answer_capped_at_1024_tokens_ends_inside_the_read_limit(
     timeout (504), never a hang or another status. The output is the status, the
     finish reason, the output tokens, the seconds the call took and the tokens
     per second, and nothing else."""
-    settings = GatewaySettings.from_env(
+    settings = live_settings_from(
         {
             MODE_ENV: "live",
             ENVIRONMENT_ENV: "local",
@@ -317,7 +329,7 @@ def test_synthetic_texts_are_embedded_by_the_routed_deployment_and_audited(
     holds what Azure counted at the embedding price. The output names the
     deployment, the model string, the length and the token counts; never a
     vector or a text."""
-    settings = GatewaySettings.from_env(
+    settings = live_settings_from(
         {
             MODE_ENV: "live",
             ENVIRONMENT_ENV: "local",
@@ -390,7 +402,7 @@ def test_synthetic_texts_are_embedded_by_the_routed_deployment_and_audited(
 
 
 def live_settings(database: DatabaseHandle) -> GatewaySettings:
-    return GatewaySettings.from_env(
+    return live_settings_from(
         {
             MODE_ENV: "live",
             ENVIRONMENT_ENV: "local",

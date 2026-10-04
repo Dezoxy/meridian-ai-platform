@@ -16,6 +16,8 @@ from meridian.platform.common.env import (
     registry_dir_from,
     require_env,
 )
+from meridian.platform.common.identity import IdentityPrefix, identity_prefix_from
+from meridian.platform.common.tls import ClientTls
 
 GATEWAY_URL_ENV = "MERIDIAN_GATEWAY_URL"
 TOOL_SERVERS_ENV = "MERIDIAN_TOOL_SERVERS"
@@ -76,6 +78,12 @@ class RuntimeSettings(BaseModel):
     database_url: str = Field(repr=False)
     # Server ID to base URL; the addresses stay out of the repr.
     tool_servers: Mapping[str, ToolServerUrl] = Field(default_factory=dict, repr=False)
+    # The prefix of the callers' certificate URIs (S055); none only for an app
+    # built in code, which then has no caller check. ``from_env`` requires it.
+    identity_prefix: IdentityPrefix | None = None
+    # The certificate this service presents to the services it calls, and the CA
+    # it trusts them by (S055); none means the library's default verification.
+    client_tls: ClientTls | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Self:
@@ -85,4 +93,6 @@ class RuntimeSettings(BaseModel):
             gateway_url=require_env(environ, GATEWAY_URL_ENV),
             database_url=require_env(environ, DATABASE_URL_ENV),
             tool_servers=_tool_servers_from(environ),
+            identity_prefix=identity_prefix_from(environ),
+            client_tls=ClientTls.from_env(environ),
         )

@@ -232,6 +232,9 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MERIDIAN_REGISTRY_DIR", str(REGISTRY_DIR))
     monkeypatch.setenv("MERIDIAN_DATABASE_URL", "postgresql://role:pw@db.invalid/m")
     monkeypatch.setenv(ALLOWED_HOSTS_ENV, "policy-mcp:8080, policy-mcp.meridian:8080")
+    monkeypatch.setenv(
+        "MERIDIAN_IDENTITY_PREFIX", "spiffe://meridian.test/ns/meridian/sa/"
+    )
 
 
 @pytest.mark.parametrize("factory", [create_app_from_env, create_claims_app_from_env])

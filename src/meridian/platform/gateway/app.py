@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Annotated, Any, NoReturn
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span
@@ -65,6 +65,14 @@ from meridian.platform.common.http import (
     ErrorBody,
     create_service_app,
     error_responses,
+)
+from meridian.platform.common.identity import (
+    NAME_REFUSAL_REASON,
+    audited_refusals,
+    caller_may_name,
+    caller_policy,
+    caller_service,
+    install_caller_check,
 )
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
@@ -111,7 +119,7 @@ from meridian.platform.gateway.walk import (
     route_facts,
 )
 from meridian.platform.registry import Registry, load_registry
-from meridian.platform.registry.models import DataClass, Deployment
+from meridian.platform.registry.models import DataClass, Deployment, Service
 
 SERVICE_NAME = "model-gateway"
 CHAT_PURPOSE = "chat"
@@ -400,6 +408,7 @@ def create_app(
     """
     _check_start_allowed(settings, providers)
     registry = load_registry(settings.registry_dir)
+    policy = caller_policy(settings.identity_prefix, SERVICE_NAME, registry)
     routes = {
         purpose: _route(settings, registry, purpose)
         for purpose in (CHAT_PURPOSE, EMBEDDING_PURPOSE)
@@ -470,6 +479,23 @@ def create_app(
         mode=settings.mode,
     )
 
+    # Outside the app's other middleware: a call that comes from no known
+    # service is refused before its body is read (S055).
+    install_caller_check(
+        app,
+        policy,
+        audited_refusals(
+            refusal_throttle,
+            lambda reason, who, carried: audit(
+                "model.call",
+                "refused",
+                reason=reason,
+                reference=who,
+                suppressed=carried,
+            ),
+        ),
+    )
+
     def audit_refusal(
         caller: Caller,
         throttle_tenant: str | None,
@@ -515,6 +541,21 @@ def create_app(
         audit_refusal(caller, throttle_tenant, refusal, facts)
         raise HTTPException(status_code=403, detail=REFUSED)
 
+    def refuse_name(
+        span: Span, record: CallRecord, caller: Caller, calling: Service | None
+    ) -> NoReturn:
+        """Answer 403 for a caller that names a tenant or an agent it may not
+        (S055), or that the scope does not name at all while the app has a
+        policy. The throttle key is the reason and the tenant when the registry
+        holds it: a header's value is caller-chosen and never becomes a key. The
+        row names the calling service in ``reference``, none without one."""
+        set_span_attributes(span, {"meridian.refusal": NAME_REFUSAL_REASON})
+        record.end("refused", NAME_REFUSAL_REASON)
+        known = caller.tenant if registry.tenant(caller.tenant) else None
+        who = None if calling is None else calling.id
+        audit_refusal(caller, known, NAME_REFUSAL_REASON, {"reference": who})
+        raise HTTPException(status_code=403, detail=REFUSED)
+
     def refuse_limit(
         span: Span,
         record: CallRecord,
@@ -542,7 +583,7 @@ def create_app(
         raise HTTPException(status_code=status, detail=detail, headers=headers)
 
     def route_responses(unavailable: str, too_large: str) -> dict[int | str, Any]:
-        responses = error_responses(403, 413, 429, 500, 502, 503, 504)
+        responses = error_responses(401, 403, 413, 429, 500, 502, 503, 504)
         responses[HTTP_SERVICE_UNAVAILABLE]["description"] = unavailable
         responses[HTTP_PAYLOAD_TOO_LARGE]["description"] = too_large
         # The gateway's own 400, the one with the refusal header: the shared
@@ -573,6 +614,7 @@ def create_app(
         tenant_id: TenantHeader,
         agent_id: AgentHeader,
         run_id: RunHeader,
+        request: Request,
         data_class: DataClassHeader = None,
     ) -> ChatResponse:
         # The call ID exists before anything can refuse the request.
@@ -589,6 +631,7 @@ def create_app(
             build,
             data_class,
             wants_schema=body.response_schema is not None,
+            calling=caller_service(request),
         )
 
     @app.post(
@@ -602,6 +645,7 @@ def create_app(
         tenant_id: TenantHeader,
         agent_id: AgentHeader,
         run_id: RunHeader,
+        request: Request,
         data_class: DataClassHeader = None,
     ) -> EmbeddingResponse:
         caller = Caller(uuid.uuid4(), tenant_id, agent_id, run_id)
@@ -611,7 +655,12 @@ def create_app(
             return embedding_operation(redacted), redactions
 
         return handle(
-            "gateway.embeddings", routes[EMBEDDING_PURPOSE], caller, build, data_class
+            "gateway.embeddings",
+            routes[EMBEDDING_PURPOSE],
+            caller,
+            build,
+            data_class,
+            calling=caller_service(request),
         )
 
     def handle[ResponseT](
@@ -621,17 +670,20 @@ def create_app(
         build: Callable[[], tuple[Operation[Any, ResponseT], int]],
         requested: DataClass | None,
         wants_schema: bool = False,
+        calling: Service | None = None,
     ) -> ResponseT:
         """One request of either purpose: a span of its own, counted once by its
         outcome. ``build`` redacts the request's text and builds the operation
         from it; ``answer`` calls it once policy has not refused the request.
         ``requested`` is the class the request's header names, if any;
-        ``wants_schema`` is true for a chat request with a response schema."""
+        ``wants_schema`` is true for a chat request with a response schema;
+        ``calling`` is the service the caller check let through, none where
+        the app has no check (and then a policy refuses every name)."""
         record = meters.call_record()
         try:
             with start_span(tracer, span_name) as span:
                 response = answer(
-                    span, record, caller, route, build, requested, wants_schema
+                    span, record, caller, route, build, requested, wants_schema, calling
                 )
         except Exception:
             record.end("failed")  # a refusal counted itself first and stays one
@@ -661,8 +713,14 @@ def create_app(
         build: Callable[[], tuple[Operation[Any, ResponseT], int]],
         requested: DataClass | None,
         wants_schema: bool,
+        calling: Service | None,
     ) -> ResponseT:
         describe_call(span, caller, route)
+        # What the calling service may name comes from the registry, not from
+        # the headers it sends (S055). With a policy and no caller in the scope
+        # nothing may be named.
+        if not caller_may_name(policy, calling, caller.tenant, caller.agent):
+            refuse_name(span, record, caller, calling)
         decision = decide(
             registry,
             route.considered,

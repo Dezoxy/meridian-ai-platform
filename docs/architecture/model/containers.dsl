@@ -17,7 +17,7 @@ meridian = softwareSystem "Meridian AI Platform" "Builds, runs and governs LLM a
         knowledgeMcp = container "Knowledge MCP Server" "Hybrid search over policy wording with citations; its ingestion pipeline runs as a job." "Python, MCP SDK, Streamable HTTP, pgvector" "Layer Services"
         evals = container "Evaluation Harness" "Answers the golden set from a recorded model, grades with rules and an LLM judge, gates CI. Runs in tests and from the command line; not deployed." "Python, pytest, meridian eval CLI" "Layer Services"
         observability = container "Observability Stack" "Collects traces, metrics and logs; serves dashboards. Alerts are designed." "OpenTelemetry Collector, Prometheus, Grafana, Tempo, Loki" "Layer Services"
-        registry = container "Platform Registry" "Declarative source of truth: models, providers, tools, agents, policies, tenants." "YAML in git with JSON Schema, loaded at startup" "Layer Data"
+        registry = container "Platform Registry" "Declarative source of truth: models, providers, tools, agents, policies, tenants, services." "YAML in git with JSON Schema, loaded at startup" "Layer Data"
         platformDb = container "Platform Database" "Claims and decisions, policies, policy wording chunks, runs and graph checkpoints, the audit log and the usage ledger; one role per service." "PostgreSQL 17 with pgvector" "Layer Data,Database"
         keyVault = container "Key Vault" "On kind, the database roles' passwords as Kubernetes Secrets. Provider credentials and signing secrets in Azure Key Vault are designed." "Kubernetes Secrets on kind; Azure Key Vault in the Azure design" "Layer Data,Vault"
     }
@@ -37,17 +37,17 @@ meridian.ingress -> meridian.claimsApp "Routes claim and adjuster requests to" "
 
 // Workload plane
 meridian.claimsApp -> identityProvider "Validates user tokens against" "OIDC/JWKS" "Layer Workload,Designed"
-meridian.claimsApp -> meridian.runtime "Starts and resumes triage runs on" "HTTP/JSON" "Layer Workload"
+meridian.claimsApp -> meridian.runtime "Starts and resumes triage runs on" "HTTP/JSON over mutual TLS" "Layer Workload"
 meridian.claimsApp -> meridian.platformDb "Stores claims and adjuster decisions in; its scheduled sweep, under a role of its own, moves overdue and stranded claims and removes abandoned runs' checkpoints in" "PostgreSQL" "Layer Workload"
 meridian.claimsMcp -> meridian.platformDb "Binds each call to its run and claim in, and writes notes, approval requests and audit events to" "PostgreSQL" "Layer Workload"
 meridian.claimsMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Workload"
 
 // Agent runtime
 meridian.runtime -> meridian.registry "Loads agent definitions and tool allowlists from" "File read at startup" "Layer Services"
-meridian.runtime -> meridian.gateway "Requests completions through" "HTTP/JSON, tenant, agent and run headers" "Layer Services"
-meridian.runtime -> meridian.policyMcp "Calls policy tools on" "MCP, Streamable HTTP" "Layer Services"
-meridian.runtime -> meridian.knowledgeMcp "Calls retrieval tools on" "MCP, Streamable HTTP" "Layer Services"
-meridian.runtime -> meridian.claimsMcp "Calls claim tools on" "MCP, Streamable HTTP" "Layer Services"
+meridian.runtime -> meridian.gateway "Requests completions through" "HTTP/JSON over mutual TLS, tenant, agent and run headers" "Layer Services"
+meridian.runtime -> meridian.policyMcp "Calls policy tools on" "MCP, Streamable HTTP over mutual TLS" "Layer Services"
+meridian.runtime -> meridian.knowledgeMcp "Calls retrieval tools on" "MCP, Streamable HTTP over mutual TLS" "Layer Services"
+meridian.runtime -> meridian.claimsMcp "Calls claim tools on" "MCP, Streamable HTTP over mutual TLS" "Layer Services"
 meridian.runtime -> meridian.platformDb "Checkpoints graph state and writes audit events to" "PostgreSQL" "Layer Services"
 
 // Model gateway
@@ -62,7 +62,7 @@ meridian.policyMcp -> meridian.platformDb "Binds each call to its run and claim 
 meridian.policyMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Services"
 meridian.knowledgeMcp -> meridian.platformDb "Binds each call to its run, claim and policy in, searches policy wording chunks in, and writes audit events to" "PostgreSQL, pgvector" "Layer Services"
 meridian.knowledgeMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Services"
-meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTP/JSON, tenant, agent and run headers" "Layer Services"
+meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTP/JSON over mutual TLS, tenant, agent and run headers" "Layer Services"
 
 // Evaluation
 meridian.evals -> meridian.claimsApp "Submits golden-set claims to and reads their proposals from" "HTTP/JSON; in process in CI" "Layer Services"

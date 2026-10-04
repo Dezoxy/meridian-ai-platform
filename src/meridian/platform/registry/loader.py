@@ -1,4 +1,4 @@
-"""Load the six registry files into a ``Registry``, or say everything wrong."""
+"""Load the seven registry files into a ``Registry``, or say everything wrong."""
 
 from collections.abc import Iterable
 from pathlib import Path
@@ -138,6 +138,7 @@ def _build_registry(files: dict[str, Any]) -> Registry:
         recorded=files["policies"].recorded,
         tenants=files["tenants"].tenants,
         exchange=files["tenants"].exchange,
+        services=files["services"].services,
     )
 
 

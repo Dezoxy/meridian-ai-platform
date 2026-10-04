@@ -273,6 +273,11 @@ PLANT_NO_AGENTS = (
     "agents: [claims-triage, knowledge-ingestion]",
     "agents: []",
 )
+# Four services name the tenant claims-triage; a tenant that runs no agent may
+# not be named (the registry refuses it), so each entry lets it go.
+PLANT_NO_SERVICE_TENANTS = (
+    ("services.yaml", "tenants: [claims-triage]", "tenants: []"),
+) * 4
 PLANT_NO_HISTORY = ("agents.yaml", "      - claim_history\n", "")
 PLANT_APPROVAL = (
     "tools.yaml",
@@ -331,7 +336,10 @@ REFUSALS = [
         id="run-awaiting-approval",
     ),
     pytest.param(
-        Refusal("tenant-not-allowed", edits=(PLANT_NO_AGENTS,)), id="tenant-lacks-agent"
+        Refusal(
+            "tenant-not-allowed", edits=(PLANT_NO_AGENTS, *PLANT_NO_SERVICE_TENANTS)
+        ),
+        id="tenant-lacks-agent",
     ),
     pytest.param(
         Refusal(
@@ -457,7 +465,7 @@ REFUSALS = [
         Refusal(
             "tenant-not-allowed",
             arguments=SEARCH,
-            edits=(PLANT_NO_AGENTS,),
+            edits=(PLANT_NO_AGENTS, *PLANT_NO_SERVICE_TENANTS),
             **UNKNOWN_POLICY,
         ),
         id="tenant-lacks-agent-and-policy-has-no-row",

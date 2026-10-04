@@ -104,8 +104,16 @@ SERVICES = (
     CLAIMS_SERVER,
     KNOWLEDGE_SERVER,
 )
+# The identity variables (S055), named here by their text: the chart sets them
+# and tests/meridian/test_helm_identity.py says which workload gets which. A
+# workload that calls another service gets the client's three; one that serves
+# TLS gets the prefix.
+TLS_ENV = {"MERIDIAN_TLS_CERT_FILE", "MERIDIAN_TLS_KEY_FILE", "MERIDIAN_TLS_CA_FILE"}
+IDENTITY_PREFIX_ENV = "MERIDIAN_IDENTITY_PREFIX"
 # Every variable a manifest may set is one the code reads, named by its constant.
 KNOWN_ENV = {
+    *TLS_ENV,
+    IDENTITY_PREFIX_ENV,
     DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
     RUNTIME_URL_ENV,
@@ -301,7 +309,7 @@ def test_the_services_find_each_other_by_the_names_of_the_cluster_services() -> 
         (runtime[GATEWAY_URL_ENV], "model-gateway"),
     ):
         url = urlsplit(variable["value"])
-        assert url.scheme == "http"
+        assert url.scheme == "https"  # both targets serve TLS (S055)
         assert url.hostname == f"{target}.meridian.svc"
         assert url.port in services[target]
 
@@ -323,7 +331,7 @@ def test_the_runtime_reaches_each_registry_server_at_its_cluster_service() -> No
     assert set(servers) == set(TOOL_SERVERS)  # the server IDs are the names
     for server_id, address in servers.items():
         url = urlsplit(address)
-        assert url.scheme == "http"
+        assert url.scheme == "https"  # every tool server serves TLS (S055)
         assert url.hostname == f"{server_id}.meridian.svc"
         assert url.port == SERVER_PORT
         assert url.port in ports[server_id]
@@ -335,9 +343,14 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
     name: str,
 ) -> None:
     env = env_of(containers(deployment(name))[0])
-    expected = {DATABASE_URL_ENV, ALLOWED_HOSTS_ENV, OTLP_ENDPOINT_ENV}
+    expected = {
+        DATABASE_URL_ENV,
+        ALLOWED_HOSTS_ENV,
+        OTLP_ENDPOINT_ENV,
+        IDENTITY_PREFIX_ENV,
+    }
     if name == KNOWLEDGE_SERVER:
-        expected.add(GATEWAY_URL_ENV)
+        expected |= {GATEWAY_URL_ENV, *TLS_ENV}
 
     address = urlsplit(runtime_tool_servers()[name])
     # DNS rebinding protection compares the Host header, byte for byte.
@@ -610,7 +623,11 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
         synthetic_destination(),
     ]
     assert cli_command_words(container["command"][1:]) == ["knowledge", "ingest"]
-    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV, GATEWAY_URL_ENV}
+    assert set(env_of(container)) == {
+        MIGRATIONS_DATABASE_URL_ENV,
+        GATEWAY_URL_ENV,
+        *TLS_ENV,
+    }
     assert env_of(container)[GATEWAY_URL_ENV] == gateway
     # The finished Job is the record that this image's corpus is in the store:
     # deploy.sh skips the ingestion when it finds it, so it must not expire.
@@ -934,7 +951,8 @@ def test_a_deployment_reads_only_its_own_secrets_and_takes_no_env_from(
 ) -> None:
     pod = pod_spec(deployment(name))
 
-    assert secrets_referenced_by(pod) == {f"{name}-db", "platform-db-ca"}
+    # Its role's Secret, the database's CA and its own certificate (S055).
+    assert secrets_referenced_by(pod) == {f"{name}-db", "platform-db-ca", f"{name}-tls"}
     assert all("envFrom" not in c for c in pod["containers"])
 
 
@@ -1087,6 +1105,7 @@ def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces(
     assert set(namespaces) == {
         "envoy-gateway-system",
         "cnpg-system",
+        "cert-manager",
         "observability",
         "meridian",
     }
@@ -1245,13 +1264,16 @@ def main_sequence() -> list[str]:
 def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -> None:
     # The seed runs before the services start: a claim that met an empty policy
     # table would get a stored proposal "policy not found", which is final. The
-    # ingestion calls the gateway, so it follows the gateway's rollout.
+    # ingestion calls the gateway, so it follows the gateway's rollout. The
+    # certificates come right after the release: the ingestion Job mounts a
+    # Secret that cert-manager makes from one of them (S055).
     assert main_sequence() == [
         "require_database",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
         "install_release",
+        "wait_for_certificates",
         'wait_for_deployment "${GATEWAY_SERVICE}"',
         "ingest_corpus",
         "wait_for_other_rollouts",
@@ -3661,3 +3683,198 @@ def test_the_sweep_check_only_reads(
     for call in asked.splitlines():
         assert " get " in call, call
         assert not re.search(r"\b(create|apply|delete|patch|replace|exec)\b", call)
+
+
+SERVICE_CA_FILE = KIND_DIR / "manifests" / "service-ca.yaml"
+CERT_MANAGER_VALUES = KIND_DIR / "values" / "cert-manager.yaml"
+SELF_SIGNED_ISSUER = "meridian-selfsigned"
+SERVICES_ISSUER = "meridian-services"
+SERVICES_CA = "meridian-services-ca"
+
+
+def pins() -> dict[str, str]:
+    """The KEY=value lines of pins.env (never printed, only compared)."""
+    found = {}
+    for line in (KIND_DIR / "pins.env").read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            found[key] = value
+    return found
+
+
+def service_ca_objects() -> dict[tuple[str, str], dict]:
+    return {
+        (d["kind"], d["metadata"]["name"]): d for d in load_documents(SERVICE_CA_FILE)
+    }
+
+
+def joined_script_lines() -> list[str]:
+    """up.sh with each backslash continuation folded into one line."""
+    return re.sub(r"\\\n\s*", "", UP_SH).splitlines()
+
+
+def test_the_cert_manager_chart_is_pinned_with_a_helm_reader_comment() -> None:
+    values = pins()
+    lines = (KIND_DIR / "pins.env").read_text(encoding="utf-8").splitlines()
+    (version_at,) = [
+        i for i, line in enumerate(lines) if line.startswith("CERT_MANAGER_VERSION=")
+    ]
+
+    assert values["CERT_MANAGER_CHART"] == "cert-manager"
+    assert values["CERT_MANAGER_REPO"].startswith("https://")
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", values["CERT_MANAGER_VERSION"])
+    assert lines[version_at - 1] == (
+        "# renovate: datasource=helm depName=cert-manager"
+        f" registryUrl={values['CERT_MANAGER_REPO']}"
+    )
+
+
+def test_up_installs_cert_manager_from_its_pin_into_its_own_namespace() -> None:
+    (installed,) = [
+        line
+        for line in joined_script_lines()
+        if line.startswith("install_release cert-manager ")
+    ]
+
+    assert installed == (
+        "install_release cert-manager cert-manager"
+        ' "${CERT_MANAGER_CHART}" "${CERT_MANAGER_VERSION}"'
+        ' "${CERT_MANAGER_REPO}" cert-manager.yaml'
+    )
+
+
+def test_up_installs_the_issuer_before_the_database_and_waits_for_it() -> None:
+    lines = joined_script_lines()
+    (release,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("install_release cert-manager ")
+    ]
+    (applied,) = [
+        i for i, line in enumerate(lines) if "manifests/service-ca.yaml" in line
+    ]
+    (waited,) = [
+        i for i, line in enumerate(lines) if "clusterissuer/meridian-services" in line
+    ]
+    (operator,) = [
+        i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
+    ]
+    (namespaces,) = [
+        i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
+    ]
+
+    assert namespaces < release < applied < waited < operator
+    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
+    assert "--for=condition=Ready" in lines[waited]
+    assert "--timeout=" in lines[waited]
+    assert lines[waited].startswith("kctl wait ")
+
+
+def test_the_service_ca_is_a_self_signed_issuer_a_ca_and_an_issuer_on_it() -> None:
+    objects = service_ca_objects()
+
+    assert set(objects) == {
+        ("ClusterIssuer", SELF_SIGNED_ISSUER),
+        ("Certificate", SERVICES_CA),
+        ("ClusterIssuer", SERVICES_ISSUER),
+    }
+    assert len(load_documents(SERVICE_CA_FILE)) == 3
+    assert objects[("ClusterIssuer", SELF_SIGNED_ISSUER)]["spec"] == {"selfSigned": {}}
+    assert objects[("ClusterIssuer", SERVICES_ISSUER)]["spec"] == {
+        "ca": {"secretName": SERVICES_CA}
+    }
+    for document in objects.values():
+        assert document["apiVersion"] == "cert-manager.io/v1"
+
+
+def test_the_service_ca_certificate_is_an_ecdsa_ca_for_a_year_in_cert_manager() -> None:
+    spec = service_ca_objects()[("Certificate", SERVICES_CA)]["spec"]
+    metadata = service_ca_objects()[("Certificate", SERVICES_CA)]["metadata"]
+
+    assert metadata["namespace"] == "cert-manager"
+    assert spec["isCA"] is True
+    assert spec["secretName"] == SERVICES_CA
+    assert spec["privateKey"]["algorithm"] == "ECDSA"
+    assert spec["privateKey"]["size"] == 256
+    assert spec["issuerRef"] == {
+        "name": SELF_SIGNED_ISSUER,
+        "kind": "ClusterIssuer",
+        "group": "cert-manager.io",
+    }
+    assert spec["duration"] == "8760h"
+    assert spec["commonName"] == SERVICES_CA
+    assert "meridian" not in {
+        d["metadata"].get("namespace") for d in load_documents(SERVICE_CA_FILE)
+    }
+
+
+def test_the_service_ca_keeps_its_key_at_renewal_by_an_explicit_setting() -> None:
+    # cert-manager's default is Always since v1.18.0 (Never before): with it the
+    # CA would get a new key at renewal, and a pod restarted after it would no
+    # longer trust the certificates of the pods that had not.
+    spec = service_ca_objects()[("Certificate", SERVICES_CA)]["spec"]
+
+    assert spec["privateKey"].get("rotationPolicy") == "Never"
+
+
+def test_the_service_ca_file_says_its_private_key_stays_outside_meridian() -> None:
+    header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+
+    assert "private key" in header
+    assert "`cert-manager` namespace" in header
+    assert "`meridian`" in header
+
+
+def test_the_service_ca_file_says_the_key_is_kept_by_the_setting_not_a_default() -> (
+    None
+):
+    header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+    flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
+
+    assert "rotationPolicy: Never" in flat
+    assert "v1.18.0" in flat
+    assert "cert-manager's default)" not in flat
+    assert "kept at renewal, cert-manager's default" not in flat
+
+
+def test_the_service_ca_file_says_who_can_read_the_key_and_who_can_ask_for_a_cert() -> (
+    None
+):
+    header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+    flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
+
+    # The readers of the key: operators with a cluster-wide read of Secrets.
+    for reader in ("cainjector", "CloudNativePG"):
+        assert reader in flat
+    # The issuer signs any request, from any namespace, with any URI.
+    assert "any namespace" in flat
+    assert "approver" in flat
+    assert "S020" in flat
+
+
+def test_the_readme_says_who_reads_the_ca_key_and_who_can_ask_for_a_certificate() -> (
+    None
+):
+    readme = " ".join((KIND_DIR / "README.md").read_text(encoding="utf-8").split())
+
+    assert "no Meridian pod can read it" in readme
+    for reader in ("cainjector", "CloudNativePG"):
+        assert reader in readme
+    assert "approves every request" in readme
+    assert "rotationPolicy: Never" in readme
+    # The old, narrower claim: only the namespace's writers could mint one.
+    assert "whoever can create a `Certificate` in `meridian`" not in readme
+
+
+def test_the_cert_manager_values_install_the_crds_and_turn_nothing_optional_on() -> (
+    None
+):
+    values = yaml.safe_load(CERT_MANAGER_VALUES.read_text(encoding="utf-8"))
+
+    assert values["crds"]["enabled"] is True
+    for component in (values, values["webhook"], values["cainjector"]):
+        assert "cpu" in component["resources"]["requests"]
+        assert "memory" in component["resources"]["requests"]
+        assert "memory" in component["resources"]["limits"]
+    assert not values.get("prometheus", {}).get("servicemonitor", {}).get("enabled")
+    assert not values.get("replicaCount", 1) > 1

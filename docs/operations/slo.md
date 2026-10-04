@@ -131,12 +131,16 @@ namespace; Meridian's file does not repeat them.
   hide an outage. An alert sends an operator to a runbook; before a
   runbook's step that deletes or rolls back anything, confirm with the
   audit rows and the ledger, which the gateway's own role wrote.
-- **A caller can move the numbers too**, until callers are identified
-  (S055, S021): five requests naming an unknown tenant raise
-  `MeridianGatewayRefusingByPolicy`; requests the provider rejects count
-  as failed calls that are not provider failures and dilute
-  `MeridianModelCallsFailing`; slow requests cause timeouts for every
-  tenant (T-45) and now an alert as well.
+- **A caller can move the numbers too**, until people are identified
+  (S021). Since S055 a caller with no certificate, or one the registry
+  does not map, is refused before the gateway counts anything, and a
+  tenant or an agent outside the caller's entry is refused as
+  `caller-name-not-allowed`, which no alert counts: five requests naming
+  an unknown tenant no longer raise `MeridianGatewayRefusingByPolicy`.
+  A service that holds a certificate can still send requests the provider
+  rejects, which count as failed calls that are not provider failures and
+  dilute `MeridianModelCallsFailing`, and slow requests, which cause
+  timeouts for every tenant (T-45) and now an alert as well.
 - **Silence is not health.** When the collector or the path to Prometheus
   stops, the gateway's series end, the recorded series is empty and every
   gateway alert goes quiet. A Deployment or a CronJob that was deleted

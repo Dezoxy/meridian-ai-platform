@@ -18,6 +18,7 @@ from meridian.platform.registry.models import (
     ReplayRoute,
     ResidencyLabel,
 )
+from meridian.platform.registry.service_checks import SERVICE_CHECKS
 from meridian.platform.registry.tool_schema import input_schema_errors
 
 # Azure regions inside the EU. Switzerland, Norway and the UK are not in the
@@ -843,6 +844,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_structured_outputs,
     check_tenant_coverage,
     check_tenant_limits,
+    *SERVICE_CHECKS,
 )
 
 

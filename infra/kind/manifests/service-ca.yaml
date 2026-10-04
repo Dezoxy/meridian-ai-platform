@@ -1,0 +1,66 @@
+# The certificate authority for the Meridian services (S055): the issuer that
+# signs the one certificate each service holds, so a service can prove to the
+# one it calls which service it is. cert-manager must be installed first
+# (values/cert-manager.yaml); up.sh applies this file after it and waits for
+# the `meridian-services` issuer to be Ready.
+#
+#   meridian-selfsigned   self-signed ClusterIssuer; it signs only the CA below
+#   meridian-services-ca  the CA certificate (ECDSA P-256, one year), in the
+#                         `cert-manager` namespace
+#   meridian-services     the ClusterIssuer that signs the services'
+#                         certificates, with the CA's key
+#
+# The CA's private key is the Secret `meridian-services-ca` in the
+# `cert-manager` namespace, outside `meridian`: no Meridian pod, no service's
+# account and no Role in `meridian` can read it. It is readable by the operators
+# that hold a cluster-wide read of Secrets: cert-manager's controller and
+# cainjector, and the CloudNativePG operator. Whoever can read that Secret can
+# issue a certificate for any service. A ClusterIssuer reads its CA Secret from
+# the namespace cert-manager runs in (the chart's cluster resource namespace).
+#
+# Who can ask for a certificate: the `meridian-services` issuer signs a
+# Certificate from any namespace, with any URI, and nothing restricts who may
+# ask (cert-manager's built-in approver approves every request). Whoever can
+# create a Certificate anywhere can obtain the identity of any service. On kind
+# that is the cluster's administrator; a policy on requests is for AKS (S020).
+#
+# The CA keeps its key at renewal by an explicit setting, `privateKey:
+# rotationPolicy: Never`, not by a default: cert-manager's default is `Always`
+# since v1.18.0 (it was `Never` before), and with it the CA would get a new key
+# at its renewal, about eight months in, so a pod that restarted after it would
+# no longer trust the certificates of the pods that had not. The workloads'
+# Certificates set `Always` in the chart for the same reason. What a service
+# that holds the old `ca.crt` does when the CA is renewed is not part of S055.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: meridian-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: meridian-services-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: meridian-services-ca
+  secretName: meridian-services-ca
+  duration: 8760h # one year
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never # the CA's key survives its renewal (see the header)
+  issuerRef:
+    name: meridian-selfsigned
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: meridian-services
+spec:
+  ca:
+    secretName: meridian-services-ca

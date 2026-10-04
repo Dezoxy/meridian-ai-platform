@@ -139,7 +139,7 @@ def reaches(policy: dict, direction: str, peer: dict) -> bool:
 
 def called_services(container: dict, namespace: str = NAMESPACE) -> set[str]:
     """The services a container is told to call, read from its rendered
-    environment alone: every ``http://<name>.<namespace>.svc`` address and every
+    environment alone: every ``http(s)://<name>.<namespace>.svc`` address and every
     address in the tool-server map. A Host header (``<name>.<ns>.svc:8000``, no
     scheme) and the collector's address are not calls to a service."""
     addresses: list[str] = []
@@ -147,7 +147,7 @@ def called_services(container: dict, namespace: str = NAMESPACE) -> set[str]:
         value = item.get("value", "")
         if value.startswith("{"):
             addresses += json.loads(value).values()
-        elif value.startswith("http://"):
+        elif value.startswith(("http://", "https://")):
             addresses.append(value)
     suffix = f".{namespace}.svc"
     hosts = {urlsplit(address).hostname for address in addresses}

@@ -17,8 +17,11 @@ asks:
   sends the claim to a person. A real model, `gpt-4o` on Azure OpenAI in
   Sweden Central, answered the 40 golden claims from a laptop; CI replays
   that recording on every pull request (minutes 10 to 12).
-- **Nothing runs in Azure**, and on kind there is no sign-in, no TLS and no
-  service identity. Those are milestone M2.
+- **Nothing runs in Azure**, and on kind there is no sign-in and no TLS at
+  the edge. The services do prove which service calls them, by mutual TLS
+  (S055), but the tenant is the calling service's word, bounded by its entry
+  in the registry, and not a person's. Sign-in and TLS at the edge are
+  milestone M2.
 - **All data is synthetic**: the policies, the claims, the names.
 
 ## Before the viewer arrives
@@ -31,7 +34,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 16 lines; PASS, or SKIP for the sweep before its first run
+make smoke     # 19 lines; PASS, or SKIP for the sweep before its first run
 ```
 
 Measured from a fresh clone with no cluster: `make up` 283 s, the first
@@ -186,12 +189,14 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 87 threats,
+- [The threat model](architecture/security/threat-model.md): 90 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
-- Not built: sign-in and roles, TLS, service identity, a
-  second provider, alerts and SLOs, anything in Azure beyond the model
-  deployments. The [plan](meridian-plan.md) has each as a step.
+- Not built: sign-in and roles, TLS at the edge and between the edge and
+  the Claims API, a second provider, alert routing (the rules exist and
+  nobody is told), measured SLOs, anything in Azure
+  beyond the model deployments. The [plan](meridian-plan.md) has each as a
+  step.
 
 ## If the viewer wants to challenge it
 

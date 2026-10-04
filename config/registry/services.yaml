@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=schemas/services.schema.json
+# The platform's services: which one may call which, and the tenant and agent
+# each names when it calls. A service's certificate says who it is (its ID is
+# the last part of the URI in it); the callee looks that ID up here and
+# refuses a caller it does not map, one that does not list the callee in
+# `calls`, and a tenant or agent outside the caller's `tenants` and `agents`.
+# `tenants` and `agents` list what the code names today, no more; a service
+# that calls nobody names none. Every tool server of tools.yaml has an entry,
+# and only agent-runtime calls one.
+services:
+  - id: claims-api
+    description: Takes a claim and has the Agent Runtime triage it; reached from the edge.
+    calls: [agent-runtime]
+    # The run request: the Claims API's own tenant (MERIDIAN_TENANT, default
+    # claims-triage) and the triage agent.
+    tenants: [claims-triage]
+    agents: [claims-triage]
+  - id: agent-runtime
+    description: Runs the agent graphs; calls the Model Gateway and the tool servers.
+    calls: [model-gateway, policy-mcp, claims-mcp, knowledge-mcp]
+    # The tenant and agent of the run it was asked for, on every gateway call.
+    tenants: [claims-triage]
+    agents: [claims-triage]
+  - id: model-gateway
+    description: The one door to a model; calls no service.
+    calls: []
+    tenants: []
+    agents: []
+  - id: policy-mcp
+    description: Policy and claim-history lookups; calls no service.
+    calls: []
+    tenants: []
+    agents: []
+  - id: claims-mcp
+    description: Claim notes and approval requests; calls no service.
+    calls: []
+    tenants: []
+    agents: []
+  - id: knowledge-mcp
+    description: Search over policy wordings; embeds the query through the Model Gateway.
+    calls: [model-gateway]
+    # The tenant and agent of the run whose tool call it answers.
+    tenants: [claims-triage]
+    agents: [claims-triage]
+  - id: meridian-ingest
+    description: The ingestion Job that embeds the policy wordings through the Model Gateway.
+    calls: [model-gateway]
+    # `--tenant claims-triage` in the chart's ingest Job, and the job agent.
+    tenants: [claims-triage]
+    agents: [knowledge-ingestion]

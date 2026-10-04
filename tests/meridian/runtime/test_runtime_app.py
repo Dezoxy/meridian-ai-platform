@@ -1658,7 +1658,10 @@ def test_a_tenant_the_registry_no_longer_allows_is_refused_and_the_run_stays_pau
             "tenants.yaml",
             "    agents: [claims-triage, knowledge-ingestion]\n",
             "    agents: [knowledge-ingestion]\n",
-        )
+        ),
+        # The three services that name claims-triage and the agent it no longer
+        # runs let the tenant go, or the registry would refuse the file.
+        *(("services.yaml", "tenants: [claims-triage]", "tenants: []"),) * 3,
     )
     narrowed = make_client(fresh_database, registry_dir=directory)
 

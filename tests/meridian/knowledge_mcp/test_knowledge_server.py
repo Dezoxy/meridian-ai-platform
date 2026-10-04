@@ -550,6 +550,18 @@ def test_the_gateway_call_goes_out_under_the_runs_agent_when_it_is_not_the_seede
             "agents: [claims-triage, knowledge-ingestion]",
             f"agents: [claims-triage, {other}, knowledge-ingestion]",
         ),
+        # A graph agent a tenant may run is one the runtime must name (S055).
+        (
+            "services.yaml",
+            "    calls: [model-gateway, policy-mcp, claims-mcp, knowledge-mcp]\n"
+            "    # The tenant and agent of the run it was asked for, on every"
+            " gateway call.\n"
+            "    tenants: [claims-triage]\n"
+            "    agents: [claims-triage]\n",
+            "    calls: [model-gateway, policy-mcp, claims-mcp, knowledge-mcp]\n"
+            "    tenants: [claims-triage]\n"
+            f"    agents: [claims-triage, {other}]\n",
+        ),
     )
     add_claim(world.db, "CLM-0004")
     run_id = add_run(world.db, "CLM-0004", agent=other)

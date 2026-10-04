@@ -34,6 +34,7 @@ with no body never checks the content type, and a cross-site form could reach it
 """
 
 import logging
+import ssl
 from collections.abc import Callable, Mapping
 from datetime import date
 from typing import Annotated
@@ -59,6 +60,7 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
+from meridian.platform.common.tls import verify_of
 from meridian.workloads.claims_triage.adjuster import (
     NO_SUCH_CLAIM_DETAIL,
     ClaimId,
@@ -282,6 +284,21 @@ def _decide(
         )
 
 
+def make_runtime_client(
+    settings: ClaimsSettings, verify: ssl.SSLContext | bool
+) -> httpx.Client:
+    """The client of the Agent Runtime. ``verify`` is ``verify_of`` the settings'
+    ``client_tls``: the context that presents the Claims API's certificate and
+    trusts the runtime's CA, or the default verification when there is none."""
+    # trust_env=False: a proxy variable must not reroute claimant data.
+    return httpx.Client(
+        base_url=settings.runtime_url,
+        timeout=RUNTIME_TIMEOUT_SECONDS,
+        trust_env=False,
+        verify=verify,
+    )
+
+
 def create_app(
     settings: ClaimsSettings,
     *,
@@ -289,12 +306,7 @@ def create_app(
     http_client: httpx.Client | None = None,
     today: Callable[[], date] | None = None,
 ) -> FastAPI:
-    # trust_env=False: a proxy variable must not reroute claimant data.
-    http = http_client or httpx.Client(
-        base_url=settings.runtime_url,
-        timeout=RUNTIME_TIMEOUT_SECONDS,
-        trust_env=False,
-    )
+    http = http_client or make_runtime_client(settings, verify_of(settings.client_tls))
     dsn, tenant = settings.database_url, settings.tenant
     service = create_service_app(
         title="Meridian Claims API",

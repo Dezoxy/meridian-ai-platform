@@ -25,7 +25,7 @@ RegistryDirOption = Annotated[
         "--registry-dir",
         exists=True,
         file_okay=False,
-        help="Directory holding the six YAML files.",
+        help="Directory holding the seven YAML files.",
     ),
 ]
 
@@ -65,6 +65,7 @@ def validate(
                 _count(len(registry.tools), "tool"),
                 _count(len(registry.agents), "agent"),
                 _count(len(registry.tenants), "tenant"),
+                _count(len(registry.services), "service"),
             ]
         )
     )

@@ -61,6 +61,7 @@ def environ_for(servers: Mapping[str, str], registry_dir: Path = REGISTRY_DIR) -
     return {
         "MERIDIAN_GATEWAY_URL": "http://gateway.invalid:8080",
         "MERIDIAN_DATABASE_URL": DSN,
+        "MERIDIAN_IDENTITY_PREFIX": "spiffe://meridian.test/ns/meridian/sa/",
         "MERIDIAN_REGISTRY_DIR": str(registry_dir),
         "MERIDIAN_TOOL_SERVERS": json.dumps(servers),
     }

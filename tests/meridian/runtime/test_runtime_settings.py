@@ -16,6 +16,7 @@ DSN = "postgresql://agent_runtime:s3cret-value@db.invalid/meridian"
 ENV = {
     "MERIDIAN_GATEWAY_URL": "http://gateway.invalid:8080",
     "MERIDIAN_DATABASE_URL": DSN,
+    "MERIDIAN_IDENTITY_PREFIX": "spiffe://meridian.test/ns/meridian/sa/",
 }
 
 

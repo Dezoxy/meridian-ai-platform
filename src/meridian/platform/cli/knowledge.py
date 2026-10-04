@@ -2,6 +2,7 @@
 (S012). A refused ingestion leaves one audit row: the reason word and no text."""
 
 import os
+import ssl
 import uuid
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -13,7 +14,8 @@ import typer
 from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
 from meridian.platform.common.audit import record_event
 from meridian.platform.common.db import connect
-from meridian.platform.common.env import registry_dir_from
+from meridian.platform.common.env import SettingsError, registry_dir_from
+from meridian.platform.common.tls import ClientTls
 from meridian.platform.knowledge_mcp import INGESTION_AGENT
 from meridian.platform.knowledge_mcp.embedding_client import EmbeddingClient
 from meridian.platform.knowledge_mcp.ingest import (
@@ -43,10 +45,17 @@ def _fail(message: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
-def make_http_client(gateway_url: str) -> httpx.Client:
-    """The client the ingestion calls the gateway with. A test replaces it."""
+def make_http_client(
+    gateway_url: str, *, verify: ssl.SSLContext | bool = True
+) -> httpx.Client:
+    """The client the ingestion calls the gateway with. A test replaces it.
+    ``verify`` is the context of the job's ``MERIDIAN_TLS_*`` files: it presents
+    the job's certificate and trusts the gateway's CA; the default verification
+    otherwise (never off)."""
     # trust_env=False: a proxy variable must not reroute the wordings' text.
-    return httpx.Client(base_url=gateway_url, timeout=HTTP_TIMEOUT, trust_env=False)
+    return httpx.Client(
+        base_url=gateway_url, timeout=HTTP_TIMEOUT, trust_env=False, verify=verify
+    )
 
 
 def _required(name: str) -> str:
@@ -67,7 +76,13 @@ def _gateway_url() -> str:
 
 def _http_client(gateway_url: str) -> httpx.Client:
     try:
-        return make_http_client(gateway_url)
+        tls = ClientTls.from_env(os.environ)
+        # With no TLS the call carries no ``verify``, as it did before S055.
+        verify = {} if tls is None else {"verify": tls.ssl_context()}
+    except SettingsError as exc:
+        _fail(str(exc))
+    try:
+        return make_http_client(gateway_url, **verify)
     except (ValueError, httpx.InvalidURL):
         _fail(f"{GATEWAY_URL_ENV} is not a URL this command can use")
 
