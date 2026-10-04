@@ -11,6 +11,16 @@ rule_files:
 
 evaluation_interval: 1m
 
+# promtool evaluates the groups it is given no order for in a random one. The
+# alerts read the recorded series, so the recording group goes first: otherwise
+# an alert sees the value of the minute before, and a test on the minute an
+# alert ends passes or fails by chance. (Prometheus itself runs the groups
+# independently, so there an alert may lag the recording by one interval.)
+group_eval_order:
+  - meridian.gateway.recording
+  - meridian.gateway
+  - meridian.workloads
+
 tests:
   # ── MeridianModelCallsFailing ───────────────────────────────────────────────
   - name: provider failures above 5 percent of 100 calls fire
