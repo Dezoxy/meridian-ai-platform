@@ -7,8 +7,10 @@ a skipped manifest suite would pass CI while it tested nothing.
 """
 
 import functools
+import json
 import shutil
 import subprocess
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -81,3 +83,72 @@ def rendered_chart() -> tuple[dict, ...]:
     """Every object of the chart with deploy.sh's arguments, once per process.
     The documents are shared: a test must not change them."""
     return tuple(render(helm_arguments()))
+
+
+NAME_LABEL = "app.kubernetes.io/name"
+NAMESPACE_LABEL = "kubernetes.io/metadata.name"
+
+
+@functools.cache
+def peers() -> dict[str, dict]:
+    """``networkPolicy.peers`` as the chart's values and kind's give it."""
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+    kind = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))
+    return chart["networkPolicy"]["peers"] | kind["networkPolicy"]["peers"]
+
+
+def network_policies(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    """The NetworkPolicies of ``documents`` by name."""
+    found = [d for d in documents if d["kind"] == "NetworkPolicy"]
+    names = [d["metadata"]["name"] for d in found]
+    assert len(names) == len(set(names)), names
+    return dict(zip(names, found, strict=True))
+
+
+def rules(policy: dict, direction: str) -> list[dict]:
+    """A policy's ``ingress`` or ``egress`` rules; none when it has no such key."""
+    return policy["spec"].get(direction, [])
+
+
+def entries(policy: dict, direction: str) -> list[dict]:
+    """Every peer a policy's rules name: ``to`` for egress, ``from`` for ingress."""
+    side = "to" if direction == "egress" else "from"
+    return [entry for rule in rules(policy, direction) for entry in rule[side]]
+
+
+def allowed_services(policy: dict, direction: str) -> set[str]:
+    """The workloads (by their name label) a policy lets its pods send to or
+    receive from: the entries that are a pod selector on the name label alone."""
+    return {
+        entry["podSelector"]["matchLabels"][NAME_LABEL]
+        for entry in entries(policy, direction)
+        if "namespaceSelector" not in entry
+        and set(entry["podSelector"]["matchLabels"]) == {NAME_LABEL}
+    }
+
+
+def reaches(policy: dict, direction: str, peer: dict) -> bool:
+    """Whether a rule names ``peer`` (one of ``peers()``) by its namespace and
+    pod labels."""
+    wanted = {
+        "namespaceSelector": {"matchLabels": {NAMESPACE_LABEL: peer["namespace"]}},
+        "podSelector": {"matchLabels": peer["podLabels"]},
+    }
+    return wanted in entries(policy, direction)
+
+
+def called_services(container: dict, namespace: str = NAMESPACE) -> set[str]:
+    """The services a container is told to call, read from its rendered
+    environment alone: every ``http://<name>.<namespace>.svc`` address and every
+    address in the tool-server map. A Host header (``<name>.<ns>.svc:8000``, no
+    scheme) and the collector's address are not calls to a service."""
+    addresses: list[str] = []
+    for item in container.get("env", []):
+        value = item.get("value", "")
+        if value.startswith("{"):
+            addresses += json.loads(value).values()
+        elif value.startswith("http://"):
+            addresses.append(value)
+    suffix = f".{namespace}.svc"
+    hosts = {urlsplit(address).hostname for address in addresses}
+    return {host.removesuffix(suffix) for host in hosts if host.endswith(suffix)}

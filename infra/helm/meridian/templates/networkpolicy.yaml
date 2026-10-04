@@ -1,0 +1,89 @@
+{{- /*
+The namespace denies all traffic by default and each workload is allowed what
+its configuration names (S019). Rendered only when `networkPolicy.enabled`. The
+Jobs' policies are not here: each is in its Job's template (job-<name>.yaml,
+helper meridian.job), because deploy.sh applies the Job outside the release.
+
+  default-deny  selects every pod of the namespace, whatever its labels, and
+                allows nothing. A pod that no other policy selects can neither
+                receive nor send. The database pod shares the namespace on
+                kind; its own policy is infra/kind/manifests/platform-db-
+                networkpolicy.yaml, which `make up` applies
+  one per       selects the service's pods by app.kubernetes.io/name. Egress:
+  service       DNS, the database, the collector when the pod is given its
+                address, and each service its environment names (an address or
+                an entry of the tool-server map; meridian.callees). Ingress is
+                the inverse, computed from the same environments
+                (meridian.callers), plus the edge for the Claims API when the
+                route is on. A service nobody calls has no ingress rule: its
+                policy still names Ingress, so nothing reaches it
+  the sweep     DNS and the database, no ingress
+
+No rule is written without the peer's pod labels and a port, and none names an
+address range: the peers are pods. The kubelet's probes are not blocked by a
+policy. The Model Gateway has no rule for a provider: on kind it runs in replay
+mode and calls nothing outside the cluster. The rule for Azure OpenAI and Key
+Vault belongs with the provider (S020).
+tests/meridian/test_helm_chart.py states these rules.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: meridian
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+{{- $collector := ne (toString .Values.telemetry.otlpEndpoint) "" }}
+{{- range $name, $service := .Values.services }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" $name | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  policyTypes: [Ingress, Egress]
+  {{- $callers := include "meridian.callers" (dict "root" $ "name" $name) | fromJsonArray }}
+  {{- $fromEdge := and $.Values.route.enabled (eq $name "claims-api") }}
+  {{- if or $callers $fromEdge }}
+  ingress:
+    {{- if $callers }}
+    {{- include "meridian.serviceRule" (dict "root" $ "direction" "from" "names" $callers) | nindent 4 }}
+    {{- end }}
+    {{- if $fromEdge }}
+    {{- $edge := include "meridian.peer" (dict "root" $ "key" "edge") | fromJson }}
+    - from:
+        - {{- include "meridian.peerSelector" (dict "namespace" $edge.namespace "labels" $edge.podLabels) | nindent 10 }}
+      ports:
+        - port: {{ $.Values.port }}
+          protocol: TCP
+    {{- end }}
+  {{- end }}
+  egress:
+    {{- include "meridian.egress" (dict "root" $ "env" $service.env "collector" $collector) | nindent 4 }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: meridian-sweep
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "meridian-sweep" | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: meridian-sweep
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "meridian.egress" (dict "root" . "env" (list) "collector" false) | nindent 4 }}
+{{- end }}

@@ -1,0 +1,56 @@
+# The database's own NetworkPolicy (S019). It is kind's platform, not the Meridian
+# chart's: the pod is CloudNativePG's, and the chart's `default-deny` selects it
+# too, because it shares the namespace. `make up` applies this before the
+# database is installed; `make deploy` refuses to run without it, because
+# `default-deny` alone would cut the database off from its operator.
+#
+# Ingress, each rule on its own:
+#   5432  from the pods of this namespace labelled part-of=meridian: the six
+#         services, the three Jobs and the sweep. Nothing else reaches the
+#         database: not another namespace, not an unlabelled pod
+#   8000  from the CloudNativePG operator: its status extraction asks each
+#         instance manager over HTTP. Without this rule the Cluster turned
+#         "Instance Status Extraction Error: HTTP communication issue" within 40
+#         seconds (measured on the owner's cluster); with it, it stayed healthy
+#   any   from the pods of the same Cluster: a replica or a join Job, none today
+#
+# Egress: everything. The instance manager calls the Kubernetes API server,
+# whose address is the node's own and changes when the cluster is re-created,
+# so no ipBlock can name it. What protects the database is who may connect to it
+# (this policy, pg_hba, TLS and SCRAM), not where it may connect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-db
+  namespace: meridian
+  labels:
+    app.kubernetes.io/part-of: meridian
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: platform-db
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: meridian
+      ports:
+        - port: 5432
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - port: 8000
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: platform-db
+  egress:
+    - {}

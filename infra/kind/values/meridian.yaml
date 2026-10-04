@@ -14,6 +14,32 @@ image:
 telemetry:
   otlpEndpoint: http://otel-collector.observability.svc.cluster.local:4318
 
+# Who the policies name outside the chart (the chart's networkPolicy.peers).
+# The labels are the ones the cluster's own pods carry.
+networkPolicy:
+  peers:
+    # The CloudNativePG cluster `make up` installs, in the release's namespace.
+    database:
+      namespace: meridian
+      podLabels:
+        cnpg.io/cluster: platform-db
+      ports:
+        - port: 5432
+          protocol: TCP
+    # The collector's OTLP HTTP port, the one telemetry.otlpEndpoint names.
+    collector:
+      namespace: observability
+      podLabels:
+        app.kubernetes.io/name: opentelemetry-collector
+      ports:
+        - port: 4318
+          protocol: TCP
+    # The Envoy proxy pods of the Gateway `edge`.
+    edge:
+      namespace: envoy-gateway-system
+      podLabels:
+        gateway.envoyproxy.io/owning-gateway-name: edge
+
 services:
   # Replay mode only: no provider is wired on kind yet.
   model-gateway:

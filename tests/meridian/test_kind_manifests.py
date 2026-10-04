@@ -28,6 +28,7 @@ from chartsupport import (
     JOBS,
     TEST_TAG,
     helm_arguments,
+    peers,
     render,
     rendered_chart,
 )
@@ -691,14 +692,14 @@ def test_the_sweep_has_an_account_of_its_own_with_no_service_account_token() -> 
     assert pod["serviceAccountName"] == "meridian-sweep"
     assert pod["automountServiceAccountToken"] is False
     # Nothing in the chart grants an account a right, and the objects the sweep
-    # owns are its account and its CronJob.
+    # owns are its account, its CronJob and its NetworkPolicy.
     assert not [d["kind"] for d in all_documents() if "Role" in d["kind"]]
     assert {
         d["kind"]
         for d in all_documents()
         if d["metadata"].get("labels", {}).get("app.kubernetes.io/name")
         == "meridian-sweep"
-    } == {"ServiceAccount", "CronJob"}
+    } == {"ServiceAccount", "CronJob", "NetworkPolicy"}
 
 
 def test_the_sweeps_pod_is_hardened_like_the_jobs_pods() -> None:
@@ -991,6 +992,150 @@ def test_up_creates_a_secret_from_stdin_and_never_overwrites_one() -> None:
     assert "set +x" in body  # a `bash -x` run must not trace a password
 
 
+DB_POLICY_FILE = KIND_DIR / "manifests" / "platform-db-networkpolicy.yaml"
+
+
+def platform_db_policy() -> dict:
+    (policy,) = load_documents(DB_POLICY_FILE)
+    return policy
+
+
+def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() -> None:
+    policy = platform_db_policy()
+    spec = policy["spec"]
+    ingress = spec["ingress"]
+    peer = peers()["database"]
+
+    assert policy["kind"] == "NetworkPolicy"
+    assert policy["metadata"] == {
+        "name": "platform-db",
+        "namespace": "meridian",
+        "labels": {"app.kubernetes.io/part-of": "meridian"},
+    }
+    # The pod the chart's database peer names is the pod this policy selects.
+    assert spec["podSelector"] == {"matchLabels": peer["podLabels"]}
+    assert peer["namespace"] == policy["metadata"]["namespace"]
+    assert spec["policyTypes"] == ["Ingress", "Egress"]
+    assert ingress == [
+        {
+            "from": [
+                {
+                    "podSelector": {
+                        "matchLabels": {"app.kubernetes.io/part-of": "meridian"}
+                    }
+                }
+            ],
+            "ports": [{"port": 5432, "protocol": "TCP"}],
+        },
+        {
+            "from": [
+                {
+                    "namespaceSelector": {
+                        "matchLabels": {"kubernetes.io/metadata.name": "cnpg-system"}
+                    },
+                    "podSelector": {
+                        "matchLabels": {"app.kubernetes.io/name": "cloudnative-pg"}
+                    },
+                }
+            ],
+            "ports": [{"port": 8000, "protocol": "TCP"}],
+        },
+        {"from": [{"podSelector": {"matchLabels": peer["podLabels"]}}]},
+    ]
+    assert [p["port"] for p in peer["ports"]] == [5432]
+    # Egress is everything, and the header says why (the API server's address
+    # is the node's own and changes with the cluster).
+    assert spec["egress"] == [{}]
+    header = DB_POLICY_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+    assert "Kubernetes API server" in header
+    assert "ipBlock" in header
+
+
+def test_every_pod_the_chart_runs_may_reach_the_database_by_its_policy() -> None:
+    (rule,) = platform_db_policy()["spec"]["ingress"][:1]
+    (selector,) = rule["from"]
+    wanted = selector["podSelector"]["matchLabels"]
+
+    for workload in pod_workloads():
+        template = (
+            workload["spec"]["jobTemplate"]["spec"]["template"]
+            if workload["kind"] == "CronJob"
+            else workload["spec"]["template"]
+        )
+        assert wanted.items() <= template["metadata"]["labels"].items(), workload[
+            "metadata"
+        ]["name"]
+
+
+def test_up_applies_the_database_policy_before_the_database_is_installed() -> None:
+    lines = UP_SH.splitlines()
+    (namespaces,) = [
+        i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
+    ]
+    (applied,) = [
+        i
+        for i, line in enumerate(lines)
+        if "manifests/platform-db-networkpolicy.yaml" in line
+    ]
+    (operator,) = [
+        i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
+    ]
+    (database,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("install_release platform-db")
+    ]
+
+    assert namespaces < applied < operator < database
+    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
+    assert lines[applied - 1].startswith("log ")
+    assert DB_POLICY_FILE.is_file()
+
+
+def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
+    """``require_database`` from deploy.sh in bash against a stub ``kctl`` that
+    knows the Database, no Secret to check and, when ``policy``, the NetworkPolicy
+    ``platform-db``."""
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "NAMESPACE=meridian; DATABASE_ROLES=()",
+            'die() { echo "error: $*" >&2; exit 1; }',
+            "database_roles_reconciled() { return 0; }",
+            "kctl() {",
+            '  case "$*" in',
+            '    *"get database"*) printf true ;;',
+            '    *"get networkpolicy platform-db"*)',
+            '      [[ "${POLICY}" == yes ]] || return 1 ;;',
+            "  esac",
+            "}",
+            function_definition(DEPLOY_SH, "require_database"),
+            "require_database",
+            "echo passed",
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "POLICY": "yes" if policy else "no"},
+        check=False,
+    )
+
+
+def test_deploy_dies_with_make_up_when_the_database_policy_is_missing() -> None:
+    missing = run_require_database(policy=False)
+    present = run_require_database(policy=True)
+
+    assert missing.returncode != 0
+    assert "NetworkPolicy 'platform-db'" in missing.stderr
+    assert "default-deny" in missing.stderr
+    assert "run 'make up' first" in missing.stderr
+    assert "passed" not in missing.stdout
+    assert present.returncode == 0, present.stderr
+    assert "passed" in present.stdout
+
+
 def test_the_release_holds_no_job_a_flag_renders_one_and_deploy_knows_services() -> (
     None
 ):
@@ -1005,7 +1150,13 @@ def test_the_release_holds_no_job_a_flag_renders_one_and_deploy_knows_services()
         (job,) = [d for d in flagged if d["kind"] == "Job"]
         added = [d for d in flagged if d not in release]
         assert job["metadata"]["name"] == f"meridian-{name}-{TEST_TAG}"
-        assert sorted(d["kind"] for d in added) == ["Job", "ServiceAccount"], name
+        # The Job's NetworkPolicy comes with it: deploy.sh applies what its
+        # template renders and nothing else of the chart.
+        assert sorted(d["kind"] for d in added) == [
+            "Job",
+            "NetworkPolicy",
+            "ServiceAccount",
+        ], name
         (account,) = [d for d in added if d["kind"] == "ServiceAccount"]
         assert account["metadata"]["name"] == f"meridian-{name}"
     assert set(services.split()) == set(SERVICES)

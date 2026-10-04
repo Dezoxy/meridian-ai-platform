@@ -342,6 +342,35 @@ jobs:
         serviceUrl: model-gateway
     resources: *jobResources
 
+# What the namespace may do on the network (templates/networkpolicy.yaml). The
+# namespace denies all traffic; each workload is allowed what its configuration
+# names: DNS, the database, the collector when it sets the collector's address
+# (telemetry.otlpEndpoint), and the services its environment calls. There is no
+# list of calls here: the `env` items above are the one place a service names
+# another, and the egress rules, and the other side's ingress, come from them.
+#   enabled   off renders no NetworkPolicy at all (the Jobs' included)
+#   peers     what lies outside the chart. Each peer is
+#               namespace   its namespace; omitted: the release's own
+#               podLabels   the labels of its pods, all required
+#               ports       [{port, protocol}] a rule allows
+#             dns holds on any cluster. database, collector and edge are the
+#             cluster's: the chart fails while the policy is on and one is
+#             missing (the collector's only when telemetry.otlpEndpoint is
+#             set, the edge's only when the route is on). The edge needs no
+#             ports: it reaches the Claims API on `port`.
+networkPolicy:
+  enabled: true
+  peers:
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
 # The scheduled sweep (templates/sweep.yaml explains how it runs).
 sweep:
   schedule: "*/5 * * * *"

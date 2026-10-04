@@ -151,9 +151,130 @@ against the container's memory limit), with a size limit. Takes the root.
 {{- end -}}
 
 {{- /*
-job: a Job and its ServiceAccount, each Job its own account; takes root, name
-(migrate, seed or ingest) and job (its values). The Job's name ends in the
-tag, or in the digest's first twelve digits.
+callees: the services an `env` list calls, as a JSON list of names, sorted and
+without repeats; takes the env list. A serviceUrl and each name of a serviceMap
+is a call. A serviceHost is not: it is the service's own name, the Host header
+its callers send. The NetworkPolicies take their egress from this, so the
+addresses a pod is given and the connections it is allowed cannot disagree.
+*/ -}}
+{{- define "meridian.callees" -}}
+{{- $names := list -}}
+{{- range . -}}
+{{- if hasKey . "serviceUrl" -}}
+{{- $names = append $names .serviceUrl -}}
+{{- else if hasKey . "serviceMap" -}}
+{{- $names = concat $names .serviceMap -}}
+{{- end -}}
+{{- end -}}
+{{- $names | uniq | sortAlpha | toJson -}}
+{{- end -}}
+
+{{- /*
+callers: the pods that call a service, as a JSON list of their
+app.kubernetes.io/name labels, sorted; takes root, name. A service's own name is
+its label; a Job's is meridian-<job>. Every Job counts whether its flag is set or
+not: the release never holds a Job, and the service's policy, which is in the
+release, must already admit the Job deploy.sh applies later.
+*/ -}}
+{{- define "meridian.callers" -}}
+{{- $target := .name -}}
+{{- $callers := list -}}
+{{- range $name, $service := .root.Values.services -}}
+{{- if has $target (include "meridian.callees" $service.env | fromJsonArray) -}}
+{{- $callers = append $callers $name -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $job := .root.Values.jobs -}}
+{{- if has $target (include "meridian.callees" $job.env | fromJsonArray) -}}
+{{- $callers = append $callers (printf "meridian-%s" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- $callers | sortAlpha | toJson -}}
+{{- end -}}
+
+{{- /*
+peer: one of networkPolicy.peers as JSON; takes root, key. Fails with the path
+of the value when it is missing, because a policy that cannot name its peer
+would be wrong, not narrower.
+*/ -}}
+{{- define "meridian.peer" -}}
+{{- $peer := get .root.Values.networkPolicy.peers .key -}}
+{{- if not $peer -}}
+{{- fail (printf "networkPolicy.peers.%s is required while networkPolicy.enabled is true: its namespace, podLabels and ports (kind's are in infra/kind/values/meridian.yaml)" .key) -}}
+{{- end -}}
+{{- if not $peer.podLabels -}}
+{{- fail (printf "networkPolicy.peers.%s.podLabels is required: a peer is named by its pod labels" .key) -}}
+{{- end -}}
+{{- toJson $peer -}}
+{{- end -}}
+
+{{- /*
+peerSelector: one entry of a rule's `to` or `from`; takes namespace (empty: the
+policy's own namespace) and labels (the pod labels). A pod selector alone
+selects in the policy's own namespace; with a namespace both must match.
+*/ -}}
+{{- define "meridian.peerSelector" -}}
+{{- with .namespace }}
+namespaceSelector:
+  matchLabels:
+    kubernetes.io/metadata.name: {{ . | quote }}
+{{- end }}
+podSelector:
+  matchLabels:
+    {{- toYaml .labels | nindent 4 }}
+{{- end -}}
+
+{{- /* peerRule: an egress rule to one of networkPolicy.peers, on its ports; takes root, key. */ -}}
+{{- define "meridian.peerRule" -}}
+{{- $peer := include "meridian.peer" . | fromJson -}}
+{{- $ports := required (printf "networkPolicy.peers.%s.ports is required: the port and protocol a rule allows" .key) $peer.ports -}}
+- to:
+    - {{- include "meridian.peerSelector" (dict "namespace" $peer.namespace "labels" $peer.podLabels) | nindent 6 }}
+  ports:
+    {{- toYaml $ports | nindent 4 }}
+{{- end -}}
+
+{{- /*
+serviceRule: a rule to or from the pods named by app.kubernetes.io/name, on the
+services' port; takes root, direction (to or from), names (a list, not empty).
+*/ -}}
+{{- define "meridian.serviceRule" -}}
+- {{ .direction }}:
+    {{- range .names }}
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ . }}
+    {{- end }}
+  ports:
+    - port: {{ .root.Values.port }}
+      protocol: TCP
+{{- end -}}
+
+{{- /*
+egress: the rules of a workload's egress; takes root, env (the workload's env
+list: the services it calls) and collector (true: it sets the collector's
+address, so it may reach the collector). Every workload gets DNS and the
+database; nothing else unless its environment names it.
+*/ -}}
+{{- define "meridian.egress" -}}
+{{- $callees := include "meridian.callees" .env | fromJsonArray -}}
+{{- include "meridian.peerRule" (dict "root" .root "key" "dns") }}
+{{ include "meridian.peerRule" (dict "root" .root "key" "database") }}
+{{- if .collector }}
+{{ include "meridian.peerRule" (dict "root" .root "key" "collector") }}
+{{- end }}
+{{- if $callees }}
+{{ include "meridian.serviceRule" (dict "root" .root "direction" "to" "names" $callees) }}
+{{- end }}
+{{- end -}}
+
+{{- /*
+job: a Job, its ServiceAccount and its NetworkPolicy, each Job its own account
+and policy; takes root, name (migrate, seed or ingest) and job (its values). The
+Job's name ends in the tag, or in the digest's first twelve digits; the policy's
+does not, so a later deploy replaces it instead of adding one. It lives here,
+not in the release, because deploy.sh applies it with the Job: the policy is
+never one deploy behind its Job.
 */ -}}
 {{- define "meridian.job" -}}
 {{- $root := .root -}}
@@ -167,6 +288,23 @@ metadata:
   labels:
     {{- include "meridian.labels" $app | nindent 4 }}
 automountServiceAccountToken: false
+{{- if $root.Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $app }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" $app | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $app }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "meridian.egress" (dict "root" $root "env" $job.env "collector" false) | nindent 4 }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job

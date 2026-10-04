@@ -77,6 +77,10 @@ require_database() {
   [[ "$(kctl -n "${NAMESPACE}" get database platform-db-meridian \
     -o jsonpath='{.status.applied}' 2>/dev/null)" == true ]] ||
     die "the Database 'meridian' is missing or not applied; run 'make up' first"
+  # The chart's default-deny selects the database pod too: without this policy
+  # (it admits the operator and the services) the Cluster would go unhealthy.
+  kctl -n "${NAMESPACE}" get networkpolicy platform-db >/dev/null 2>&1 ||
+    die "the NetworkPolicy 'platform-db' is missing, and the chart's default-deny would cut the database off from its operator; run 'make up' first"
   for role in "${DATABASE_ROLES[@]}"; do
     secret="$(role_secret_name "${role}")"
     kctl -n "${NAMESPACE}" get secret "${secret}" >/dev/null 2>&1 ||

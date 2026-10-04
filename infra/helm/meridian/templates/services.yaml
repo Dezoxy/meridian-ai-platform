@@ -4,7 +4,8 @@ One ServiceAccount, Deployment, Service and PodDisruptionBudget per entry of
 cluster holds objects of these names already). The pod takes no service-account
 token. Each reads its own database role's Secret and the CA's public
 certificate, and sets the variables its values list. The root filesystem is
-read-only; the pod's /tmp is the one writable path. No NetworkPolicy here yet.
+read-only; the pod's /tmp is the one writable path. Their NetworkPolicies are in
+networkpolicy.yaml.
 tests/meridian/test_kind_manifests.py ties every name below to the code.
 
 The Model Gateway keeps its rate windows in one process: with a second replica
