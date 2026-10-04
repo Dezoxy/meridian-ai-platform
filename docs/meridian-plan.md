@@ -346,7 +346,7 @@ that day; the rest stand as their step recorded them.
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open | none |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | none |
-| Fifteen tests assume one graph agent and fail in a tree with a scaffolded workload: fourteen in `test_runtime_app.py` fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents; not measured with a database | S039 | open | S037 |
+| 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | open | S037 |
 | No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open | S037 |
 | The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | open | none |
 | The scaffold's comparison "the old agents plus exactly one" has no test that reaches it alone (the YAML parse and the registry validation refuse first) | S039 | open | none |
@@ -6098,6 +6098,16 @@ own gates accept on the first run, and grants it nothing.
   anything against Azure; the suite with a database in a scaffolded copy;
   `make check` (the model is unchanged).
 
+- After the merge (pull request 50, 2026-10-04), the one run the list
+  above left out: the scaffolded copy's suite with a database, `104
+  failed, 7708 passed, 8 skipped`. 103 are in `test_runtime_app.py` and
+  one in `test_structured_outputs.py`: the same two files and the same
+  cause, so "fifteen" in this section is the count without a database.
+  The README and the backlog row now say 104.
+- Pull request 50 merged as 9c1076f with its five checks green, the
+  first-run test's offline install included; the 20 files the branch
+  changed are byte-identical on `main`.
+
 **Follow-ups:** in Part B's backlog: the fifteen tests that assume one graph
 agent; a generated workload that has never run through the run API; the
 first-run test's time in CI; the comparison no test reaches; what the
@@ -6241,3 +6251,6 @@ list.
   threats are T-81 and T-82. The backlog's "one loader" row is left as it
   was, and gains seven rows, the first being the fifteen tests that assume
   one graph agent.
+- **v0.29, 2026-10-04:** S039's count corrected after its merge: with a
+  database, 104 tests in two files fail in a tree with a scaffolded
+  workload, not fifteen. One cause, one backlog row, its home still S037.
