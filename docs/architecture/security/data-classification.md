@@ -69,7 +69,7 @@ which for this project is always in the EU.
 | Evaluation results | `personal` (pseudonymous) | A JSON report: the baseline in Git (`data/evaluation/`), a run's report beside it or in CI's temporary directory (S017); the recording of a real model's answers and two live reports beside the baseline (S050); no table in the Platform Database (S050 decided against one) | Per golden-set case, the grades and the proposal's route, reason, recommendation, amount and assessment, with the hashes of the prompt, the judge's prompt, the recording, the tools and the golden set; since S050 also the model's rationale and the judge's reason (both redacted), the name and the arguments of each tool call, and the tokens and the cost from the gateway's ledger; no prompt text. The cases are synthetic today: a report over real claims would hold claim data in those fields and could not be committed |
 | Registry | `internal` | Git | Changed only by pull request (T-35) |
 | Provider credentials, signing keys, the pipeline's cloud identity | Secret, outside the classes | Key Vault; Kubernetes Secrets on kind | Never in a prompt, a log or the repository (T-18, T-34, T-37) |
-| Mock OIDC issuer signing key | Secret, kind only | Generated at `make up` | Never committed and never accepted outside kind (T-06) |
+| Mock OIDC issuer signing key (designed, S021: no issuer runs on kind yet) | Secret, kind only | To be generated at `make up` | Never committed and never accepted outside kind (T-06) |
 
 ### Retention
 

@@ -1,7 +1,7 @@
 // Entry point for the architecture model. Keep this file at docs/architecture/:
 // !docs and !adrs paths must be this directory or a subdirectory of it.
 // Model fragments live in model/ and are pulled in with !include (order matters).
-workspace "Meridian AI Platform" "Architecture model for the Meridian AI Platform: an enterprise platform for building, running and governing LLM agents, with a claims-triage reference workload. Target architecture as of 2026-09-29; nothing is deployed yet." {
+workspace "Meridian AI Platform" "Architecture model for the Meridian AI Platform: an enterprise platform for building, running and governing LLM agents, with a claims-triage reference workload. As built on a local kind cluster at the end of milestone M1 (2026-10-04); elements and relationships tagged Designed are not built yet." {
 
     !identifiers hierarchical
 

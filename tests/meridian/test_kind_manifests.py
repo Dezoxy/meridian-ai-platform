@@ -63,6 +63,10 @@ from meridian.workloads.claims_triage.settings import RUNTIME_URL_ENV, ClaimsSet
 from meridian.workloads.claims_triage.sweep import (
     DOCUMENTS_DEADLINE_ENV as SWEEP_DEADLINE_ENV,
 )
+from meridian.workloads.claims_triage.triaging import (
+    DIFFERENT_SUBMISSION_DETAIL,
+    HAS_PROPOSAL_DETAIL,
+)
 
 KIND_DIR = REPO_ROOT / "infra" / "kind"
 MANIFESTS = KIND_DIR / "manifests" / "meridian"
@@ -2487,8 +2491,13 @@ case "${url}" in
     printf '%s' "${STUB_DECISION_STATUS}" ;;
   */claims)
     echo "POST ${url} ${trace} ${body}" >>"${STUB_DIR}/calls"
-    printf '%s' "${STUB_SUBMIT_ANSWER}" >"${out}"
-    printf 201 ;;
+    if [[ -n "${STUB_CONFLICT_DETAIL}" && "${body}" == *'"CLM-0001"'* ]]; then
+      jq -cn --arg detail "${STUB_CONFLICT_DETAIL}" '{detail: $detail}' >"${out}"
+      printf 409
+    else
+      printf '%s' "${STUB_SUBMIT_ANSWER}" >"${out}"
+      printf 201
+    fi ;;
   */tempo/api/traces/*)
     echo "GET ${url}" >>"${STUB_DIR}/calls"
     id="${url##*/}"
@@ -2497,10 +2506,22 @@ case "${url}" in
     marker="${STUB_DIR}/decision_trace"
     [[ ! -f "${marker}" ]] || decided="$(cat "${marker}")"
     if [[ "${decided}" == "${id}" ]]; then services="${STUB_DECISION_SERVICES}"; fi
-    jq -cn --arg services "${services}" '{batches: [
+    # The reading's number for this trace: STUB_GROW_UNTIL makes every service
+    # report 2 + min(reading, STUB_GROW_UNTIL) spans, and STUB_LATE_AFTER holds
+    # model-gateway back until that reading. Both unset: two spans, always.
+    echo >>"${STUB_DIR}/reads-${id}"
+    reading="$(wc -l <"${STUB_DIR}/reads-${id}" | tr -d ' ')"
+    spans=2
+    if [[ -n "${STUB_GROW_UNTIL}" ]]; then
+      spans=$((2 + (reading < STUB_GROW_UNTIL ? reading : STUB_GROW_UNTIL)))
+    fi
+    if [[ -n "${STUB_LATE_AFTER}" ]] && ((reading < STUB_LATE_AFTER)); then
+      services="${services/model-gateway/}"
+    fi
+    jq -cn --arg services "${services}" --argjson spans "${spans}" '{batches: [
       ($services | split(" ")[] | select(. != "")) as $name
       | {resource: {attributes: [{key: "service.name", value: {stringValue: $name}}]},
-         scopeSpans: [{spans: [{}, {}]}]}]}'
+         scopeSpans: [{spans: [range(0; $spans) | {}]}]}]}'
     printf '\n200' ;;
   *) echo "unexpected curl: ${url}" >&2; exit 1 ;;
 esac
@@ -2539,6 +2560,11 @@ def decision_answer(state: str = "approved") -> str:
     )
 
 
+# One trace settles (three readings, two pauses) while the other runs into the
+# deadline: six seconds leave the first four to spare.
+SLOW_POLL = {"poll_timeout": 6, "poll_interval": 1}
+
+
 def run_demo(
     tmp_path: Path,
     *,
@@ -2548,21 +2574,37 @@ def run_demo(
     decision_body: str | None = None,
     triage_services: str = TRIAGE_FIVE + " claims-mcp",
     decision_services: str = DECISION_THREE,
+    poll_timeout: int = 10,
+    poll_interval: int = 0,
+    grow_until: int | None = None,
+    late_after: int | None = None,
+    first_claim_conflict: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
     """demo.sh run in a scratch copy of ``infra/kind`` against the stubs, with
-    a one-second wait for a trace. ``decision`` sets the DECISION variable
-    (unset when None). Returns the process and the stub curl's calls, each as
-    its words: ``POST``/``GET``, the URL, and for a POST the trace ID the
-    traceparent carried and the body."""
+    ``poll_interval`` seconds between two readings of a trace (none unless
+    given) and ``poll_timeout`` seconds to wait for it. A test in which one
+    trace must pass and another fail gives both (``SLOW_POLL``): the passing
+    trace needs three readings, and a one-second deadline does not always
+    hold three when the suite's workers share the CPU (S018). ``decision``
+    sets the DECISION variable (unset when None).
+    ``grow_until`` and ``late_after`` shape what the stub Tempo answers (see
+    the stub); ``first_claim_conflict`` is the detail of a 409 the stub answers
+    to the first claim (the second is accepted). Returns the process and the
+    stub curl's calls, each as its words: ``POST``/``GET``, the URL, and for a
+    POST the trace ID the traceparent carried and the body."""
     kind, bin_dir = tmp_path / "infra" / "kind", tmp_path / "bin"
     data = tmp_path / "data" / "synthetic"
     for folder in (kind, bin_dir, data):
         folder.mkdir(parents=True)
-    # The timeouts are readonly constants of the script: a one-second wait keeps
-    # a trace that never arrives from costing two minutes.
+    # The timeouts are readonly constants of the script. No pause between
+    # readings keeps the three that settling needs from costing seconds, and a
+    # short timeout keeps a trace that never settles from costing two minutes.
     patched, count = re.subn(
         r"^readonly POLL_(TIMEOUT|INTERVAL)=\d+$",
-        r"readonly POLL_\1=1",
+        lambda match: (
+            f"readonly POLL_{match[1]}="
+            + str(poll_timeout if match[1] == "TIMEOUT" else poll_interval)
+        ),
         DEMO_SH,
         flags=re.MULTILINE,
     )
@@ -2583,6 +2625,9 @@ def run_demo(
         "STUB_DECISION_ANSWER": decision_body or decision_answer(),
         "STUB_TRIAGE_SERVICES": triage_services,
         "STUB_DECISION_SERVICES": decision_services,
+        "STUB_GROW_UNTIL": "" if grow_until is None else str(grow_until),
+        "STUB_LATE_AFTER": "" if late_after is None else str(late_after),
+        "STUB_CONFLICT_DETAIL": first_claim_conflict or "",
     }
     if decision is not None:
         env["DECISION"] = decision
@@ -2603,6 +2648,16 @@ def posts_of(calls: list[list[str]]) -> list[list[str]]:
     return [call for call in calls if call[0] == "POST"]
 
 
+def trace_reads(calls: list[list[str]]) -> dict[str, int]:
+    """How many times Tempo was asked for each trace, in order of first ask."""
+    reads: dict[str, int] = {}
+    for call in calls:
+        if call[0] == "GET":
+            trace = call[1].rsplit("/", 1)[1]
+            reads[trace] = reads.get(trace, 0) + 1
+    return reads
+
+
 @requires_demo_tools
 def test_a_referred_claim_is_decided_with_approve_unless_told_otherwise(
     tmp_path: Path,
@@ -2618,10 +2673,7 @@ def test_a_referred_claim_is_decided_with_approve_unless_told_otherwise(
     # Each post carries a trace ID of its own; the traces read back are those.
     assert len(claim_post[2]) == len(decision_post[2]) == 32
     assert claim_post[2] != decision_post[2]
-    assert [c[1].rsplit("/", 1)[1] for c in calls if c[0] == "GET"] == [
-        claim_post[2],
-        decision_post[2],
-    ]
+    assert list(trace_reads(calls)) == [claim_post[2], decision_post[2]]
     lines = done.stdout.splitlines()
     assert "state       awaiting_adjuster" in lines
     assert "decision    approve" in lines
@@ -2702,14 +2754,16 @@ def test_a_claim_that_is_not_referred_posts_no_decision_and_passes_on_its_trace(
     assert any(line.startswith("PASS  trace ") for line in lines)
     assert not any("decision trace" in line for line in lines)
     assert "no adjuster was needed; the next make demo posts the next claim" in lines
-    assert len([c for c in calls if c[0] == "GET"]) == 1  # the triage's trace only
+    assert len(trace_reads(calls)) == 1  # the triage's trace only
 
 
 @requires_demo_tools
 def test_the_decision_trace_check_fails_when_claims_mcp_has_no_span(
     tmp_path: Path,
 ) -> None:
-    done, _ = run_demo(tmp_path, decision_services="claims-api agent-runtime")
+    done, _ = run_demo(
+        tmp_path, decision_services="claims-api agent-runtime", **SLOW_POLL
+    )
 
     lines = done.stdout.splitlines()
     assert done.returncode != 0
@@ -2727,7 +2781,9 @@ def test_the_decision_trace_check_fails_when_claims_mcp_has_no_span(
 def test_the_triage_trace_check_fails_without_hiding_the_decision_traces_result(
     tmp_path: Path,
 ) -> None:
-    done, _ = run_demo(tmp_path, triage_services="claims-api agent-runtime")
+    done, _ = run_demo(
+        tmp_path, triage_services="claims-api agent-runtime", **SLOW_POLL
+    )
 
     lines = done.stdout.splitlines()
     assert done.returncode != 0
@@ -2751,6 +2807,147 @@ def test_the_decision_is_not_followed_by_a_trace_check_when_the_api_refuses_it(
     )
     assert [c for c in calls if c[0] == "GET"] == []
     assert "PASS" not in done.stdout
+
+
+def demo_constant(name: str) -> str:
+    """The value of a quoted ``readonly NAME="..."`` constant of demo.sh."""
+    (value,) = re.findall(rf'^readonly {name}="(.*)"$', DEMO_SH, re.MULTILINE)
+    return value
+
+
+def test_demo_skips_a_claim_on_the_two_409_details_the_claims_api_gives() -> None:
+    assert demo_constant("ALREADY_TRIAGED") == HAS_PROPOSAL_DETAIL
+    assert demo_constant("DIFFERENT_SUBMISSION") == DIFFERENT_SUBMISSION_DETAIL
+
+
+@requires_demo_tools
+@pytest.mark.parametrize(
+    ("detail", "logged"),
+    [
+        (HAS_PROPOSAL_DETAIL, "CLM-0001: already triaged, trying the next claim"),
+        (
+            DIFFERENT_SUBMISSION_DETAIL,
+            "CLM-0001: exists with a different submission (the claimant's form "
+            "stamps its own report date), trying the next claim",
+        ),
+    ],
+)
+def test_a_409_that_means_the_claim_is_taken_moves_on_to_the_next_claim(
+    tmp_path: Path, detail: str, logged: str
+) -> None:
+    done, calls = run_demo(tmp_path, first_claim_conflict=detail)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    claim_posts = [call for call in posts_of(calls) if "/decision" not in call[1]]
+    assert [json.loads(call[3])["claim_id"] for call in claim_posts] == [
+        "CLM-0001",
+        "CLM-0002",
+    ]
+    assert f"==> {logged}" in done.stdout.splitlines()
+    assert "claim       CLM-0002" in done.stdout.splitlines()
+    assert posts_of(calls)[-1][1].endswith(":8088/claims/CLM-0002/decision")
+
+
+@requires_demo_tools
+def test_any_other_409_still_stops_the_demo(tmp_path: Path) -> None:
+    done, calls = run_demo(tmp_path, first_claim_conflict="something else is wrong")
+
+    assert done.returncode != 0
+    assert "error: CLM-0001: 409 something else is wrong" in done.stderr
+    assert len(posts_of(calls)) == 1  # the second claim is not tried
+    assert "PASS" not in done.stdout
+
+
+SETTLE_POLLS = 3  # demo.sh: readings with unchanged counts before PASS
+
+
+@requires_demo_tools
+def test_a_trace_that_has_every_service_at_once_passes_after_three_readings(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(tmp_path)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    # Both traces are read exactly SETTLE_POLLS times: not once, not four times.
+    assert list(trace_reads(calls).values()) == [SETTLE_POLLS, SETTLE_POLLS]
+    assert re.search(r"^readonly SETTLE_POLLS=3$", DEMO_SH, re.MULTILINE)
+
+
+@requires_demo_tools
+def test_a_trace_that_grows_and_then_stays_the_same_passes_with_its_final_counts(
+    tmp_path: Path,
+) -> None:
+    # Readings 1 to 3 report 3, 4, 5 spans per service; every later one 5. The
+    # run of equal readings starts at the third (the first with the final
+    # counts), so the script stops at the fifth.
+    done, calls = run_demo(tmp_path, grow_until=3)
+
+    lines = done.stdout.splitlines()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert list(trace_reads(calls).values()) == [5, 5]
+    assert any(line.startswith("PASS  trace ") for line in lines)
+    spans = [line.split() for line in lines if line.endswith(" span(s)")]
+    assert len(spans) == 9  # the triage's six services, then the decision's three
+    assert {words[1] for words in spans} == {"5"}
+    assert not any(line.startswith("FAIL") for line in lines)
+
+
+@requires_demo_tools
+def test_a_service_that_arrives_late_restarts_the_count_of_unchanged_readings(
+    tmp_path: Path,
+) -> None:
+    # model-gateway is absent from readings 1 and 2: the readings that have
+    # every service are 3, 4 and 5, so no sooner than the fifth passes.
+    done, calls = run_demo(tmp_path, late_after=3)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert trace_reads(calls)[posts_of(calls)[0][2]] == 5
+    assert "PASS  trace " in done.stdout
+
+
+@requires_demo_tools
+def test_a_trace_that_keeps_growing_until_the_deadline_fails_as_still_growing(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(tmp_path, grow_until=1_000_000, poll_timeout=3)
+
+    lines = done.stdout.splitlines()
+    assert done.returncode != 0
+    assert "PASS" not in done.stdout
+    triage, decision = [line for line in lines if line.startswith("FAIL")]
+    reads = trace_reads(calls)
+    triage_id, decision_id = reads  # the order the script read them in
+    assert triage == f"FAIL  trace {triage_id} was still growing after 3s"
+    assert decision == f"FAIL  decision trace {decision_id} was still growing after 3s"
+    # Every service was there, so the old "no trace with spans from all of"
+    # line would be wrong; what Tempo last returned is listed, with the counts
+    # of the last reading (2 spans, and one more with each reading).
+    assert "no trace" not in done.stdout
+    first = lines.index("      Tempo returned:") + 1
+    returned = lines[first : lines.index(decision)]
+    triage_counts = [
+        line.split()[1] for line in returned if line.startswith("        ")
+    ]
+    assert triage_counts == [str(2 + reads[triage_id])] * 6
+    assert reads[triage_id] > SETTLE_POLLS  # it did not stop at three
+
+
+@requires_demo_tools
+def test_a_trace_missing_a_service_still_fails_with_the_line_it_had_before(
+    tmp_path: Path,
+) -> None:
+    done, _ = run_demo(
+        tmp_path, triage_services="claims-api agent-runtime", **SLOW_POLL
+    )
+
+    (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
+    assert done.returncode != 0
+    assert failure.startswith("FAIL  no trace ")
+    assert failure.endswith(
+        " with spans from all of: "
+        "claims-api agent-runtime policy-mcp knowledge-mcp model-gateway after 6s"
+    )
+    assert "still growing" not in done.stdout
 
 
 def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:

@@ -9,9 +9,12 @@ is the product; a claims-triage agent is its reference workload.
 
 ### Status
 
-Target architecture, recorded on 2026-09-29. Nothing in this model is deployed
-yet. The view register in the architecture README says, per view, whether it
-has been checked against running software. Every capability in this
+The model shows the platform as built at the end of milestone M1
+(2026-10-04): it runs in tests and on a local kind cluster, with the model
+simulated there, and nothing runs in Azure. What a view draws dotted and
+faded is tagged `Designed` and is not built yet. The view register in the
+architecture README says, per view, what was compared with the code and
+when it was last read as a rendered image. Every capability in this
 documentation carries one of three labels: implemented, simulated or designed.
 
 ### Context
