@@ -340,7 +340,8 @@ OK_GRADES = {"alpha": True, "beta": True}
 
 
 class FakeWorkload:
-    """A stand-in plugin: three cases, graded as ``grades`` says."""
+    """A stand-in plugin: three cases (none when ``empty``), graded as
+    ``grades`` says."""
 
     workload = "demo"
     case_field = "id"
@@ -351,15 +352,19 @@ class FakeWorkload:
         *,
         unreadable: bool = False,
         inconsistent: bool = False,
+        empty: bool = False,
     ) -> None:
         self.grades = grades or {}
         self.unreadable = unreadable
         self.inconsistent = inconsistent
+        self.empty = empty
         self.reported: list[str] = []
 
     def submissions(self, golden_set: Path) -> list[Submission]:
         if self.unreadable:
             raise ReportError("file not found")
+        if self.empty:
+            return []
         return [Submission(c, "/things", {"id": c}) for c in ("c-1", "c-2", "c-3")]
 
     def answer_path(self, case: str) -> str:
@@ -534,6 +539,163 @@ def test_run_where_every_case_is_on_the_stack_exits_1_and_writes_nothing(
     assert result.stderr == "ERROR nothing ran: every case is already on the stack\n"
     assert not (tmp_path / "report.json").exists()
     assert run_env.sleeps == []
+
+
+EMPTY_REFUSED = (
+    "ERROR the golden set holds no case: nothing to evaluate (--allow-empty passes a "
+    "workload that has none yet)\n"
+)
+REPORT_IN_THE_WAY = (
+    "ERROR a report is already at the report's path and is not this run's: remove it "
+    "or name another path\n"
+)
+EMPTY_PASSED_LINES = [
+    "the golden set holds no case: nothing was sent, nothing was evaluated and "
+    "no report is written",
+    "eval run: passed, nothing evaluated",
+]
+
+
+def test_the_texts_of_an_empty_golden_set_are_the_ones_the_command_holds() -> None:
+    assert EMPTY_PASSED_LINES[0] == cli.NO_CASES
+    assert f"ERROR {cli.EMPTY_GOLDEN_SET}\n" == EMPTY_REFUSED
+    assert f"ERROR {cli.REPORT_IN_THE_WAY}\n" == REPORT_IN_THE_WAY
+    assert EMPTY_PASSED_LINES[1] == cli.EMPTY_PASSED
+
+
+def test_run_with_a_golden_set_that_holds_no_case_fails_unless_asked_to_pass(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    run_env.workload.empty = True
+
+    result = run_eval(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert result.stdout == "eval run: failed\n"
+    assert result.stderr == EMPTY_REFUSED
+    assert "already on the stack" not in result.output
+    assert not (tmp_path / "report.json").exists()
+    assert run_env.clients == []
+    assert run_env.stack.requests == []
+    assert run_env.sleeps == []
+
+
+def test_run_allow_empty_passes_a_golden_set_that_holds_no_case_and_does_nothing(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    run_env.workload.empty = True
+
+    result = run_eval(tmp_path, "--allow-empty")
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "\n".join(EMPTY_PASSED_LINES) + "\n"
+    assert result.stderr == ""
+    assert not (tmp_path / "report.json").exists()
+    assert run_env.clients == []
+    assert run_env.stack.requests == []
+    assert run_env.sleeps == []
+
+
+def test_run_allow_empty_does_not_check_the_report_directory(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    run_env.workload.empty = True
+    missing = tmp_path / "missing" / "report.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "eval", "run", "--base-url", BASE_URL,
+            "--golden-set", str(tmp_path),
+            "--registry", str(REGISTRY_DIR),
+            "--report", str(missing),
+            "--allow-empty",
+        ],
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "\n".join(EMPTY_PASSED_LINES) + "\n"
+    assert result.stderr == ""
+    assert not missing.parent.exists()
+    assert run_env.clients == []
+
+
+def occupy_with_a_report(path: Path) -> None:
+    path.write_text('{"an": "older report"}', encoding="utf-8")
+
+
+def occupy_with_a_dangling_symlink(path: Path) -> None:
+    path.symlink_to(path.parent / "nowhere")
+
+
+def paths_under(directory: Path) -> list[tuple[str, bool]]:
+    return sorted(
+        (p.relative_to(directory).as_posix(), p.is_symlink())
+        for p in directory.rglob("*")
+    )
+
+
+@pytest.mark.parametrize(
+    "occupy",
+    [occupy_with_a_report, occupy_with_a_dangling_symlink],
+    ids=lambda f: f.__name__,
+)
+def test_run_allow_empty_with_something_at_the_report_path_exits_2_and_deletes_nothing(
+    run_env: SimpleNamespace, tmp_path: Path, occupy: Callable[[Path], None]
+) -> None:
+    run_env.workload.empty = True
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "report.json"
+    occupy(report)
+    before = paths_under(out)
+    content = report.read_bytes() if report.is_file() else None
+
+    # The report goes beside the golden set's files, not among them: the last
+    # --report wins.
+    result = run_eval(tmp_path, "--allow-empty", "--report", str(report))
+
+    assert result.exit_code == 2, result.output
+    assert result.stdout == ""
+    assert result.stderr == REPORT_IN_THE_WAY
+    assert paths_under(out) == before
+    assert (report.read_bytes() if report.is_file() else None) == content
+    assert run_env.clients == []
+
+
+def test_run_allow_empty_on_a_golden_set_that_has_cases_is_a_normal_run(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    result = run_eval(tmp_path, "--allow-empty")
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        "ran 3, skipped 0 (already on the stack), failed 0",
+        "answered by scripted (simulated)",
+        "alpha: 3/3",
+        "beta: 3/3",
+        "eval run: passed",
+    ]
+    assert result.stderr == ""
+    assert (tmp_path / "report.json").is_file()
+    assert run_env.clients == [BASE_URL]
+
+
+def test_run_with_no_case_and_a_golden_set_that_is_not_its_manifest_exits_2(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    run_env.workload.empty = True
+    damage_a_file(tmp_path)
+
+    result = run_eval(tmp_path)
+
+    assert result.exit_code == 2, result.output
+    assert result.stderr == (
+        "ERROR the golden set: the golden set's files differ from its manifest: "
+        "claims.json\n"
+    )
+    assert result.stdout == ""
+    assert run_env.clients == []
 
 
 def test_run_where_a_case_failed_names_it_with_its_status_and_exits_1(
@@ -910,5 +1072,5 @@ def test_run_has_help_for_its_options() -> None:
     plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
     for option in ("--base-url", "--workload", "--golden-set", "--registry"):
         assert option in plain
-    for option in ("--report", "--limit", "--pace"):
+    for option in ("--report", "--limit", "--pace", "--allow-empty"):
         assert option in plain
