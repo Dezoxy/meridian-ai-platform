@@ -1,0 +1,26 @@
+# Values of the Meridian chart (infra/helm/meridian) on the kind cluster: only
+# what is kind's. deploy.sh passes the image. No secret belongs here: Helm keeps
+# a release's values in a Secret and this repository is public.
+
+# Traces go to the collector's HTTP port (4317 is gRPC; the exporter speaks
+# HTTP).
+telemetry:
+  otlpEndpoint: http://otel-collector.observability.svc.cluster.local:4318
+
+services:
+  # Replay mode only: no provider is wired on kind yet.
+  model-gateway:
+    env:
+      - name: MERIDIAN_GATEWAY_MODE
+        value: replay
+      - name: MERIDIAN_ENVIRONMENT
+        value: kind
+
+# The Claims API on a *.localhost name, through the edge Gateway `make up`
+# installs.
+route:
+  enabled: true
+  hostname: claims.meridian.localhost
+  parentRef:
+    name: edge
+    namespace: envoy-gateway-system

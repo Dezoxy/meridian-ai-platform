@@ -54,7 +54,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline eval-record synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline eval-record synthetic up deploy helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -214,6 +214,10 @@ grafana:
 ## grafana-password print the Grafana admin password
 grafana-password:
 	@infra/kind/grafana.sh password
+
+## helm-lint       lint the Meridian chart strictly, with kind's values and every Job on (needs helm)
+helm-lint:
+	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
 
 ## down            delete the kind cluster "meridian" and its credentials file (destructive; the owner runs it)
 down:

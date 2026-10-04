@@ -1,0 +1,8 @@
+apiVersion: v2
+name: meridian
+description: >-
+  The Meridian services (Claims API, Agent Runtime, Model Gateway and the
+  policy, claims and knowledge tool servers), the claims-api route, the
+  scheduled sweep and, on request, the migration, seed and ingestion Jobs.
+type: application
+version: 0.1.0

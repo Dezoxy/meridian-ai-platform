@@ -1,0 +1,327 @@
+# Values of the Meridian chart: what is true on any cluster. What is kind's
+# (the gateway's mode, the route's host, the collector's address) is in
+# infra/kind/values/meridian.yaml.
+#
+# No value here is a secret. Helm keeps the values of a release in a Secret of
+# the namespace and this repository is public: a value names a Secret (and
+# Kubernetes reads it), it never holds a password or a connection string.
+# tests/meridian/test_helm_chart.py checks that.
+
+# The image every container runs: <repository>:<tag>. Both are required and
+# come from the command line (deploy.sh passes the image it just built); a
+# Job's name ends in the tag.
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The port every service listens on, and its Service answers on. The
+# in-cluster addresses are http://<service>.<release namespace>.svc:<port>.
+port: 8000
+
+replicas: 1
+
+# Where a service sends its traces (OTLP over HTTP). Empty: no variable.
+telemetry:
+  otlpEndpoint: ""
+
+database:
+  # The Secrets Kubernetes reads, created out of band (infra/kind/up.sh). A
+  # service's own is under `services` below, with the key `uri`. The owner's is
+  # for the three Jobs alone: the six services get a role that can neither
+  # create nor alter anything (T-25).
+  ownerSecret: meridian-owner-db
+  # The CA that signed the database's certificate. The Secret also holds the
+  # CA's private key, so the pods mount only ca.crt.
+  caSecret: platform-db-ca
+
+# The container's securityContext, the same for every pod of the chart.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  seccompProfile:
+    type: RuntimeDefault
+
+# The probes of every service: /healthz on the service's port.
+probes:
+  readiness:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 3
+  liveness:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+# One Deployment, Service and ServiceAccount of the same name per entry. `env`
+# is what the service sets besides its database URL (from `dbSecret`) and the
+# collector's address. An item takes one of:
+#   value        the string as it is
+#   serviceUrl   http://<that service>.<release namespace>.svc:<port>
+#   serviceHost  <that service>.<release namespace>.svc:<port>, the Host
+#                header a caller sends (DNS rebinding protection)
+#   serviceMap   {"<service>": <its serviceUrl>, ...}, in the order listed:
+#                the registry's server IDs and where each is served (base URLs;
+#                the client appends /mcp)
+services:
+  # Takes a claim and has the Agent Runtime triage it. Reached from the edge
+  # (the route below) and inside the cluster.
+  claims-api:
+    dbSecret: claims-api-db
+    command:
+      - uvicorn
+      - --factory
+      - meridian.workloads.claims_triage.app:create_app_from_env
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env:
+      - name: MERIDIAN_RUNTIME_URL
+        serviceUrl: agent-runtime
+    # Sized from cAdvisor on kind (2026-10-01): peak working set 66 MB after
+    # two demo claims; the limit leaves about three times that.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 192Mi
+
+  # Runs the triage graph and calls the Model Gateway. Cluster-internal: no
+  # route.
+  agent-runtime:
+    dbSecret: agent-runtime-db
+    command:
+      - uvicorn
+      - --factory
+      - meridian.runtime.app:create_app_from_env
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env:
+      - name: MERIDIAN_GATEWAY_URL
+        serviceUrl: model-gateway
+      - name: MERIDIAN_TOOL_SERVERS
+        serviceMap: [policy-mcp, claims-mcp, knowledge-mcp]
+    # Sized from cAdvisor on kind (2026-10-01): peak working set 87 MB after
+    # two demo claims; the limit leaves about three times that.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        memory: 256Mi
+
+  # The one door to a model. Cluster-internal: no route. Its mode and
+  # environment are the cluster's (infra/kind/values/meridian.yaml sets
+  # MERIDIAN_GATEWAY_MODE and MERIDIAN_ENVIRONMENT).
+  model-gateway:
+    dbSecret: model-gateway-db
+    command:
+      - uvicorn
+      - --factory
+      - meridian.platform.gateway.app:create_app_from_env
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env: []
+    # Sized from cAdvisor on kind (2026-10-01): peak working set 57 MB after
+    # two demo claims; the limit leaves about three times that.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 192Mi
+
+  # The three tool servers (MCP over HTTP at /mcp) are cluster-internal: no
+  # route; the Agent Runtime calls each at the address in its
+  # MERIDIAN_TOOL_SERVERS. Their numbers are the Agent Runtime's, measured from
+  # cAdvisor on kind (2026-10-02) after demo claims and smoke runs.
+
+  # policy_lookup and claim_history over the simulated policy store. Working
+  # set 72 to 73 MB.
+  policy-mcp:
+    dbSecret: policy-mcp-db
+    command:
+      - uvicorn
+      - --factory
+      - meridian.platform.policy_mcp.app:create_app_from_env
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env:
+      - name: MERIDIAN_ALLOWED_HOSTS
+        serviceHost: policy-mcp
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        memory: 256Mi
+
+  # add_claim_note and request_approval, the claims workload's own mutating
+  # tools. Working set 72 to 86 MB.
+  claims-mcp:
+    dbSecret: claims-mcp-db
+    command:
+      - uvicorn
+      - --factory
+      - meridian.workloads.claims_triage.mcp_server.app:create_app_from_env
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env:
+      - name: MERIDIAN_ALLOWED_HOSTS
+        serviceHost: claims-mcp
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        memory: 256Mi
+
+  # wording_search, hybrid search over the policy wordings. It embeds the query
+  # through the Model Gateway. Working set 79 to 87 MB.
+  knowledge-mcp:
+    dbSecret: knowledge-mcp-db
+    command:
+      - uvicorn
+      - --factory
+      - meridian.platform.knowledge_mcp.app:create_app_from_env
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    env:
+      - name: MERIDIAN_ALLOWED_HOSTS
+        serviceHost: knowledge-mcp
+      - name: MERIDIAN_GATEWAY_URL
+        serviceUrl: model-gateway
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        memory: 256Mi
+
+# The edge route of the Claims API, the only one: the Agent Runtime and the
+# Model Gateway have none and stay reachable only in the cluster. A request
+# with another Host header (127.0.0.1:8088, a rebinding page) matches no route
+# and gets 404 (threat model T-01). Off until a cluster's values turn it on and
+# name the host and the Gateway it attaches to:
+#   hostname    the name the route answers to
+#   parentRef   the Gateway: {name, namespace}
+route:
+  enabled: false
+  hostname: ""
+  parentRef: {}
+  # Envoy buffers each request in full and answers 413 above the limit, so an
+  # oversized body never reaches the Claims API. 64Ki is the app's own limit
+  # (SMALL_BODY_LIMIT_BYTES); the app still enforces it for chunked bodies.
+  requestBufferLimit: 64Ki
+
+# The Jobs run to completion as the database owner role. deploy.sh renders and
+# runs them one at a time (a Job's spec cannot change, so each image gets its
+# own, named with the tag); the release never holds one, so each is off here
+# and deploy.sh turns on the one it renders.
+jobs:
+  # Applies the SQL migrations: `meridian db migrate`. Each image runs them
+  # once and the services start after it.
+  migrate:
+    enabled: false
+    command: [meridian, db, migrate]
+    backoffLimit: 1
+    # A hung database connection ends the Job instead of blocking the deploy.
+    activeDeadlineSeconds: 300
+    ttlSecondsAfterFinished: 3600
+    resources: &jobResources
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        memory: 192Mi
+
+  # Loads the simulated policy store from the synthetic data the image carries:
+  # `meridian db seed-policies`. deploy.sh runs it on every deploy, after the
+  # migrations and before the services start: the load mirrors its source, so a
+  # rerun changes nothing, and a claim that met an empty policy table would get
+  # a stored proposal "policy not found", which is final. Only the owner's
+  # Secret can write the store; the tool servers' roles cannot.
+  seed:
+    enabled: false
+    command:
+      - meridian
+      - db
+      - seed-policies
+      - --from
+      - /opt/meridian/synthetic
+    backoffLimit: 1
+    # A hung database connection ends the Job instead of blocking the deploy.
+    activeDeadlineSeconds: 300
+    ttlSecondsAfterFinished: 3600
+    resources: *jobResources
+
+  # Embeds the policy wordings the image carries and replaces the knowledge
+  # store with them: `meridian knowledge ingest`, with the embedding calls going
+  # through the Model Gateway under the claims-triage tenant's limits. deploy.sh
+  # runs it after the gateway has rolled out, at most once per image.
+  #
+  # No ttlSecondsAfterFinished, unlike the other two Jobs: the finished Job is
+  # the record that this image's corpus is in the store. deploy.sh finds it and
+  # skips the ingestion, which spends most of the tenant's tokens for a minute;
+  # a Job that expired would make every deploy ingest again.
+  ingest:
+    enabled: false
+    command:
+      - meridian
+      - knowledge
+      - ingest
+      - --tenant
+      - claims-triage
+      - --from
+      - /opt/meridian/synthetic
+    # No retry: a second pod straight after a failure would meet the token
+    # window the first one filled. The next deploy is the retry.
+    backoffLimit: 0
+    # A hung database or gateway connection ends the Job instead of blocking
+    # the deploy. Above ingest.MAX_TOTAL_WAIT_SECONDS (300), the longest the
+    # command waits for the gateway, so it can end by itself and audit its
+    # refusal.
+    activeDeadlineSeconds: 360
+    env:
+      - name: MERIDIAN_GATEWAY_URL
+        serviceUrl: model-gateway
+    resources: *jobResources
+
+# The scheduled sweep (templates/sweep.yaml explains how it runs).
+sweep:
+  schedule: "*/5 * * * *"
+  # The role's Secret, never the owner's.
+  dbSecret: claims-sweep-db
+  # Whole calendar days from the claim's latest request for documents (the
+  # owner's answer of 2026-10-03).
+  documentsDeadlineDays: 14
+  # Under half the period: a hung connection ends the pass, because the
+  # CronJob's Forbid policy would otherwise skip every later run behind it.
+  activeDeadlineSeconds: 120
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 192Mi

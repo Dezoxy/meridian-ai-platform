@@ -199,7 +199,7 @@ and Pydantic, at the cost of one dependency.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | todo | S018 |
+| S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | doing | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | todo | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
@@ -5944,6 +5944,103 @@ Run by the session; exit code 0 unless said.
   a split table, and the wording of a failed trace that alternated.
 - Closed in the backlog: S053 on kind; `make demo` on an incomplete trace;
   the golden claims' reset (not built).
+
+### S019 — Hardened Helm charts
+**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Goal:** the six services, the three Jobs and the sweep run on kind from
+one Helm chart with probes, resource limits, a default-deny NetworkPolicy,
+PodDisruptionBudgets, non-root read-only containers and pinned image
+references, instead of the raw manifests of the skeleton.
+
+**Decisions:**
+
+- **One step, by the owner (2026-10-04).** The session estimated five to
+  six hours and proposed to make the NetworkPolicy a step of its own; the
+  owner chose to keep the "done when" whole.
+- **One chart, the same object names, adopted in place.**
+  `infra/helm/meridian/` renders the six services, the route, the sweep's
+  CronJob, the budgets and the policies; kind's values are in
+  `infra/kind/values/meridian.yaml`. The objects keep the names and the
+  label selectors the manifests gave them, so Helm takes over what
+  `kubectl apply` created (`--take-ownership`) and nothing is deleted.
+  Rejected: a chart per service (six releases for one image and one
+  version), and a release-name prefix on the objects (a selector cannot
+  change, so every Deployment would have had to be deleted first).
+- **The three Jobs stay outside the release.** The migration must finish
+  before the new pods start, and the ingestion runs once per image, so
+  `deploy.sh` keeps their order and renders each Job from the chart
+  (`helm template --show-only`). Rejected: Helm hooks, which would run the
+  ingestion on every deploy (it spends the tenant's token window) and
+  hide a failed Job's log, which the script prints today.
+- **The deny is the namespace's, not a label's.** `default-deny` selects
+  every pod in `meridian` (`podSelector: {}`), so a pod with no label gets
+  nothing. `platform-db` shares the namespace on kind, and its policy is
+  the platform's: `make up` applies it and `make deploy` refuses without
+  it. The database's egress is open: its instance manager calls the API
+  server at the node's own address, which changes with every new cluster,
+  so no `ipBlock` can name it; who may connect to the database is the
+  control (the policy, `pg_hba`, TLS, SCRAM). Rejected: a deny that
+  selects `part-of: meridian` only, which leaves an unlabelled pod open.
+- **A Job's policy travels with the Job**, in the Job's own template
+  file, so a change to it is never one deploy behind.
+- **Pinned means a digest, or an image that is never pulled.** The chart
+  takes `image.digest` and refuses a tag unless `imagePullPolicy` is
+  `Never`. On kind there is no registry and so no repository digest:
+  `make deploy` loads the image into the node under the first 12 hex
+  digits of its image ID, a name the content gives itself, and `Never`
+  means a missing image fails the pod instead of being looked up on
+  Docker Hub. The Dockerfile's base images are pinned by digest since
+  S041. Signing and verification are S022.
+- **`maxUnavailable: 1` on every budget.** With one replica it protects
+  nothing and blocks nothing; `minAvailable: 1` on one replica would
+  block every node drain, which on AKS is a node upgrade. The budgets
+  start to matter with a second replica, which no service has: whether
+  each is safe to run twice is not measured (S027).
+- **No CPU limit.** A request reserves what a service needs; a limit
+  throttles it while the node has headroom. Memory keeps its limit.
+- **The gateway's rolling update is left alone (T-45).** `maxSurge: 0`
+  would keep two gateway processes from each allowing the full rate
+  windows for the seconds of a rollout, at the price of a gateway that is
+  down for those seconds, and a triage in flight then fails over to an
+  adjuster. The budgets and quotas are in PostgreSQL and are not doubled;
+  only the rate windows are. The chart refuses more than one gateway
+  replica instead, and the row stays open until the windows are shared.
+- **TLS at the edge is not in this step.** `infra/kind/README.md` and the
+  route's comment had named S019 for it; the "done when" never did. On
+  kind the edge listens on loopback only. It is a backlog row now.
+- **Helm is a test dependency.** The manifest tests render the chart, so a
+  machine without `helm` fails them instead of skipping; CI installs the
+  version the README documents.
+
+**Work log:**
+
+- 2026-10-04: branch `s019-hardened-helm-charts` from `origin/main` at
+  `b905712`. Two spikes on the kind cluster, each with a throwaway
+  NetworkPolicy that was deleted afterwards. An ingress policy on the
+  Model Gateway that admits the Agent Runtime alone: the Claims API's pod
+  was refused (`URLError`), the runtime's got 200, and the gateway's pod
+  stayed ready with no restart, so the kubelet's probes pass a policy. An
+  egress policy on the policy tool server that allows DNS and the
+  database: the database was reached through its Service name, the
+  gateway and the collector timed out. kindnet (`v20260820-69b56db7`)
+  enforces both directions, and a rule by pod selector holds for traffic
+  sent to a ClusterIP.
+- A third spike, for the database's own policy (ingress on 5432 from
+  `part-of: meridian` pods and on 8000 from the CloudNativePG operator,
+  egress open): a Meridian pod reached the database, a pod with no label
+  in `observability` timed out, and the Cluster stayed `healthy` through a
+  forced reconcile. With the operator's rule taken out, the Cluster turned
+  `Instance Status Extraction Error: HTTP communication issue` within 40
+  seconds, so the rule is needed and the log shows when it is missing.
+  Policy and probe pod deleted; the Cluster was healthy again.
+- `kubectl label --dry-run=server ns meridian
+  pod-security.kubernetes.io/enforce=restricted` printed no warning: every
+  pod now in the namespace, the database's included, meets `restricted`.
+  Not applied (see the follow-ups).
+
+**Result / verification:** —
+
+**Follow-ups:** —
 
 ## Part D — Open questions
 

@@ -63,6 +63,14 @@ jobs:
         run: uv sync --locked
       - name: Lint, format check and import contracts
         run: make lint
+      # The chart tests render the chart and fail without helm (never skip), and
+      # `make helm-lint` lints it. The version is the one infra/kind/README.md
+      # documents (tests/meridian/test_helm_chart.py compares them).
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
+      - name: Lint the Helm chart
+        run: make helm-lint
       - name: Tests
         run: make pytest
         env:

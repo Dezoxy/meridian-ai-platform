@@ -1,0 +1,89 @@
+{{- /*
+The scheduled sweep (S052): `python -m meridian.workloads.claims_triage.sweep`,
+one pass every five minutes, as the database role claims_sweep (Secret
+claims-sweep-db, never the owner's). A pass refers a claim whose documents are
+overdue to an adjuster, fails a claim stranded in submitted or triaging, ends a
+run nobody resumes and deletes the checkpoints of a finished run. It needs
+PostgreSQL and nothing else: no call to a service, no registry, no model.
+The release holds it with the services. Unlike a Job's, a CronJob's spec can
+change in place, and the next Job it starts carries the change, so its name has
+no image tag.
+  concurrencyPolicy Forbid  governs only what the schedule starts: a scheduled
+                            pass is skipped while another is running. A Job
+                            made by hand (`kubectl create job
+                            --from=cronjob/meridian-sweep`) runs beside a
+                            scheduled one, which is why the role's connection
+                            limit allows two pods; the CronJob owns it, so the
+                            next scheduled pass is skipped while it runs
+  activeDeadlineSeconds     120, under half the period: a hung connection ends
+                            the pass, because Forbid would otherwise skip
+                            every later run behind it
+  startingDeadlineSeconds   a run the controller could not start within 120 s
+                            is skipped; the next one is five minutes away
+  backoffLimit 0            the next run is the retry
+  history limits            one success and the last three failures; a by-hand
+                            Job counts, as the CronJob owns it. A success is
+                            removed when the next one finishes, about five
+                            minutes later; make smoke reads the last finished
+  ttlSecondsAfterFinished   a day: what keeps a failure for the morning, and
+                            the last success of a suspended CronJob, which no
+                            later Job pushes out
+The pod takes the migration Job's shape: the 'db-ca' volume holds only the CA's
+public certificate, no service-account token, no extra privilege. The schedule,
+the deadline and the documents' deadline are values.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meridian-sweep
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "meridian-sweep" | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: meridian-sweep
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "meridian-sweep" | nindent 4 }}
+spec:
+  schedule: {{ .Values.sweep.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "meridian.labels" "meridian-sweep" | nindent 8 }}
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .Values.sweep.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "meridian.labels" "meridian-sweep" | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: meridian-sweep
+          automountServiceAccountToken: false
+          containers:
+            - name: sweep
+              image: {{ include "meridian.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: [python, -m, meridian.workloads.claims_triage.sweep]
+              env:
+                {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_DATABASE_URL" "secret" .Values.sweep.dbSecret) | nindent 16 }}
+                - name: MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS
+                  value: {{ .Values.sweep.documentsDeadlineDays | quote }}
+              resources:
+                {{- toYaml .Values.sweep.resources | nindent 18 }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 18 }}
+              volumeMounts:
+                {{- include "meridian.caMount" . | nindent 16 }}
+          volumes:
+            {{- include "meridian.caVolume" . | nindent 12 }}

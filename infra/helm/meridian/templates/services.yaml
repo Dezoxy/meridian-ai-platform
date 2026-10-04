@@ -1,0 +1,86 @@
+{{- /*
+One ServiceAccount, Deployment and Service per entry of `services` in
+values.yaml, all named after the service (no release prefix: the cluster holds
+objects of these names already). The pod takes no service-account token. Each
+reads its own database role's Secret and the CA's public certificate, and sets
+the variables its values list. No NetworkPolicy, PodDisruptionBudget or
+read-only root filesystem here yet.
+tests/meridian/test_kind_manifests.py ties every name below to the code.
+*/ -}}
+{{- range $name, $service := .Values.services }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" $name | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" $name | nindent 4 }}
+spec:
+  replicas: {{ $.Values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.labels" $name | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      containers:
+        - name: {{ $name }}
+          image: {{ include "meridian.image" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            {{- toYaml $service.command | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $.Values.port }}
+          env:
+            {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_DATABASE_URL" "secret" $service.dbSecret) | nindent 12 }}
+            {{- range $service.env }}
+            {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
+            {{- end }}
+            {{- with $.Values.telemetry.otlpEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+          readinessProbe:
+            {{- toYaml $.Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            {{- toYaml $.Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $service.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "meridian.caMount" . | nindent 12 }}
+      volumes:
+        {{- include "meridian.caVolume" $ | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" $name | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+  ports:
+    - name: http
+      port: {{ $.Values.port }}
+      targetPort: http
+{{- end }}

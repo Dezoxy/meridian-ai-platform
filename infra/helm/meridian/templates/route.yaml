@@ -1,0 +1,43 @@
+{{- /*
+The only route on the edge: the Claims API, on a *.localhost name on kind. The
+Agent Runtime and the Model Gateway have none and stay reachable only in the
+cluster. A request with another Host header (127.0.0.1:8088, a rebinding page)
+matches no route and gets 404 (threat model T-01). Plain HTTP until the edge
+gets its certificates. Rendered only when `route.enabled`.
+*/ -}}
+{{- if .Values.route.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: claims-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "claims-api" | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ required "route.parentRef.name is required when route.enabled" .Values.route.parentRef.name }}
+      namespace: {{ required "route.parentRef.namespace is required when route.enabled" .Values.route.parentRef.namespace }}
+  hostnames:
+    - {{ required "route.hostname is required when route.enabled" .Values.route.hostname }}
+  rules:
+    - backendRefs:
+        - name: claims-api
+          port: {{ .Values.port }}
+---
+{{- /*
+Envoy buffers each request in full and answers 413 above the limit, so an
+oversized body never reaches the Claims API.
+*/}}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claims-api
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: claims-api
+  requestBuffer:
+    limit: {{ .Values.route.requestBufferLimit }}
+{{- end }}
