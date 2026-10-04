@@ -50,7 +50,7 @@ RUNTIME = service(
     tenants=("claims-triage",),
     agents=("claims-triage",),
 )
-INGEST = service("knowledge-ingest", calls=("knowledge-mcp",))
+INGEST = service("meridian-ingest", calls=("knowledge-mcp",))
 GATEWAY = service("model-gateway")
 POLICY = CallerPolicy(
     service_id="model-gateway",
@@ -255,16 +255,16 @@ def test_a_service_the_registry_does_not_map_is_refused_403() -> None:
 
 
 def test_a_service_that_may_not_call_this_one_is_refused_403() -> None:
-    # knowledge-ingest is in the registry, and calls knowledge-mcp, not this one.
+    # meridian-ingest is in the registry, and calls knowledge-mcp, not this one.
     refused: Refused = []
-    client, seen = build((uri("knowledge-ingest"),), refused)
+    client, seen = build((uri("meridian-ingest"),), refused)
 
     answer = client.get("/work")
 
     assert answer.status_code == 403
     assert answer.json() == REFUSED_BODY
     assert seen == []
-    assert refused == [(Refusal.NOT_ALLOWED, "knowledge-ingest")]
+    assert refused == [(Refusal.NOT_ALLOWED, "meridian-ingest")]
 
 
 def test_a_service_does_not_pass_by_being_called_itself() -> None:
@@ -315,7 +315,7 @@ def test_healthz_is_the_only_path_that_passes() -> None:
 def test_a_refusal_is_logged_with_the_reason_and_the_service_not_the_certificate(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    secret_uri = uri("knowledge-ingest")
+    secret_uri = uri("meridian-ingest")
     client, _ = build((secret_uri, "https://example.invalid/certificate-text"))
 
     with caplog.at_level(logging.WARNING, logger="meridian.platform.common.identity"):
@@ -325,7 +325,7 @@ def test_a_refusal_is_logged_with_the_reason_and_the_service_not_the_certificate
 
     text = "\n".join(record.getMessage() for record in caplog.records)
     assert Refusal.NOT_ALLOWED.value in text
-    assert "knowledge-ingest" in text
+    assert "meridian-ingest" in text
     assert Refusal.NO_IDENTITY.value in text
     assert "anonymous" in text
     assert "spiffe://" not in text

@@ -187,7 +187,7 @@ calls nobody says `[]`. The lists hold what the code names today, no more:
 | `agent-runtime` | `model-gateway` and the three tool servers | `claims-triage` | `claims-triage` | `ModelClient` sends the run's own tenant and agent, which are the Claims API's |
 | `model-gateway`, `policy-mcp`, `claims-mcp` | nothing | none | none | no service URL in their chart `env` |
 | `knowledge-mcp` | `model-gateway` | `claims-triage` | `claims-triage` | `wording_search` embeds under `binding.tenant` and `binding.agent`, the run's |
-| `knowledge-ingest` | `model-gateway` | `claims-triage` | `knowledge-ingestion` | `--tenant claims-triage` in the chart's `ingest` Job; `INGESTION_AGENT` in `knowledge_mcp/__init__.py` |
+| `meridian-ingest` | `model-gateway` | `claims-triage` | `knowledge-ingestion` | `--tenant claims-triage` in the chart's `ingest` Job; `INGESTION_AGENT` in `knowledge_mcp/__init__.py` |
 
 The tenant of `knowledge-mcp` follows the Claims API's: if the Claims API's
 tenant changes, both entries change. A caller that is not a service (the

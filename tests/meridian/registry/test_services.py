@@ -24,7 +24,7 @@ SERVICE_IDS = (
     "policy-mcp",
     "claims-mcp",
     "knowledge-mcp",
-    "knowledge-ingest",
+    "meridian-ingest",
 )
 # What each caller names today, read from the code (see config/registry/README.md).
 CALLS = {
@@ -34,7 +34,7 @@ CALLS = {
     "policy-mcp": (),
     "claims-mcp": (),
     "knowledge-mcp": ("model-gateway",),
-    "knowledge-ingest": ("model-gateway",),
+    "meridian-ingest": ("model-gateway",),
 }
 NAMES = {
     "claims-api": (("claims-triage",), ("claims-triage",)),
@@ -43,7 +43,7 @@ NAMES = {
     "policy-mcp": ((), ()),
     "claims-mcp": ((), ()),
     "knowledge-mcp": (("claims-triage",), ("claims-triage",)),
-    "knowledge-ingest": (("claims-triage",), ("knowledge-ingestion",)),
+    "meridian-ingest": (("claims-triage",), ("knowledge-ingestion",)),
 }
 
 
@@ -105,7 +105,7 @@ def test_what_a_service_names_is_a_pair_the_registry_lets_run(
 ) -> None:
     registry = load_registry(real_registry)
     claims = registry.service("claims-api")
-    ingest = registry.service("knowledge-ingest")
+    ingest = registry.service("meridian-ingest")
     gateway = registry.service("model-gateway")
     assert claims is not None and ingest is not None and gateway is not None
 
@@ -183,7 +183,7 @@ def test_a_call_to_an_unknown_service_is_reported(
     registry_copy: Path, load_errors: LoadErrors
 ) -> None:
     def change(services: list[dict[str, Any]]) -> None:
-        entry(services, "knowledge-ingest")["calls"].append("ghost")
+        entry(services, "meridian-ingest")["calls"].append("ghost")
 
     errors = load_errors(change_services(registry_copy, change))
 
@@ -194,13 +194,13 @@ def test_a_service_that_calls_itself_is_reported(
     registry_copy: Path, load_errors: LoadErrors
 ) -> None:
     def change(services: list[dict[str, Any]]) -> None:
-        entry(services, "knowledge-ingest")["calls"].append("knowledge-ingest")
+        entry(services, "meridian-ingest")["calls"].append("meridian-ingest")
 
     errors = load_errors(change_services(registry_copy, change))
 
     assert errors == (
         "services.yaml: services[6].calls[1]: a service cannot call itself "
-        "('knowledge-ingest')",
+        "('meridian-ingest')",
     )
 
 
@@ -208,7 +208,7 @@ def test_a_call_listed_twice_is_reported(
     registry_copy: Path, load_errors: LoadErrors
 ) -> None:
     def change(services: list[dict[str, Any]]) -> None:
-        entry(services, "knowledge-ingest")["calls"].append("model-gateway")
+        entry(services, "meridian-ingest")["calls"].append("model-gateway")
 
     errors = load_errors(change_services(registry_copy, change))
 
@@ -238,7 +238,7 @@ def test_a_tenant_that_may_run_none_of_the_named_agents_is_reported(
 ) -> None:
     # evaluation lists claims-triage and evaluation-judge, not the ingestion job.
     def change(services: list[dict[str, Any]]) -> None:
-        entry(services, "knowledge-ingest")["tenants"].append("evaluation")
+        entry(services, "meridian-ingest")["tenants"].append("evaluation")
 
     errors = load_errors(change_services(registry_copy, change))
 
@@ -313,7 +313,7 @@ def test_every_fault_is_reported_in_one_run(
     registry_copy: Path, load_errors: LoadErrors
 ) -> None:
     def change(services: list[dict[str, Any]]) -> None:
-        entry(services, "knowledge-ingest")["calls"].append("ghost")
+        entry(services, "meridian-ingest")["calls"].append("ghost")
         entry(services, "claims-api")["calls"].append("policy-mcp")
 
     errors = load_errors(change_services(registry_copy, change))
@@ -326,7 +326,7 @@ def test_the_checks_do_not_run_when_the_file_fails_validation(
 ) -> None:
     def change(services: list[dict[str, Any]]) -> None:
         del services[0]["calls"]
-        entry(services, "knowledge-ingest")["calls"].append("ghost")
+        entry(services, "meridian-ingest")["calls"].append("ghost")
 
     with pytest.raises(RegistryError) as raised:
         load_registry(change_services(registry_copy, change))

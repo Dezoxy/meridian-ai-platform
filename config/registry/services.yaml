@@ -42,7 +42,7 @@ services:
     # The tenant and agent of the run whose tool call it answers.
     tenants: [claims-triage]
     agents: [claims-triage]
-  - id: knowledge-ingest
+  - id: meridian-ingest
     description: The ingestion Job that embeds the policy wordings through the Model Gateway.
     calls: [model-gateway]
     # `--tenant claims-triage` in the chart's ingest Job, and the job agent.
