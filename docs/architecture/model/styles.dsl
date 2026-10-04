@@ -61,4 +61,14 @@ styles {
     element "Vault" {
         shape Folder
     }
+    // Not built yet: constraint C-07's "designed". Dotted and faded, so a
+    // roadmap never reads as deployed capability. Always the last tag.
+    element "Designed" {
+        border dotted
+        opacity 60
+    }
+    relationship "Designed" {
+        style dotted
+        opacity 75
+    }
 }

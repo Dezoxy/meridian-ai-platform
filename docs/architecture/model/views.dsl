@@ -25,20 +25,20 @@ dynamic meridian "ClaimsTriage" "What happens between a claim being submitted an
     claimant -> meridian.ingress "Submits a claim"
     meridian.ingress -> meridian.claimsApp "Routes the claim"
     meridian.claimsApp -> meridian.runtime "Starts a triage run"
-    meridian.runtime -> meridian.policyMcp "Validates the policy"
+    meridian.runtime -> meridian.policyMcp "Looks up the policy and its claim history"
     meridian.runtime -> meridian.knowledgeMcp "Retrieves coverage terms with citations"
-    meridian.runtime -> meridian.gateway "Asks whether an exclusion applies; rules then decide the route"
-    meridian.gateway -> azureOpenAI "Sends the redacted prompt to an EU deployment"
-    meridian.runtime -> meridian.platformDb "Checkpoints the run and pauses for approval"
+    meridian.runtime -> meridian.gateway "Asks whether an exclusion applies, when the rules need it; rules then decide the route"
+    meridian.gateway -> azureOpenAI "Sends the redacted prompt to an EU deployment (replayed on kind)"
+    meridian.runtime -> meridian.platformDb "Checkpoints every step and, for a referred claim, pauses the run for approval"
     autoLayout lr
 }
 
 dynamic meridian "ClaimsApproval" "What happens when an adjuster decides on a paused triage proposal?" {
     adjuster -> meridian.ingress "Approves, rejects or asks for documents"
     meridian.ingress -> meridian.claimsApp "Routes the decision"
-    meridian.claimsApp -> meridian.platformDb "Records the decision with the adjuster's identity and moves the claim"
+    meridian.claimsApp -> meridian.platformDb "Records the decision and its audit event and moves the claim"
     meridian.claimsApp -> meridian.runtime "Resumes the paused run"
     meridian.runtime -> meridian.claimsMcp "Reads the recorded decision and adds a note"
-    meridian.runtime -> meridian.platformDb "Writes the audit event"
+    meridian.runtime -> meridian.platformDb "Ends the run, writes its audit event and deletes its checkpoints"
     autoLayout lr
 }

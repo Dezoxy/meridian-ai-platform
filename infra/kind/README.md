@@ -140,7 +140,7 @@ node image, Kubernetes components and the platform).
 |---|---|
 | `make up` | Create the cluster if absent, install every release and provision the Grafana dashboards. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, applies the manifests in `manifests/meridian/` (the sweep's CronJob among them), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross. |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross and its span counts have settled (unchanged for three readings, six seconds). |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
@@ -310,18 +310,25 @@ database boundary above does not depend on any of that.
 Claims API through the edge, with a W3C `traceparent` header whose trace ID the
 script made up. A claim that already has a triage proposal answers 409 and the
 script moves on to the next one, so each run uses the next claim (40 are
-available); it stops at the first 201. It prints the claim ID, the status, the
-route and the deployment the model call went to, or that no model was called
-(never a claimant field, and not the reason: the answer does not carry it),
-then reads the trace by that ID from Tempo through Grafana's datasource proxy,
-retrying for up to 120 seconds. It prints PASS only if the trace has spans from
-`claims-api`, `agent-runtime`, `policy-mcp`, `knowledge-mcp` and
-`model-gateway`, with the span count of each, and exits non-zero otherwise.
-Every triage of a claim whose policy exists touches the five: the graph looks
-up the policy and its claim history, then searches the wording, and each
-search embeds its query through the gateway even when the rules decide and
-the model is never asked. `make grafana` shows the trace in Explore with the
-TraceQL query `{ trace:id = "<id>" }`.
+available); it stops at the first 201. A claim ID someone already submitted with
+other content (through the claimant's form, which stamps its own report date)
+answers 409 too and is skipped the same way; any other 409 stops the demo. It
+prints the claim ID, the status, the route and the deployment the model call
+went to, or that no model was called (never a claimant field, and not the
+reason: the answer does not carry it), then reads the trace by that ID from
+Tempo through Grafana's datasource proxy, retrying for up to 120 seconds. It
+prints PASS only if the trace has spans from `claims-api`, `agent-runtime`,
+`policy-mcp`, `knowledge-mcp` and `model-gateway` and the span counts have
+settled: the same in three readings in a row, six seconds without change,
+because the services flush their spans separately and an earlier reading can be
+partial. It prints the settled span count of each service and exits non-zero
+otherwise; when every service was there but the counts were still changing at
+the deadline, the FAIL line says the trace was still growing. Every triage of a
+claim whose policy exists touches the five: the graph looks up the policy and
+its claim history, then searches the wording, and each search embeds its query
+through the gateway even when the rules decide and the model is never asked.
+`make grafana` shows the trace in Explore with the TraceQL query
+`{ trace:id = "<id>" }`.
 
 The script also prints the claim's state. A claim the rules referred to an
 adjuster is `awaiting_adjuster`, its run paused in PostgreSQL (S015). The

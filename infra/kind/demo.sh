@@ -11,7 +11,9 @@
 #      records it and the runtime resumes the run, which writes one note
 #   3. reads each trace back from Tempo through Grafana's datasource proxy, the
 #      way an owner would see it, and PASSes only when it has spans from every
-#      service expected of it:
+#      service expected of it and its span counts have settled (the same in
+#      three readings in a row, six seconds without change: the services flush
+#      their spans separately, so an earlier reading can be partial):
 #        the triage trace: claims-api, agent-runtime, policy-mcp, knowledge-mcp
 #          and model-gateway. The graph calls policy_lookup and claim_history on
 #          the policy server and wording_search on the knowledge server, which
@@ -23,10 +25,11 @@
 #          resumed run's note).
 # Each run uses the next claim in data/synthetic/claims.json; a claim that was
 # triaged before answers 409 and is skipped (a claim still awaiting its
-# adjuster is skipped too: decide it by hand). A claim that is not referred
-# needs no decision, and the next `make demo` posts the next claim. Prints
-# identifiers, states and the route, never a claimant field. Exits non-zero on
-# any failure.
+# adjuster is skipped too: decide it by hand), and so is a claim ID someone
+# submitted with other content, through the claimant's form say. A claim that
+# is not referred needs no decision, and the next `make demo` posts the next
+# claim. Prints identifiers, states and the route, never a claimant field.
+# Exits non-zero on any failure.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -38,12 +41,16 @@ readonly CLAIMS_URL=http://claims.meridian.localhost:8088/claims
 readonly HEALTH_URL=http://claims.meridian.localhost:8088/healthz
 readonly EDGE_TIMEOUT=60
 readonly ALREADY_TRIAGED="the claim already has a triage proposal"
+readonly DIFFERENT_SUBMISSION="the claim exists with a different submission"
 readonly AWAITING_ADJUSTER=awaiting_adjuster
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly TRIAGE_SERVICES=(claims-api agent-runtime policy-mcp knowledge-mcp model-gateway)
 readonly DECISION_SERVICES=(claims-api agent-runtime claims-mcp)
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
+# Readings with unchanged counts before PASS. Three at POLL_INTERVAL=3 is 6 s
+# without change, longer than the span exporters' 5 s batch delay.
+readonly SETTLE_POLLS=3
 readonly POST_TIMEOUT=60
 
 need_tools curl jq openssl base64 kubectl
@@ -104,8 +111,9 @@ post_json() {
 }
 
 # Post claims in order until one is triaged. Sets ${claim_id}, ${status} and
-# ${trace_id}. A claim that already has a proposal is skipped; any other
-# answer stops the demo, with the API's fixed error text.
+# ${trace_id}. A claim that already has a proposal, or whose ID exists with
+# other content (the claimant's form stamps its own report date), is skipped;
+# any other answer stops the demo, with the API's fixed error text.
 submit_next_claim() {
   local claim detail
   response="$(mktemp)"
@@ -122,6 +130,10 @@ submit_next_claim() {
         detail="$(clean "$(jq -r '.detail // empty' "${response}" 2>/dev/null || true)")"
         if [[ "${detail}" == "${ALREADY_TRIAGED}" ]]; then
           log "${claim_id}: already triaged, trying the next claim"
+          continue
+        fi
+        if [[ "${detail}" == "${DIFFERENT_SUBMISSION}" ]]; then
+          log "${claim_id}: exists with a different submission (the claimant's form stamps its own report date), trying the next claim"
           continue
         fi
         die "${claim_id}: 409 ${detail}"
@@ -196,13 +208,16 @@ has_every_service() {
 }
 
 # wait_for_trace TRACE_ID SERVICE...: wait until Tempo has spans of every
-# service given for the trace. Leaves the per-service counts in ${counts}. Tempo
-# answers 404 until it has the trace, and the services flush their spans
-# separately, so the answer can be partial.
+# service given for the trace and the per-service counts have settled: the same
+# text in SETTLE_POLLS readings in a row, each with every service. Leaves the
+# last counts in ${counts}, and in ${complete} whether the last reading had
+# every service (yes or no). Tempo answers 404 until it has the trace, and the
+# services flush their spans separately, so an earlier answer can be partial.
 wait_for_trace() {
   local id=$1 deadline=$((SECONDS + POLL_TIMEOUT)) out http body
+  local previous="" settled=0
   shift
-  counts=""
+  counts="" complete=no
   while ((SECONDS < deadline)); do
     kill -0 "${pf_pid}" 2>/dev/null ||
       die "the Grafana port-forward died: $(clean "$(tail -n 3 "${pf_log}")")"
@@ -215,9 +230,16 @@ wait_for_trace() {
     case "${http}" in
       200)
         counts="$(jq -r "${SPANS_PER_SERVICE}" <<<"${body}" 2>/dev/null | LC_ALL=C tr -cd '[:print:]\n')" || counts=""
-        if has_every_service "$@"; then return 0; fi
+        if has_every_service "$@"; then
+          complete=yes
+          if [[ "${counts}" == "${previous}" ]]; then settled=$((settled + 1)); else settled=1; fi
+          previous="${counts}"
+          if ((settled >= SETTLE_POLLS)); then return 0; fi
+        else
+          complete=no settled=0 previous=""
+        fi
         ;;
-      404) ;;
+      404) complete=no settled=0 previous="" ;;
       *) die "Tempo answered HTTP $(clean "${http}") through Grafana: $(clean "${body:0:200}")" ;;
     esac
     sleep "${POLL_INTERVAL}"
@@ -226,7 +248,9 @@ wait_for_trace() {
 }
 
 # report_trace LABEL TRACE_ID SERVICE...: wait for the trace, print PASS or
-# FAIL; the status is the result.
+# FAIL; the status is the result. PASS means every service has spans and the
+# counts printed are the settled ones; FAIL says whether a service is missing or
+# the counts were still changing at the deadline.
 report_trace() {
   local label=$1 id=$2 service count
   shift 2
@@ -239,8 +263,12 @@ report_trace() {
     printf '  Tempo       TraceQL    { trace:id = "%s" }\n' "${id}"
     return 0
   fi
-  printf 'FAIL  no %s %s with spans from all of: %s after %ss\n' \
-    "${label}" "${id}" "$*" "${POLL_TIMEOUT}"
+  if [[ "${complete}" == yes ]]; then
+    printf 'FAIL  %s %s was still growing after %ss\n' "${label}" "${id}" "${POLL_TIMEOUT}"
+  else
+    printf 'FAIL  no %s %s with spans from all of: %s after %ss\n' \
+      "${label}" "${id}" "$*" "${POLL_TIMEOUT}"
+  fi
   if [[ -n "${counts}" ]]; then
     printf '      Tempo returned:\n'
     while read -r service count; do

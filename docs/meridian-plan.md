@@ -193,7 +193,7 @@ and Pydantic, at the cost of one dependency.
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | done | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | done | S048, S049 |
 | S054 | Parallel tests | `make pytest-db` and the CI python job run the suite in parallel with `pytest-xdist`: a database per worker inside the one PostgreSQL container, ports for the stack tests in `tests/meridian/stacksupport.py` that do not collide, and an empty database of its own for the migration runner's concurrency test; the CI python job's time before and after recorded in the step. It unblocks a coverage gate, which is not added here | done | S049 |
-| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | todo | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
+| S018 | M1 exit | Views match the code and the register says so; threat model v1; a fifteen-minute demo script; the demo runs from a clean checkout with `make` | doing | S016, S017, S041, S042, S043, S044, S047, S048, S052 |
 
 ### M2 — Azure, identity, delivery
 
@@ -243,8 +243,7 @@ that day; the rest stand as their step recorded them.
 | Item | Raised in | Status | Home |
 |---|---|---|---|
 | `make up` waits on the Gateway's `Programmed` condition, which Envoy Gateway left `False` for hours while the edge served | S041 | open | S019 |
-| `make demo` spends one golden claim per run and fails once all are triaged; a way to reset them | S041, S044 | open | S018 |
-| `make demo` passes as soon as each service has one span in Tempo, so it can pass on a trace that is not complete | S044 | open | S018 |
+| `make demo` passes as soon as each service has one span in Tempo, so it can pass on a trace that is not complete | S044 | closed by S018 (PASS needs every service and span counts unchanged in three readings, six seconds) | S018 |
 | Old `meridian:*` images and finished migrate and seed Jobs stay until `make down` | S041, S044 | open | none |
 | The wait after an interrupted deploy | S044 | open | none |
 | `make smoke` does not read the stores | S044 | partly closed by S043 (it reads `gateway.usage`) | none |
@@ -305,7 +304,7 @@ that day; the rest stand as their step recorded them.
 | A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open | S032 |
 | The estimate of a response schema's tokens (its compact JSON's bytes over three) rests on one live measurement, 43 counted against 64 reserved | S051 | open | S050 |
 | Registry tests anchor on adjacent lines of `models.yaml`, so a field added inside a deployment's entry breaks them | S051 | open | none |
-| S053 on kind: the stamped report date, the error pages, migration 0013 and the history view, and no query string on a span in Tempo (the cluster was held by S052 while S053 ran) | S053 | open; S052 deployed S053's code with its own and applied migration 0013 on kind (`make smoke`: 15 PASS lines); the report date, the error pages, the history view and the span were not looked at | S018 |
+| S053 on kind: the stamped report date, the error pages, migration 0013 and the history view, and no query string on a span in Tempo (the cluster was held by S052 while S053 ran) | S053 | closed by S018: all five looked at on the cluster made from a fresh clone | S018 |
 | The JSON route `POST /claims` takes its caller's report date until callers are identified (T-66) | S053 | open, the owner's accepted residual | S021 |
 | The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | none |
 | `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-76) | S053 | open | S021 |
@@ -334,6 +333,19 @@ that day; the rest stand as their step recorded them.
 | T-45's read limit was measured once (1,024 output tokens in 10.1 s on 2026-10-03); S020 accepts that or repeats it before the gateway reaches Azure from a cluster | S050 | open | S020 |
 | The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | open | none |
 | On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | none |
+| A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | open | S019 |
+| The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open | S019 |
+| A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | open | S019 |
+| The Prometheus operator and kube-state-metrics may read Secrets in every namespace (T-68) | threat model, S018 | open | S019 |
+| Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | open | S019 |
+| The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open | S019, S021 |
+| An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
+| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" does | threat model, S018 | open, the owner's decision: which step builds it | none |
+| A web application firewall in the Azure design (T-02) | threat model, S018 | open | none |
+| No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open | S024 |
+| `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
+| `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open | none |
+| `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | none |
 
 ## Part C — Step details
 
@@ -5781,6 +5793,24 @@ with the grades, and a way to run it against a deployed stack.
   from S017); what the recorded run adds to CI's python job; CLM-0034's
   `unsure`. `drafted_by` on a withheld completion stays there, with no
   home.
+
+### S018 — M1 exit
+
+**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Goal:** the first milestone closes: the views say what the code does, the
+threat model's statuses are true of `main`, and a reader who clones the
+repository reaches the fifteen-minute demo with `make`.
+**Decisions:**
+
+- By the owner, 2026-10-04: the session deletes the kind cluster and
+  creates it again for this step (`make down`, hard rule 8), and the step
+  runs in the session that checked S050 to S054 together.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
