@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Keeps every pinned version current: GitHub Actions (pinned to commit hashes), the locked Python dependencies, the Dockerfile's base images, the Terraform providers, and the pins no built-in reader knows (infra/kind/pins.env, the Makefile's images, the gitleaks version, the pinned MCP server).",
-    "One grouped pull request per group, on the first day of the month. Nothing is merged by Renovate: a session or the owner merges, as the plan's Part A says.",
+    "One grouped pull request per group, on the first day of the month. The hourly limit of the recommended preset is off, since one day a month is the limit; at most 20 are open at once. Nothing is merged by Renovate: a session or the owner merges, as the plan's Part A says.",
     "A new pin in pins.env, the Makefile or a workflow needs a reader here; tests/test_renovate_config.py fails when a pin of a shape it knows has none.",
     "Advisories are GitHub's: its own security updates open those pull requests, so Renovate's are off and no advisory gets two."
   ],
@@ -13,8 +13,10 @@
   ],
   "timezone": "Europe/Budapest",
   "schedule": [
-    "* 0-5 1 * *"
+    "* * 1 * *"
   ],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 20,
   "rebaseWhen": "behind-base-branch",
   "vulnerabilityAlerts": {
     "enabled": false
@@ -29,7 +31,7 @@
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
-      "* 0-5 1 * *"
+      "* * 1 * *"
     ]
   },
   "customManagers": [
