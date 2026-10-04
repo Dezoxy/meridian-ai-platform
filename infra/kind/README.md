@@ -21,6 +21,7 @@ adjuster; the rules decide every other claim.
 |---|---|---|---|
 | Envoy Gateway (Gateway API edge) | `oci://docker.io/envoyproxy/gateway-helm` | v1.9.2 | `envoy-gateway-system` |
 | cert-manager (with the CA for the services) | `cert-manager` (`https://charts.jetstack.io`) | v1.21.2 | `cert-manager` |
+| approver-policy (decides which certificate requests are approved) | `cert-manager-approver-policy` (`https://charts.jetstack.io`) | v0.28.0 | `cert-manager` |
 | CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `cnpg-system` |
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
 | Prometheus, Grafana, kube-state-metrics, node-exporter | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
@@ -65,11 +66,45 @@ can read it, and the operators that hold a cluster-wide read of Secrets can
 (cert-manager's controller and cainjector, the CloudNativePG operator). The
 CA keeps its key at its renewal by an explicit `rotationPolicy: Never`, because
 cert-manager's default has been `Always` since v1.18.0 and a new key would
-leave a restarted pod distrusting the pods that had not. The issuer signs a
-Certificate from any namespace with any URI and nothing restricts who may ask
-(cert-manager's built-in approver approves every request); on kind that is the
-cluster's administrator, and a policy on requests is for AKS (S020). `make up`
-waits for the issuer to be Ready before it installs the database.
+leave a restarted pod distrusting the pods that had not.
+
+Who may ask for a certificate (S056, threat T-88) is decided by cert-manager's
+approver-policy, not by cert-manager: its built-in approver, which approves
+every request, is switched off (`disableAutoApproval` in
+[`values/cert-manager.yaml`](values/cert-manager.yaml)). Three
+`CertificateRequestPolicy` objects in
+[`manifests/certificate-policy.yaml`](manifests/certificate-policy.yaml) apply
+to the two issuers, and approver-policy may act for no other signer
+([`values/approver-policy.yaml`](values/approver-policy.yaml)):
+
+- `meridian-services` permits a request for the `meridian-services` issuer
+  only from the `meridian` namespace, with a URI under
+  `spiffe://meridian.kind/ns/meridian/sa/`, a `*.meridian.svc` DNS name, the
+  three usages the services use (digital signature, client auth, server auth)
+  and at most 90 days; a CA, a common name or any other field is not allowed.
+- `meridian-services-ca` permits the CA certificate's own request (issuer
+  `meridian-selfsigned`, namespace `cert-manager`, common name
+  `meridian-services-ca`, `isCA`, at most a year); without it the CA's renewal
+  would wait for ever.
+- `meridian-deny-unlisted` selects every request and allows nothing, so a
+  request for either issuer that no other policy permits is denied, not left
+  waiting.
+
+The namespace limit is held twice: by each policy's selector and by where its
+binding is. cert-manager's account may `use` the two policies that allow
+through a Role and RoleBinding in one namespace each, and the one that denies
+through a ClusterRoleBinding, so a request from another namespace meets only
+the policy that denies. What is left: whoever can create a `Certificate` in
+`meridian` has any service's identity issued (the policy checks the namespace
+and the URI prefix, not which service), and whoever can change a policy or its
+binding undoes the limit; on kind that is the cluster's administrator.
+
+`make up` installs approver-policy and applies the policies before the CA,
+waits for the three to be Ready, and then waits for the issuer to be Ready
+before it installs the database. On a cluster where cert-manager already ran
+with its approver on, `make up` turns the approver off first and brings the
+policies seconds later: the certificates already issued are not touched, and
+a request made in between waits and is then decided.
 
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
 ConfigMap each in `observability`, and applies Meridian's alert rules in
@@ -512,11 +547,11 @@ and the Claims API's own certificate is for its calls out only (TLS at the edge
 is a backlog row); a service reads its certificate when it starts, so a
 renewed one reaches it with the next restart (a Deployment's pods are not
 restarted by cert-manager), and so does a renewed CA; no certificate is
-revoked; nothing limits who may request a certificate for a service's name
-(the `meridian-services` issuer signs a `Certificate` from any namespace with
-any URI, and cert-manager's built-in approver approves every request, so on
-kind whoever can create a `Certificate` anywhere, the cluster's administrator,
-can mint any service's identity; a policy on requests is for AKS, S020); the
+revoked; nothing limits which service's name a request in `meridian` asks for
+(approver-policy lets the `meridian-services` issuer sign only a request from
+`meridian` with a URI under the Meridian prefix, so a request from another
+namespace is denied, but whoever can create a `Certificate` in `meridian`, or
+change a policy or its binding, can still mint any service's identity); the
 CA's private key is readable by the operators that hold a cluster-wide read of
 Secrets (cert-manager, cainjector, CloudNativePG), though by no Meridian pod;
 and the telemetry to the collector is still plain OTLP.

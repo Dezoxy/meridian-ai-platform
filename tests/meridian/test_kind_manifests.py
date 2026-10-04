@@ -3846,10 +3846,12 @@ def test_the_service_ca_file_says_who_can_read_the_key_and_who_can_ask_for_a_cer
     # The readers of the key: operators with a cluster-wide read of Secrets.
     for reader in ("cainjector", "CloudNativePG"):
         assert reader in flat
-    # The issuer signs any request, from any namespace, with any URI.
-    assert "any namespace" in flat
-    assert "approver" in flat
-    assert "S020" in flat
+    # S056: approver-policy decides, so the issuer no longer signs a request
+    # from any namespace; the file says what is left.
+    assert "approver-policy decides" in flat
+    assert "certificate-policy.yaml" in flat
+    assert "nothing restricts who may ask" not in flat
+    assert "whoever can create a Certificate in `meridian`" in flat
 
 
 def test_the_readme_says_who_reads_the_ca_key_and_who_can_ask_for_a_certificate() -> (
@@ -3860,10 +3862,15 @@ def test_the_readme_says_who_reads_the_ca_key_and_who_can_ask_for_a_certificate(
     assert "no Meridian pod can read it" in readme
     for reader in ("cainjector", "CloudNativePG"):
         assert reader in readme
-    assert "approves every request" in readme
+    # S056: approver-policy decides; the built-in approver no longer does.
+    assert "approver-policy" in readme
+    assert "disableAutoApproval" in readme
+    assert "nothing restricts who may ask" not in readme
+    assert "a policy on requests is for AKS" not in readme
     assert "rotationPolicy: Never" in readme
-    # The old, narrower claim: only the namespace's writers could mint one.
-    assert "whoever can create a `Certificate` in `meridian`" not in readme
+    # What is left is said in the README: whoever can create a `Certificate` in
+    # `meridian` has any service's identity issued.
+    assert "whoever can create a `Certificate` in `meridian`" in readme
 
 
 def test_the_cert_manager_values_install_the_crds_and_turn_nothing_optional_on() -> (

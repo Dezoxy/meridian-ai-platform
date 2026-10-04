@@ -1,0 +1,181 @@
+# Who may ask for a certificate from the Meridian issuers (S056, threat T-88):
+# the policies approver-policy applies to every CertificateRequest. cert-manager's
+# own approver is off (values/cert-manager.yaml) and approver-policy runs in its
+# place (values/approver-policy.yaml); up.sh applies this file after the add-on
+# and before manifests/service-ca.yaml, and waits for the three policies to be
+# Ready.
+#
+# How approver-policy decides: a policy is appropriate for a request when its
+# selector matches and the requester may `use` the policy (RBAC, checked in the
+# request's namespace). If at least one appropriate policy permits the request
+# it is approved; if there are appropriate policies and none permits it, it is
+# denied; with no appropriate policy it is left neither approved nor denied. In
+# `allowed`, a field that is left out is "deny all" and `*` stands for any
+# string.
+#
+#   meridian-services       the services' certificates: issuer
+#                           `meridian-services`, requested in `meridian`; a URI
+#                           of the form spiffe://meridian.kind/ns/meridian/sa/*
+#                           (required, the chart's identity prefix), a DNS name
+#                           of the form *.meridian.svc, the usages digital
+#                           signature, client auth and server auth, and at most
+#                           90 days (cert-manager's default lifetime). No CA and
+#                           no common name: neither is allowed, so a request
+#                           that sets one is denied
+#   meridian-services-ca    the CA's own request, which the policy above does not
+#                           permit (it is a CA, with a common name, signed by the
+#                           self-signed issuer, in `cert-manager`): issuer
+#                           `meridian-selfsigned`, requested in `cert-manager`,
+#                           common name `meridian-services-ca` and `isCA`, at
+#                           most a year. Without it the CA's renewal would wait
+#                           for ever
+#   meridian-deny-unlisted  selects every request and allows nothing, so a
+#                           request for either issuer that no other policy
+#                           permits is denied, not left waiting. It is not a
+#                           wall around the cluster: approver-policy acts only
+#                           for the two signers it is given (approveSignerNames),
+#                           and a request for any other issuer is left alone,
+#                           which with the built-in approver off means it is
+#                           never approved
+#
+# Who is bound: the requester of every Certificate is cert-manager's own
+# account, `system:serviceaccount:cert-manager:cert-manager`, and it is the only
+# subject below. It may `use` meridian-services through a Role and RoleBinding in
+# `meridian`, meridian-services-ca the same way in `cert-manager`, and
+# meridian-deny-unlisted through a ClusterRole and ClusterRoleBinding. So the
+# namespace limit is held twice: by the policy's selector and by where its
+# binding is, and a request from another namespace meets only the policy that
+# denies.
+#
+# What is left: whoever may create a Certificate in `meridian` has any service's
+# identity issued (the policy checks the namespace and the URI prefix, not which
+# service), and whoever may change a policy or its binding undoes the limit.
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: meridian-services
+spec:
+  selector:
+    issuerRef:
+      name: meridian-services
+      kind: ClusterIssuer
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - meridian
+  allowed:
+    uris:
+      values:
+        - spiffe://meridian.kind/ns/meridian/sa/*
+      required: true
+    dnsNames:
+      values:
+        - "*.meridian.svc"
+    usages:
+      - digital signature
+      - client auth
+      - server auth
+  constraints:
+    maxDuration: 2160h
+---
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: meridian-services-ca
+spec:
+  selector:
+    issuerRef:
+      name: meridian-selfsigned
+      kind: ClusterIssuer
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - cert-manager
+  allowed:
+    commonName:
+      value: meridian-services-ca
+      required: true
+    isCA: true
+  constraints:
+    maxDuration: 8760h
+---
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: meridian-deny-unlisted
+spec:
+  selector:
+    issuerRef: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: meridian-services-use-policy
+  namespace: meridian
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames: ["meridian-services"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: meridian-services-use-policy
+  namespace: meridian
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: meridian-services-use-policy
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: meridian-services-ca-use-policy
+  namespace: cert-manager
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames: ["meridian-services-ca"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: meridian-services-ca-use-policy
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: meridian-services-ca-use-policy
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: meridian-deny-unlisted-use-policy
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames: ["meridian-deny-unlisted"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: meridian-deny-unlisted-use-policy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: meridian-deny-unlisted-use-policy
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager

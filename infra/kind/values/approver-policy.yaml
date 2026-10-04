@@ -1,0 +1,23 @@
+# cert-manager approver-policy: decides which certificate requests the
+# Meridian issuers sign (S056). cert-manager's own approver is switched off
+# (values/cert-manager.yaml); the policies it applies are in
+# manifests/certificate-policy.yaml. Everything not set here is the chart's
+# default: one replica, the CRD installed (and kept when the release is
+# uninstalled), a metrics Service and no ServiceMonitor.
+
+app:
+  # The signers approver-policy may approve and deny for: the two issuers in
+  # manifests/service-ca.yaml and no other. The chart's default, an empty list,
+  # is every signer, and the add-on's ClusterRole would then reach every issuer
+  # in the cluster.
+  approveSignerNames:
+    - clusterissuers.cert-manager.io/meridian-services
+    - clusterissuers.cert-manager.io/meridian-selfsigned
+
+# One small pod on a one-node cluster.
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 96Mi
