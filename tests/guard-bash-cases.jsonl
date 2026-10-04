@@ -145,3 +145,80 @@
 {"expect":"none","command":"git commit --amend --no-edit"}
 {"expect":"none","command":"SKIP_TESTS=1 make test"}
 {"expect":"none","command":"cat > notes.md <<'EOF'\nnever use git commit --no-verify\nEOF"}
+{"expect": "deny", "command": "git commit -m \"fix; tidy\" --no-verify"}
+{"expect": "deny", "command": "git commit -m \"a && b\" -n"}
+{"expect": "deny", "command": "git commit -m 'left | right' --no-verify"}
+{"expect": "deny", "command": "git --no-pager commit -n -m x"}
+{"expect": "deny", "command": "git -C repo --no-pager commit -n -m x"}
+{"expect": "deny", "command": "git --git-dir .git --work-tree . commit -n -m x"}
+{"expect": "deny", "command": "git commit \"-n\" -m x"}
+{"expect": "deny", "command": "git commit '-n' -m x"}
+{"expect": "deny", "command": "git commit \"--no-verify\" -m x"}
+{"expect": "deny", "command": "export SKIP=ruff && git commit -m x"}
+{"expect": "deny", "command": "export SKIP=ruff; git push"}
+{"expect": "deny", "command": "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null; git commit -m x"}
+{"expect": "deny", "command": "git commit -m \"$(git commit --no-verify -m inner)\""}
+{"expect": "deny", "command": "git commit -m \"docs\" -n"}
+{"expect": "none", "command": "git commit -m \"docs: never use --no-verify\""}
+{"expect": "none", "command": "git commit -m 'docs: git commit --no-verify is denied'"}
+{"expect": "none", "command": "git commit --message=\"explain why git push --no-verify is denied\""}
+{"expect": "none", "command": "gh pr create --title \"guard\" --body \"git commit --no-verify and SKIP=ruff git commit are denied\""}
+{"expect": "none", "command": "git commit -m \"docs: what core.hooksPath does\""}
+{"expect": "none", "command": "git grep core.hooksPath"}
+{"expect": "none", "command": "git log --grep=core.hooksPath --oneline"}
+{"expect": "none", "command": "git log --grep commit -n 5"}
+{"expect": "none", "command": "git --no-pager log -n 3"}
+{"expect": "none", "command": "git commit -m \"note the -n flag\""}
+{"expect": "none", "command": "SKIP=1 make test"}
+{"expect": "none", "command": "git commit -m \"x\" && git push -n origin main"}
+{"expect": "deny", "command": "bash -c \"git commit -m x -n\""}
+{"expect": "deny", "command": "git -c \"core.hooksPath=/dev/null\" commit -m x"}
+{"expect": "deny", "command": "git commit --message \"x; y\" -n"}
+{"expect": "deny", "command": "SKIP=ruff,mypy git commit -m \"x\""}
+{"expect": "deny", "command": "git commit -m \"it is; fine\" -n"}
+{"expect": "deny", "command": "git commit -m \"say \\\"hi\\\"; ok\" --no-verify"}
+{"expect": "deny", "command": "git commit -nm \"msg\""}
+{"expect": "deny", "command": "git commit -am \"x; y\" -n"}
+{"expect": "deny", "command": "git commit -m \"$(echo x)\" -n"}
+{"expect": "deny", "command": "git --no-pager config core.hooksPath /dev/null"}
+{"expect": "deny", "command": "git config --local --unset core.hooksPath"}
+{"expect": "none", "command": "git commit -am \"docs: never use --no-verify\""}
+{"expect": "none", "command": "git tag -a v1 -m \"no -n here; really\""}
+{"expect": "none", "command": "gh pr create --title \"x\" --body-file body.md"}
+{"expect": "ask", "command": "gh release create v1 --notes \"mentions git commit --no-verify\""}
+{"expect": "none", "command": "git --no-pager config --get core.hooksPath"}
+{"expect": "none", "command": "git commit -m \"$(cat msg.txt)\""}
+{"expect": "none", "command": "git commit -F msg.txt"}
+{"expect": "deny", "command": "echo 'use git commit -m' && git commit -n -m 'y'"}
+{"expect": "deny", "command": "echo \"pass -m\" ; git commit -n; echo \"x\""}
+{"expect": "deny", "command": "git log --grep='-m' ; git commit -n -m 'x'"}
+{"expect": "deny", "command": "echo \"x -m\" && git push --no-verify -m \"a\""}
+{"expect": "deny", "command": "git commit -m 'a' ; echo 'b -m' ; git commit -n ; echo 'c'"}
+{"expect": "deny", "command": "bash -c 'git commit -m \"a;b\" -n'"}
+{"expect": "deny", "command": "bash -c \"git commit -m 'a;b' -n\""}
+{"expect": "deny", "command": "git -C \"my dir\" config core.hooksPath /dev/null"}
+{"expect": "deny", "command": "git -c user.name=\"A B\" config core.hooksPath /dev/null"}
+{"expect": "deny", "command": "git -C \"my dir\" commit -n -m x"}
+{"expect": "deny", "command": "GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/dev/null'\" git commit -m x"}
+{"expect": "none", "command": "grep -rn \"git commit -n\" docs/"}
+{"expect": "none", "command": "echo \"never use git commit -n\""}
+{"expect": "none", "command": "git log --grep=\"git commit -n\""}
+{"expect": "deny", "command": "bash -c \"cd x; git commit -n\""}
+{"expect": "deny", "command": "sh -c \"git add . && git commit -n\""}
+{"expect": "none", "command": "grep -c core.hooksPath README.md"}
+{"expect": "none", "command": "SKIP=1 pytest; git status"}
+{"expect": "deny", "command": "export SKIP=ruff; git merge feat"}
+{"expect": "deny", "command": "git commit -m \"$(cat <<'EOF'\nfix: one thing\n\nbody line\nEOF\n)\" --no-verify"}
+{"expect": "deny", "command": "git commit -m \"$(cat <<'EOF'\nfix: one thing\n\nbody line\nEOF\n)\" -n"}
+{"expect": "deny", "command": "git add -A && git commit -m \"$(cat <<'EOF'\nfix: one thing\n\nbody line\nEOF\n)\" -n"}
+{"expect": "none", "command": "git commit -m \"$(cat <<'EOF'\nfix: one thing\n\nbody line\nEOF\n)\""}
+{"expect": "none", "command": "git commit -m \"$(cat <<'EOF'\ndocs: --no-verify; core.hooksPath\nEOF\n)\""}
+{"expect": "deny", "command": "git commit -m \"$(date); x\" -n"}
+{"expect": "deny", "command": "git commit -m 'x'\"'\"'y;z' -n"}
+{"expect": "none", "command": "git commit -m \"docs: it's -m 'x' --no-verify\""}
+{"expect": "none", "command": "git commit -m 'x'\"'\"'y;z'"}
+{"expect": "none", "command": "git commit -m \"mention HUSKY=0 here\""}
+{"expect": "deny", "command": "mv .git/hooks .git/hooks.off"}
+{"expect": "deny", "command": "SKIP=ruff /usr/bin/git commit -m x"}
+{"expect": "deny", "command": "ssh host \"git commit -n\""}
+{"expect": "none", "command": "git commit -m 'bash -c \"git commit -n\" is denied'"}
