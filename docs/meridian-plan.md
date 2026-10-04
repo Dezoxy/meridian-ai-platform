@@ -311,9 +311,12 @@ what exists and add no capability; none needs Azure, and none costs
 money unless its row says so. They sit beside M2 and M3, not in a
 milestone's exit.
 
-- S056 to S061 change different folders and may run in parallel, S056
-  owning the cluster. S056 changes the `/healthz` route of the five
-  services and nothing else in their applications.
+- S056 to S061 change different files and may run in parallel, S056
+  owning the cluster. Two places are shared, so the session that
+  finishes later expects a merge there: S056 changes the `/healthz` route
+  in the application files S058 and S059 work in, and nothing else in
+  them; S060 and S061 both work under `workloads/claims_triage/`, S061 in
+  `injection.py` and `evaluation.py` alone.
 - S062 to S064 need the cluster and follow one another.
 - S065 to S067 follow the steps whose files they share. S067 is the one
   step here that changes the triage graph's rules.
