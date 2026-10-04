@@ -15,7 +15,7 @@ audits a refusal through its own audit path, one row per window
 
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
@@ -66,8 +66,9 @@ class Refusal(StrEnum):
 
 
 # What the service's audit is told: the reason and the caller's service ID, or
-# None when the caller had no identity.
-type OnRefusal = Callable[[Refusal, str | None], None]
+# None when the caller had no identity. Awaited, so the throttle is asked on
+# the event loop and only the write leaves it (``audited_refusals``).
+type OnRefusal = Callable[[Refusal, str | None], Awaitable[None]]
 # What a service writes for a refusal: the audit reason, the caller's service ID
 # (cut to an ID's length) or None, and the refusals the row stands in for.
 type WriteRefusal = Callable[[str, str | None, int], None]
@@ -142,6 +143,26 @@ def caller_service(request: Request) -> Service | None:
     return caller if isinstance(caller, Service) else None
 
 
+def caller_may_name(
+    policy: CallerPolicy | None,
+    calling: Service | None,
+    tenant: str,
+    agent: str | None = None,
+) -> bool:
+    """Whether the call may name the tenant, and the agent when one is given.
+    An app without a policy has no rule. An app with one lists what its callers
+    may name, so a request with no caller in its scope (the middleware did not
+    run, or a route did not pass it on) may name nothing: the rule fails
+    closed."""
+    if policy is None:
+        return True
+    if calling is None:
+        return False
+    if agent is None:
+        return tenant in calling.tenants
+    return may_name(calling, tenant, agent)
+
+
 def caller_policy(
     prefix: str | None, service_id: str, registry: Registry
 ) -> CallerPolicy | None:
@@ -164,10 +185,14 @@ def audited_refusals(throttle: RefusalAuditThrottle, write: WriteRefusal) -> OnR
     throttle says it is due, so a flood leaves one row per window and not one
     per request (T-49). The window's key is the reason and, for a caller the
     registry maps, its ID; the ID of an unknown caller is a certificate's text
-    and never a key, so the map is bounded by the registry. A write that fails
-    releases the window and the error goes to the caller of this function."""
+    and never a key, so the map is bounded by the registry, and never in the
+    row either: only a caller the registry holds (``NOT_ALLOWED``) is named.
+    The throttle is a lock and a dictionary and is asked on the event loop; only
+    ``write``, a database write, goes to a worker thread, so a flood of refused
+    calls takes no thread per call. A write that fails releases the window and
+    the error goes to the caller of this function."""
 
-    def on_refusal(reason: Refusal, service_id: str | None) -> None:
+    async def on_refusal(reason: Refusal, service_id: str | None) -> None:
         word = audit_reason(reason)
         known = service_id if reason is Refusal.NOT_ALLOWED else None
         key = f"{known or '-'}/{word}"
@@ -175,10 +200,8 @@ def audited_refusals(throttle: RefusalAuditThrottle, write: WriteRefusal) -> OnR
         if carried is None:
             return
         try:
-            write(
-                word,
-                None if service_id is None else service_id[:MAX_ID_LENGTH],
-                carried,
+            await anyio.to_thread.run_sync(
+                write, word, None if known is None else known[:MAX_ID_LENGTH], carried
             )
         except BaseException:
             throttle.release(None, key, carried)
@@ -219,16 +242,19 @@ class CallerIdentityMiddleware:
         self.on_refusal = on_refusal
 
     async def _note(self, reason: Refusal, service_id: str | None) -> None:
-        """Log the refusal and hand it to the audit, which writes to a database:
-        in a worker thread, and waited for. A callback that fails changes
-        nothing the caller sees; only its class is logged."""
+        """Log the refusal and hand it to the audit, and wait for it. The ID is
+        cut to an ID's length in the log, as in the audit: an unknown service's
+        is text from a certificate. A callback that fails changes nothing the
+        caller sees; only its class is logged."""
         logger.warning(
-            "call refused: %s (caller %s)", reason.value, service_id or ANONYMOUS
+            "call refused: %s (caller %s)",
+            reason.value,
+            ANONYMOUS if service_id is None else service_id[:MAX_ID_LENGTH],
         )
         if self.on_refusal is None:
             return
         try:
-            await anyio.to_thread.run_sync(self.on_refusal, reason, service_id)
+            await self.on_refusal(reason, service_id)
         except Exception as exc:
             logger.error("the audit of a refused call failed: %s", type(exc).__name__)
 
@@ -282,10 +308,13 @@ def install_caller_check(
     app: Starlette, policy: CallerPolicy | None, on_refusal: OnRefusal | None
 ) -> None:
     """Put the check on ``app``, outside every middleware it has so far: an
-    anonymous call is refused before a body is read or limited, and inside the
-    FastAPI instrumentation, which wraps the stack when it is built, so a
-    refusal has its server span. No policy (an app built in code without a
-    prefix) installs nothing."""
+    anonymous call is refused before a body is read or limited. It is inside the
+    FastAPI instrumentation, however late it is added: Starlette builds the
+    middleware stack at the first request, and the instrumentation replaces
+    that builder to wrap the whole stack of user middleware in its server span,
+    so a refusal has one (a test in ``test_identity.py`` proves it). Install it
+    before the first request, as Starlette refuses a middleware after. No policy
+    (an app built in code without a prefix) installs nothing."""
     if policy is not None:
         app.add_middleware(
             CallerIdentityMiddleware, policy=policy, on_refusal=on_refusal

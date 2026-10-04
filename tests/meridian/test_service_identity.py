@@ -5,6 +5,7 @@ The check, its audit and the tenant and agent rule are proved here; the
 certificate itself is proved with real TLS in ``common/test_peercert.py``.
 """
 
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -22,6 +23,7 @@ from toolsupport import HOSTS, add_run
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.platform.gateway import app as gateway_module
 from meridian.platform.gateway.app import create_app as create_gateway
 from meridian.platform.gateway.settings import GatewaySettings
@@ -59,7 +61,7 @@ def gateway_app(dsn: str) -> ASGIApp:
     )
 
 
-def runtime_app(dsn: str) -> ASGIApp:
+def runtime_app(dsn: str, clock: Callable[[], float] = time.monotonic) -> ASGIApp:
     return create_runtime(
         RuntimeSettings(
             registry_dir=REGISTRY_DIR,
@@ -68,6 +70,7 @@ def runtime_app(dsn: str) -> ASGIApp:
             identity_prefix=PREFIX,
         ),
         tracer_provider=make_tracer_provider("agent-runtime"),
+        clock=clock,
     )
 
 
@@ -283,7 +286,8 @@ def test_a_refusal_is_audited_with_its_reason_and_the_caller_once_per_window(
     assert [r[:6] for r in caller_rows(fresh_database)] == [
         (service, event, "refused", "caller-not-allowed", forbidden, 0),
         (service, event, "refused", "caller-no-identity", None, 0),
-        (service, event, "refused", "caller-unknown-service", "stranger", 0),
+        # An unknown service's ID is text from a certificate: no reference.
+        (service, event, "refused", "caller-unknown-service", None, 0),
     ]
 
 
@@ -504,17 +508,15 @@ def test_resuming_a_run_of_a_tenant_the_caller_may_not_name_does_not_say_it_exis
     # The same answer: no answer tells that a run of that tenant exists (T-10).
     assert (existing.status_code, existing.json()) == (403, REFUSED)
     assert (absent.status_code, absent.json()) == (403, REFUSED)
-    assert (
-        owner_rows(
-            fresh_database,
-            "SELECT event, tenant, agent, run_id FROM audit.events WHERE reason = %s",
-            (NAME_REASON,),
-        )
-        == [("run.refused", "evaluation", None, None)] * 2
-    )
+    # Both refusals are one window's: one row, the second counted.
+    assert owner_rows(
+        fresh_database,
+        "SELECT event, tenant, agent, run_id FROM audit.events WHERE reason = %s",
+        (NAME_REASON,),
+    ) == [("run.refused", "evaluation", None, None)]
 
 
-def test_resuming_a_run_of_an_agent_the_caller_may_not_name_is_403_and_audited(
+def test_resuming_a_run_of_an_agent_the_caller_may_not_name_is_404_and_audited(
     fresh_database: DatabaseHandle,
 ) -> None:
     run_id = add_run(
@@ -525,9 +527,12 @@ def test_resuming_a_run_of_an_agent_the_caller_may_not_name_is_403_and_audited(
     )
     client = client_of("agent-runtime", "claims-api", fresh_database)
 
-    answer = resume(client, run_id, "claims-triage")
+    existing = resume(client, run_id, "claims-triage")
+    absent = resume(client, uuid.uuid4(), "claims-triage")
 
-    assert (answer.status_code, answer.json()) == (403, REFUSED)
+    # The same 404 as a run that is not there: a 403 would say the run exists.
+    assert (existing.status_code, existing.json()) == (404, {"detail": "no such run"})
+    assert (absent.status_code, absent.json()) == (404, {"detail": "no such run"})
     assert owner_rows(
         fresh_database,
         "SELECT event, reason, tenant, agent, run_id FROM audit.events "
@@ -569,14 +574,37 @@ def test_reading_a_run_of_a_tenant_the_caller_may_not_name_does_not_say_it_exist
     # The same answer: no answer tells that a run of that tenant exists (T-10).
     assert (existing.status_code, existing.json()) == (403, REFUSED)
     assert (absent.status_code, absent.json()) == (403, REFUSED)
-    assert (
-        owner_rows(
-            fresh_database,
-            "SELECT event, tenant, agent, run_id FROM audit.events WHERE reason = %s",
-            (NAME_REASON,),
-        )
-        == [("run.refused", "evaluation", None, None)] * 2
+    # Both refusals are one window's: one row, the second counted.
+    assert owner_rows(
+        fresh_database,
+        "SELECT event, tenant, agent, run_id FROM audit.events WHERE reason = %s",
+        (NAME_REASON,),
+    ) == [("run.refused", "evaluation", None, None)]
+
+
+def test_reading_a_run_of_an_agent_the_caller_may_not_name_is_404_and_audited(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id = add_run(
+        fresh_database,
+        status="AwaitingApproval",
+        tenant="claims-triage",
+        agent="knowledge-ingestion",
     )
+    client = client_of("agent-runtime", "claims-api", fresh_database)
+
+    existing = read(client, run_id, "claims-triage")
+    absent = read(client, uuid.uuid4(), "claims-triage")
+
+    # The same 404 as a run that is not there; the run's agent is not returned.
+    assert (existing.status_code, existing.json()) == (404, {"detail": "no such run"})
+    assert (absent.status_code, absent.json()) == (404, {"detail": "no such run"})
+    assert owner_rows(
+        fresh_database,
+        "SELECT event, reason, tenant, agent, run_id FROM audit.events "
+        "WHERE run_id = %s",
+        (run_id,),
+    ) == [("run.refused", NAME_REASON, "claims-triage", "knowledge-ingestion", run_id)]
 
 
 def test_reading_a_run_of_a_tenant_the_caller_may_name_gets_the_ordinary_answer(
@@ -591,3 +619,143 @@ def test_reading_a_run_of_a_tenant_the_caller_may_name_gets_the_ordinary_answer(
     assert (found.status_code, found.json()["run_id"]) == (200, str(run_id))
     assert (absent.status_code, absent.json()) == (404, {"detail": "no such run"})
     assert caller_rows(fresh_database) == []
+
+
+# ── the runtime: a name refusal leaves one row per window ───────────────────
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def runtime_client(
+    dsn: str, clock: Callable[[], float], caller: str = "claims-api"
+) -> TestClient:
+    return TestClient(
+        as_caller(runtime_app(dsn, clock), caller),
+        base_url=f"http://{HOSTS[0]}",
+        raise_server_exceptions=False,
+    )
+
+
+def name_rows(db: DatabaseHandle) -> list[tuple]:
+    return owner_rows(
+        db,
+        "SELECT service, tenant, suppressed FROM audit.events WHERE reason = %s "
+        "ORDER BY recorded_at",
+        (NAME_REASON,),
+    )
+
+
+def test_refused_reads_in_one_window_leave_one_row_and_the_next_window_counts_them(
+    fresh_database: DatabaseHandle,
+) -> None:
+    clock = Clock()
+    client = runtime_client(fresh_database.dsn("agent_runtime"), clock)
+
+    first = read(client, uuid.uuid4(), "evaluation")
+    second = read(client, uuid.uuid4(), "evaluation")
+
+    assert (first.status_code, second.status_code) == (403, 403)
+    assert name_rows(fresh_database) == [("agent-runtime", "evaluation", 0)]
+
+    clock.now += REFUSAL_AUDIT_SECONDS
+    read(client, uuid.uuid4(), "evaluation")
+
+    # The second refusal left no row and is counted by the next one.
+    assert name_rows(fresh_database) == [
+        ("agent-runtime", "evaluation", 0),
+        ("agent-runtime", "evaluation", 1),
+    ]
+
+
+def test_a_tenant_the_registry_does_not_hold_shares_one_window_whatever_its_text(
+    fresh_database: DatabaseHandle,
+) -> None:
+    client = runtime_client(fresh_database.dsn("agent_runtime"), Clock())
+
+    for index in range(5):
+        assert read(client, uuid.uuid4(), f"made-up-{index}").status_code == 403
+    resumed = resume(client, uuid.uuid4(), "another-made-up")
+    created = client.post("/runs", json={**RUN, "tenant": "yet-another"})
+
+    assert (resumed.status_code, created.status_code) == (403, 403)
+    # One window for the lot; a tenant the registry holds has a window of its own.
+    assert [row[1:] for row in name_rows(fresh_database)] == [("made-up-0", 0)]
+    read(client, uuid.uuid4(), "evaluation")
+    assert [row[1] for row in name_rows(fresh_database)] == ["made-up-0", "evaluation"]
+
+
+def test_a_name_refusal_whose_write_fails_releases_the_window(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = runtime_client(fresh_database.dsn("agent_runtime"), Clock())
+    real_write = runtime_module.write_audit
+    failing = [True]
+
+    def write_audit(dsn: str, event: Any) -> None:
+        if failing:
+            raise OSError("the write failed")
+        real_write(dsn, event)
+
+    monkeypatch.setattr(runtime_module, "write_audit", write_audit)
+
+    lost = read(client, uuid.uuid4(), "evaluation")
+    failing.clear()
+    again = read(client, uuid.uuid4(), "evaluation")
+
+    # The failed write changed no answer but the error; the next refusal is due
+    # at once and counts the one that left no row.
+    assert (lost.status_code, again.status_code) == (500, 403)
+    assert name_rows(fresh_database) == [("agent-runtime", "evaluation", 1)]
+
+
+# ── a policy and no caller in the scope: nothing may be named ───────────────
+@pytest.fixture
+def no_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The middleware's work undone for the routes: they see no caller, as a
+    route that forgot to pass it on would. The apps keep their policy."""
+    for module in (gateway_module, runtime_module):
+        monkeypatch.setattr(module, "caller_service", lambda request: None)
+
+
+@pytest.mark.usefixtures("no_caller")
+@pytest.mark.parametrize(
+    ("route", "body"), [("/v1/chat", CHAT), ("/v1/embeddings", EMBED)]
+)
+def test_the_gateway_refuses_a_name_when_the_scope_has_no_caller(
+    route: str, body: dict[str, Any], fresh_database: DatabaseHandle
+) -> None:
+    client = client_of("model-gateway", "agent-runtime", fresh_database)
+    run_id = uuid.uuid4()
+
+    answer = client.post(route, json=body, headers=headers(run_id=run_id))
+
+    assert (answer.status_code, answer.json()) == (403, REFUSED)
+    assert owner_rows(
+        fresh_database,
+        "SELECT event, reason, reference, deployment FROM audit.events "
+        "WHERE run_id = %s",
+        (run_id,),
+    ) == [("model.call", NAME_REASON, None, None)]
+
+
+@pytest.mark.usefixtures("no_caller")
+def test_the_runtime_refuses_a_name_when_the_scope_has_no_caller(
+    fresh_database: DatabaseHandle,
+) -> None:
+    run_id = add_run(fresh_database, status="AwaitingApproval")
+    client = client_of("agent-runtime", "claims-api", fresh_database)
+
+    created = client.post("/runs", json=RUN)
+    resumed = resume(client, run_id, "claims-triage")
+    found = read(client, run_id, "claims-triage")
+
+    # What the caller names is one the registry lets run: only the rule refuses.
+    assert [(a.status_code, a.json()) for a in (created, resumed, found)] == [
+        (403, REFUSED)
+    ] * 3
+    assert owner_rows(fresh_database, "SELECT 1 FROM runtime.runs") == [(1,)]
+    assert len(name_rows(fresh_database)) == 1

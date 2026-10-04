@@ -69,10 +69,10 @@ from meridian.platform.common.http import (
 from meridian.platform.common.identity import (
     NAME_REFUSAL_REASON,
     audited_refusals,
+    caller_may_name,
     caller_policy,
     caller_service,
     install_caller_check,
-    may_name,
 )
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
@@ -542,16 +542,18 @@ def create_app(
         raise HTTPException(status_code=403, detail=REFUSED)
 
     def refuse_name(
-        span: Span, record: CallRecord, caller: Caller, calling: Service
+        span: Span, record: CallRecord, caller: Caller, calling: Service | None
     ) -> NoReturn:
         """Answer 403 for a caller that names a tenant or an agent it may not
-        (S055). The throttle key is the reason and the tenant when the registry
+        (S055), or that the scope does not name at all while the app has a
+        policy. The throttle key is the reason and the tenant when the registry
         holds it: a header's value is caller-chosen and never becomes a key. The
-        row names the calling service in ``reference``."""
+        row names the calling service in ``reference``, none without one."""
         set_span_attributes(span, {"meridian.refusal": NAME_REFUSAL_REASON})
         record.end("refused", NAME_REFUSAL_REASON)
         known = caller.tenant if registry.tenant(caller.tenant) else None
-        audit_refusal(caller, known, NAME_REFUSAL_REASON, {"reference": calling.id})
+        who = None if calling is None else calling.id
+        audit_refusal(caller, known, NAME_REFUSAL_REASON, {"reference": who})
         raise HTTPException(status_code=403, detail=REFUSED)
 
     def refuse_limit(
@@ -676,7 +678,7 @@ def create_app(
         ``requested`` is the class the request's header names, if any;
         ``wants_schema`` is true for a chat request with a response schema;
         ``calling`` is the service the caller check let through, none where
-        the app has no check."""
+        the app has no check (and then a policy refuses every name)."""
         record = meters.call_record()
         try:
             with start_span(tracer, span_name) as span:
@@ -715,8 +717,9 @@ def create_app(
     ) -> ResponseT:
         describe_call(span, caller, route)
         # What the calling service may name comes from the registry, not from
-        # the headers it sends (S055).
-        if calling is not None and not may_name(calling, caller.tenant, caller.agent):
+        # the headers it sends (S055). With a policy and no caller in the scope
+        # nothing may be named.
+        if not caller_may_name(policy, calling, caller.tenant, caller.agent):
             refuse_name(span, record, caller, calling)
         decision = decide(
             registry,

@@ -332,3 +332,71 @@ def test_the_checks_do_not_run_when_the_file_fails_validation(
         load_registry(change_services(registry_copy, change))
 
     assert raised.value.errors == ("services.yaml: services[0].calls: Field required",)
+
+
+# A graph agent a tenant may run is one the runtime may name
+
+
+def add_graph_agent(registry_copy: Path, *, tenant: str | None) -> Path:
+    """A new graph agent in agents.yaml, listed by ``tenant`` when one is given."""
+    agents_path = registry_copy / "agents.yaml"
+    agents = yaml.safe_load(agents_path.read_text(encoding="utf-8"))
+    agents["agents"].append(
+        {"id": "claims-review", "description": "A new graph agent.", "tools": []}
+    )
+    agents_path.write_text(yaml.safe_dump(agents), encoding="utf-8")
+    if tenant is not None:
+        tenants_path = registry_copy / "tenants.yaml"
+        tenants = yaml.safe_load(tenants_path.read_text(encoding="utf-8"))
+        listed = next(t for t in tenants["tenants"] if t["id"] == tenant)
+        listed["agents"].append("claims-review")
+        tenants_path.write_text(yaml.safe_dump(tenants), encoding="utf-8")
+    return registry_copy
+
+
+def test_a_graph_agent_a_tenant_lists_and_the_runtime_does_not_is_reported(
+    registry_copy: Path, load_errors: LoadErrors
+) -> None:
+    add_graph_agent(registry_copy, tenant="development")
+
+    errors = load_errors(registry_copy)
+
+    assert errors == (
+        "services.yaml: services[1].agents: graph agent 'claims-review' is listed "
+        "by a tenant, so add it to the agents of 'agent-runtime': without it every "
+        "call for the agent is refused",
+    )
+
+
+def test_a_graph_agent_the_runtime_lists_passes(registry_copy: Path) -> None:
+    add_graph_agent(registry_copy, tenant="development")
+
+    def change(services: list[dict[str, Any]]) -> None:
+        entry(services, "agent-runtime")["agents"].append("claims-review")
+
+    registry = load_registry(change_services(registry_copy, change))
+
+    runtime = registry.service("agent-runtime")
+    assert runtime is not None and "claims-review" in runtime.agents
+
+
+def test_a_new_graph_agent_no_tenant_lists_passes_as_the_scaffold_leaves_it(
+    registry_copy: Path,
+) -> None:
+    add_graph_agent(registry_copy, tenant=None)
+
+    assert load_registry(registry_copy).agent("claims-review") is not None
+
+
+def test_a_registry_without_the_runtime_service_is_reported(
+    registry_copy: Path, load_errors: LoadErrors
+) -> None:
+    def change(services: list[dict[str, Any]]) -> None:
+        services[:] = [s for s in services if s["id"] != "agent-runtime"]
+
+    errors = load_errors(change_services(registry_copy, change))
+
+    assert (
+        "services.yaml: services: no service 'agent-runtime', which runs the "
+        "graph agents"
+    ) in errors

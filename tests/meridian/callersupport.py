@@ -5,6 +5,8 @@ verified client certificate would, with the URI of a service of the registry."""
 from starlette.types import ASGIApp, Receive, Scope, Send
 from tlssupport import PREFIX, spiffe
 
+from meridian.platform.common.peercert import CLIENT_CERT_URIS, TLS_EXTENSION
+
 
 def with_uris(app: ASGIApp, uris: tuple[str, ...] | None) -> ASGIApp:
     """``app`` with the given certificate URIs in the TLS extension of every
@@ -14,7 +16,7 @@ def with_uris(app: ASGIApp, uris: tuple[str, ...] | None) -> ASGIApp:
         if scope["type"] == "http" and uris is not None:
             extensions = {
                 **scope.get("extensions", {}),
-                "tls": {"client_cert_uris": uris},
+                TLS_EXTENSION: {CLIENT_CERT_URIS: uris},
             }
             scope = {**scope, "extensions": extensions}
         await app(scope, receive, send)
@@ -43,7 +45,7 @@ def as_caller_named_by_header(app: ASGIApp) -> ASGIApp:
                 **scope,
                 "extensions": {
                     **scope.get("extensions", {}),
-                    "tls": {"client_cert_uris": uris},
+                    TLS_EXTENSION: {CLIENT_CERT_URIS: uris},
                 },
             }
         await app(scope, receive, send)

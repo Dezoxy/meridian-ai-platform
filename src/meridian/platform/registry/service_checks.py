@@ -96,6 +96,38 @@ def check_service_names(registry: Registry) -> list[str]:
     ]
 
 
+def check_runtime_names_the_graph_agents(registry: Registry) -> list[str]:
+    """Every graph agent some tenant lists is one the runtime may name: the
+    runtime and the gateway refuse a call that names an agent the caller's
+    ``agents`` lacks, so an agent missing there passes validation and is
+    refused on every call. A job agent has no run, and an agent no tenant lists
+    cannot be run (the scaffold's new agent starts so)."""
+    listed = {a for tenant in registry.tenants for a in tenant.agents}
+    graph_agents = [
+        agent.id
+        for agent in registry.agents
+        if agent.kind == "graph" and agent.id in listed
+    ]
+    runtime = registry.service(RUNTIME_SERVICE)
+    if runtime is None:
+        return (
+            [
+                f"{SERVICES}: services: no service {RUNTIME_SERVICE!r}, which "
+                "runs the graph agents"
+            ]
+            if graph_agents
+            else []
+        )
+    i = registry.services.index(runtime)
+    return [
+        f"{SERVICES}: services[{i}].agents: graph agent {agent!r} is listed by a "
+        f"tenant, so add it to the agents of {RUNTIME_SERVICE!r}: without it "
+        "every call for the agent is refused"
+        for agent in graph_agents
+        if agent not in runtime.agents
+    ]
+
+
 def check_servers_are_services(registry: Registry) -> list[str]:
     return [
         f"{TOOLS}: servers[{i}]: server {server.id!r} has no entry in {SERVICES}"
@@ -108,5 +140,6 @@ SERVICE_CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_service_ids,
     check_service_calls,
     check_service_names,
+    check_runtime_names_the_graph_agents,
     check_servers_are_services,
 )

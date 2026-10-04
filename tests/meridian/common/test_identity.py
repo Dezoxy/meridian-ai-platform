@@ -5,7 +5,6 @@ name (S055). In process: a small ASGI wrapper plays the part of
 import asyncio
 import logging
 import threading
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -21,13 +20,16 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from meridian.platform.common import identity as identity_module
 from meridian.platform.common.env import SettingsError
-from meridian.platform.common.http import create_service_app
+from meridian.platform.common.http import MAX_ID_LENGTH, create_service_app
 from meridian.platform.common.identity import (
     CallerIdentityMiddleware,
     CallerPolicy,
+    OnRefusal,
     Refusal,
     audited_refusals,
+    caller_may_name,
     caller_policy,
     caller_service,
     identity_prefix_problem,
@@ -153,6 +155,32 @@ def test_a_service_that_names_nothing_may_name_nothing() -> None:
     assert not may_name(GATEWAY, "claims-triage", "claims-triage")
 
 
+@pytest.mark.parametrize(
+    ("policy", "calling", "tenant", "agent", "expected"),
+    [
+        # An app without a policy has no rule.
+        (None, None, "evaluation", "knowledge-ingestion", True),
+        (None, RUNTIME, "evaluation", None, True),
+        # With a policy: what the caller lists, the tenant alone or the pair.
+        (POLICY, RUNTIME, "claims-triage", None, True),
+        (POLICY, RUNTIME, "claims-triage", "claims-triage", True),
+        (POLICY, RUNTIME, "evaluation", None, False),
+        (POLICY, RUNTIME, "claims-triage", "knowledge-ingestion", False),
+        # With a policy and no caller in the scope: nothing may be named.
+        (POLICY, None, "claims-triage", None, False),
+        (POLICY, None, "claims-triage", "claims-triage", False),
+    ],
+)
+def test_a_policy_with_no_caller_lets_nothing_be_named(
+    policy: CallerPolicy | None,
+    calling: Service | None,
+    tenant: str,
+    agent: str | None,
+    expected: bool,
+) -> None:
+    assert caller_may_name(policy, calling, tenant, agent) is expected
+
+
 # The middleware
 
 
@@ -186,10 +214,10 @@ def build(
             Route("/work", answer, methods=["GET", "POST"]),
         ]
     )
-    callback: Callable[[Refusal, str | None], None] | None = None
+    callback: OnRefusal | None = None
     if refused is not None:
 
-        def callback(reason: Refusal, service_id: str | None) -> None:
+        async def callback(reason: Refusal, service_id: str | None) -> None:
             refused.append((reason, service_id))
 
     guarded = CallerIdentityMiddleware(inner, POLICY, on_refusal=callback)
@@ -459,9 +487,11 @@ def test_a_websocket_scope_is_refused_and_the_app_is_not_reached() -> None:
         # Even a scope that carries an allowed identity gets no websocket.
         "extensions": {"tls": {"client_cert_uris": (uri("agent-runtime"),)}},
     }
-    guarded = CallerIdentityMiddleware(
-        inner, POLICY, on_refusal=lambda reason, who: refused.append((reason, who))
-    )
+
+    async def on_refusal(reason: Refusal, who: str | None) -> None:
+        refused.append((reason, who))
+
+    guarded = CallerIdentityMiddleware(inner, POLICY, on_refusal=on_refusal)
 
     asyncio.run(guarded(scope, receive, send))
 
@@ -470,13 +500,11 @@ def test_a_websocket_scope_is_refused_and_the_app_is_not_reached() -> None:
     assert refused == [(Refusal.NO_IDENTITY, None)]
 
 
-def test_the_audit_callback_runs_in_a_worker_thread_and_is_waited_for() -> None:
-    threads: dict[str, int] = {}
+def test_the_audit_callback_is_waited_for_before_the_answer() -> None:
     finished: list[str] = []
 
-    def on_refusal(reason: Refusal, service_id: str | None) -> None:
-        threads["callback"] = threading.get_ident()
-        time.sleep(0.05)  # a database write takes time; the answer waits for it
+    async def on_refusal(reason: Refusal, service_id: str | None) -> None:
+        await asyncio.sleep(0.05)  # a database write takes time; the answer waits
         finished.append("audited")
 
     async def inner(scope: Scope, receive: Receive, send: Send) -> None:
@@ -490,13 +518,11 @@ def test_the_audit_callback_runs_in_a_worker_thread_and_is_waited_for() -> None:
             assert finished == ["audited"]
 
     async def go() -> None:
-        threads["loop"] = threading.get_ident()
         scope = {"type": "http", "method": "GET", "path": "/work", "headers": []}
         await CallerIdentityMiddleware(inner, POLICY, on_refusal)(scope, receive, send)
 
     asyncio.run(go())
 
-    assert threads["callback"] != threads["loop"]
     assert finished == ["audited"]
 
 
@@ -507,7 +533,7 @@ def test_the_audit_callback_runs_in_a_worker_thread_and_is_waited_for() -> None:
 def test_a_callback_that_raises_does_not_change_the_refusal(
     uris: tuple[str, ...] | None, status: int, caplog: pytest.LogCaptureFixture
 ) -> None:
-    def on_refusal(reason: Refusal, service_id: str | None) -> None:
+    async def on_refusal(reason: Refusal, service_id: str | None) -> None:
         raise RuntimeError("database-password-canary")
 
     inner = Starlette(routes=[Route("/work", lambda request: JSONResponse({}))])
@@ -531,7 +557,7 @@ def test_a_callback_that_raises_does_not_change_the_refusal(
 def guarded_service(
     uris: tuple[str, ...] | None,
     exporter: InMemorySpanExporter | None = None,
-    on_refusal: Callable[[Refusal, str | None], None] | None = None,
+    on_refusal: OnRefusal | None = None,
 ) -> ASGIApp:
     """The shared FastAPI setup with a 100-byte body limit and the check."""
     service = create_service_app(
@@ -693,12 +719,20 @@ Written = list[tuple[str, str | None, int]]
 def auditor(
     written: Written, clock: Clock, fail: list[bool] | None = None
 ) -> Callable[[Refusal, str | None], None]:
+    """``audited_refusals`` over a write into ``written``, as a plain call: each
+    refusal runs on an event loop of its own."""
+
     def write(reason: str, caller: str | None, suppressed: int) -> None:
         if fail:
             raise OSError("the write failed")
         written.append((reason, caller, suppressed))
 
-    return audited_refusals(RefusalAuditThrottle(clock), write)
+    on_refusal = audited_refusals(RefusalAuditThrottle(clock), write)
+
+    def refuse(reason: Refusal, caller: str | None) -> None:
+        asyncio.run(on_refusal(reason, caller))
+
+    return refuse
 
 
 def test_a_refusal_is_written_with_a_reason_of_its_own_and_the_caller() -> None:
@@ -709,9 +743,10 @@ def test_a_refusal_is_written_with_a_reason_of_its_own_and_the_caller() -> None:
     on_refusal(Refusal.UNKNOWN_SERVICE, "stranger")
     on_refusal(Refusal.NOT_ALLOWED, "claims-api")
 
+    # An unknown service's ID is text from a certificate: no reference.
     assert written == [
         ("caller-no-identity", None, 0),
-        ("caller-unknown-service", "stranger", 0),
+        ("caller-unknown-service", None, 0),
         ("caller-not-allowed", "claims-api", 0),
     ]
 
@@ -744,7 +779,7 @@ def test_unknown_service_ids_share_one_window_so_the_throttle_stays_bounded() ->
     for index in range(50):
         on_refusal(Refusal.UNKNOWN_SERVICE, f"stranger-{index}")
 
-    assert written == [("caller-unknown-service", "stranger-0", 0)]
+    assert written == [("caller-unknown-service", None, 0)]
 
 
 def test_each_known_service_that_may_not_call_has_its_own_window() -> None:
@@ -764,9 +799,79 @@ def test_each_known_service_that_may_not_call_has_its_own_window() -> None:
 def test_a_service_id_longer_than_an_id_may_be_is_cut_before_it_is_written() -> None:
     written: Written = []
 
+    # A known service has a registry ID; the cut is a second line.
+    auditor(written, Clock())(Refusal.NOT_ALLOWED, "a" * 300)
+
+    assert written[0][1] == "a" * MAX_ID_LENGTH
+
+
+def test_an_unknown_service_is_audited_with_no_reference_whatever_its_id() -> None:
+    written: Written = []
+
     auditor(written, Clock())(Refusal.UNKNOWN_SERVICE, "a" * 300)
 
-    assert written[0][1] == "a" * 64
+    assert written == [("caller-unknown-service", None, 0)]
+
+
+def test_an_unknown_service_id_is_cut_in_the_log_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    long_id = "a" * 300
+    client, _ = build((uri(long_id),))
+
+    with caplog.at_level(logging.WARNING, logger="meridian.platform.common.identity"):
+        client.get("/work")
+
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "a" * MAX_ID_LENGTH in text
+    assert "a" * (MAX_ID_LENGTH + 1) not in text
+
+
+def test_the_throttle_is_asked_on_the_loop_and_only_the_write_goes_to_a_thread() -> (
+    None
+):
+    threads: dict[str, int] = {}
+
+    def clock() -> float:
+        threads["throttle"] = threading.get_ident()
+        return 1000.0
+
+    def write(reason: str, caller: str | None, suppressed: int) -> None:
+        threads["write"] = threading.get_ident()
+
+    on_refusal = audited_refusals(RefusalAuditThrottle(clock), write)
+
+    async def go() -> None:
+        threads["loop"] = threading.get_ident()
+        await on_refusal(Refusal.NO_IDENTITY, None)
+
+    asyncio.run(go())
+
+    assert threads["throttle"] == threads["loop"]
+    assert threads["write"] != threads["loop"]
+
+
+def test_a_throttled_refusal_starts_no_worker_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[str] = []
+    run_sync = identity_module.anyio.to_thread.run_sync
+
+    async def counting(*args: Any, **kwargs: Any) -> Any:
+        started.append("thread")
+        return await run_sync(*args, **kwargs)
+
+    monkeypatch.setattr(identity_module.anyio.to_thread, "run_sync", counting)
+    on_refusal = audited_refusals(RefusalAuditThrottle(Clock()), lambda *_: None)
+
+    async def flood() -> None:
+        for _ in range(50):
+            await on_refusal(Refusal.NO_IDENTITY, None)
+
+    asyncio.run(flood())
+
+    # The first is due and written; the other forty-nine are counted on the loop.
+    assert started == ["thread"]
 
 
 def test_a_write_that_fails_ends_the_window_and_is_counted_by_the_next_row() -> None:

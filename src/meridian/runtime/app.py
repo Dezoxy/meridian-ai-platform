@@ -13,6 +13,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import replace
 from typing import Any, Literal
 
 import httpx
@@ -39,10 +40,10 @@ from meridian.platform.common.http import (
 from meridian.platform.common.identity import (
     NAME_REFUSAL_REASON,
     audited_refusals,
+    caller_may_name,
     caller_policy,
     caller_service,
     install_caller_check,
-    may_name,
 )
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.telemetry import (
@@ -373,6 +374,41 @@ def create_app(
         ),
     )
 
+    def record_refusal(
+        tenant: str,
+        agent: str | None,
+        reference: str,
+        reason: str | None = None,
+        run_id: uuid.UUID | None = None,
+    ) -> None:
+        """Write the audit row of a refusal. A caller's name refusal (S055) is
+        due a row once per window (T-49): the key is the reason and the tenant
+        only when the registry holds it, as a request's tenant is
+        caller-chosen and never a key, and a write that fails releases the
+        window. The runtime's other refusals write a row each."""
+        event = AuditEvent(
+            service=SERVICE_NAME,
+            event="run.refused",
+            outcome="refused",
+            reason=reason,
+            tenant=tenant,
+            agent=agent,
+            run_id=run_id,
+            reference=reference,
+        )
+        if reason != NAME_REFUSAL_REASON:
+            write_audit(dsn, event)
+            return
+        known = tenant if registry.tenant(tenant) is not None else None
+        carried = refusal_throttle.due(known, NAME_REFUSAL_REASON)
+        if carried is None:
+            return
+        try:
+            write_audit(dsn, replace(event, suppressed=carried))
+        except BaseException:
+            refusal_throttle.release(known, NAME_REFUSAL_REASON, carried)
+            raise
+
     def refuse(
         tenant: str,
         agent: str | None,
@@ -380,19 +416,7 @@ def create_app(
         reason: str | None = None,
         run_id: uuid.UUID | None = None,
     ) -> HTTPException:
-        write_audit(
-            dsn,
-            AuditEvent(
-                service=SERVICE_NAME,
-                event="run.refused",
-                outcome="refused",
-                reason=reason,
-                tenant=tenant,
-                agent=agent,
-                run_id=run_id,
-                reference=reference,
-            ),
-        )
+        record_refusal(tenant, agent, reference, reason, run_id)
         return HTTPException(status_code=403, detail=REFUSED)
 
     def run_leg(
@@ -480,7 +504,7 @@ def create_app(
         body: RunRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
         calling = caller_service(request)
-        if calling is not None and not may_name(calling, body.tenant, body.agent):
+        if not caller_may_name(policy, calling, body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference, NAME_REFUSAL_REASON)
         if not registry.tenant_may_run(body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference)
@@ -524,7 +548,7 @@ def create_app(
         # The tenant is checked before the run is read, so a caller that may
         # not name it learns nothing of a run under it (T-10).
         calling = caller_service(request)
-        if calling is not None and body.tenant not in calling.tenants:
+        if not caller_may_name(policy, calling, body.tenant):
             raise refuse(body.tenant, None, body.reference, NAME_REFUSAL_REASON)
         found = runs.fetch_run(dsn, run_id)
         # The same answer for a run that is not there and one under another
@@ -534,14 +558,17 @@ def create_app(
             body.reference,
         ):
             raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
-        if calling is not None and not may_name(calling, found.tenant, found.agent):
-            raise refuse(
+        # A run whose agent the caller may not name is not there for it: a 403
+        # would say that the run exists. The refusal is audited.
+        if not caller_may_name(policy, calling, found.tenant, found.agent):
+            record_refusal(
                 found.tenant,
                 found.agent,
                 found.reference,
                 NAME_REFUSAL_REASON,
                 run_id=run_id,
             )
+            raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
         if not registry.tenant_may_run(found.tenant, found.agent):
             raise refuse(found.tenant, found.agent, found.reference, run_id=run_id)
         factory = factories.get(found.agent)
@@ -587,12 +614,23 @@ def create_app(
         # As for a resume: the tenant is checked before the run is read, so a
         # caller that may not name it learns nothing of a run under it (T-10).
         calling = caller_service(request)
-        if calling is not None and tenant not in calling.tenants:
+        if not caller_may_name(policy, calling, tenant):
             raise refuse(tenant, None, reference, NAME_REFUSAL_REASON)
         found = runs.fetch_run(dsn, run_id)
         # Bound like the resume: the same 404 for a run that is not there and
         # one under another tenant or reference (T-10).
         if found is None or (found.tenant, found.reference) != (tenant, reference):
+            raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
+        # And for a run whose agent the caller may not name, which the answer
+        # would otherwise show.
+        if not caller_may_name(policy, calling, found.tenant, found.agent):
+            record_refusal(
+                found.tenant,
+                found.agent,
+                found.reference,
+                NAME_REFUSAL_REASON,
+                run_id=run_id,
+            )
             raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
         return found
 
