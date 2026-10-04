@@ -461,7 +461,7 @@ that day; the rest stand as their step recorded them.
 | Golden-set cases on the fraud indicators' boundaries and an unknown policy number | S003, S017 | open; not taken by S050 | S067 |
 | A view that shows the Evaluation Harness's edges (Containers leaves the harness out, Governance the Claims Triage App) | S017 | open; not taken by S050 | S035 |
 | T-45's read limit was measured once (1,024 output tokens in 10.1 s on 2026-10-03); S020 accepts that or repeats it before the gateway reaches Azure from a cluster | S050 | open | S020 |
-| The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 50 to 58 s and 22 to 27 s of one worker on a laptop's three; the job prints its slowest tests from S057 on | S057 |
+| The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 42 s and 16 s of one worker in CI (pull request 79; four workers, the Tests step 5 min 34 s); the job prints its slowest tests from S057 on | S057 |
 | On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | none |
 | A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | open; left by S019 (roles, grants and a migration, not the chart) | S063 |
 | The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open; S019: the chart refuses a second gateway replica, and leaves the rolling update alone (its decisions say why); windows shared between processes are the fix | S066 |
@@ -478,7 +478,7 @@ that day; the rest stand as their step recorded them.
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | S062 |
 | 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | open | S037 |
 | No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open | S037 |
-| The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | closed by S057, accepted with its number: 30 to 39 s of one worker on a laptop's three | S057 |
+| The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | closed by S057, accepted with its number: 11 s of one worker in CI (pull request 79), 30 to 39 s on a laptop | S057 |
 | The scaffold's comparison "the old agents plus exactly one" has no test that reaches it alone (the YAML parse and the registry validation refuse first) | S039 | open | S061 |
 | The scaffold refuses valid but unusual files without saying which line (a table header with a trailing comment, a flow-style list), and `the name is taken` does not say by what | S039 | open | S061 |
 | `meridian registry validate` ends in a traceback when the registry directory cannot be listed (older than S039; the scaffold catches it for itself) | S039 | open | S061 |
@@ -488,7 +488,7 @@ that day; the rest stand as their step recorded them.
 | The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | open | S067 |
 | A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | open | S067 |
 | A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open | S031 |
-| The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | closed by S057, accepted with its number: 50 to 51 s of one worker on a laptop's three | S057 |
+| The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | closed by S057, accepted with its number: 34 s of one worker in CI (pull request 79), 50 to 55 s on a laptop | S057 |
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once | none |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | open | S061 |
 | TLS at the edge: `infra/kind/README.md` had named S019 for it, and no step's "done when" holds it; on kind the edge listens on loopback only | S006, S019 | open | S020 |
@@ -540,6 +540,7 @@ that day; the rest stand as their step recorded them.
 | On macOS `unused_port()` still releases its port before the test connects: a bound socket that does not listen drops a connect there, which then waits out its timeout, so a kept port cannot refuse | S057 | open; an observation: the required check runs on Linux, where the port is kept | none |
 | `tests/meridian/guardrails/test_redaction.py` has its own copy of the CPU-time measurement that is now `tests/meridian/cputime.py` | S057 | open | none |
 | The advisory hook reports `ubuntu-26.04` as an unknown runner label on every edit of a workflow: the laptop's actionlint is older than the label the runs use | S057 | open | none |
+| `test_misses_and_hits_are_counted_exactly_under_threads` in `tests/meridian/gateway/test_recorded.py` takes 33 s of one worker in CI, the third slowest test of the job (read from pull request 79, the first run that printed durations) | S057 | open; an observation with its number: S058 works in the gateway's tests while S057 runs | none |
 
 ## Part C — Step details
 
@@ -7346,6 +7347,8 @@ construction, not by a margin, and what the suite costs in CI is measured.
 - The `docs-sync` pass: Part A's "Before pushing", the secret rotation
   runbook, the README's command list and `.gitleaks.toml`'s header name
   `make secret-scan`; the Makefile's comment on `PYTEST_ARGS`.
+- Pull request 79, in two commits: the change, then the numbers its own
+  first run printed.
 
 **Result / verification:**
 
@@ -7397,12 +7400,17 @@ steps' suites and the kind cluster ran (load average 13 to 22).
   passed. After: nothing; a template that refers to a value nothing sets
   is reported under `make helm-lint:`, and a chart the target does not
   lint is linted bare. Three tests, which failed before the change.
-- **What the three tests cost.** On this laptop, three workers, two whole
-  runs: the fake model's whole-set test 58 s and 50 s, the recorded
-  evaluation 22 s and 27 s (the row's "about a minute" is these two); the
-  injection stack test 51 s and 50 s; the scaffold's first run 39 s and
-  30 s. Together about 170 s of a run's 1,470 worker-seconds, 12 %.
-  Accepted.
+- **What the three tests cost.** In CI, read from this step's pull
+  request (four workers; the Tests step ran 5 min 34 s, the job 6 min
+  20 s): the fake model's whole-set test 42.2 s and the recorded
+  evaluation 16.0 s (the row's "about a minute" is these two); the
+  injection stack test 33.7 s, where its row said 45 to 80 s; the
+  scaffold's first run 11.2 s, where its row said 15 to 40 s. Together
+  103 s of that run's 1,336 worker-seconds, under 8 %. Accepted. On this
+  laptop, three workers, three whole runs: 50 to 79 s and 22 to 27 s; 50
+  to 55 s; 30 to 39 s. The same output shows a test no row named:
+  `test_misses_and_hits_are_counted_exactly_under_threads`, 33.4 s in CI;
+  it is in the backlog.
 - **The gates.** `uv run ruff check . --no-cache`: `All checks passed!`;
   `ruff format --check`: 386 files; `lint-imports`: `5 kept, 0 broken`;
   `make docs`: 13 checks passed; `make test`: `Ran 153 tests`, `OK`;
@@ -7414,7 +7422,8 @@ steps' suites and the kind cluster ran (load average 13 to 22).
   The option now reaches pytest through the step's environment and the
   command is unchanged. The gate again on the final tree: `8555 passed, 11
   skipped` in 10 min 32 s (8 skipped before; the three more are the tests
-  of the kept port, on macOS).
+  of the kept port, on macOS). On the pull request's Linux runner those
+  three run: `8558 passed, 8 skipped`.
 - **Not run:** `make eval` (no prompt, graph or recording changed), any
   command against the kind cluster, anything against Azure.
 
@@ -7442,8 +7451,9 @@ two races, five of the six limits, `unused_port()` where CI runs, the
 registry anchors, the two long files, the job's limit, the hook, and the
 three measurements. Open: the split-table check (the base's), the sixth
 limit (S059), `test_redaction.py`'s own copy of the CPU-time helper,
-`unused_port()` on macOS, and actionlint's report of `ubuntu-26.04` on
-every edit of a workflow.
+`unused_port()` on macOS, actionlint's report of `ubuntu-26.04` on every
+edit of a workflow, and a gateway test of 33 s that the job's new output
+showed.
 
 ## Part D — Open questions
 
@@ -7690,4 +7700,4 @@ every edit of a workflow.
   slow tests are accepted with their numbers. One row stays open:
   `make docs` and a split table, because the checker is a copy of
   development-base's. Part A's "Before pushing" names `make secret-scan`.
-  Four new rows, one of them S059's.
+  Five new rows, one of them S059's. Pull request 79.
