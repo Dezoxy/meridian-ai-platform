@@ -342,14 +342,17 @@ Every pod of the chart, the Jobs' and the sweep's included:
 
 - runs as user and group 10001, never root, with every capability dropped,
   no privilege escalation, the runtime's default seccomp profile and no
-  service-account token;
+  service-account token. These settings are written in the chart, not in
+  its values, so a `--set` cannot loosen them, and the chart refuses user 0;
 - has a read-only root filesystem. `/tmp`, an `emptyDir` of at most 16 MiB
   on the node's disk, is its one writable path;
 - has a memory limit and CPU and memory requests. There is no CPU limit on
   purpose: a request reserves what a service needs, and a limit would
   throttle it while the node has headroom;
 - runs the image under a pinned reference. The chart takes `image.digest`
-  and refuses a tag unless `imagePullPolicy` is `Never`. kind has no
+  and refuses a tag unless `imagePullPolicy` is `Never`; the tag `latest`
+  and a repository that carries a tag of its own are refused always. kind
+  has no
   registry, so there is no repository digest to pin: `make deploy` loads the
   image into the node under the first 12 hex digits of its image ID, a name
   the content gives itself, and `Never` makes a missing image fail the pod
@@ -387,9 +390,12 @@ The database pod shares the namespace, and its policy is the platform's:
 [`manifests/platform-db-networkpolicy.yaml`](manifests/platform-db-networkpolicy.yaml),
 applied by `make up`. It admits the Meridian pods on 5432 and the
 CloudNativePG operator on 8000 (without that rule the operator reported
-`Instance Status Extraction Error` within 40 seconds, measured in S019). Its
-egress is open: the instance manager calls the API server at the node's own
-address, which changes with every new cluster, so no rule can name it.
+`Instance Status Extraction Error` within 40 seconds, measured in S019). The
+database pod itself may reach DNS, the pods of its own Cluster and TCP port
+6443 at any address: its instance manager calls the API server, whose
+address is the node's own and changes with every new cluster, so the rule
+names the port and no address. From the database pod a connection to the
+internet timed out, and 40 of 40 to the API server were made (S019).
 
 What the policies do not do:
 
@@ -397,7 +403,12 @@ What the policies do not do:
   is admitted as that service; who may create pods there is the cluster's
   access control, and proving which service calls is S055.
 - DNS and the collector are open to the pods that use them, and either
-  could carry data out slowly. The database may connect anywhere.
+  could carry data out slowly. The database pod may reach port 6443 at any
+  address, not only the API server's.
+- They are not enforced by admission. The namespace warns about and audits
+  a pod below the `restricted` Pod Security Standard
+  ([`manifests/namespaces.yaml`](manifests/namespaces.yaml)); it does not
+  refuse one yet (below).
 - The Model Gateway has no rule towards a provider: on kind it calls none.
   The rule for Azure OpenAI is S020's.
 
@@ -592,9 +603,10 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
 
 - TLS on the gateway: no step yet (the plan's follow-up backlog). The edge
   listens on loopback only.
-- Pod Security Admission labels on the `meridian` namespace: a server-side
-  dry run of `enforce=restricted` reported no violation (S019), but a cold
-  `make up` under it was not tried; in the backlog.
+- `enforce` for Pod Security Admission on the `meridian` namespace, which
+  has `warn` and `audit` at `restricted` since S019: a server-side dry run
+  of `enforce=restricted` reported no violation, but a cold `make up` under
+  it (CloudNativePG's init Job) was not tried; in the backlog.
 - A second replica of any service, and so a budget that protects one:
   whether each service is safe to run twice is not measured (S027).
 - Alertmanager: S024. Its Grafana datasource is off too.

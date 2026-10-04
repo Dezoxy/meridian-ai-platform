@@ -200,7 +200,7 @@ and Pydantic, at the cost of one dependency.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | doing | S018 |
+| S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | todo | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
@@ -350,17 +350,22 @@ that day; the rest stand as their step recorded them.
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | none |
 | TLS at the edge: `infra/kind/README.md` had named S019 for it, and no step's "done when" holds it; on kind the edge listens on loopback only | S006, S019 | open | S020 |
 | TLS between the services inside the cluster (T-61) | S019 | open; S055's mechanism may bring it | S055 |
-| Pod Security Admission on the `meridian` namespace: a server-side dry run of `enforce=restricted` reported no violation, but a cold `make up` under it (CloudNativePG's init Job) was not tried (T-82) | S019 | open | S020 |
+| `enforce` for Pod Security Admission on the `meridian` namespace, which has `warn` and `audit` at `restricted` since S019: a server-side dry run of `enforce=restricted` reported no violation, but a cold `make up` under it (CloudNativePG's init Job) was not tried (T-82) | S019 | open | S020 |
 | The Model Gateway's egress rule towards the providers and Key Vault, with FQDN-aware egress or private endpoints (T-19); the chart has none, because on kind the gateway calls nothing outside | S019 | open | S020 |
 | No NetworkPolicy outside `meridian`: the collector accepts a push from any pod of another namespace (T-68, T-81) | S019 | open | none |
 | DNS and the collector are open to the pods that use them and could carry data out (T-81) | S019 | open | none |
-| The database pod's egress is open on kind: its instance manager calls the API server at the node's own address (T-81) | S019 | open; Azure's database is outside the cluster | none |
+| The database pod may reach TCP 6443 at any address on kind, not only the API server's: its instance manager calls the API server at the node's own address (T-81) | S019 | open; Azure's database is outside the cluster | none |
 | Whether each service is safe to run with two replicas is not measured, so every disruption budget protects nothing yet (T-17) | S019 | open | S027 |
 | The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | open | none |
 | On a cluster whose services were first applied as raw manifests, the field manager `kubectl` still co-owns their fields, so a field a later chart version drops would stay | S019 | open; a new cluster ends it | none |
 | Private endpoints or IP rules for the vault, the Azure OpenAI account and the state storage, and diagnostics settings: `infra/terraform/README.md` had named S019 for "the hardening" | S007, S019 | open | S020 |
 | `tests/meridian/test_helm_chart.py` is over the 800-line ceiling (about 1,080 lines); its network-policy tests could be a file of their own | S019 | open | none |
 | The advisory hook `check-iac.sh` runs `helm lint` on the chart with no values, so every edit of the chart reports the image and the policy peers as missing; `make helm-lint` is the gate | S019 | open | none |
+| A tag that is valid for an image but not for an object's name (upper case, `_`, more than 46 characters) passes the chart and fails when the Job is applied; `deploy.sh` passes twelve hex digits | S019 | open | S022 |
+| `make smoke` proves one denied path (Claims API to Model Gateway); egress to an address outside the cluster and the database's policy were proved by hand in S019 | S019 | open | none |
+| A first `helm upgrade --install` that fails may leave a release Helm refuses to upgrade ("has no deployed releases"); `deploy.sh` names `status` and `history`, and the cure, an uninstall, needs the owner (not tried) | S019 | open | none |
+| GitHub Actions are pinned by version tag, not by commit, `azure/setup-helm@v5` among them (T-36) | S002, S019 | open | S022 |
+| Under a laptop load average of 50 to 90 the kubelet's probes time out and containers restart (the database five times on 2026-10-04, the services once or twice); seen before the network policies existed and after, and whether kindnet's enforcement adds to it is not measured | S019 | open | none |
 
 ## Part C — Step details
 
@@ -5960,7 +5965,7 @@ Run by the session; exit code 0 unless said.
   the golden claims' reset (not built).
 
 ### S019 — Hardened Helm charts
-**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
 **Goal:** the six services, the three Jobs and the sweep run on kind from
 one Helm chart with probes, resource limits, a default-deny NetworkPolicy,
 PodDisruptionBudgets, non-root read-only containers and pinned image
@@ -5990,11 +5995,13 @@ references, instead of the raw manifests of the skeleton.
   every pod in `meridian` (`podSelector: {}`), so a pod with no label gets
   nothing. `platform-db` shares the namespace on kind, and its policy is
   the platform's: `make up` applies it and `make deploy` refuses without
-  it. The database's egress is open: its instance manager calls the API
-  server at the node's own address, which changes with every new cluster,
-  so no `ipBlock` can name it; who may connect to the database is the
-  control (the policy, `pg_hba`, TLS, SCRAM). Rejected: a deny that
-  selects `part-of: meridian` only, which leaves an unlabelled pod open.
+  it. The database pod may reach DNS, the pods of its own Cluster and TCP
+  6443 at any address: its instance manager calls the API server at the
+  node's own address, which changes with every new cluster, so the rule
+  names the port and no address. The session first left that egress
+  wholly open; the infra reviewer called it the one high finding, rightly:
+  the reason covers one port. Rejected: a deny that selects
+  `part-of: meridian` only, which leaves an unlabelled pod open.
 - **A Job's policy travels with the Job**, in the Job's own template
   file, so a change to it is never one deploy behind.
 - **Pinned means a digest, or an image that is never pulled.** The chart
@@ -6025,6 +6032,21 @@ references, instead of the raw manifests of the skeleton.
 - **Helm is a test dependency.** The manifest tests render the chart, so a
   machine without `helm` fails them instead of skipping; CI installs the
   version the README documents.
+- **The security contexts are the chart's, not the values'.** As values, a
+  `--set securityContext.privileged=true` rendered a privileged container
+  (the reviewer tried it). They are literals of the helpers now; the user
+  ID is the one value, and 0 is refused.
+- **Pod Security Admission warns and audits, and does not enforce yet.**
+  `warn` and `audit` never refuse a pod, so they cannot break a cold
+  `make up`; `enforce=restricted` passed a server-side dry run against
+  today's pods, but CloudNativePG's init Job runs only on a new cluster,
+  and re-creating the cluster to prove it was not worth asking for in
+  this step.
+- **Which backlog rows the "done when" holds.** Of the ten the backlog
+  proposed for S019, one: the sweep's NetworkPolicy, which a default-deny
+  cannot leave out. The other nine are application code, database roles,
+  the observability chart, the edge's logging or `make up`'s wait, none
+  of them the Meridian chart; each stays in the backlog with its reason.
 
 **Work log:**
 
@@ -6063,7 +6085,7 @@ references, instead of the raw manifests of the skeleton.
   2. **Container hardening** (`8bb4d6a`): read-only root filesystems, `/tmp`,
      pod security contexts, the budgets, the image rule, the gateway's
      replica guard.
-  3. **NetworkPolicy** (the third commit): `default-deny`, a policy per
+  3. **NetworkPolicy** (`0543264`): `default-deny`, a policy per
      workload derived from each service's environment, the Jobs' policies
      in their own templates, the database's policy in `make up`, the check
      in `deploy.sh` and the eighth smoke check.
@@ -6077,6 +6099,29 @@ references, instead of the raw manifests of the skeleton.
 - The finished Job `meridian-ingest-113b0b11967f` was deleted once, the
   README's way to ingest again, so that the ingestion ran under the
   policies and the read-only filesystem.
+- The whole suite once, on the tree of the third contract:
+  `GITHUB_ACTIONS=true make pytest-db PYTEST_DB_CONTAINER=meridian-pytest-db-s019
+  PYTEST_DB_PORT=55433 PYTEST_WORKERS=3` ended
+  `7700 passed, 8 skipped, 7 warnings in 2777.12s (0:46:17)`, exit 0. It
+  took 46 minutes because two other sessions ran suites beside it.
+- The `infra-reviewer` on the result: pass, with one high finding and
+  three medium. A fourth contract took them: the database pod's egress
+  (high), the image rule accepting `latest` and a repository with a tag of
+  its own, the security contexts as values, Pod Security labels, a Job's
+  log redacted of any PostgreSQL URL, and two comments. Not taken, each
+  with its reason in the decisions or the backlog: a rollout strategy for
+  the gateway (T-45), `enforce` for Pod Security, an action pinned by
+  commit and not by tag (the repository's convention; S022), more than
+  one denied path in `make smoke`.
+- The database's container restarted five times on 2026-10-04, each time
+  killed after its liveness probe timed out while the laptop's load
+  average was between 50 and 90: three times before any NetworkPolicy
+  existed (the last at 07:57 UTC; `platform-db`'s policy was created at
+  08:03), twice during this session's own 46-minute test run. The
+  services' containers restarted once or twice at 08:46 UTC, and came
+  back under the read-only filesystem. In the quarter of an hour after
+  the suite ended the database logged no probe failure and no API
+  message, under the tightened egress.
 - Documents the branch falsified, fixed: `infra/kind/README.md` (a new
   section on the chart and what it locks down), the root README, the
   architecture README, `docs/demo.md`, the threat model (T-08 and T-24
@@ -6114,10 +6159,17 @@ image `meridian:113b0b11967f`:
   Kubernetes API, Grafana or the collector's gRPC port. A pod with no
   Meridian label in `meridian` reached neither the gateway, the database,
   DNS nor the internet (addressed by IP), and was deleted. The database's
-  Cluster stayed `healthy`.
+  Cluster stayed `healthy`. From the database pod, under its own policy:
+  `1.1.1.1` on 443 and 80 timed out, and 40 of 40 connections to the API
+  server's Service were made, 5 ms each.
+- **Pod Security.** The namespace carries `warn` and `audit` at
+  `restricted`; `make up` and `make deploy` printed no warning.
 - **`make smoke`:** 16 lines, all PASS, the new one among them: `network
   policy: the Claims API cannot reach the Model Gateway
-  (model-gateway.meridian.svc:8000), which no rule allows`.
+  (model-gateway.meridian.svc:8000), which no rule allows`. After the
+  fourth contract's deploy: 15 PASS and one SKIP, the cost series, because
+  the gateway's container had restarted under the load and settled no
+  call since.
 - **`make demo`, twice.** CLM-0005 was approved by the rules, and its
   trace settled with spans from the Claims API, the runtime, the policy
   and knowledge tool servers and the gateway. CLM-0006 was referred,
@@ -6126,6 +6178,20 @@ image `meridian:113b0b11967f`:
   server. 34 golden claims are left.
 - **`helm lint`:** `make helm-lint` ends `1 chart(s) linted, 0 chart(s)
   failed`, with kind's values and every Job on, locally and as a CI step.
+- **The infra reviewer:** pass; its high and medium findings are fixed or
+  decided above.
+- **Gates.** `make docs`: `docs consistency: 13 checks passed`. `make
+  test`: `Ran 124 tests`, `OK`. `make lint`: `Contracts: 5 kept, 0
+  broken.` The chart and kind tests after the fourth contract, with
+  `GITHUB_ACTIONS=true`: `328 passed`.
+- **Not run:** the whole suite again after the fourth contract (it
+  changed the chart, two manifests, one shell function and their tests;
+  those three test files ran, and CI runs the suite on the pull request);
+  `make eval` (no code, registry, prompt or data changed); `make check`
+  and `make mermaid` (the model and the views are unchanged); a cold
+  `make up` from no cluster (it needs the cluster deleted, which is the
+  owner's call); anything against Azure; `make smoke`'s cost series after
+  the last deploy.
 
 **Follow-ups:** in Part B's backlog. Taken: the sweep's NetworkPolicy.
 Left, each with its reason there: the Gateway's `Programmed` wait, the
@@ -6269,3 +6335,11 @@ cluster's field manager, Azure's private endpoints and the size of
   mechanism is not chosen: that is a security boundary, and the step asks
   the owner when it opens. The threat model's rows T-08, T-24, T-48 and
   T-50 and the README name S055.
+- **v0.28, 2026-10-04:** S019 done, as one step by the owner's choice (the
+  session had proposed to split the NetworkPolicy off). The six services,
+  the Jobs and the sweep run from one Helm chart, which adopted the
+  running objects; the namespace denies by default. Of the ten backlog
+  rows proposed for S019 it took one, the sweep's NetworkPolicy; the nine
+  it left have no S019 in their home any more. TLS at the edge, which the
+  kind README had promised for S019, is a backlog row. Its threats are
+  T-81 and T-82.

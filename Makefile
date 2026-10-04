@@ -195,7 +195,7 @@ synthetic:
 up:
 	infra/kind/up.sh
 
-## deploy          build the image, run the migrations, seed the policy store, put the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion)
+## deploy          build the image, run the migrations, seed the policy store, install the Helm release with the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion)
 deploy:
 	infra/kind/deploy.sh
 
@@ -203,7 +203,7 @@ deploy:
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages and the sweep's last Job
+## smoke           prove the edge, pgvector, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that a connection no network policy allows is blocked
 smoke:
 	infra/kind/smoke.sh
 
