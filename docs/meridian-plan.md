@@ -6103,8 +6103,9 @@ committed.
   38/40`, every other 40/40).
 - `make lint`: `Contracts: 5 kept, 0 broken.` `make test`: `Ran 124 tests`,
   `OK`. `make docs`: `13 checks passed`. `make registry`: `schemas OK`,
-  `contracts OK`. `make check` not run: no file under `model/` or
-  `decisions/` changed. `gitleaks` over the branch: see the pull request.
+  `contracts OK`. `make check` (two documents the Documentation tab
+  imports changed): exit 0, no ERROR line. `gitleaks` over the branch:
+  `no leaks found`.
 - The golden set's files and its baseline keep their bytes: `git status`
   lists none of them after `make synthetic` and `make eval-baseline`.
 - The injection report, 90 cases, answered by a script (simulated):
