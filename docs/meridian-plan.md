@@ -6858,8 +6858,10 @@ cluster's field manager, Azure's private endpoints and the size of
   `Makefile` and the scripts, the gitleaks version, the pinned MCP server
   and the Terraform providers. Part A gains "Version updates": which of its
   pull requests green checks do not prove. The owner installed the app
-  the same day; its onboarding pull request (56) is not merged, since this
-  configuration replaces the default it would add. The first grouped pull
+  the same day and merged its onboarding pull request (56); this change
+  removes the default `renovate.json` that added at the root, which would
+  be read instead of `.github/renovate.json`. Pull requests 57 and 58 came
+  from that default and are Renovate's to regroup. The first grouped pull
   requests are due on 2026-11-01. Dependabot's security alerts are a
   repository setting and stay on, and GitHub's security updates keep
   opening the pull requests for advisories (Renovate's are off, so none
