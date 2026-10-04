@@ -6973,8 +6973,10 @@ services' logs. New: the cluster proof, the smoke line, alert routing,
 the three objectives without an indicator, burn-rate alerts, the
 metrics S046 and S047 asked for, a command that credits a tenant or
 closes a reservation, the cost dashboard's baseline, the runbooks'
-exercise, the database's certificates and the image pull in the
-required check.
+exercise, the database's certificates, the image pull in the required
+check, the harness's hook that should deny printing a Secret and does
+so only for the bare command, and alerts on missing data with a network
+policy for `observability`.
 
 ## Part D — Open questions
 
