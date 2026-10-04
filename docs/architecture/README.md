@@ -113,5 +113,6 @@ Mermaid. The rule is "Model or Mermaid" in
 ## Not documented here
 
 API contracts (`api/`), Terraform and Helm (`infra/`), application code
-(`src/`), runbooks (`docs/operations/`). This folder links to them; it does
-not copy them.
+(`src/`), service level objectives, alert rules and runbooks
+([`docs/operations/`](../operations/README.md)). This folder links to them;
+it does not copy them.
