@@ -64,6 +64,7 @@ def test_the_seeded_embedding_deployments_carry_1024_and_the_chat_ones_none(
         "aoai-sdc-text-embedding-3-large": 1024,
         "replay-chat": None,
         "replay-embedding": 1024,
+        "recorded-chat": None,
     }
 
 

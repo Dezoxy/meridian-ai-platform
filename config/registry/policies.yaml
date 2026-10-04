@@ -25,3 +25,9 @@ replay:
     deployment: replay-chat
   - purpose: embedding
     deployment: replay-embedding
+
+# In recorded mode the gateway answers chat from a recording of a real model
+# (S050). Like replay it is never a route candidate.
+recorded:
+  - purpose: chat
+    deployment: recorded-chat

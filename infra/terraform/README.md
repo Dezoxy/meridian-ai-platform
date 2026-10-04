@@ -227,7 +227,16 @@ synthetic description and two clauses of the synthetic motor wording: it
 asks by schema, under the class `personal`, and the answer is read by the
 same strict reader as any. The test prints the status and the clause
 number, never the rationale. One synthetic question does not measure the
-model: the golden set answered by a real model is S050.
+model: `make eval-record` answers the golden set with it.
+
+`make eval-record` (S050) records the evaluation: about 60 chat calls
+through a gateway in live mode on this laptop (the 14 golden claims that
+ask the model and the judge's question for each answer, for the committed
+prompt and for a variant), and the files under `data/evaluation/` are
+rewritten. The embeddings stay simulated in that run. A sixth test asks
+for the output cap: 1,024 tokens came back in 10.1 s on 2026-10-03, half
+the 20 s read limit (T-45). The whole run was measured at EUR 0.12, and
+its output goes through the same filters as `make gateway-live`.
 
 The gateway on kind stays in replay mode: a pod there has no Azure identity
 until workload identity arrives with S020.

@@ -14,11 +14,11 @@ one answers (S042). The design is in the plan's S008 section and in
 
 | File | Holds |
 |---|---|
-| `providers.yaml` | Provider accounts: Azure OpenAI and the replay provider |
+| `providers.yaml` | Provider accounts: Azure OpenAI, the replay provider and the recorded provider |
 | `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits, the vector length of an embedding deployment |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema and output schema, idempotency |
 | `agents.yaml` | Agents, their kind (`graph` or `job`) and their tool allowlists |
-| `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, and the replay deployment per purpose |
+| `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, the replay deployment per purpose and the recorded one |
 | `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
 | `schemas/` | JSON Schemas generated from the Pydantic models; never edited by hand |
 | `snapshots/` | Terraform's deployment outputs without account names or endpoints |
@@ -42,7 +42,7 @@ job. Beyond the schemas, validation refuses:
   reviewer;
 - a residency label that does not match the SKU and region: `Standard` in an
   EU region is `eu-region`, `DataZoneStandard` is `eu-zone`,
-  `GlobalStandard` is `global`, replay is `eu-region`;
+  `GlobalStandard` is `global`, replay and recorded are `eu-region`;
 - a deployment that allows a data class its label does not permit, so
   personal data never reaches a `global` deployment (hard rule 3). The
   ceiling per class is fixed in the validator's code as well as in
@@ -69,14 +69,26 @@ job. Beyond the schemas, validation refuses:
   route's candidates, and a replay deployment that does not allow some
   tenant's data class or whose residency that class may not reach (replay
   must serve every tenant, or a test run would refuse one);
+- a recorded provider other than `recorded`; a recorded deployment with a
+  deployment name, SKU, region, Terraform key or rate limits, a model that
+  does not start with `recorded-`, a purpose other than `chat`, or without
+  `recorded_from`; a `recorded_from` that names an unknown deployment, a
+  replay or recorded one, or one of another purpose; a recorded price (currency,
+  input or output) that differs from that deployment's; and `recorded_from` on
+  any other deployment;
+- a `recorded` entry that repeats a purpose, names an unknown deployment, a
+  deployment of another purpose or one whose provider is not `recorded`, a
+  recorded deployment among a route's candidates, and a recorded deployment
+  that does not allow some tenant's data class or whose residency that class
+  may not reach. Unlike replay, recorded need not cover every purpose;
 - an Azure deployment without `rate_limits` and a replay deployment with
   them;
 - an embedding deployment without `dimensions` (the length of the vectors it
   returns, 1 to 2000, the most pgvector can index in its `vector` type; its
   `halfvec` type indexes up to 4000) and a chat deployment with it;
 - `structured_outputs: true` on an embedding deployment, and, once an agent
-  declares it, a chat route candidate or the chat replay deployment that does
-  not (see below);
+  declares it, a chat route candidate, the chat replay deployment or the chat
+  recorded one that does not (see below);
 - an embedding route whose candidates differ from the first in model, version
   or `dimensions`, and a replay embedding deployment whose `dimensions`
   differ from a candidate's: vectors of different models or sizes are not
@@ -95,6 +107,24 @@ Replay is a gateway mode, set per deployment in `policies.yaml`, never a
 route candidate: a real outage must not be answered with canned text (chat) or
 a simulated vector (embeddings). The replay embedding is simulated: a hashed
 bag-of-words vector, no model called, and no meaning of the text.
+
+Recorded is a second gateway mode of the same kind, set per deployment in the
+`recorded` list of `policies.yaml` (S050): the gateway answers chat from a
+committed file of a real model's answers and sends nothing out. Its provider
+is `recorded`, inside the platform like `replay`, and its deployment is
+labelled `eu-region`. Unlike replay it need not cover every purpose, and it is
+never a route candidate either. `recorded_from` names the live deployment that
+answered the recordings, and the recorded deployment carries that
+deployment's price, so the ledger of a recorded run charges what the live run
+was charged. Status: implemented (S050): the gateway's `recorded` mode
+starts only in the `test`, `ci` and `local` environments and answers from
+`data/evaluation/recordings/`; the response schema is part of the key an
+answer is found by, so a recorded chat deployment declares
+`structured_outputs` like the deployment that answered.
+
+`evaluation-judge` is the second `job` agent (S050): it grades whether a
+rationale is grounded in the text it was drawn from, calls the gateway under
+its own name and lists no tool. Only the tenant `evaluation` may run it.
 
 Every tool call is audited by its tool server (T-14, S013), so a tool has no
 audit flag to switch off. `approval_required` marks a tool whose effect

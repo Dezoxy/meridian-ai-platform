@@ -39,15 +39,20 @@ PYTEST_WORKERS      ?= auto
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
-# The evaluation of the claims workload (S017): the baseline committed in Git,
-# the report a run writes (gitignored) and the one test that writes it.
+# The evaluation of the claims workload (S017, S050): the baseline committed in
+# Git, the report a run writes (gitignored) and the one test that writes it. It
+# replays a real model's recorded answers through the Model Gateway (CI and
+# `make eval`); `make eval-record` makes the recording and needs an Azure login.
 EVAL_BASELINE       ?= data/evaluation/claims-triage-baseline.json
 EVAL_REPORT         ?= .eval/claims-triage-report.json
-EVAL_TEST           ?= tests/meridian/test_triage_stack.py::test_a_scripted_model_gives_the_oracle_s_proposals
+EVAL_TEST           ?= tests/meridian/test_evaluation_stack.py::test_the_recorded_model_answers_the_golden_set_through_the_gateway
+# What a report is made from: a tracked file here that is newer than the report
+# makes it stale (`make eval-compare` refuses it).
+EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/recordings tests/meridian pyproject.toml uv.lock
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db eval eval-compare eval-baseline eval-record synthetic up deploy demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -145,20 +150,30 @@ pytest-db:
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
 	MERIDIAN_REQUIRE_DB=1 uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
-## eval            replay the golden set through the stack with the scripted model (needs Docker), write the report and compare it with the baseline
+## eval            replay the golden set through the stack with the recorded model's answers and the judge (needs Docker), write the report and compare it with the baseline
 eval:
 	mkdir -p $(dir $(EVAL_REPORT))
+	rm -f $(EVAL_REPORT)
 	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_REPORT)) $(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) -q"
 	$(MAKE) eval-compare
 
-## eval-compare    compare a report with the baseline (meridian eval compare)
+## eval-compare    compare a report with the baseline (meridian eval compare); refuses a report older than a tracked file it is made from
 eval-compare:
+	@test -f "$(EVAL_REPORT)" || { echo "no report at $(EVAL_REPORT): run make eval" >&2; exit 1; }
+	@newer="$$(git ls-files -- $(EVAL_INPUTS) | while IFS= read -r file; do \
+		if [ "$$file" -nt "$(EVAL_REPORT)" ]; then printf '%s\n' "$$file"; break; fi; \
+	done)"; \
+	if [ -n "$$newer" ]; then echo "the report is older than $$newer: run make eval" >&2; exit 1; fi
 	uv run meridian eval compare $(EVAL_BASELINE) $(EVAL_REPORT)
 
-## eval-baseline   regenerate the baseline after a reviewed prompt, tool or golden-set change (needs Docker)
+## eval-baseline   regenerate the baseline after a reviewed prompt, tool, recording or golden-set change (needs Docker)
 eval-baseline:
 	mkdir -p $(dir $(EVAL_BASELINE))
 	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_BASELINE)) $(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) -q"
+
+## eval-record     SPENDS MONEY: about 60 chat calls, under EUR 0.50, on the live Azure models, with the judge, to record the golden set's answers and a variant prompt's; rewrites files under data/evaluation/ (needs az login, Docker; the owner runs it)
+eval-record:
+	infra/terraform/foundation.sh eval-record
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas and the tool-server contracts under api/mcp
 registry:

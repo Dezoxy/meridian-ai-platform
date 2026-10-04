@@ -105,3 +105,24 @@ deployments:
       input_per_million_tokens: 0
       source: Runs inside the platform; no provider call
       checked: 2026-09-30
+
+  # Chat answers recorded from aoai-sdc-gpt-4o and replayed inside the platform
+  # (S050); it charges that deployment's price, as the live run was charged.
+  - id: recorded-chat
+    provider: recorded
+    purpose: chat
+    model: recorded-chat
+    version: "1"
+    # The deployment that answered the recording honoured the schema, and the
+    # schema is part of the request's key, so a changed schema finds no
+    # recording.
+    structured_outputs: true
+    residency: eu-region
+    data_classes: [synthetic, internal, personal]
+    recorded_from: aoai-sdc-gpt-4o
+    price:
+      currency: USD
+      input_per_million_tokens: 3.025
+      output_per_million_tokens: 12.10
+      source: "The list price of aoai-sdc-gpt-4o, which answered the recordings; no provider is called"
+      checked: 2026-09-30

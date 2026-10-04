@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from meridian.platform.common import jsonfile
 from meridian.platform.evaluation import report as report_module
 from meridian.platform.evaluation.report import (
     REPORT_FORMAT,
@@ -22,6 +23,17 @@ from meridian.platform.evaluation.report import (
 
 DIGEST = "ab" * 32
 MARKER = "SECRET-MARKER-9f3a"
+
+
+def measured(**overrides: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "model_calls": 2,
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "cost_micro_eur": 1500,
+        "latency_ms": 350,
+    }
+    return data | overrides
 
 
 def report_data(**overrides: Any) -> dict[str, Any]:
@@ -190,8 +202,130 @@ def no_cases() -> dict[str, Any]:
     return report_data(cases=[])
 
 
+def format_one() -> dict[str, Any]:
+    return report_data(format=1)
+
+
 def another_format() -> dict[str, Any]:
-    return report_data(format=2)
+    return report_data(format=3)
+
+
+def tools_on_some_cases_only() -> dict[str, Any]:
+    data = report_data()
+    data["cases"][0]["tools"] = [{"tool": "lookup", "arguments": {}}]
+    return data
+
+
+def measured_on_some_cases_only() -> dict[str, Any]:
+    data = report_data()
+    data["cases"][1]["measured"] = measured()
+    return data
+
+
+def a_negative_token_count() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["measured"] = measured(input_tokens=-1)
+    return data
+
+
+def a_negative_latency() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["measured"] = measured(latency_ms=-1)
+    return data
+
+
+def a_fractional_cost() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["measured"] = measured(cost_micro_eur=1.5)
+    return data
+
+
+def a_boolean_call_count() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["measured"] = measured(model_calls=True)
+    return data
+
+
+def an_extra_measured_key() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["measured"] = measured(surprise=1)
+    return data
+
+
+def a_bad_tool_name() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "Look-Up", "arguments": {}}]
+    return data
+
+
+def a_tool_name_over_64_characters() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "t" * 65, "arguments": {}}]
+    return data
+
+
+def tool_arguments_that_are_a_list() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "lookup", "arguments": [1]}]
+    return data
+
+
+def with_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "lookup", "arguments": arguments}]
+    return data
+
+
+def a_nan_argument() -> dict[str, Any]:
+    return with_arguments({"amount": float("nan")})
+
+
+def an_infinite_argument() -> dict[str, Any]:
+    return with_arguments({"amount": float("inf")})
+
+
+def a_negative_infinite_argument() -> dict[str, Any]:
+    return with_arguments({"amount": float("-inf")})
+
+
+def a_nan_argument_in_a_list() -> dict[str, Any]:
+    return with_arguments({"n": [1, None, [float("nan")]]})
+
+
+def an_infinite_argument_in_a_nested_object() -> dict[str, Any]:
+    return with_arguments({"a": {"b": [{"c": float("inf")}]}})
+
+
+def an_extra_tool_key() -> dict[str, Any]:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "lookup", "arguments": {}, "surprise": 1}]
+    return data
+
+
+def a_bad_judge_digest() -> dict[str, Any]:
+    data = report_data()
+    data["fingerprints"]["judge"] = "ABC"
+    return data
+
+
+def a_bad_recording_digest() -> dict[str, Any]:
+    data = report_data()
+    data["fingerprints"]["recording"] = "ABC"
+    return data
+
+
+def recorded_but_simulated() -> dict[str, Any]:
+    return report_data(answered_by={"kind": "recorded", "label": "simulated"})
 
 
 def a_bad_workload() -> dict[str, Any]:
@@ -226,7 +360,30 @@ INVALID = [
     pytest.param(a_bad_digest, id="bad-digest"),
     pytest.param(no_golden_files, id="no-golden-files"),
     pytest.param(no_cases, id="no-cases"),
+    pytest.param(format_one, id="format-one"),
     pytest.param(another_format, id="another-format"),
+    pytest.param(tools_on_some_cases_only, id="tools-on-some-cases-only"),
+    pytest.param(measured_on_some_cases_only, id="measured-on-some-cases-only"),
+    pytest.param(a_negative_token_count, id="negative-token-count"),
+    pytest.param(a_negative_latency, id="negative-latency"),
+    pytest.param(a_fractional_cost, id="fractional-cost"),
+    pytest.param(a_boolean_call_count, id="boolean-call-count"),
+    pytest.param(an_extra_measured_key, id="extra-measured-key"),
+    pytest.param(a_bad_tool_name, id="bad-tool-name"),
+    pytest.param(a_tool_name_over_64_characters, id="tool-name-too-long"),
+    pytest.param(tool_arguments_that_are_a_list, id="tool-arguments-a-list"),
+    pytest.param(an_extra_tool_key, id="extra-tool-key"),
+    pytest.param(a_nan_argument, id="nan-argument"),
+    pytest.param(an_infinite_argument, id="infinite-argument"),
+    pytest.param(a_negative_infinite_argument, id="negative-infinite-argument"),
+    pytest.param(a_nan_argument_in_a_list, id="nan-argument-in-a-list"),
+    pytest.param(
+        an_infinite_argument_in_a_nested_object,
+        id="infinite-argument-in-a-nested-object",
+    ),
+    pytest.param(a_bad_judge_digest, id="bad-judge-digest"),
+    pytest.param(a_bad_recording_digest, id="bad-recording-digest"),
+    pytest.param(recorded_but_simulated, id="recorded-labelled-simulated"),
     pytest.param(a_bad_workload, id="bad-workload"),
     pytest.param(a_case_without_grades, id="case-without-grades"),
 ]
@@ -248,10 +405,156 @@ def test_load_report_refuses_an_invalid_file_with_a_report_error(
         load_report(path)
 
 
-def test_a_recorded_run_may_be_labelled_either_way() -> None:
-    for label in ("simulated", "real"):
-        answered_by = AnsweredBy(kind="recorded", label=label)
-        assert answered_by.label == label
+def test_a_non_finite_argument_is_refused_with_a_fixed_sentence() -> None:
+    with pytest.raises(ValidationError, match="not a finite number") as raised:
+        Report.model_validate(a_nan_argument())
+
+    assert "cases.0.tools.0.arguments" in str(raised.value)
+
+
+def test_a_non_finite_argument_in_a_file_is_refused_without_quoting_it(
+    tmp_path: Path,
+) -> None:
+    path = write_data(tmp_path / "report.json", a_nan_argument())
+    assert "NaN" in path.read_text(encoding="utf-8")  # json.dumps wrote the token
+
+    with pytest.raises(ReportError, match="not a finite number") as raised:
+        load_report(path)
+
+    assert "NaN" not in str(raised.value)
+
+
+def test_a_number_too_large_for_a_float_is_refused_as_not_finite(
+    tmp_path: Path,
+) -> None:
+    # json.loads reads 1e999 as infinity.
+    text = json.dumps(with_arguments({"amount": 0})).replace(
+        '"amount": 0', '"amount": 1e999'
+    )
+    assert "1e999" in text
+    path = tmp_path / "report.json"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ReportError, match="not a finite number"):
+        load_report(path)
+
+
+def test_the_largest_and_smallest_finite_numbers_are_arguments() -> None:
+    arguments = {"big": 1.7976931348623157e308, "small": -5e-324, "n": [0, -1, 2.5]}
+
+    report = Report.model_validate(with_arguments(arguments))
+
+    assert report.cases[0].tools is not None
+    assert report.cases[0].tools[0].arguments == arguments
+
+
+def test_a_dump_is_standard_json_for_any_report_the_model_accepts() -> None:
+    def refuse(token: str) -> None:
+        raise AssertionError(f"non-standard JSON token {token}")
+
+    report = Report.model_validate(
+        with_arguments({"amount": 1e308, "n": [0.1, {"z": -2.5}]})
+    )
+
+    parsed = json.loads(dump_report(report), parse_constant=refuse)
+
+    assert parsed["cases"][0]["tools"][0]["arguments"]["amount"] == 1e308
+
+
+def test_a_recorded_run_is_labelled_real() -> None:
+    assert AnsweredBy(kind="recorded", label="real").label == "real"
+    with pytest.raises(ValidationError, match="recorded run is labelled real"):
+        AnsweredBy(kind="recorded", label="simulated")
+
+
+def test_a_report_may_carry_tools_measures_a_judge_and_a_recording(
+    tmp_path: Path,
+) -> None:
+    data = report_data(answered_by={"kind": "recorded", "label": "real"})
+    data["fingerprints"]["judge"] = "cd" * 32
+    data["fingerprints"]["recording"] = "ef" * 32
+    for case in data["cases"]:
+        case["tools"] = [
+            {"tool": "lookup", "arguments": {"id": "p-1", "n": [1, None, {"a": 2.5}]}},
+            {"tool": "decide", "arguments": {}},
+        ]
+        case["measured"] = measured()
+    case_two = data["cases"][1]
+    case_two["measured"] = measured(latency_ms=None)
+    path = write_data(tmp_path / "report.json", data)
+
+    report = load_report(path)
+
+    assert report.fingerprints.judge == "cd" * 32
+    assert report.fingerprints.recording == "ef" * 32
+    assert report.cases[0].tools is not None
+    assert report.cases[0].tools[0].arguments["n"] == [1, None, {"a": 2.5}]
+    assert report.cases[0].measured is not None
+    assert report.cases[0].measured.latency_ms == 350
+    assert report.cases[1].measured is not None
+    assert report.cases[1].measured.latency_ms is None
+    assert json.loads(dump_report(report)) == json.loads(json.dumps(data))
+    write_report(report, tmp_path / "again.json")
+    assert (tmp_path / "again.json").read_text("utf-8") == dump_report(report)
+
+
+def test_the_dump_writes_a_missing_optional_as_null() -> None:
+    dumped = json.loads(dump_report(Report.model_validate(report_data())))
+
+    assert dumped["fingerprints"]["judge"] is None
+    assert dumped["fingerprints"]["recording"] is None
+    assert all(case["tools"] is None for case in dumped["cases"])
+    assert all(case["measured"] is None for case in dumped["cases"])
+    assert '"judge": null' in dump_report(Report.model_validate(report_data()))
+
+
+def test_tools_and_measured_on_every_case_or_none_say_it_in_a_fixed_sentence() -> None:
+    with pytest.raises(ValidationError, match="every case has tools or none does"):
+        Report.model_validate(tools_on_some_cases_only())
+    with pytest.raises(ValidationError, match="every case has measured or none does"):
+        Report.model_validate(measured_on_some_cases_only())
+
+
+def test_zero_counts_and_a_missing_latency_are_accepted() -> None:
+    data = report_data()
+    for case in data["cases"]:
+        case["measured"] = measured(
+            model_calls=0,
+            input_tokens=0,
+            output_tokens=0,
+            cost_micro_eur=0,
+            latency_ms=0,
+        )
+    del data["cases"][1]["measured"]["latency_ms"]
+
+    report = Report.model_validate(data)
+
+    assert report.cases[1].measured is not None
+    assert report.cases[1].measured.latency_ms is None
+
+
+def test_a_tool_name_of_64_characters_is_accepted() -> None:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": "t" * 64, "arguments": {}}]
+
+    assert Report.model_validate(data).cases[0].tools is not None
+
+
+def test_a_planted_tool_name_and_argument_key_are_not_echoed_in_an_error(
+    tmp_path: Path,
+) -> None:
+    data = report_data()
+    for case in data["cases"]:
+        case["tools"] = [{"tool": MARKER, "arguments": {}}]
+    data["cases"][0]["measured"] = {MARKER: 1}
+    path = write_data(tmp_path / "report.json", data)
+
+    with pytest.raises(ReportError) as raised:
+        load_report(path)
+
+    assert MARKER not in str(raised.value)
+    assert "cases.0.tools.0.tool: string_pattern_mismatch" in str(raised.value)
 
 
 def test_the_model_is_immutable() -> None:
@@ -269,7 +572,7 @@ def test_load_report_names_a_missing_file(tmp_path: Path) -> None:
 def test_load_report_refuses_a_file_over_the_limit_before_parsing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(report_module, "MAX_REPORT_BYTES", 100)
+    monkeypatch.setattr(jsonfile, "MAX_JSON_FILE_BYTES", 100)
     path = write_data(tmp_path / "report.json", report_data())
     assert path.stat().st_size > 100
 
@@ -282,13 +585,19 @@ def test_load_report_accepts_a_file_at_the_limit(
 ) -> None:
     path = tmp_path / "report.json"
     write_report(Report.model_validate(report_data()), path)
-    monkeypatch.setattr(report_module, "MAX_REPORT_BYTES", path.stat().st_size)
+    monkeypatch.setattr(jsonfile, "MAX_JSON_FILE_BYTES", path.stat().st_size)
 
     assert load_report(path).workload == "demo-workload"
 
 
 def test_the_limit_is_five_mebibytes() -> None:
     assert report_module.MAX_REPORT_BYTES == 5 * 1024 * 1024
+    assert jsonfile.MAX_JSON_FILE_BYTES == report_module.MAX_REPORT_BYTES
+
+
+def test_the_names_that_moved_are_the_ones_common_defines() -> None:
+    assert report_module.HexDigest is jsonfile.HexDigest
+    assert report_module.describe_validation_error is jsonfile.describe_validation_error
 
 
 def test_load_report_refuses_invalid_json(tmp_path: Path) -> None:
@@ -310,6 +619,10 @@ def test_load_report_refuses_a_file_that_is_not_utf8(tmp_path: Path) -> None:
 def test_load_report_refuses_a_directory(tmp_path: Path) -> None:
     with pytest.raises(ReportError):
         load_report(tmp_path)
+
+
+def test_the_format_is_two() -> None:
+    assert REPORT_FORMAT == 2
 
 
 def test_a_validation_error_names_the_field_and_not_the_planted_value(
@@ -367,7 +680,7 @@ def with_a_duplicate(old: str, new: str) -> str:
 
 
 DUPLICATES = [
-    pytest.param('{"format": 1,', '{"format": 1, "format": 1,', id="top-level"),
+    pytest.param('{"format": 2,', '{"format": 2, "format": 2,', id="top-level"),
     pytest.param(
         '"grades": {"alpha": true,',
         '"grades": {"alpha": true, "alpha": false,',
@@ -567,8 +880,8 @@ def test_an_integer_target_of_one_is_read_as_the_float_one(tmp_path: Path) -> No
     assert '"beta": 1.0' in dump_report(report)
 
 
-@pytest.mark.parametrize("value", [True, 1.0, "1"])
-def test_the_format_must_be_the_integer_one(value: Any, tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", [True, 2.0, "2"])
+def test_the_format_must_be_the_integer_two(value: Any, tmp_path: Path) -> None:
     path = write_data(tmp_path / "report.json", report_data(format=value))
 
     with pytest.raises(ReportError):
@@ -591,7 +904,7 @@ def test_the_limit_holds_without_trusting_the_reported_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = write_data(tmp_path / "report.json", report_data())
-    monkeypatch.setattr(report_module, "MAX_REPORT_BYTES", 100)
+    monkeypatch.setattr(jsonfile, "MAX_JSON_FILE_BYTES", 100)
 
     def stat_claiming_an_empty_regular_file(self: Path, **_: Any) -> os.stat_result:
         return os.stat_result((0o100644,) + (0,) * 9)

@@ -35,6 +35,11 @@ meridian = "meridian.platform.cli:app"
 [project.entry-points."meridian.graphs"]
 claims-triage = "meridian.workloads.claims_triage.graph:build"
 
+# `meridian eval run` finds a workload's evaluation plugin here by the workload's
+# name and accepts only entry points published by this distribution (T-80).
+[project.entry-points."meridian.evaluations"]
+claims-triage = "meridian.workloads.claims_triage.evaluation_http:EVALUATION"
+
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13"]
 build-backend = "uv_build"
@@ -160,4 +165,16 @@ allow_indirect_imports = true
 ignore_imports = [
     "meridian.platform.gateway.providers.azure_openai -> openai",
     "meridian.platform.gateway.providers.azure_openai -> azure",
+]
+
+[[tool.importlinter.contracts]]
+name = "the gateway imports neither the evaluation package nor the CLI"
+type = "forbidden"
+# A deployed service must not depend on the package that loads workloads and
+# holds a client of the gateway (S050, T-78). What both need, the JSON file
+# reader, lives in meridian.platform.common.jsonfile. Indirect imports count.
+source_modules = ["meridian.platform.gateway"]
+forbidden_modules = [
+    "meridian.platform.evaluation",
+    "meridian.platform.cli",
 ]

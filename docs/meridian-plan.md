@@ -13,8 +13,9 @@
   servers and the runtime's client for them run on kind, where the policy
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
-  a fixed order and lets rules decide each claim's route (no real model
-  has answered its one question in a run, which is asked for by schema;
+  a fixed order and lets rules decide each claim's route (a real model
+  answered its one question, asked for by schema, for the golden set from
+  a laptop; on kind the model is simulated;
   claimant text that holds special-category
   data or addresses the model is not sent, and identifiers are redacted
   before any model call and in logs), a claim it refers to an adjuster waits
@@ -29,8 +30,9 @@
   policy's claim history), reads its status, reports documents and
   withdraws it on server-rendered
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
-  proposals with rules against a reviewed baseline (with a scripted model,
-  simulated), and no service runs in Azure yet.
+  proposals with rules and an LLM judge against a reviewed baseline (the
+  model's answers recorded from Azure OpenAI and replayed through the
+  gateway), and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -120,15 +122,18 @@ and Pydantic, at the cost of one dependency.
   documentation gates); Terraform and Helm keep infrastructure.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
-  ~~`eval run` and~~ `eval compare`; S050 adds `eval run`; S039 would add
+  ~~`eval run` and~~ `eval compare`; S050 adds `eval run` and `eval diff`;
+  S039 would add
   `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
   sign-in and stay designed until S021 exists.
 - **Cost.** Evaluation uses ~~the replay provider~~ a scripted model, in
-  process and at no cost (S017), unless `--live` is passed (C-04; `--live`
-  and a recorded model are S050).
+  process and at no cost (S017), ~~unless `--live` is passed (C-04; `--live`
+  and a recorded model are S050)~~ and since S050 a recorded real model,
+  replayed at no cost; recording again is `make eval-record`, which spends
+  money (C-04) and is not a CLI flag (S050's decisions say why).
 - **Placement.** `src/meridian/platform/cli/`, importing only platform
   packages. The Evaluation Harness reaches workloads through the ~~runtime
   API~~ Claims API (S017: every tool call needs the claim's row, so a run
@@ -183,7 +188,7 @@ and Pydantic, at the cost of one dependency.
 | S016 | Adjuster UI | Server-rendered queue with claim, proposal, citations and fraud flags; approve, reject and request documents; audit trail; ~~time-boxed to two sessions~~ (split on 2026-10-03: the claimant's pages are S049) | done | S015 |
 | S049 | Claimant pages | A claimant submits a claim and reads its status on server-rendered pages behind the staff route until claimants are identified (T-01); the form says the data must be fictional (T-04); the answer tells the claimant what happens next without describing the proposal (T-65) | done | S016 |
 | S017 | Evaluation harness | Golden-set replay with rule ~~and LLM-judge~~ graders (~~tool choice, arguments, groundedness,~~ route, reason, recommendation, amount, fraud indicators, missing documents, citations, completion~~, latency, cost~~); a report per prompt version; a CI gate on prompt or tool changes; ~~`meridian eval run` and~~ `meridian eval compare` drive~~s~~ it locally and in CI (split on 2026-10-03: the judge, latency and cost, a recorded or live model and `eval run` are S050) | done | S003, S014 |
-| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with `--live`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | todo | S017, S054 |
+| S050 | Live evaluation | The golden set answered through the Model Gateway by a recorded model, a recording missing for a changed prompt failing the gate, and re-recorded with ~~`--live`~~ `make eval-record`; an LLM judge grades groundedness only, under an agent identity of its own, and cannot override the rule graders (T-29); latency and cost graded from the gateway's ledger; the tool names and arguments of each run kept with the results; `meridian eval run` against a deployed stack; a report comparing two prompt versions | done | S017, S054 |
 | S051 | Structured outputs | The Model Gateway passes a JSON schema for the answer to providers that support it (Azure OpenAI's structured outputs), declared per agent in the registry and refused for a deployment that cannot honour it; the triage assessment asks for its three-field answer by schema and still reads it strictly; tried live | done | S047 |
 | S052 | Scheduled sweep | A scheduled job ~~closes a claim whose documents miss the deadline as rejected~~ refers a claim whose documents miss the deadline to an adjuster (Part D question 3, answered on 2026-10-03), ends runs left `Running` that no resume takes over, paused runs that no claim points to, and checkpoints a failed delete left (T-63); a documents post whose triage failed while another move changed the claim is answered by what was stored, not by the claim's state afterwards (a `stored` flag on `DecisionFailure`; added on 2026-10-03 from S049) | done | S048 |
 | S053 | The claimant's word checked | The Claims API stamps the report date once claimants submit their own claims, and a decided claim enters the claim history, so `late_report` and `frequent_claims` stop resting on the claimant's word (T-66); the claimant's pages answer a 422 for an ID in the path, 404, 405, 413 and 400 with a page, not the API's JSON, and no server span's `http.url` keeps a query string (platform-wide, T-03) (both added on 2026-10-03 from S049) | done | S048, S049 |
@@ -273,11 +278,11 @@ that day; the rest stand as their step recorded them.
 | After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
 | The adjuster's queue shows at most 100 claims with no next page | S016 | open | none |
-| `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | open | S050 |
-| A file in the golden set's directory that the manifest does not list is not noticed | S017 | open | S050 |
+| `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
+| A file in the golden set's directory that the manifest does not list is not noticed | S017 | closed by S050 (refused when the report is built and before `eval run` sends anything) | S050 |
 | Hungarian forms of names and identifiers in the screening | S047 | open | S032 |
 | The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | none |
-| `drafted_by` on a completion the filter withheld but the provider billed | S047 | open | S050 |
+| `drafted_by` on a completion the filter withheld but the provider billed | S047 | open; left by S050, with its reason there | none |
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | open | none |
 | `database_failure` without the claim's ID | S048 | open | none |
 | A per-phase httpx timeout | S048 | open | none |
@@ -321,6 +326,14 @@ that day; the rest stand as their step recorded them.
 | The trigger that confines the sweep's role runs, and returns at once, for every role's update of a claim or a run | S052 | open | none |
 | Migration numbers collide between parallel steps (S052 and S053 both wrote a 0013); the kind ledger was renamed by hand | S052 | open | none |
 | `test_scheduled_sweep_migration.py` and `test_sweep.py` are over the 800-line ceiling | S052 | open | none |
+| One loader for the two entry-point groups (`meridian.graphs`, `meridian.evaluations`), which copy each other's trust checks | S050 | open | none |
+| The evaluation's embeddings are simulated in every run, the recording run included: retrieval with a real embedding is not measured | S050 | open | none |
+| The LLM judge is not calibrated against people's labels, and a rationale that holds a word its screen knows is graded ungrounded without a call (T-79) | S050 | open | S032 |
+| Golden-set cases on the fraud indicators' boundaries and an unknown policy number | S003, S017 | open; not taken by S050 | none |
+| A view that shows the Evaluation Harness's edges (Containers leaves the harness out, Governance the Claims Triage App) | S017 | open; not taken by S050 | none |
+| T-45's read limit was measured once (1,024 output tokens in 10.1 s on 2026-10-03); S020 accepts that or repeats it before the gateway reaches Azure from a cluster | S050 | open | S020 |
+| The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | open | none |
+| On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | none |
 
 ## Part C — Step details
 
@@ -5535,6 +5548,240 @@ every refusal with a page, and no server span keeps a query string.
   claims open at the same time; a page for a 500 or 503 under
   `/claimant/`; a span processor added later; the status page's tie-break.
 
+### S050 — Live evaluation
+
+**Status:** done · **Started:** 2026-10-03 · **Finished:** 2026-10-04
+**Goal:** the golden set is answered by a real model, recorded once from
+Azure OpenAI and replayed through the Model Gateway on every change, with
+an LLM judge for groundedness, the cost and the tool calls of each run kept
+with the grades, and a way to run it against a deployed stack.
+**Decisions:**
+
+- A recorded model is a gateway mode, `recorded`, with a provider and a
+  deployment (`recorded-chat`) of its own, as replay is. It starts only in
+  the `test`, `ci` and `local` environments and is never a route candidate
+  (T-78). Rejected: answering from a recording inside the replay provider,
+  which would label a real model's answer `replay`, simulated.
+- An entry is found by the SHA-256 of the request the provider is given:
+  the messages after the gateway's redaction, the output budget and, since
+  S051, the response schema; never the tenant, the agent or the run. So a
+  changed prompt or schema finds no entry, the gateway answers 502 with a
+  fixed text that names `make eval-record`, the run fails and the
+  evaluation says how many requests have no recording and for which prompt
+  the file was made. The request itself is not stored.
+- The evaluation's stack has two gateways over one database. The first
+  stays in replay mode for the ingestion and the wording search; the second
+  answers chat, live when recording and from the file in CI, and is what the
+  runtime calls the model through (`build_stack`'s `runtime_http`, the seam
+  the scripted model already used). Embeddings are therefore simulated in
+  both runs, so the clauses found and each chat request are the same when
+  recording and when replaying, and the live spend is the chat calls only.
+  What a real embedding does to retrieval stays unmeasured. Rejected: live
+  embeddings in the recording run, which would make a replay depend on two
+  embedding models finding the same clauses.
+- `recorded-chat` carries the price of the deployment that answered
+  (`recorded_from`, checked by the registry), so the ledger of a recorded
+  run charges what the live run was charged and the `cost` grade means
+  something in CI. No budget of a running platform is touched: the mode
+  does not start on a cluster.
+- Latency is graded only in a live run (the ledger's `reserved_at` to
+  `closed_at` of the chat rows). In a recorded run the ledger times a file
+  read, so the report leaves the latency unset rather than print a number
+  that means nothing. Each recording entry keeps the live call's latency.
+- The judge is generic and lives in the platform
+  (`meridian.platform.evaluation.judge`): whether a statement is supported
+  by a source. The workload decides what the two are (the peril, the
+  description and the candidate clauses; the verdict and the rationale). It
+  calls the gateway over HTTP as the registry agent `evaluation-judge`, a
+  `job` with no tool, allowed only for the tenant `evaluation`. Its verdict
+  is the one grader `groundedness`, in neither the absolute graders nor a
+  target; the ten rule grades are computed without it (T-29, T-79). Any
+  answer but a strict `{"grounded": true, ...}` is the grade false.
+- `--live` in this step's row became `make eval-record`. The CLI imports
+  only platform packages, so it cannot build the in-process stack; the
+  recording run is a pytest run with the live environment, as
+  `make gateway-live` is.
+- `meridian eval run` is HTTP only. It finds a workload's submissions and
+  graders through an entry-point group, `meridian.evaluations`, as the
+  runtime finds a graph through `meridian.graphs`, so the platform still
+  imports no workload. It reads a proposal at
+  `GET /adjuster/claims/{id}/proposal`: under the adjuster's path, JSON of
+  what the adjuster's page already shows and nothing of the claimant, so
+  S021's staff sign-in will cover both and T-65 holds for `/claims` and
+  `/claimant` (T-80). Over HTTP there is no judge, no ledger and no tool
+  capture: it grades the ten rules.
+- Tool names and arguments are kept by the in-process run only, taken from
+  the calls themselves. The audit log and the spans still hold no argument
+  (T-03, T-25).
+- No results table in the Platform Database (S017 passed that on): the
+  reports and the recording live in Git, where a change is a reviewed diff,
+  and three other sessions were adding migrations.
+- The three backlog rows proposed for this step: `make eval-compare` now
+  refuses a report older than a tracked file it is made from, and
+  `golden_set_of` refuses a file the manifest does not list (both taken).
+  `drafted_by` on a completion the filter withheld but the provider billed
+  is left: it needs the gateway's 400 to name the deployment, a change to
+  the gateway's contract and the runtime's client that S051 was editing at
+  the same time; it stays in the backlog with no home.
+- The live spend was estimated before any call from the real prompts: 14
+  triage calls of about 530 input tokens each and at most 400 output
+  tokens, the same again for a variant prompt, 28 judge calls and one probe
+  at the output cap, at most about EUR 0.30 in all. Under the one euro the
+  owner set, so it was not asked.
+- Asked of the owner on 2026-10-04, the one question this step had: the
+  real model scores 38 of 40 on `recommendation` where the scripted model
+  scored 39, so which run does the gate compare against. Answer: the
+  recorded real model. The baseline is now that run, and the scripted run
+  stays in the suite as a test that the pipeline equals the oracle; it
+  writes no report any more.
+
+**Work log:**
+
+- Opened from `main` at 98f35ae, after S054 merged (pull request 42). Three
+  other sessions ran at the same time, and `main` was merged into the
+  branch three times: S051 (bf1e09c), S053 (8330012) and S052 (78ecd98).
+  Each took the next free threat ID first, so this step's three rows moved
+  from T-75 to T-77 up to T-78 to T-80, with every citation in 23 source
+  and test files; the step adds no migration.
+- The `feature-threat-model` skill first (three rows), then the advisor,
+  whose points shaped the design: the second gateway through
+  `runtime_http`, the baseline flipping to the recorded run, and a missing
+  recording that says what to run.
+- Eight contracts to `implementer`, in parallel where their paths were
+  apart:
+  - A1: the registry's `recorded` provider, `recorded-chat` with
+    `recorded_from`, the agent `evaluation-judge`;
+  - B: report format 2 (the judge's and the recording's fingerprints, each
+    case's tool calls and measurements), `meridian eval diff`, and the
+    golden-set file the manifest does not list;
+  - A2: the gateway's `recorded` mode, the recorded provider and the
+    recorder;
+  - C1: the judge;
+  - C2: the workload's graders, the evaluation run in pytest, `make
+    eval-record`, the stale-report check, the probe at the output cap;
+  - D: `meridian eval run`, the entry-point group and the proposal's read
+    path;
+  - E1: after S051 merged. Its check of `structured_outputs` did not look
+    at the `recorded` list, which did not exist when it was written, so
+    `make registry` passed while recorded mode would have refused every
+    triage call for want of a deployment that takes a schema. The check
+    now covers it, `recorded-chat` declares it, and the judge asks by
+    schema too;
+  - F: the reviewers' findings (below).
+- The `security-reviewer` found nothing critical or high. Three medium,
+  all fixed in F: `eval run` sent its requests before it verified the
+  golden set and put an unchecked claim ID into a path and a printed line
+  (an ID with `/../` would have steered the read elsewhere on the host);
+  the scan for identifiers read only the recording and not the reports
+  written beside it; and `eval run` said "passed" without looking at the
+  route target. Of its seven low ones F took the recorded model string's
+  pattern, the judge's own answer fields in its screen, the entry point's
+  location checked before it is loaded, a bound on a response body, and a
+  code span around every value the comparison prints.
+- The `platform-boundary-reviewer` blocked on what was still to come (the
+  recording, the baseline, the README) and on one sentence of this
+  section: "the platform still imports no workload" is true for the import
+  contracts and not for the process, since `eval run` loads the workload's
+  evaluation, and with it runtime code, through the entry point. The
+  sentence was corrected below, a test now starts a fresh interpreter and
+  fails if an agent framework module is loaded with the plugin, the JSON
+  file reader moved to `platform/common` so the gateway no longer imports
+  the evaluation package (a fifth import contract holds that), and
+  `recorded_from` also checks the data classes. Left for the backlog: one
+  loader for the two entry-point groups.
+- Correction to the decision above on `meridian eval run`: statically the
+  platform imports no workload; at run time the CLI's process executes the
+  workload's evaluation and what it imports. That is the seam's purpose,
+  as it is the runtime's with `meridian.graphs`.
+- Recorded live once with `make eval-record` on 2026-10-03 (the numbers
+  are under the result). The baseline, the comparison and `make eval`
+  were regenerated after the diff's format changed and again checked after
+  each merge of `main`; the recording answered every request after all
+  three.
+- The session's own hands: the three merges (scripts that keep both sides
+  and renumber only this step's IDs), the documents, and one test fix: on
+  a GitHub runner Typer colours its help and a colour code sits between
+  the dashes of an option's name, so `--base-url` was not found. The suite
+  run with `GITHUB_ACTIONS=true` found it before CI did.
+- The first full run of the suite lost 103 tests to "server closed the
+  connection unexpectedly" while the session ran the Structurizr containers
+  beside it; alone it was clean, twice. The backlog's row stands.
+- The implementers broke the no-heredoc rule again, in B, A1, A2, C2 and
+  F, each once or twice and each reported; A2 also changed a source file
+  with `sed` for a mutation check and restored it. C2 reported that
+  GateGuard never denied its first edit of a source file; the session's
+  own first edit was denied and answered.
+
+**Result / verification:** done when met, with one live recording:
+
+- Live, `gpt-4o` (2024-11-20) on the regional deployment in Sweden
+  Central, through the gateway on a laptop: route, reason, amount,
+  citations, indicators, documents and the exclusion's clause equal the
+  oracle on 40 of 40; both absolute graders 40 of 40; `recommendation` 38
+  of 40 (CLM-0012 is withheld by S047's screen; on CLM-0034 the model
+  answered `unsure`, which leaves the claim on its way to an adjuster with
+  no recommendation); the judge called all 13 rationales grounded. The
+  three automatic approvals S017 could not confirm (CLM-0011, CLM-0015,
+  CLM-0023) are confirmed.
+- Cost and latency from the ledger of that run: 14 claims ask the model,
+  0.8 to 2.1 s and at most 2,342 micro-EUR each (QA-07 allows 20,000),
+  EUR 0.029 for the 40. The whole recording, with the judge, a variant
+  prompt and the probe, cost about EUR 0.12 (27 calls and EUR 0.0514, 27
+  calls and EUR 0.0536, one call of 1,024 output tokens).
+- T-45, measured: a reply at the cap of 1,024 output tokens came back in
+  10.1 s, 101 tokens a second, half the 20 s read limit; the triage's own
+  answers were at most 62 tokens.
+- Two prompt versions, live, in `data/evaluation/prompt-comparison.md`: a
+  variant that asks the rationale to quote the claimant gives CLM-0034 a
+  recommendation whose rationale the judge calls ungrounded, and loses the
+  exclusion of CLM-0038 (five grades). The committed prompt stays.
+- `make eval`: `1 passed in 16.64s`, then `workload claims-triage, 40
+  cases, answered by recorded (real)`, `recommendation: 38/40 -> 38/40`,
+  every other grader `40/40 -> 40/40`, `eval compare: passed`.
+- The gate, negatively, with the session's own hands: one word of
+  `SYSTEM_MESSAGE` changed ("check" to "verify") and `make eval` exited 2
+  with "14 requests have no recording. It was recorded for prompt
+  cc8e3c33cbde and judge 0d63ecf60989; the tree has 3a819dc00b50 and
+  0d63ecf60989: run make eval-record"; changed back, `make eval` passed.
+- `GITHUB_ACTIONS=true make pytest-db` with three workers, on the tree
+  with all three merges: `7606 passed, 8 skipped, 7 warnings in 274.72s
+  (0:04:34)` (the skips are the opt-in live tests).
+- `make lint`: `Contracts: 5 kept, 0 broken.`; `make registry`: `registry
+  OK: 3 providers, 6 deployments, 6 tools, 3 agents, 3 tenants`, `schemas
+  OK`, `contracts OK`; `make test`: `OK`; `make docs`: `13 checks passed`;
+  `make check`: no ERROR line; `make mermaid-views`: no derived block
+  changed.
+- On kind (the cluster S052 had deployed to, not recreated), after S052
+  merged and `main` was merged in: `make deploy` and `make smoke` (15 PASS
+  lines), then `meridian eval run --base-url
+  http://claims.meridian.localhost:8088 --limit 5`: `ran 5, skipped 1
+  (already on the stack), failed 0`, `answered by replay (simulated)`,
+  `route: 5/5`, `human_oversight: 5/5`, `eval run: passed`. It ran
+  CLM-0001 and CLM-0003 to CLM-0006 and skipped CLM-0002, which the
+  cluster held as withdrawn. With the simulated model CLM-0001 loses its
+  exclusion (five field grades): the replay text is no answer to the
+  question. The new route answered
+  200 with `claim_id`, `state` and `proposal`, and 404 for an unknown
+  claim. Those five golden claims are now spent on kind; CLM-0001,
+  CLM-0004 and CLM-0006 wait for an adjuster there.
+- Not run: `make demo`; the rendered views (`make export`); `shfmt` on
+  the script (not installed; `shellcheck` passes); a second live
+  recording, so every live number is one run on one evening; anything
+  with a real embedding.
+
+**Follow-ups:**
+
+- The owner: read the diff under `data/evaluation/` (T-72's residual is
+  that review); decide whether S020 takes T-45's one measurement or
+  repeats it.
+- In Part B's backlog: one loader for the two entry-point groups; a real
+  embedding in the evaluation; the judge's calibration and its screen's
+  false flags; golden-set cases on the indicators' boundaries and an
+  unknown policy number, and a view that shows the harness's edges (both
+  from S017); what the recorded run adds to CI's python job; CLM-0034's
+  `unsure`. `drafted_by` on a withheld completion stays there, with no
+  home.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -5645,3 +5892,11 @@ every refusal with a page, and no server span keeps a query string.
   database role ends abandoned runs directly in the database. C-02 loses
   its "procedural closure": no claim is rejected without a person. The
   sweep's migration is 0014 and its threat T-77, because S053 merged first.
+- **v0.25, 2026-10-04:** S050 done. Its `--live` became `make
+  eval-record`: the CLI imports only platform packages and cannot build
+  the stack in process. By the owner, in S050: the evaluation gate
+  compares against the recorded real model's run (38 of 40 on
+  `recommendation`), not the scripted one. Its threats are T-78 to T-80,
+  because S051, S053 and S052 merged first, and it adds no migration.
+  Three backlog rows it was offered: two closed, `drafted_by` on a
+  withheld completion left with no home.

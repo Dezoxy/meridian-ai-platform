@@ -6,30 +6,39 @@ opaque id; the workload decides what each one means. The file is canonical
 """
 
 import json
+import math
 import os
-import re
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import (
     Field,
+    JsonValue,
     StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
     StringConstraints,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
+from meridian.platform.common import jsonfile
+from meridian.platform.common.jsonfile import (
+    MAX_JSON_FILE_BYTES,
+    HexDigest,
+    JsonFileError,
+    describe_validation_error,
+)
 from meridian.platform.common.wire import WireModel
 
-REPORT_FORMAT = 1
-MAX_REPORT_BYTES = 5 * 1024 * 1024  # a report is a few KiB; this refuses a mistake
-MAX_REPORTED_ERRORS = 5
-MAX_LOC_PART_CHARS = 40
-SAFE_LOC_PART = re.compile(r"[A-Za-z0-9_]+")
+REPORT_FORMAT = 2
+# The size limit of every JSON file read here lives in common.jsonfile; this is
+# its value, for the importers that name it (a test that moves the limit moves
+# it there).
+MAX_REPORT_BYTES = MAX_JSON_FILE_BYTES
 
 GraderName = Annotated[
     str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)
@@ -37,13 +46,12 @@ GraderName = Annotated[
 CaseId = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", max_length=64)
 ]
-HexDigest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 WorkloadName = Annotated[
     str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=64)
 ]
 
 
-class ReportError(ValueError):
+class ReportError(JsonFileError):
     """A report or manifest cannot be read; the message never quotes its content."""
 
 
@@ -55,11 +63,11 @@ class AnsweredBy(WireModel):
 
     @model_validator(mode="after")
     def _label_matches_the_kind(self) -> "AnsweredBy":
-        # A recorded run may be real later; the other three are fixed.
+        # A recorded run replays a real model's answers; the label is fixed.
         if self.kind in ("scripted", "replay") and self.label != "simulated":
             raise ValueError("a scripted or replay run is labelled simulated")
-        if self.kind == "live" and self.label != "real":
-            raise ValueError("a live run is labelled real")
+        if self.kind in ("recorded", "live") and self.label != "real":
+            raise ValueError(f"a {self.kind} run is labelled real")
         return self
 
 
@@ -76,13 +84,64 @@ class Fingerprints(WireModel):
     prompt: HexDigest
     tools: HexDigest
     golden_set: GoldenSet
+    judge: HexDigest | None = None  # the judge's prompt, when a judge grades
+    recording: HexDigest | None = None  # the recording file's bytes, when replayed
+
+
+Count = Annotated[StrictInt, Field(ge=0)]
+
+
+def _has_a_number_that_is_not_finite(value: JsonValue) -> bool:
+    """Whether ``NaN`` or an infinity is anywhere in ``value``, at any depth.
+    Iterative: the depth is the caller's."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, float) and not math.isfinite(item):
+            return True
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
+
+
+class ToolCall(WireModel):
+    """A call the agent made, as the workload logged it."""
+
+    tool: GraderName
+    arguments: dict[str, JsonValue]
+
+    @field_validator("arguments")
+    @classmethod
+    def _arguments_are_finite(
+        cls, arguments: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        # json.dumps writes NaN and Infinity, which are not JSON: refuse them
+        # here so that dump_report can only write standard JSON.
+        if _has_a_number_that_is_not_finite(arguments):
+            raise ValueError("an argument is not a finite number")
+        return arguments
+
+
+class Measured(WireModel):
+    """What one case's run cost."""
+
+    model_calls: Count
+    input_tokens: Count
+    output_tokens: Count
+    cost_micro_eur: Count
+    latency_ms: Count | None = None
 
 
 class Case(WireModel):
     case: CaseId
     grades: Annotated[dict[GraderName, StrictBool], Field(min_length=1)]
-    # What the workload saw, for a human reading a diff. Never compared.
+    # What the workload saw, for a human reading a diff. Never compared; nor are
+    # the tool calls and the measures.
     observed: dict[GraderName, StrictStr | StrictInt | None]
+    tools: tuple[ToolCall, ...] | None = None
+    measured: Measured | None = None
 
 
 class Report(WireModel):
@@ -114,6 +173,10 @@ class Report(WireModel):
             raise ValueError("absolute names a grader no case grades")
         if not set(self.targets) <= graders:
             raise ValueError("targets names a grader no case grades")
+        if len({case.tools is None for case in self.cases}) > 1:
+            raise ValueError("either every case has tools or none does")
+        if len({case.measured is None for case in self.cases}) > 1:
+            raise ValueError("either every case has measured or none does")
         return self
 
 
@@ -149,86 +212,29 @@ def write_report(report: Report, path: Path) -> None:
         raise
 
 
-def _loc_part(part: str | int) -> str:
-    """One step of an error's location. A dict key or an extra field's name is
-    the file's own text, so only a plain identifier is shown; an index stays."""
-    if isinstance(part, int):
-        return str(part)
-    if len(part) > MAX_LOC_PART_CHARS or not SAFE_LOC_PART.fullmatch(part):
-        return "?"
-    return part
-
-
-def describe_validation_error(error: ValidationError) -> str:
-    """Field paths and error kinds only: Pydantic's text quotes the input, and
-    a path can carry the file's own keys, so every part goes through
-    ``_loc_part``."""
-    problems = []
-    for item in error.errors(include_input=False, include_url=False)[
-        :MAX_REPORTED_ERRORS
-    ]:
-        path = ".".join(_loc_part(part) for part in item["loc"])
-        kind = item["type"]
-        if kind == "value_error":
-            # Only this package's validators raise it, with a fixed sentence.
-            kind = item["msg"].removeprefix("Value error, ")
-        problems.append(f"{path or 'file'}: {kind}")
-    hidden = error.error_count() - len(problems)
-    if hidden > 0:
-        problems.append(f"and {hidden} more")
-    return "; ".join(problems)
-
-
 def read_text_file(path: Path) -> str:
-    """Read a small UTF-8 file; raise ``ReportError`` without quoting it.
-
-    Only a regular file is opened (a named pipe or a directory is refused, not
-    read), and the read stops one byte past the limit, whatever the size the
-    file system reported.
-    """
+    """``jsonfile.read_text_file``, raising ``ReportError``."""
     try:
-        if not path.is_file():
-            raise ReportError(
-                "not a regular file" if path.exists() else "file not found"
-            )
-        with path.open("rb") as stream:
-            data = stream.read(MAX_REPORT_BYTES + 1)
-    except OSError as exc:
-        raise ReportError(f"cannot read the file ({type(exc).__name__})") from None
-    if len(data) > MAX_REPORT_BYTES:
-        raise ReportError(f"file too large (limit {MAX_REPORT_BYTES} bytes)")
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ReportError("file is not valid UTF-8") from None
-
-
-def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """``json.loads`` keeps the last of two equal keys silently; refuse both,
-    and never name the key: it is the file's own text."""
-    keys = [key for key, _ in pairs]
-    if len(set(keys)) != len(keys):
-        raise ReportError("duplicate key")
-    return dict(pairs)
+        return jsonfile.read_text_file(path)
+    except JsonFileError as exc:
+        raise ReportError(str(exc)) from None
 
 
 def parse_json(text: str) -> Any:
-    """Parse JSON text with no duplicate key at any depth; raise ``ReportError``
-    without quoting the text."""
+    """``jsonfile.parse_json``, raising ``ReportError``."""
     try:
-        return json.loads(text, object_pairs_hook=_no_duplicates)
-    except ReportError:
-        raise
-    except RecursionError:
-        raise ReportError("the JSON is nested too deeply") from None
-    except ValueError:  # a syntax error, or an integer too long to convert
-        raise ReportError("the file is not valid JSON") from None
+        return jsonfile.parse_json(text)
+    except JsonFileError as exc:
+        raise ReportError(str(exc)) from None
 
 
 def read_json_file(path: Path) -> Any:
-    """Read a small JSON file: bounded, UTF-8, no duplicate key, and errors that
-    never quote the file. Every JSON file the evaluation reads goes through it."""
-    return parse_json(read_text_file(path))
+    """``jsonfile.read_json_file``, raising ``ReportError``. Every JSON file the
+    evaluation reads goes through it."""
+    try:
+        return jsonfile.read_json_file(path)
+    except JsonFileError as exc:
+        raise ReportError(str(exc)) from None
 
 
 def load_report(path: Path) -> Report:

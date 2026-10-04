@@ -135,6 +135,7 @@ def _build_registry(files: dict[str, Any]) -> Registry:
         data_classes=files["policies"].data_classes,
         routes=files["policies"].routes,
         replay=files["policies"].replay,
+        recorded=files["policies"].recorded,
         tenants=files["tenants"].tenants,
         exchange=files["tenants"].exchange,
     )

@@ -10,25 +10,46 @@ from typing import Any
 
 import pytest
 from servicesupport import REGISTRY_DIR, REPO_ROOT
+from stacksupport import whole_wording
 
 from meridian.platform.evaluation.fingerprints import golden_set_of, tools_fingerprint
-from meridian.platform.evaluation.report import AnsweredBy, Report, ReportError
+from meridian.platform.evaluation.judge import Judgement
+from meridian.platform.evaluation.report import (
+    AnsweredBy,
+    Measured,
+    Report,
+    ReportError,
+    ToolCall,
+)
+from meridian.platform.guardrails import addresses_the_model
 from meridian.platform.registry import load_registry
 from meridian.workloads.claims_triage.evaluation import (
     ABSOLUTE,
+    COST,
     GRADERS,
+    GROUNDEDNESS,
+    LATENCY,
+    MAX_COST_MICRO_EUR_PER_CLAIM,
+    MAX_MODEL_LATENCY_MS_PER_CLAIM,
+    RULE_GRADERS,
     TARGETS,
     WORKLOAD,
     build_report,
     grade,
+    judge_inputs,
 )
 from meridian.workloads.claims_triage.proposal import TriageProposal
+from meridian.workloads.claims_triage.wording import select_terms
 
 SYNTHETIC = REPO_ROOT / "data" / "synthetic"
 MANIFEST = SYNTHETIC / "manifest.json"
 LIMIT = json.loads(MANIFEST.read_text(encoding="utf-8"))["auto_approval_limit"]
 PROMPT = "ab" * 32
+JUDGE_PROMPT = "cd" * 32
+RECORDING = "ef" * 32
 SCRIPTED = AnsweredBy(kind="scripted", label="simulated")
+RECORDED = AnsweredBy(kind="recorded", label="real")
+LIVE = AnsweredBy(kind="live", label="real")
 DRAFTED_BY = {
     "deployment": "replay-chat",
     "provider": "replay",
@@ -129,7 +150,7 @@ def test_the_golden_set_has_the_claims_these_tests_need() -> None:
 def test_a_proposal_equal_to_the_oracle_passes_all_ten_graders(claim_id: str) -> None:
     grades = graded(claim_id, oracle(claim_id))
 
-    assert tuple(grades) == GRADERS
+    assert tuple(grades) == RULE_GRADERS
     assert len(grades) == 10
     assert all(grades.values()), claim_id
 
@@ -164,7 +185,7 @@ def test_a_citation_with_another_wording_version_fails_the_citations_grader() ->
 def test_no_proposal_fails_every_grader_and_observes_only_nulls() -> None:
     case = grade(None, EXPECTED[AUTO], policy_of(AUTO), LIMIT)
 
-    assert tuple(case.grades) == GRADERS
+    assert tuple(case.grades) == RULE_GRADERS
     assert not any(case.grades.values())
     assert case.case == AUTO
     assert set(case.observed.values()) == {None}
@@ -278,7 +299,11 @@ def test_the_report_has_one_sorted_case_per_claim_and_the_real_golden_set() -> N
     assert ids == sorted(EXPECTED)
     assert all(all(case.grades.values()) for case in report.cases)
     assert report.workload == WORKLOAD == "claims-triage"
-    assert report.format == 1
+    assert report.format == 2
+    assert tuple(report.cases[0].grades) == RULE_GRADERS
+    assert all(case.tools is None and case.measured is None for case in report.cases)
+    assert report.fingerprints.judge is None
+    assert report.fingerprints.recording is None
     assert report.absolute == ABSOLUTE
     assert report.targets == TARGETS
     assert report.answered_by == SCRIPTED
@@ -336,3 +361,337 @@ def test_a_manifest_whose_limit_is_not_an_integer_is_refused(
 
     with pytest.raises(ReportError, match="auto_approval_limit"):
         report_for({}, manifest_path=path)
+
+
+# ── the judged, measured report (S050) ──────────────────────────────────────
+RATIONALE = "The description states a fact the clause excludes."
+OUTCOMES = ("grounded", "ungrounded", "flagged", "too-long", "unanswered", "unreadable")
+GROUNDED = Judgement("grounded", "The facts are in the source.")
+UNGROUNDED = Judgement("ungrounded", "The source states no such fact.")
+
+
+def measure(**changes: Any) -> Measured:
+    values: dict[str, Any] = {
+        "model_calls": 1,
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cost_micro_eur": 1_000,
+        "latency_ms": None,
+    } | changes
+    return Measured.model_validate(values)
+
+
+def with_rationale(claim_id: str, rationale: str | None = RATIONALE) -> TriageProposal:
+    return oracle(claim_id).model_copy(update={"rationale": rationale})
+
+
+def judged_report(
+    proposals: dict[str, TriageProposal | None],
+    *,
+    judgements: dict[str, Judgement] | None = None,
+    measures: dict[str, Measured] | None = None,
+    answered_by: AnsweredBy = RECORDED,
+    **overrides: Any,
+) -> Report:
+    """A measured report; every claim is measured as ``measure()`` says unless
+    ``measures`` names it."""
+    everyone = {claim_id: measure() for claim_id in EXPECTED} | (measures or {})
+    arguments: dict[str, Any] = {
+        "judgements": judgements or {},
+        "measured": everyone,
+        "tools": {claim_id: () for claim_id in EXPECTED},
+        "judge_fingerprint": JUDGE_PROMPT,
+        "recording_fingerprint": RECORDING,
+        "answered_by": answered_by,
+    } | overrides
+    return report_for(proposals, **arguments)
+
+
+def oracle_proposals() -> dict[str, TriageProposal | None]:
+    return {claim_id: oracle(claim_id) for claim_id in EXPECTED}
+
+
+def case_of(report: Report, claim_id: str):
+    (case,) = [c for c in report.cases if c.case == claim_id]
+    return case
+
+
+def test_the_graders_are_the_ten_rule_graders_then_groundedness_and_cost() -> None:
+    assert (*RULE_GRADERS, GROUNDEDNESS, COST) == GRADERS
+    assert (GROUNDEDNESS, COST, LATENCY) == ("groundedness", "cost", "latency")
+    assert LATENCY not in GRADERS
+    # T-79: the judge's grader is in neither list.
+    assert GROUNDEDNESS not in ABSOLUTE
+    assert GROUNDEDNESS not in TARGETS
+    assert COST not in ABSOLUTE
+    assert COST not in TARGETS
+
+
+def test_a_measured_report_grades_twelve_graders_with_tools_and_measures() -> None:
+    tools = {
+        claim_id: (ToolCall(tool="policy_lookup", arguments={"n": 1}),)
+        for claim_id in EXPECTED
+    }
+
+    report = judged_report(oracle_proposals(), tools=tools)
+
+    assert report.format == 2
+    assert tuple(report.cases[0].grades) == GRADERS
+    assert report.fingerprints.judge == JUDGE_PROMPT
+    assert report.fingerprints.recording == RECORDING
+    assert all(case.measured == measure() for case in report.cases)
+    assert all(case.tools == tools[case.case] for case in report.cases)
+    assert report.absolute == ABSOLUTE
+    assert report.targets == TARGETS
+    assert Report.model_validate(report.model_dump(mode="json")) == report
+
+
+# ── groundedness ────────────────────────────────────────────────────────────
+def test_a_proposal_with_no_rationale_has_nothing_to_ground_and_passes() -> None:
+    report = judged_report(oracle_proposals())
+
+    case = case_of(report, AUTO)
+    assert case.grades[GROUNDEDNESS]
+    assert case.observed["rationale"] is None
+    assert case.observed["groundedness"] == "no-rationale"
+    assert case.observed["judge_reason"] is None
+
+
+def test_a_rationale_the_judge_found_grounded_passes() -> None:
+    proposals = oracle_proposals() | {AUTO: with_rationale(AUTO)}
+
+    report = judged_report(proposals, judgements={AUTO: GROUNDED})
+
+    case = case_of(report, AUTO)
+    assert case.grades[GROUNDEDNESS]
+    assert case.observed["rationale"] == RATIONALE
+    assert case.observed["groundedness"] == "grounded"
+    assert case.observed["judge_reason"] == GROUNDED.reason
+
+
+def test_a_rationale_the_judge_found_ungrounded_fails() -> None:
+    proposals = oracle_proposals() | {AUTO: with_rationale(AUTO)}
+
+    report = judged_report(proposals, judgements={AUTO: UNGROUNDED})
+
+    case = case_of(report, AUTO)
+    assert not case.grades[GROUNDEDNESS]
+    assert case.observed["groundedness"] == "ungrounded"
+    assert case.observed["judge_reason"] == UNGROUNDED.reason
+
+
+def test_a_rationale_with_no_judgement_fails() -> None:
+    proposals = oracle_proposals() | {AUTO: with_rationale(AUTO)}
+
+    report = judged_report(proposals, judgements={})
+
+    case = case_of(report, AUTO)
+    assert not case.grades[GROUNDEDNESS]
+    assert case.observed["groundedness"] == "unjudged"
+    assert case.observed["judge_reason"] is None
+
+
+@pytest.mark.parametrize("outcome", [o for o in OUTCOMES if o != "grounded"])
+def test_every_outcome_but_grounded_fails(outcome: str) -> None:
+    proposals = oracle_proposals() | {AUTO: with_rationale(AUTO)}
+
+    report = judged_report(proposals, judgements={AUTO: Judgement(outcome)})  # type: ignore[arg-type]
+
+    assert not case_of(report, AUTO).grades[GROUNDEDNESS]
+    assert case_of(report, AUTO).observed["groundedness"] == outcome
+
+
+@pytest.mark.parametrize("outcome", OUTCOMES)
+def test_a_judgement_never_changes_one_of_the_ten_rule_grades(outcome: str) -> None:
+    proposals = oracle_proposals() | {
+        AUTO: with_rationale(AUTO),
+        EXCLUDED: with_rationale(EXCLUDED).model_copy(update={"route": "adjuster"}),
+    }
+    judgement = Judgement(outcome, "A reason.")  # type: ignore[arg-type]
+
+    judged = judged_report(proposals, judgements={AUTO: judgement, EXCLUDED: judgement})
+    unjudged = judged_report(proposals, judgements={})
+
+    for claim_id in EXPECTED:
+        wanted = grade(
+            proposals[claim_id], EXPECTED[claim_id], policy_of(claim_id), LIMIT
+        ).grades
+        for report in (judged, unjudged):
+            got = case_of(report, claim_id).grades
+            assert {name: got[name] for name in RULE_GRADERS} == wanted, claim_id
+
+
+# ── cost and latency ────────────────────────────────────────────────────────
+def test_the_limits_are_qa_07_and_qa_01() -> None:
+    assert MAX_COST_MICRO_EUR_PER_CLAIM == 20_000
+    assert MAX_MODEL_LATENCY_MS_PER_CLAIM == 30_000
+
+
+@pytest.mark.parametrize(
+    ("cost", "passes"),
+    [(0, True), (MAX_COST_MICRO_EUR_PER_CLAIM, True), (20_001, False)],
+)
+def test_a_case_costs_at_most_two_cents(cost: int, passes: bool) -> None:
+    report = judged_report(
+        oracle_proposals(), measures={AUTO: measure(cost_micro_eur=cost)}
+    )
+
+    assert case_of(report, AUTO).grades[COST] is passes
+    assert case_of(report, EXCLUDED).grades[COST]
+
+
+@pytest.mark.parametrize(
+    ("latency", "passes"), [(0, True), (30_000, True), (30_001, False)]
+)
+def test_a_live_case_answers_within_thirty_seconds(latency: int, passes: bool) -> None:
+    report = judged_report(
+        oracle_proposals(),
+        answered_by=LIVE,
+        measures={AUTO: measure(latency_ms=latency)},
+        recording_fingerprint=None,
+    )
+
+    assert tuple(report.cases[0].grades) == (*GRADERS, LATENCY)
+    assert case_of(report, AUTO).grades[LATENCY] is passes
+
+
+def test_a_live_run_with_no_latency_fails_the_latency_grader() -> None:
+    report = judged_report(
+        oracle_proposals(), answered_by=LIVE, recording_fingerprint=None
+    )
+
+    assert not any(case.grades[LATENCY] for case in report.cases)
+
+
+def test_a_recorded_report_has_no_latency_grader() -> None:
+    report = judged_report(oracle_proposals())
+
+    assert all(LATENCY not in case.grades for case in report.cases)
+
+
+# ── a claim with no proposal, and the optional parts ────────────────────────
+def test_a_claim_with_no_proposal_fails_every_grader_of_a_measured_report() -> None:
+    proposals = oracle_proposals() | {AUTO: None}
+
+    report = judged_report(proposals, answered_by=LIVE, recording_fingerprint=None)
+
+    case = case_of(report, AUTO)
+    assert tuple(case.grades) == (*GRADERS, LATENCY)
+    assert not any(case.grades.values())
+    assert case.observed["rationale"] is None
+    assert case.observed["groundedness"] is None
+    assert case_of(report, EXCLUDED).grades[COST]
+
+
+def test_a_claim_the_maps_do_not_name_is_measured_as_nothing_ran() -> None:
+    proposals = oracle_proposals() | {AUTO: None}
+    report = report_for(
+        proposals,
+        judgements={},
+        measured={c: measure() for c in EXPECTED if c != AUTO},
+        tools={c: () for c in EXPECTED if c != AUTO},
+        judge_fingerprint=JUDGE_PROMPT,
+    )
+
+    case = case_of(report, AUTO)
+    assert case.measured == Measured(
+        model_calls=0, input_tokens=0, output_tokens=0, cost_micro_eur=0
+    )
+    assert case.tools == ()
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        ("judgements",),
+        ("measured",),
+        ("tools",),
+        ("judgements", "measured"),
+        ("judgements", "tools"),
+        ("measured", "tools"),
+    ],
+)
+def test_some_of_the_judgements_measures_and_tools_without_the_rest_is_refused(
+    given: tuple[str, ...],
+) -> None:
+    arguments = {name: {} for name in given}
+
+    with pytest.raises(ValueError, match="together"):
+        report_for(oracle_proposals(), **arguments)
+
+
+@pytest.mark.parametrize("name", ["judge_fingerprint", "recording_fingerprint"])
+def test_a_fingerprint_without_a_judged_run_is_refused(name: str) -> None:
+    with pytest.raises(ValueError, match="fingerprint"):
+        report_for(oracle_proposals(), **{name: JUDGE_PROMPT})
+
+
+# ── what the judge is shown ─────────────────────────────────────────────────
+def candidates_of(claim_id: str):
+    claim, policy = CLAIMS[claim_id], policy_of(claim_id)
+    terms = select_terms(
+        claim["peril"],
+        whole_wording(policy["product"]),
+        product=policy["product"],
+        wording_version=policy["wording_version"],
+    )
+    return terms.candidates
+
+
+def test_the_judge_is_shown_the_claim_the_clauses_and_one_statement() -> None:
+    claim_id = EXCLUDED
+    proposal = with_rationale(claim_id).model_copy(update={"exclusion_clause": "3.2"})
+    candidates = candidates_of(claim_id)
+
+    shown = judge_inputs(CLAIMS[claim_id], proposal, candidates)
+
+    assert shown is not None
+    source, statement = shown
+    assert source["peril"] == CLAIMS[claim_id]["peril"]
+    assert source["description"] == CLAIMS[claim_id]["description"]
+    assert source["clauses"] == [
+        {"number": c.clause, "title": c.title, "text": c.body} for c in candidates
+    ]
+    assert set(source) == {"peril", "description", "clauses"}
+    assert RATIONALE in statement
+    assert "3.2" in statement
+    assert "applies" in statement
+
+
+def test_the_statement_of_no_exclusion_names_no_clause() -> None:
+    proposal = with_rationale(AUTO).model_copy(
+        update={"assessment": "none_applies", "exclusion_clause": None}
+    )
+
+    shown = judge_inputs(CLAIMS[AUTO], proposal, ())
+
+    assert shown is not None
+    assert shown.source["clauses"] == []
+    assert RATIONALE in shown.statement
+    assert "no exclusion" in shown.statement.lower()
+
+
+def test_a_proposal_with_no_rationale_gives_the_judge_nothing_to_judge() -> None:
+    assert judge_inputs(CLAIMS[AUTO], with_rationale(AUTO, None), ()) is None
+
+
+@pytest.mark.parametrize("claim_id", sorted(EXPECTED))
+def test_the_judge_is_shown_no_claimant_name_email_policy_number_or_claim_id(
+    claim_id: str,
+) -> None:
+    claim = CLAIMS[claim_id]
+    proposal = with_rationale(claim_id)
+
+    shown = judge_inputs(claim, proposal, candidates_of(claim_id))
+
+    assert shown is not None
+    # The judge refuses a statement that addresses the model: ours must not.
+    assert not addresses_the_model(shown.statement), claim_id
+    text = json.dumps([shown.source, shown.statement], ensure_ascii=False)
+    for secret in (
+        claim["claimant"]["name"],
+        claim["claimant"]["email"],
+        claim["policy_number"],
+        claim_id,
+    ):
+        assert secret not in text, claim_id

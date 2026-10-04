@@ -347,7 +347,7 @@ def test_a_mode_the_runtime_does_not_know_is_no_usable_answer() -> None:
     assert caught.value.status_code == 0
 
 
-@pytest.mark.parametrize("mode", ["replay", "live"])
+@pytest.mark.parametrize("mode", ["replay", "recorded", "live"])
 def test_what_the_gateway_answers_is_what_the_runtime_parses(mode: str) -> None:
     # The runtime keeps its own copy of the contract; this is the one place
     # the two sides meet, so a renamed field fails here and not in a demo.

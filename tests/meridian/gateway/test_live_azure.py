@@ -21,11 +21,17 @@ triage's own call (``assess``, through the runtime's ``ModelClient``) asks its
 question about one synthetic description by schema, and ``read_answer`` reads
 the answer as strictly as it reads any. They print the keys, the verdict's
 status and the clause number, which is one of the two sent; never the rationale.
+
+The sixth caps a long answer at 1024 tokens as the tenant ``development`` (T-45)
+and prints the status, the finish reason, the output tokens and the speed;
+``make eval-record`` runs it with the evaluation's recording.
 """
 
 import json
 import os
+import time
 import uuid
+from http import HTTPStatus
 
 import pytest
 from dbsupport import DatabaseHandle
@@ -239,6 +245,68 @@ def test_with_the_first_candidate_down_the_second_deployment_answers(
     (chat,) = [s for s in exporter.get_finished_spans() if s.name == "gateway.chat"]
     assert chat.attributes["meridian.attempts"] == 2
     assert PROMPT not in str(failed) + str(completed)
+
+
+LONG_PROMPT = (
+    "Write a story of about 900 words about an invented storm over an imaginary "
+    "harbour town, in plain prose, with no lists and no headings."
+)
+LONG_OUTPUT_TOKENS = 1024
+NOT_AVAILABLE = "n/a"
+
+
+def test_an_answer_capped_at_1024_tokens_ends_inside_the_read_limit(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """T-45: the gateway's read limit against the output cap. A synthetic prompt
+    asks for about 900 words under ``max_output_tokens=1024`` as the tenant
+    ``development``; the call must end with an answer (200) or the gateway's own
+    timeout (504), never a hang or another status. The output is the status, the
+    finish reason, the output tokens, the seconds the call took and the tokens
+    per second, and nothing else."""
+    settings = GatewaySettings.from_env(
+        {
+            MODE_ENV: "live",
+            ENVIRONMENT_ENV: "local",
+            DATABASE_URL_ENV: fresh_database.dsn("model_gateway"),
+            REGISTRY_DIR_ENV: str(REGISTRY_DIR),
+            CREDENTIAL_ENV: "azure-cli",
+            ENDPOINTS_ENV: os.environ[ENDPOINTS_ENV],
+            TENANT_ID_ENV: os.environ[TENANT_ID_ENV],
+        }
+    )
+    client = TestClient(
+        create_app(
+            settings,
+            tracer_provider=make_tracer_provider("gw", InMemorySpanExporter()),
+        )
+    )
+    headers = {
+        "X-Meridian-Tenant": "development",
+        "X-Meridian-Agent": "claims-triage",
+        "X-Meridian-Run": str(uuid.uuid4()),
+    }
+    body = {
+        "messages": [{"role": "user", "content": LONG_PROMPT}],
+        "max_output_tokens": LONG_OUTPUT_TOKENS,
+    }
+
+    started = time.monotonic()
+    response = client.post("/v1/chat", json=body, headers=headers)
+    seconds = time.monotonic() - started
+
+    finish, tokens, rate = NOT_AVAILABLE, NOT_AVAILABLE, NOT_AVAILABLE
+    if response.status_code == HTTPStatus.OK:
+        reply = response.json()
+        finish = reply["output"]["finish_reason"]
+        tokens = reply["usage"]["output_tokens"]
+        rate = f"{tokens / seconds:.1f}"
+    print(f"\nstatus:        {response.status_code}")
+    print(f"finish reason: {finish}")
+    print(f"output tokens: {tokens}")
+    print(f"seconds:       {seconds:.1f}")
+    print(f"tokens/second: {rate}")
+    assert response.status_code in (HTTPStatus.OK, HTTPStatus.GATEWAY_TIMEOUT)
 
 
 def test_synthetic_texts_are_embedded_by_the_routed_deployment_and_audited(

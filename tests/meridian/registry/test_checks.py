@@ -1038,12 +1038,12 @@ def test_an_agent_without_a_kind_is_a_graph_agent(real_registry: Path) -> None:
     assert "kind:" not in (real_registry / "agents.yaml").read_text().split("- id:")[1]
 
 
-def test_the_real_registry_has_exactly_one_job_agent(real_registry: Path) -> None:
+def test_the_real_registry_has_exactly_two_job_agents(real_registry: Path) -> None:
     registry = load_registry(real_registry)
 
     jobs = [agent.id for agent in registry.agents if agent.kind == "job"]
 
-    assert jobs == ["knowledge-ingestion"]
+    assert jobs == ["knowledge-ingestion", "evaluation-judge"]
 
 
 def test_an_unknown_agent_kind_is_a_load_error(

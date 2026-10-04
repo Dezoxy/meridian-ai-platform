@@ -19,7 +19,7 @@ ResidencyLabel = Literal["eu-region", "eu-zone", "global"]
 DataClass = Literal["synthetic", "internal", "personal", "special"]
 Purpose = Literal["chat", "embedding"]
 Sku = Literal["Standard", "DataZoneStandard", "GlobalStandard"]
-ProviderKind = Literal["azure-openai", "replay"]
+ProviderKind = Literal["azure-openai", "replay", "recorded"]
 ToolEffect = Literal["read", "write", "decision"]
 AgentKind = Literal["graph", "job"]
 
@@ -83,8 +83,8 @@ class Deployment(RegistryModel):
     purpose: Purpose
     model: NonEmptyStr
     version: NonEmptyStr
-    # Optional in the schema because a replay deployment has none of these;
-    # checks.py requires them for provider kind azure-openai.
+    # Optional in the schema because a replay or recorded deployment has none of
+    # these; checks.py requires them for provider kind azure-openai.
     deployment_name: NonEmptyStr | None = None
     sku: Sku | None = None
     region: Region | None = None
@@ -100,6 +100,10 @@ class Deployment(RegistryModel):
     # provider and checked on every answer (T-54); checks.py requires it for
     # purpose embedding and refuses it for chat.
     dimensions: Annotated[int, Field(ge=1, le=MAX_EMBEDDING_DIMENSIONS)] | None = None
+    # The live deployment whose answers a recorded deployment replays (S050);
+    # checks.py requires it for provider kind recorded, refuses it elsewhere and
+    # holds the price equal to that deployment's.
+    recorded_from: EntityId | None = None
     # The deployment honours a JSON schema for the answer (Azure OpenAI's
     # structured outputs); checks.py refuses it for purpose embedding. A replay
     # deployment accepts a schema and ignores it (simulated).
@@ -166,7 +170,8 @@ class Route(RegistryModel):
 
 
 class ReplayRoute(RegistryModel):
-    """The deployment the gateway uses for a purpose in replay mode."""
+    """The deployment the gateway uses for a purpose in replay mode (and, for
+    the ``recorded`` list, in recorded mode)."""
 
     purpose: Purpose
     deployment: EntityId
@@ -176,6 +181,8 @@ class PoliciesFile(RegistryModel):
     data_classes: tuple[DataClassPolicy, ...]
     routes: tuple[Route, ...]
     replay: tuple[ReplayRoute, ...]
+    # Unlike replay it need not cover every purpose.
+    recorded: tuple[ReplayRoute, ...] = ()
 
 
 class TenantLimits(RegistryModel):
@@ -233,6 +240,7 @@ class Registry(RegistryModel):
     data_classes: tuple[DataClassPolicy, ...]
     routes: tuple[Route, ...]
     replay: tuple[ReplayRoute, ...]
+    recorded: tuple[ReplayRoute, ...] = ()
     tenants: tuple[Tenant, ...]
     exchange: ExchangeRate
 
@@ -256,6 +264,10 @@ class Registry(RegistryModel):
 
     def replay_deployment(self, purpose: str) -> Deployment | None:
         entry = next((r for r in self.replay if r.purpose == purpose), None)
+        return None if entry is None else self.deployment(entry.deployment)
+
+    def recorded_deployment(self, purpose: str) -> Deployment | None:
+        entry = next((r for r in self.recorded if r.purpose == purpose), None)
         return None if entry is None else self.deployment(entry.deployment)
 
     def tenant(self, tenant_id: str) -> Tenant | None:

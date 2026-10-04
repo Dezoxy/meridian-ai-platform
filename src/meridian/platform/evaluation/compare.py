@@ -56,6 +56,10 @@ def _fingerprint_problems(baseline: Report, new: Report) -> list[str]:
         problems.append(f"the tools' contracts changed: {REGENERATE}")
     if before.golden_set != after.golden_set:
         problems.append(f"the golden set changed: {REGENERATE}")
+    if before.judge != after.judge:
+        problems.append(f"the judge's prompt changed: {REGENERATE}")
+    if before.recording != after.recording:
+        problems.append(f"the recording changed: {REGENERATE}")
     return problems
 
 
