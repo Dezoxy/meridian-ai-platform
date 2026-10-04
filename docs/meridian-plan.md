@@ -6998,7 +6998,7 @@ so only for the bare command, and alerts on missing data with a network
 policy for `observability`.
 
 ### S055 — Service-to-service identity
-**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
 **Goal:** on kind, each service proves which service it is to the one it
 calls, and the Agent Runtime, the Model Gateway and the tool servers refuse
 a call with no identity or from a service the registry does not map.
@@ -7006,24 +7006,144 @@ a call with no identity or from a service the registry does not map.
 **Decisions:**
 
 - **The mechanism, by the owner (2026-10-04): mutual TLS, with
-  certificates from cert-manager.** The session laid out four options:
-  ServiceAccount tokens checked by the callee (nothing to install, proves
-  the caller, encrypts nothing; the session's recommendation), mutual TLS
-  with cert-manager (proves the caller and encrypts the call, at the cost
-  of certificates in every service), a service mesh (the same outside the
-  code, with a proxy beside every pod and S019's policies and pod settings
-  reworked) and a shared secret per service (weakest, rotated by hand). The
-  owner asked for the differences and when each fits, then chose mutual
-  TLS.
-- **In parallel with S024, by the owner (2026-10-04).** This session owns
-  the kind cluster; the S024 session runs no command against it.
+  certificates from cert-manager**
+  ([ADR 4](architecture/decisions/0004-prove-service-identity-with-mutual-tls.md)).
+  The session laid out four options: ServiceAccount tokens checked by the
+  callee (nothing to install, proves the caller, encrypts nothing; the
+  session's recommendation), mutual TLS with cert-manager (proves the
+  caller and encrypts the call, at the cost of certificates in every
+  service), a service mesh (the same outside the code, with a proxy beside
+  every pod and S019's policies and pod settings reworked) and a shared
+  secret per service (weakest, rotated by hand). The owner asked for the
+  differences and when each fits, then chose mutual TLS.
+- **In parallel with S024, by the owner (2026-10-04).** This session owned
+  the kind cluster; the S024 session ran no command against it, and its
+  cluster proof was run here after the merge.
+- **The identity is a URI in the certificate, in SPIFFE form.**
+  `spiffe://meridian.kind/ns/meridian/sa/<service>`; the last part is the
+  service's ID in the registry and its ServiceAccount's name. Rejected:
+  the DNS name as the identity, which the ingestion Job does not have.
+  The ingestion Job's registry ID is therefore `meridian-ingest`, the
+  name the chart already runs it under: the first draft's
+  `knowledge-ingest` would have meant renaming the Job, and an orphaned
+  account and policy on the cluster.
+- **The server asks for a certificate and the application decides.**
+  uvicorn 0.54.0 verifies a client certificate and tells the application
+  nothing about it (read in its source, then proved by a spike). A
+  subclass of its HTTP protocol class puts the certificate's URIs in the
+  request's scope. The certificate is optional at the connection because
+  the kubelet's probe has none; the application refuses everything but
+  `GET /healthz` without an identity. Rejected: requiring it at the
+  connection, which fails every probe; another server (hypercorn has the
+  extension), a change to six commands and the tests for one missing
+  field.
+- **The registry is the mapping**: `config/registry/services.yaml`, a
+  seventh file, with each service's `calls`, `tenants` and `agents`. A
+  test holds it equal to the chart's callers, so the network policy and
+  the identity check admit the same pairs.
+- **No switch.** Every `create_app_from_env` requires
+  `MERIDIAN_IDENTITY_PREFIX`, and the chart fails without a trust domain
+  and an issuer. An app built in code without a prefix has no check:
+  that is how the tests that are about something else build theirs.
+- **The Claims API serves plain HTTP and is a client only.** The step
+  names the runtime, the gateway and the tool servers; only the edge
+  calls the Claims API, and TLS at the edge is the backlog's (S020).
+- **A refused caller is audited once per reason and minute**, through
+  each service's own audit path, with the calling service's ID in
+  `reference`. Rejected: a column for it, which is a migration; the
+  backlog holds it for the audit search (S033).
+- **Kept whole**, as the owner chose for S019: the transport, the check
+  and the tenant and agent rule in one step, six contracts.
 
 **Work log:**
 
+- Read uvicorn's source for the certificate, then a spike outside the
+  repository: a caller with a certificate is seen with its name, one
+  without is seen with none, another CA's certificate cannot complete a
+  request. The spike also found that Python 3.13 refuses a chain without
+  key identifiers, which the test certificates and cert-manager's carry.
+- Six contracts to `implementer`, two at a time on disjoint files:
+  1. `make up` installs cert-manager (v1.21.2, pinned, read by
+     Renovate's `kind platform` group) and three objects: a self-signed
+     issuer, a CA certificate in the `cert-manager` namespace and the
+     `meridian-services` issuer.
+  2. `common/peercert.py`, `common/identity.py`, the registry's services
+     file with its model, schema and five checks.
+  3. The check in the five services, the tenant and agent rule in the
+     gateway and the runtime, the audit of refusals.
+  4. `common/tls.py` and a client certificate in every caller: the
+     runtime's gateway and tool clients, the Claims API's runtime
+     client, the knowledge server's embedding client, the ingestion
+     command and the tool probe.
+  5. The chart: a Certificate per workload, the TLS flags, HTTPS probes
+     and `https` addresses for the five, the wait for the Certificates
+     in `make deploy`, three lines in `make smoke`.
+  6. The documents the step made false.
+- What the contracts got wrong, found by the implementers or on review:
+  the Job's name (above); the smoke lines, which the first contract ran
+  from the Claims API's pod, a pod the network policy keeps from the
+  gateway, so they run from the runtime's; `GET /runs/{id}`, which named
+  a tenant and had no rule until the fourth contract; a websocket scope,
+  which the first middleware passed through and the third refuses; an
+  older test that pinned the network-policy check as smoke's last.
+- The main session read every changed source, chart and script file and
+  ran every gate. Three of the implementer runs changed files through
+  shell rewrites and not the Edit tool, so the edit gate never saw them
+  (backlog).
+- `main` was merged in after S024 landed (one conflict, both steps'
+  sections in this file). T-88 to T-90, ADR 4 and changelog v0.35 were
+  numbered after it.
+- S024's cluster proof, left to the session that owns the cluster: `make
+  up` applied the rule object and the second dashboard, the three groups
+  are healthy, the seven series exist and no Meridian alert fires. The
+  backlog row has the numbers.
+
 **Result / verification:**
 
-**Follow-ups:**
+- **On the kind cluster** (2026-10-04, image `811afd3d5438`):
+  - `make up`: exit 0, `release cert-manager v1.21.2 ready in
+    cert-manager`; both issuers Ready.
+  - `make deploy`: exit 0, `the services' certificates are ready`; seven
+    Certificates Ready; the ingestion Job embedded 85 chunks through the
+    gateway over mutual TLS.
+  - `make smoke`: exit 0, 19 PASS, before and after the merge of `main`.
+    The three new lines: `GET /healthz` with no certificate 200; a chat
+    call with no certificate 401; the runtime naming the `evaluation`
+    tenant 403. The tool probe passes over TLS.
+  - `make demo`: exit 0; the triage trace has spans from the Claims API,
+    the runtime, the gateway and the three tool servers.
+  - The audit table holds one `caller-no-identity` row and one
+    `caller-name-not-allowed` row naming `agent-runtime`, both from
+    smoke.
+  - A service's certificate (public part): 90 days, the URI
+    `spiffe://meridian.kind/ns/meridian/sa/agent-runtime`, the DNS name
+    `agent-runtime.meridian.svc`, client and server usage.
+- **Not provable on the cluster:** a service that may not call another
+  being refused by identity. The network policy admits exactly the
+  registry's callers, so no pod both reaches a service and is refused by
+  it; the tests over real TLS show the 403.
+- **Gates.** `make docs`: `docs consistency: 13 checks passed`. `make
+  test`: exit 0, `codex agents: 11 twins current`. `make lint`:
+  `Contracts: 5 kept, 0 broken.` `make registry`: exit 0, seven
+  services. `make check`: exit 0, no ERROR line. `make mermaid`: exit 0,
+  no derived block rewritten. `make export`: the Containers view read
+  with its new labels. `make helm-lint`: `1 chart(s) linted, 0 chart(s)
+  failed`. `shellcheck` on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0.
+- **The whole suite**, `GITHUB_ACTIONS=true make pytest-db` with three
+  workers, after the merge: `1 failed, 8477 passed, 8 skipped`. The
+  failure was the older smoke-order test; it was corrected and its file
+  and the identity chart tests ran again, `103 passed`. The suite was
+  not run a second time in full; CI runs it on the pull request.
+- **Not run:** `make eval` (no prompt, graph or recording changed);
+  anything against Azure; a cold `make up` from no cluster; a
+  certificate's renewal; the health dashboard in a browser.
 
+**Follow-ups:** in Part B's backlog. Closed: service identity itself,
+TLS between the services, S024's cluster proof. New: a renewed
+certificate needs a restart and nothing alerts on expiry; no revocation
+and no policy on certificate requests; telemetry in clear text; the
+scaffold and `services.yaml`; a column for the calling service; the
+mounted key's file mode; the implementer and the edit gate.
 
 ## Part D — Open questions
 
@@ -7225,3 +7345,10 @@ a call with no identity or from a service the registry does not map.
   for S028. Three backlog rows that named S024 are re-homed with their
   reasons, fourteen are new, among them the cluster proof this step
   leaves to the session that owns the cluster. T-86 and T-87 are new.
+- **v0.35, 2026-10-04:** S055 done: on kind the Agent Runtime, the Model
+  Gateway and the tool servers know the calling service from its
+  certificate (mutual TLS with cert-manager, ADR 4, the owner's choice)
+  and refuse a tenant or agent outside its entry in the registry's new
+  `services.yaml`. T-08, T-24, T-48 and T-50 say what is built; T-88 to
+  T-90 are new. Three backlog rows close, S024's cluster proof among
+  them, and seven are new.
