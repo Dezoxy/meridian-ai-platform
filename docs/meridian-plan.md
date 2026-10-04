@@ -7461,4 +7461,8 @@ goes to AKS (S020).
   75 backlog rows get a home, five of them at a step that existed (S020,
   S022, S035), and the scaffold's comparison test moves from S057 to
   S061. 23 open rows stay without one: the owner's decisions, two
-  declined, what waits on something outside, and observations.
+  declined, what waits on something outside, and observations. Outside
+  a step the same day (pull request 78): the alert rules' unit tests
+  failed the required `python` check at random, because promtool
+  evaluates rule groups in no fixed order; the test file now names the
+  recording group first.
