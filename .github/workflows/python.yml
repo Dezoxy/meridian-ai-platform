@@ -68,9 +68,14 @@ jobs:
         env:
           # The recorded evaluation test writes its report here (S017, S050).
           MERIDIAN_EVAL_REPORT: ${{ runner.temp }}/claims-triage-report.json
+          # The injection stack test writes its report here (S032).
+          MERIDIAN_EVAL_INJECTION_REPORT: ${{ runner.temp }}/claims-triage-injection-report.json
       # The test compares the report too; this runs the same comparison as the
       # command a reader runs (meridian eval compare) on the file the test wrote.
       - name: Evaluation gate
-        run: make eval-compare EVAL_REPORT="$RUNNER_TEMP/claims-triage-report.json"
+        run: >-
+          make eval-compare
+          EVAL_REPORT="$RUNNER_TEMP/claims-triage-report.json"
+          EVAL_INJECTION_REPORT="$RUNNER_TEMP/claims-triage-injection-report.json"
       - name: Registry validation
         run: make registry

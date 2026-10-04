@@ -48,6 +48,13 @@ DECISION            ?= approve
 EVAL_BASELINE       ?= data/evaluation/claims-triage-baseline.json
 EVAL_REPORT         ?= .eval/claims-triage-report.json
 EVAL_TEST           ?= tests/meridian/test_evaluation_stack.py::test_the_recorded_model_answers_the_golden_set_through_the_gateway
+# The injection suite (S032) beside it: its baseline and the summary beside the
+# baseline are committed, the report is gitignored, and one test writes all three
+# (the summary only when `make eval-baseline` asks for it).
+EVAL_INJECTION_BASELINE ?= data/evaluation/claims-triage-injection-baseline.json
+EVAL_INJECTION_REPORT   ?= .eval/claims-triage-injection-report.json
+EVAL_INJECTION_SUMMARY  ?= data/evaluation/injection-summary.md
+EVAL_INJECTION_TEST     ?= tests/meridian/test_injection_stack.py::test_the_injection_cases_run_through_the_stack_with_an_obedient_model
 # What a report is made from: a tracked file here that is newer than the report
 # makes it stale (`make eval-compare` refuses it).
 EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/recordings tests/meridian pyproject.toml uv.lock
@@ -152,26 +159,36 @@ pytest-db:
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
 	MERIDIAN_REQUIRE_DB=1 uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
-## eval            replay the golden set through the stack with the recorded model's answers and the judge (needs Docker), write the report and compare it with the baseline
+## eval            replay the golden set through the stack with the recorded model's answers and the judge, and run the injection cases through it with a model that obeys (needs Docker); write both reports and compare them with their baselines
 eval:
-	mkdir -p $(dir $(EVAL_REPORT))
-	rm -f $(EVAL_REPORT)
-	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_REPORT)) $(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) -q"
+	mkdir -p $(dir $(EVAL_REPORT)) $(dir $(EVAL_INJECTION_REPORT))
+	rm -f $(EVAL_REPORT) $(EVAL_INJECTION_REPORT)
+	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_REPORT)) \
+	MERIDIAN_EVAL_INJECTION_REPORT=$(abspath $(EVAL_INJECTION_REPORT)) \
+	$(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
 	$(MAKE) eval-compare
 
-## eval-compare    compare a report with the baseline (meridian eval compare); refuses a report older than a tracked file it is made from
+## eval-compare    compare the two reports with their baselines (meridian eval compare), both even when one fails; refuses a report older than a tracked file it is made from
 eval-compare:
-	@test -f "$(EVAL_REPORT)" || { echo "no report at $(EVAL_REPORT): run make eval" >&2; exit 1; }
-	@newer="$$(git ls-files -- $(EVAL_INPUTS) | while IFS= read -r file; do \
-		if [ "$$file" -nt "$(EVAL_REPORT)" ]; then printf '%s\n' "$$file"; break; fi; \
-	done)"; \
-	if [ -n "$$newer" ]; then echo "the report is older than $$newer: run make eval" >&2; exit 1; fi
-	uv run meridian eval compare $(EVAL_BASELINE) $(EVAL_REPORT)
+	@for report in "$(EVAL_REPORT)" "$(EVAL_INJECTION_REPORT)"; do \
+		test -f "$$report" || { echo "no report at $$report: run make eval" >&2; exit 1; }; \
+		newer="$$(git ls-files -- $(EVAL_INPUTS) | while IFS= read -r file; do \
+			if [ "$$file" -nt "$$report" ]; then printf '%s\n' "$$file"; break; fi; \
+		done)"; \
+		if [ -n "$$newer" ]; then echo "the report is older than $$newer ($$report): run make eval" >&2; exit 1; fi; \
+	done
+	@status=0; \
+	uv run meridian eval compare $(EVAL_BASELINE) $(EVAL_REPORT) || status=1; \
+	uv run meridian eval compare $(EVAL_INJECTION_BASELINE) $(EVAL_INJECTION_REPORT) || status=1; \
+	exit $$status
 
-## eval-baseline   regenerate the baseline after a reviewed prompt, tool, recording or golden-set change (needs Docker)
+## eval-baseline   regenerate the golden set's baseline, the injection baseline and its summary after a reviewed prompt, tool, recording, golden-set, screen or case change (needs Docker)
 eval-baseline:
-	mkdir -p $(dir $(EVAL_BASELINE))
-	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_BASELINE)) $(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) -q"
+	mkdir -p $(dir $(EVAL_BASELINE)) $(dir $(EVAL_INJECTION_BASELINE)) $(dir $(EVAL_INJECTION_SUMMARY))
+	MERIDIAN_EVAL_REPORT=$(abspath $(EVAL_BASELINE)) \
+	MERIDIAN_EVAL_INJECTION_REPORT=$(abspath $(EVAL_INJECTION_BASELINE)) \
+	MERIDIAN_EVAL_INJECTION_SUMMARY=$(abspath $(EVAL_INJECTION_SUMMARY)) \
+	$(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
 
 ## eval-record     SPENDS MONEY: about 60 chat calls, under EUR 0.50, on the live Azure models, with the judge, to record the golden set's answers and a variant prompt's; rewrites files under data/evaluation/ (needs az login, Docker; the owner runs it)
 eval-record:
@@ -183,7 +200,7 @@ registry:
 	uv run meridian registry schemas --check
 	uv run meridian registry contracts --check
 
-## synthetic       regenerate the synthetic data and golden set under data/synthetic (seeded; reruns are identical)
+## synthetic       regenerate the synthetic data, the golden set and the injection cases under data/synthetic (seeded; reruns are identical)
 synthetic:
 	PYTHONPATH=data/synthetic uv run python -m generator
 

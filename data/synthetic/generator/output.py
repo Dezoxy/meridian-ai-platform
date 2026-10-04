@@ -4,11 +4,12 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import GENERATOR_VERSION, catalogue
+from . import GENERATOR_VERSION, catalogue, injection
 from .scenarios import Dataset
 from .wording import render_wording
 
 MANIFEST = "manifest.json"
+INJECTION_DIR = "injection"
 
 
 def render_json(value: object) -> str:
@@ -53,7 +54,8 @@ def build_manifest(dataset: Dataset, seed: int, files: dict[str, bytes]) -> dict
 
 
 def write_dataset(dataset: Dataset, seed: int, out_dir: Path) -> list[str]:
-    """Write every file under ``out_dir``, the manifest last; return their paths."""
+    """Write every file under ``out_dir``, the manifest last, then the injection
+    case set and its own manifest under ``injection/``; return their paths."""
     encoded = {
         path: text.encode("utf-8") for path, text in render_files(dataset).items()
     }
@@ -61,8 +63,25 @@ def write_dataset(dataset: Dataset, seed: int, out_dir: Path) -> list[str]:
         "utf-8"
     )
     order = [path for path in sorted(encoded) if path != MANIFEST] + [MANIFEST]
+    injection_files = render_injection_files(dataset, seed, encoded[MANIFEST])
+    for path, data in injection_files.items():
+        encoded[f"{INJECTION_DIR}/{path}"] = data
+        order.append(f"{INJECTION_DIR}/{path}")
     for path in order:
         target = out_dir / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(encoded[path])
     return order
+
+
+def render_injection_files(
+    dataset: Dataset, seed: int, golden_manifest: bytes
+) -> dict[str, bytes]:
+    """The injection case set, relative to its folder, the manifest last."""
+    cases = injection.build_cases(dataset)
+    cases_bytes = injection.render_cases(cases).encode("ascii")
+    manifest = injection.build_manifest(cases, seed, golden_manifest, cases_bytes)
+    return {
+        injection.CASES_FILE: cases_bytes,
+        MANIFEST: render_json(manifest).encode("utf-8"),
+    }
