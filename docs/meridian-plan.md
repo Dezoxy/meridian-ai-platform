@@ -347,7 +347,7 @@ that day; the rest stand as their step recorded them.
 | An upper bound on a provider's token counts | S045 | open | none |
 | A purpose on the gateway's refusal rows | S045 | open | none |
 | 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | open | none |
-| Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | closed on 2026-10-04 outside a step: Renovate reads it in the `Makefile` and in `python.yml` and moves both in one pull request, once the owner installs the app | none |
+| Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | closed on 2026-10-04 outside a step: Renovate reads it in the `Makefile` and in `python.yml` and moves both in one pull request (the app was installed the same day) | none |
 | After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
 | Ingestion tests that run without a database | S012 | open | none |
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
@@ -1053,8 +1053,8 @@ test trace reaches Grafana, and one command removes it.
   owner's laptop only.
 - The chart pins in `pins.env` are not watched by Dependabot; bumping them
   is manual until a step adds Renovate or similar.
-  *2026-10-04:* Renovate's configuration reads them (changelog v0.32); it
-  opens pull requests once the owner installs the app.
+  *2026-10-04:* Renovate's configuration reads them (changelog v0.32); the
+  owner installed the app the same day.
 
 ### S007 — Azure foundation
 **Status:** done · **Started:** 2026-09-30 · **Finished:** 2026-09-30
@@ -6857,8 +6857,10 @@ cluster's field manager, Azure's private endpoints and the size of
   and what nothing watched: `infra/kind/pins.env`, the images in the
   `Makefile` and the scripts, the gitleaks version, the pinned MCP server
   and the Terraform providers. Part A gains "Version updates": which of its
-  pull requests green checks do not prove. Until the app is installed
-  nothing opens update pull requests; Dependabot's security alerts are a
+  pull requests green checks do not prove. The owner installed the app
+  the same day; its onboarding pull request (56) is not merged, since this
+  configuration replaces the default it would add. The first grouped pull
+  requests are due on 2026-11-01. Dependabot's security alerts are a
   repository setting and stay on, and GitHub's security updates keep
   opening the pull requests for advisories (Renovate's are off, so none
   comes twice). A release is proposed once it is a week old. Checked
