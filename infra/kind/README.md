@@ -349,24 +349,23 @@ runs `python -m meridian.workloads.claims_triage.sweep` every five minutes,
 in the image `make deploy` built, as the database role `claims_sweep` (Secret
 `claims-sweep-db`, never the owner's).
 
-Status: **implemented** in S052 (the plan's section for the step says what
-the code does). This is what the job is written to do, not behaviour this page
-observed; `make smoke`'s seventh line is the check that it ran and finished on
-your cluster. One pass is meant to refer a claim whose documents are overdue
-to an adjuster, fail a claim stranded in `submitted` or `triaging`, end a run
-no resume takes over and delete the checkpoints a finished run left. It needs
-PostgreSQL only: no call to any service and no model. The deadline for
-documents is `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days.
+Implemented in S052, and run on kind there. One pass refers a claim whose
+documents are overdue to an adjuster, fails a claim stranded in `submitted`
+or `triaging`, ends a run no resume takes over and deletes the checkpoints a
+finished run left; it logs one line with what it moved. It needs PostgreSQL
+only: no call to any service and no model. The deadline for documents is
+`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days from the
+claim's latest request for documents. `make smoke`'s seventh line checks
+that the job ran and finished on your cluster.
 
 `concurrencyPolicy: Forbid` governs only what the schedule starts: a scheduled
 pass is skipped while another is running. A Job made by hand (below) runs
-beside a scheduled one, which is why the role may hold 4 connections, and,
-because the CronJob owns it, the next scheduled pass is skipped while it
-runs. A pass is cut off after 120 seconds and is not retried
-(`backoffLimit: 0`): the next run, five minutes later, is the retry. The
-CronJob keeps one succeeded and three failed Jobs, and a by-hand Job counts
-toward those limits because the CronJob owns it. A succeeded Job is removed when the next one finishes,
-about five minutes later. Kubernetes removes any Job a day after it finishes
+beside a scheduled one, which is why the role may hold 4 connections. A pass
+is cut off after 120 seconds and is not retried (`backoffLimit: 0`): the next
+run, five minutes later, is the retry. The CronJob keeps one succeeded and
+three failed Jobs, and a by-hand Job counts toward those limits because the
+CronJob owns it. A succeeded Job is removed when the next one finishes, about
+five minutes later. Kubernetes removes any Job a day after it finishes
 (`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
 the morning, and the last success of a suspended CronJob. A pod has no
 service-account token, no extra privilege and mounts only the CA's public
