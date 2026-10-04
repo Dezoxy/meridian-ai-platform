@@ -27,6 +27,7 @@ TRAIL_COLUMNS = (
     "service",
     "event",
     "outcome",
+    "reason",  # appended by 0014
 )
 INSERT_CLAIM = (
     "INSERT INTO claims.claims (claim_id, tenant, submission) VALUES (%s, %s, '{}')"
@@ -202,7 +203,11 @@ def test_the_indexes_exist_on_those_columns_in_that_order(
             "WHERE (state = ANY (ARRAY['awaiting_adjuster'::text, "
             "'triage_failed'::text]))",
         ),
-        ("audit.events_reference_idx", "WHERE (db_role = 'claims_api'::name)"),
+        (
+            "audit.events_reference_idx",
+            # Widened by 0014 to the Claims API's and the sweep's rows.
+            "WHERE (db_role = ANY (ARRAY['claims_api'::name, 'claims_sweep'::name]))",
+        ),
         ("runtime.runs_reference_idx", None),
     ],
 )
@@ -221,7 +226,7 @@ def test_the_partial_indexes_carry_their_predicates(
     assert (f"WHERE {where}" if found else None) == predicate
 
 
-def test_the_view_has_exactly_the_seven_columns_in_order(
+def test_the_view_has_exactly_the_eight_columns_in_order(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(

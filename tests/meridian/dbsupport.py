@@ -20,6 +20,7 @@ SERVICE_ROLES = (
     "policy_mcp",
     "claims_mcp",
     "knowledge_mcp",
+    "claims_sweep",
 )
 PASSWORD_BYTES = 24
 # The key under which the xdist controller hands its passwords to a worker.

@@ -26,6 +26,10 @@ SERVICE_NAME = "claims-api"
 # retry, a send-back, documents, a lease taken over): each is a model call, and a
 # loop of them is a bill (T-38).
 MAX_TRIAGES_PER_CLAIM = 5
+# How long a claim waits for the claimant's documents before the sweep refers it
+# to an adjuster (S052): the owner's decision of 2026-10-03, counted from the
+# claim's last move to ``documents_requested``. The sweep's setting may change it.
+DOCUMENTS_DEADLINE_DAYS = 14
 
 LifecycleState = Literal[
     "submitted",
@@ -76,6 +80,15 @@ DOCUMENTS_ARRIVED = Transition("documents_requested", "triaging", "documents-arr
 DOCUMENTS_AT_CAP = Transition(
     "documents_requested", "awaiting_adjuster", "triage-cap-reached"
 )
+# The scheduled sweep's moves (S052). It refers a claim to an adjuster when the
+# documents never came (no claim is rejected without a person), and fails a claim
+# whose triage never started or never ended, so that a person sees it. TRIAGE_FAILED
+# is the triage's own word for the second source; the reason tells them apart.
+DOCUMENTS_OVERDUE = Transition(
+    "documents_requested", "awaiting_adjuster", "documents-overdue"
+)
+TRIAGE_NOT_STARTED = Transition("submitted", "triage_failed", "triage-not-started")
+TRIAGE_ABANDONED = Transition("triaging", "triage_failed", "triage-abandoned")
 
 TRANSITIONS: frozenset[Transition] = frozenset(
     {
@@ -95,6 +108,9 @@ TRANSITIONS: frozenset[Transition] = frozenset(
         CLAIMANT_WITHDREW_DOCUMENTS,
         DOCUMENTS_ARRIVED,
         DOCUMENTS_AT_CAP,
+        DOCUMENTS_OVERDUE,
+        TRIAGE_NOT_STARTED,
+        TRIAGE_ABANDONED,
     }
 )
 
@@ -117,6 +133,7 @@ def move_claim(
     tenant: str,
     run_id: UUID | None = None,
     changed_at: datetime | None = None,
+    service: str = SERVICE_NAME,
 ) -> datetime | None:
     """Move a claim along one listed transition, in the caller's transaction.
 
@@ -127,7 +144,8 @@ def move_claim(
     Returns when the claim changed, or ``None`` if it did not move. When it
     moved, the audit event is written in the same transaction. ``run_id`` is the
     run the change is about, ``None`` while none is known; it replaces the
-    claim's.
+    claim's. ``service`` is the one the audit event names, the Claims API unless
+    the sweep moves the claim.
 
     A move whose target is ``triaging`` raises the claim's ``triages`` by one in
     the same ``UPDATE``, and is refused (``None``, like any other compare-and-set
@@ -157,7 +175,7 @@ def move_claim(
     record_event(
         conn,
         AuditEvent(
-            service=SERVICE_NAME,
+            service=service,
             event=f"claim.{transition.target}",
             outcome=transition.target,
             reason=transition.trigger,

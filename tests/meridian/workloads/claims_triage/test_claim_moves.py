@@ -18,7 +18,9 @@ import httpx
 import psycopg
 import pytest
 from dbsupport import DatabaseHandle
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -42,8 +44,8 @@ from workloads.claims_triage.test_claims_app import (
     make_client,
 )
 
-from meridian.workloads.claims_triage import triaging
-from meridian.workloads.claims_triage.models import ClaimSubmission
+from meridian.workloads.claims_triage import moves, triaging
+from meridian.workloads.claims_triage.models import ClaimSubmission, DecisionFailure
 
 MOVE_ID = "CLM-9301"
 TENANT = "claims-triage"
@@ -1392,6 +1394,157 @@ def test_a_first_post_is_sent_the_submissions_documents_and_no_others(
     assert response.status_code == 201
     assert facts_sent(runtime.starts[0])["documents"] == ["police-report", "photos"]
     assert triages_of(fresh_database, MOVE_ID) == 1
+
+
+def add_documents_directly(
+    db: DatabaseHandle, runtime: MoveRuntime, names: list[str]
+) -> Any:
+    """What ``add_documents`` answers, as the claimant's page receives it."""
+    return moves.add_documents(
+        claims_dsn(db),
+        TENANT,
+        runtime.client,
+        trace.get_tracer(__name__),
+        MOVE_ID,
+        names,
+    )
+
+
+@pytest.mark.parametrize(
+    ("runtime_options", "status"),
+    [
+        pytest.param({"start_http": 502}, 502, id="run-failed"),
+        pytest.param({"start_raises": httpx.ReadTimeout("slow")}, 504, id="timeout"),
+    ],
+)
+def test_a_triage_that_fails_after_the_names_were_stored_is_a_stored_failure(
+    fresh_database: DatabaseHandle, runtime_options: dict[str, Any], status: int
+) -> None:
+    waiting_for_documents(fresh_database, [])
+
+    answer = add_documents_directly(
+        fresh_database, MoveRuntime(**runtime_options), ["photos"]
+    )
+
+    assert isinstance(answer, DecisionFailure)
+    assert (answer.status, answer.stored) == (status, True)
+    assert arrived_names(fresh_database, MOVE_ID) == ["photos"]
+    assert claim_state(fresh_database, MOVE_ID)[0] == "triage_failed"
+
+
+def test_a_proposal_that_cannot_be_stored_is_a_stored_failure(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waiting_for_documents(fresh_database, [])
+
+    def lost(*_: object) -> bool:
+        raise psycopg.OperationalError("the connection was lost")
+
+    monkeypatch.setattr(triaging, "close_triage", lost)
+
+    answer = add_documents_directly(fresh_database, MoveRuntime(), ["photos"])
+
+    assert isinstance(answer, DecisionFailure)
+    assert (answer.status, answer.stored) == (503, True)
+    assert arrived_names(fresh_database, MOVE_ID) == ["photos"]
+
+
+def test_a_triage_taken_over_after_the_names_were_stored_is_a_stored_refusal(
+    fresh_database: DatabaseHandle,
+) -> None:
+    waiting_for_documents(fresh_database, [])
+    runtime = MoveRuntime(
+        during_start=lambda: owner_rows(
+            fresh_database,
+            "UPDATE claims.claims SET state = 'approved', run_id = %s, "
+            "state_changed_at = clock_timestamp() WHERE claim_id = %s RETURNING 1",
+            (uuid.uuid4(), MOVE_ID),
+        )
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        add_documents_directly(fresh_database, runtime, ["photos"])
+
+    # A 409 as the JSON route answers it; the page learns that the names were
+    # stored from the exception's type.
+    assert isinstance(refused.value, moves.RefusedAfterStoring)
+    assert (refused.value.status_code, refused.value.detail) == (
+        409,
+        triaging.TAKEN_OVER_DETAIL,
+    )
+    assert arrived_names(fresh_database, MOVE_ID) == ["photos"]
+
+
+def test_the_json_route_still_answers_a_taken_over_documents_triage_as_before(
+    fresh_database: DatabaseHandle,
+) -> None:
+    waiting_for_documents(fresh_database, [])
+    runtime = MoveRuntime(
+        during_start=lambda: owner_rows(
+            fresh_database,
+            "UPDATE claims.claims SET state = 'approved', run_id = %s, "
+            "state_changed_at = clock_timestamp() WHERE claim_id = %s RETURNING 1",
+            (uuid.uuid4(), MOVE_ID),
+        )
+    )
+
+    response = client_for(fresh_database, runtime).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "the triage was taken over by another request"}
+
+
+@pytest.mark.parametrize("triages", [1, 5], ids=["triaged", "referred-at-the-cap"])
+def test_a_success_and_the_cap_referral_are_not_failures(
+    fresh_database: DatabaseHandle, triages: int
+) -> None:
+    waiting_for_documents(fresh_database, [], triages=triages)
+
+    answer = add_documents_directly(fresh_database, MoveRuntime(), ["photos"])
+
+    assert not isinstance(answer, DecisionFailure)
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        pytest.param(
+            psycopg.OperationalError("the connection was lost"), id="database"
+        ),
+        pytest.param(moves.StoredSubmissionInvalid("not valid"), id="submission"),
+    ],
+)
+def test_a_failure_before_or_in_the_commit_stored_nothing(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    raised: Exception,
+) -> None:
+    waiting_for_documents(fresh_database, [])
+
+    def store(*_: object) -> None:
+        raise raised
+
+    monkeypatch.setattr(moves, "_store_arrival", store)
+
+    answer = add_documents_directly(fresh_database, MoveRuntime(), ["photos"])
+
+    assert isinstance(answer, DecisionFailure)
+    assert answer.stored is False
+
+
+def test_a_refusal_before_the_commit_is_a_plain_409_not_a_stored_one(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "approved", run_id=uuid.uuid4())
+
+    with pytest.raises(HTTPException) as refused:
+        add_documents_directly(fresh_database, MoveRuntime(), ["photos"])
+
+    assert not isinstance(refused.value, moves.RefusedAfterStoring)
+    assert refused.value.status_code == 409
+    assert arrived_names(fresh_database, MOVE_ID) == []
 
 
 # ── a decision on a claim with no paused run ────────────────────────────────

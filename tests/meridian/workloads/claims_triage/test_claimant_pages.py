@@ -34,6 +34,7 @@ from workloads.claims_triage.test_adjuster_pages import (
     client_for,
     put_claim,
     put_proposal,
+    put_sweep_event,
 )
 from workloads.claims_triage.test_claim_moves import (
     MoveRuntime,
@@ -59,6 +60,7 @@ from meridian.workloads.claims_triage.models import MAX_DOCUMENTS, DecisionFailu
 from meridian.workloads.claims_triage.moves import (
     NOT_AWAITING_DOCUMENTS_DETAIL,
     TOO_MANY_DOCUMENTS_DETAIL,
+    RefusedAfterStoring,
 )
 
 CLAIMANT_MODULE = "meridian.workloads.claims_triage.claimant"
@@ -1125,6 +1127,29 @@ def test_the_status_page_has_the_claim_the_time_and_one_sentence_for_each_state(
             assert response.headers[name] == value
 
 
+def test_a_claim_referred_as_overdue_reads_to_the_claimant_as_any_claim_in_review(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """T-65: no reason and no word of the sweep reach the claimant."""
+    db = fresh_database
+    pages = {}
+    for claim_id, reason in (("CLM-9701", "documents-overdue"), ("CLM-9702", None)):
+        put_claim(db, claim_id, "awaiting_adjuster")
+        put_received(db, claim_id)
+        put_proposal(db, claim_id, OUTPUT | {"route": "request_documents"})
+        if reason:
+            put_sweep_event(db, claim_id, "claim.awaiting_adjuster", reason)
+        response = client_for(db).get(status_url(claim_id))
+        assert response.status_code == 200
+        pages[claim_id] = response.text.replace(claim_id, "CLM-ID")
+
+    assert pages["CLM-9701"] == pages["CLM-9702"]
+    text = Page(pages["CLM-9701"]).text.lower()
+    assert ALL_STATES["awaiting_adjuster"] in Page(pages["CLM-9701"]).text
+    for word in ("overdue", "sweep", "deadline", "did not arrive", "in time"):
+        assert word not in text, word
+
+
 MARKERS = {
     "reason": "marker-reason-3141",
     "amount": "4817231",
@@ -1514,8 +1539,8 @@ def test_a_documents_post_whose_names_were_stored_and_triage_failed_is_303(
 
     response = post_to(client, documents_url(), {"documents": "police report"})
 
-    # The names are stored and the claim no longer waits for them: its state is
-    # the answer, as for a submission whose triage failed.
+    # The names are stored: the failure says so, and the status page is the
+    # answer, as for a submission whose triage failed.
     assert response.status_code == 303
     assert response.headers["location"] == status_url(DOCUMENTS_ID)
     assert arrived_names(db, DOCUMENTS_ID) == ["police report"]
@@ -1548,32 +1573,59 @@ def test_a_documents_failure_with_nothing_stored_is_the_status_page_with_the_not
     assert arrived_names(db, DOCUMENTS_ID) == []
 
 
-def test_a_documents_failure_that_left_the_claim_in_an_adjusters_queue_is_303(
-    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+def moved_by_another_request(db: DatabaseHandle, state: str) -> None:
+    """Another move changes the claim while the post is answered."""
+    owner_rows(
+        db,
+        "UPDATE claims.claims SET state = %s WHERE claim_id = %s RETURNING 1",
+        (state, DOCUMENTS_ID),
+    )
+
+
+@pytest.mark.parametrize("state", ["approved", "documents_requested", "withdrawn"])
+def test_a_stored_failure_is_303_whatever_state_another_move_left_the_claim_in(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
     db = fresh_database
     waiting_for_documents(db)
 
-    def stored_and_referred(*_: object) -> DecisionFailure:
-        owner_rows(
-            db,
-            "UPDATE claims.claims SET state = 'awaiting_adjuster' "
-            "WHERE claim_id = %s RETURNING 1",
-            (DOCUMENTS_ID,),
-        )
-        return DecisionFailure(503, DATABASE_DOWN)
+    def stored_then_moved(*_: object) -> DecisionFailure:
+        moved_by_another_request(db, state)
+        return DecisionFailure(502, RUN_FAILED, stored=True)
 
-    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", stored_and_referred)
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", stored_then_moved)
 
     response = post_to(
         client_for(db, MoveRuntime()), documents_url(), {"documents": "police report"}
     )
 
+    # No queue lists the claim, but the names are stored: that is the answer.
     assert response.status_code == 303
     assert response.headers["location"] == status_url(DOCUMENTS_ID)
 
 
-def test_a_documents_failure_that_left_the_claim_triaging_is_the_notice_not_303(
+def test_a_failure_that_stored_nothing_is_the_notice_even_in_an_adjusters_queue(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    waiting_for_documents(db)
+
+    def nothing_stored(*_: object) -> DecisionFailure:
+        moved_by_another_request(db, "awaiting_adjuster")
+        return DecisionFailure(503, DATABASE_DOWN)
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", nothing_stored)
+
+    response = post_to(
+        client_for(db, MoveRuntime()), documents_url(), {"documents": "police report"}
+    )
+
+    # The state is not read to guess: the failure says nothing was stored.
+    page = refused_page(response, 503)
+    assert DATABASE_DOWN in page.text
+
+
+def test_a_documents_failure_that_left_the_claim_triaging_is_303_names_are_stored(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = fresh_database
@@ -1585,13 +1637,47 @@ def test_a_documents_failure_that_left_the_claim_triaging_is_the_notice_not_303(
         client_for(db, runtime), documents_url(), {"documents": "police report"}
     )
 
-    # The names are stored but the run failed and the claim could not be moved to
-    # triage_failed: no queue lists it, so the page keeps the notice.
-    page = refused_page(response, 502)
-    assert RUN_FAILED in page.text
-    assert "We have received your claim and are assessing it." in page.text
+    # The run failed and the claim could not be moved to triage_failed, so it is
+    # still triaging; the names are stored all the same.
+    assert response.status_code == 303
+    assert response.headers["location"] == status_url(DOCUMENTS_ID)
     assert claim_state(db, DOCUMENTS_ID)[0] == "triaging"
     assert arrived_names(db, DOCUMENTS_ID) == ["police report"]
+
+
+def test_a_documents_refusal_after_the_names_were_stored_is_303(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = fresh_database
+    waiting_for_documents(db)
+
+    def taken_over(*_: object) -> None:
+        moved_by_another_request(db, "approved")
+        raise RefusedAfterStoring(409, triaging.TAKEN_OVER_DETAIL)
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", taken_over)
+
+    response = post_to(
+        client_for(db, MoveRuntime()), documents_url(), {"documents": "police report"}
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == status_url(DOCUMENTS_ID)
+
+
+def test_a_documents_refusal_that_stored_nothing_is_the_notice_with_its_status(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, DOCUMENTS_ID, "approved")
+
+    response = post_to(
+        client_for(db, MoveRuntime()), documents_url(), {"documents": "police report"}
+    )
+
+    page = refused_page(response, 409)
+    assert NOT_AWAITING_DOCUMENTS_DETAIL in page.text
+    assert arrived_names(db, DOCUMENTS_ID) == []
 
 
 def test_a_documents_failure_and_then_the_database_down_is_the_answers_error_page(

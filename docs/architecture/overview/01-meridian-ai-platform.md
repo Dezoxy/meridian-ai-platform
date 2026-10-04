@@ -35,12 +35,16 @@ arriving documents trigger a new triage run. A claim is triaged at most five
 times; documents that arrive after that refer it to an adjuster. The adjuster
 can send a claim back to triage. A claim whose triage run fails can be triaged
 again, or be referred to an adjuster. A claimant can withdraw while the claim
-waits, and a claim whose documents miss the deadline is closed as rejected.
-Approved, Rejected and Withdrawn are final.
+waits. A claim whose documents do not arrive within 14 days of the request is
+referred to an adjuster: no claim is rejected without a person (C-02). A
+claim that a failed request left in Submitted or Triaging becomes
+TriageFailed, which an adjuster sees. Approved, Rejected and Withdrawn are
+final.
 
-Implemented in part (S015, S048): the Claims API keeps every claim in one of
-these states and moves it only along these edges. Every edge is implemented
-except the deadline, which a scheduled job closes (S052).
+Implemented (S015, S048, S052): the Claims API keeps every claim in one of
+these states and moves it only along these edges. A scheduled sweep, with a
+database role of its own that can decide no claim, moves the overdue and
+the stranded ones (S052).
 
 ```mermaid
 stateDiagram-v2
@@ -49,6 +53,7 @@ stateDiagram-v2
     state "Triage failed" as TriageFailed
     [*] --> Submitted
     Submitted --> Triaging: triage starts
+    Submitted --> TriageFailed: triage never starts
     Triaging --> Approved: below threshold
     Triaging --> AwaitingAdjuster: over threshold or fraud flag
     Triaging --> DocumentsRequested: info missing
@@ -61,8 +66,7 @@ stateDiagram-v2
     AwaitingAdjuster --> Triaging: sends back
     AwaitingAdjuster --> Withdrawn: withdraws
     DocumentsRequested --> Triaging: documents arrive
-    DocumentsRequested --> AwaitingAdjuster: documents at the triage cap
-    DocumentsRequested --> Rejected: deadline passes
+    DocumentsRequested --> AwaitingAdjuster: documents at the triage cap or overdue
     DocumentsRequested --> Withdrawn: withdraws
 ```
 
@@ -80,7 +84,7 @@ stateDiagram-v2
 | Platform Registry | Models, providers, tools, agents, policies, tenants | YAML in git, JSON Schema | Control |
 | Platform Database | Claims, wording chunks, checkpoints, audit, usage, results | PostgreSQL 17, pgvector | Control |
 | Key Vault | Provider credentials and signing secrets | Azure Key Vault; Kubernetes Secrets on kind | Control |
-| Claims Triage App | Claims API, adjuster queue UI, claimant pages, the triage graph package | Python, FastAPI, Jinja | Workload |
+| Claims Triage App | Claims API, adjuster queue UI, claimant pages, the triage graph package, the scheduled sweep (a job with a database role of its own) | Python, FastAPI, Jinja | Workload |
 | Claims MCP Server | Notes, approval requests and the outcome recorded for a request as tools; adjuster decisions are recorded by the Claims Triage App | Python, MCP SDK | Workload |
 
 ![Containers view: the building blocks of the platform and the claims-triage workload](embed:Containers)
