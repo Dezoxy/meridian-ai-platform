@@ -61,17 +61,19 @@ blurs what the step was for.
 3. **Open the step.** Add its section to Part C from the template and set the
    status to `doing`.
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
-   with paths, names and what not to touch, delegates implementation to the
-   `implementer` subagent (Sonnet at high effort), and consults the advisor
-   before committing to an approach and before declaring done. It runs every
-   gate itself; a subagent's report is a claim, not evidence.
+   with paths, names and what not to touch (the form is below), delegates
+   implementation to the `implementer` subagent (Sonnet at high effort), and
+   consults the advisor before committing to an approach and before
+   declaring done. It runs every gate itself and reads every changed file;
+   a subagent's report is a claim, not evidence.
 5. **Gates.** Always `make docs` and `make test`. `make check` when the model
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
-6. **Close.** Fill in the work log and verification, set `done`, commit, open
-   the PR, set it to merge when its required checks pass
-   (`gh pr merge --auto --squash`), and confirm the content landed on
-   `main`. The session merges every pull request this way. It stops and
+6. **Close.** Fill in the work log and verification, set `done`, commit, go
+   through "Before pushing" below, open the PR, set it to merge when its
+   required checks pass (`gh pr merge --auto --squash`), and confirm the
+   content landed on `main`. The session merges every pull request this
+   way. It stops and
    asks the owner first, in chat, only for a decision that shapes what
    comes later: the design, a security boundary or an accepted risk, the
    cost, or the roadmap and the rules of this repository. The answer goes
@@ -80,6 +82,63 @@ blurs what the step was for.
    the next step in a new session. A follow-up that no step's "done when"
    covers goes into Part B's follow-up backlog, with a proposed home, not
    only into the step's own section.
+
+**The contract.** One concern per contract and about a page, in a scratch
+file the `implementer` reads. A long contract gets worked around with
+scripts, and the edit hooks never see those.
+
+```text
+# <step> contract <n>: <the one concern, in a sentence>
+Worktree and branch. Do not commit, push, switch branches or stash.
+## Why             the plan row or the finding this answers, quoted
+## The change      numbered: paths, names, formats
+## Tests first     the tests to add; see each fail before the change
+## Do not touch    the paths and behaviours that stay as they are
+## Edit-gate facts who imports the file, the public interface, the data
+                   touched, the owner's instruction verbatim
+## Gates you run   the commands, and which gates the main session keeps
+## Report          per file what changed, the tests added, each gate's last
+                   lines with its exit code, what the contract left open
+```
+
+**Before pushing.**
+
+- `gitleaks git --log-opts="origin/main..HEAD" --redact`. CI scans every
+  commit of a pull request, so a finding in an early commit is not fixed by
+  a later one.
+- `GITHUB_ACTIONS=true make pytest-db` once, when the step changed Python.
+  A tool can behave differently when CI's variables are set; Typer's usage
+  errors did, on pull request 27.
+- Read a gate's exit status, not its last lines. A gate piped into `tail`
+  inside an `&&` chain hands on `tail`'s status, and a failing check passes.
+- Read every source file a subagent changed. A green suite does not show a
+  value that was hard-coded to match the one fixture.
+
+**Working in parallel.** Steps whose dependencies are `done` and whose files
+do not overlap may run in separate sessions, each in its own worktree and on
+its own branch; one step per session still holds. The brief of each session
+says:
+
+- **What is shared, and who owns it.** There is one kind cluster and one
+  Azure environment: one session owns them, and the others run no
+  `make deploy`, `make demo`, `make down`, `make azure-state` or
+  `make azure-apply`. There is one set of recorded model answers: only one
+  session at a time changes a prompt or the triage graph, since that needs
+  `make eval-record`.
+- **What each session has of its own.** `PYTEST_DB_CONTAINER`,
+  `PYTEST_DB_PORT` and `PYTEST_WORKERS=3`, for `make pytest-db` and
+  `make eval`, so two test runs never meet.
+- **Numbers are taken late.** Migration numbers, `T-NN`, ADR numbers and
+  the changelog's version are taken after merging `main` into the step's
+  branch, right before the pull request. A branch whose migration number
+  is not final is not deployed to the cluster: the runner records a
+  migration by name and hash.
+- **Who finishes later, merges first.** That session runs
+  `git merge origin/main` (no rebase and no force-push on a branch with a
+  pull request), runs the gates again, then opens its pull request.
+
+A session does not see the others: it fetches and reads the open pull
+requests before it assumes anything about them.
 
 Cost rules:
 
@@ -6755,3 +6814,9 @@ cluster's field manager, Azure's private endpoints and the size of
   kind README had promised for S019, is a backlog row. Its threats are
   T-84 and T-85 and this entry is v0.30, because S039, its correction
   and S032 merged first.
+- **v0.31, 2026-10-04:** by the owner: Part A gains the form of the
+  contract, four checks before pushing and the rules for parallel sessions.
+  They were written into development-base's plan template the same day,
+  from what this repository's steps had taught, and come back here with
+  this repository's own values in place of the template's blanks. No step
+  changes.
