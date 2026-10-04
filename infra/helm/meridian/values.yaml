@@ -117,7 +117,9 @@ probes:
 # `tls: true` says a service serves TLS and asks its callers for a certificate
 # (S055). It is one value and nothing else: the template adds the uvicorn
 # flags, the probes' scheme, the DNS name in the certificate and the prefix the
-# service reads its callers' identity with. The Claims API has none: the edge
+# service reads its callers' identity with. The chart fails for a service that
+# another workload calls (a serviceUrl or a serviceMap names it) and does not
+# set it. The Claims API has none: the edge
 # calls it over plain HTTP (TLS at the edge is a backlog row), and it is a
 # client only. Every service gets a certificate and a mount; the ones that call
 # another service also get the client's variables (MERIDIAN_TLS_*).

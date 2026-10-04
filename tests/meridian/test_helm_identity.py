@@ -179,6 +179,102 @@ def test_there_is_no_value_that_turns_identity_off() -> None:
     }
 
 
+@pytest.mark.parametrize("off", ["false", "null"])
+@pytest.mark.parametrize("name", TLS_SERVICES)
+def test_the_chart_fails_for_a_called_service_without_tls_and_names_it(
+    name: str, off: str
+) -> None:
+    # Five services are called by another workload; `tls: false` or no `tls` on
+    # any of them would leave a caller's identity unchecked, so the chart refuses.
+    done = run_helm([*helm_arguments(), "--set", f"services.{name}.tls={off}"])
+
+    assert done.returncode != 0
+    assert f"services.{name}.tls" in done.stderr
+    assert "tls: true" in done.stderr
+
+
+EXTRA_SERVICE = {
+    "dbSecret": "extra-db",
+    "replicas": 1,
+    "command": ["uvicorn"],
+    "env": [],
+    "resources": {
+        "requests": {"cpu": "50m", "memory": "64Mi"},
+        "limits": {"memory": "192Mi"},
+    },
+}
+RUNTIME_URL = {"name": "MERIDIAN_RUNTIME_URL", "serviceUrl": "agent-runtime"}
+GATEWAY_URL = {"name": "MERIDIAN_GATEWAY_URL", "serviceUrl": "model-gateway"}
+# What names the new service `extra`, as a --set-json pair: a serviceUrl and a
+# serviceMap entry of a service, and a serviceUrl of the ingestion Job.
+CALLS_EXTRA = {
+    "a serviceUrl": (
+        "services.claims-api.env",
+        [RUNTIME_URL, {"name": "EXTRA_URL", "serviceUrl": "extra"}],
+    ),
+    "a serviceMap": (
+        "services.claims-api.env",
+        [RUNTIME_URL, {"name": "EXTRA_MAP", "serviceMap": ["extra"]}],
+    ),
+    "a Job": (
+        "jobs.ingest.env",
+        [GATEWAY_URL, {"name": "EXTRA_URL", "serviceUrl": "extra"}],
+    ),
+}
+
+
+def with_extra_service(*, tls: bool | None, called_by: str | None) -> list[str]:
+    service = EXTRA_SERVICE if tls is None else {**EXTRA_SERVICE, "tls": tls}
+    arguments = [
+        *helm_arguments(),
+        "--set-json",
+        f"services.extra={json.dumps(service)}",
+    ]
+    if called_by is not None:
+        path, env = CALLS_EXTRA[called_by]
+        arguments += ["--set-json", f"{path}={json.dumps(env)}"]
+    return arguments
+
+
+@pytest.mark.parametrize("called_by", CALLS_EXTRA)
+def test_a_new_service_that_another_workload_calls_needs_tls_and_the_chart_names_it(
+    called_by: str,
+) -> None:
+    done = run_helm(with_extra_service(tls=None, called_by=called_by))
+
+    assert done.returncode != 0
+    assert "services.extra.tls" in done.stderr
+
+
+@pytest.mark.parametrize("called_by", CALLS_EXTRA)
+def test_a_new_service_that_another_workload_calls_renders_with_tls(
+    called_by: str,
+) -> None:
+    documents = render(with_extra_service(tls=True, called_by=called_by))
+
+    assert "extra" in by_name(documents, "Certificate")
+
+
+def test_a_service_nobody_calls_renders_without_tls() -> None:
+    # The boundary of the rule: the Claims API is called by no one inside the
+    # chart (the edge is outside it), and neither is a new service nobody names.
+    documents = render(with_extra_service(tls=None, called_by=None))
+
+    assert "extra" in by_name(documents, "Service")
+    command = container_of(workloads(documents)["extra"])["command"]
+    assert "--ssl-certfile" not in command
+
+
+def test_the_claims_api_renders_without_tls() -> None:
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+    assert "tls" not in chart["services"]["claims-api"]
+
+    documents = render(helm_arguments())
+
+    command = container_of(workloads(documents)["claims-api"])["command"]
+    assert not [word for word in command if word.startswith("--ssl")]
+
+
 # ── the certificates ─────────────────────────────────────────────────────────
 
 
@@ -197,11 +293,27 @@ def test_a_certificate_names_its_secret_its_uri_and_the_issuer(name: str) -> Non
     assert certificate["apiVersion"] == "cert-manager.io/v1"
     assert certificate["metadata"]["namespace"] == NAMESPACE
     assert spec["secretName"] == f"{name}-tls"
-    assert spec["privateKey"] == {"algorithm": "ECDSA", "size": 256}
+    assert spec["privateKey"] == {
+        "algorithm": "ECDSA",
+        "size": 256,
+        "rotationPolicy": "Always",
+    }
     assert spec["uris"] == [f"spiffe://{TRUST_DOMAIN}/ns/{NAMESPACE}/sa/{name}"]
     assert spec["issuerRef"] == {**ISSUER, "group": "cert-manager.io"}
     # cert-manager's own lifetime: 90 days, renewed at 60.
     assert not {"duration", "renewBefore"} & set(spec)
+
+
+def test_every_certificate_gets_a_new_key_at_renewal_by_an_explicit_setting() -> None:
+    # cert-manager's default changed from Never to Always in v1.18.0, so neither
+    # behaviour rests on a default: the chart sets Always on each Certificate
+    # (the CA's Never is pinned in test_kind_manifests.py).
+    certificates = of_kind(rendered_chart(), "Certificate")
+
+    assert len(certificates) == len(ALL_WORKLOADS)
+    for certificate in certificates:
+        policy = certificate["spec"]["privateKey"].get("rotationPolicy")
+        assert policy == "Always", certificate["metadata"]["name"]
 
 
 @pytest.mark.parametrize("name", TLS_SERVICES)
@@ -473,29 +585,30 @@ def test_no_value_of_the_identity_is_a_secret() -> None:
 # ── the network policies ─────────────────────────────────────────────────────
 
 
-def test_turning_tls_off_changes_no_network_policy() -> None:
+def test_turning_tls_on_for_the_claims_api_changes_no_network_policy() -> None:
     # TLS changes what is spoken on the port, not who may reach it: the same
-    # peers and the same port. Rendering the chart with every `tls` off must
-    # give byte-identical policies.
-    tls_off = [
-        item
-        for name in TLS_SERVICES
-        for item in ("--set", f"services.{name}.tls=false")
-    ]
-    with_tls = network_policies(rendered_chart())
-    without_tls = network_policies(render([*helm_arguments(), *tls_off]))
-
-    assert sorted(with_tls) == sorted(without_tls)
-    assert len(with_tls) == 11  # default-deny, six services, three Jobs, the sweep
-    for name, policy in with_tls.items():
-        assert yaml.safe_dump(policy) == yaml.safe_dump(without_tls[name]), name
-    # And the TLS was on in the first rendering and off in the second.
-    on = container_of(workloads(rendered_chart())["model-gateway"])["command"]
-    assert "--ssl-certfile" in on
-    gateway = container_of(
-        workloads(render([*helm_arguments(), *tls_off]))["model-gateway"]
+    # peers and the same port. The chart no longer renders with a called
+    # service's `tls` off, so the one service whose `tls` may differ, the Claims
+    # API (nobody inside the chart calls it), is turned on: the policies must be
+    # byte-identical.
+    plain = network_policies(rendered_chart())
+    served = network_policies(
+        render([*helm_arguments(), "--set", "services.claims-api.tls=true"])
     )
-    assert "--ssl-certfile" not in gateway["command"]
+
+    assert sorted(plain) == sorted(served)
+    assert len(plain) == 11  # default-deny, six services, three Jobs, the sweep
+    for name, policy in plain.items():
+        assert yaml.safe_dump(policy) == yaml.safe_dump(served[name]), name
+    # And the TLS was off in the first rendering and on in the second.
+    off = container_of(workloads(rendered_chart())["claims-api"])["command"]
+    assert "--ssl-certfile" not in off
+    claims_api = container_of(
+        workloads(render([*helm_arguments(), "--set", "services.claims-api.tls=true"]))[
+            "claims-api"
+        ]
+    )
+    assert "--ssl-certfile" in claims_api["command"]
 
 
 def test_every_policy_allows_the_port_the_services_listen_on_and_no_other() -> None:

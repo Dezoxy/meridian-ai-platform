@@ -60,8 +60,8 @@ readonly JOB_TIMEOUT=420
 readonly JOB_INTERVAL=3
 readonly ROLLOUT_TIMEOUT=300s
 # cert-manager issues the services' certificates in seconds once its webhook and
-# the issuer are Ready (`make up` waited for both); a minute and a half is far
-# more than a first deploy needs.
+# the issuer are Ready (`make up` waited for both); two minutes is far more than
+# a first deploy needs.
 readonly CERTIFICATE_TIMEOUT=120s
 readonly ROUTE_TIMEOUT=120s
 # The gateway counts a tenant's tokens over a sliding 60 s window and its

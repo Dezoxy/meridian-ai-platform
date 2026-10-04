@@ -12,7 +12,10 @@ certificates.yaml asks cert-manager for) at /etc/meridian/tls, read-only (S055).
 A service with `tls: true` in the values serves TLS and asks its callers for a
 certificate: the template, not the values, appends uvicorn's flags to its
 command and sets the probes' scheme to HTTPS. The port, the container's port
-name and the Service do not change.
+name and the Service do not change. A service that another workload calls (a
+serviceUrl or a serviceMap of any service's or Job's env names it) must set
+`tls: true`, or the chart fails: no value turns identity off. The Claims API,
+which nobody inside the chart calls, stays plain HTTP.
 tests/meridian/test_kind_manifests.py ties every name below to the code.
 
 The Model Gateway keeps its rate windows in one process: with a second replica
@@ -25,6 +28,10 @@ seconds. The plan's backlog holds it (T-45).
 {{- range $name, $service := .Values.services }}
 {{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) }}
 {{- fail (printf "services.model-gateway.replicas is %v, but the gateway keeps its rate windows in one process, so each replica would allow the full limits (threat model T-45): it runs one replica" $service.replicas) }}
+{{- end }}
+{{- $callers := include "meridian.callers" (dict "root" $ "name" $name) | fromJsonArray }}
+{{- if and $callers (not $service.tls) }}
+{{- fail (printf "services.%s.tls is not true, but it is called by %s (a serviceUrl or a serviceMap in their env names it): a service that is called must set `tls: true`, serve TLS and check its caller's certificate, and no value turns identity off. Only a service that nobody inside the chart calls, like claims-api, may stay plain HTTP" $name (join ", " $callers)) }}
 {{- end }}
 ---
 apiVersion: v1

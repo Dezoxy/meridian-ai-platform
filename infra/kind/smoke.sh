@@ -65,7 +65,10 @@
 #                 so the gateway's own tenant check would let it through),
 #                 answers 403. The tools check
 #                 above is the fourth proof: its calls run over TLS with the
-#                 runtime's certificate. Skipped while the Meridian services are
+#                 runtime's certificate. The two refusals (the 401 and the 403)
+#                 leave two refusal rows in the audit table on each run, one
+#                 per reason (the gateway throttles its refusal rows to one per
+#                 reason and minute). Skipped while the Meridian services are
 #                 not deployed (`make deploy`). A traceback is a failure, not a
 #                 refusal.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.

@@ -290,7 +290,10 @@ certificate: one workload's Certificate, after a `---`; takes root, identity (th
 output of meridian.identity, as a dict), name (the workload's, also its
 ServiceAccount's) and server (it serves TLS: it also gets a DNS name and the
 server usage). templates/certificates.yaml says what each field is for. No
-duration: cert-manager's default, 90 days renewed at 60.
+duration: cert-manager's default, 90 days renewed at 60. The key is new at every
+renewal by an explicit rotationPolicy: Always, not by cert-manager's default,
+which was Never before v1.18.0 (the CA's key, kept by Never, is in
+infra/kind/manifests/service-ca.yaml).
 */ -}}
 {{- define "meridian.certificate" -}}
 ---
@@ -306,6 +309,7 @@ spec:
   privateKey:
     algorithm: ECDSA
     size: 256
+    rotationPolicy: Always
   usages:
     - digital signature
     - client auth

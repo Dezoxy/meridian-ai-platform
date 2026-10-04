@@ -3808,12 +3808,62 @@ def test_the_service_ca_certificate_is_an_ecdsa_ca_for_a_year_in_cert_manager() 
     }
 
 
+def test_the_service_ca_keeps_its_key_at_renewal_by_an_explicit_setting() -> None:
+    # cert-manager's default is Always since v1.18.0 (Never before): with it the
+    # CA would get a new key at renewal, and a pod restarted after it would no
+    # longer trust the certificates of the pods that had not.
+    spec = service_ca_objects()[("Certificate", SERVICES_CA)]["spec"]
+
+    assert spec["privateKey"].get("rotationPolicy") == "Never"
+
+
 def test_the_service_ca_file_says_its_private_key_stays_outside_meridian() -> None:
     header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
 
     assert "private key" in header
     assert "`cert-manager` namespace" in header
     assert "`meridian`" in header
+
+
+def test_the_service_ca_file_says_the_key_is_kept_by_the_setting_not_a_default() -> (
+    None
+):
+    header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+    flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
+
+    assert "rotationPolicy: Never" in flat
+    assert "v1.18.0" in flat
+    assert "cert-manager's default)" not in flat
+    assert "kept at renewal, cert-manager's default" not in flat
+
+
+def test_the_service_ca_file_says_who_can_read_the_key_and_who_can_ask_for_a_cert() -> (
+    None
+):
+    header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+    flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
+
+    # The readers of the key: operators with a cluster-wide read of Secrets.
+    for reader in ("cainjector", "CloudNativePG"):
+        assert reader in flat
+    # The issuer signs any request, from any namespace, with any URI.
+    assert "any namespace" in flat
+    assert "approver" in flat
+    assert "S020" in flat
+
+
+def test_the_readme_says_who_reads_the_ca_key_and_who_can_ask_for_a_certificate() -> (
+    None
+):
+    readme = " ".join((KIND_DIR / "README.md").read_text(encoding="utf-8").split())
+
+    assert "no Meridian pod can read it" in readme
+    for reader in ("cainjector", "CloudNativePG"):
+        assert reader in readme
+    assert "approves every request" in readme
+    assert "rotationPolicy: Never" in readme
+    # The old, narrower claim: only the namespace's writers could mint one.
+    assert "whoever can create a `Certificate` in `meridian`" not in readme
 
 
 def test_the_cert_manager_values_install_the_crds_and_turn_nothing_optional_on() -> (

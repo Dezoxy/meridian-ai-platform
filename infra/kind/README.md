@@ -60,8 +60,16 @@ issuer, a CA certificate (ECDSA P-256, one year) and the `meridian-services`
 issuer that signs one certificate per service. The services use those
 certificates to prove to one another which service they are, by mutual TLS
 (the chart's part is under "Who a service is" below). The CA's private key is
-a Secret in the `cert-manager` namespace, outside `meridian`; `make up` waits
-for the issuer to be Ready before it installs the database.
+a Secret in the `cert-manager` namespace, outside `meridian`: no Meridian pod
+can read it, and the operators that hold a cluster-wide read of Secrets can
+(cert-manager's controller and cainjector, the CloudNativePG operator). The
+CA keeps its key at its renewal by an explicit `rotationPolicy: Never`, because
+cert-manager's default has been `Always` since v1.18.0 and a new key would
+leave a restarted pod distrusting the pods that had not. The issuer signs a
+Certificate from any namespace with any URI and nothing restricts who may ask
+(cert-manager's built-in approver approves every request); on kind that is the
+cluster's administrator, and a policy on requests is for AKS (S020). `make up`
+waits for the issuer to be Ready before it installs the database.
 
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
 ConfigMap each in `observability`, and applies Meridian's alert rules in
@@ -467,7 +475,8 @@ for every Certificate to be Ready right after the release. What the deploy
 creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
 
 - seven `Certificate` objects in `meridian`, signed by the `meridian-services`
-  ClusterIssuer: ECDSA P-256, cert-manager's default lifetime (90 days,
+  ClusterIssuer: ECDSA P-256, a new key at every renewal (`rotationPolicy:
+  Always`, set in the chart), cert-manager's default lifetime (90 days,
   renewed at 60), the URI `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
   for the five services that serve TLS the DNS name `<name>.meridian.svc`;
 - seven Secrets `<name>-tls` (`tls.crt`, `tls.key`, `ca.crt`), each mounted
@@ -478,7 +487,10 @@ The values `identity.trustDomain` (`meridian.kind`) and `identity.issuer` are
 required and have no off switch; a service with `tls: true` in the chart's
 values serves TLS, and the template adds uvicorn's flags, the HTTPS probes and
 the prefix its callers' URIs start with. Nothing else of the five's commands
-is repeated in the values.
+is repeated in the values. The chart fails for a service that another workload
+calls (a `serviceUrl` or a `serviceMap` entry, the Jobs' included) and does not
+set `tls: true`; only the Claims API, which nobody inside the chart calls,
+stays plain HTTP.
 
 | Caller | What it proves | Callee | What the callee checks |
 |---|---|---|---|
@@ -501,8 +513,13 @@ is a backlog row); a service reads its certificate when it starts, so a
 renewed one reaches it with the next restart (a Deployment's pods are not
 restarted by cert-manager), and so does a renewed CA; no certificate is
 revoked; nothing limits who may request a certificate for a service's name
-(whoever can create a `Certificate` in `meridian` can mint one: the cluster's
-access control); and the telemetry to the collector is still plain OTLP.
+(the `meridian-services` issuer signs a `Certificate` from any namespace with
+any URI, and cert-manager's built-in approver approves every request, so on
+kind whoever can create a `Certificate` anywhere, the cluster's administrator,
+can mint any service's identity; a policy on requests is for AKS, S020); the
+CA's private key is readable by the operators that hold a cluster-wide read of
+Secrets (cert-manager, cainjector, CloudNativePG), though by no Meridian pod;
+and the telemetry to the collector is still plain OTLP.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no
