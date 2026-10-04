@@ -34,8 +34,10 @@ PYTEST_DB_PORT      ?= 55432
 # Extra pytest arguments for `make pytest-db`, e.g. one test file.
 PYTEST_ARGS         ?=
 # Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
-# number, or auto for one per CPU core; 0 runs the tests in one process.
-PYTEST_WORKERS      ?= auto
+# number, or auto for one per CPU core; 0 runs the tests in one process. Four,
+# as CI's runner has: with ten on a laptop, connections to the database
+# container were dropped before PostgreSQL saw them (Docker Desktop, S054).
+PYTEST_WORKERS      ?= 4
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
@@ -128,11 +130,11 @@ lint:
 	uv run ruff format --check .
 	uv run lint-imports
 
-## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default auto; 0 runs them in one process)
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process)
 pytest:
 	uv run pytest -n $(PYTEST_WORKERS)
 
-## pytest-db       pytest in parallel (PYTEST_WORKERS, default auto; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
 pytest-db:
 	@set -e; \
 	docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true; \
