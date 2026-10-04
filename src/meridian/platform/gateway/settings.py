@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import SettingsError, registry_dir_from, require_env
+from meridian.platform.common.identity import IdentityPrefix, identity_prefix_from
 
 MODE_ENV = "MERIDIAN_GATEWAY_MODE"
 ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
@@ -134,6 +135,9 @@ class GatewaySettings(BaseModel):
     azure_tenant_id: str | None = Field(default=None, repr=False)
     # Recorded mode only (S050): the file whose answers the gateway replays.
     recordings: Path | None = None
+    # The prefix of the callers' certificate URIs (S055); none only for an app
+    # built in code, which then has no caller check. ``from_env`` requires it.
+    identity_prefix: IdentityPrefix | None = None
 
     @field_validator("azure_openai_endpoints")
     @classmethod
@@ -159,4 +163,5 @@ class GatewaySettings(BaseModel):
             azure_credential=environ.get(CREDENTIAL_ENV) or None,
             azure_tenant_id=_tenant_id_from(environ),
             recordings=Path(raw) if (raw := environ.get(RECORDINGS_ENV)) else None,
+            identity_prefix=identity_prefix_from(environ),
         )

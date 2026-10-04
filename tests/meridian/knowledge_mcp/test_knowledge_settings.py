@@ -26,6 +26,7 @@ ENVIRONMENT = {
     "MERIDIAN_REGISTRY_DIR": str(REGISTRY_DIR),
     "MERIDIAN_DATABASE_URL": DSN,
     "MERIDIAN_ALLOWED_HOSTS": "knowledge-mcp:8080",
+    "MERIDIAN_IDENTITY_PREFIX": "spiffe://meridian.test/ns/meridian/sa/",
     GATEWAY_URL_ENV: GATEWAY_URL,
 }
 # Each value breaks one rule; the text after the colon is what must not leak.

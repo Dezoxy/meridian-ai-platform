@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import httpx
 import psycopg
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.serde import _msgpack
@@ -34,6 +34,14 @@ from meridian.platform.common.http import (
     create_service_app,
     error_answer,
     error_responses,
+)
+from meridian.platform.common.identity import (
+    NAME_REFUSAL_REASON,
+    audited_refusals,
+    caller_policy,
+    caller_service,
+    install_caller_check,
+    may_name,
 )
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.telemetry import (
@@ -286,6 +294,7 @@ def create_app(
     # At start, not on the first run: the SDK's log routing and its models.
     prepare_sdk()
     registry = load_registry(settings.registry_dir)
+    policy = caller_policy(settings.identity_prefix, SERVICE_NAME, registry)
     servers: Mapping[str, ToolTarget] = (
         settings.tool_servers if tool_servers is None else tool_servers
     )
@@ -325,9 +334,31 @@ def create_app(
     )
     app, tracer = service.app, service.tracer
 
+    # Outside the app's other middleware: a call that comes from no known
+    # service is refused before its body is read (S055). The row says who in
+    # ``reference``, which a run's own rows use for the claim's reference.
+    install_caller_check(
+        app,
+        policy,
+        audited_refusals(
+            refusal_throttle,
+            lambda reason, who, carried: write_audit(
+                dsn,
+                AuditEvent(
+                    service=SERVICE_NAME,
+                    event="run.refused",
+                    outcome="refused",
+                    reason=reason,
+                    reference=who,
+                    suppressed=carried,
+                ),
+            ),
+        ),
+    )
+
     def refuse(
         tenant: str,
-        agent: str,
+        agent: str | None,
         reference: str,
         reason: str | None = None,
         run_id: uuid.UUID | None = None,
@@ -423,11 +454,16 @@ def create_app(
         response_model=RunResponse,
         # A failed run answers 502 (504 for a gateway timeout) with the usual
         # RunResponse, status "Failed"; a 503 names the run when it has one.
-        responses=error_responses(403, 413, 500)
+        responses=error_responses(401, 403, 413, 500)
         | error_responses(502, 504, model=RunResponse)
         | error_responses(503, model=RunErrorBody),
     )
-    def create_run(body: RunRequest, response: Response) -> RunResponse | JSONResponse:
+    def create_run(
+        body: RunRequest, response: Response, request: Request
+    ) -> RunResponse | JSONResponse:
+        calling = caller_service(request)
+        if calling is not None and not may_name(calling, body.tenant, body.agent):
+            raise refuse(body.tenant, body.agent, body.reference, NAME_REFUSAL_REASON)
         if not registry.tenant_may_run(body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference)
         factory = factories.get(body.agent)
@@ -459,13 +495,19 @@ def create_app(
         # leaves a run so); the rest is as for POST /runs,
         # except that a failed leg answers its 502 or 504 with status
         # "AwaitingApproval": the run is paused again and can be resumed.
-        responses=error_responses(403, 404, 413, 500)
+        responses=error_responses(401, 403, 404, 413, 500)
         | error_responses(502, 504, model=RunResponse)
         | error_responses(503, model=RunErrorBody),
     )
     def resume_run(
-        run_id: uuid.UUID, body: ResumeRequest, response: Response
+        run_id: uuid.UUID, body: ResumeRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
+        # A resume names a tenant and a reference; the agent is the run's own.
+        # The tenant is checked before the run is read, so a caller that may
+        # not name it learns nothing of a run under it (T-10).
+        calling = caller_service(request)
+        if calling is not None and body.tenant not in calling.tenants:
+            raise refuse(body.tenant, None, body.reference, NAME_REFUSAL_REASON)
         found = runs.fetch_run(dsn, run_id)
         # The same answer for a run that is not there and one under another
         # tenant or reference: no answer says that a run ID exists (T-10).
@@ -474,6 +516,14 @@ def create_app(
             body.reference,
         ):
             raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
+        if calling is not None and not may_name(calling, found.tenant, found.agent):
+            raise refuse(
+                found.tenant,
+                found.agent,
+                found.reference,
+                NAME_REFUSAL_REASON,
+                run_id=run_id,
+            )
         if not registry.tenant_may_run(found.tenant, found.agent):
             raise refuse(found.tenant, found.agent, found.reference, run_id=run_id)
         factory = factories.get(found.agent)
@@ -508,7 +558,7 @@ def create_app(
         "/runs/{run_id}",
         tags=["runs"],
         summary="Read the status of a run of the given tenant and reference.",
-        responses=error_responses(404, 500, 503),
+        responses=error_responses(401, 403, 404, 500, 503),
     )
     def read_run(
         run_id: uuid.UUID, tenant: BoundedEntityId, reference: Reference

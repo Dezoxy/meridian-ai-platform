@@ -75,7 +75,11 @@ class Health(WireModel):
 
 
 ERROR_DESCRIPTIONS = {
-    403: "The tenant may not run this agent or may not reach this model.",
+    401: "The caller presented no identity.",
+    403: (
+        "The caller is not a service that may call this one, may not name this "
+        "tenant or agent, or the tenant may not run this agent or reach this model."
+    ),
     404: "No such resource.",
     409: "The request conflicts with what is stored.",
     413: BODY_TOO_LARGE.capitalize() + ".",

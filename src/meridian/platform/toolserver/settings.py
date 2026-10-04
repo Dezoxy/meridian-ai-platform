@@ -13,6 +13,7 @@ from meridian.platform.common.env import (
     registry_dir_from,
     require_env,
 )
+from meridian.platform.common.identity import IdentityPrefix, identity_prefix_from
 
 ALLOWED_HOSTS_ENV = "MERIDIAN_ALLOWED_HOSTS"
 
@@ -25,6 +26,9 @@ class ToolServerSettings(BaseModel):
     # The ``host:port`` values the Host header may carry (DNS rebinding
     # protection); a wildcard port is written ``host:*``.
     allowed_hosts: tuple[str, ...] = Field(min_length=1)
+    # The prefix of the callers' certificate URIs (S055); none only for an app
+    # built in code, which then has no caller check. ``from_env`` requires it.
+    identity_prefix: IdentityPrefix | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Self:
@@ -40,4 +44,5 @@ class ToolServerSettings(BaseModel):
             registry_dir=registry_dir_from(environ),
             database_url=require_env(environ, DATABASE_URL_ENV),
             allowed_hosts=hosts,
+            identity_prefix=identity_prefix_from(environ),
         )
