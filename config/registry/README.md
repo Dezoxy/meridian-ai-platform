@@ -99,8 +99,9 @@ job. Beyond the schemas, validation refuses:
   itself or lists a call twice; a service that names a tenant or agent that
   does not exist, and a named tenant that may run none of the agents the
   service names; a tool server of `tools.yaml` without an entry in
-  `services.yaml`; and a service other than `agent-runtime` that calls a tool
-  server (S055);
+  `services.yaml`; a service other than `agent-runtime` that calls a tool
+  server; and a graph agent some tenant lists that `agent-runtime` does not
+  name, since every call for it would be refused (S055);
 - tenants whose rate limits do not fit together: for each route candidate that
   has `rate_limits`, the sum over all tenants of `requests_per_10_seconds`
   and of `tokens_per_minute` must not exceed the candidate's own value, or
@@ -168,11 +169,12 @@ knowledge store and may run for the tenant `claims-triage` only.
 ## Services
 
 `services.yaml` maps each workload of the platform to what it may do as a
-caller (S055). Status: **implemented** as validated configuration and as the
-parts a service will check a call with (`meridian.platform.common.identity`
-and `peercert`), proven alone; **designed** for the services themselves: no
-service reads the file or refuses a call by it yet, and no certificate is
-issued yet.
+caller (S055). Status: **implemented**, in tests and on kind: the Agent
+Runtime, the Model Gateway and the tool servers read the calling service
+from its certificate (`meridian.platform.common.identity` and `peercert`)
+and refuse a caller this file does not map, one that does not list them in
+`calls`, and a tenant or agent outside the caller's lists. Nothing runs in
+Azure.
 
 Each entry has the service's `id` (also its chart name, its ServiceAccount and
 the last part of the URI in its certificate), a `description`, `calls` (the

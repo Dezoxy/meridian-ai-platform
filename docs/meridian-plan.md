@@ -7055,7 +7055,7 @@ a call with no identity or from a service the registry does not map.
   `reference`. Rejected: a column for it, which is a migration; the
   backlog holds it for the audit search (S033).
 - **Kept whole**, as the owner chose for S019: the transport, the check
-  and the tenant and agent rule in one step, six contracts.
+  and the tenant and agent rule in one step, eight contracts.
 
 **Work log:**
 
@@ -7064,7 +7064,7 @@ a call with no identity or from a service the registry does not map.
   without is seen with none, another CA's certificate cannot complete a
   request. The spike also found that Python 3.13 refuses a chain without
   key identifiers, which the test certificates and cert-manager's carry.
-- Six contracts to `implementer`, two at a time on disjoint files:
+- Eight contracts to `implementer`, two at a time on disjoint files:
   1. `make up` installs cert-manager (v1.21.2, pinned, read by
      Renovate's `kind platform` group) and three objects: a self-signed
      issuer, a CA certificate in the `cert-manager` namespace and the
@@ -7081,6 +7081,8 @@ a call with no identity or from a service the registry does not map.
      and `https` addresses for the five, the wait for the Certificates
      in `make deploy`, three lines in `make smoke`.
   6. The documents the step made false.
+  7. and 8. What the reviews found, in the code and in the chart
+     (below).
 - What the contracts got wrong, found by the implementers or on review:
   the Job's name (above); the smoke lines, which the first contract ran
   from the Claims API's pod, a pod the network policy keeps from the
@@ -7091,7 +7093,40 @@ a call with no identity or from a service the registry does not map.
 - The main session read every changed source, chart and script file and
   ran every gate. Three of the implementer runs changed files through
   shell rewrites and not the Edit tool, so the edit gate never saw them
-  (backlog).
+  (backlog); the last two were told to use it and did.
+- **Three reviews**, each given the code and seven or eight claims to
+  break, not the session's conclusions. None found a way round the
+  check: the security reviewer ran the middleware behind a real TLS
+  server and tried methods, paths and headers. What they found, and
+  what was done:
+  - Fixed. The runtime's name refusals wrote an audit row per request,
+    so a service with a certificate could fill the table through `GET
+    /runs/{id}` (security, high; platform boundary): they are throttled
+    like the gateway's. A run whose agent the caller may not name
+    answered 403 on a resume, which says it exists, and was readable:
+    both answer 404. The name rule skipped a request with no caller in
+    its scope: with a policy it refuses. An unknown service's ID, text
+    from a certificate, reached the audit row and an uncut log line.
+    Every refused call took a worker thread before the throttle was
+    asked. A new agent given to a tenant passed validation and would
+    be refused on every call: the registry now fails for it.
+  - Fixed. The CA's manifest said its key is kept at renewal by
+    cert-manager's default (infrastructure, high; security). The
+    installed version's own description says the default is `Always`
+    since v1.18: the CA now sets `Never` and the workloads `Always`,
+    and `make up` left the CA's key as it was (the same key
+    identifier). `services.<name>.tls=false` rendered, against the
+    values file's own claim: the chart fails for a called service
+    without TLS. The comments, the README and T-88 said too little
+    about who can reach the CA's key and the issuer.
+  - Into the backlog, each with the reviewer's way out: an expired
+    certificate leaves the probes green (infrastructure, high: before
+    the chart goes to AKS), the issuer signs for any namespace, the
+    `cert-manager` namespace has no policy, the smoke line reads a
+    status and not a reason, `make deploy` on a cluster without
+    cert-manager, the mounted key's mode, cert-manager's images by tag.
+  - Left as designed and recorded (ADR 4, T-89): an app built in code
+    without a prefix has no check.
 - `main` was merged in after S024 landed (one conflict, both steps'
   sections in this file). T-88 to T-90, ADR 4 and changelog v0.35 were
   numbered after it.
@@ -7102,24 +7137,34 @@ a call with no identity or from a service the registry does not map.
 
 **Result / verification:**
 
-- **On the kind cluster** (2026-10-04, image `811afd3d5438`):
+- **On the kind cluster** (2026-10-04; first on image `811afd3d5438`,
+  then again after the review fixes on image `a49a13ef7aa1`, whose
+  results these are):
   - `make up`: exit 0, `release cert-manager v1.21.2 ready in
-    cert-manager`; both issuers Ready.
+    cert-manager`; both issuers Ready; the CA stores `rotationPolicy:
+    Never` and has the key identifier it had before the setting.
   - `make deploy`: exit 0, `the services' certificates are ready`; seven
-    Certificates Ready; the ingestion Job embedded 85 chunks through the
-    gateway over mutual TLS.
-  - `make smoke`: exit 0, 19 PASS, before and after the merge of `main`.
-    The three new lines: `GET /healthz` with no certificate 200; a chat
-    call with no certificate 401; the runtime naming the `evaluation`
-    tenant 403. The tool probe passes over TLS.
-  - `make demo`: exit 0; the triage trace has spans from the Claims API,
-    the runtime, the gateway and the three tool servers.
-  - The audit table holds one `caller-no-identity` row and one
-    `caller-name-not-allowed` row naming `agent-runtime`, both from
-    smoke.
+    Certificates Ready. On the first image the ingestion Job embedded 85
+    chunks through the gateway over mutual TLS.
+  - `make smoke`: exit 0, 19 PASS, three times: before the merge of
+    `main`, after it, and after the fixes. The three new lines: `GET
+    /healthz` with no certificate 200; a chat call with no certificate
+    401; the runtime naming the `evaluation` tenant 403. The tool probe
+    passes over TLS.
+  - `make demo`: exit 0, twice; the triage trace has spans from the
+    Claims API, the runtime, the gateway and the tool servers the claim
+    needed. Golden claims CLM-0002 and CLM-0003 were used; 37 are left.
+  - From the Claims API's pod with its own certificate, against the
+    runtime: no certificate 401; reading a run under `evaluation` 403
+    three times, with one audit row for the three; a run that does not
+    exist under its own tenant 404.
+  - The audit table holds, for the gateway, `caller-no-identity` and
+    `caller-name-not-allowed` (naming `agent-runtime`) from the smoke
+    runs, and the same two reasons for the runtime from the probe.
   - A service's certificate (public part): 90 days, the URI
     `spiffe://meridian.kind/ns/meridian/sa/agent-runtime`, the DNS name
-    `agent-runtime.meridian.svc`, client and server usage.
+    `agent-runtime.meridian.svc`, client and server usage; it stores
+    `rotationPolicy: Always`.
 - **Not provable on the cluster:** a service that may not call another
   being refused by identity. The network policy admits exactly the
   registry's callers, so no pod both reaches a service and is refused by
@@ -7132,20 +7177,28 @@ a call with no identity or from a service the registry does not map.
   with its new labels. `make helm-lint`: `1 chart(s) linted, 0 chart(s)
   failed`. `shellcheck` on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0.
 - **The whole suite**, `GITHUB_ACTIONS=true make pytest-db` with three
-  workers, after the merge: `1 failed, 8477 passed, 8 skipped`. The
-  failure was the older smoke-order test; it was corrected and its file
-  and the identity chart tests ran again, `103 passed`. The suite was
-  not run a second time in full; CI runs it on the pull request.
+  workers, twice. After the merge: `1 failed, 8477 passed, 8 skipped`;
+  the failure was an older test that pinned the network-policy check as
+  smoke's last. After the review fixes: `1 failed, 8523 passed, 8
+  skipped`; the failure was a knowledge-server test whose registry gives
+  a tenant a second graph agent, which the new check refuses until the
+  runtime's entry names it. Each was corrected and its files ran again
+  (`103 passed`; `488 passed, 2 skipped` with the stack tests that share
+  the fixture). The suite was not run a third time in full; CI runs it on
+  the pull request.
 - **Not run:** `make eval` (no prompt, graph or recording changed);
   anything against Azure; a cold `make up` from no cluster; a
   certificate's renewal; the health dashboard in a browser.
 
 **Follow-ups:** in Part B's backlog. Closed: service identity itself,
 TLS between the services, S024's cluster proof. New: a renewed
-certificate needs a restart and nothing alerts on expiry; no revocation
-and no policy on certificate requests; telemetry in clear text; the
-scaffold and `services.yaml`; a column for the calling service; the
-mounted key's file mode; the implementer and the edit gate.
+certificate needs a restart, and an expired one leaves the probes green;
+no revocation and an issuer that signs for any namespace; telemetry in
+clear text; the scaffold and `services.yaml`; a column for the calling
+service; the mounted key's file mode; the smoke line that reads a status
+and not a reason; `make deploy` on a cluster without cert-manager; the
+implementer and the edit gate. The first two are for before the chart
+goes to AKS (S020).
 
 ## Part D — Open questions
 
@@ -7352,5 +7405,7 @@ mounted key's file mode; the implementer and the edit gate.
   certificate (mutual TLS with cert-manager, ADR 4, the owner's choice)
   and refuse a tenant or agent outside its entry in the registry's new
   `services.yaml`. T-08, T-24, T-48 and T-50 say what is built; T-88 to
-  T-90 are new. Three backlog rows close, S024's cluster proof among
-  them, and seven are new.
+  T-90 are new. Three reviews found no way round the check and nine
+  defects, fixed in the step; what they found beyond it is in the
+  backlog. Three backlog rows close, S024's cluster proof among them,
+  and nine are new.
