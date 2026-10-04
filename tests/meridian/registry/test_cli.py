@@ -14,7 +14,7 @@ from meridian.platform.registry import load_registry
 runner = CliRunner()
 SUMMARY = re.compile(
     r"registry OK: \d+ providers?, \d+ deployments?, \d+ tools?, \d+ agents?, "
-    r"\d+ tenants?"
+    r"\d+ tenants?, \d+ services?"
 )
 
 
@@ -197,6 +197,14 @@ def test_summary_uses_singular_and_plural_correctly(registry_copy: Path) -> None
     agents.write_text(
         text[: text.index("  - id: knowledge-ingestion")], encoding="utf-8"
     )
+    # The ingestion Job names the agent that is gone.
+    services = registry_copy / "services.yaml"
+    services.write_text(
+        services.read_text(encoding="utf-8").replace(
+            "agents: [knowledge-ingestion]", "agents: [claims-triage]"
+        ),
+        encoding="utf-8",
+    )
 
     result = runner.invoke(
         app, ["registry", "validate", "--registry-dir", str(registry_copy)]
@@ -204,7 +212,7 @@ def test_summary_uses_singular_and_plural_correctly(registry_copy: Path) -> None
 
     assert result.exit_code == 0, result.output
     assert "1 agent," in result.stdout
-    assert result.stdout.strip().endswith("1 tenant")
+    assert "1 tenant," in result.stdout
     assert "1 tenants" not in result.stdout
     assert "1 agents" not in result.stdout
 

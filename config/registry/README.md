@@ -2,12 +2,13 @@
 
 The declarative source of truth for the platform: which models exist, which
 data may reach them, which tools exist and which agent may call them, and
-which tenant runs which agent. Status: **implemented** (S008) as validated
-configuration; the Model Gateway and the Agent Runtime load it at startup
-(S009), and in live mode the gateway routes each chat call by it: the
-tenant's data class against every candidate's residency label and data
-classes (S010), then the candidates it kept, in the route's order, until
-one answers (S042). The design is in the plan's S008 section and in
+which tenant runs which agent, and which service may call which. Status:
+**implemented** (S008) as validated configuration; the Model Gateway and the
+Agent Runtime load it at startup (S009), and in live mode the gateway routes
+each chat call by it: the tenant's data class against every candidate's
+residency label and data classes (S010), then the candidates it kept, in the
+route's order, until one answers (S042). The design is in the plan's S008
+section and in
 [ADR 3](../../docs/architecture/decisions/0003-build-a-thin-model-gateway.md).
 
 ## Files
@@ -20,6 +21,7 @@ one answers (S042). The design is in the plan's S008 section and in
 | `agents.yaml` | Agents, their kind (`graph` or `job`) and their tool allowlists |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, the replay deployment per purpose and the recorded one |
 | `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
+| `services.yaml` | The platform's services: which ones each may call, and the tenants and agents it names when it calls (S055) |
 | `schemas/` | JSON Schemas generated from the Pydantic models; never edited by hand |
 | `snapshots/` | Terraform's deployment outputs without account names or endpoints |
 
@@ -93,6 +95,12 @@ job. Beyond the schemas, validation refuses:
   or `dimensions`, and a replay embedding deployment whose `dimensions`
   differ from a candidate's: vectors of different models or sizes are not
   comparable, and nothing would fail when one met another (T-54);
+- a repeated service ID; a service that calls one that does not exist, calls
+  itself or lists a call twice; a service that names a tenant or agent that
+  does not exist, and a named tenant that may run none of the agents the
+  service names; a tool server of `tools.yaml` without an entry in
+  `services.yaml`; and a service other than `agent-runtime` that calls a tool
+  server (S055);
 - tenants whose rate limits do not fit together: for each route candidate that
   has `rate_limits`, the sum over all tenants of `requests_per_10_seconds`
   and of `tokens_per_minute` must not exceed the candidate's own value, or
@@ -157,6 +165,35 @@ The runtime loads no graph for it and refuses a run that names it. The one job
 is `knowledge-ingestion` (S012), which embeds the policy wordings for the
 knowledge store and may run for the tenant `claims-triage` only.
 
+## Services
+
+`services.yaml` maps each workload of the platform to what it may do as a
+caller (S055). Status: **implemented** as validated configuration and as the
+parts a service will check a call with (`meridian.platform.common.identity`
+and `peercert`), proven alone; **designed** for the services themselves: no
+service reads the file or refuses a call by it yet, and no certificate is
+issued yet.
+
+Each entry has the service's `id` (also its chart name, its ServiceAccount and
+the last part of the URI in its certificate), a `description`, `calls` (the
+services it may call; a callee refuses a caller that does not list it) and,
+for what it names when it calls, `tenants` and `agents` (a callee refuses a
+tenant or an agent outside them). All three lists are required; a service that
+calls nobody says `[]`. The lists hold what the code names today, no more:
+
+| Service | Calls | Tenant | Agent | Where the code says so |
+|---|---|---|---|---|
+| `claims-api` | `agent-runtime` | `claims-triage` | `claims-triage` | `ClaimsSettings.tenant`, default `claims-triage` (`MERIDIAN_TENANT` is set nowhere in the chart or `infra/`); `AGENT` in `claims_triage/triaging.py` |
+| `agent-runtime` | `model-gateway` and the three tool servers | `claims-triage` | `claims-triage` | `ModelClient` sends the run's own tenant and agent, which are the Claims API's |
+| `model-gateway`, `policy-mcp`, `claims-mcp` | nothing | none | none | no service URL in their chart `env` |
+| `knowledge-mcp` | `model-gateway` | `claims-triage` | `claims-triage` | `wording_search` embeds under `binding.tenant` and `binding.agent`, the run's |
+| `knowledge-ingest` | `model-gateway` | `claims-triage` | `knowledge-ingestion` | `--tenant claims-triage` in the chart's `ingest` Job; `INGESTION_AGENT` in `knowledge_mcp/__init__.py` |
+
+The tenant of `knowledge-mcp` follows the Claims API's: if the Claims API's
+tenant changes, both entries change. A caller that is not a service (the
+evaluation judge names tenant `evaluation` and agent `evaluation-judge`, from a
+laptop or CI) has no entry and no certificate.
+
 ## Limits
 
 Each tenant has four limits, each with its own job:
@@ -190,6 +227,9 @@ an in-memory reader; a dashboard for them is designed (S043).
   then `make registry-snapshot` and edit `models.yaml` in the same pull
   request. Prices and retirement dates are verified values with a source and
   a date, never recalled ones.
+- **A service:** edit `services.yaml` with the chart's `env` (who calls whom)
+  and the code (what each names) in view; validation refuses a tool server
+  without an entry.
 - **A tool or an agent:** edit `tools.yaml` or `agents.yaml`. A tool that
   changes state has effect `write` and requires an idempotency key.
   `uv run meridian workload new NAME` appends a new workload's agent to
