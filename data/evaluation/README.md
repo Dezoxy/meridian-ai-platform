@@ -43,7 +43,7 @@ An entry is found by the SHA-256 of the request the provider is given: the
 messages after the gateway's redaction, the output budget and the answer
 schema. It holds the answer's text, the finish reason, the provider's model
 string, the token counts and the latency of the live call, and nothing
-else: no request, no header, no identifier (T-77; a test reads every file
+else: no request, no header, no identifier (T-78; a test reads every file
 here for an Azure host, an account name, an email address and a GUID).
 
 A changed prompt or schema finds no entry. The gateway then answers 502,
@@ -97,7 +97,7 @@ Three more:
   registry agent `evaluation-judge`, which has no tool, under the tenant
   `evaluation`; anything but a strict `{"grounded": true, ...}` is false. It
   is in neither the absolute graders nor a target, and it never changes a
-  rule grade (T-29, T-78).
+  rule grade (T-29, T-79).
 - `cost`: the claim's model cost in the gateway's ledger is at most
   EUR 0.02 (QA-07).
 - `latency`, in a live report only: the claim's model calls took at most

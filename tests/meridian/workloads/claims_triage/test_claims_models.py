@@ -1,5 +1,6 @@
 """The claim submission mirrors data/synthetic/claims.json."""
 
+import dataclasses
 from typing import Any, get_args
 
 import pytest
@@ -16,6 +17,7 @@ from meridian.workloads.claims_triage.models import (
     ClaimMoveResponse,
     ClaimSubmission,
     Decision,
+    DecisionFailure,
     DecisionResponse,
     DocumentsArrival,
     DraftedBy,
@@ -341,3 +343,20 @@ def test_the_decision_route_s_body_still_has_three_words_and_the_outcome_five() 
     for word in ("send_back", "withdrawn"):
         with pytest.raises(ValidationError):
             ClaimDecision.model_validate({"decision": word})
+
+
+def test_a_decision_failure_stored_nothing_unless_it_says_so() -> None:
+    failure = DecisionFailure(502, "the run failed")
+
+    assert failure.stored is False
+    assert failure.run_id is None
+
+
+def test_a_decision_failure_is_frozen_and_is_marked_stored_by_a_new_value() -> None:
+    failure = DecisionFailure(502, "the run failed")
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        failure.stored = True  # type: ignore[misc]
+    marked = dataclasses.replace(failure, stored=True)
+    assert marked == DecisionFailure(502, "the run failed", None, True)
+    assert failure.stored is False

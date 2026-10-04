@@ -1,4 +1,4 @@
-"""The LLM judge: whether a statement is supported by a source (S050, T-29, T-78).
+"""The LLM judge: whether a statement is supported by a source (S050, T-29, T-79).
 
 The judge grades one thing, groundedness, and knows no workload's words: the
 workload decides what the source and the statement are. It calls the Model
@@ -10,7 +10,7 @@ Its verdict is the one grader ``groundedness``. The rule graders are computed
 without it and it never overrides them (T-29). Nothing it says can pass a
 statement unless it is read strictly: a statement that addresses the model is
 ``flagged`` and no call is made, and an answer that is not the format is
-``unreadable``. Every outcome but ``grounded`` is false (T-78). A log line names
+``unreadable``. Every outcome but ``grounded`` is false (T-79). A log line names
 the outcome and never repeats the source, the statement or the model's text
 (T-03).
 """
@@ -54,7 +54,7 @@ ANSWER_FIELDS = frozenset({"grounded", "reason"})
 # Read-only: it is sent as it is and hashed into the prompt's version. It has no
 # length for the reason, which the gateway's subset does not take: the system
 # message states it and read_answer cuts it. The schema makes the shape likely;
-# read_answer still decides what is read (T-78).
+# read_answer still decides what is read (T-79).
 ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

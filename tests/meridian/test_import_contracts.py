@@ -369,7 +369,7 @@ def test_the_package_inits_that_no_contract_lists_import_nothing(init: Path) -> 
     assert imports == []
 
 
-# ── the gateway does not depend on the evaluation or the CLI (S050, T-77) ─────
+# ── the gateway does not depend on the evaluation or the CLI (S050, T-78) ─────
 GATEWAY_ISOLATION_CONTRACT = (
     "the gateway imports neither the evaluation package nor the CLI"
 )

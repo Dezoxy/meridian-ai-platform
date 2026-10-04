@@ -117,7 +117,7 @@ SERVICE_NAME = "model-gateway"
 CHAT_PURPOSE = "chat"
 EMBEDDING_PURPOSE = "embedding"
 REPLAY_ENVIRONMENTS = frozenset({"test", "ci", "kind"})
-# A recording is a laptop's or a CI run's, never a cluster's (T-77).
+# A recording is a laptop's or a CI run's, never a cluster's (T-78).
 RECORDED_ENVIRONMENTS = frozenset({"test", "ci", "local"})
 # The Azure CLI credential is a developer's login, so a gateway that builds its
 # own live providers starts on a laptop only.
@@ -145,7 +145,7 @@ PROVIDER_FAILED = "the model provider failed"
 PROVIDER_FILTERED = "the model provider's content filter refused the request"
 # No attempt was made: every candidate was skipped.
 PROVIDER_UNAVAILABLE = "the model provider is unavailable"
-# Recorded mode: the recording holds no answer to this request (T-77). Fixed, so
+# Recorded mode: the recording holds no answer to this request (T-78). Fixed, so
 # it names no prompt; it says which command records again.
 NOT_RECORDED = "no recording answers this request; record again (make eval-record)"
 # The reason on the calls counter of a request no candidate was called for.
@@ -198,7 +198,7 @@ def _check_start_allowed(
         if settings.environment not in RECORDED_ENVIRONMENTS:
             raise SettingsError(
                 "recorded mode is refused outside the test, ci and local "
-                "environments (T-77)"
+                "environments (T-78)"
             )
         if providers is None and settings.recordings is None:
             raise SettingsError(f"recorded mode needs {RECORDINGS_ENV}")

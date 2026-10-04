@@ -1,4 +1,4 @@
-"""``GET /adjuster/claims/{claim_id}/proposal`` (S050, T-79): the stored
+"""``GET /adjuster/claims/{claim_id}/proposal`` (S050, T-80): the stored
 proposal as JSON, for the evaluation of a deployed stack, and nothing of the
 claimant.
 

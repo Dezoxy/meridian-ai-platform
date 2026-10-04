@@ -1,7 +1,7 @@
 """The adjuster's pages of the Claims API (S016): the queue of the claims that
 wait for a person, one claim with its proposal and audit trail, and the form
 that records a decision. One JSON route, ``GET /adjuster/claims/{claim_id}/proposal``,
-answers the stored proposal for ``meridian eval run`` (S050, T-79).
+answers the stored proposal for ``meridian eval run`` (S050, T-80).
 
 The pages are server-rendered with Jinja2 (autoescape on, no ``|safe``), carry
 no script and one stylesheet from the app itself, and are out of the OpenAPI
@@ -51,7 +51,9 @@ from meridian.platform.common.telemetry import (
     set_span_attributes,
     start_span,
 )
+from meridian.runtime.sweep import ABANDONED_REASON
 from meridian.workloads.claims_triage.lifecycle import (
+    DOCUMENTS_OVERDUE,
     MAX_TRIAGES_PER_CLAIM,
     SERVICE_NAME,
 )
@@ -165,15 +167,32 @@ DECIDED_STATES = ("approved", "rejected", "documents_requested")
 # audit.claim_trail is the one thing of the audit log the Claims API may read
 # (migration 0011, T-71); the tenant filter is the page's own as well.
 TRAIL_SQL = (
-    "SELECT recorded_at, db_role, service, event, outcome FROM audit.claim_trail "
+    "SELECT recorded_at, db_role, service, event, outcome, reason "
+    "FROM audit.claim_trail "
     "WHERE claim_id = %s AND tenant = %s ORDER BY recorded_at, event LIMIT %s"
 )
-# Whether the run completed at or after the decision (the resend button's test).
-COMPLETED_SQL = (
-    "SELECT EXISTS (SELECT 1 FROM audit.claim_trail "
-    "WHERE claim_id = %s AND tenant = %s AND event = 'run.completed' "
-    "AND recorded_at >= %s)"
+# How the run ended, completed or failed, at or after the decision: its event
+# and reason, or no row while it has not ended (the resend button's test): the
+# sweep ends an abandoned run Failed, and sending the decision again could not
+# complete it. The first end is the one that counts.
+ENDED_SQL = (
+    "SELECT event, reason FROM audit.claim_trail "
+    "WHERE claim_id = %s AND tenant = %s "
+    "AND event IN ('run.completed', 'run.failed') AND recorded_at >= %s "
+    "ORDER BY recorded_at LIMIT 1"
 )
+# The end the page explains: the sweep's, for a run that could not be resumed.
+SWEPT_END = ("run.failed", ABANDONED_REASON)
+# Why the claim is in its present state: the reason of the latest ``claim.<state>``
+# event, the move that brought it there. Asked of the database, not read off the
+# listed rows, which are at most TRAIL_LIMIT.
+REASON_SQL = (
+    "SELECT reason FROM audit.claim_trail "
+    "WHERE claim_id = %s AND tenant = %s AND event = %s "
+    "ORDER BY recorded_at DESC LIMIT 1"
+)
+# The reason of the sweep's move of a claim whose documents did not come.
+DOCUMENTS_OVERDUE_REASON = DOCUMENTS_OVERDUE.trigger
 
 
 class TrailRow(NamedTuple):
@@ -182,6 +201,7 @@ class TrailRow(NamedTuple):
     service: str
     event: str
     outcome: str
+    reason: str | None
 
 
 class QueueRow(NamedTuple):
@@ -199,9 +219,14 @@ class ClaimView:
     decision needs, as text, and never the claimant's name or email.
     ``decision`` is the one that moved the claim into its state, if it is in a
     state a decision leads to. ``resend_due`` is true when that decision has a
-    run and no ``run.completed`` event was recorded at or after it. ``run_id``
-    is the claim's run (``None`` when it has none) and ``triages`` the number
-    of times it has been triaged."""
+    run and no ``run.completed`` or ``run.failed`` event was recorded at or
+    after it. ``swept`` is true when that end was the sweep's (``run.failed``
+    with the reason ``abandoned``): the decision stands, its run was ended
+    before it could note it. ``run_id`` is the claim's run (``None`` when it has
+    none) and ``triages`` the number of times it has been triaged.
+    ``referral_reason`` is the reason of the move that brought a waiting claim
+    to the adjuster (``None`` for a claim in another state, or a move with no
+    reason)."""
 
     claim_id: str
     state: str
@@ -213,8 +238,10 @@ class ClaimView:
     decision: tuple[str, datetime] | None
     trail: tuple[TrailRow, ...]
     resend_due: bool = False
+    swept: bool = False
     run_id: UUID | None = None
     triages: int = 0
+    referral_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,17 +393,20 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
     failed = view.state == "triage_failed"
     has_run = view.run_id is not None
     at_cap = view.triages >= MAX_TRIAGES_PER_CLAIM
+    overdue = waiting and view.referral_reason == DOCUMENTS_OVERDUE_REASON
     return TEMPLATES.get_template("claim.html").render(
         view=view,
         since=_when(view.since),
         received_at=_when(view.received_at),
         decision=view.decision and (view.decision[0], _when(view.decision[1])),
-        trail=[(_when(t.recorded_at), *t[1:]) for t in view.trail],
+        trail=[(_when(t.recorded_at), *t[1:5], _text(t.reason)) for t in view.trail],
         payable=payable,
         waiting=waiting,
         failed=failed,
         # A claim referred at the cap has no paused run: nothing to send back.
         no_run=waiting and not has_run,
+        # The sweep referred it: the documents asked for did not arrive.
+        overdue=overdue,
         # Triaging again is a send-back of a paused run, or a retry of a failed
         # triage; at the cap it is neither, and the page says why.
         send_back=waiting and has_run and not at_cap,
@@ -385,6 +415,7 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         cap_words=NUMBER_WORDS[MAX_TRIAGES_PER_CLAIM],
         notice=notice,
         resend=resend,
+        swept=view.swept,
         # Jinja would print ``None``: a claim with no run is the empty string.
         run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
@@ -453,14 +484,19 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
             decision = conn.execute(DECISION_SQL, (claim_id, run_id)).fetchone()
         trail = conn.execute(TRAIL_SQL, (claim_id, tenant, TRAIL_LIMIT)).fetchall()
         # A decision with no run has nothing to resume, so nothing to send again.
-        # Whether the run completed is asked of the database, not read off the
-        # listed rows: the page lists at most TRAIL_LIMIT of them.
-        resend_due = False
+        # How the run ended is asked of the database, not read off the listed
+        # rows: the page lists at most TRAIL_LIMIT of them.
+        resend_due = swept = False
         if decision is not None and run_id is not None:
-            completed = conn.execute(
-                COMPLETED_SQL, (claim_id, tenant, decision[1])
+            ended = conn.execute(ENDED_SQL, (claim_id, tenant, decision[1])).fetchone()
+            resend_due = ended is None
+            swept = ended == SWEPT_END
+        referral_reason = None
+        if state == "awaiting_adjuster":
+            referral = conn.execute(
+                REASON_SQL, (claim_id, tenant, f"claim.{state}")
             ).fetchone()
-            resend_due = not completed[0]
+            referral_reason = None if referral is None else referral[0]
     proposal, note = _proposal_of(claim_id, proposal_row)
     return ClaimView(
         claim_id=claim_id,
@@ -473,8 +509,10 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         decision=None if decision is None else (decision[0], decision[1]),
         trail=tuple(TrailRow(*row) for row in trail),
         resend_due=resend_due,
+        swept=swept,
         run_id=run_id,
         triages=triages,
+        referral_reason=referral_reason,
     )
 
 
@@ -556,7 +594,7 @@ def add_adjuster_pages(
         return HTMLResponse(render_claim(view))
 
     # The proposal the page above shows, as JSON, for ``meridian eval run``
-    # (T-79): the claim's ID, its state and the proposal, and nothing of the
+    # (T-80): the claim's ID, its state and the proposal, and nothing of the
     # claimant. A read: no audit row, as the page writes none (S021).
     @app.get(QUEUE_PATH + "/{claim_id}/proposal", include_in_schema=False)
     def adjuster_proposal(claim_id: ClaimId) -> JSONResponse:

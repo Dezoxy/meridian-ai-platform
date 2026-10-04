@@ -20,7 +20,7 @@ meridian = softwareSystem "Meridian AI Platform" "Builds, runs and governs LLM a
     }
 
     group "Workload plane" {
-        claimsApp = container "Claims Triage App" "Claims API, adjuster queue UI and claimant pages for the reference workload; owns the claims-triage graph package." "Python, FastAPI, Jinja" "Layer Workload"
+        claimsApp = container "Claims Triage App" "Claims API, adjuster queue UI and claimant pages for the reference workload; owns the claims-triage graph package and the scheduled sweep that refers overdue claims to an adjuster and ends abandoned runs." "Python, FastAPI, Jinja" "Layer Workload"
         claimsMcp = container "Claims MCP Server" "Claim notes, approval requests and the outcome recorded for a request as MCP tools. Adjuster decisions are recorded by the Claims Triage App, never through a tool." "Python, MCP SDK" "Layer Workload"
     }
 }
@@ -35,7 +35,7 @@ meridian.ingress -> meridian.claimsApp "Routes claim and adjuster requests to" "
 // Workload plane
 meridian.claimsApp -> identityProvider "Validates user tokens against" "OIDC/JWKS" "Layer Workload"
 meridian.claimsApp -> meridian.runtime "Starts and resumes triage runs on" "HTTPS/JSON, service identity" "Layer Workload"
-meridian.claimsApp -> meridian.platformDb "Stores claims and adjuster decisions in" "PostgreSQL" "Layer Workload"
+meridian.claimsApp -> meridian.platformDb "Stores claims and adjuster decisions in; its scheduled sweep, under a role of its own, moves overdue and stranded claims and removes abandoned runs' checkpoints in" "PostgreSQL" "Layer Workload"
 meridian.claimsMcp -> meridian.platformDb "Binds each call to its run and claim in, and writes notes, approval requests and audit events to" "PostgreSQL" "Layer Workload"
 meridian.claimsMcp -> meridian.registry "Loads its tools, their schemas and the agent allowlists from" "File read at startup" "Layer Workload"
 

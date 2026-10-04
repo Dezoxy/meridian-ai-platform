@@ -420,7 +420,7 @@ def test_the_graders_are_the_ten_rule_graders_then_groundedness_and_cost() -> No
     assert (*RULE_GRADERS, GROUNDEDNESS, COST) == GRADERS
     assert (GROUNDEDNESS, COST, LATENCY) == ("groundedness", "cost", "latency")
     assert LATENCY not in GRADERS
-    # T-78: the judge's grader is in neither list.
+    # T-79: the judge's grader is in neither list.
     assert GROUNDEDNESS not in ABSOLUTE
     assert GROUNDEDNESS not in TARGETS
     assert COST not in ABSOLUTE

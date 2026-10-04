@@ -1,5 +1,5 @@
 """Read a small JSON file that is not to be trusted, and describe what is wrong
-with it without quoting it (S050, T-77).
+with it without quoting it (S050, T-78).
 
 The evaluation's reports and manifests and the gateway's recordings are files
 the platform reads at start or in a command. Each is bounded, UTF-8, free of a

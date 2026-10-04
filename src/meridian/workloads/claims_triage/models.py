@@ -201,11 +201,16 @@ class ClaimMoveResponse(WireModel):
 class DecisionFailure:
     """A decision that did not complete, as a status and a fixed text: the
     JSON route answers it as JSON and the adjuster's page renders it. The run's
-    ID is there once the decision was recorded and a resume was tried."""
+    ID is there once the decision was recorded and a resume was tried.
+    ``stored`` is whether what the request sent was committed before the
+    failure (the names of a documents post, whose triage then failed): the
+    claimant's page answers by it, not by the claim's state afterwards. It is
+    not a field of any response body."""
 
     status: int
     detail: str
     run_id: UUID | None = None
+    stored: bool = False
 
 
 class ClaimErrorBody(ErrorBody):

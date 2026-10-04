@@ -10,15 +10,19 @@
 #      would get a stored proposal "policy not found", which is final.
 #   3. every manifest in manifests/meridian/ but the three Jobs: the six
 #      Deployments and Services (Claims API, Agent Runtime, Model Gateway and
-#      the policy, claims and knowledge tool servers), and the one route
-#      (Claims API only) with its request-size limit
+#      the policy, claims and knowledge tool servers), the one route (Claims
+#      API only) with its request-size limit, and the sweep's CronJob (S052).
+#      The CronJob's spec is mutable (a change reaches the Jobs it starts
+#      afterwards, none that is running), so the same server-side apply
+#      updates it in place; no rollout waits for it, as it runs on a schedule
 #   4. the Model Gateway's rollout, then the ingestion Job (it embeds the
 #      wordings through the gateway), at most once per image: a finished Job of
 #      this image's tag, and rows in knowledge.chunks, are the record that its
 #      corpus is in the store
 #   5. the other rollouts and the route, then, when an ingestion ran, a wait
 #      until its token reservation has left the tenant's one-minute window
-# The only text replaced in the manifests is @IMAGE@ (and @TAG@ in a Job's name).
+# The only text replaced in the manifests is @IMAGE@ (and @TAG@ in a Job's name;
+# the CronJob's name has none).
 # Nothing here prints a Secret's value.
 set -euo pipefail
 

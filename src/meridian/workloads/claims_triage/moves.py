@@ -13,6 +13,7 @@ No document name, description or claimant field reaches a log line or a span
 attribute (T-03).
 """
 
+import dataclasses
 import logging
 from collections.abc import Sequence
 from datetime import datetime
@@ -396,6 +397,21 @@ def _store_arrival(
         return _Arrival(old_run, (taken_at, facts))
 
 
+class RefusedAfterStoring(HTTPException):
+    """A refusal raised after the names were committed (the triage taken over by
+    another request, a 409). The JSON route answers it as any ``HTTPException``;
+    the claimant's page reads from its type that the names are stored."""
+
+
+def _stored(
+    result: ClaimMoveResponse | DecisionFailure,
+) -> ClaimMoveResponse | DecisionFailure:
+    """A triage's failure after the names were committed says so."""
+    if isinstance(result, DecisionFailure):
+        return dataclasses.replace(result, stored=True)
+    return result
+
+
 def add_documents(
     dsn: str,
     tenant: str,
@@ -409,7 +425,9 @@ def add_documents(
     the claim is referred to an adjuster, with no run. The run the claim held is
     ended first, best effort, as for a send-back: a resume of a run that has
     ended answers its status and runs nothing, and one still paused reads the
-    recorded ``request_documents`` and completes with its note."""
+    recorded ``request_documents`` and completes with its note. A failure after
+    the commit (the triage's, or its 409 when another request took it over, as
+    ``RefusedAfterStoring``) is marked ``stored``; one before or in it is not."""
     with start_span(tracer, "claims.documents") as span:
         set_span_attributes(
             span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
@@ -427,6 +445,10 @@ def add_documents(
         if arrival.taken is None:
             return ClaimMoveResponse(claim_id=claim_id, state="awaiting_adjuster")
         taken_at, facts = arrival.taken
-        return _move_answer(
-            run_taken_triage(dsn, tenant, http, span, claim_id, facts, taken_at)
-        )
+        try:
+            result = run_taken_triage(
+                dsn, tenant, http, span, claim_id, facts, taken_at
+            )
+        except HTTPException as exc:
+            raise RefusedAfterStoring(exc.status_code, exc.detail) from None
+        return _stored(_move_answer(result))

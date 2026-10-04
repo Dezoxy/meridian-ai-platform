@@ -1,4 +1,4 @@
-"""The claims workload's plugin for ``meridian eval run`` (S050, T-79): what it
+"""The claims workload's plugin for ``meridian eval run`` (S050, T-80): what it
 submits, where it reads the answers, how it grades them and who answered; the
 platform's loader that finds it; and one run over the real services in process.
 """
@@ -93,7 +93,7 @@ def test_an_answer_names_its_case_in_the_claim_id_field() -> None:
     assert EVALUATION.case_field == "claim_id"
 
 
-# ── a claim ID goes into a path, a log line and a CI annotation (T-79) ──────
+# ── a claim ID goes into a path, a log line and a CI annotation (T-80) ──────
 CRAFTED_IDS = [
     pytest.param("CLM-0001/../../claimant/claims/CLM-0001", id="a-path-climb"),
     pytest.param("CLM-0001?x=1", id="a-query"),

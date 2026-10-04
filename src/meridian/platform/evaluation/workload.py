@@ -4,7 +4,7 @@ The platform knows no workload's words. ``meridian eval run`` posts a
 workload's ``Submission`` objects to the stack, reads the answer of each case
 from the path the workload names and hands the answers back to the workload to
 grade. A workload publishes its ``WorkloadEvaluation`` in the entry-point group
-``meridian.evaluations`` under its name (T-79).
+``meridian.evaluations`` under its name (T-80).
 
 The loader accepts only what this distribution published, only when exactly one
 entry point carries the name, only when the entry point's value names a module
@@ -16,7 +16,7 @@ again from the module once it has loaded.
 
 Loading the claims evaluation runs workload and runtime code inside the
 platform's command: that is the seam's purpose. The agent framework must not
-ride along; a test starts a fresh interpreter and looks (T-79).
+ride along; a test starts a fresh interpreter and looks (T-80).
 """
 
 import importlib.util

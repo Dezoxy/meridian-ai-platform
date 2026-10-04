@@ -303,7 +303,7 @@ def _recorded_class_errors(
     dep: Deployment, source: Deployment, where: str
 ) -> list[str]:
     """A class is never asserted over a recording made on a deployment that
-    never allowed it (T-77)."""
+    never allowed it (T-78)."""
     beyond = sorted(set(dep.data_classes) - set(source.data_classes))
     if not beyond:
         return []

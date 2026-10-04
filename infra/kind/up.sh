@@ -3,8 +3,9 @@
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces, Envoy Gateway and the edge Gateway
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
-#      the database "meridian" and its six roles; their password Secrets are
-#      created first, only if absent
+#      the database "meridian" and its eight roles (the owner, six services and
+#      the scheduled sweep's); their password Secrets are created first, only if
+#      absent
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
