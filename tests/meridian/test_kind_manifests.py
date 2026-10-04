@@ -1087,6 +1087,7 @@ def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces(
     assert set(namespaces) == {
         "envoy-gateway-system",
         "cnpg-system",
+        "cert-manager",
         "observability",
         "meridian",
     }
@@ -3661,3 +3662,148 @@ def test_the_sweep_check_only_reads(
     for call in asked.splitlines():
         assert " get " in call, call
         assert not re.search(r"\b(create|apply|delete|patch|replace|exec)\b", call)
+
+
+SERVICE_CA_FILE = KIND_DIR / "manifests" / "service-ca.yaml"
+CERT_MANAGER_VALUES = KIND_DIR / "values" / "cert-manager.yaml"
+SELF_SIGNED_ISSUER = "meridian-selfsigned"
+SERVICES_ISSUER = "meridian-services"
+SERVICES_CA = "meridian-services-ca"
+
+
+def pins() -> dict[str, str]:
+    """The KEY=value lines of pins.env (never printed, only compared)."""
+    found = {}
+    for line in (KIND_DIR / "pins.env").read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            found[key] = value
+    return found
+
+
+def service_ca_objects() -> dict[tuple[str, str], dict]:
+    return {
+        (d["kind"], d["metadata"]["name"]): d for d in load_documents(SERVICE_CA_FILE)
+    }
+
+
+def joined_script_lines() -> list[str]:
+    """up.sh with each backslash continuation folded into one line."""
+    return re.sub(r"\\\n\s*", "", UP_SH).splitlines()
+
+
+def test_the_cert_manager_chart_is_pinned_with_a_helm_reader_comment() -> None:
+    values = pins()
+    lines = (KIND_DIR / "pins.env").read_text(encoding="utf-8").splitlines()
+    (version_at,) = [
+        i for i, line in enumerate(lines) if line.startswith("CERT_MANAGER_VERSION=")
+    ]
+
+    assert values["CERT_MANAGER_CHART"] == "cert-manager"
+    assert values["CERT_MANAGER_REPO"].startswith("https://")
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", values["CERT_MANAGER_VERSION"])
+    assert lines[version_at - 1] == (
+        "# renovate: datasource=helm depName=cert-manager"
+        f" registryUrl={values['CERT_MANAGER_REPO']}"
+    )
+
+
+def test_up_installs_cert_manager_from_its_pin_into_its_own_namespace() -> None:
+    (installed,) = [
+        line
+        for line in joined_script_lines()
+        if line.startswith("install_release cert-manager ")
+    ]
+
+    assert installed == (
+        "install_release cert-manager cert-manager"
+        ' "${CERT_MANAGER_CHART}" "${CERT_MANAGER_VERSION}"'
+        ' "${CERT_MANAGER_REPO}" cert-manager.yaml'
+    )
+
+
+def test_up_installs_the_issuer_before_the_database_and_waits_for_it() -> None:
+    lines = joined_script_lines()
+    (release,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("install_release cert-manager ")
+    ]
+    (applied,) = [
+        i for i, line in enumerate(lines) if "manifests/service-ca.yaml" in line
+    ]
+    (waited,) = [
+        i for i, line in enumerate(lines) if "clusterissuer/meridian-services" in line
+    ]
+    (operator,) = [
+        i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
+    ]
+    (namespaces,) = [
+        i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
+    ]
+
+    assert namespaces < release < applied < waited < operator
+    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
+    assert "--for=condition=Ready" in lines[waited]
+    assert "--timeout=" in lines[waited]
+    assert lines[waited].startswith("kctl wait ")
+
+
+def test_the_service_ca_is_a_self_signed_issuer_a_ca_and_an_issuer_on_it() -> None:
+    objects = service_ca_objects()
+
+    assert set(objects) == {
+        ("ClusterIssuer", SELF_SIGNED_ISSUER),
+        ("Certificate", SERVICES_CA),
+        ("ClusterIssuer", SERVICES_ISSUER),
+    }
+    assert len(load_documents(SERVICE_CA_FILE)) == 3
+    assert objects[("ClusterIssuer", SELF_SIGNED_ISSUER)]["spec"] == {"selfSigned": {}}
+    assert objects[("ClusterIssuer", SERVICES_ISSUER)]["spec"] == {
+        "ca": {"secretName": SERVICES_CA}
+    }
+    for document in objects.values():
+        assert document["apiVersion"] == "cert-manager.io/v1"
+
+
+def test_the_service_ca_certificate_is_an_ecdsa_ca_for_a_year_in_cert_manager() -> None:
+    spec = service_ca_objects()[("Certificate", SERVICES_CA)]["spec"]
+    metadata = service_ca_objects()[("Certificate", SERVICES_CA)]["metadata"]
+
+    assert metadata["namespace"] == "cert-manager"
+    assert spec["isCA"] is True
+    assert spec["secretName"] == SERVICES_CA
+    assert spec["privateKey"]["algorithm"] == "ECDSA"
+    assert spec["privateKey"]["size"] == 256
+    assert spec["issuerRef"] == {
+        "name": SELF_SIGNED_ISSUER,
+        "kind": "ClusterIssuer",
+        "group": "cert-manager.io",
+    }
+    assert spec["duration"] == "8760h"
+    assert spec["commonName"] == SERVICES_CA
+    assert "meridian" not in {
+        d["metadata"].get("namespace") for d in load_documents(SERVICE_CA_FILE)
+    }
+
+
+def test_the_service_ca_file_says_its_private_key_stays_outside_meridian() -> None:
+    header = SERVICE_CA_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
+
+    assert "private key" in header
+    assert "`cert-manager` namespace" in header
+    assert "`meridian`" in header
+
+
+def test_the_cert_manager_values_install_the_crds_and_turn_nothing_optional_on() -> (
+    None
+):
+    values = yaml.safe_load(CERT_MANAGER_VALUES.read_text(encoding="utf-8"))
+
+    assert values["crds"]["enabled"] is True
+    for component in (values, values["webhook"], values["cainjector"]):
+        assert "cpu" in component["resources"]["requests"]
+        assert "memory" in component["resources"]["requests"]
+        assert "memory" in component["resources"]["limits"]
+    assert not values.get("prometheus", {}).get("servicemonitor", {}).get("enabled")
+    assert not values.get("replicaCount", 1) > 1

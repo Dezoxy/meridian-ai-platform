@@ -20,6 +20,7 @@ adjuster; the rules decide every other claim.
 | Component | Chart | Chart version | Namespace |
 |---|---|---|---|
 | Envoy Gateway (Gateway API edge) | `oci://docker.io/envoyproxy/gateway-helm` | v1.9.2 | `envoy-gateway-system` |
+| cert-manager (with the CA for the services) | `cert-manager` (`https://charts.jetstack.io`) | v1.21.2 | `cert-manager` |
 | CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `cnpg-system` |
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
 | Prometheus, Grafana, kube-state-metrics, node-exporter | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
@@ -52,6 +53,16 @@ namespaced Role would still add Secrets. So the chart creates no RBAC for
 Grafana; [`manifests/grafana-rbac.yaml`](manifests/grafana-rbac.yaml) gives
 it a Role in `observability` that reads ConfigMaps only, and both sidecars
 watch that namespace only (threat model T-68). `make smoke` checks it.
+
+The CA for the services (S055, the issuer only; the certificates the
+services hold follow in S055's later changes) is three cert-manager objects
+in [`manifests/service-ca.yaml`](manifests/service-ca.yaml): a self-signed
+issuer, a CA certificate (ECDSA P-256, one year) and the `meridian-services`
+issuer that signs one certificate per service. The services will use those
+certificates to prove to one another which service they are, by mutual TLS.
+The CA's private key is a Secret in the `cert-manager` namespace, outside
+`meridian`; `make up` waits for the issuer to be Ready before it installs the
+database.
 
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
 ConfigMap each in `observability` (below).
