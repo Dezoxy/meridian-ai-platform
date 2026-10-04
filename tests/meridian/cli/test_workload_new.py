@@ -1,0 +1,176 @@
+"""``meridian workload new``: the command's output, exit codes and refusals (S039).
+
+Every test writes into the small tree of ``conftest.py`` in ``tmp_path``; none
+touches the real checkout.
+"""
+
+import os
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from meridian.platform.cli import app
+from meridian.platform.registry.loader import load_registry
+
+runner = CliRunner()
+NAME = "fraud-review"
+MODULE = "fraud_review"
+EXIT_REFUSED = 2
+
+
+def snapshot(root: Path) -> dict[str, object]:
+    """Every path under ``root``: a file's bytes, a directory as ``None``."""
+    found: dict[str, object] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        found[relative] = None if path.is_dir() else path.read_bytes()
+    return found
+
+
+def expected_stdout(name: str, module: str) -> str:
+    created = sorted(
+        [
+            f"src/meridian/workloads/{module}/__init__.py",
+            f"src/meridian/workloads/{module}/graph.py",
+            f"src/meridian/workloads/{module}/evaluation.py",
+            f"tests/meridian/workloads/{module}/test_{module}_scaffold.py",
+            f"data/evaluation/{name}/golden/cases.json",
+            f"data/evaluation/{name}/golden/manifest.json",
+        ]
+    )
+    lines = [f"created {path}" for path in created]
+    lines += [
+        "changed config/registry/agents.yaml",
+        "changed pyproject.toml",
+        "workload new: done",
+        "generated: a graph with one node that calls no model and no tool, an "
+        "evaluation with no grader, a golden set with no case and an agent with "
+        "no tool",
+        "still by hand: a tenant that lists the agent, its tools, a prompt, the "
+        "cases and their graders, an API and its deployment",
+        "first run:",
+        "  uv run meridian registry validate",
+        "  uv run lint-imports",
+        f"  uv run meridian eval run --workload {name} "
+        f"--golden-set data/evaluation/{name}/golden "
+        f"--base-url http://localhost:8000 --report {name}-report.json",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_a_new_workload_is_created_and_the_command_says_what_is_left(
+    root: Path,
+) -> None:
+    # Arrange
+    agents_before = len(load_registry(root / "config" / "registry").agents)
+
+    # Act
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    # Assert
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout == expected_stdout(NAME, MODULE)
+    assert result.stderr == ""
+    for line in result.stdout.splitlines():
+        if line.startswith("created "):
+            assert (root / line.removeprefix("created ")).is_file()
+    registry = load_registry(root / "config" / "registry")
+    assert len(registry.agents) == agents_before + 1
+    assert registry.agent(NAME) is not None
+
+
+def test_the_root_defaults_to_the_working_directory(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(root)
+
+    result = runner.invoke(app, ["workload", "new", NAME])
+
+    assert result.exit_code == 0, result.stderr
+    assert (root / "src" / "meridian" / "workloads" / MODULE / "graph.py").is_file()
+
+
+@pytest.mark.parametrize("name", ["../x", "class", "yes", "claims-triage"])
+def test_a_refused_name_writes_nothing_and_is_not_quoted(root: Path, name: str) -> None:
+    # Arrange
+    before = snapshot(root)
+
+    # Act
+    result = runner.invoke(app, ["workload", "new", name, "--root", str(root)])
+
+    # Assert
+    assert result.exit_code == EXIT_REFUSED
+    assert result.stdout == ""
+    lines = result.stderr.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("ERROR ")
+    assert name not in result.stderr
+    assert snapshot(root) == before
+
+
+def test_a_second_run_with_the_same_name_is_refused_and_changes_nothing(
+    root: Path,
+) -> None:
+    # Arrange
+    first = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+    assert first.exit_code == 0, first.stderr
+    before = snapshot(root)
+
+    # Act
+    second = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    # Assert
+    assert second.exit_code == EXIT_REFUSED
+    assert second.stdout == ""
+    assert second.stderr.startswith("ERROR ")
+    assert snapshot(root) == before
+
+
+def test_a_tree_that_is_no_checkout_is_refused(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(tmp_path)])
+
+    assert result.exit_code == EXIT_REFUSED
+    assert result.stdout == ""
+    assert result.stderr.startswith("ERROR ")
+    assert os.listdir(tmp_path) == []
+
+
+def test_a_root_that_does_not_exist_is_a_usage_error_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(missing)])
+
+    assert result.exit_code == EXIT_REFUSED
+    assert result.stdout == ""
+    assert "Usage" in result.stderr
+    assert "--root" in result.stderr
+    assert not missing.exists()
+    assert os.listdir(tmp_path) == []
+
+
+def test_a_root_that_is_a_file_is_a_usage_error(tmp_path: Path) -> None:
+    file = tmp_path / "file"
+    file.write_text("x", encoding="utf-8")
+
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(file)])
+
+    assert result.exit_code == EXIT_REFUSED
+    assert "Usage" in result.stderr
+    assert "--root" in result.stderr
+    assert os.listdir(tmp_path) == ["file"]
+
+
+def test_the_meridian_help_lists_workload_and_its_help_lists_new() -> None:
+    top = runner.invoke(app, ["--help"])
+    group = runner.invoke(app, ["workload", "--help"])
+    bare = runner.invoke(app, ["workload"])
+
+    assert top.exit_code == 0
+    assert "workload" in top.stdout
+    assert group.exit_code == 0
+    assert "new" in group.stdout
+    assert bare.exit_code in (0, EXIT_REFUSED)
+    assert "new" in bare.stdout

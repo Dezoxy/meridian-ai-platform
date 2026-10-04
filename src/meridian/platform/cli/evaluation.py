@@ -47,6 +47,10 @@ PARTIAL_RUN = (
     "partial run: the report holds only the cases that ran and is not "
     "comparable with the baseline"
 )
+NO_CASES = (
+    "the golden set holds no case: nothing was sent, nothing was evaluated and "
+    "no report is written"
+)
 
 app = typer.Typer(no_args_is_help=True, help="Evaluate a workload.")
 
@@ -311,9 +315,15 @@ def run_command(
     A case the stack already has (409) is skipped. Exit 0 when at least one
     case ran, none failed, every absolute grader passed on every case that ran
     and every target of the report is met over those cases; 1 otherwise; 2 when
-    something cannot be read or the address is refused.
+    something cannot be read or the address is refused. A golden set that holds
+    no case is an empty evaluation: it exits 0 too, says so, and sends and
+    writes nothing.
     """
     evaluation, registry, total = _prepare(workload, golden_set, registry_dir)
+    if total == 0:
+        typer.echo(NO_CASES)
+        typer.echo("eval run: passed")
+        raise typer.Exit(code=EXIT_PASSED)
     if not report_path.parent.is_dir():
         _stop(EXIT_UNREADABLE, "the report's directory does not exist")
     try:

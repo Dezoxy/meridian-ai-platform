@@ -123,8 +123,7 @@ and Pydantic, at the cost of one dependency.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
   ~~`eval run` and~~ `eval compare`; S050 adds `eval run` and `eval diff`;
-  S039 would add
-  `workload new`.
+  S039 adds `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
@@ -230,7 +229,7 @@ and Pydantic, at the cost of one dependency.
 | S036 | AWS validate-only Terraform | The module passes `terraform validate` and a policy scan; it is never applied | todo | S025 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | todo | S012 |
-| S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | todo | S018 |
+| S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | doing | S018 |
 
 ### Follow-up backlog
 
@@ -5944,6 +5943,62 @@ Run by the session; exit code 0 unless said.
   a split table, and the wording of a failed trace that alternated.
 - Closed in the backlog: S053 on kind; `make demo` on an incomplete trace;
   the golden claims' reset (not built).
+
+### S039 — Workload scaffold
+
+**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Goal:** `meridian workload new NAME` writes a workload this repository's
+own gates accept on the first run, and grants it nothing.
+**Decisions:**
+
+- The generated workload lives in this repository's package. The runtime
+  and `meridian eval run` load only what the `meridian` distribution
+  publishes from a module under `meridian.workloads` in the installed
+  package (T-40, T-80), so the command writes
+  `src/meridian/workloads/<name>/`, two entry points into `pyproject.toml`
+  and one agent into `config/registry/agents.yaml`. Rejected: a workload in
+  a package of its own, which needs the trust checks loosened; neither
+  loader changes in this step.
+- It declares and never grants (T-81). The agent's tool list is empty and
+  no tenant lists the agent, so the gateway refuses its model calls and no
+  tool server answers it until a person adds both in a reviewed change.
+  Rejected: adding the agent to the `development` tenant, which is an
+  authorisation the scaffold would take for the developer.
+- The name is the control. One pattern, the registry's agent ID with a
+  length limit; its module name must be an identifier and no keyword; a
+  name an agent, an entry point of either group or a workload directory
+  already has is refused, and no existing file is written over.
+- Edits are checked before the first write. `pyproject.toml` and
+  `agents.yaml` are changed as text, after the last line of the table or
+  the list, because a YAML or TOML writer would drop their comments; the
+  new `pyproject.toml` must parse to the old one plus exactly two entry
+  points, and a copy of the registry with the new file must validate.
+- Templates are text files (`.tmpl`), filled with `string.Template`. The
+  generated graph imports LangGraph; a template that was a `.py` file under
+  `meridian.platform` would break the import contract, and the CLI imports
+  only platform packages (hard rule 5). Rejected: Jinja2 and `str.format`,
+  whose braces collide with Python source.
+- An empty evaluation is a golden set with no case. `meridian eval run`
+  said `nothing ran: every case is already on the stack` and exited 1 for
+  it, and a report needs one case. It now says that the golden set holds no
+  case, sends nothing, writes no report and exits 0 (T-82). Rejected: a
+  separate `eval check` command, a second way to ask the same question; a
+  placeholder case, which needs a deployed stack to answer it. The change
+  is in `cli/evaluation.py`; `platform/evaluation/` is unchanged.
+- The proof is a test, not a committed example. It copies the tree, runs
+  the command, installs the copy (`uv sync --locked --offline`, under a
+  second with a warm cache) and runs `meridian registry validate`,
+  `lint-imports`, `ruff`, both trusted loaders and `meridian eval run`
+  there. An install, not `PYTHONPATH`: entry points are read from the
+  installed metadata. Rejected: a generated workload committed to the
+  repository, a second workload to maintain whose drift from the templates
+  nothing would catch.
+- The backlog's "one loader for the two entry-point groups" is not taken:
+  the step reads both loaders and changes neither.
+
+**Work log:** —
+**Result / verification:** —
+**Follow-ups:** —
 
 ## Part D — Open questions
 

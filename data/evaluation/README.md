@@ -143,3 +143,13 @@ calls, tokens, cost).
 - The variant prompt, which asks the rationale to quote the claimant, is
   worse: it gives CLM-0034 a recommendation the judge calls ungrounded, and
   it loses the exclusion on CLM-0038. `prompt-comparison.md` has the rows.
+
+## A scaffolded workload's golden set
+
+`meridian workload new NAME` writes `NAME/golden/` here: `cases.json`, an
+empty list, and the `manifest.json` that lists its hash. No such directory is
+committed; the claims workload's golden set is `data/synthetic/`. A golden
+set with no case is an empty evaluation: `meridian eval run` says that
+nothing was evaluated, sends nothing and writes no report (T-82). Cases
+added later are synthetic and come from a seeded generator (hard rule 2),
+and the manifest's hash changes with them.
