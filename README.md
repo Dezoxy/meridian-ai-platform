@@ -131,6 +131,7 @@ the [plan](docs/meridian-plan.md).
 .codex/             Codex hooks, prompts, agent twins, config example
 .mcp.json           the chrome-devtools MCP server, pinned
 .github/workflows/  documentation gate; Python gates; architecture PDF release
+.github/renovate.json  which pinned versions Renovate watches and how it groups them
 api/mcp/            what each MCP tool server publishes, generated from the registry
 config/registry/    platform registry: YAML, generated JSON Schemas, Terraform output snapshot
 data/synthetic/     seeded generator, its committed output, the golden set and the injection cases

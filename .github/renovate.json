@@ -1,0 +1,220 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Keeps every pinned version current: GitHub Actions (pinned to commit hashes), the locked Python dependencies, the Dockerfile's base images, the Terraform providers, and the pins no built-in reader knows (infra/kind/pins.env, the Makefile's images, the gitleaks version, the pinned MCP server).",
+    "One grouped pull request per group, on the first day of the month. The hourly limit of the recommended preset is off, since one day a month is the limit; at most 20 are open at once. Nothing is merged by Renovate: a session or the owner merges, as the plan's Part A says.",
+    "A new pin in pins.env, the Makefile or a workflow needs a reader here; tests/test_renovate_config.py fails when a pin of a shape it knows has none.",
+    "Advisories are GitHub's: its own security updates open those pull requests, so Renovate's are off and no advisory gets two."
+  ],
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits"
+  ],
+  "timezone": "Europe/Budapest",
+  "schedule": [
+    "* * 1 * *"
+  ],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 20,
+  "rebaseWhen": "behind-base-branch",
+  "vulnerabilityAlerts": {
+    "enabled": false
+  },
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**",
+    "spikes/**"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "* * 1 * *"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "An image pinned by tag and digest in a KEY=value line.",
+      "managerFilePatterns": [
+        "/^Makefile$/",
+        "/^infra/kind/pins\\.env$/"
+      ],
+      "matchStrings": [
+        "=\\s*(?<depName>[a-z0-9][a-z0-9./-]*):(?<currentValue>[\\w.-]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The three images of the documentation toolchain, wherever the Makefile or a script names one (a default and the comment that repeats it move together).",
+      "managerFilePatterns": [
+        "/^Makefile$/",
+        "/^scripts/[^/]+\\.sh$/"
+      ],
+      "matchStrings": [
+        "(?<depName>structurizr/structurizr|pandoc/extra|minlag/mermaid-cli):(?<currentValue>\\d[\\w.-]*\\w)"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "A version on the line under a '# renovate: datasource=... depName=...' comment; a KEY_DIGEST line right below it is the image's digest.",
+      "managerFilePatterns": [
+        "/^infra/kind/pins\\.env$/",
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)(?: registryUrl=(?<registryUrl>\\S+))?(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\n\\s*[A-Z][A-Z0-9_]*(?:=|: )\"?(?<currentValue>[^\"\\s]+)\"?(?:\\n[A-Z][A-Z0-9_]*_DIGEST=(?<currentDigest>sha256:[a-f0-9]{64}))?"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "The MCP server that npx runs at a pinned version.",
+      "managerFilePatterns": [
+        "/^\\.mcp\\.json$/",
+        "/^\\.codex/config\\.toml\\.example$/"
+      ],
+      "matchStrings": [
+        "\"(?<depName>(?:@[a-z0-9-]+/)?[a-z][a-z0-9-]*)@(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "datasourceTemplate": "npm"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "A release is proposed once it is a week old: a bad one has usually been withdrawn by then. Only for sources that say when a release was made.",
+      "matchDatasources": [
+        "npm",
+        "pypi",
+        "github-tags",
+        "github-releases",
+        "helm",
+        "terraform-provider"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "One pull request for the GitHub Actions.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepTypes": [
+        "action"
+      ],
+      "groupName": "github actions"
+    },
+    {
+      "description": "One pull request for the Python dependencies.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "groupName": "python"
+    },
+    {
+      "description": "One pull request for the Dockerfile's base images.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "groupName": "base images",
+      "prBodyNotes": [
+        "CI does not build the image. Before merging, run `make deploy` on this branch: it builds the image and starts the services from it."
+      ]
+    },
+    {
+      "description": "One pull request for the documentation toolchain.",
+      "matchPackageNames": [
+        "structurizr/structurizr",
+        "pandoc/extra",
+        "minlag/mermaid-cli",
+        "gitleaks/gitleaks"
+      ],
+      "groupName": "tooling",
+      "prBodyNotes": [
+        "Structurizr and gitleaks run in required checks. Pandoc and Mermaid run only in `Docs / Architecture PDF`, which is not required: read its result before merging."
+      ]
+    },
+    {
+      "description": "The MCP server runs on the owner's laptop through npx, with control of a browser: its update is the owner's to read and merge.",
+      "matchPackageNames": [
+        "chrome-devtools-mcp"
+      ],
+      "groupName": "mcp server",
+      "prBodyNotes": [
+        "This package runs on the owner's laptop with control of a browser. The owner reads the release notes and merges; a session does not."
+      ]
+    },
+    {
+      "description": "One pull request for Terraform and its providers.",
+      "matchManagers": [
+        "terraform"
+      ],
+      "groupName": "terraform",
+      "prBodyNotes": [
+        "CI does not run Terraform. Before merging, run `make azure-plan` and read the plan."
+      ]
+    },
+    {
+      "description": "One pull request for the local platform. CI never starts it, so green checks prove nothing here.",
+      "matchFileNames": [
+        "infra/kind/pins.env"
+      ],
+      "groupName": "kind platform",
+      "prBodyNotes": [
+        "CI does not start the kind platform. Before merging, run `make up` and `make smoke` on this branch, put what they printed in a comment, and bring the versions table in `infra/kind/README.md` up to date."
+      ]
+    },
+    {
+      "description": "The test database and the cluster's database carry the same PostgreSQL, pgvector and OS release, so they arrive together.",
+      "matchPackageNames": [
+        "pgvector/pgvector",
+        "ghcr.io/cloudnative-pg/postgresql"
+      ],
+      "groupName": "postgresql images"
+    },
+    {
+      "description": "A PostgreSQL major upgrade means ingesting the knowledge store again (the plan's follow-ups): by hand, in a step.",
+      "matchPackageNames": [
+        "ghcr.io/cloudnative-pg/postgresql"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The Kubernetes minor follows what is generally available on AKS: by hand.",
+      "matchPackageNames": [
+        "kindest/node"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "CI's Helm is the version infra/kind/README.md documents for the laptop, and a test compares the two: by hand.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "helm"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The Python minor is a step's decision (requires-python, the image and .python-version move together).",
+      "matchPackageNames": [
+        "python"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
+    }
+  ]
+}
