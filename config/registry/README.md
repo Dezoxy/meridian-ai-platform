@@ -192,6 +192,9 @@ an in-memory reader; a dashboard for them is designed (S043).
   a date, never recalled ones.
 - **A tool or an agent:** edit `tools.yaml` or `agents.yaml`. A tool that
   changes state has effect `write` and requires an idempotency key.
+  `uv run meridian workload new NAME` appends a new workload's agent to
+  `agents.yaml` with no tool, and adds it to no tenant: both are edits a
+  person makes (T-81).
 - **The models themselves:** edit `src/meridian/platform/registry/`, then
   regenerate the schemas with `uv run meridian registry schemas`.
 
