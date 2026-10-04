@@ -123,8 +123,7 @@ and Pydantic, at the cost of one dependency.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
   ~~`eval run` and~~ `eval compare`; S050 adds `eval run` and `eval diff`;
-  S039 would add
-  `workload new`.
+  S039 adds `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
@@ -230,7 +229,7 @@ and Pydantic, at the cost of one dependency.
 | S036 | AWS validate-only Terraform | The module passes `terraform validate` and a policy scan; it is never applied | todo | S025 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | todo | S012 |
-| S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | todo | S018 |
+| S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
 
 ### Follow-up backlog
 
@@ -347,6 +346,13 @@ that day; the rest stand as their step recorded them.
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open | none |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | none |
+| Fifteen tests assume one graph agent and fail in a tree with a scaffolded workload: fourteen in `test_runtime_app.py` fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents; not measured with a database | S039 | open | S037 |
+| No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open | S037 |
+| The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | open | none |
+| The scaffold's comparison "the old agents plus exactly one" has no test that reaches it alone (the YAML parse and the registry validation refuse first) | S039 | open | none |
+| The scaffold refuses valid but unusual files without saying which line (a table header with a trailing comment, a flow-style list), and `the name is taken` does not say by what | S039 | open | none |
+| `meridian registry validate` ends in a traceback when the registry directory cannot be listed (older than S039; the scaffold catches it for itself) | S039 | open | none |
+| Nothing ties a golden set to a workload before a report exists: `eval run --allow-empty` passes one scaffolded workload on another's empty set | S039 | open | none |
 
 ## Part C — Step details
 
@@ -5945,6 +5951,159 @@ Run by the session; exit code 0 unless said.
 - Closed in the backlog: S053 on kind; `make demo` on an incomplete trace;
   the golden claims' reset (not built).
 
+### S039 — Workload scaffold
+
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
+**Goal:** `meridian workload new NAME` writes a workload this repository's
+own gates accept on the first run, and grants it nothing.
+**Decisions:**
+
+- The generated workload lives in this repository's package. The runtime
+  and `meridian eval run` load only what the `meridian` distribution
+  publishes from a module under `meridian.workloads` in the installed
+  package (T-40, T-80), so the command writes
+  `src/meridian/workloads/<name>/`, two entry points into `pyproject.toml`
+  and one agent into `config/registry/agents.yaml`. Rejected: a workload in
+  a package of its own, which needs the trust checks loosened; neither
+  loader changes in this step.
+- It declares and never grants (T-81). The agent's tool list is empty and
+  no tenant lists the agent, so the gateway refuses its model calls and no
+  tool server answers it until a person adds both in a reviewed change.
+  Rejected: adding the agent to the `development` tenant, which is an
+  authorisation the scaffold would take for the developer.
+- The name is the control. One pattern, the registry's agent ID with a
+  length limit; its module name must be an identifier and no keyword; a
+  name an agent, an entry point of either group or a workload directory
+  or module already has is refused, and so is a word YAML reads as
+  something other than text (`yes`, `null`): it would become a boolean in
+  the first tenant list a person writes it into. No existing file is
+  written over; two are appended to. A directory or file the command
+  would write through a symbolic link, or outside the checkout, is
+  refused.
+- Edits are checked before the first write. `pyproject.toml` and
+  `agents.yaml` are changed as text, after the last line of the table or
+  the list, because a YAML or TOML writer would drop their comments; the
+  new `pyproject.toml` must parse to the old one plus exactly two entry
+  points, and a copy of the registry with the new file must validate.
+- Templates are text files (`.tmpl`), filled with `string.Template`. The
+  generated graph imports LangGraph; a template that was a `.py` file under
+  `meridian.platform` would break the import contract, and the CLI imports
+  only platform packages (hard rule 5). Rejected: Jinja2 and `str.format`,
+  whose braces collide with Python source.
+- An empty evaluation is a golden set with no case, and it passes only
+  when asked to: `meridian eval run --allow-empty`. Without the flag a
+  golden set with no case exits 1, as it did, now with a message that is
+  true (it said `nothing ran: every case is already on the stack`). With
+  it the run says that nothing was evaluated, sends nothing, writes no
+  report and exits 0, and it refuses a report already at the report's
+  path, so a later `eval compare` cannot read an old one as this run's
+  (T-82). The first version of this step passed without a flag; the
+  security and the silent-failure reviews both read that as a gate
+  command turned from fail-closed to fail-open for every workload, the
+  claims workload included. Rejected: a separate `eval check` command, a
+  second way to ask the same question; a placeholder case, which needs a
+  deployed stack to answer it; a distinct exit code, which a script reads
+  no better than a flag. The change is in `cli/evaluation.py`;
+  `platform/evaluation/` is unchanged.
+- The proof is a test, not a committed example. It copies the tree, runs
+  the command, installs the copy (`uv sync --locked --offline`, under a
+  second with a warm cache) and runs `meridian registry validate`,
+  `lint-imports`, `ruff`, both trusted loaders and `meridian eval run`
+  there. An install, not `PYTHONPATH`: entry points are read from the
+  installed metadata. Rejected: a generated workload committed to the
+  repository, a second workload to maintain whose drift from the templates
+  nothing would catch.
+- The backlog's "one loader for the two entry-point groups" is not taken:
+  the step reads both loaders and changes neither.
+- The golden set lives in `data/evaluation/<name>/golden/`, not under
+  `data/synthetic/`: the generator's reproducibility test reads every JSON
+  file there and would count a second set as stale output. Its manifest
+  names no generator (`generator_version` is `none`): an empty set has
+  none, and saying otherwise would be a false label.
+- All or nothing, as far as a process can: a write that fails, or a run
+  that is interrupted, removes what it made and puts `agents.yaml` back;
+  a plan whose two files changed before the write is refused. A failed
+  write exits 1, a refusal exits 2, and a rollback that could not finish
+  names what it left.
+- The generated evaluation refuses a golden set that has a case until its
+  graders are written, before anything is posted. Rejected: failing in
+  `report()`, after the cases are on a stack that will then answer 409.
+- The scaffold does not make the existing tests pass in the tree it
+  writes into. Fifteen tests assume one graph agent (below); changing the
+  runtime's test fixtures is not this step's diff. The README says so.
+
+**Work log:**
+
+- Read the two loaders, the plugin contract, the registry's checks and the
+  claims workload; measured that an offline locked install of a copy of
+  the tree takes under a second and that `uv run` republishes the entry
+  points after `pyproject.toml` changes. Advisor consulted before the
+  approach; the `feature-threat-model` skill gave T-81 and T-82.
+- Four contracts to the `implementer`: the planning, writing and templates
+  (`cli/scaffold.py`, `cli/templates/workload/`); `eval run` on a golden
+  set with no case; the command and the first-run test (`cli/workload.py`,
+  `tests/meridian/cli/`); the fixes from the reviews.
+- Reviews by `security-reviewer`, `python-reviewer`,
+  `platform-boundary-reviewer` and `silent-failure-hunter`: no critical
+  finding. Taken: two tests that failed with `GITHUB_ACTIONS=true` (Typer
+  styles its usage error there); `--allow-empty` (above); the rollback on
+  any exit; errors that carry the registry's own messages and say which
+  option validates which registry; a symbolic link or a module of the same
+  name refused; the stale plan; the manifest's label. Not taken, with the
+  reason in the backlog or here: a lost update is closed by the stale-plan
+  check; a refusal of valid but unusual TOML or YAML fails closed. One
+  finding was wrong: the tool servers do refuse an agent no tenant lists
+  (`toolserver/pipeline.py`, `tenant-not-allowed`).
+- The session itself made three small edits after the last contract: a
+  comment's place in `scaffold.py`, the first-run test's last assertion
+  (the last line of stderr, not all of it) and a scaffold test that
+  pinned the real `pyproject.toml`'s content.
+
+**Result / verification:**
+
+- The "done when", in `tests/meridian/cli/test_workload_first_run.py`: a
+  copy of the tree is installed, `meridian workload new first-run-probe`
+  runs there, and `meridian registry validate` (one agent more),
+  `lint-imports` (0 broken), `ruff`, both trusted loaders in the copy's
+  own interpreter, the generated tests (4 passed) and `meridian eval run
+  --allow-empty` pass; without the flag the run exits 1, a second
+  `workload new` is refused and this repository's own files are unchanged.
+  15 s alone, 28 to 41 s beside other tests.
+- By hand, in a full copy: `workload new demo-probe`, then `make lint`
+  (`Contracts: 5 kept, 0 broken.`), `make registry` (`4 agents`),
+  `make docs` (`13 checks passed`) and the empty evaluation (`eval run:
+  passed, nothing evaluated`), all exit 0. The copy's test suite without
+  a database: `16 failed, 5311 passed, 2493 skipped`. One was this step's
+  own test, corrected; the other fifteen are in
+  `tests/meridian/runtime/test_runtime_app.py` (14, `no graph is published
+  for agent 'demo-probe'`: they fake the entry points for `claims-triage`
+  only) and `tests/meridian/registry/test_structured_outputs.py` (1, it
+  lists the registry's agents). Not run there with a database.
+- Mutations, in a scratch copy: 36 changes to the controls over two
+  rounds. Round one killed 16 of 21 and its five survivors each got a test
+  of their own; round two, on the final code, killed 14 of 15. The
+  survivor is the comparison "the old agents plus exactly one" in
+  `_agents_edit`: no input reaches it alone, because the YAML parse or the
+  registry validation refuses first.
+- The suite, `GITHUB_ACTIONS=true make pytest-db` with three workers and a
+  container of its own: `7808 passed, 8 skipped, 7 warnings in 1268.10s`
+  (two other sessions shared the machine). `make lint`: `Contracts: 5
+  kept, 0 broken.` `make test`: `Ran 124 tests`, `OK`. `make registry`:
+  `contracts OK: up to date`. `make docs`: `13 checks passed`.
+  `make eval`: `recommendation: 38/40 -> 38/40`, every other grader
+  `40/40 -> 40/40`, `eval compare: passed`. A built wheel holds the four
+  `.tmpl` files.
+- Not run: the kind cluster (another session holds it), so no generated
+  workload has started in the Agent Runtime's pod or answered a run;
+  anything against Azure; the suite with a database in a scaffolded copy;
+  `make check` (the model is unchanged).
+
+**Follow-ups:** in Part B's backlog: the fifteen tests that assume one graph
+agent; a generated workload that has never run through the run API; the
+first-run test's time in CI; the comparison no test reaches; what the
+refusals do not say; `meridian registry validate` on a directory it cannot
+list.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -6075,3 +6234,10 @@ Run by the session; exit code 0 unless said.
   mechanism is not chosen: that is a security boundary, and the step asks
   the owner when it opens. The threat model's rows T-08, T-24, T-48 and
   T-50 and the README name S055.
+- **v0.28, 2026-10-04:** S039 done: `meridian workload new` writes a
+  workload into this repository's own package and grants it nothing; the
+  trust checks of the two entry-point loaders are unchanged. `meridian eval
+  run` passes a golden set with no case only with `--allow-empty`. Its
+  threats are T-81 and T-82. The backlog's "one loader" row is left as it
+  was, and gains seven rows, the first being the fifteen tests that assume
+  one graph agent.
