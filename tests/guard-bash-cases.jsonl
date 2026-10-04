@@ -222,3 +222,128 @@
 {"expect": "deny", "command": "SKIP=ruff /usr/bin/git commit -m x"}
 {"expect": "deny", "command": "ssh host \"git commit -n\""}
 {"expect": "none", "command": "git commit -m 'bash -c \"git commit -n\" is denied'"}
+{"expect":"deny","command":"kubectl -n meridian get secret x -o yaml"}
+{"expect":"deny","command":"kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian get secret x -o json"}
+{"expect":"deny","command":"$K get secret x -o yaml"}
+{"expect":"deny","command":"\"$K\" get secret x -o yaml"}
+{"expect":"deny","command":"k get secret x -o yaml"}
+{"expect":"deny","command":"kctl -n observability get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d"}
+{"expect":"deny","command":"kubectl get secret x -n meridian -o=yaml"}
+{"expect":"deny","command":"kubectl get secret x --output=yaml"}
+{"expect":"deny","command":"kubectl get secret x --output yaml"}
+{"expect":"deny","command":"kubectl get secret x -oyaml"}
+{"expect":"deny","command":"kubectl get secret x -o jsonpath='{.data.password}'"}
+{"expect":"deny","command":"kubectl get secret x -o go-template='{{.data.password | base64decode}}'"}
+{"expect":"deny","command":"kubectl get secret x --template='{{.data.password}}'"}
+{"expect":"deny","command":"kubectl get secret x -o custom-columns=P:.data.password"}
+{"expect":"deny","command":"kubectl get secret x -o kyaml"}
+{"expect":"deny","command":"kubectl get secrets -A -o yaml"}
+{"expect":"deny","command":"kubectl get secrets -Ao yaml"}
+{"expect":"deny","command":"kubectl get secret/gateway-keys -o yaml"}
+{"expect":"deny","command":"kubectl get secrets/gateway-keys -n meridian -o json"}
+{"expect":"deny","command":"kubectl get configmap,secret -o yaml"}
+{"expect":"deny","command":"kubectl get secret,configmap -n meridian -o yaml"}
+{"expect":"deny","command":"kubectl get -n meridian -o yaml secret x"}
+{"expect":"deny","command":"kubectl get -o yaml secret"}
+{"expect":"deny","command":"kubectl get secret x \\\n  -n meridian \\\n  -o yaml"}
+{"expect":"deny","command":"password=\"$(kubectl -n meridian get secret x -o jsonpath='{.data.password}')\""}
+{"expect":"deny","command":"bash -c \"kubectl get secret x -o yaml\""}
+{"expect":"deny","command":"kubectl get secret x -o \"$fmt\""}
+{"expect":"deny","command":"kubectl get secret x -o yaml > /dev/null"}
+{"expect":"deny","command":"echo ok && kubectl -n meridian get secret x -o yaml"}
+{"expect":"deny","command":"grep -rn 'kubectl get secret x -o yaml' docs/"}
+{"expect":"none","command":"kubectl get secret x"}
+{"expect":"none","command":"kubectl -n meridian get secret x"}
+{"expect":"none","command":"kubectl get secrets -A"}
+{"expect":"none","command":"kubectl get secret x -o name"}
+{"expect":"none","command":"kubectl get secret x -o wide"}
+{"expect":"none","command":"kubectl get secrets -Ao wide"}
+{"expect":"none","command":"kubectl get secret x -o=name"}
+{"expect":"none","command":"kubectl get secret x --output=name"}
+{"expect":"none","command":"kubectl get secret x -oname"}
+{"expect":"none","command":"kubectl get secret x -o \"name\""}
+{"expect":"none","command":"kctl -n meridian get secret x >/dev/null 2>&1"}
+{"expect":"none","command":"kubectl describe secret x -n meridian"}
+{"expect":"none","command":"kubectl get pods -o yaml"}
+{"expect":"none","command":"kubectl -n meridian get pods -o json"}
+{"expect":"none","command":"kubectl get pods -l app=secret -o yaml"}
+{"expect":"none","command":"kubectl get pod secret-reader -o yaml"}
+{"expect":"none","command":"kubectl get externalsecret x -o yaml"}
+{"expect":"none","command":"kubectl get sealedsecrets -o yaml"}
+{"expect":"none","command":"kubectl get deploy x -o yaml | grep -i secret"}
+{"expect":"none","command":"kubectl get events --field-selector involvedObject.kind=Secret -o yaml"}
+{"expect":"none","command":"kubectl auth can-i get secrets -n meridian --as system:serviceaccount:observability:grafana"}
+{"expect":"none","command":"grep -o 'get secret' docs/operations/runbooks/secret-rotation.md"}
+{"expect":"none","command":"bash -o pipefail -c \"kubectl get secret x\""}
+{"expect":"none","command":"set -o pipefail; kubectl get secret x"}
+{"expect":"none","command":"git config --get secret -o yaml"}
+{"expect":"none","command":"apt-get secret -o yaml"}
+{"expect":"none","command":"kubectl get secret x -n observability"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- psql -c \"DROP TABLE audit.events\""}
+{"expect":"ask","command":"kubectl -n meridian exec platform-db-1 -c postgres -- psql -U postgres -d meridian -c 'SELECT 1'"}
+{"expect":"ask","command":"$K exec -it platform-db-1 -- psql"}
+{"expect":"ask","command":"k exec platform-db-1 -- /usr/bin/psql -f /tmp/x.sql"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- bash -c \"psql -c 'TRUNCATE audit.events'\""}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c \"cd /tmp && psql -f x.sql\""}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- env PGDATABASE=meridian psql -c 'select 1'"}
+{"expect":"ask","command":"echo \"DROP TABLE x\" | kubectl exec -i platform-db-1 -- psql"}
+{"expect":"ask","command":"kubectl exec -i platform-db-1 -- psql <<'EOF'\nDROP TABLE audit.events;\nEOF"}
+{"expect":"none","command":"kubectl exec platform-db-1 -- ls /var/lib/postgresql"}
+{"expect":"none","command":"kubectl exec platform-db-1 -- pg_isready"}
+{"expect":"none","command":"grep -rn 'exec .*psql' infra/kind"}
+{"expect":"none","command":"docker exec meridian-test-db psql -U postgres -c 'select 1'"}
+{"expect":"none","command":"psql -h 127.0.0.1 -d meridian -c 'select 1'"}
+{"expect":"none","command":"kubectl logs platform-db-1 -- psql"}
+{"expect":"none","command":"kubectl exec platform-db-1 -- cat /tmp/psql.log"}
+{"expect":"deny","command":"for s in $(kubectl get secrets -o name); do kubectl get $s -o yaml; done"}
+{"expect":"deny","command":"kubectl get secrets -o name | xargs -n1 kubectl get -o yaml"}
+{"expect":"deny","command":"kubectl get secrets -o name | while read s; do kubectl get $s -o json; done"}
+{"expect":"deny","command":"kubectl get secrets -o name | xargs -n1 -I{} sh -c 'kubectl get {} -o yaml'"}
+{"expect":"deny","command":"kubectl -n meridian get secrets -o name | xargs -I{} kubectl -n meridian get {} -o jsonpath='{.data}'"}
+{"expect":"none","command":"kubectl get secrets -o name | xargs -n1 kubectl describe"}
+{"expect":"none","command":"$K get secret x >/dev/null && $K get pods -o yaml"}
+{"expect":"none","command":"kubectl get pod \"$POD\" -o yaml"}
+{"expect":"none","command":"kubectl get pods -o name | xargs -n1 kubectl get -o yaml"}
+{"expect":"none","command":"git commit -m \"fix(guard): deny get secret with -o, ask on exec -- psql\""}
+{"expect":"none","command":"git commit -m \"docs: runbook for get secret -o yaml\""}
+{"expect":"none","command":"git commit -am \"hook: deny get secret x -o custom-columns\""}
+{"expect":"none","command":"gh pr create --title \"x\" --body \"get secret -o go-template is now denied\""}
+{"expect":"none","command":"git commit -m \"docs: kubectl exec db-1 -- psql runbook\""}
+{"expect":"deny","command":"git commit -m \"x\" && kubectl get secret x -o yaml"}
+{"expect":"deny","command":"git commit -m \"$(kubectl get secret x -o yaml)\""}
+{"expect":"deny","command":"kubectl get \"secret\" x -o yaml"}
+{"expect":"deny","command":"kubectl get 'secret/x' -o yaml"}
+{"expect":"deny","command":"kubectl get secret x -wo yaml"}
+{"expect":"deny","command":"kubectl get secret x -o 'yaml'"}
+{"expect":"deny","command":"kubectl get secrets.v1 -A -o yaml"}
+{"expect":"deny","command":"kubectl get secret x --template '{{.data.password}}'"}
+{"expect":"deny","command":"kubectl get --template='{{.data}}' secret x"}
+{"expect":"deny","command":"echo \"$(kubectl get -o json secret)\""}
+{"expect":"deny","command":"kubectl exec platform-db-1 -- psql -c x && az keyvault secret show --name y"}
+{"expect":"ask","command":"kubectl exec -it platform-db-1 -- sh -c 'echo \"select 1\"|psql'"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c 'cat q.sql|psql'"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c 'psql<q.sql'"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c '(psql -c \"x\")'"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c 'psql;'"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c \"psql\""}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- sh -c 'psql'"}
+{"expect":"ask","command":"kubectl exec platform-db-1 -- which psql"}
+{"expect":"none","command":"find . -type f -exec grep -l -- psql {} +"}
+{"expect":"none","command":"docker exec -i --user postgres test-db psql -c 'select 1'"}
+{"expect":"none","command":"kubectl exec platform-db-1 -- pg_dump --schema-only meridian"}
+{"expect":"none","command":"gh pr create --title \"x\" --body \"kubectl exec db-1 -- psql asks\""}
+{"expect":"deny","command":"kubectl get secrets -o name | parallel kubectl get {} -o yaml"}
+{"expect":"none","command":"kubectl get secrets -o name | xargs -n1 kubectl get --show-labels"}
+{"expect":"ask","command":"make grafana-password"}
+{"expect":"ask","command":"make -s grafana-password"}
+{"expect":"ask","command":"cd infra && make -C .. grafana-password"}
+{"expect":"ask","command":"pw=$(make grafana-password)"}
+{"expect":"ask","command":"make grafana-password | pbcopy"}
+{"expect":"ask","command":"infra/kind/grafana.sh password"}
+{"expect":"ask","command":"bash infra/kind/grafana.sh password"}
+{"expect":"ask","command":"cd infra/kind && ./grafana.sh password"}
+{"expect":"none","command":"make grafana"}
+{"expect":"none","command":"infra/kind/grafana.sh forward"}
+{"expect":"none","command":"grep -n grafana-password Makefile"}
+{"expect":"none","command":"grep -rn 'make grafana-password' docs/"}
+{"expect":"none","command":"shellcheck infra/kind/grafana.sh"}
