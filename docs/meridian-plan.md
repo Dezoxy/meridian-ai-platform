@@ -7396,7 +7396,12 @@ refusal flood, and the rate limit before redaction (T-73).
   rewrote part of a test file it had just created with a script, which
   it reported; every source file was changed with the Edit tool. The
   main session read every changed source file and made the mutations,
-  two docstring lines and the two tests above itself.
+  two docstring lines and the two tests above itself. The edit gate
+  denied the main session's first edit of ten files (the plan, the
+  threat register, the README, two runbooks, a docstring, the three
+  mutated source files and a test file); each went through on the retry,
+  after the facts it asks for were stated in the session. Two of the
+  implementer's runs reported that the gate never fired for them.
 
 **Result / verification:**
 
@@ -7437,9 +7442,11 @@ refusal flood, and the rate limit before redaction (T-73).
   a request the budget refuses has been redacted.
 - **Contract tests pass.** The whole suite, `GITHUB_ACTIONS=true make
   pytest-db` with three workers and this step's own container: `8596
-  passed, 8 skipped` in 11 min 6 s, exit 0, before the review fixes; the
-  numbers after them and after the merge of `main` are in the pull
-  request. `uv run ruff check . --no-cache`: `All checks passed!`. `uv
+  passed, 8 skipped` in 11 min 6 s, exit 0, before the review fixes, and
+  `8602 passed, 8 skipped` in 6 min 12 s, exit 0, after them and the two
+  added tests; a run after a later merge of `main` is in the pull
+  request. `gitleaks detect --log-opts="origin/main..HEAD" --redact`: `no
+  leaks found`. `uv run ruff check . --no-cache`: `All checks passed!`. `uv
   run ruff format --check .`: `381 files already formatted`. `uv run
   lint-imports`: `Contracts: 5 kept, 0 broken.` `make docs`: `docs
   consistency: 13 checks passed`. `make test`: exit 0, `codex agents: 11
@@ -7702,7 +7709,7 @@ tokens would meet.
   failed the required `python` check at random, because promtool
   evaluates rule groups in no fixed order; the test file now names the
   recording group first.
-- **v0.38, 2026-10-04:** S058 done, unattended and beside S056 and S057.
+- **v0.39, 2026-10-04:** S058 done, unattended and beside S056 and S057.
   In the Model Gateway a provider's token counts are bounded against the
   request, a refusal row carries the call's purpose (migration 0015), an
   embedding input of more than 8,191 UTF-8 bytes is a 422, the count of a
