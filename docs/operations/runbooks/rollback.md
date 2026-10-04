@@ -91,6 +91,10 @@ on kind.
 
    If a commit in that list closed a hole, rolling back opens it again.
    Fix forward, or take the rollback knowingly and write it down.
+   A rollback to a commit before S055 also leaves the seven `*-tls`
+   Secrets in `meridian`: the older chart has no Certificate, and
+   cert-manager does not delete the Secret of one that is gone. Each
+   holds a key that stays valid for up to 90 days.
 3. In the checkout that holds the cluster's credentials
    (`infra/kind/kubeconfig`, which is gitignored, so a new worktree has
    none), check out the good commit and run `make deploy`. It builds that
