@@ -2327,12 +2327,17 @@ def test_neither_open_grafana_nor_gcurl_leaves_the_password_in_a_trace(
 
 
 def run_poll(gcurl: str, *, stale: str = "stale") -> str:
-    """One run of the real ``poll`` (a one-second budget) against a ``gcurl``
-    that behaves as ``gcurl`` says; what it left in ``poll_error``."""
+    """One run of the real ``poll`` (a two-second budget) against a ``gcurl``
+    that behaves as ``gcurl`` says; what it left in ``poll_error``.
+
+    Two seconds, not one: ``poll`` adds the budget to bash's ``SECONDS``, a
+    whole number, before its loop. With a budget of one, a second that ticks
+    between that sum and the loop's first test ends the loop before it ran
+    once, and ``poll_error`` stays empty (seen in S048 and S052)."""
     script = "\n".join(
         [
             "set -euo pipefail",
-            "readonly POLL_TIMEOUT=1 POLL_INTERVAL=1",
+            "readonly POLL_TIMEOUT=2 POLL_INTERVAL=1",
             one_line_function(SMOKE_SH, "clean_lines"),
             f"gcurl() {{ {gcurl}; }}",
             function_definition(SMOKE_SH, "poll"),
