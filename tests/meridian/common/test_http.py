@@ -1,8 +1,11 @@
 """The shared app setup: error answers, the body limit, health and lifecycle."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import httpx
 import psycopg
 import pytest
 from fastapi import HTTPException, Request
@@ -17,15 +20,25 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.trace import ProxyTracerProvider
 from psycopg import errors
+from tlsserver import serve_tls
+from tlssupport import (
+    CertificateAuthority,
+    KeyPair,
+    client_context,
+    loopback_sans,
+    make_ca,
+)
 
-from meridian.platform.common import http
+from meridian.platform.common import certlife, http
 from meridian.platform.common.audit import AuditUnavailable
+from meridian.platform.common.env import SettingsError
 from meridian.platform.common.http import (
     SMALL_BODY_LIMIT_BYTES,
     create_service_app,
     drop_query_from_span,
 )
 from meridian.platform.common.telemetry import make_tracer_provider, start_span
+from meridian.platform.common.tls import CERT_FILE_ENV
 
 CANARY = "canary-claimant@example.invalid"
 QUERY_CANARY = "query-canary-7731"
@@ -37,7 +50,10 @@ def build(
     closed: list[str] | None = None,
     provider: TracerProvider | None = None,
     limit: int = LIMIT,
+    environ: Mapping[str, str] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> TestClient:
+    # An empty environment unless a test gives one: no certificate to watch.
     service = create_service_app(
         title="Test",
         description="A test service.",
@@ -46,6 +62,8 @@ def build(
         max_body_bytes=limit,
         tracer_provider=provider,
         close=None if closed is None else lambda: closed.append("closed"),
+        environ={} if environ is None else environ,
+        **({} if clock is None else {"clock": clock}),
     )
     app = service.app
 
@@ -175,6 +193,180 @@ def test_healthz_answers_ok_without_touching_anything() -> None:
     response = build().get("/healthz")
 
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+# ── health follows the certificate the process loaded (S056, T-89) ──────────
+EXPIRING = {"status": "certificate-expiring"}
+NINETY_DAYS = timedelta(days=90)
+
+
+class Certificate:
+    """A certificate file and the dates in it."""
+
+    def __init__(self, ca: CertificateAuthority, directory: Path) -> None:
+        self.ca = ca
+        self.not_before = (datetime.now(UTC) - timedelta(days=1)).replace(microsecond=0)
+        self.not_after = self.not_before + NINETY_DAYS
+        self.pair: KeyPair = ca.issue(
+            "service", "service", loopback_sans(), self.not_before, self.not_after
+        )
+        self.environ = {CERT_FILE_ENV: str(self.pair.cert)}
+        self.restart_at = self.not_after - timedelta(hours=24)
+        self.directory = directory
+
+
+@pytest.fixture
+def certificate(tmp_path: Path) -> Certificate:
+    return Certificate(make_ca(tmp_path, "health-ca"), tmp_path)
+
+
+def at(moment: datetime) -> Callable[[], datetime]:
+    return lambda: moment
+
+
+def test_healthz_is_200_far_from_the_end_of_the_certificate(
+    certificate: Certificate,
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_before))
+
+    response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_healthz_is_200_a_second_before_the_restart_time_and_503_at_it(
+    certificate: Certificate,
+) -> None:
+    just_before = build(
+        environ=certificate.environ,
+        clock=at(certificate.restart_at - timedelta(seconds=1)),
+    ).get("/healthz")
+    at_restart = build(
+        environ=certificate.environ, clock=at(certificate.restart_at)
+    ).get("/healthz")
+
+    assert just_before.status_code == 200
+    assert (at_restart.status_code, at_restart.json()) == (503, EXPIRING)
+
+
+def test_healthz_stays_503_after_the_certificate_ended(
+    certificate: Certificate,
+) -> None:
+    client = build(
+        environ=certificate.environ,
+        clock=at(certificate.not_after + timedelta(days=1)),
+    )
+
+    assert client.get("/healthz").status_code == 503
+
+
+def test_an_app_with_no_certificate_answers_200_whatever_the_clock_says() -> None:
+    far_future = datetime(2999, 1, 1, tzinfo=UTC)
+
+    for environ in ({}, {CERT_FILE_ENV: ""}):
+        response = build(environ=environ, clock=at(far_future)).get("/healthz")
+
+        assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_a_certificate_replaced_on_disk_after_the_start_does_not_turn_it_healthy(
+    certificate: Certificate,
+) -> None:
+    """The regression T-89 names: the kubelet rewrites the mounted file at
+    renewal, the process keeps the certificate it loaded, so it must still say
+    it is near the end of that one until the container restarts."""
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    renewed_from = certificate.not_after - timedelta(days=60)
+    certificate.ca.issue(
+        "service",  # the same file
+        "service",
+        loopback_sans(),
+        renewed_from,
+        renewed_from + NINETY_DAYS,
+    )
+
+    response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+
+
+def test_the_certificate_is_read_when_the_app_is_built_not_per_request(
+    certificate: Certificate,
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.pair.cert.write_text("not a certificate any more")
+
+    assert client.get("/healthz").status_code == 503
+    assert client.get("/healthz").status_code == 503
+
+
+def test_the_first_503_warns_once_with_the_end_date_and_no_path(
+    certificate: Certificate, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+
+    with caplog.at_level(logging.WARNING, logger=certlife.__name__):
+        answers = [client.get("/healthz") for _ in range(3)]
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert [a.status_code for a in answers] == [503, 503, 503]
+    assert len(warnings) == 1
+    assert certificate.not_after.isoformat() in warnings[0].getMessage()
+    assert str(certificate.pair.cert) not in caplog.text
+    assert str(certificate.directory) not in caplog.text
+    # The answer itself carries no date.
+    assert answers[0].text == '{"status":"certificate-expiring"}'
+
+
+def test_no_warning_is_logged_while_the_certificate_is_healthy(
+    certificate: Certificate, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_before))
+
+    with caplog.at_level(logging.WARNING, logger=certlife.__name__):
+        client.get("/healthz")
+
+    assert caplog.records == []
+
+
+def test_an_unreadable_certificate_stops_the_app_from_being_built(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SettingsError, match=CERT_FILE_ENV):
+        build(environ={CERT_FILE_ENV: str(tmp_path / "missing.crt")})
+
+
+# ── the same over real TLS, the way the kubelet asks ────────────────────────
+@pytest.mark.parametrize(
+    ("valid_from", "valid_for", "status"),
+    [
+        # Past the margin of a sixth of its hour: the service must say so.
+        (timedelta(minutes=55), timedelta(minutes=5), 503),
+        (timedelta(minutes=1), timedelta(minutes=59), 200),
+    ],
+    ids=["near-its-end", "far-from-its-end"],
+)
+def test_over_tls_a_client_with_no_certificate_gets_the_health_answer(
+    tmp_path: Path, valid_from: timedelta, valid_for: timedelta, status: int
+) -> None:
+    ca = make_ca(tmp_path, "tls-health-ca")
+    now = datetime.now(UTC)
+    server = ca.issue(
+        "server", "server", loopback_sans(), now - valid_from, now + valid_for
+    )
+    app = create_service_app(
+        title="Test",
+        description="A test service.",
+        service_name="test-service",
+        tracer_name="meridian.test",
+        max_body_bytes=LIMIT,
+        environ={CERT_FILE_ENV: str(server.cert)},
+    ).app
+
+    with serve_tls(app, ca, server) as url:
+        response = httpx.get(f"{url}/healthz", verify=client_context(ca, None))
+
+    assert response.status_code == status
 
 
 def test_fastapis_own_telemetry_sets_no_global_provider_from_the_environment(

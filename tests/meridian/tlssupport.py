@@ -82,8 +82,15 @@ class CertificateAuthority:
     _certificate: x509.Certificate
 
     def issue(
-        self, stem: str, common_name: str, sans: list[x509.GeneralName]
+        self,
+        stem: str,
+        common_name: str,
+        sans: list[x509.GeneralName],
+        not_before: datetime.datetime | None = None,
+        not_after: datetime.datetime | None = None,
     ) -> KeyPair:
+        """A leaf valid from ``not_before`` to ``not_after`` (by default from a
+        minute ago for an hour from now)."""
         key = ec.generate_private_key(ec.SECP256R1())
         now = datetime.datetime.now(datetime.UTC)
         certificate = (
@@ -92,8 +99,8 @@ class CertificateAuthority:
             .issuer_name(self._certificate.subject)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(now - CLOCK_SKEW)
-            .not_valid_after(now + VALIDITY)
+            .not_valid_before(not_before or now - CLOCK_SKEW)
+            .not_valid_after(not_after or now + VALIDITY)
             .add_extension(x509.SubjectAlternativeName(sans), critical=False)
             .add_extension(
                 x509.AuthorityKeyIdentifier.from_issuer_public_key(

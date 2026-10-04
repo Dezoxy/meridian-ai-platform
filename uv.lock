@@ -713,6 +713,7 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "httpx2" },
@@ -736,7 +737,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "cryptography" },
     { name = "import-linter" },
     { name = "pytest" },
     { name = "pytest-xdist" },
@@ -746,6 +746,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "azure-identity", specifier = "==1.26.0" },
+    { name = "cryptography", specifier = "==50.0.2" },
     { name = "fastapi", specifier = "==0.142.2" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "httpx2", specifier = "==2.13.1" },
@@ -769,7 +770,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "cryptography", specifier = "==50.0.2" },
     { name = "import-linter", specifier = "==2.15" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-xdist", specifier = "==3.8.0" },

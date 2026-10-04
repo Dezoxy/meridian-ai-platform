@@ -6,6 +6,7 @@ call are in ``pipeline.py``.
 """
 
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -32,8 +33,13 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from meridian.platform.common.audit import AuditEvent, write_audit
+from meridian.platform.common.certlife import expiry_check, load_certificate
 from meridian.platform.common.env import SettingsError
-from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
+from meridian.platform.common.http import (
+    HEALTH_PATH,
+    SMALL_BODY_LIMIT_BYTES,
+    CertificateExpiring,
+)
 from meridian.platform.common.identity import (
     audited_refusals,
     caller_policy,
@@ -226,7 +232,16 @@ def create_tool_app(
         if not isinstance(middleware, OpenTelemetryMiddleware)
     ]
 
+    # Read once, here: the file on disk changes at renewal, this process's
+    # certificate does not, so near its end it says so and is restarted (S056).
+    near_end = expiry_check(load_certificate(os.environ))
+
     async def healthz(request: Request) -> JSONResponse:
+        if near_end():
+            return JSONResponse(
+                CertificateExpiring(status="certificate-expiring").model_dump(),
+                status_code=503,
+            )
         return JSONResponse({"status": "ok"})
 
     app = server.streamable_http_app(

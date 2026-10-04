@@ -6,9 +6,11 @@ request body, SQL or exception text (T-03).
 """
 
 import logging
-from collections.abc import AsyncIterator, Callable
+import os
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 import psycopg
@@ -25,6 +27,11 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meridian.platform.common.audit import AuditUnavailable
+from meridian.platform.common.certlife import (
+    expiry_check,
+    load_certificate,
+    utc_now,
+)
 from meridian.platform.common.telemetry import (
     configure_propagation,
     make_tracer_provider,
@@ -72,6 +79,19 @@ class ErrorBody(WireModel):
 
 class Health(WireModel):
     status: Literal["ok"]
+
+
+class CertificateExpiring(WireModel):
+    """The 503 of ``/healthz``: the certificate this process loaded is near its
+    end, so the kubelet should restart the container (S056). No date."""
+
+    status: Literal["certificate-expiring"]
+
+
+CERTIFICATE_EXPIRING_DESCRIPTION = (
+    "The certificate this process loaded is near its end; the kubelet restarts "
+    "the container, which loads the renewed one."
+)
 
 
 ERROR_DESCRIPTIONS = {
@@ -278,17 +298,25 @@ def create_service_app(
     tracer_provider: TracerProvider | None = None,
     close: Callable[[], None] | None = None,
     too_large: ScopeAnswer = body_too_large,
+    environ: Mapping[str, str] = os.environ,
+    clock: Callable[[], datetime] = utc_now,
 ) -> ServiceApp:
     """What the three services set up the same way.
 
     Trace-context propagation, a tracer provider (one the app made is shut
     down, flushing its spans, when the lifespan ends; an injected one is the
     caller's), the error handlers, the body limit, the FastAPI instrumentation
-    and ``GET /healthz``, which touches nothing. ``close`` runs at shutdown.
-    ``too_large`` is the answer to a declared body over the limit (see
-    ``BodyLimitMiddleware``). No server span keeps a query string (see
-    ``drop_query_from_span``).
+    and ``GET /healthz``, which reads nothing per request and nothing of the
+    caller's. ``close`` runs at shutdown. ``too_large`` is the answer to a
+    declared body over the limit (see ``BodyLimitMiddleware``). No server span
+    keeps a query string (see ``drop_query_from_span``).
+
+    The certificate ``environ`` names is read once, here (S056, T-89): once
+    ``clock`` says it is near its end (see ``certlife``), ``/healthz`` answers
+    503 until the container is restarted and loads the renewed file. Raise
+    ``SettingsError`` when that file cannot be read.
     """
+    near_end = expiry_check(load_certificate(environ), clock)
     configure_propagation()
     provider = tracer_provider or make_tracer_provider(service_name)
     owns_provider = tracer_provider is None
@@ -331,8 +359,20 @@ def create_service_app(
         HEALTH_PATH,
         tags=["health"],
         summary="Liveness: answers ok without calling the database.",
+        response_model=Health,
+        responses={
+            503: {
+                "model": CertificateExpiring,
+                "description": CERTIFICATE_EXPIRING_DESCRIPTION,
+            }
+        },
     )
-    async def healthz() -> Health:
-        return Health(status="ok")
+    async def healthz() -> Response:
+        if near_end():
+            return JSONResponse(
+                status_code=503,
+                content=CertificateExpiring(status="certificate-expiring").model_dump(),
+            )
+        return JSONResponse(content=Health(status="ok").model_dump())
 
     return ServiceApp(app=app, tracer=provider.get_tracer(tracer_name))
