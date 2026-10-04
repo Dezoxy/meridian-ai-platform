@@ -325,7 +325,7 @@ milestone's exit.
 |---|---|---|---|---|
 | S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | todo | S055, S024 |
 | S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table; `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | todo | S054 |
-| S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | todo | S045 |
+| S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | doing | S045 |
 | S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | todo | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI; a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it | todo | S053 |
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | todo | S039, S050 |
@@ -387,16 +387,16 @@ that day; the rest stand as their step recorded them.
 | A tool-server client that lives longer than one call | S013 | open | S059 |
 | An OpenAPI or health entry for the tool servers in `test_openapi.py` | S013 | open | S059 |
 | Length checks on `runtime.runs` text columns | S013 | open | S059 |
-| An upper bound on a provider's token counts | S045 | open | S058 |
-| A purpose on the gateway's refusal rows | S045 | open | S058 |
-| 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | open | S058 |
+| An upper bound on a provider's token counts | S045 | closed by S058 (an input count over four times the estimate, an output count over the wire's cap or a negative count is a bad response of that candidate) | S058 |
+| A purpose on the gateway's refusal rows | S045 | closed by S058 (a column, written on refusal rows) | S058 |
+| 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | closed by S058 (an input of more than 8,191 UTF-8 bytes is a 422) | S058 |
 | Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | closed on 2026-10-04 outside a step: Renovate reads it in the `Makefile` and in `python.yml` and moves both in one pull request (the app was installed the same day) | none |
 | After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
 | Ingestion tests that run without a database | S012 | open | S065 |
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
 | The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | open | S059 |
 | One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | open | S059 |
-| The count of a refusal flood's last window is never written | S046 | open; left by S024 (the gateway's code, which S055 held while S024 ran) | S058 |
+| The count of a refusal flood's last window is never written | S046 | closed by S058 for the gateway's own refusals (a row with the outcome `suppressed`); the caller check and the other services have a row below | S058 |
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | S059 |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open | S060 |
 | The tool-call limits are the same for every agent | S014 | open | S031 |
@@ -465,7 +465,7 @@ that day; the rest stand as their step recorded them.
 | The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open; S019: the chart refuses a second gateway replica, and leaves the rolling update alone (its decisions say why); windows shared between processes are the fix | S066 |
 | A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | open; left by S019 (application code) | S059 |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace (T-68) | threat model, S018 | open; left by S019 (the observability chart's values, not the Meridian chart) | S063 |
-| Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | open; left by S019 (application code) | S058 |
+| Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | closed by S058 (the limiter admits the estimate of the text as sent, and redaction runs after it) | S058 |
 | The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open; left by S019 (application code) | S021 |
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
 | Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | done in S055 (mutual TLS, ADR 4): a call with no identity, from an unmapped service or naming a tenant or agent outside the caller's registry entry is refused | S055 |
@@ -534,6 +534,9 @@ that day; the rest stand as their step recorded them.
 | `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | open | S056 |
 | `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | open; split on 2026-10-04: the check for the issuer is S056's, the first upgrade's outage stays with S020 | S056, S020 |
 | Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
+| The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | open | none |
+| The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | open | none |
+| A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
 
 ## Part C — Step details
 
@@ -7232,6 +7235,105 @@ service; the mounted key's file mode; the smoke line that reads a status
 and not a reason; `make deploy` on a cluster without cert-manager; the
 implementer and the edit gate. The first two are for before the chart
 goes to AKS (S020).
+
+### S058 — Gateway loose ends
+**Status:** doing · **Started:** 2026-10-04 · **Finished:** —
+**Goal:** close the five gateway items of the follow-up backlog: bounded
+token counts, a purpose on refusal rows, an answer of the gateway's own
+for an embedding input that is too long, the last window's count of a
+refusal flood, and the rate limit before redaction (T-73).
+
+**Decisions:**
+
+- **Unattended, by the owner's instruction (2026-10-04).** Nobody
+  answered a question during this session, so everything below was
+  decided here. None of it changes a security boundary, a cost or the
+  roadmap; the two that touch what a caller sees (the byte bound and the
+  order) say why they could be decided from the threat register.
+- **In parallel with S056 and S057.** This session ran no command against
+  the kind cluster and none against Azure.
+- **Three files outside the gateway's folder.** The brief kept this step
+  inside `platform/gateway/`, and two items cannot be done there: a
+  purpose needs a column (a migration and `common/audit.py`), and the
+  last window's count needs the throttle to hand it out
+  (`common/throttle.py`). No running step owns those files (S056 has
+  `identity.py`, `tls.py` and `peercert.py`; S059 has `env.py`), both
+  changes only add, and the open pull requests were read before this one
+  was opened.
+- **Token counts are bounded against the request, where the vectors are
+  checked.** A reply's input count may be at most four times the
+  estimate, its output count at most the wire's cap of 1,024; anything
+  else, a negative count too, is `bad-response`. A token of a byte-level
+  BPE is at least one byte and the estimate is the UTF-8 bytes over
+  three, so a count over three times the estimate cannot be of the
+  request; four leaves room for redaction's placeholders and the
+  provider's framing. The check sits in `operations.py` inside the call,
+  like the check of a vector's length, so the walk does the rest: the
+  reservation stays as the charge, the circuit counts it and the next
+  candidate is tried. Rejected: one constant for every request (four
+  million tokens is the most the wire could hold), which stops an
+  overflow and still lets one reply use up a tenant's day. Rejected: the
+  request's own `max_output_tokens` as the output bound, because the
+  replay provider ignores that cap and tests send caps of 7, 10 and 16.
+  The risk taken: a bound that is too tight counts against a circuit
+  (`bad-response` is a deployment's failure, T-45), which is why it is
+  provable and not measured.
+- **An embedding input is bounded in bytes, as a 422.** The gateway has
+  no tokenizer. What it can prove is that an input of at most 8,191
+  UTF-8 bytes cannot pass 8,191 tokens, so a longer one is refused when
+  the body is read, as 8,001 characters are. The price: inputs that
+  would have fitted are refused too (Cyrillic past 4,095 characters, CJK
+  past 2,730). No caller meets it: a search query is at most 500
+  characters, and the largest whole wording is 7,812 bytes, so no clause
+  of it is longer.
+  Rejected: `tiktoken`, a dependency that fetches its vocabulary from
+  the internet at first use, which a pod behind S019's egress policy
+  cannot. Rejected: the gateway's own estimate (bytes over three) as the
+  bound, which refuses almost nothing and leaves the 502. Rejected:
+  reading the provider's 400 for this case, whose code no live call has
+  shown. A tokenizer could later relax the bound without breaking a
+  caller that passes it.
+- **One estimate, of the text as sent.** To refuse before redaction the
+  limiter needs a number before redaction, so the estimate is computed
+  from the request as it arrived, and the ledger reserves the same
+  number: a request is still held to one number. S047 estimated from the
+  redacted text because redaction ran first; three of its tests pinned
+  that and say the new order now. The provider gets the redacted text
+  only, as before. Decided from the threat register, as the brief asked:
+  a row of a 429 or a 413 holds what it held (IDs, the route's facts, a
+  reason, a count), the estimate is a byte count and never text (T-56),
+  a refused request reaches no provider (T-20), and the one change in a
+  span is that a rate-refused request has no `meridian.redactions`.
+  Rejected: the limiter on the text as sent and the ledger on the
+  redacted text, two numbers for one request.
+- **The purpose is a column, on refusal rows, and the throttle's key
+  stays.** `audit.events.purpose`, nullable, as 0002 and 0003 added their
+  columns. A row's purpose is that of the call that wrote the row; its
+  `suppressed` count is of both purposes, because the key is still
+  tenant and reason. Rejected: a key with the purpose in it, which would
+  double the rows a flood may leave (T-49). Rows that name a deployment
+  need no purpose and get none. The row of a caller the check refuses
+  before the body is read (S055) has none either: that code is
+  `common/identity.py`, which S056 holds.
+- **The last window's count is a row of its own, written by the next
+  request.** A row with the outcome `suppressed` carries the count once
+  no row of that tenant and reason was claimed for two windows, written
+  when the next request of any tenant arrives, and at shutdown for every
+  count still held. It is not a refusal, so the refusals of a key are its
+  `refused` rows plus the `suppressed` counts of both kinds of row. Two
+  windows and not one: a flood that goes on claims a row each window and
+  that row carries the count, so one key still leaves one row a minute
+  on average (T-49). Rejected: a timer thread, a second clock beside the
+  injected one and a thread to stop in every test. Rejected: a row with
+  the outcome `refused`, which would count as one refusal more. A
+  process that is killed loses the counts it holds, as it loses its rate
+  windows (C-01).
+
+**Work log:** —
+
+**Result / verification:** —
+
+**Follow-ups:** —
 
 ## Part D — Open questions
 

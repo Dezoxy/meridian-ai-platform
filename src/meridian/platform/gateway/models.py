@@ -19,6 +19,16 @@ MAX_OUTPUT_TOKENS = 1024
 # so the bound is on inputs and characters, not on a reply.
 MAX_EMBEDDING_INPUTS = 16
 MAX_EMBEDDING_INPUT_CHARS = 8000
+# The provider refuses an input of more than 8,191 tokens. The gateway has no
+# tokenizer, but a token of a byte-level BPE is at least one byte, so an input of
+# at most 8,191 UTF-8 bytes cannot pass 8,191 tokens. It also refuses inputs that
+# would have fitted (Cyrillic past 4,095 characters, CJK past 2,730): accepted.
+MAX_EMBEDDING_INPUT_BYTES = 8191
+# One fixed sentence that names the bound and nothing of the input: the
+# service's 422 copies a validator's message (T-56).
+EMBEDDING_INPUT_REFUSAL = (
+    f"an embedding input must not exceed {MAX_EMBEDDING_INPUT_BYTES} bytes of UTF-8"
+)
 # The one sentence a refused schema is answered with. The service's 422 copies a
 # validator's message, so it names nothing of the schema: a name or a value in
 # it would travel to a log, a trace or a reply (T-56).
@@ -69,16 +79,28 @@ class ChatResponse(WireModel):
     usage: Usage
 
 
+def _check_input_bytes(text: str) -> str:
+    # surrogatepass: a lone surrogate counts as the three bytes it would take
+    # and never raises, so the only message this can produce is the fixed one.
+    if len(text.encode("utf-8", errors="surrogatepass")) > MAX_EMBEDDING_INPUT_BYTES:
+        raise ValueError(EMBEDDING_INPUT_REFUSAL)
+    return text
+
+
 EmbeddingInput = Annotated[
     str,
     StringConstraints(min_length=1, max_length=MAX_EMBEDDING_INPUT_CHARS),
     NoNul,
+    AfterValidator(_check_input_bytes),
 ]
 
 
 class EmbeddingRequest(WireModel):
     """The texts to embed and nothing else: the caller never chooses the model
-    or the number of dimensions (T-54), both come from the registry."""
+    or the number of dimensions (T-54), both come from the registry.
+
+    An input is at most 8,000 characters and at most 8,191 bytes of UTF-8: the
+    provider refuses more than 8,191 tokens, and a token is at least a byte."""
 
     inputs: tuple[EmbeddingInput, ...] = Field(
         min_length=1, max_length=MAX_EMBEDDING_INPUTS

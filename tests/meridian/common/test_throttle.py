@@ -17,6 +17,7 @@ from servicesupport import FakeClock
 
 from meridian.platform.common.throttle import (
     REFUSAL_AUDIT_SECONDS,
+    REFUSAL_SUMMARY_SECONDS,
     RefusalAuditThrottle,
 )
 
@@ -195,6 +196,175 @@ def test_a_refusal_with_no_tenant_is_a_key_of_its_own(clock: FakeClock) -> None:
 
     assert throttle.due(None, "unknown-tenant") is None
     assert throttle.due(TENANT, "unknown-tenant") == 0
+
+
+def flood(throttle: RefusalAuditThrottle, refusals: int) -> None:
+    """One row due, then ``refusals - 1`` suppressed in the same window."""
+    assert throttle.due(TENANT, REASON) == 0
+    for _ in range(refusals - 1):
+        assert throttle.due(TENANT, REASON) is None
+
+
+def test_a_summary_waits_two_windows_after_the_row(clock: FakeClock) -> None:
+    assert REFUSAL_SUMMARY_SECONDS == 2 * REFUSAL_AUDIT_SECONDS
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+
+    clock.advance(REFUSAL_SUMMARY_SECONDS - 0.5)
+    inside = throttle.take_ended()
+    clock.advance(0.5)
+    after = throttle.take_ended()
+
+    assert (inside, after) == ([], [(TENANT, REASON, 2)])
+
+
+def test_a_summary_is_handed_out_once(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+
+    assert throttle.take_ended() == [(TENANT, REASON, 2)]
+    assert throttle.take_ended() == []
+    assert throttle.take_ended(everything=True) == []
+
+
+def test_taking_a_summary_leaves_the_window_of_the_row_alone(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+    assert throttle.take_ended() == [(TENANT, REASON, 2)]
+
+    # The row is due again, and carries nothing: the summary took the count.
+    assert throttle.due(TENANT, REASON) == 0
+
+
+def test_a_released_key_hands_out_no_count_inside_two_windows_of_the_release(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    carried = throttle.due(TENANT, REASON)
+    assert carried == 0
+    throttle.release(TENANT, REASON, carried)  # one refusal with no row
+
+    assert throttle.take_ended() == []
+    clock.advance(REFUSAL_SUMMARY_SECONDS - 0.5)
+    assert throttle.take_ended() == []
+
+
+def test_a_released_key_hands_out_its_count_two_windows_after_the_release(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    carried = throttle.due(TENANT, REASON)
+    throttle.release(TENANT, REASON, carried)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+
+    assert throttle.take_ended() == [(TENANT, REASON, 1)]
+    assert throttle.take_ended() == []
+
+
+def test_a_release_is_measured_from_the_release_and_not_from_the_old_row(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    throttle.due(TENANT, REASON)  # a row, long ago
+    clock.advance(10 * REFUSAL_SUMMARY_SECONDS)
+    carried = throttle.due(TENANT, REASON)
+    throttle.release(TENANT, REASON, carried)
+
+    assert throttle.take_ended() == []
+
+
+def test_after_a_release_due_still_carries_the_count_at_once(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    carried = throttle.due(TENANT, REASON)
+    throttle.release(TENANT, REASON, carried)
+
+    assert throttle.due(TENANT, REASON) == 1
+    assert throttle.take_ended() == []
+
+
+def test_everything_hands_out_a_count_inside_the_window(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+
+    assert throttle.take_ended() == []
+    assert throttle.take_ended(everything=True) == [(TENANT, REASON, 2)]
+
+
+def test_a_key_with_no_suppressed_refusal_is_never_handed_out(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 1)
+    clock.advance(10 * REFUSAL_SUMMARY_SECONDS)
+
+    assert throttle.take_ended() == []
+    assert throttle.take_ended(everything=True) == []
+
+
+def test_only_the_keys_that_ended_are_handed_out(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 2)
+    clock.advance(REFUSAL_AUDIT_SECONDS)
+    assert throttle.due(OTHER_TENANT, REASON) == 0
+    assert throttle.due(OTHER_TENANT, REASON) is None
+    clock.advance(REFUSAL_AUDIT_SECONDS)
+
+    assert throttle.take_ended() == [(TENANT, REASON, 1)]
+    assert throttle.take_ended(everything=True) == [(OTHER_TENANT, REASON, 1)]
+
+
+def test_a_flood_that_goes_on_has_its_count_in_its_own_row(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+    clock.advance(REFUSAL_AUDIT_SECONDS)
+
+    assert throttle.take_ended() == []  # no summary yet,
+    assert throttle.due(TENANT, REASON) == 2  # the next row carries the count
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+    assert throttle.take_ended() == []  # and nothing is left to summarise
+
+
+def test_a_restored_count_comes_out_again_and_the_next_row_carries_it(
+    clock: FakeClock,
+) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+    (tenant, reason, count), *_ = throttle.take_ended()
+
+    throttle.restore(tenant, reason, count)
+
+    assert throttle.take_ended() == [(TENANT, REASON, 2)]
+    throttle.restore(tenant, reason, count)
+    assert throttle.due(TENANT, REASON) == 2
+
+
+def test_a_restore_adds_to_what_arrived_meanwhile(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+    flood(throttle, 3)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+    (tenant, reason, count), *_ = throttle.take_ended()
+    assert throttle.due(TENANT, REASON) == 0
+    assert throttle.due(TENANT, REASON) is None  # one more, counted
+
+    throttle.restore(tenant, reason, count)
+
+    assert throttle.take_ended(everything=True) == [(TENANT, REASON, 3)]
+
+
+def test_a_restore_of_an_unknown_key_makes_it_a_key(clock: FakeClock) -> None:
+    throttle = RefusalAuditThrottle(clock=clock)
+
+    throttle.restore(None, "unknown-tenant", 4)
+
+    # Never claimed a row, so nothing keeps the count back.
+    assert throttle.take_ended() == [(None, "unknown-tenant", 4)]
 
 
 @pytest.mark.usefixtures("fast_switching")

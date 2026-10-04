@@ -49,12 +49,8 @@ from meridian.platform.common.throttle import (
 from meridian.platform.gateway import app as gateway_app
 from meridian.platform.gateway import budget
 from meridian.platform.gateway.app import (
-    LIMIT_ANSWERS,
     PROVIDER_FAILED,
     PROVIDER_TIMED_OUT,
-    TENANT_BUDGET_USED_UP,
-    TENANT_RATE_LIMIT_REACHED,
-    TENANT_REQUEST_TOO_LARGE,
     create_app,
 )
 from meridian.platform.gateway.budget import (
@@ -71,6 +67,12 @@ from meridian.platform.gateway.providers.base import (
     ProviderReply,
 )
 from meridian.platform.gateway.ratelimit import RateRefusalReason
+from meridian.platform.gateway.refusals import (
+    LIMIT_ANSWERS,
+    TENANT_BUDGET_USED_UP,
+    TENANT_RATE_LIMIT_REACHED,
+    TENANT_REQUEST_TOO_LARGE,
+)
 from meridian.platform.gateway.resilience import FAILURE_THRESHOLD, OPEN_SECONDS
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.gateway.walk import closing_for
@@ -1210,7 +1212,8 @@ def test_twenty_unknown_tenant_names_leave_one_row_and_no_key_and_no_label(
     assert one.refused_audit_rows("unknown-tenant") == 1
     assert one.suppressed_counts("unknown-tenant") == [0]
     assert one.calls_counted() == {("refused", "unknown-tenant"): 20}
-    (throttle,) = throttles
+    # The app builds two throttles; the caller check's holds no key here.
+    (throttle,) = [t for t in throttles if t._windows]
     assert set(throttle._windows) == {(None, "unknown-tenant")}
     everything = str([one.points("meridian.gateway.calls")])
     assert not any(name in everything for name in names)
