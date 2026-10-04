@@ -160,6 +160,14 @@ class Readers(unittest.TestCase):
     def test_nothing_is_merged_by_renovate(self) -> None:
         self.assertNotIn("automerge", CONFIG.read_text(encoding="utf-8").lower())
 
+    def test_every_action_is_pinned_to_a_commit(self) -> None:
+        # A tag can be moved to other code; a commit hash cannot (T-36).
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            for action in re.findall(r"^\s*(?:- )?uses:\s*(\S+)", text, re.MULTILINE):
+                with self.subTest(workflow=path.name, action=action):
+                    self.assertRegex(action, r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
+
 
 if __name__ == "__main__":
     unittest.main()

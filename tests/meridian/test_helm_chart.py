@@ -383,7 +383,7 @@ def test_the_workflow_installs_the_helm_version_the_readme_documents() -> None:
         s for s in workflow_steps() if s.get("uses", "").startswith("azure/setup-helm@")
     ]
 
-    assert re.fullmatch(r"azure/setup-helm@v\d+", setup["uses"])
+    assert re.fullmatch(r"azure/setup-helm@[0-9a-f]{40}", setup["uses"])
     assert setup["with"]["version"] == documented
 
 
