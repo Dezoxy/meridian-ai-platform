@@ -12,7 +12,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.12.22@sha256:f513a91fc62fe7c17567eee97230dd198e43edb8a9fbecca843714a4358fe1bc AS uv
 
-FROM python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS build
+FROM python:3.13-slim@sha256:3dd7cc108ec1493442514f5c2a871af6af0ec31d768ff6e378a93340c3b3db5f AS build
 COPY --from=uv /uv /usr/local/bin/uv
 # The system Python of this base image is the only interpreter: uv downloads
 # none. Bytecode is compiled here, so the final image never needs to write it.
@@ -28,7 +28,7 @@ COPY src ./src
 # Non-editable: the package is installed into site-packages, not linked to /src.
 RUN uv sync --locked --no-dev --no-editable
 
-FROM python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS runtime
+FROM python:3.13-slim@sha256:3dd7cc108ec1493442514f5c2a871af6af0ec31d768ff6e378a93340c3b3db5f AS runtime
 RUN groupadd --gid 10001 meridian \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin meridian
 # Same base image and same path as the build stage: the venv's interpreter
