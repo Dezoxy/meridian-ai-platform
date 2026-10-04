@@ -5967,7 +5967,12 @@ own gates accept on the first run, and grants it nothing.
 - The name is the control. One pattern, the registry's agent ID with a
   length limit; its module name must be an identifier and no keyword; a
   name an agent, an entry point of either group or a workload directory
-  already has is refused, and no existing file is written over.
+  or module already has is refused, and so is a word YAML reads as
+  something other than text (`yes`, `null`): it would become a boolean in
+  the first tenant list a person writes it into. No existing file is
+  written over; two are appended to. A directory or file the command
+  would write through a symbolic link, or outside the checkout, is
+  refused.
 - Edits are checked before the first write. `pyproject.toml` and
   `agents.yaml` are changed as text, after the last line of the table or
   the list, because a YAML or TOML writer would drop their comments; the
@@ -5978,13 +5983,21 @@ own gates accept on the first run, and grants it nothing.
   `meridian.platform` would break the import contract, and the CLI imports
   only platform packages (hard rule 5). Rejected: Jinja2 and `str.format`,
   whose braces collide with Python source.
-- An empty evaluation is a golden set with no case. `meridian eval run`
-  said `nothing ran: every case is already on the stack` and exited 1 for
-  it, and a report needs one case. It now says that the golden set holds no
-  case, sends nothing, writes no report and exits 0 (T-82). Rejected: a
-  separate `eval check` command, a second way to ask the same question; a
-  placeholder case, which needs a deployed stack to answer it. The change
-  is in `cli/evaluation.py`; `platform/evaluation/` is unchanged.
+- An empty evaluation is a golden set with no case, and it passes only
+  when asked to: `meridian eval run --allow-empty`. Without the flag a
+  golden set with no case exits 1, as it did, now with a message that is
+  true (it said `nothing ran: every case is already on the stack`). With
+  it the run says that nothing was evaluated, sends nothing, writes no
+  report and exits 0, and it refuses a report already at the report's
+  path, so a later `eval compare` cannot read an old one as this run's
+  (T-82). The first version of this step passed without a flag; the
+  security and the silent-failure reviews both read that as a gate
+  command turned from fail-closed to fail-open for every workload, the
+  claims workload included. Rejected: a separate `eval check` command, a
+  second way to ask the same question; a placeholder case, which needs a
+  deployed stack to answer it; a distinct exit code, which a script reads
+  no better than a flag. The change is in `cli/evaluation.py`;
+  `platform/evaluation/` is unchanged.
 - The proof is a test, not a committed example. It copies the tree, runs
   the command, installs the copy (`uv sync --locked --offline`, under a
   second with a warm cache) and runs `meridian registry validate`,

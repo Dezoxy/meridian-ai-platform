@@ -4,19 +4,29 @@ Every test writes into the small tree of ``conftest.py`` in ``tmp_path``; none
 touches the real checkout.
 """
 
+import errno
 import os
+import re
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from meridian.platform.cli import app
+from meridian.platform.cli import app, scaffold
 from meridian.platform.registry.loader import load_registry
 
 runner = CliRunner()
 NAME = "fraud-review"
 MODULE = "fraud_review"
 EXIT_REFUSED = 2
+EXIT_FAILED = 1
+# Typer styles its usage errors when GITHUB_ACTIONS is set, and the colour codes
+# split even an option's name ("-" "-root").
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(text: str) -> str:
+    return ANSI.sub("", text)
 
 
 def snapshot(root: Path) -> dict[str, object]:
@@ -47,14 +57,16 @@ def expected_stdout(name: str, module: str) -> str:
         "generated: a graph with one node that calls no model and no tool, an "
         "evaluation with no grader, a golden set with no case and an agent with "
         "no tool",
-        "still by hand: a tenant that lists the agent, its tools, a prompt, the "
-        "cases and their graders, an API and its deployment",
-        "first run:",
+        "still by hand: a tenant that lists the agent, its tools, a prompt, "
+        "synthetic cases from a seeded generator and their graders, an API and its "
+        "deployment",
+        "first run, from the checkout's root:",
         "  uv run meridian registry validate",
         "  uv run lint-imports",
         f"  uv run meridian eval run --workload {name} "
         f"--golden-set data/evaluation/{name}/golden "
-        f"--base-url http://localhost:8000 --report {name}-report.json",
+        f"--base-url http://localhost:8000 --report {name}-report.json "
+        "--allow-empty",
     ]
     return "\n".join(lines) + "\n"
 
@@ -145,8 +157,8 @@ def test_a_root_that_does_not_exist_is_a_usage_error_and_writes_nothing(
 
     assert result.exit_code == EXIT_REFUSED
     assert result.stdout == ""
-    assert "Usage" in result.stderr
-    assert "--root" in result.stderr
+    assert "Usage" in plain(result.stderr)
+    assert "--root" in plain(result.stderr)
     assert not missing.exists()
     assert os.listdir(tmp_path) == []
 
@@ -158,9 +170,79 @@ def test_a_root_that_is_a_file_is_a_usage_error(tmp_path: Path) -> None:
     result = runner.invoke(app, ["workload", "new", NAME, "--root", str(file)])
 
     assert result.exit_code == EXIT_REFUSED
-    assert "Usage" in result.stderr
-    assert "--root" in result.stderr
+    assert "Usage" in plain(result.stderr)
+    assert "--root" in plain(result.stderr)
     assert os.listdir(tmp_path) == ["file"]
+
+
+def test_a_failed_write_exits_1_not_2_and_says_what_is_left_behind(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = os.replace
+    agents_replacements = []
+
+    def replace(source: object, destination: object, *args: object) -> None:
+        if Path(str(destination)).name == "agents.yaml":
+            agents_replacements.append(source)
+        if (
+            Path(str(destination)).name == "pyproject.toml"
+            or len(agents_replacements) > 1
+        ):
+            raise PermissionError(errno.EACCES, "a-path-the-output-must-not-repeat")
+        real(source, destination, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", replace)
+
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    assert result.exit_code == EXIT_FAILED
+    assert result.stdout == ""
+    assert result.stderr == (
+        "ERROR "
+        + scaffold.ROLLBACK_FAILED.format(
+            f"PermissionError: {os.strerror(errno.EACCES)}"
+        )
+        + "\nERROR left behind: config/registry/agents.yaml\n"
+    )
+
+
+def test_a_write_that_was_undone_exits_1_with_one_line(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = snapshot(root)
+    real = os.replace
+
+    def replace(source: object, destination: object, *args: object) -> None:
+        if Path(str(destination)).name == "pyproject.toml":
+            raise PermissionError(errno.EACCES, "a-path-the-output-must-not-repeat")
+        real(source, destination, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", replace)
+
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    assert result.exit_code == EXIT_FAILED
+    assert result.stdout == ""
+    assert result.stderr == (
+        "ERROR "
+        + scaffold.WRITE_FAILED.format(f"PermissionError: {os.strerror(errno.EACCES)}")
+        + "\n"
+    )
+    assert snapshot(root) == before
+
+
+def test_a_refusal_with_details_prints_each_on_its_own_line(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(root: Path, name: str) -> None:
+        raise scaffold.ScaffoldError("the message", details=("one", "two"))
+
+    monkeypatch.setattr("meridian.platform.cli.workload.plan_workload", refuse)
+
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    assert result.exit_code == EXIT_REFUSED
+    assert result.stderr == "ERROR the message\nERROR one\nERROR two\n"
 
 
 def test_the_meridian_help_lists_workload_and_its_help_lists_new() -> None:
@@ -172,5 +254,5 @@ def test_the_meridian_help_lists_workload_and_its_help_lists_new() -> None:
     assert "workload" in top.stdout
     assert group.exit_code == 0
     assert "new" in group.stdout
-    assert bare.exit_code in (0, EXIT_REFUSED)
+    assert bare.exit_code == EXIT_REFUSED
     assert "new" in bare.stdout

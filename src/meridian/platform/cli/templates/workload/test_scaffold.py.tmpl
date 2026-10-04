@@ -28,7 +28,8 @@ def test_the_graph_compiles_and_answers_with_its_agent() -> None:
     assert answer["output"] == {"agent": "$name"}
 
 
-def test_the_evaluation_is_published_and_the_golden_set_holds_no_case() -> None:
+def test_the_empty_workloads_evaluation_is_published_and_holds_no_case() -> None:
+    """The empty workload's test: replace it with the first case."""
     golden = golden_set()
 
     fingerprint = golden_set_of(golden / "manifest.json")
@@ -41,3 +42,14 @@ def test_the_evaluation_is_published_and_the_golden_set_holds_no_case() -> None:
 def test_the_evaluation_has_no_graders_yet() -> None:
     with pytest.raises(ReportError):
         evaluation.EVALUATION.report({}, golden_set(), None)
+
+
+def test_a_golden_set_with_one_case_is_refused_while_nothing_grades(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "cases.json").write_text('[{"case": "case-1"}]', encoding="utf-8")
+
+    with pytest.raises(ReportError) as refused:
+        evaluation.EVALUATION.submissions(tmp_path)
+
+    assert str(refused.value) == evaluation.NO_GRADERS

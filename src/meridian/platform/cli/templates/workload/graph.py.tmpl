@@ -19,6 +19,8 @@ AGENT = "$name"
 
 
 class State(TypedDict):
+    # A run's `input` object is the graph's initial state, key by key; `request`
+    # is this skeleton's one input key.
     request: dict[str, Any]
     output: dict[str, Any]
 

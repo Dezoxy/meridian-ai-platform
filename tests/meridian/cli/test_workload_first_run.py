@@ -1,7 +1,9 @@
 """The step's "done when": a developer's first run of ``meridian workload new``.
 
 The real flow, in an installed copy of this tree: scaffold a workload, then
-validate, lint, run and test it with the commands the scaffold prints. Entry
+validate, lint, run and test it. The test runs the scaffold's flow with its own
+address and report path, plus ``ruff`` and ``pytest``: it does not parse the
+commands the scaffold prints (``test_workload_new.py`` pins their text). Entry
 points are read from the installed distribution's metadata, so a ``PYTHONPATH``
 copy (what ``tests/meridian/test_import_contracts.py`` does) cannot prove it: the
 copy needs an install of its own, with the new ``pyproject.toml``. Every command
@@ -10,7 +12,8 @@ is ``uv run --locked --offline`` in the copy, which creates the copy's own
 
 ``--offline`` works because the environment the tests run in was installed from
 the same lock, so uv's cache holds every wheel. A cold cache fails here for that
-reason, not because of the scaffold.
+reason, not because of the scaffold: step 0 runs ``python -c pass`` first, so
+that failure is named there, before the step under test.
 """
 
 import os
@@ -21,7 +24,12 @@ from pathlib import Path
 
 import pytest
 
-from meridian.platform.cli.evaluation import NO_CASES
+from meridian.platform.cli.evaluation import (
+    EMPTY_GOLDEN_SET,
+    EMPTY_PASSED,
+    NO_CASES,
+)
+from meridian.platform.cli.scaffold import NAME_TAKEN
 from meridian.platform.registry.loader import load_registry
 
 REPO = Path(__file__).resolve().parents[3]
@@ -35,6 +43,7 @@ WORKLOAD_TESTS = f"tests/meridian/workloads/{MODULE}"
 # Variables that would put the real tree, or its environment, on the copy's path.
 DROPPED = ("VIRTUAL_ENV", "PYTHONPATH", "UV_PROJECT_ENVIRONMENT")
 AGENT_COUNT = re.compile(r"(\d+) agents?")
+TESTS_PASSED = re.compile(r"\b4 passed\b")
 SUMMARY = re.compile(r"Contracts: (?P<kept>\d+) kept, (?P<broken>\d+) broken")
 
 LOAD_GRAPHS = f"""
@@ -114,6 +123,8 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
         return completed
 
     # Act and assert, in the order a developer takes them.
+    run("0 the environment (uv, its cache, the lock) works", "python", "-c", "pass")
+
     run("1 workload new", "meridian", "workload", "new", NAME)
     after_first = {path: (tree / path).read_bytes() for path in (PYPROJECT, AGENTS)}
 
@@ -136,8 +147,7 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     evaluation = run("6 load evaluation", "python", "-c", LOAD_EVALUATION)
     assert evaluation.stdout.strip() == "framework:", evaluation.stdout
 
-    evaluated = run(
-        "7 eval run",
+    eval_run = (
         "meridian",
         "eval",
         "run",
@@ -150,14 +160,23 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
         "--report",
         "report.json",
     )
-    assert evaluated.stdout == f"{NO_CASES}\neval run: passed\n", evaluated.stdout
+    evaluated = run("7 eval run --allow-empty", *eval_run, "--allow-empty")
+    assert evaluated.stdout == f"{NO_CASES}\n{EMPTY_PASSED}\n", evaluated.stdout
     assert "ERROR" not in evaluated.stderr, evaluated.stderr
     assert not (tree / "report.json").exists()
 
-    tested = run("8 pytest", "pytest", WORKLOAD_TESTS, "-q", "-p", "no:cacheprovider")
-    assert "3 passed" in tested.stdout, tested.stdout
+    refused = run("7b eval run without the flag", *eval_run, expect=1)
+    assert refused.stdout == "eval run: failed\n", refused.stdout
+    assert refused.stderr == f"ERROR {EMPTY_GOLDEN_SET}\n", refused.stderr
+    assert not (tree / "report.json").exists()
 
-    run("9 workload new again", "meridian", "workload", "new", NAME, expect=2)
+    tested = run("8 pytest", "pytest", WORKLOAD_TESTS, "-q", "-p", "no:cacheprovider")
+    # Four generated tests; the pattern cannot match "14 passed".
+    assert TESTS_PASSED.search(tested.stdout), tested.stdout
+
+    again = run("9 workload new again", "meridian", "workload", "new", NAME, expect=2)
+    # The last line: uv may print a notice of its own before the command's.
+    assert again.stderr.splitlines()[-1:] == [f"ERROR {NAME_TAKEN}"], again.stderr
     for path, content in after_first.items():
         assert (tree / path).read_bytes() == content, path
 

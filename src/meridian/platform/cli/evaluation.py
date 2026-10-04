@@ -1,6 +1,7 @@
 """``meridian eval``: compare an evaluation report with its baseline, read two
 reports side by side, or run a workload's golden set against a deployed stack."""
 
+import os
 from pathlib import Path
 from time import sleep
 from typing import Annotated, NoReturn
@@ -51,6 +52,15 @@ NO_CASES = (
     "the golden set holds no case: nothing was sent, nothing was evaluated and "
     "no report is written"
 )
+EMPTY_GOLDEN_SET = (
+    "the golden set holds no case: nothing to evaluate (--allow-empty passes a "
+    "workload that has none yet)"
+)
+REPORT_IN_THE_WAY = (
+    "a report is already at the report's path and is not this run's: remove it or "
+    "name another path"
+)
+EMPTY_PASSED = "eval run: passed, nothing evaluated"
 
 app = typer.Typer(no_args_is_help=True, help="Evaluate a workload.")
 
@@ -188,6 +198,18 @@ def _prepare(
     return evaluation, registry, total
 
 
+def _finish_empty(report_path: Path, allow_empty: bool) -> NoReturn:
+    """End a run whose golden set holds no case: nothing is sent or written."""
+    if not allow_empty:
+        typer.echo("eval run: failed")
+        _stop(EXIT_FAILED, EMPTY_GOLDEN_SET)
+    if os.path.lexists(report_path):
+        _stop(EXIT_UNREADABLE, REPORT_IN_THE_WAY)
+    typer.echo(NO_CASES)
+    typer.echo(EMPTY_PASSED)
+    raise typer.Exit(code=EXIT_PASSED)
+
+
 def _echo_outcome(outcome: RunOutcome) -> None:
     typer.echo(
         f"ran {len(outcome.ran)}, skipped {len(outcome.skipped)} "
@@ -309,6 +331,10 @@ def run_command(
         float,
         typer.Option("--pace", min=0.0, help="Seconds to wait after a case that ran."),
     ] = DEFAULT_PACE_SECONDS,
+    allow_empty: Annotated[
+        bool,
+        typer.Option("--allow-empty", help="Pass when the golden set holds no case."),
+    ] = False,
 ) -> None:
     """Post the golden set to a deployed stack, read each answer, grade it.
 
@@ -316,14 +342,14 @@ def run_command(
     case ran, none failed, every absolute grader passed on every case that ran
     and every target of the report is met over those cases; 1 otherwise; 2 when
     something cannot be read or the address is refused. A golden set that holds
-    no case is an empty evaluation: it exits 0 too, says so, and sends and
-    writes nothing.
+    no case fails (exit 1) unless ``--allow-empty`` is given: then nothing is
+    sent or written and the run passes, saying that nothing was evaluated, but
+    it exits 2 when anything is already at the report's path, because a report
+    left there is not this run's.
     """
     evaluation, registry, total = _prepare(workload, golden_set, registry_dir)
     if total == 0:
-        typer.echo(NO_CASES)
-        typer.echo("eval run: passed")
-        raise typer.Exit(code=EXIT_PASSED)
+        _finish_empty(report_path, allow_empty)
     if not report_path.parent.is_dir():
         _stop(EXIT_UNREADABLE, "the report's directory does not exist")
     try:
