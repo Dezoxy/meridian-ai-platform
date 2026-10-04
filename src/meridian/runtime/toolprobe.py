@@ -11,6 +11,7 @@ throttle window, a refusal's audit row.
 """
 
 import os
+import ssl
 import sys
 import uuid
 from collections.abc import Mapping, Sequence
@@ -20,6 +21,7 @@ from opentelemetry.trace import NoOpTracer
 from pydantic import ValidationError
 
 from meridian.platform.common.env import SettingsError
+from meridian.platform.common.tls import verify_of
 from meridian.platform.registry import Registry, RegistryError, load_registry
 from meridian.platform.registry.models import Tool
 from meridian.runtime.settings import RuntimeSettings
@@ -61,7 +63,12 @@ def first_tool(registry: Registry, server: str) -> tuple[str, Tool] | None:
 
 
 def call_once(
-    registry: Registry, target: ToolTarget, server: str, agent: str, tool: Tool
+    registry: Registry,
+    target: ToolTarget,
+    server: str,
+    agent: str,
+    tool: Tool,
+    verify: ssl.SSLContext | bool = True,
 ) -> Answer:
     """One call with an empty argument object and a run ID nobody has."""
     client = ToolClient(
@@ -74,6 +81,7 @@ def call_once(
         # allowlist never refuses and there is nothing to audit here.
         on_refusal=lambda _tool: None,
         max_calls=1,  # the client makes one call
+        verify=verify,
     )
     step = STEP if tool.idempotency_key_required else None
     try:
@@ -86,8 +94,13 @@ def call_once(
     return Answer(server, tool.id, COMPLETED)
 
 
-def probe(registry: Registry, addresses: Mapping[str, ToolTarget]) -> list[Answer]:
-    """One answer per server of the registry, in registry order."""
+def probe(
+    registry: Registry,
+    addresses: Mapping[str, ToolTarget],
+    verify: ssl.SSLContext | bool = True,
+) -> list[Answer]:
+    """One answer per server of the registry, in registry order. ``verify`` is
+    how the runtime's own client reaches an address over TLS."""
     answers: list[Answer] = []
     for server in registry.servers:
         chosen = first_tool(registry, server.id)
@@ -99,7 +112,7 @@ def probe(registry: Registry, addresses: Mapping[str, ToolTarget]) -> list[Answe
         if target is None:
             answers.append(Answer(server.id, tool.id, NO_ADDRESS))
             continue
-        answers.append(call_once(registry, target, server.id, agent, tool))
+        answers.append(call_once(registry, target, server.id, agent, tool, verify))
     return answers
 
 
@@ -118,6 +131,8 @@ def main(
     try:
         settings = RuntimeSettings.from_env(environ)
         registry = load_registry(settings.registry_dir)
+        # The runtime's own certificate and CA, as ``create_app`` builds them.
+        verify = verify_of(settings.client_tls)
     except (SettingsError, RegistryError) as error:
         # The text names a variable or a rule, never a value.
         text = "; ".join(str(error).splitlines())
@@ -131,7 +146,7 @@ def main(
         )
         return 1
     servers = settings.tool_servers if targets is None else targets
-    answers = probe(registry, servers)
+    answers = probe(registry, servers, verify)
     for answer in answers:
         sys.stdout.write(f"{answer.server} {answer.tool} {answer.answer}\n")
     return 0 if succeeded(answers) else 1

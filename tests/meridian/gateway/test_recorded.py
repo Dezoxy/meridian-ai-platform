@@ -906,6 +906,7 @@ def test_the_variable_is_read_from_the_environment(tmp_path: Path) -> None:
         "MERIDIAN_GATEWAY_MODE": "recorded",
         "MERIDIAN_ENVIRONMENT": "ci",
         "MERIDIAN_DATABASE_URL": UNUSED_DSN,
+        "MERIDIAN_IDENTITY_PREFIX": "spiffe://meridian.test/ns/meridian/sa/",
         RECORDINGS_ENV: str(tmp_path / "r.json"),
     }
 

@@ -116,9 +116,11 @@ Read the second query's `state` column:
 - **The agent `knowledge-ingestion`**: each ingestion of the wordings
   spends about 7,700 tokens of the tenant `claims-triage`, and a deploy
   of a new image ingests again.
-- **A caller that names another tenant.** Until callers are identified
-  (S055, S021) the tenant is the caller's word (T-48), so one tenant's
-  budget can be spent by a caller that is not it.
+- **A caller that names another tenant.** Until people are identified
+  (S021) the tenant is the calling service's word (T-48), bounded since
+  S055 by its entry in `config/registry/services.yaml`: a tenant outside
+  the entry is refused, one inside it can still be spent by a caller that
+  is not the tenant's own.
 
 ## What to do
 

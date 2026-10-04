@@ -41,6 +41,7 @@ ENV = {
     "MERIDIAN_GATEWAY_MODE": "replay",
     "MERIDIAN_ENVIRONMENT": "ci",
     "MERIDIAN_DATABASE_URL": DSN,
+    "MERIDIAN_IDENTITY_PREFIX": "spiffe://meridian.test/ns/meridian/sa/",
 }
 
 

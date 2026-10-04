@@ -24,7 +24,10 @@ ToolEffect = Literal["read", "write", "decision"]
 AgentKind = Literal["graph", "job"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
-EntityId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+# Also what a caller's service ID must match when it is read from a certificate
+# (``common/identity.py``).
+ENTITY_ID_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
+EntityId = Annotated[str, StringConstraints(pattern=ENTITY_ID_PATTERN)]
 # MCP tool names: lower-case words joined by underscores.
 ToolId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
 Money = Annotated[Decimal, Field(ge=0)]
@@ -216,6 +219,28 @@ class TenantsFile(RegistryModel):
     tenants: tuple[Tenant, ...]
 
 
+class Service(RegistryModel):
+    """A workload of the platform that serves or calls another (S055).
+
+    ``id`` is also the chart's service name and its ServiceAccount, and the
+    last part of the URI in the service's certificate. ``calls`` are the
+    services it may call: a callee refuses a caller that does not list it.
+    ``tenants`` and ``agents`` are what the service names when it calls (the
+    tenant and agent of a run, or of a gateway call); the callee refuses any
+    other. They list what the code names today, no more.
+    """
+
+    id: EntityId
+    description: NonEmptyStr
+    calls: tuple[EntityId, ...]
+    tenants: tuple[EntityId, ...]
+    agents: tuple[EntityId, ...]
+
+
+class ServicesFile(RegistryModel):
+    services: tuple[Service, ...]
+
+
 # File stem to model: the loader reads these files, schemas.py writes theirs.
 FILE_MODELS: Mapping[str, type[RegistryModel]] = MappingProxyType(
     {
@@ -225,12 +250,13 @@ FILE_MODELS: Mapping[str, type[RegistryModel]] = MappingProxyType(
         "agents": AgentsFile,
         "policies": PoliciesFile,
         "tenants": TenantsFile,
+        "services": ServicesFile,
     }
 )
 
 
 class Registry(RegistryModel):
-    """All six files together, with lookups for the checks and the runtime."""
+    """All seven files together, with lookups for the checks and the runtime."""
 
     providers: tuple[Provider, ...]
     deployments: tuple[Deployment, ...]
@@ -243,6 +269,7 @@ class Registry(RegistryModel):
     recorded: tuple[ReplayRoute, ...] = ()
     tenants: tuple[Tenant, ...]
     exchange: ExchangeRate
+    services: tuple[Service, ...]
 
     def provider(self, provider_id: str) -> Provider | None:
         return next((p for p in self.providers if p.id == provider_id), None)
@@ -278,6 +305,9 @@ class Registry(RegistryModel):
         both ask this)."""
         tenant = self.tenant(tenant_id)
         return tenant is not None and agent_id in tenant.agents
+
+    def service(self, service_id: str) -> Service | None:
+        return next((s for s in self.services if s.id == service_id), None)
 
     def has_provider(self, provider_id: str) -> bool:
         return self.provider(provider_id) is not None

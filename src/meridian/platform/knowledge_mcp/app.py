@@ -1,5 +1,6 @@
 """The knowledge tool server's app and its factory (S046)."""
 
+import ssl
 import time
 from collections.abc import Callable
 from http.cookiejar import DefaultCookiePolicy
@@ -28,9 +29,15 @@ EMBEDDING_TIMEOUT = httpx.Timeout(5.0, connect=2.0)
 
 
 def make_http_client(
-    gateway_url: str, *, transport: httpx.BaseTransport | None = None
+    gateway_url: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    verify: ssl.SSLContext | bool = True,
 ) -> httpx.Client:
-    """The client the query is embedded with. ``transport`` is for a test."""
+    """The client the query is embedded with. ``transport`` is for a test.
+    ``verify`` is the context of the settings' ``client_tls``: it presents the
+    server's certificate and trusts the gateway's CA; the default verification
+    otherwise (never off)."""
     # trust_env=False: a proxy variable must not reroute a query. No redirect:
     # a redirect would send the query, and the run's identity, elsewhere.
     client = httpx.Client(
@@ -39,6 +46,7 @@ def make_http_client(
         trust_env=False,
         follow_redirects=False,
         transport=transport,
+        verify=verify,
     )
     # No cookie is ever stored or sent: this client is shared by every tenant's
     # calls, and a cookie the gateway set for one would reach the next.
@@ -57,8 +65,12 @@ def create_app(
     one this function builds is closed when the app's lifespan ends."""
     client = http
     if client is None:
+        # Before the try: an unusable certificate is not an unusable address.
+        # With no TLS the call carries no ``verify``, as it did before S055.
+        tls = settings.client_tls
+        verify = {} if tls is None else {"verify": tls.ssl_context()}
         try:
-            client = make_http_client(settings.gateway_url)
+            client = make_http_client(settings.gateway_url, **verify)
         except (ValueError, httpx.InvalidURL):
             # The value is not echoed: a URL can carry credentials.
             raise SettingsError(

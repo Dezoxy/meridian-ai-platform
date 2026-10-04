@@ -43,6 +43,7 @@ SPECS = {name: app.openapi() for name, app in apps().items()}
 # operation -> the error statuses it must declare (422 is FastAPI's own)
 ERRORS = {
     ("gateway", "post", "/v1/chat"): {
+        "401",
         "403",
         "413",
         "422",
@@ -53,6 +54,7 @@ ERRORS = {
         "504",
     },
     ("gateway", "post", "/v1/embeddings"): {
+        "401",
         "403",
         "413",
         "422",
@@ -62,8 +64,18 @@ ERRORS = {
         "503",
         "504",
     },
-    ("runtime", "post", "/runs"): {"403", "413", "422", "500", "502", "503", "504"},
+    ("runtime", "post", "/runs"): {
+        "401",
+        "403",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
     ("runtime", "post", "/runs/{run_id}/resume"): {
+        "401",
         "403",
         "404",
         "413",
@@ -73,7 +85,7 @@ ERRORS = {
         "503",
         "504",
     },
-    ("runtime", "get", "/runs/{run_id}"): {"404", "422", "500", "503"},
+    ("runtime", "get", "/runs/{run_id}"): {"401", "403", "404", "422", "500", "503"},
     ("claims", "post", "/claims"): {"409", "413", "422", "500", "502", "503", "504"},
     ("claims", "post", "/claims/{claim_id}/decision"): {
         "404",

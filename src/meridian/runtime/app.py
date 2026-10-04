@@ -8,15 +8,17 @@ second request, which claims it once and runs the next leg.
 """
 
 import logging
+import ssl
 import time
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import replace
 from typing import Any, Literal
 
 import httpx
 import psycopg
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.serde import _msgpack
@@ -35,6 +37,14 @@ from meridian.platform.common.http import (
     error_answer,
     error_responses,
 )
+from meridian.platform.common.identity import (
+    NAME_REFUSAL_REASON,
+    audited_refusals,
+    caller_may_name,
+    caller_policy,
+    caller_service,
+    install_caller_check,
+)
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.telemetry import (
     mark_error,
@@ -42,6 +52,7 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.platform.common.throttle import RefusalAuditThrottle
+from meridian.platform.common.tls import verify_of
 from meridian.platform.registry import Registry, load_registry
 from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.checkpoints import open_saver
@@ -214,6 +225,21 @@ def _log_delete_failure(identity: RunIdentity, error: Exception) -> None:
     )
 
 
+def make_gateway_client(
+    settings: RuntimeSettings, verify: ssl.SSLContext | bool
+) -> httpx.Client:
+    """The client of the Model Gateway. ``verify`` is ``verify_of`` the settings'
+    ``client_tls``: the context that presents the runtime's certificate and
+    trusts the gateway's CA, or the default verification when there is none."""
+    # trust_env=False: a proxy variable must not reroute claimant data.
+    return httpx.Client(
+        base_url=settings.gateway_url,
+        timeout=GATEWAY_TIMEOUT_SECONDS,
+        trust_env=False,
+        verify=verify,
+    )
+
+
 def tool_client_for(
     servers: Mapping[str, ToolTarget],
     *,
@@ -222,6 +248,7 @@ def tool_client_for(
     tracer: Tracer,
     identity: RunIdentity,
     throttle: RefusalAuditThrottle,
+    verify: ssl.SSLContext | bool = True,
 ) -> ToolClient:
     """The run's tool client. A call its allowlist refuses is audited here,
     with the tool's registry ID or none, at most one row per tenant and tool per
@@ -263,6 +290,7 @@ def tool_client_for(
         tracer=tracer,
         on_refusal=audit_refusal,
         max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
+        verify=verify,
     )
 
 
@@ -286,6 +314,7 @@ def create_app(
     # At start, not on the first run: the SDK's log routing and its models.
     prepare_sdk()
     registry = load_registry(settings.registry_dir)
+    policy = caller_policy(settings.identity_prefix, SERVICE_NAME, registry)
     servers: Mapping[str, ToolTarget] = (
         settings.tool_servers if tool_servers is None else tool_servers
     )
@@ -301,12 +330,10 @@ def create_app(
         for agent in registry.agents
         if agent.kind == "graph"
     }
-    # trust_env=False: a proxy variable must not reroute claimant data.
-    http = http_client or httpx.Client(
-        base_url=settings.gateway_url,
-        timeout=GATEWAY_TIMEOUT_SECONDS,
-        trust_env=False,
-    )
+    # One context for the gateway client and every tool call, built once: a
+    # certificate or key that cannot be loaded stops the start.
+    verify = verify_of(settings.client_tls)
+    http = http_client or make_gateway_client(settings, verify)
     dsn = settings.database_url
 
     # An injected checkpointer (tests) serves every request; otherwise each
@@ -325,26 +352,71 @@ def create_app(
     )
     app, tracer = service.app, service.tracer
 
+    # Outside the app's other middleware: a call that comes from no known
+    # service is refused before its body is read (S055). The row says who in
+    # ``reference``, which a run's own rows use for the claim's reference.
+    install_caller_check(
+        app,
+        policy,
+        audited_refusals(
+            refusal_throttle,
+            lambda reason, who, carried: write_audit(
+                dsn,
+                AuditEvent(
+                    service=SERVICE_NAME,
+                    event="run.refused",
+                    outcome="refused",
+                    reason=reason,
+                    reference=who,
+                    suppressed=carried,
+                ),
+            ),
+        ),
+    )
+
+    def record_refusal(
+        tenant: str,
+        agent: str | None,
+        reference: str,
+        reason: str | None = None,
+        run_id: uuid.UUID | None = None,
+    ) -> None:
+        """Write the audit row of a refusal. A caller's name refusal (S055) is
+        due a row once per window (T-49): the key is the reason and the tenant
+        only when the registry holds it, as a request's tenant is
+        caller-chosen and never a key, and a write that fails releases the
+        window. The runtime's other refusals write a row each."""
+        event = AuditEvent(
+            service=SERVICE_NAME,
+            event="run.refused",
+            outcome="refused",
+            reason=reason,
+            tenant=tenant,
+            agent=agent,
+            run_id=run_id,
+            reference=reference,
+        )
+        if reason != NAME_REFUSAL_REASON:
+            write_audit(dsn, event)
+            return
+        known = tenant if registry.tenant(tenant) is not None else None
+        carried = refusal_throttle.due(known, NAME_REFUSAL_REASON)
+        if carried is None:
+            return
+        try:
+            write_audit(dsn, replace(event, suppressed=carried))
+        except BaseException:
+            refusal_throttle.release(known, NAME_REFUSAL_REASON, carried)
+            raise
+
     def refuse(
         tenant: str,
-        agent: str,
+        agent: str | None,
         reference: str,
         reason: str | None = None,
         run_id: uuid.UUID | None = None,
     ) -> HTTPException:
-        write_audit(
-            dsn,
-            AuditEvent(
-                service=SERVICE_NAME,
-                event="run.refused",
-                outcome="refused",
-                reason=reason,
-                tenant=tenant,
-                agent=agent,
-                run_id=run_id,
-                reference=reference,
-            ),
-        )
+        record_refusal(tenant, agent, reference, reason, run_id)
         return HTTPException(status_code=403, detail=REFUSED)
 
     def run_leg(
@@ -372,6 +444,7 @@ def create_app(
                 tracer=tracer,
                 identity=identity,
                 throttle=refusal_throttle,
+                verify=verify,
             )
             outcome = runs.execute(
                 factory, saver, http, tools, tracer, identity, run_input, resume=resume
@@ -423,11 +496,16 @@ def create_app(
         response_model=RunResponse,
         # A failed run answers 502 (504 for a gateway timeout) with the usual
         # RunResponse, status "Failed"; a 503 names the run when it has one.
-        responses=error_responses(403, 413, 500)
+        responses=error_responses(401, 403, 413, 500)
         | error_responses(502, 504, model=RunResponse)
         | error_responses(503, model=RunErrorBody),
     )
-    def create_run(body: RunRequest, response: Response) -> RunResponse | JSONResponse:
+    def create_run(
+        body: RunRequest, response: Response, request: Request
+    ) -> RunResponse | JSONResponse:
+        calling = caller_service(request)
+        if not caller_may_name(policy, calling, body.tenant, body.agent):
+            raise refuse(body.tenant, body.agent, body.reference, NAME_REFUSAL_REASON)
         if not registry.tenant_may_run(body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference)
         factory = factories.get(body.agent)
@@ -459,13 +537,19 @@ def create_app(
         # leaves a run so); the rest is as for POST /runs,
         # except that a failed leg answers its 502 or 504 with status
         # "AwaitingApproval": the run is paused again and can be resumed.
-        responses=error_responses(403, 404, 413, 500)
+        responses=error_responses(401, 403, 404, 413, 500)
         | error_responses(502, 504, model=RunResponse)
         | error_responses(503, model=RunErrorBody),
     )
     def resume_run(
-        run_id: uuid.UUID, body: ResumeRequest, response: Response
+        run_id: uuid.UUID, body: ResumeRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
+        # A resume names a tenant and a reference; the agent is the run's own.
+        # The tenant is checked before the run is read, so a caller that may
+        # not name it learns nothing of a run under it (T-10).
+        calling = caller_service(request)
+        if not caller_may_name(policy, calling, body.tenant):
+            raise refuse(body.tenant, None, body.reference, NAME_REFUSAL_REASON)
         found = runs.fetch_run(dsn, run_id)
         # The same answer for a run that is not there and one under another
         # tenant or reference: no answer says that a run ID exists (T-10).
@@ -473,6 +557,17 @@ def create_app(
             body.tenant,
             body.reference,
         ):
+            raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
+        # A run whose agent the caller may not name is not there for it: a 403
+        # would say that the run exists. The refusal is audited.
+        if not caller_may_name(policy, calling, found.tenant, found.agent):
+            record_refusal(
+                found.tenant,
+                found.agent,
+                found.reference,
+                NAME_REFUSAL_REASON,
+                run_id=run_id,
+            )
             raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
         if not registry.tenant_may_run(found.tenant, found.agent):
             raise refuse(found.tenant, found.agent, found.reference, run_id=run_id)
@@ -508,15 +603,34 @@ def create_app(
         "/runs/{run_id}",
         tags=["runs"],
         summary="Read the status of a run of the given tenant and reference.",
-        responses=error_responses(404, 500, 503),
+        responses=error_responses(401, 403, 404, 500, 503),
     )
     def read_run(
-        run_id: uuid.UUID, tenant: BoundedEntityId, reference: Reference
+        run_id: uuid.UUID,
+        tenant: BoundedEntityId,
+        reference: Reference,
+        request: Request,
     ) -> RunStatus:
+        # As for a resume: the tenant is checked before the run is read, so a
+        # caller that may not name it learns nothing of a run under it (T-10).
+        calling = caller_service(request)
+        if not caller_may_name(policy, calling, tenant):
+            raise refuse(tenant, None, reference, NAME_REFUSAL_REASON)
         found = runs.fetch_run(dsn, run_id)
         # Bound like the resume: the same 404 for a run that is not there and
         # one under another tenant or reference (T-10).
         if found is None or (found.tenant, found.reference) != (tenant, reference):
+            raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
+        # And for a run whose agent the caller may not name, which the answer
+        # would otherwise show.
+        if not caller_may_name(policy, calling, found.tenant, found.agent):
+            record_refusal(
+                found.tenant,
+                found.agent,
+                found.reference,
+                NAME_REFUSAL_REASON,
+                run_id=run_id,
+            )
             raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
         return found
 

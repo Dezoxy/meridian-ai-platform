@@ -1,0 +1,36 @@
+# cert-manager: issues the certificates the Meridian services use to prove
+# which service they are (S055). The issuers are in manifests/service-ca.yaml.
+# Everything not set here is the chart's default: one replica of each
+# component, no ServiceMonitor, no extra feature gates.
+
+# The chart installs the cert-manager CRDs (it does not by default). Helm
+# creates no namespace and runs no CRD upgrade by itself, so they come with
+# the release; `keep` stays at its default (true), so uninstalling the release
+# does not delete the CRDs and, with them, every Certificate and Issuer.
+crds:
+  enabled: true
+
+# The controller, the webhook that validates the objects and the cainjector
+# that fills in webhook CA bundles. One small pod each on a one-node cluster.
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    memory: 192Mi
+
+webhook:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 96Mi
+
+cainjector:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 192Mi

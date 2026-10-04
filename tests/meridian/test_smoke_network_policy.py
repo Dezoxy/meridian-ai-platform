@@ -35,7 +35,7 @@ PROBE_DEFINITIONS = re.findall(r"^readonly NETWORK_PROBE_\w+=\S+$", SMOKE_SH, re
 ]
 
 
-def test_smoke_runs_the_network_policy_check_last_after_the_sweep_check() -> None:
+def test_smoke_runs_the_network_policy_check_after_the_sweep_check() -> None:
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
 
@@ -50,7 +50,9 @@ def test_smoke_runs_the_network_policy_check_last_after_the_sweep_check() -> Non
         "check_sweep",
     ]
     assert calls[7] == "check_network_policy"
-    assert calls[8].startswith("if ((failures")  # nothing runs after it
+    # Only the service identity check (S055) runs after it.
+    assert calls[8] == "check_service_identity"
+    assert calls[9].startswith("if ((failures")
 
 
 def run_network_policy_check(

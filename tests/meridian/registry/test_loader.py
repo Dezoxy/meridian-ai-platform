@@ -36,6 +36,9 @@ def test_committed_registry_validates_clean(real_registry: Path) -> None:
     assert len(registry.tenants) == yaml_length(
         real_registry, "tenants.yaml", "tenants"
     )
+    assert len(registry.services) == yaml_length(
+        real_registry, "services.yaml", "services"
+    )
     assert registry.deployments
 
 

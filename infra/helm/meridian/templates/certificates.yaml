@@ -1,0 +1,41 @@
+{{- /*
+The identity of every workload that has one (S055): one cert-manager
+Certificate each, which cert-manager turns into the Secret <name>-tls (tls.crt,
+tls.key, ca.crt) in the release's namespace. The pod mounts it at
+/etc/meridian/tls (services.yaml, and meridian.job for the ingestion Job).
+
+  the services   one per entry of `services`, named after it
+  the Jobs       one per Job that calls a service (ingest: `meridian-ingest`,
+                 the name of its ServiceAccount and of its pods' label). It is
+                 rendered here, in the release, whatever the Job's flag says:
+                 deploy.sh applies the Job on its own, after the release, and
+                 its Secret must exist before its pod starts
+
+What a certificate says:
+
+  URI           spiffe://<identity.trustDomain>/ns/<namespace>/sa/<name>. The
+                last part is the service's ID in config/registry/services.yaml,
+                which is also its ServiceAccount's name: the callee reads it
+                from here and looks it up there
+  DNS name      <service>.<namespace>.svc, on a service with `tls: true` only:
+                the host in the URLs the chart renders, so a client verifies
+                the server's name. The Claims API and the Jobs are clients only
+  usages        client auth for every one, server auth for a service that
+                serves TLS, and digital signature (the key is ECDSA P-256)
+  issuer        identity.issuer: on kind the `meridian-services` ClusterIssuer
+                that `make up` installs, one CA for every certificate
+
+The lifetime is cert-manager's default: 90 days, renewed at 60. A service reads
+its certificate when it starts, so a renewed one reaches it with the next
+restart (S055 does not reload it). Both identity values are required: the chart
+fails while either is empty (meridian.identity).
+*/ -}}
+{{- $identity := include "meridian.identity" . | fromJson -}}
+{{- range $name, $service := .Values.services }}
+{{ include "meridian.certificate" (dict "root" $ "identity" $identity "name" $name "server" $service.tls) }}
+{{- end }}
+{{- range $name, $job := .Values.jobs }}
+{{- if include "meridian.callees" $job.env | fromJsonArray }}
+{{ include "meridian.certificate" (dict "root" $ "identity" $identity "name" (printf "meridian-%s" $name) "server" false) }}
+{{- end }}
+{{- end }}

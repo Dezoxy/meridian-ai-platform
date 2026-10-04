@@ -53,6 +53,24 @@
 #                 the connection succeeds (the cluster does not enforce
 #                 NetworkPolicy, or a rule is too wide). Skipped while the
 #                 Claims API is not deployed (`make deploy`).
+#   9. service identity: three lines, from the Agent Runtime's pod to the Model
+#                 Gateway (S055; the Claims API's pod cannot reach the gateway,
+#                 which check 8 proves, so the runtime's does). The image has no
+#                 curl, so Python opens the connection and checks the gateway's
+#                 certificate against the CA. `GET /healthz` with no client
+#                 certificate answers 200 (the kubelet's probe presents none);
+#                 a `POST /v1/chat` with none answers 401 (no identity); the
+#                 same with the runtime's own certificate, naming a tenant the
+#                 registry's services.yaml does not let it name (a real tenant,
+#                 so the gateway's own tenant check would let it through),
+#                 answers 403. The tools check
+#                 above is the fourth proof: its calls run over TLS with the
+#                 runtime's certificate. The two refusals (the 401 and the 403)
+#                 leave two refusal rows in the audit table on each run, one
+#                 per reason (the gateway throttles its refusal rows to one per
+#                 reason and minute). Skipped while the Meridian services are
+#                 not deployed (`make deploy`). A traceback is a failure, not a
+#                 refusal.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -83,6 +101,35 @@ try:
     print("reached")
 except TimeoutError:
     print("blocked")'
+# The service identity check (9): the Model Gateway's Service from the Agent
+# Runtime's pod, with the pod's own certificate files (MERIDIAN_TLS_*). The probe
+# prints the HTTP status of one request and nothing else; its argument says which:
+#   health          GET /healthz, no client certificate
+#   anonymous       POST /v1/chat, no client certificate
+#   foreign-tenant  POST /v1/chat with the runtime's certificate, naming a tenant
+#                   that is not the runtime's (services.yaml) but is one the
+#                   gateway would serve (tenants.yaml: `evaluation` may run the
+#                   claims-triage agent), so only the identity rule refuses it;
+#                   an unknown tenant would be refused without S055
+readonly IDENTITY_HOST=model-gateway.meridian.svc
+readonly IDENTITY_PORT=8000
+readonly IDENTITY_FOREIGN_TENANT=evaluation
+readonly IDENTITY_PROBE='import http.client, json, os, ssl, sys, uuid
+mode, host, port, tenant = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+context = ssl.create_default_context(cafile=os.environ["MERIDIAN_TLS_CA_FILE"])
+if mode == "foreign-tenant":
+    context.load_cert_chain(os.environ["MERIDIAN_TLS_CERT_FILE"], os.environ["MERIDIAN_TLS_KEY_FILE"])
+connection = http.client.HTTPSConnection(host, port, context=context, timeout=10)
+if mode == "health":
+    connection.request("GET", "/healthz")
+else:
+    headers = {"Content-Type": "application/json"}
+    if mode == "foreign-tenant":
+        headers.update({"X-Meridian-Tenant": tenant, "X-Meridian-Agent": "claims-triage", "X-Meridian-Run": str(uuid.uuid4())})
+    body = json.dumps({"messages": [{"role": "user", "content": "identity check"}]})
+    connection.request("POST", "/v1/chat", body=body, headers=headers)
+print(connection.getresponse().status)'
+
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
@@ -103,6 +150,7 @@ failures=0
 skips=0
 grafana_url=""     # set by open_grafana
 grafana_failed=0   # open_grafana failed once: later calls fail quietly
+identity_answer="" # set by identity_status
 poll_error=""      # what the last failed poll attempt saw
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
@@ -206,7 +254,7 @@ check_tools() {
   if out="$(kctl -n meridian exec deploy/agent-runtime -- \
     python -m meridian.runtime.toolprobe 2>"${err_file}")"; then
     servers="$(clean_lines "$(awk '{ print $1 }' <<<"${out}")")"
-    pass "tools: each server (${servers//;/, }) answered unknown-run through the runtime's client"
+    pass "tools: each server (${servers//;/, }) answered unknown-run through the runtime's client, over TLS with its certificate"
   else
     fail "tools: the probe in deployment/agent-runtime failed: stdout: $(clean_lines "${out}"); stderr: $(clean_lines "$(<"${err_file}")")"
   fi
@@ -833,6 +881,49 @@ check_network_policy() {
   rm -f "${err_file}"
 }
 
+# ── 9. service identity ──────────────────────────────────────────────────────
+# identity_status MODE: the probe's answer for MODE in ${identity_answer}: the
+# HTTP status it printed, or "error: ..." with what it wrote on stderr when it
+# failed (a name that does not resolve, a certificate that does not verify, a
+# refused connection: a traceback is never read as a status).
+identity_status() {
+  local err_file
+  err_file="$(mktemp)"
+  if identity_answer="$(kctl -n meridian exec deploy/agent-runtime -- \
+    python -c "${IDENTITY_PROBE}" "$1" "${IDENTITY_HOST}" "${IDENTITY_PORT}" "${IDENTITY_FOREIGN_TENANT}" 2>"${err_file}")"; then
+    identity_answer="$(clean_lines "${identity_answer}")"
+  else
+    identity_answer="error: $(clean_lines "$(<"${err_file}")")"
+  fi
+  rm -f "${err_file}"
+}
+
+# expect_identity_status MODE STATUS WHAT: PASS when the probe's answer is STATUS.
+expect_identity_status() {
+  local mode=$1 expected=$2 what=$3
+  identity_status "${mode}"
+  if [[ "${identity_answer}" == "${expected}" ]]; then
+    pass "service identity: ${what} -> ${expected}"
+  else
+    fail "service identity: ${what}: expected ${expected}, got ${identity_answer}"
+  fi
+}
+
+check_service_identity() {
+  local found
+  if ! found="$(deployed_services)"; then
+    fail "service identity: could not look for the Meridian deployments (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "service identity: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+  expect_identity_status health 200 "GET /healthz on the Model Gateway with no certificate (the kubelet's probe sends none)"
+  expect_identity_status anonymous 401 "POST /v1/chat on the Model Gateway with no certificate"
+  expect_identity_status foreign-tenant 403 "POST /v1/chat with the Agent Runtime's certificate, naming a tenant it may not name"
+}
+
 trap cleanup EXIT
 check_edge
 check_database
@@ -842,6 +933,7 @@ check_cost_panel
 check_adjuster_pages
 check_sweep
 check_network_policy
+check_service_identity
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

@@ -31,8 +31,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from meridian.platform.common.audit import AuditEvent, write_audit
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
+from meridian.platform.common.identity import (
+    audited_refusals,
+    caller_policy,
+    install_caller_check,
+)
 from meridian.platform.common.sdklog import quiet_sdk_logging
 from meridian.platform.common.telemetry import (
     configure_propagation,
@@ -154,18 +160,20 @@ def create_tool_app(
     """
     quiet_sdk_logging()
     registry = load_registry(settings.registry_dir)
+    policy = caller_policy(settings.identity_prefix, server_id, registry)
     entries = build_entries(registry, server_id, handlers)
     listed = _listed_tools(registry, server_id)
     # One limiter per app: every call, whatever its run ID, costs a database
     # connection in a worker thread. Created here, it binds to the first event
     # loop that uses it.
     limiter = anyio.CapacityLimiter(MAX_CONCURRENT_CALLS)
+    throttle = RefusalAuditThrottle(clock)
     pipeline = Pipeline(
         dsn=settings.database_url,
         registry=registry,
         service_name=service_name,
         entries=entries,
-        throttle=RefusalAuditThrottle(clock),
+        throttle=throttle,
     )
     configure_propagation()
     provider = tracer_provider or make_tracer_provider(service_name)
@@ -235,6 +243,27 @@ def create_tool_app(
     )
     # The SDK would open an event stream on a GET that never ends.
     app.add_middleware(PostOnlyMiddleware, path=MCP_PATH)
+    # Added last, so outside every other middleware: a call from no service
+    # the registry maps is refused before the SDK reads a byte (S055). The row
+    # says who in ``reference``, which a tool call's rows use for the claim.
+    install_caller_check(
+        app,
+        policy,
+        audited_refusals(
+            throttle,
+            lambda reason, who, carried: write_audit(
+                settings.database_url,
+                AuditEvent(
+                    service=service_name,
+                    event="tool.call",
+                    outcome="refused",
+                    reason=reason,
+                    reference=who,
+                    suppressed=carried,
+                ),
+            ),
+        ),
+    )
     sessions = app.router.lifespan_context
 
     @asynccontextmanager

@@ -50,6 +50,9 @@ dev = [
     "pytest==9.1.1",
     "pytest-xdist==3.8.0",
     "import-linter==2.15",
+    # Makes the test certificates (tests/meridian/tlssupport.py); already
+    # locked, through azure-identity and msal.
+    "cryptography==50.0.2",
 ]
 
 [tool.ruff]

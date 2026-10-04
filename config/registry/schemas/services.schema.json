@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "Service": {
+      "additionalProperties": false,
+      "description": "A workload of the platform that serves or calls another (S055).\n\n``id`` is also the chart's service name and its ServiceAccount, and the\nlast part of the URI in the service's certificate. ``calls`` are the\nservices it may call: a callee refuses a caller that does not list it.\n``tenants`` and ``agents`` are what the service names when it calls (the\ntenant and agent of a run, or of a gateway call); the callee refuses any\nother. They list what the code names today, no more.",
+      "properties": {
+        "agents": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "type": "string"
+          },
+          "title": "Agents",
+          "type": "array"
+        },
+        "calls": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "type": "string"
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "tenants": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "type": "string"
+          },
+          "title": "Tenants",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "calls",
+        "tenants",
+        "agents"
+      ],
+      "title": "Service",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "services": {
+      "items": {
+        "$ref": "#/$defs/Service"
+      },
+      "title": "Services",
+      "type": "array"
+    }
+  },
+  "required": [
+    "services"
+  ],
+  "title": "ServicesFile",
+  "type": "object"
+}

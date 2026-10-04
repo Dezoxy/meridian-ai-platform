@@ -84,7 +84,7 @@ stateDiagram-v2
 | Knowledge MCP Server | Hybrid search over policy wording with citations; ingestion | Python, MCP SDK, pgvector | Control |
 | Evaluation Harness | Golden-set replay, graders, CI gate | Python, pytest | Control |
 | Observability Stack | Traces, metrics, logs, dashboards, alerts | OpenTelemetry, Prometheus, Grafana, Tempo, Loki | Control |
-| Platform Registry | Models, providers, tools, agents, policies, tenants | YAML in git, JSON Schema | Control |
+| Platform Registry | Models, providers, tools, agents, policies, tenants, services | YAML in git, JSON Schema | Control |
 | Platform Database | Claims, wording chunks, checkpoints, audit, usage, results | PostgreSQL 17, pgvector | Control |
 | Key Vault | Provider credentials and signing secrets | Azure Key Vault; Kubernetes Secrets on kind | Control |
 | Claims Triage App | Claims API, adjuster queue UI, claimant pages, the triage graph package, the scheduled sweep (a job with a database role of its own) | Python, FastAPI, Jinja | Workload |

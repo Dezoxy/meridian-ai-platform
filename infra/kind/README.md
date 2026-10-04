@@ -20,6 +20,7 @@ adjuster; the rules decide every other claim.
 | Component | Chart | Chart version | Namespace |
 |---|---|---|---|
 | Envoy Gateway (Gateway API edge) | `oci://docker.io/envoyproxy/gateway-helm` | v1.9.2 | `envoy-gateway-system` |
+| cert-manager (with the CA for the services) | `cert-manager` (`https://charts.jetstack.io`) | v1.21.2 | `cert-manager` |
 | CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `cnpg-system` |
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
 | Prometheus, Grafana, kube-state-metrics, node-exporter | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
@@ -52,6 +53,23 @@ namespaced Role would still add Secrets. So the chart creates no RBAC for
 Grafana; [`manifests/grafana-rbac.yaml`](manifests/grafana-rbac.yaml) gives
 it a Role in `observability` that reads ConfigMaps only, and both sidecars
 watch that namespace only (threat model T-68). `make smoke` checks it.
+
+The CA for the services (S055) is three cert-manager objects in
+[`manifests/service-ca.yaml`](manifests/service-ca.yaml): a self-signed
+issuer, a CA certificate (ECDSA P-256, one year) and the `meridian-services`
+issuer that signs one certificate per service. The services use those
+certificates to prove to one another which service they are, by mutual TLS
+(the chart's part is under "Who a service is" below). The CA's private key is
+a Secret in the `cert-manager` namespace, outside `meridian`: no Meridian pod
+can read it, and the operators that hold a cluster-wide read of Secrets can
+(cert-manager's controller and cainjector, the CloudNativePG operator). The
+CA keeps its key at its renewal by an explicit `rotationPolicy: Never`, because
+cert-manager's default has been `Always` since v1.18.0 and a new key would
+leave a restarted pod distrusting the pods that had not. The issuer signs a
+Certificate from any namespace with any URI and nothing restricts who may ask
+(cert-manager's built-in approver approves every request); on kind that is the
+cluster's administrator, and a policy on requests is for AKS (S020). `make up`
+waits for the issuer to be Ready before it installs the database.
 
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
 ConfigMap each in `observability`, and applies Meridian's alert rules in
@@ -155,7 +173,7 @@ node image, Kubernetes components and the platform).
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks eight things:
+`make smoke` checks nine things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -169,7 +187,8 @@ node image, Kubernetes components and the platform).
    proves the address, the name lookup, the server's Host allowlist, the MCP
    handshake and the server's database role reading `runtime.runs`. It does
    not prove a completed call: no single role can make up a claim and a run,
-   so that is `make demo`'s proof. Before `make deploy` this check prints SKIP.
+   so that is `make demo`'s proof. The calls run over TLS with the runtime's
+   certificate (line 9). Before `make deploy` this check prints SKIP.
 4. **Telemetry.** Three short Jobs run `telemetrygen` and send one trace, one
    log and one metric for a fresh service name (`meridian-smoke-<epoch>`)
    through the collector. The script then reads each back through Grafana's
@@ -217,6 +236,20 @@ node image, Kubernetes components and the platform).
    proof (line 3). It fails when the connection is made, and when the
    NetworkPolicy `default-deny` is missing. Before `make deploy` this line
    prints SKIP.
+9. **Service identity.** Three lines, run with Python in the Agent Runtime's
+   pod against the Model Gateway (the image has no curl; the Claims API's pod
+   would be the better caller to refuse, but the policy of line 8 blocks it
+   from the gateway altogether, so the runtime's is the pod that reaches it).
+   `GET /healthz` with no client certificate answers 200, which is what the
+   kubelet's probe sends. `POST /v1/chat` with no client certificate answers
+   401: the gateway knows no caller. The same request with the runtime's own
+   certificate, naming the tenant `evaluation`, which is real and may run the
+   triage agent but is not one the registry lets the runtime name, answers
+   403 (so only the identity rule refuses it, not the gateway's own tenant
+   check). The probe checks the gateway's certificate against the CA and
+   its DNS name; a traceback (a name that does not resolve, a certificate that
+   does not verify) is a FAIL, never a refusal. Before `make deploy` this
+   check prints SKIP.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -245,12 +278,12 @@ tag.
 
 | Service | Reached at | Database role |
 |---|---|---|
-| Claims API | `http://claims.meridian.localhost:8088` (edge) and `claims-api.meridian.svc:8000` | `claims_api` |
-| Agent Runtime | `agent-runtime.meridian.svc:8000`, cluster only | `agent_runtime` |
-| Model Gateway | `model-gateway.meridian.svc:8000`, cluster only | `model_gateway` |
-| Policy tool server (`policy_lookup`, `claim_history`) | `policy-mcp.meridian.svc:8000/mcp`, cluster only | `policy_mcp` |
-| Knowledge tool server (`wording_search`) | `knowledge-mcp.meridian.svc:8000/mcp`, cluster only | `knowledge_mcp` |
-| Claims tool server (`add_claim_note`, `request_approval`, `approval_outcome`; the triage graph calls them for a claim referred to an adjuster, S015) | `claims-mcp.meridian.svc:8000/mcp`, cluster only | `claims_mcp` |
+| Claims API | `http://claims.meridian.localhost:8088` (edge) and `http://claims-api.meridian.svc:8000` | `claims_api` |
+| Agent Runtime | `https://agent-runtime.meridian.svc:8000`, cluster only | `agent_runtime` |
+| Model Gateway | `https://model-gateway.meridian.svc:8000`, cluster only | `model_gateway` |
+| Policy tool server (`policy_lookup`, `claim_history`) | `https://policy-mcp.meridian.svc:8000/mcp`, cluster only | `policy_mcp` |
+| Knowledge tool server (`wording_search`) | `https://knowledge-mcp.meridian.svc:8000/mcp`, cluster only | `knowledge_mcp` |
+| Claims tool server (`add_claim_note`, `request_approval`, `approval_outcome`; the triage graph calls them for a claim referred to an adjuster, S015) | `https://claims-mcp.meridian.svc:8000/mcp`, cluster only | `claims_mcp` |
 
 The runtime finds the tool servers through `MERIDIAN_TOOL_SERVERS`, a map of
 the registry's server IDs to those addresses. A tool server answers `/mcp`
@@ -328,8 +361,9 @@ A `ClusterIP` Service means unrouted, not protected. Since S019 the
 namespace's network policies are the protection: the Agent Runtime, the
 Model Gateway and the tool servers accept a connection only from the pods
 the next section lists. That is a rule about pods' labels, not about who a
-caller is: the services still trust the tenant and agent headers they are
-sent, until service identity (S055). A tool server gives a caller less than
+caller is: since S055 each of them also reads the calling service from
+its certificate and refuses a tenant or agent that service may not name
+("Who a service is" below). A tool server gives a caller less than
 the others do: it answers only for the run ID of a running run and only with
 that run's claim (T-50). The database boundary above does not depend on any
 of that.
@@ -386,6 +420,9 @@ names:
 | The migrate and seed Jobs, the sweep | nobody | nothing |
 | The ingest Job | nobody | Model Gateway |
 
+The policies are unchanged by TLS: the services listen on the same port, so
+every rule names the same peers and the same port as before, and a test
+renders the chart with TLS off and compares the policies byte for byte.
 Every workload may also reach DNS and the database, and the six services
 the collector; the Jobs and the sweep send no telemetry and may not. A test
 derives the table from each container's environment: a service address
@@ -407,7 +444,7 @@ What the policies do not do:
 
 - They are not identity. A pod created in `meridian` with a service's label
   is admitted as that service; who may create pods there is the cluster's
-  access control, and proving which service calls is S055.
+  access control. Proving which service calls is S055's mutual TLS (below).
 - DNS and the collector are open to the pods that use them, and either
   could carry data out slowly. The database pod may reach port 6443 at any
   address, not only the API server's.
@@ -426,6 +463,63 @@ export KUBECONFIG=$PWD/infra/kind/kubeconfig
 helm -n meridian status meridian
 kubectl -n meridian get networkpolicy,poddisruptionbudget
 ```
+
+### Who a service is (S055)
+
+Mutual TLS with certificates from cert-manager: each service holds one, and
+the one it calls learns which service it is from it. The chart renders a
+`Certificate` for each of the six services and one for the ingestion Job
+(`meridian-ingest`), always, because `make deploy` applies the Job outside the
+release and its Secret must exist before its pod starts; `make deploy` waits
+for every Certificate to be Ready right after the release. What the deploy
+creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
+
+- seven `Certificate` objects in `meridian`, signed by the `meridian-services`
+  ClusterIssuer: ECDSA P-256, a new key at every renewal (`rotationPolicy:
+  Always`, set in the chart), cert-manager's default lifetime (90 days,
+  renewed at 60), the URI `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
+  for the five services that serve TLS the DNS name `<name>.meridian.svc`;
+- seven Secrets `<name>-tls` (`tls.crt`, `tls.key`, `ca.crt`), each mounted
+  read-only at `/etc/meridian/tls` in its own pod and in no other;
+- no new Service, port or NetworkPolicy.
+
+The values `identity.trustDomain` (`meridian.kind`) and `identity.issuer` are
+required and have no off switch; a service with `tls: true` in the chart's
+values serves TLS, and the template adds uvicorn's flags, the HTTPS probes and
+the prefix its callers' URIs start with. Nothing else of the five's commands
+is repeated in the values. The chart fails for a service that another workload
+calls (a `serviceUrl` or a `serviceMap` entry, the Jobs' included) and does not
+set `tls: true`; only the Claims API, which nobody inside the chart calls,
+stays plain HTTP.
+
+| Caller | What it proves | Callee | What the callee checks |
+|---|---|---|---|
+| the edge (Envoy) | nothing: plain HTTP | Claims API | nothing yet (a backlog row); the policy lets only the edge's pods in |
+| Claims API | its certificate, URI `.../sa/claims-api` | Agent Runtime | the certificate is from the CA, the service ID is in the registry and its `calls` hold `agent-runtime`; the tenant and agent the request names are in the caller's `tenants` and `agents` |
+| Agent Runtime | `.../sa/agent-runtime` | Model Gateway, the three tool servers | the same, for each |
+| Knowledge tool server | `.../sa/knowledge-mcp` | Model Gateway | the same |
+| the ingest Job | `.../sa/meridian-ingest` | Model Gateway | the same |
+| any caller | the server's certificate | | the caller checks the CA and the DNS name `<service>.meridian.svc` |
+
+`GET /healthz` needs no client certificate (the kubelet's probe presents none);
+every other request without one is refused with 401, and a certificate from
+another CA fails the handshake. `config/registry/services.yaml` is the list of
+who may call whom, and a test holds it equal to what the chart's environments
+call. `make smoke`'s ninth check proves 200, 401 and 403 against the gateway.
+
+What this does not cover, on purpose: the edge to the Claims API is plain HTTP
+and the Claims API's own certificate is for its calls out only (TLS at the edge
+is a backlog row); a service reads its certificate when it starts, so a
+renewed one reaches it with the next restart (a Deployment's pods are not
+restarted by cert-manager), and so does a renewed CA; no certificate is
+revoked; nothing limits who may request a certificate for a service's name
+(the `meridian-services` issuer signs a `Certificate` from any namespace with
+any URI, and cert-manager's built-in approver approves every request, so on
+kind whoever can create a `Certificate` anywhere, the cluster's administrator,
+can mint any service's identity; a policy on requests is for AKS, S020); the
+CA's private key is readable by the operators that hold a cluster-wide read of
+Secrets (cert-manager, cainjector, CloudNativePG), though by no Meridian pod;
+and the telemetry to the collector is still plain OTLP.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no

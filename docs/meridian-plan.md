@@ -5,7 +5,10 @@
   foundation, the platform registry and a walking skeleton of the Claims
   API, the Agent Runtime and the Model Gateway exist; the skeleton runs on
   kind with `make demo`, from one hardened Helm chart under a default-deny
-  network policy (S019), the gateway routes a call to Azure OpenAI by data
+  network policy (S019), where the runtime, the gateway and the tool servers
+  know the calling service from its certificate (mutual TLS, S055) and
+  refuse a tenant or agent the registry does not let it name, the gateway
+  routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
   the same region and holds each tenant to its rate limits and budgets
   (a Grafana dashboard on kind shows what each tenant, agent, model and
@@ -34,7 +37,7 @@
   proposals with rules and an LLM judge against a reviewed baseline (the
   model's answers recorded from Azure OpenAI and replayed through the
   gateway), alert rules, a health dashboard and five runbooks exist as
-  files checked offline and not yet applied to a cluster, with service
+  files, applied to the kind cluster and none exercised, with service
   level objectives nobody has measured (S024), and no service runs in
   Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
@@ -292,7 +295,7 @@ and Pydantic, at the cost of one dependency.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
-| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | todo | S019 |
+| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
@@ -433,7 +436,7 @@ that day; the rest stand as their step recorded them.
 | Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | open; left by S019 (application code) | none |
 | The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open; left by S019 (application code) | S021 |
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
-| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | closed on 2026-10-04 by the owner: a step of its own between S019 and S020, S055 | S055 |
+| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | done in S055 (mutual TLS, ADR 4): a call with no identity, from an unmapped service or naming a tenant or agent outside the caller's registry entry is refused | S055 |
 | A web application firewall in the Azure design (T-02) | threat model, S018 | open | none |
 | No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open; left by S024 (the services' telemetry setup, or a log collector on the node, which a session without the cluster cannot try). So no alert rule reads a log | none |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
@@ -455,14 +458,14 @@ that day; the rest stand as their step recorded them.
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once | none |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | open | none |
 | TLS at the edge: `infra/kind/README.md` had named S019 for it, and no step's "done when" holds it; on kind the edge listens on loopback only | S006, S019 | open | S020 |
-| TLS between the services inside the cluster (T-61) | S019 | open; S055's mechanism may bring it | S055 |
+| TLS between the services inside the cluster (T-61) | S019 | closed by S055 for the five services that are called: mutual TLS with the server's name verified. The edge's hop to the Claims API stays plain HTTP, with the row above | S055 |
 | `enforce` for Pod Security Admission on the `meridian` namespace, which has `warn` and `audit` at `restricted` since S019: a server-side dry run of `enforce=restricted` reported no violation, but a cold `make up` under it (CloudNativePG's init Job) was not tried (T-85) | S019 | open | S020 |
 | The Model Gateway's egress rule towards the providers and Key Vault, with FQDN-aware egress or private endpoints (T-19); the chart has none, because on kind the gateway calls nothing outside | S019 | open | S020 |
-| No NetworkPolicy outside `meridian`: the collector accepts a push from any pod of another namespace (T-68, T-84) | S019 | open | none |
+| No NetworkPolicy outside `meridian`: the collector accepts a push from any pod of another namespace (T-68, T-84). Since S055 the `cert-manager` namespace is one more without a policy and without Pod Security labels, though its pods meet `restricted` as rendered | S019, S055 | open | none |
 | DNS and the collector are open to the pods that use them and could carry data out (T-84) | S019 | open | none |
 | The database pod may reach TCP 6443 at any address on kind, not only the API server's: its instance manager calls the API server at the node's own address (T-84) | S019 | open; Azure's database is outside the cluster | none |
 | Whether each service is safe to run with two replicas is not measured, so every disruption budget protects nothing yet (T-17) | S019 | open | S027 |
-| The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | open | none |
+| The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator and, since S055, cert-manager, whose pods read every Secret) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | open | none |
 | On a cluster whose services were first applied as raw manifests, the field manager `kubectl` still co-owns their fields, so a field a later chart version drops would stay | S019 | open; a new cluster ends it | none |
 | Private endpoints or IP rules for the vault, the Azure OpenAI account and the state storage, and diagnostics settings: `infra/terraform/README.md` had named S019 for "the hardening" | S007, S019 | open | S020 |
 | `tests/meridian/test_helm_chart.py` is over the 800-line ceiling (about 1,080 lines); its network-policy tests could be a file of their own | S019 | open | none |
@@ -475,7 +478,7 @@ that day; the rest stand as their step recorded them.
 | Renovate's one-week hold is advisory: `renovate/stability-days` is not a required check, a pull request asked for from the Dependency Dashboard arrives before the week is up, and the lock file refresh has no hold (on 2026-10-04 it brought two Python packages a day or two old and the Terraform provider that the held pull request was waiting on) | changelog v0.33 | open; the owner's decision: require the status, drop the lock file refresh, or accept | none |
 | The test database's image has pgvector 0.8.7, the cluster's CloudNativePG image 0.8.6; both are PostgreSQL 17.11 on Debian trixie | changelog v0.33 | open; closes when the CloudNativePG image ships 0.8.7 and Renovate proposes it | none |
 | `azurerm` is locked at 5.8.0 and no plan has been read with it: `make azure-plan` stopped at the backend because the Azure CLI's account is not in the pinned tenant (`AADSTS50020`) | changelog v0.33 | open; needs the owner's `az login` | none |
-| The cluster proof of S024: `make up` on `main`, then the seven checks under "Not proved on a cluster" in `docs/operations/README.md` (the rule object, its three groups healthy, a `count()` per series the rules and the health dashboard name, no Meridian alert on a healthy cluster, the dashboard served) | S024 | open; the session that owns the cluster | none |
+| The cluster proof of S024: `make up` on `main`, then the seven checks under "Not proved on a cluster" in `docs/operations/README.md` (the rule object, its three groups healthy, a `count()` per series the rules and the health dashboard name, no Meridian alert on a healthy cluster, the dashboard served) | S024 | done on 2026-10-04 by the S055 session, on its branch after merging `main`: `make up` exit 0 with both log lines, the rule object exists, the three groups are healthy (the alert group read `unknown` until its first evaluation), the seven counts are 6, 1, 1, 1, 11, 1 and 4, and no Meridian alert fires. Not done: the health dashboard was not opened in Grafana | none |
 | `make smoke` checks neither the alert rules nor the health dashboard; it reads the cost dashboard by name | S024 | open | none |
 | Alert routing and notification: kind runs no Alertmanager, so a firing alert is shown and nobody is told | S024 | open; the game day is the first time someone must be told | S028 |
 | Three objectives have no indicator: a duration metric for a triage run (QA-01) and for the gateway's own time (QA-02), and a count of runs by how they end | S024 | open | S027 |
@@ -490,6 +493,15 @@ that day; the rest stand as their step recorded them.
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | closed on 2026-10-04 outside a step, in development-base first (its pull request 45), then copied in: the rule reads what follows `get` in a command segment, whatever stands before it, and denies a get of a Secret with any output format but `name` and `wide`; a command that lists the Secrets in one segment and prints what a variable or xargs hands it in another is denied as a pair, which a security review of the first version found missing by running the old and the new hook side by side. The owner decided the other two that day: `psql` through `kubectl exec` asks on every call, and `make grafana-password` asks (a person's own terminal never meets the hook). 125 cases added; 38 mutants of the patterns each fail one | none |
 | The command guard is a pattern on what a session types, and these ways to a Secret's values or to superuser SQL give no answer: `kubectl exec` with `env`, `printenv` or `cat` of a mounted file, `kubectl get --raw`, `kubectl config view --raw`, `kubectl create token`, `helm get manifest`, a cloud CLI's secret commands, `pg_dump` or `pg_restore` through `kubectl exec`, and `psql` reached by `kubectl run`, `kubectl debug`, a plugin or `docker exec`. Listed by the security review of the Secret rule on 2026-10-04. A rule for one of them goes into development-base first; the hook stays a guard for habits, not a boundary, as its header says | S024 | open | none |
 | Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | open; a rule on absent series and a NetworkPolicy for `observability` | none |
+| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | open; before the chart goes to AKS | S020 |
+| Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | open; a policy that limits the issuer to `meridian` and its URI prefix, and a CA key outside a Kubernetes Secret, before the chart goes to AKS | S020 |
+| Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | open | none |
+| `meridian workload new` adds a new agent to the registry but not to the Agent Runtime's entry in `services.yaml`, so on a cluster the gateway would refuse the scaffolded workload's calls (S055's name rule) | S055 | closed in part by S055's review: `meridian registry validate` now fails for a graph agent a tenant may run that the runtime may not name, and says where to add it; the scaffold still does not write the entry, and a new workload's own API needs an entry too | none |
+| The audit has no column for the calling service: a refused caller's ID is written to `reference`, which a run's rows use for the claim | S055 | open | S033 |
+| A pod's certificate Secret is mounted with the default file mode (0644, owned by root), so the key is readable by any user in the container; each container runs one process as one user. The fix is `fsGroup` in the pod's security context with `defaultMode: 0440`; `0400` alone would stop the non-root process reading it | S055 | open | none |
+| `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | open | none |
+| `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | open | S020 |
+| Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
 
 ## Part C — Step details
 
@@ -6971,6 +6983,8 @@ the kind cluster or Azure.
   Meridian alert fires on a healthy cluster, Grafana serves the
   dashboard, and `make smoke` still passes 16 of 16. A series that is
   missing there is a wrong name here.
+  Added on 2026-10-04 by the S055 session, which owned the cluster: the
+  checks ran and passed; the backlog row holds the numbers.
 - Not run either: any runbook as a procedure (S022 and S028 exercise
   four of the five; the secret rotation has no step); the dashboard in
   a browser; `make azure-plan`.
@@ -6985,6 +6999,207 @@ exercise, the database's certificates, the image pull in the required
 check, the harness's hook that should deny printing a Secret and does
 so only for the bare command, and alerts on missing data with a network
 policy for `observability`.
+
+### S055 — Service-to-service identity
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
+**Goal:** on kind, each service proves which service it is to the one it
+calls, and the Agent Runtime, the Model Gateway and the tool servers refuse
+a call with no identity or from a service the registry does not map.
+
+**Decisions:**
+
+- **The mechanism, by the owner (2026-10-04): mutual TLS, with
+  certificates from cert-manager**
+  ([ADR 4](architecture/decisions/0004-prove-service-identity-with-mutual-tls.md)).
+  The session laid out four options: ServiceAccount tokens checked by the
+  callee (nothing to install, proves the caller, encrypts nothing; the
+  session's recommendation), mutual TLS with cert-manager (proves the
+  caller and encrypts the call, at the cost of certificates in every
+  service), a service mesh (the same outside the code, with a proxy beside
+  every pod and S019's policies and pod settings reworked) and a shared
+  secret per service (weakest, rotated by hand). The owner asked for the
+  differences and when each fits, then chose mutual TLS.
+- **In parallel with S024, by the owner (2026-10-04).** This session owned
+  the kind cluster; the S024 session ran no command against it, and its
+  cluster proof was run here after the merge.
+- **The identity is a URI in the certificate, in SPIFFE form.**
+  `spiffe://meridian.kind/ns/meridian/sa/<service>`; the last part is the
+  service's ID in the registry and its ServiceAccount's name. Rejected:
+  the DNS name as the identity, which the ingestion Job does not have.
+  The ingestion Job's registry ID is therefore `meridian-ingest`, the
+  name the chart already runs it under: the first draft's
+  `knowledge-ingest` would have meant renaming the Job, and an orphaned
+  account and policy on the cluster.
+- **The server asks for a certificate and the application decides.**
+  uvicorn 0.54.0 verifies a client certificate and tells the application
+  nothing about it (read in its source, then proved by a spike). A
+  subclass of its HTTP protocol class puts the certificate's URIs in the
+  request's scope. The certificate is optional at the connection because
+  the kubelet's probe has none; the application refuses everything but
+  `GET /healthz` without an identity. Rejected: requiring it at the
+  connection, which fails every probe; another server (hypercorn has the
+  extension), a change to six commands and the tests for one missing
+  field.
+- **The registry is the mapping**: `config/registry/services.yaml`, a
+  seventh file, with each service's `calls`, `tenants` and `agents`. A
+  test holds it equal to the chart's callers, so the network policy and
+  the identity check admit the same pairs.
+- **No switch.** Every `create_app_from_env` requires
+  `MERIDIAN_IDENTITY_PREFIX`, and the chart fails without a trust domain
+  and an issuer. An app built in code without a prefix has no check:
+  that is how the tests that are about something else build theirs.
+- **The Claims API serves plain HTTP and is a client only.** The step
+  names the runtime, the gateway and the tool servers; only the edge
+  calls the Claims API, and TLS at the edge is the backlog's (S020).
+- **A refused caller is audited once per reason and minute**, through
+  each service's own audit path, with the calling service's ID in
+  `reference`. Rejected: a column for it, which is a migration; the
+  backlog holds it for the audit search (S033).
+- **Kept whole**, as the owner chose for S019: the transport, the check
+  and the tenant and agent rule in one step, eight contracts.
+
+**Work log:**
+
+- Read uvicorn's source for the certificate, then a spike outside the
+  repository: a caller with a certificate is seen with its name, one
+  without is seen with none, another CA's certificate cannot complete a
+  request. The spike also found that Python 3.13 refuses a chain without
+  key identifiers, which the test certificates and cert-manager's carry.
+- Eight contracts to `implementer`, two at a time on disjoint files:
+  1. `make up` installs cert-manager (v1.21.2, pinned, read by
+     Renovate's `kind platform` group) and three objects: a self-signed
+     issuer, a CA certificate in the `cert-manager` namespace and the
+     `meridian-services` issuer.
+  2. `common/peercert.py`, `common/identity.py`, the registry's services
+     file with its model, schema and five checks.
+  3. The check in the five services, the tenant and agent rule in the
+     gateway and the runtime, the audit of refusals.
+  4. `common/tls.py` and a client certificate in every caller: the
+     runtime's gateway and tool clients, the Claims API's runtime
+     client, the knowledge server's embedding client, the ingestion
+     command and the tool probe.
+  5. The chart: a Certificate per workload, the TLS flags, HTTPS probes
+     and `https` addresses for the five, the wait for the Certificates
+     in `make deploy`, three lines in `make smoke`.
+  6. The documents the step made false.
+  7. and 8. What the reviews found, in the code and in the chart
+     (below).
+- What the contracts got wrong, found by the implementers or on review:
+  the Job's name (above); the smoke lines, which the first contract ran
+  from the Claims API's pod, a pod the network policy keeps from the
+  gateway, so they run from the runtime's; `GET /runs/{id}`, which named
+  a tenant and had no rule until the fourth contract; a websocket scope,
+  which the first middleware passed through and the third refuses; an
+  older test that pinned the network-policy check as smoke's last.
+- The main session read every changed source, chart and script file and
+  ran every gate. Three of the implementer runs changed files through
+  shell rewrites and not the Edit tool, so the edit gate never saw them
+  (backlog); the last two were told to use it and did.
+- **Three reviews**, each given the code and seven or eight claims to
+  break, not the session's conclusions. None found a way round the
+  check: the security reviewer ran the middleware behind a real TLS
+  server and tried methods, paths and headers. What they found, and
+  what was done:
+  - Fixed. The runtime's name refusals wrote an audit row per request,
+    so a service with a certificate could fill the table through `GET
+    /runs/{id}` (security, high; platform boundary): they are throttled
+    like the gateway's. A run whose agent the caller may not name
+    answered 403 on a resume, which says it exists, and was readable:
+    both answer 404. The name rule skipped a request with no caller in
+    its scope: with a policy it refuses. An unknown service's ID, text
+    from a certificate, reached the audit row and an uncut log line.
+    Every refused call took a worker thread before the throttle was
+    asked. A new agent given to a tenant passed validation and would
+    be refused on every call: the registry now fails for it.
+  - Fixed. The CA's manifest said its key is kept at renewal by
+    cert-manager's default (infrastructure, high; security). The
+    installed version's own description says the default is `Always`
+    since v1.18: the CA now sets `Never` and the workloads `Always`,
+    and `make up` left the CA's key as it was (the same key
+    identifier). `services.<name>.tls=false` rendered, against the
+    values file's own claim: the chart fails for a called service
+    without TLS. The comments, the README and T-88 said too little
+    about who can reach the CA's key and the issuer.
+  - Into the backlog, each with the reviewer's way out: an expired
+    certificate leaves the probes green (infrastructure, high: before
+    the chart goes to AKS), the issuer signs for any namespace, the
+    `cert-manager` namespace has no policy, the smoke line reads a
+    status and not a reason, `make deploy` on a cluster without
+    cert-manager, the mounted key's mode, cert-manager's images by tag.
+  - Left as designed and recorded (ADR 4, T-89): an app built in code
+    without a prefix has no check.
+- `main` was merged in after S024 landed (one conflict, both steps'
+  sections in this file). T-88 to T-90, ADR 4 and changelog v0.35 were
+  numbered after it.
+- S024's cluster proof, left to the session that owns the cluster: `make
+  up` applied the rule object and the second dashboard, the three groups
+  are healthy, the seven series exist and no Meridian alert fires. The
+  backlog row has the numbers.
+
+**Result / verification:**
+
+- **On the kind cluster** (2026-10-04; first on image `811afd3d5438`,
+  then again after the review fixes on image `a49a13ef7aa1`, whose
+  results these are):
+  - `make up`: exit 0, `release cert-manager v1.21.2 ready in
+    cert-manager`; both issuers Ready; the CA stores `rotationPolicy:
+    Never` and has the key identifier it had before the setting.
+  - `make deploy`: exit 0, `the services' certificates are ready`; seven
+    Certificates Ready. On the first image the ingestion Job embedded 85
+    chunks through the gateway over mutual TLS.
+  - `make smoke`: exit 0, 19 PASS, three times: before the merge of
+    `main`, after it, and after the fixes. The three new lines: `GET
+    /healthz` with no certificate 200; a chat call with no certificate
+    401; the runtime naming the `evaluation` tenant 403. The tool probe
+    passes over TLS.
+  - `make demo`: exit 0, twice; the triage trace has spans from the
+    Claims API, the runtime, the gateway and the tool servers the claim
+    needed. Golden claims CLM-0002 and CLM-0003 were used; 37 are left.
+  - From the Claims API's pod with its own certificate, against the
+    runtime: no certificate 401; reading a run under `evaluation` 403
+    three times, with one audit row for the three; a run that does not
+    exist under its own tenant 404.
+  - The audit table holds, for the gateway, `caller-no-identity` and
+    `caller-name-not-allowed` (naming `agent-runtime`) from the smoke
+    runs, and the same two reasons for the runtime from the probe.
+  - A service's certificate (public part): 90 days, the URI
+    `spiffe://meridian.kind/ns/meridian/sa/agent-runtime`, the DNS name
+    `agent-runtime.meridian.svc`, client and server usage; it stores
+    `rotationPolicy: Always`.
+- **Not provable on the cluster:** a service that may not call another
+  being refused by identity. The network policy admits exactly the
+  registry's callers, so no pod both reaches a service and is refused by
+  it; the tests over real TLS show the 403.
+- **Gates.** `make docs`: `docs consistency: 13 checks passed`. `make
+  test`: exit 0, `codex agents: 11 twins current`. `make lint`:
+  `Contracts: 5 kept, 0 broken.` `make registry`: exit 0, seven
+  services. `make check`: exit 0, no ERROR line. `make mermaid`: exit 0,
+  no derived block rewritten. `make export`: the Containers view read
+  with its new labels. `make helm-lint`: `1 chart(s) linted, 0 chart(s)
+  failed`. `shellcheck` on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0.
+- **The whole suite**, `GITHUB_ACTIONS=true make pytest-db` with three
+  workers, twice. After the merge: `1 failed, 8477 passed, 8 skipped`;
+  the failure was an older test that pinned the network-policy check as
+  smoke's last. After the review fixes: `1 failed, 8523 passed, 8
+  skipped`; the failure was a knowledge-server test whose registry gives
+  a tenant a second graph agent, which the new check refuses until the
+  runtime's entry names it. Each was corrected and its files ran again
+  (`103 passed`; `488 passed, 2 skipped` with the stack tests that share
+  the fixture). The suite was not run a third time in full; CI runs it on
+  the pull request.
+- **Not run:** `make eval` (no prompt, graph or recording changed);
+  anything against Azure; a cold `make up` from no cluster; a
+  certificate's renewal; the health dashboard in a browser.
+
+**Follow-ups:** in Part B's backlog. Closed: service identity itself,
+TLS between the services, S024's cluster proof. New: a renewed
+certificate needs a restart, and an expired one leaves the probes green;
+no revocation and an issuer that signs for any namespace; telemetry in
+clear text; the scaffold and `services.yaml`; a column for the calling
+service; the mounted key's file mode; the smoke line that reads a status
+and not a reason; `make deploy` on a cluster without cert-manager; the
+implementer and the edit gate. The first two are for before the chart
+goes to AKS (S020).
 
 ## Part D — Open questions
 
@@ -7186,3 +7401,12 @@ policy for `observability`.
   for S028. Three backlog rows that named S024 are re-homed with their
   reasons, fourteen are new, among them the cluster proof this step
   leaves to the session that owns the cluster. T-86 and T-87 are new.
+- **v0.35, 2026-10-04:** S055 done: on kind the Agent Runtime, the Model
+  Gateway and the tool servers know the calling service from its
+  certificate (mutual TLS with cert-manager, ADR 4, the owner's choice)
+  and refuse a tenant or agent outside its entry in the registry's new
+  `services.yaml`. T-08, T-24, T-48 and T-50 say what is built; T-88 to
+  T-90 are new. Three reviews found no way round the check and nine
+  defects, fixed in the step; what they found beyond it is in the
+  backlog. Three backlog rows close, S024's cluster proof among them,
+  and nine are new.

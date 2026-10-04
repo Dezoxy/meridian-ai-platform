@@ -140,6 +140,27 @@ class Readers(unittest.TestCase):
         expected = ("helm", "tempo", "https://charts.example.org", "3.1.0")
         self.assertEqual(found, expected)
 
+    def test_the_cert_manager_chart_is_read_as_a_helm_chart_of_its_group(self) -> None:
+        text = (ROOT / PINS).read_text(encoding="utf-8")
+        found = {}
+        for match in self.comment_reader(PINS).finditer(text):
+            found[match.group("depName")] = match.group(
+                "datasource", "registryUrl", "currentValue"
+            )
+        datasource, registry, version = found["cert-manager"]
+        self.assertEqual(datasource, "helm")
+        self.assertRegex(version, r"^v\d+\.\d+\.\d+$")
+        self.assertEqual(
+            registry, re.search(r"^CERT_MANAGER_REPO=(\S+)$", text, re.M).group(1)
+        )
+        (group,) = [
+            rule
+            for rule in self.config["packageRules"]
+            if rule.get("groupName") == "kind platform"
+        ]
+        self.assertEqual(group["matchFileNames"], [PINS])
+        self.assertIn("helm", self.config["packageRules"][0]["matchDatasources"])
+
     def test_a_split_image_carries_its_digest(self) -> None:
         digest = "sha256:" + "a" * 64
         text = (

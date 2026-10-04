@@ -19,12 +19,17 @@
 #      upgrade updates it in place; no rollout waits for it, as it runs on a
 #      schedule. Objects a raw `kubectl apply` made before the chart existed
 #      are adopted (--take-ownership). Helm does not wait for the rollouts:
-#      the steps below do
-#   4. the Model Gateway's rollout, then the ingestion Job (it embeds the
+#      the steps below do. The release also holds a cert-manager Certificate
+#      for every service and for the ingestion Job (S055): cert-manager turns
+#      each into the Secret its pod mounts
+#   4. the Certificates, waited for until each is Ready: a pod whose Secret does
+#      not exist yet stays in ContainerCreating, and the ingestion Job (applied
+#      outside the release, after it) would spend its deadline waiting for one
+#   5. the Model Gateway's rollout, then the ingestion Job (it embeds the
 #      wordings through the gateway), at most once per image: a finished Job of
 #      this image's tag, and rows in knowledge.chunks, are the record that its
 #      corpus is in the store
-#   5. the other rollouts and the route, then, when an ingestion ran, a wait
+#   6. the other rollouts and the route, then, when an ingestion ran, a wait
 #      until its token reservation has left the tenant's one-minute window
 # The chart's only inputs from this script are the image's repository and tag
 # (a Job's name ends in the tag; the CronJob's name has none).
@@ -54,6 +59,10 @@ readonly GATEWAY_SERVICE=model-gateway
 readonly JOB_TIMEOUT=420
 readonly JOB_INTERVAL=3
 readonly ROLLOUT_TIMEOUT=300s
+# cert-manager issues the services' certificates in seconds once its webhook and
+# the issuer are Ready (`make up` waited for both); two minutes is far more than
+# a first deploy needs.
+readonly CERTIFICATE_TIMEOUT=120s
 readonly ROUTE_TIMEOUT=120s
 # The gateway counts a tenant's tokens over a sliding 60 s window and its
 # requests over 10 s. Measured on kind (2026-10-02): the ingestion reserves
@@ -234,6 +243,17 @@ ingest_corpus() {
   ingested_at=${SECONDS}
 }
 
+# The Certificates of the release (the chart's, labelled part-of=meridian; not
+# the CA's, which is in another namespace): each Ready means cert-manager made
+# its Secret. kubectl wait fails when it finds none, so a chart without
+# Certificates is not mistaken for a ready one.
+wait_for_certificates() {
+  kctl -n "${NAMESPACE}" wait --for=condition=Ready certificate \
+    -l app.kubernetes.io/part-of=meridian --timeout="${CERTIFICATE_TIMEOUT}" >/dev/null ||
+    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT} (kubectl -n ${NAMESPACE} describe certificate; is the issuer 'meridian-services' Ready? run 'make up' first)"
+  log "the services' certificates are ready"
+}
+
 wait_for_deployment() {
   kctl -n "${NAMESPACE}" rollout status "deployment/$1" --timeout="${ROLLOUT_TIMEOUT}" >/dev/null ||
     die "deployment $1 did not roll out (kubectl -n ${NAMESPACE} logs deploy/$1)"
@@ -272,6 +292,7 @@ build_image
 run_job "meridian-migrate-${tag}" migrate
 run_job "meridian-seed-${tag}" seed
 install_release
+wait_for_certificates
 wait_for_deployment "${GATEWAY_SERVICE}"
 ingest_corpus
 wait_for_other_rollouts

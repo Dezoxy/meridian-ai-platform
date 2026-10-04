@@ -2,6 +2,7 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces, the database's NetworkPolicy, Envoy Gateway and the edge Gateway
+#      cert-manager and the CA that signs the services' certificates
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its eight roles (the owner, six services and
 #      the scheduled sweep's); their password Secrets are created first, only if
@@ -164,6 +165,16 @@ log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
   "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yaml" >/dev/null
+
+log "identity: cert-manager and the CA for the services"
+install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
+  "${CERT_MANAGER_VERSION}" "${CERT_MANAGER_REPO}" cert-manager.yaml
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
+# Helm returns when cert-manager runs (its startupapicheck hook has proved the
+# webhook answers); the issuer is Ready once the CA certificate is issued and
+# its Secret holds the key.
+kctl wait --for=condition=Ready clusterissuer/meridian-services \
+  --timeout=5m >/dev/null
 
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
