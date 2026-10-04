@@ -16,7 +16,7 @@
 # renderer's own message. A folder with no .mmd files is not an error.
 #
 #   MERMAID_IMAGE  required: the pinned Mermaid CLI image, e.g.
-#                  minlag/mermaid-cli:11.17.0 (~630 MB). Keep it identical to
+#                  minlag/mermaid-cli:11.17.1 (~630 MB). Keep it identical to
 #                  the Makefile's pin.
 #
 # The container runs as you, so the folder needs no chmod and the PNGs are

@@ -23,7 +23,7 @@
 #   PANDOC_IMAGE       optional: default pandoc/extra:3.11.0.0-debian, the
 #                      version this was tested with (LaTeX, Eisvogel; ~2 GB)
 #   ARCH_DIR           optional: default docs/architecture
-#   MERMAID_IMAGE      optional: default minlag/mermaid-cli:11.17.0, the
+#   MERMAID_IMAGE      optional: default minlag/mermaid-cli:11.17.1, the
 #                      Mermaid CLI that renders the diagrams (~630 MB). Keep
 #                      it identical to the Makefile's pin.
 set -euo pipefail
@@ -31,7 +31,7 @@ set -euo pipefail
 : "${STRUCTURIZR_IMAGE:?Set STRUCTURIZR_IMAGE to your pinned Structurizr image}"
 PANDOC_IMAGE="${PANDOC_IMAGE:-pandoc/extra:3.11.0.0-debian}"
 ARCH_DIR="${ARCH_DIR:-docs/architecture}"
-MERMAID_IMAGE="${MERMAID_IMAGE:-minlag/mermaid-cli:11.17.0}"
+MERMAID_IMAGE="${MERMAID_IMAGE:-minlag/mermaid-cli:11.17.1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 arch="$(cd "${ARCH_DIR}" && pwd)"
 generated="${arch}/generated"
