@@ -13,8 +13,9 @@
   servers and the runtime's client for them run on kind, where the policy
   wordings are ingested into pgvector and searched through one of those
   servers (with a simulated embedding), a triage graph calls the tools in
-  a fixed order and lets rules decide each claim's route (no real model
-  has answered its one question in a run, which is asked for by schema;
+  a fixed order and lets rules decide each claim's route (a real model
+  answered its one question, asked for by schema, for the golden set from
+  a laptop; on kind the model is simulated;
   claimant text that holds special-category
   data or addresses the model is not sent, and identifiers are redacted
   before any model call and in logs), a claim it refers to an adjuster waits
@@ -27,8 +28,9 @@
   policy's claim history), reads its status, reports documents and
   withdraws it on server-rendered
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
-  proposals with rules against a reviewed baseline (with a scripted model,
-  simulated), and no service runs in Azure yet.
+  proposals with rules and an LLM judge against a reviewed baseline (the
+  model's answers recorded from Azure OpenAI and replayed through the
+  gateway), and no service runs in Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add a `### S0xx` section
   under Part C from the template, flip its status, and fill it in as you go.
@@ -118,15 +120,18 @@ and Pydantic, at the cost of one dependency.
   documentation gates); Terraform and Helm keep infrastructure.
 - **One entry point.** CI runs the same command a developer runs, so a check
   that passes locally passes in CI. S008 adds `registry validate`; S017 adds
-  ~~`eval run` and~~ `eval compare`; S050 adds `eval run`; S039 would add
+  ~~`eval run` and~~ `eval compare`; S050 adds `eval run` and `eval diff`;
+  S039 would add
   `workload new`.
 - **Boundary.** The CLI never approves, rejects or changes a claim; adjuster
   decisions stay in the UI, where they are audited (C-02). Commands that call
   the platform APIs, such as run inspection or audit search, need an Entra
   sign-in and stay designed until S021 exists.
 - **Cost.** Evaluation uses ~~the replay provider~~ a scripted model, in
-  process and at no cost (S017), unless `--live` is passed (C-04; `--live`
-  and a recorded model are S050).
+  process and at no cost (S017), ~~unless `--live` is passed (C-04; `--live`
+  and a recorded model are S050)~~ and since S050 a recorded real model,
+  replayed at no cost; recording again is `make eval-record`, which spends
+  money (C-04) and is not a CLI flag (S050's decisions say why).
 - **Placement.** `src/meridian/platform/cli/`, importing only platform
   packages. The Evaluation Harness reaches workloads through the ~~runtime
   API~~ Claims API (S017: every tool call needs the claim's row, so a run
@@ -271,11 +276,11 @@ that day; the rest stand as their step recorded them.
 | After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
 | The adjuster's queue shows at most 100 claims with no next page | S016 | open | none |
-| `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | open | S050 |
-| A file in the golden set's directory that the manifest does not list is not noticed | S017 | open | S050 |
+| `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
+| A file in the golden set's directory that the manifest does not list is not noticed | S017 | closed by S050 (refused when the report is built and before `eval run` sends anything) | S050 |
 | Hungarian forms of names and identifiers in the screening | S047 | open | S032 |
 | The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | none |
-| `drafted_by` on a completion the filter withheld but the provider billed | S047 | open | S050 |
+| `drafted_by` on a completion the filter withheld but the provider billed | S047 | open; left by S050, with its reason there | none |
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | open | none |
 | `database_failure` without the claim's ID | S048 | open | none |
 | A per-phase httpx timeout | S048 | open | none |

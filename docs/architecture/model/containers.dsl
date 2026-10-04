@@ -12,7 +12,7 @@ meridian = softwareSystem "Meridian AI Platform" "Builds, runs and governs LLM a
         runtime = container "Agent Runtime" "Hosts workload graphs behind the agent contract: start, pause for approval, resume; checkpoints; guardrails; MCP client." "Python, LangGraph host" "Layer Services"
         policyMcp = container "Policy MCP Server" "Policy lookup and claim history as MCP tools." "Python, MCP SDK, Streamable HTTP" "Layer Services"
         knowledgeMcp = container "Knowledge MCP Server" "Hybrid search over policy wording with citations, and the ingestion pipeline behind it." "Python, MCP SDK, pgvector" "Layer Services"
-        evals = container "Evaluation Harness" "Replays the golden set, grades with rules and an LLM judge, gates CI." "Python, pytest" "Layer Services"
+        evals = container "Evaluation Harness" "Answers the golden set from a recorded model, grades with rules and an LLM judge, gates CI." "Python, pytest" "Layer Services"
         observability = container "Observability Stack" "Collects traces, metrics and logs; serves dashboards and alerts." "OpenTelemetry Collector, Prometheus, Grafana, Tempo, Loki" "Layer Services"
         registry = container "Platform Registry" "Declarative source of truth: models, providers, tools, agents, policies, tenants." "YAML in git with JSON Schema, loaded at startup" "Layer Data"
         platformDb = container "Platform Database" "Claims, policy wording chunks, graph checkpoints, audit log, usage and evaluation results." "PostgreSQL 17 with pgvector" "Layer Data,Database"
@@ -63,7 +63,8 @@ meridian.knowledgeMcp -> meridian.gateway "Requests embeddings through" "HTTPS/J
 
 // Evaluation
 meridian.evals -> meridian.claimsApp "Submits golden-set claims to and reads their proposals from" "HTTPS/JSON" "Layer Services"
-meridian.evals -> meridian.platformDb "Stores evaluation results in" "PostgreSQL" "Layer Services"
+meridian.evals -> meridian.platformDb "Reads each run's proposals and the gateway's usage ledger from" "PostgreSQL" "Layer Services"
+meridian.evals -> meridian.gateway "Asks the judge's question through" "HTTPS/JSON, tenant and agent headers" "Layer Services"
 
 // Telemetry, one arrow per emitting service
 meridian.claimsApp -> meridian.observability "Exports traces, metrics and logs to" "OTLP" "Layer Workload"

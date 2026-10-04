@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -904,7 +905,10 @@ def test_run_has_help_for_its_options() -> None:
     result = runner.invoke(app, ["eval", "run", "--help"])
 
     assert result.exit_code == 0
+    # On a GitHub runner the help is coloured, and a colour code sits between
+    # the dashes of an option's name.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
     for option in ("--base-url", "--workload", "--golden-set", "--registry"):
-        assert option in result.stdout
+        assert option in plain
     for option in ("--report", "--limit", "--pace"):
-        assert option in result.stdout
+        assert option in plain

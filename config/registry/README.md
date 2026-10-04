@@ -116,8 +116,11 @@ labelled `eu-region`. Unlike replay it need not cover every purpose, and it is
 never a route candidate either. `recorded_from` names the live deployment that
 answered the recordings, and the recorded deployment carries that
 deployment's price, so the ledger of a recorded run charges what the live run
-was charged. Status: the registry knows the provider and the deployment; the
-gateway mode that uses them is part of S050.
+was charged. Status: implemented (S050): the gateway's `recorded` mode
+starts only in the `test`, `ci` and `local` environments and answers from
+`data/evaluation/recordings/`; the response schema is part of the key an
+answer is found by, so a recorded chat deployment declares
+`structured_outputs` like the deployment that answered.
 
 `evaluation-judge` is the second `job` agent (S050): it grades whether a
 rationale is grounded in the text it was drawn from, calls the gateway under
