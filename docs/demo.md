@@ -18,7 +18,7 @@ asks:
   Sweden Central, answered the 40 golden claims from a laptop; CI replays
   that recording on every pull request (minutes 10 to 12).
 - **Nothing runs in Azure**, and on kind there is no sign-in, no TLS and no
-  network policy. Those are milestone M2.
+  service identity. Those are milestone M2.
 - **All data is synthetic**: the policies, the claims, the names.
 
 ## Before the viewer arrives
@@ -31,7 +31,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 15 lines; PASS, or SKIP for the sweep before its first run
+make smoke     # 16 lines; PASS, or SKIP for the sweep before its first run
 ```
 
 Measured from a fresh clone with no cluster: `make up` 283 s, the first
@@ -186,10 +186,10 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 80 threats,
+- [The threat model](architecture/security/threat-model.md): 82 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
-- Not built: sign-in and roles, TLS, network policy, service identity, a
+- Not built: sign-in and roles, TLS, service identity, a
   second provider, alerts and SLOs, anything in Azure beyond the model
   deployments. The [plan](meridian-plan.md) has each as a step.
 
