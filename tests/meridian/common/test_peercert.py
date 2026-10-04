@@ -18,11 +18,6 @@ from typing import Any
 import httpx
 import pytest
 import uvicorn
-from meridian.platform.common.peercert import (
-    PeerCertProtocol,
-    client_cert_uris,
-    with_client_cert_uris,
-)
 from tlssupport import (
     LOOPBACK,
     CertificateAuthority,
@@ -36,6 +31,12 @@ from tlssupport import (
 )
 from uvicorn.importer import import_from_string
 from uvicorn.protocols.http.h11_impl import H11Protocol
+
+from meridian.platform.common.peercert import (
+    PeerCertProtocol,
+    client_cert_uris,
+    with_client_cert_uris,
+)
 
 PROTOCOL_PATH = "meridian.platform.common.peercert:PeerCertProtocol"
 START_TIMEOUT_SECONDS = 10
