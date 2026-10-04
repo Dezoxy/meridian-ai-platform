@@ -42,7 +42,7 @@ jobs:
         # PostgreSQL 17.11 with pgvector 0.8.6 on Debian trixie (the knowledge
         # store, S012): the same PostgreSQL, pgvector and OS release as the
         # CloudNativePG image kind runs.
-        image: pgvector/pgvector:0.8.6-pg17-trixie@sha256:724a4041afdb1750446e3f6b5cfa8f3b0ac5a2cf538ddfa6bfee4f94c2fa85c6
+        image: pgvector/pgvector:0.8.7-pg17-trixie@sha256:7a7e9f22015b67edb4bef5c59daeebcd7e74bfa570df6ce60ae01237c8648a84
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
