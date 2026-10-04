@@ -2,7 +2,9 @@
 # node-exporter) and Grafana (bundled subchart). Sized for a laptop.
 # Release name is kube-prometheus-stack; services are named after it.
 
-# Alertmanager arrives with S024.
+# No Alertmanager on kind (S024): Prometheus evaluates Meridian's rules
+# (infra/kind/alerts) and shows what fires, and nobody is on call for a
+# laptop. Routing and notification are designed, for the game day (S028).
 alertmanager:
   enabled: false
 windowsMonitoring:

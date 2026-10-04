@@ -71,6 +71,10 @@ jobs:
           version: v4.3.0
       - name: Lint the Helm chart
         run: make helm-lint
+      # promtool, from the Makefile's pinned image, checks the alert rules and
+      # runs their unit tests (S024); the runner has Docker.
+      - name: Check the alert rules
+        run: make alerts
       - name: Tests
         run: make pytest
         env:

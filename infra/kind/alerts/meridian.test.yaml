@@ -1,0 +1,562 @@
+# promtool unit tests for meridian.yaml; `make alerts` extracts the rules to
+# meridian.rules.yaml beside this file and runs them (S024).
+#
+# A series' samples are one per minute from t=0: `_` is no sample, `10x3` is 10
+# four times. The gateway series appear mid-run (`_x5` first) because that is
+# what a process does: its first export already holds what it counted, which an
+# increase() would lose. Evaluation steps are one minute, as in the file's
+# default.
+rule_files:
+  - meridian.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── MeridianModelCallsFailing ───────────────────────────────────────────────
+  - name: provider failures above 5 percent of 100 calls fire
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="timeout", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 10x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 90x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianModelCallsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway's calls are failing on the provider's side."
+              description: "10% of the model calls that ended in the last 15 minutes failed with a timeout, an unavailable provider, a rate limit or a bad response (proposed threshold: more than 5 percent and at least 3 calls)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md"
+
+  - name: steady counters of a process that started at t=0 fire on what they gained
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="unavailable"}'
+        values: "0+1x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed"}'
+        values: "0+9x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MeridianModelCallsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway's calls are failing on the provider's side."
+              description: "10% of the model calls that ended in the last 15 minutes failed with a timeout, an unavailable provider, a rate limit or a bad response (proposed threshold: more than 5 percent and at least 3 calls)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md"
+
+  - name: 2 failed of 10 is under the count guard
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="timeout"}'
+        values: "_x5 2x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed"}'
+        values: "_x5 8x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianModelCallsFailing
+        exp_alerts: []
+
+  - name: 3 failed of 100 is under 5 percent
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="timeout"}'
+        values: "_x5 3x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed"}'
+        values: "_x5 97x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianModelCallsFailing
+        exp_alerts: []
+
+  - name: 3 failed of 40 is over both guards
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="timeout"}'
+        values: "_x5 3x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed"}'
+        values: "_x5 37x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianModelCallsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway's calls are failing on the provider's side."
+              description: "7.5% of the model calls that ended in the last 15 minutes failed with a timeout, an unavailable provider, a rate limit or a bad response (proposed threshold: more than 5 percent and at least 3 calls)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md"
+
+  - name: a failed series that first appears mid-run with 7 fires it (increase() would lose it)
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="bad-response"}'
+        values: "_x5 7x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed"}'
+        values: "_x5 93x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianModelCallsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway's calls are failing on the provider's side."
+              description: "7% of the model calls that ended in the last 15 minutes failed with a timeout, an unavailable provider, a rate limit or a bad response (proposed threshold: more than 5 percent and at least 3 calls)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md"
+
+  - name: a process that stopped exporting stops counting once the window has passed
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="timeout"}'
+        values: "_x5 10x3"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed"}'
+        values: "_x5 90x3"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianModelCallsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway's calls are failing on the provider's side."
+              description: "10% of the model calls that ended in the last 15 minutes failed with a timeout, an unavailable provider, a rate limit or a bad response (proposed threshold: more than 5 percent and at least 3 calls)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md"
+      # The first export was at 5m: at 20m the start of the window (5m) holds it,
+      # so what the series gained in the window is 0.
+      - eval_time: 19m
+        alertname: MeridianModelCallsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway's calls are failing on the provider's side."
+              description: "10% of the model calls that ended in the last 15 minutes failed with a timeout, an unavailable provider, a rate limit or a bad response (proposed threshold: more than 5 percent and at least 3 calls)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/provider-outage.md"
+      - eval_time: 20m
+        alertname: MeridianModelCallsFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: MeridianModelCallsFailing
+        exp_alerts: []
+
+  # ── MeridianModelCredentialRefused ──────────────────────────────────────────
+  - name: a refused credential fires at once, other failures do not
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="auth", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 1x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "A provider refused the gateway's credential."
+              description: "1 model call(s) in the last 15 minutes failed because a provider refused the credential. The gateway holds no key: an expired login or a removed role assignment is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/secret-rotation.md"
+
+  - name: a rejected call is not a refused credential
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="rejected"}'
+        values: "_x5 4x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts: []
+
+  # ── MeridianGatewayInternalErrors ───────────────────────────────────────────
+  - name: an internal failure fires, and so does a failure with no reason
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="internal"}'
+        values: "_x5 1x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianGatewayInternalErrors
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway failed a call for a reason of its own."
+              description: "1 model call(s) in the last 15 minutes failed inside the gateway, not at a provider. A code or configuration fault is the usual cause; a recent release is the first suspect."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
+
+  - name: a failure with no reason label is an internal one
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed"}'
+        values: "_x5 2x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianGatewayInternalErrors
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "The Model Gateway failed a call for a reason of its own."
+              description: "2 model call(s) in the last 15 minutes failed inside the gateway, not at a provider. A code or configuration fault is the usual cause; a recent release is the first suspect."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
+
+  - name: a provider timeout is not an internal failure
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="timeout"}'
+        values: "_x5 9x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianGatewayInternalErrors
+        exp_alerts: []
+
+  # ── MeridianTenantBudgetUsedUp ──────────────────────────────────────────────
+  - name: a tenant whose budget is used up fires with its tenant and reason
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-token-budget", meridian_tenant="tenant-a", meridian_agent="a"}'
+        values: "_x5 2x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-cost-budget", meridian_tenant="tenant-b", meridian_agent="a"}'
+        values: "_x5 1x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-request-rate", meridian_tenant="tenant-c", meridian_agent="a"}'
+        values: "_x5 50x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-token-rate", meridian_tenant="tenant-d", meridian_agent="a"}'
+        values: "_x5 50x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="special-data", meridian_tenant="tenant-e", meridian_agent="a"}'
+        values: "_x5 50x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianTenantBudgetUsedUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              meridian_tenant: tenant-a
+              meridian_reason: tenant-token-budget
+            exp_annotations:
+              summary: "A tenant's budget is used up and the gateway refuses its calls."
+              description: "Tenant tenant-a had 2 call(s) refused in the last 15 minutes with tenant-token-budget. The refusal is the budget working; the question is whether the budget is right."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/budget-exhaustion.md"
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              meridian_tenant: tenant-b
+              meridian_reason: tenant-cost-budget
+            exp_annotations:
+              summary: "A tenant's budget is used up and the gateway refuses its calls."
+              description: "Tenant tenant-b had 1 call(s) refused in the last 15 minutes with tenant-cost-budget. The refusal is the budget working; the question is whether the budget is right."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/budget-exhaustion.md"
+
+  # ── MeridianGatewayRefusingByPolicy ─────────────────────────────────────────
+  - name: five policy refusals of one reason fire, four or the rate and special-data reasons do not
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="no-route", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 5x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="agent-not-allowed", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 4x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="special-data", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 9x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-request-rate", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 9x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-token-rate", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 9x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MeridianGatewayRefusingByPolicy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              meridian_reason: no-route
+            exp_annotations:
+              summary: "The Model Gateway keeps refusing calls by policy."
+              description: "5 call(s) in the last 15 minutes were refused with no-route (proposed threshold: 5). A caller the registry does not know, or a registry change that left a route without a deployment, would look like this."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
+
+  # ── MeridianServiceUnavailable ──────────────────────────────────────────────
+  - name: a deployment at 0 replicas fires after 5 minutes, at 1 it does not
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="meridian", deployment="claims-api"}'
+        values: "0x20"
+      - series: 'kube_deployment_status_replicas_available{namespace="meridian", deployment="agent-runtime"}'
+        values: "1x20"
+      - series: 'kube_deployment_status_replicas_available{namespace="observability", deployment="grafana"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MeridianServiceUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MeridianServiceUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: service-availability
+              namespace: meridian
+              deployment: claims-api
+            exp_annotations:
+              summary: "A Meridian service has no available replica."
+              description: "Deployment claims-api in meridian has had no available replica for 5 minutes (proposed threshold)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
+
+  # ── MeridianDatabaseNotReady ────────────────────────────────────────────────
+  - name: a platform-db pod that is not ready fires, a ready one does not
+    interval: 1m
+    input_series:
+      - series: 'up{job="kube-state-metrics"}'
+        values: "1x20"
+      - series: 'kube_pod_status_ready{namespace="meridian", pod="platform-db-1", condition="true"}'
+        values: "0x20"
+      - series: 'kube_pod_status_ready{namespace="meridian", pod="platform-db-2", condition="true"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MeridianDatabaseNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: database-availability
+            exp_annotations:
+              summary: "No platform-db pod is ready."
+              description: "None of the platform-db pods has been ready for 2 minutes (proposed threshold), or kube-state-metrics reports none. Every service that needs the database fails with it."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md"
+
+  - name: one ready platform-db pod among the unready is enough
+    interval: 1m
+    input_series:
+      - series: 'up{job="kube-state-metrics"}'
+        values: "1x20"
+      - series: 'kube_pod_status_ready{namespace="meridian", pod="platform-db-1", condition="true"}'
+        values: "0x20"
+      - series: 'kube_pod_status_ready{namespace="meridian", pod="platform-db-2", condition="true"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianDatabaseNotReady
+        exp_alerts: []
+
+  - name: no ready series at all fires while kube-state-metrics is up
+    interval: 1m
+    input_series:
+      - series: 'up{job="kube-state-metrics"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MeridianDatabaseNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: database-availability
+            exp_annotations:
+              summary: "No platform-db pod is ready."
+              description: "None of the platform-db pods has been ready for 2 minutes (proposed threshold), or kube-state-metrics reports none. Every service that needs the database fails with it."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md"
+
+  - name: the alert is quiet while kube-state-metrics is down
+    interval: 1m
+    input_series:
+      - series: 'up{job="kube-state-metrics"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianDatabaseNotReady
+        exp_alerts: []
+
+  # ── Gaps, restarts and clearing (the baseline is the series' last value
+  # before the window, however long ago) ────────────────────────────────────────
+  # A series at 5 from 0 to 29m, no samples for 8 minutes (a laptop that slept),
+  # then 5 again. Nothing was gained, so nothing may fire at 51m. A baseline that
+  # looks back only 5 minutes finds none at 36m and counts the 5 as new.
+  - name: a gap in the data does not make an old failure new
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", instance="gateway-a", meridian_outcome="failed", meridian_reason="auth", meridian_tenant="t", meridian_agent="a"}'
+        values: "5x29 _x8 5x25"
+    alert_rule_test:
+      - eval_time: 51m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts: []
+
+  - name: a gap in the data does not make an old budget refusal new
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", instance="gateway-a", meridian_outcome="refused", meridian_reason="tenant-token-budget", meridian_tenant="tenant-a", meridian_agent="a"}'
+        values: "5x29 _x8 5x25"
+    alert_rule_test:
+      - eval_time: 51m
+        alertname: MeridianTenantBudgetUsedUp
+        exp_alerts: []
+
+  - name: after a gap only what the series gained counts
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", instance="gateway-a", meridian_outcome="failed", meridian_reason="auth", meridian_tenant="t", meridian_agent="a"}'
+        values: "5x29 _x8 8x25"
+    alert_rule_test:
+      - eval_time: 51m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "A provider refused the gateway's credential."
+              description: "3 model call(s) in the last 15 minutes failed because a provider refused the credential. The gateway holds no key: an expired login or a removed role assignment is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/secret-rotation.md"
+
+  # Instance a stops at 10m, instance b (the restarted process) starts at 12m
+  # with 2. a gained 3-1 and b gained 4, so 6, and nothing is counted twice.
+  - name: a restart adds the two processes' gains and counts nothing twice
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", instance="gateway-a", meridian_outcome="failed", meridian_reason="auth"}'
+        values: "_ 1 1 1 1 1 3 3 3 3 3"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", instance="gateway-b", meridian_outcome="failed", meridian_reason="auth"}'
+        values: "_x12 2 2 3 3 4 4 4 4"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "A provider refused the gateway's credential."
+              description: "6 model call(s) in the last 15 minutes failed because a provider refused the credential. The gateway holds no key: an expired login or a removed role assignment is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/secret-rotation.md"
+
+  # One failure at 11m. It is in the window until 26m, where the start of the
+  # window (11m) already holds it.
+  - name: an alert clears once its failures are older than the window
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", instance="gateway-a", meridian_outcome="failed", meridian_reason="auth"}'
+        values: "0x10 1x50"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "A provider refused the gateway's credential."
+              description: "1 model call(s) in the last 15 minutes failed because a provider refused the credential. The gateway holds no key: an expired login or a removed role assignment is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/secret-rotation.md"
+      - eval_time: 25m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: model-calls
+            exp_annotations:
+              summary: "A provider refused the gateway's credential."
+              description: "1 model call(s) in the last 15 minutes failed because a provider refused the credential. The gateway holds no key: an expired login or a removed role assignment is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/secret-rotation.md"
+      - eval_time: 26m
+        alertname: MeridianModelCredentialRefused
+        exp_alerts: []
+
+  # ── MeridianSweepStale ──────────────────────────────────────────────────────
+  # The last success at 600 s: time() - 600 is 900 at 25 minutes (not over it)
+  # and 960 at 26: the alert fires with no extra wait.
+  - name: a last success over 900 seconds old fires at once
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "600x60"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MeridianSweepStale
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: MeridianSweepStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: sweep-freshness
+              namespace: meridian
+              cronjob: meridian-sweep
+            exp_annotations:
+              summary: "The scheduled sweep has not succeeded for a quarter of an hour."
+              description: "The sweep has not succeeded for 16m 0s, counted from its last success or, if it never succeeded, from its creation (proposed threshold: 15 minutes, three missed runs)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md"
+
+  - name: a sweep that keeps succeeding stays quiet, whatever its age
+    interval: 1m
+    input_series:
+      # One success per minute: the value is the sample's own time in seconds.
+      - series: 'kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "0+60x60"
+      - series: 'kube_cronjob_created{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MeridianSweepStale
+        exp_alerts: []
+
+  # A CronJob that never succeeded has no last-success series: its age counts.
+  - name: a cronjob created over 900 seconds ago that never succeeded fires
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MeridianSweepStale
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: MeridianSweepStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: sweep-freshness
+              namespace: meridian
+              cronjob: meridian-sweep
+            exp_annotations:
+              summary: "The scheduled sweep has not succeeded for a quarter of an hour."
+              description: "The sweep has not succeeded for 16m 0s, counted from its last success or, if it never succeeded, from its creation (proposed threshold: 15 minutes, three missed runs)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md"
+
+  - name: a cronjob created 5 minutes ago does not fire
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "1800x60"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MeridianSweepStale
+        exp_alerts: []

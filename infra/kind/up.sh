@@ -9,7 +9,8 @@
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
-#      there is deleted), Tempo, Loki, OpenTelemetry Collector
+#      there is deleted), Meridian's alert rules (infra/kind/alerts, one
+#      PrometheusRule), Tempo, Loki, OpenTelemetry Collector
 # Every version is pinned in pins.env.
 set -euo pipefail
 
@@ -190,6 +191,8 @@ install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" 
 kctl -n observability wait --for=condition=Available \
   prometheus/kube-prometheus-stack-prometheus --timeout=10m >/dev/null
 apply_dashboards
+log "observability: Meridian's alert rules"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/alerts/meridian.yaml" >/dev/null
 log "observability: Tempo"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml
