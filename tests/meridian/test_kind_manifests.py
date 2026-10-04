@@ -1043,12 +1043,60 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
         {"from": [{"podSelector": {"matchLabels": peer["podLabels"]}}]},
     ]
     assert [p["port"] for p in peer["ports"]] == [5432]
-    # Egress is everything, and the header says why (the API server's address
-    # is the node's own and changes with the cluster).
-    assert spec["egress"] == [{}]
+    # Egress is exactly three rules: DNS, the API server's port on the node (no
+    # address: the node's own changes with the cluster) and the Cluster's own
+    # pods. The database pod cannot open a connection to the internet.
+    dns_rule = {
+        "to": [
+            {
+                "namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": "kube-system"}
+                },
+                "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}},
+            }
+        ],
+        "ports": [
+            {"port": 53, "protocol": "UDP"},
+            {"port": 53, "protocol": "TCP"},
+        ],
+    }
+    api_server_rule = {"ports": [{"port": 6443, "protocol": "TCP"}]}
+    cluster_rule = {"to": [{"podSelector": {"matchLabels": peer["podLabels"]}}]}
+    assert spec["egress"] == [dns_rule, api_server_rule, cluster_rule]
+    assert {} not in spec["egress"]  # an empty rule allows everything
+    # The only rule without a destination is the one for port 6443: a rule
+    # without `to` allows its ports to any address.
+    assert [r for r in spec["egress"] if "to" not in r] == [api_server_rule]
     header = DB_POLICY_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
-    assert "Kubernetes API server" in header
-    assert "ipBlock" in header
+    assert "6443" in header
+    assert "translated" in header
+    assert "internet" in header
+
+
+PSA = "pod-security.kubernetes.io/"
+
+
+def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces() -> (
+    None
+):
+    namespaces = {
+        d["metadata"]["name"]: d
+        for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
+    }
+
+    assert set(namespaces) == {
+        "envoy-gateway-system",
+        "cnpg-system",
+        "observability",
+        "meridian",
+    }
+    labels = namespaces["meridian"]["metadata"].get("labels", {})
+    assert labels == {PSA + "warn": "restricted", PSA + "audit": "restricted"}
+    # `enforce` waits: a first `make up` under it was not tried.
+    assert PSA + "enforce" not in labels
+    for name, namespace in namespaces.items():
+        if name != "meridian":
+            assert "labels" not in namespace["metadata"], name
 
 
 def test_every_pod_the_chart_runs_may_reach_the_database_by_its_policy() -> None:
@@ -1373,6 +1421,33 @@ def test_the_printable_ascii_filter_drops_escapes_and_other_bytes() -> None:
     )
 
     assert done.stdout == "ok [31mred[0mcaf\nnext\n"
+
+
+def test_the_printable_ascii_filter_redacts_a_postgresql_connection_string() -> None:
+    # Synthetic: the host is under .invalid and the password says what it is.
+    lines = (
+        "connect failed: postgresql://role:not-a-secret@db.invalid/x refused",
+        "also postgres://role:not-a-secret@db.invalid:5432/x?sslmode=require",
+        "plain line",
+    )
+    script = (
+        function_definition(DEPLOY_SH, "printable_ascii")
+        + "printf '%s\\n' "
+        + " ".join(f"'{line}'" for line in lines)
+        + " | printable_ascii"
+    )
+
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True
+    )
+
+    assert "not-a-secret" not in done.stdout
+    assert "db.invalid" not in done.stdout
+    assert done.stdout.splitlines() == [
+        "connect failed: postgresql://[redacted] refused",
+        "also postgresql://[redacted]",
+        "plain line",
+    ]
 
 
 def test_the_smoke_probe_reads_server_names_from_stdout_only() -> None:

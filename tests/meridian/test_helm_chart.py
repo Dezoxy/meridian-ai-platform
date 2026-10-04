@@ -659,6 +659,88 @@ def test_a_tag_without_a_digest_fails_unless_the_image_is_never_pulled() -> None
     assert never.returncode == 0, never.stderr
 
 
+@pytest.mark.parametrize(
+    "tag", ["latest", "with space", "a/b", "", ".leading-dot", "x" * 129]
+)
+def test_a_tag_that_is_latest_or_not_a_tag_fails_and_says_the_rule(tag: str) -> None:
+    done = run_helm(helm_arguments(tag=tag))
+
+    assert done.returncode != 0, tag
+    assert "image.tag" in done.stderr
+
+
+@pytest.mark.parametrize("tag", ["0123456789ab", "lint", "v1.2_3-rc", "x" * 128])
+def test_a_tag_of_twelve_hex_digits_or_lint_or_a_plain_tag_renders(tag: str) -> None:
+    documents = render(helm_arguments(tag=tag))
+
+    assert images_of(documents) == {f"{IMAGE_REPOSITORY}:{tag}"}
+
+
+def test_a_job_named_with_a_tag_fails_on_latest_even_with_a_digest() -> None:
+    # The digest keeps the tag out of the image reference; a Job's name still
+    # ends in the tag, so only the suffix can reject it.
+    done = run_helm(
+        [
+            *helm_arguments(tag="latest"),
+            "--set-string",
+            f"image.digest={TEST_DIGEST}",
+        ]
+    )
+
+    assert done.returncode != 0
+    assert "image.tag" in done.stderr
+
+
+@pytest.mark.parametrize(
+    "repository",
+    ["meridian:latest", "meridian:v1", "meridian@sha256:" + "ab" * 32, "reg:5000/m:v1"],
+)
+def test_a_repository_with_its_own_tag_or_digest_fails(repository: str) -> None:
+    done = run_helm(helm_arguments(repository=repository))
+
+    assert done.returncode != 0, repository
+    assert "image.repository" in done.stderr
+
+
+def test_a_repository_with_a_registry_port_is_valid() -> None:
+    documents = render(helm_arguments(repository="registry:5000/meridian"))
+
+    assert images_of(documents) == {f"registry:5000/meridian:{TEST_TAG}"}
+
+
+def test_the_security_contexts_are_not_values_so_a_set_cannot_loosen_them() -> None:
+    loosened = render(
+        [
+            *helm_arguments(),
+            "--set",
+            "securityContext.privileged=true",
+            "--set",
+            "securityContext.readOnlyRootFilesystem=false",
+            "--set",
+            "podSecurityContext.runAsNonRoot=false",
+        ]
+    )
+
+    assert loosened == list(rendered_chart())
+    values = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+    assert "securityContext" not in values
+    assert "podSecurityContext" not in values
+    for workload in pod_workloads(loosened):
+        pod = pod_spec(workload)
+        assert pod["securityContext"]["runAsNonRoot"] is True
+        for container in pod["containers"]:
+            context = container["securityContext"]
+            assert not context.get("privileged")
+            assert context["readOnlyRootFilesystem"] is True
+
+
+def test_running_as_root_fails() -> None:
+    done = run_helm([*helm_arguments(), "--set", "runAsId=0"])
+
+    assert done.returncode != 0
+    assert "runAsId" in done.stderr
+
+
 def test_the_chart_default_pulls_if_not_present_and_kind_never_pulls() -> None:
     chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
     kind = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))

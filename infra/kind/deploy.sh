@@ -28,7 +28,7 @@
 #      until its token reservation has left the tenant's one-minute window
 # The chart's only inputs from this script are the image's repository and tag
 # (a Job's name ends in the tag; the CronJob's name has none).
-# Nothing here prints a Secret's value.
+# Nothing here prints a Secret's value, or a connection string of a Job's log.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -141,10 +141,14 @@ job_state() {
 }
 
 # printable_ascii: stdin without any byte that is not printable ASCII or a
-# newline. A Job's log can quote data of a checkout (a manifest key, a database
-# message), and an escape sequence in it must not reach the terminal.
+# newline, and with anything that looks like a PostgreSQL URL (postgres:// or
+# postgresql:// up to the next whitespace) replaced by postgresql://[redacted].
+# A Job's log can quote data of a checkout (a manifest key, a database message),
+# and an escape sequence in it must not reach the terminal; a driver's error can
+# quote the connection string, and its password must not reach the log.
 printable_ascii() {
-  LC_ALL=C tr -cd '[:print:]\n'
+  LC_ALL=C tr -cd '[:print:]\n' |
+    sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://[redacted]#g'
 }
 
 # run_job NAME CHART_JOB: the Job NAME, rendered by render_job CHART_JOB, run to

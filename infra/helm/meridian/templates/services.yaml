@@ -10,6 +10,10 @@ tests/meridian/test_kind_manifests.py ties every name below to the code.
 
 The Model Gateway keeps its rate windows in one process: with a second replica
 each one would allow the full limits (threat model T-45), so the chart fails.
+The guard does not cover a rolling update, during which Kubernetes runs a second
+pod for some seconds and each allows the full windows. That is left as it is on
+purpose: the alternative, `maxSurge: 0`, takes the gateway down for those
+seconds. The plan's backlog holds it (T-45).
 */ -}}
 {{- range $name, $service := .Values.services }}
 {{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) }}

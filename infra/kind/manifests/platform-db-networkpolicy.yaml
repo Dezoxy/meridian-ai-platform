@@ -14,10 +14,16 @@
 #         seconds (measured on the owner's cluster); with it, it stayed healthy
 #   any   from the pods of the same Cluster: a replica or a join Job, none today
 #
-# Egress: everything. The instance manager calls the Kubernetes API server,
-# whose address is the node's own and changes when the cluster is re-created,
-# so no ipBlock can name it. What protects the database is who may connect to it
-# (this policy, pg_hba, TLS and SCRAM), not where it may connect.
+# Egress, three rules and nothing else; the database pod cannot open a
+# connection to the internet (measured on the owner's cluster: 443 and 80 timed
+# out, the API server's Service answered, the Cluster stayed healthy):
+#   53    DNS: the cluster's DNS pods (UDP and TCP)
+#   6443  TCP to any address. The instance manager calls the Kubernetes API
+#         server, and 6443 is the API server's own port on the node. The policy
+#         is evaluated after the Service's address is translated to the node's,
+#         and that address changes when the cluster is re-created, so no ipBlock
+#         can name it: the rule names the port and no address
+#   any   the pods of the same Cluster: a replica or a join Job, none today
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -53,4 +59,22 @@ spec:
             matchLabels:
               cnpg.io/cluster: platform-db
   egress:
-    - {}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 6443
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: platform-db

@@ -42,28 +42,15 @@ database:
 
 # The user and the group (one ID for both) every container runs as: the
 # Dockerfile's USER. The pod's and the container's security context both take
-# it from here, so the two cannot disagree.
+# it from here, so the two cannot disagree. The chart refuses 0 (root).
+#
+# The security contexts themselves are not values: they are literals in
+# templates/_helpers.tpl (meridian.podSecurityContext and
+# meridian.containerSecurityContext). A value can be set from the command line
+# or by another values file, and `--set securityContext.privileged=true` would
+# then render a privileged container; a literal changes only with a reviewed
+# change to the chart.
 runAsId: 10001
-
-# The pod's securityContext, the same for every pod of the chart, with runAsUser
-# and runAsGroup from runAsId.
-podSecurityContext:
-  runAsNonRoot: true
-  seccompProfile:
-    type: RuntimeDefault
-
-# The container's securityContext, the same for every container of the chart,
-# with runAsUser from runAsId. It repeats the pod's runAsNonRoot and
-# seccompProfile on purpose: a container added to a pod later keeps them.
-securityContext:
-  runAsNonRoot: true
-  allowPrivilegeEscalation: false
-  # The image's filesystem cannot be written; the pod's /tmp (below) can.
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: [ALL]
-  seccompProfile:
-    type: RuntimeDefault
 
 # The only writable path of a pod: an emptyDir mounted at /tmp, on the node's
 # disk (the default medium; a memory-backed one would count against the
@@ -92,6 +79,10 @@ probes:
 # one for model-gateway (its rate windows live in one process, so each replica
 # would allow the full limits: threat model T-45). `env` is what the service
 # sets besides its database URL (from `dbSecret`) and the collector's address.
+# Each service's `resources` has a CPU request and a memory request and limit,
+# and no CPU limit, on purpose: a request reserves what a service needs, while a
+# limit throttles it even when the node has headroom. Memory has a limit, since
+# a process that outgrows it must die instead of taking the node's memory.
 # An item takes one of:
 #   value        the string as it is
 #   serviceUrl   http://<that service>.<release namespace>.svc:<port>

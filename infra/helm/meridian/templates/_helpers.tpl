@@ -14,10 +14,15 @@ image: the reference every container runs; takes the root. A digest gives
 <repository>@<digest> and the tag is no part of it. Without one the reference is
 <repository>:<tag>, only when the pull policy is Never: a tag names an image
 loaded into the node, which is never pulled, and a tag in a registry can be
-moved.
+moved. The repository carries neither a tag nor a digest of its own: those are
+image.tag and image.digest, and a second one would make the reference say two
+things.
 */ -}}
 {{- define "meridian.image" -}}
 {{- $repository := required "image.repository is required: pass --set-string image.repository=<repository>" .Values.image.repository -}}
+{{- if or (contains "@" $repository) (contains ":" (splitList "/" $repository | last)) -}}
+{{- fail (printf "image.repository must not carry a tag or a digest of its own (no @, and no : after the last /; a registry port before it is fine); got %q: pass the tag as image.tag or the digest as image.digest" $repository) -}}
+{{- end -}}
 {{- $digest := toString (.Values.image.digest | default "") -}}
 {{- if $digest -}}
 {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
@@ -31,9 +36,18 @@ moved.
 {{- end -}}
 {{- end -}}
 
-{{- /* tag: the image tag as a string (twelve digits are a number to --set). */ -}}
+{{- /*
+tag: the image tag as a string (twelve digits are a number to --set). It must
+match the OCI tag grammar and must not be `latest`, a tag that names a different
+image each time it is built. A Job's name ends in the tag, so this is also the
+one place the suffix is checked.
+*/ -}}
 {{- define "meridian.tag" -}}
-{{- toString (required "image.tag is required (or image.digest): pass --set-string image.tag=<tag> or --set-string image.digest=sha256:<64 hex digits>" .Values.image.tag) -}}
+{{- $tag := toString (required "image.tag is required (or image.digest): pass --set-string image.tag=<tag> or --set-string image.digest=sha256:<64 hex digits>" .Values.image.tag) -}}
+{{- if or (not (regexMatch "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" $tag)) (eq $tag "latest") -}}
+{{- fail (printf "image.tag must match ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ and must not be latest; got %q" $tag) -}}
+{{- end -}}
+{{- $tag -}}
 {{- end -}}
 
 {{- /*
@@ -119,19 +133,35 @@ key. Takes the root.
 {{- end -}}
 
 {{- /*
-podSecurityContext: the pod's; takes the root. The user and the group are
-runAsId, which wins over a value of the same name in podSecurityContext.
+runAsId: the user and the group every container runs as, as an int64; takes the
+root. Zero is root, and the chart refuses it.
 */ -}}
-{{- define "meridian.podSecurityContext" -}}
-{{- toYaml (merge (dict "runAsUser" (int64 .Values.runAsId) "runAsGroup" (int64 .Values.runAsId)) .Values.podSecurityContext) -}}
+{{- define "meridian.runAsId" -}}
+{{- $id := int64 .Values.runAsId -}}
+{{- if eq $id 0 -}}
+{{- fail "runAsId must not be 0: the containers never run as root" -}}
+{{- end -}}
+{{- $id -}}
 {{- end -}}
 
 {{- /*
-containerSecurityContext: the container's; takes the root. The user is runAsId,
-the pod's too, so the two levels cannot disagree.
+podSecurityContext: the pod's, the same for every pod of the chart; takes the
+root. A literal, not a value: a `--set` or a values file cannot loosen it (see
+values.yaml). The user and the group are runAsId.
+*/ -}}
+{{- define "meridian.podSecurityContext" -}}
+{{- toYaml (dict "runAsNonRoot" true "runAsUser" (include "meridian.runAsId" . | int64) "runAsGroup" (include "meridian.runAsId" . | int64) "seccompProfile" (dict "type" "RuntimeDefault")) -}}
+{{- end -}}
+
+{{- /*
+containerSecurityContext: the container's, the same for every container of the
+chart; takes the root. A literal, not a value. The user is runAsId, the pod's
+too, so the two levels cannot disagree. It repeats the pod's runAsNonRoot and
+seccompProfile on purpose: a container added to a pod later keeps them. The
+image's filesystem cannot be written; the pod's /tmp can.
 */ -}}
 {{- define "meridian.containerSecurityContext" -}}
-{{- toYaml (merge (dict "runAsUser" (int64 .Values.runAsId)) .Values.securityContext) -}}
+{{- toYaml (dict "runAsNonRoot" true "runAsUser" (include "meridian.runAsId" . | int64) "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) "seccompProfile" (dict "type" "RuntimeDefault")) -}}
 {{- end -}}
 
 {{- /* tmpMount: the pod's one writable path (the root filesystem is read-only). */ -}}
