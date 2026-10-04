@@ -200,7 +200,8 @@ and Pydantic, at the cost of one dependency.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | todo | S018 |
-| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019 |
+| S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | todo | S019 |
+| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
@@ -340,7 +341,7 @@ that day; the rest stand as their step recorded them.
 | Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | open | S019 |
 | The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open | S019, S021 |
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
-| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" does | threat model, S018 | open, the owner's decision: which step builds it | none |
+| Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | closed on 2026-10-04 by the owner: a step of its own between S019 and S020, S055 | S055 |
 | A web application firewall in the Azure design (T-02) | threat model, S018 | open | none |
 | No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open | S024 |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
@@ -6068,3 +6069,9 @@ Run by the session; exit code 0 unless said.
   what is not; the threat model is version 1; `docs/demo.md` is the demo.
   The backlog gains the homes the threat model named that no step holds;
   where service-to-service identity is built is the owner's to decide.
+- **v0.27, 2026-10-04:** by the owner, after S018: service-to-service
+  identity is a step of its own between S019 and S020 ("keeps both steps
+  small"). S055 is new, depending on S019, and S020 now depends on it. Its
+  mechanism is not chosen: that is a security boundary, and the step asks
+  the owner when it opens. The threat model's rows T-08, T-24, T-48 and
+  T-50 and the README name S055.
