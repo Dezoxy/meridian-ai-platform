@@ -19,7 +19,7 @@ concurrency:
 jobs:
   docs:
     name: docs consistency
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -34,7 +34,7 @@ jobs:
 
   model:
     name: architecture model
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -44,7 +44,7 @@ jobs:
 
   diagrams:
     name: derived diagrams
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -57,7 +57,7 @@ jobs:
 
   secrets:
     name: secret scan
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       # Full history: gitleaks scans every commit, not only the tree.
