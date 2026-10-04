@@ -12,7 +12,8 @@ designed, and each gets its procedure here when it exists.
 
 No command on this page prints a secret, with one exception that exists
 to print one: `make grafana-password`. A person runs that one, on a
-private terminal, never a session: a session's output is its transcript.
+private terminal, never a session: a session's output is its transcript,
+and the harness asks the owner before a session may run it.
 
 ## What you see
 
@@ -207,10 +208,14 @@ is not fixed by a later one.
 
 - **Do not print a Secret** to look at it: no `kubectl get secret -o
   yaml`, no `echo` of a password, no password as a command-line argument.
-  Do not rely on the harness to stop it. Its hook denies only the bare
-  form of that command, and not the same command with a namespace flag
-  in front or behind a shell function, as every command on this page is
-  (the plan's backlog). The rule is the operator's to keep.
+  Do not rely on the harness to stop it. Its hook denies a `get` of a
+  Secret with any output format but `name` and `wide`, with a namespace
+  flag in front or behind a shell function too, as every command on this
+  page is; it asks before `psql` through `kubectl exec` and before
+  `make grafana-password`. It reads only the command a session types: a
+  script's inside, a file a pod mounts and a pod's environment it does
+  not see, and a person's terminal never meets it. The rule is the
+  operator's to keep.
 - **Do not edit `password` without `uri`**, or the other way round. The
   services read `uri`; CloudNativePG reads `password`.
 - **Do not rotate while the database is down.** CloudNativePG cannot

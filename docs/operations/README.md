@@ -80,8 +80,9 @@ over the local socket; that is how `make deploy` and `make smoke` ask
 their questions too.
 
 It is a privileged act and the platform does not record it: no audit row
-is written for what is read this way, and no hook of the harness stands
-in front of it. The superuser can read every claim and could change
+is written for what is read this way. The harness asks the owner before
+a session runs `psql` through `kubectl exec`; a person's own terminal
+meets no hook. The superuser can read every claim and could change
 anything, the audit triggers included. So the runbooks give it queries
 that only read, and the command asks PostgreSQL for a session that only
 reads, which stops a wrong paste and not a person who means to write:

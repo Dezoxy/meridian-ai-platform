@@ -56,7 +56,8 @@ print("\n".join(out))
 ' 2>/dev/null || printf '%s' "$cmd")"
 fi
 
-# hook_cmd is what the git hook-bypass rules read. A commit message or a pull
+# hook_cmd is what the git hook-bypass rules read, and the Kubernetes Secret
+# and psql rules after them. A commit message or a pull
 # request body is prose: it may name --no-verify or core.hooksPath, and it may
 # hold a `;` that would cut the command in two before a real flag. So the
 # quoted value of a prose option (-m, also bundled as in -am, --message,
@@ -77,7 +78,7 @@ fi
 # missed again, as before this pass existed.
 hook_cmd="$cmd"
 # shellcheck disable=SC2016  # the Python source below is meant to stay literal
-if [[ "$cmd" == *git* ]] && command -v python3 >/dev/null 2>&1; then
+if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* ]] && command -v python3 >/dev/null 2>&1; then
   hook_cmd="$(printf '%s' "$cmd" | python3 -c '
 import re, sys
 PROSE = r"((?<![\w-])-[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
@@ -169,6 +170,33 @@ hookspath_read_re="git${git_globals}[[:space:]]+config[[:space:]]+((--local|--ge
 hookspath_inline_re="git[[:space:]].*(-c[[:space:]]*|--config-env[=[:space:]]+)[\"${sq}]?core\.hookspath"
 # The git subcommands that run a hook SKIP could leave out.
 hooked="(commit|push|merge|rebase|pull|am|cherry-pick|revert)"
+# Printing a Kubernetes Secret. Two questions are asked of what follows the
+# word `get` in a segment: is a Secret among the resources (secret, secrets,
+# secret/name, pod,secret, "secret"), and is there an output format that can
+# carry a value? Whatever stands before `get` does not matter, so global flags
+# (-n, --kubeconfig, --context), a variable ($K get ...), a shell function
+# or an alias are all read the same way. Every format but `name` and `wide`
+# counts, jsonpath and go-template on metadata included: the last-applied
+# annotation of an applied Secret holds its values. `-o` may be bundled
+# (-Ao yaml). A namespace or an object that is itself named `secrets` is
+# denied too.
+#
+# Two segments can do together what neither does alone: one lists the
+# Secrets, the other prints whatever a variable, `{}` or xargs hands it
+# (for s in $(... get secrets -o name); do ... get $s -o yaml; done). So a
+# get of Secrets and such a get in one command are denied as a pair.
+#
+# These rules read hook_cmd, so a commit message or a pull request body that
+# names the command passes; a grep or an echo that names it is denied, as
+# before.
+k8s_get_re="(^|[^[:alnum:]_-])get[[:space:]]+(.*)\$"
+k8s_secret_re="(^|[[:space:],\"'])secrets?([[:space:],/.)\"']|\$)"
+k8s_output_re="(^|[[:space:]])(-[AwR]*o[=[:space:]]*|--output[=[:space:]]+)[\"']?([^nw=[:space:]\"']|n[^a]|w[^i])"
+k8s_template_re="(^|[[:space:]])--template([=[:space:]]|\$)"
+k8s_handed_re="[\$]|[{][}]"
+k8s_xargs_re="(^|[^[:alnum:]_-])xargs[[:space:]]"
+k8s_secret_seen=""
+k8s_handed_seen=""
 while IFS= read -r seg; do
   # Git accepts abbreviated long options (--no-veri), and only `commit` reads
   # -n as --no-verify; `git push -n` is a dry run and `git log -n` a count.
@@ -180,7 +208,25 @@ while IFS= read -r seg; do
      { [[ "$seg" =~ $hookspath_config_re ]] && ! [[ "$seg" =~ $hookspath_read_re ]]; }; then
     decide deny "Changing core.hooksPath disables the repository's git hooks. Run it yourself if intended."
   fi
+  if [[ "$seg" =~ $k8s_get_re ]]; then
+    k8s_rest="${BASH_REMATCH[2]}"
+    k8s_values=""
+    if [[ "$k8s_rest" =~ $k8s_output_re ]] || [[ "$k8s_rest" =~ $k8s_template_re ]]; then
+      k8s_values=1
+    fi
+    if [[ "$k8s_rest" =~ $k8s_secret_re ]]; then
+      [ -n "$k8s_values" ] && \
+        decide deny "That would print Kubernetes Secret values to the transcript. -o name lists Secrets and kubectl describe secret shows keys and sizes; run it yourself for a value."
+      k8s_secret_seen=1
+    elif [ -n "$k8s_values" ]; then
+      if [[ "$k8s_rest" =~ $k8s_handed_re ]] || [[ "$seg" =~ $k8s_xargs_re ]]; then
+        k8s_handed_seen=1
+      fi
+    fi
+  fi
 done < <(printf '%s\n' "${hook_cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+[[ -n "$k8s_secret_seen" && -n "$k8s_handed_seen" ]] && \
+  decide deny "A get of Secrets, and a get that prints whatever a variable or xargs hands it, in one command: that can print Secret values to the transcript. Run it yourself."
 [[ "$hook_cmd" =~ $commit_n_wrapped_re ]] && \
   decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
 # Environment switches are checked across the whole command, because
@@ -199,8 +245,6 @@ hookspath_env_re="(^|[^[:alnum:]_])(GIT_CONFIG_KEY_[0-9]+|GIT_CONFIG_PARAMETERS)
   decide deny "Disabling the hook manager (HUSKY=0, LEFTHOOK=0) bypasses git hooks. Fix what the hook reports, or run it yourself."
 [[ "$cmd" =~ az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|download|backup|restore) ]] && \
   decide deny "Key Vault secret values never enter the transcript or the command line. Run it yourself; list secret names with 'az keyvault secret list'."
-[[ "$cmd" =~ kubectl[[:space:]]+get[[:space:]]+secrets?[[:space:]].*-o[[:space:]]*(yaml|json) ]] && \
-  decide deny "That would print Kubernetes secret values to the transcript."
 [[ "$cmd" =~ az[[:space:]].*(group|keyvault|postgres|aks|cognitiveservices|acr)[[:space:]]+(.*[[:space:]])?delete([[:space:]]|$) ]] && \
   decide deny "Azure resource delete is destructive; run it yourself after confirming subscription and resource."
 [[ "$cmd" =~ kubectl[[:space:]].*delete[[:space:]].*(namespace|[[:space:]]ns[[:space:]]|pvc|persistentvolumeclaim|--all) ]] && \
@@ -219,6 +263,16 @@ nl=$'\n'
   decide ask "make down deletes the kind cluster and its local state; confirm."
 [[ "$cmd" =~ (^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)down\.sh ]] && \
   decide ask "infra/kind/down.sh deletes the kind cluster and its local state; confirm."
+# `make grafana-password` and the script behind it exist to print a password.
+# A person runs them in a terminal of their own, which never meets this hook;
+# in a session the output is the transcript, so the owner is asked first.
+# Same anchoring as the down rules; `make grafana` and `grafana.sh forward`
+# pass.
+grafana_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?grafana-password([[:space:]]|\$|[;\&\|\)])"
+grafana_script_re="(^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)grafana\.sh[[:space:]]+password([[:space:]]|\$|[;\&\|\)])"
+if [[ "$cmd" =~ $grafana_make_re ]] || [[ "$cmd" =~ $grafana_script_re ]]; then
+  decide ask "This prints the Grafana admin password into the transcript; confirm, or run it in a terminal of your own."
+fi
 # `make azure-state`, `make azure-apply` and the scripts behind them create
 # Azure resources without the word terraform or az on the command line, so the
 # rules above never see them. Same anchoring as the down rules, widened for the
@@ -253,6 +307,16 @@ foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?
   decide ask "terraform state surgery, import, taint or force-unlock can orphan or corrupt resources, and state pull prints resource secrets; confirm the workspace and the reason."
 [[ "$cmd" =~ (^|[^[:alnum:]_.-])az[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?account[[:space:]]+get-access-token ]] && \
   decide ask "That would put a bearer token into the transcript; run it yourself, or use a script that passes it on stdin."
+# psql through `kubectl exec` runs SQL inside the database pod, where the
+# default login is usually the superuser. The `--` that kubectl exec puts
+# before the pod's command tells it from a local psql, from `docker exec` and
+# from a search for the words. Read on the whole command, because the SQL or
+# a shell wrapper after `--` may hold a separator; so any psql after the `--`
+# asks, a `which psql` and a local psql in a later command included. It
+# reads hook_cmd: a commit message that names the command passes.
+psql_exec_re="(^|[^[:alnum:]_-])exec[[:space:]].*[[:space:]]--[[:space:]](.*[[:space:]/\"';|&(])?psql([[:space:]\"';|&<>)]|\$)"
+[[ "$hook_cmd" =~ $psql_exec_re ]] && \
+  decide ask "psql through kubectl exec runs SQL inside the database pod, usually as its superuser; confirm the statement and the kube context."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
 [[ "$cmd" =~ kubectl[[:space:]].*(apply|delete|scale|rollout[[:space:]]+restart) ]] && \
