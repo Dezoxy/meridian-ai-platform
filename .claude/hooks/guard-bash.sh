@@ -23,12 +23,22 @@ WRITER = re.compile(r"(^|[;&|(]\s*)(cat|tee)\b")
 EXECUTES = re.compile(r"(^|[\s;&|(])(sudo\s+)?(bash|sh|zsh|dash|python3?|node|perl|ruby|xargs|eval|source|exec|chmod)(\s|$)")
 SCRIPT_TARGET = re.compile(r"\S+\.(sh|bash|zsh|py|rb|pl|js)\b")
 term = None
+closed = False
 out = []
 for line in sys.stdin.read().split("\n"):
     if term is not None:
         if line.strip() == term:
             term = None
+            closed = True
         continue
+    # After a stripped body, a line that starts with the closing bracket of
+    # the command substitution around the heredoc belongs to the command that
+    # opened it: a flag written after the message is a flag of that commit.
+    if closed and line.lstrip().startswith(")") and out:
+        out[-1] += " " + line.lstrip()
+        closed = False
+        continue
+    closed = False
     out.append(line)
     m = MARK.search(line)
     if not m:
@@ -43,6 +53,59 @@ for line in sys.stdin.read().split("\n"):
     if plain_write:
         term = m.group(1)
 print("\n".join(out))
+' 2>/dev/null || printf '%s' "$cmd")"
+fi
+
+# hook_cmd is what the git hook-bypass rules read. A commit message or a pull
+# request body is prose: it may name --no-verify or core.hooksPath, and it may
+# hold a `;` that would cut the command in two before a real flag. So the
+# quoted value of a prose option (-m, also bundled as in -am, --message,
+# --body, --title, --notes) is emptied first.
+#
+# - The command is read one quoted string at a time, so a `-m` that ends an
+#   earlier string never opens a value, and the inside of a quoted string is
+#   read the same way: `bash -c "git commit -m x -n"` still shows its flag.
+# - A value may be several quoted pieces set side by side, which is how a
+#   shell writes an apostrophe inside single quotes.
+# - A value that holds a command substitution is kept, because that part
+#   executes; only the separators in it are blanked, so a flag after it
+#   stays in the same segment.
+# - A quoted flag is still a flag, so "-n" is read as -n.
+#
+# Without python3 the rules read the command as it is: prose that names a
+# flag is denied again, and a flag after prose with a separator in it is
+# missed again, as before this pass existed.
+hook_cmd="$cmd"
+# shellcheck disable=SC2016  # the Python source below is meant to stay literal
+if [[ "$cmd" == *git* ]] && command -v python3 >/dev/null 2>&1; then
+  hook_cmd="$(printf '%s' "$cmd" | python3 -c '
+import re, sys
+PROSE = r"((?<![\w-])-[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
+SINGLE = r"\x27[^\x27]*\x27"
+DOUBLE = r"\"(?:[^\"\\]|\\.)*\""
+QUOTED = "(?:" + SINGLE + "|" + DOUBLE + ")"
+ATOM = re.compile(PROSE + "(" + QUOTED + "+)|" + QUOTED)
+PIECE = re.compile(QUOTED)
+def value_of(m):
+    value = m.group(3)
+    executes = any(
+        p[0] == "\"" and ("$(" in p or "`" in p) for p in PIECE.findall(value)
+    )
+    if executes:
+        value = re.sub(r"[;&|]", " ", value)
+    else:
+        value = "\"\""
+    return m.group(1) + (m.group(2) or "") + value
+def read(text):
+    def atom(m):
+        if m.group(3) is not None:
+            return value_of(m)
+        quoted = m.group(0)
+        return quoted[0] + read(quoted[1:-1]) + quoted[-1]
+    return ATOM.sub(atom, text)
+text = read(sys.stdin.read())
+text = re.sub(r"([\x27\"])(-[A-Za-z][A-Za-z-]*)\1", r"\2", text)
+sys.stdout.write(text)
 ' 2>/dev/null || printf '%s' "$cmd")"
 fi
 
@@ -69,34 +132,70 @@ bs_nl=$'\\\n'
 while IFS= read -r seg; do
   [[ "$seg" =~ git[[:space:]]+push([[:space:]].*)?[[:space:]](--force|-[a-zA-Z]*f|[+]|--mirror|--prune) ]] && \
     decide deny "Destructive push (--force*, bundled -f, +refspec, --mirror/--prune) can rewrite shared refs. Run it yourself if you must."
-  # Git hook bypasses. A repository's hooks are its guard rails (a pre-push
-  # hook may be the only thing stopping a push to main), so an agent never
-  # skips them: every form is denied, and a human runs it if truly needed.
-  # Git accepts abbreviated long options (--no-veri), and only `commit` reads
-  # -n as --no-verify; `git push -n` is a dry run and `git log -n` a count.
-  [[ "$seg" =~ git[[:space:]].*--no-veri ]] && \
-    decide deny "Skipping git hooks (--no-verify) is not allowed. Fix what the hook reports, or run it yourself."
-  [[ "$seg" =~ git[[:space:]]+(-[cC][[:space:]]+[^[:space:]]+[[:space:]]+)*commit([[:space:]].*)?[[:space:]]-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$) ]] && \
-    decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
-  # Repointing or unsetting core.hooksPath (git config, -c, --config-env or
-  # GIT_CONFIG_KEY_n) disables every hook at once. Reading it, or pointing it
-  # at the repository's own .githooks, is the activation step and passes.
-  if [[ "$seg" =~ (^|[[:space:]])git[[:space:]] && "$seg" =~ core\.hookspath ]] && \
-     ! [[ "$seg" =~ git[[:space:]]+config[[:space:]]+((--local|--get)[[:space:]]+)*core\.hookspath([[:space:]]+(\./)?\.githooks/?)?[[:space:]]*$ ]]; then
-    decide deny "Changing core.hooksPath disables the repository's git hooks. Run it yourself if intended."
-  fi
-  [[ "$seg" =~ (^|[[:space:]])SKIP=[^[:space:]]+[[:space:]]+(.*[[:space:]])?git[[:space:]] ]] && \
-    decide deny "SKIP= bypasses pre-commit hooks. Fix what the hook reports, or run it yourself."
-  [[ "$seg" =~ (^|[[:space:]])(rm|mv|unlink|truncate)[[:space:]].*(\.git/hooks/|\.githooks/|\.husky/) || \
-     "$seg" =~ chmod[[:space:]]+[ugoa]*-[rwx]*x.*(\.git/hooks/|\.githooks/|\.husky/) ]] && \
+  [[ "$seg" =~ (^|[[:space:]])(rm|mv|unlink|truncate)[[:space:]].*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) || \
+     "$seg" =~ chmod[[:space:]]+[ugoa]*-[rwx]*x.*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) ]] && \
     decide deny "Removing or disabling a git hook file bypasses it. Run it yourself if intended."
   [[ "$seg" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config) ]] && \
     decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig)."
 done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
-# Hook-manager switches, checked across the whole command because
-# `export HUSKY=0 && git push` splits them from the git call. They have no use
-# other than turning hooks off.
-[[ "$cmd" =~ (^|[^[:alnum:]_])(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0) ]] && \
+# Git hook bypasses. A repository's hooks are its guard rails (a pre-push
+# hook may be the only thing stopping a push to main), so an agent never
+# skips them: every form is denied, and a human runs it if truly needed.
+# These rules read hook_cmd, so prose that names a flag passes and a flag
+# after prose that holds a separator is still seen. What they cannot see is
+# a git alias that carries the flag: this catches a habit, not an adversary.
+#
+# Git's own options may stand between `git` and the subcommand: any word
+# that starts with a dash, and the value of the few that take one. A word
+# may hold quoted parts with spaces in them, as in -C "my dir".
+sq="'"
+word="([^[:space:]\"${sq}]|\"[^\"]*\"|${sq}[^${sq}]*${sq})+"
+git_globals="([[:space:]]+(-[cC][[:space:]]+${word}|--(git-dir|work-tree|namespace|config-env)[[:space:]]+${word}|-${word}))*"
+# Only `commit` reads -n as --no-verify. The flag ends at a space, at the
+# end, or at the bracket that closes `$(...)`. A closing quote ends it only
+# inside a string that an interpreter runs (bash -c "..."), which is judged
+# on the whole command below; elsewhere a quoted `git commit -n` is prose,
+# as in grep or echo.
+commit_n="git${git_globals}[[:space:]]+commit([[:space:]].*)?[[:space:]]-[a-zA-Z]*n[a-zA-Z]*"
+commit_n_re="${commit_n}([[:space:]]|\$|[)])"
+commit_n_wrapped_re="(^|[[:space:]])(bash|sh|zsh|dash|eval|ssh|su|sudo|xargs)[[:space:]].*[\"${sq}].*${commit_n}[\"${sq}]"
+# Repointing or unsetting core.hooksPath disables every hook at once. Only
+# the ways of setting it count: `git config`, `-c` and `--config-env`. Reading
+# it, or pointing it at the repository's own .githooks, is the activation
+# step and passes; a command that merely names the setting (git grep, a log
+# search, grep in a README) passes too.
+hookspath_config_re="git${git_globals}[[:space:]]+config[[:space:]].*core\.hookspath"
+hookspath_read_re="git${git_globals}[[:space:]]+config[[:space:]]+((--local|--get)[[:space:]]+)*core\.hookspath([[:space:]]+(\./)?\.githooks/?)?[[:space:]]*\$"
+hookspath_inline_re="git[[:space:]].*(-c[[:space:]]*|--config-env[=[:space:]]+)[\"${sq}]?core\.hookspath"
+# The git subcommands that run a hook SKIP could leave out.
+hooked="(commit|push|merge|rebase|pull|am|cherry-pick|revert)"
+while IFS= read -r seg; do
+  # Git accepts abbreviated long options (--no-veri), and only `commit` reads
+  # -n as --no-verify; `git push -n` is a dry run and `git log -n` a count.
+  [[ "$seg" =~ git[[:space:]].*--no-veri ]] && \
+    decide deny "Skipping git hooks (--no-verify) is not allowed. Fix what the hook reports, or run it yourself."
+  [[ "$seg" =~ $commit_n_re ]] && \
+    decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
+  if [[ "$seg" =~ $hookspath_inline_re ]] || \
+     { [[ "$seg" =~ $hookspath_config_re ]] && ! [[ "$seg" =~ $hookspath_read_re ]]; }; then
+    decide deny "Changing core.hooksPath disables the repository's git hooks. Run it yourself if intended."
+  fi
+done < <(printf '%s\n' "${hook_cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+[[ "$hook_cmd" =~ $commit_n_wrapped_re ]] && \
+  decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
+# Environment switches are checked across the whole command, because
+# `export SKIP=ruff && git commit` splits them from the git call. SKIP names
+# the hooks pre-commit leaves out; other tools read a variable of that name,
+# so it counts only when the command also runs a git subcommand that has
+# hooks. The rest have no use other than turning hooks off.
+skip_re="(^|[^[:alnum:]_])SKIP=[^[:space:];&|]+"
+hooked_git_re="(^|[^[:alnum:]_.-])git${git_globals}[[:space:]]+${hooked}([[:space:]]|\$)"
+[[ "$hook_cmd" =~ $skip_re && "$hook_cmd" =~ $hooked_git_re ]] && \
+  decide deny "SKIP= bypasses pre-commit hooks. Fix what the hook reports, or run it yourself."
+hookspath_env_re="(^|[^[:alnum:]_])(GIT_CONFIG_KEY_[0-9]+|GIT_CONFIG_PARAMETERS)=[\"${sq}]*core\.hookspath"
+[[ "$hook_cmd" =~ $hookspath_env_re ]] && \
+  decide deny "Changing core.hooksPath disables the repository's git hooks. Run it yourself if intended."
+[[ "$hook_cmd" =~ (^|[^[:alnum:]_])(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0) ]] && \
   decide deny "Disabling the hook manager (HUSKY=0, LEFTHOOK=0) bypasses git hooks. Fix what the hook reports, or run it yourself."
 [[ "$cmd" =~ az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|download|backup|restore) ]] && \
   decide deny "Key Vault secret values never enter the transcript or the command line. Run it yourself; list secret names with 'az keyvault secret list'."

@@ -186,7 +186,7 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 82 threats,
+- [The threat model](architecture/security/threat-model.md): 84 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
 - Not built: sign-in and roles, TLS, service identity, a

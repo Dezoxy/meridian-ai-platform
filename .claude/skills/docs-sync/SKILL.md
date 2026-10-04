@@ -48,6 +48,7 @@ of those goes stale silently when something is added or renamed.
    | `docs/architecture/model/*.dsl` | elements, relationships, deployment, views — the model must tell the same story as the prose |
    | `docs/architecture/<concern>/` | requirements, security, data, integration, deployment, reliability, observability, risks, roadmap — each owns its facts and IDs |
    | `docs/architecture/decisions/` | ADRs — history; a changed decision gets a new ADR, not an edit |
+   | `docs/meridian-plan.md` | the **status line**, each step's status and "done when", the open questions — a closed step's section and the changelog are history |
    | `<dir>/README.md` | a README beside the thing it describes — a module, service or package: what it is, how it is used, and what is on the other end of its inputs and outputs |
    | `Makefile` `##` comments | these ARE `make help` output |
    | `AGENTS.md` + `CLAUDE.md` | conventions and hard rules — **twins, byte-identical** |
@@ -113,8 +114,8 @@ of those goes stale silently when something is added or renamed.
      (note the latter in the PR body).
    - Do NOT restyle prose, reorganize docs, or "improve" things that are merely
      imperfect.
-   - **Historical text describes what WAS true.** ADRs, plan Part E step
-     sections, the plan changelog and dated compliance memos record their
+   - **Historical text describes what WAS true.** ADRs, the plan's closed
+     step sections, the plan changelog and dated compliance memos record their
      moment. Supersede with a new ADR, append a dated note, strike through in
      the plan — never rewrite history to match the present.
 

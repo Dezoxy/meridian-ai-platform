@@ -150,7 +150,18 @@ def markdown_files() -> list[Path]:
 
 def check_twins(f: Failures) -> None:
     """AGENTS.md and CLAUDE.md carry the same instructions, byte for byte."""
-    if read(REPO / "AGENTS.md") != read(REPO / "CLAUDE.md"):
+    twins = [REPO / "AGENTS.md", REPO / "CLAUDE.md"]
+    present = [p for p in twins if p.exists()]
+    if not present:
+        return  # a repository on its first day: no subject yet
+    if len(present) == 1:
+        missing = next(p for p in twins if p not in present)
+        f.add(
+            "twins",
+            f"{missing.name} is missing; cp {present[0].name} {missing.name}",
+        )
+        return
+    if read(twins[0]) != read(twins[1]):
         f.add(
             "twins",
             "AGENTS.md and CLAUDE.md differ; edit CLAUDE.md, then cp CLAUDE.md AGENTS.md",

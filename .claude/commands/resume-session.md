@@ -30,9 +30,16 @@ This command is the counterpart to `/save-session`.
 If no argument provided:
 
 1. Check `~/.claude/session-data/`
-2. Read the matching `*-session.tmp` candidates and apply the candidate ranking below
-3. Load the highest-ranked candidate
-4. If the folder does not exist or has no eligible matching files, tell the user:
+2. Keep only the candidates recorded for this repository. The folder holds every project's
+   sessions, so a file counts when its `**Worktree:**` is the current directory, or its
+   `**Repo:**` is this repository's common git directory (`git rev-parse --git-common-dir`), or,
+   for a file with neither field, its `**Project:**` is this repository's name
+3. Read those `*-session.tmp` candidates and apply the candidate ranking below
+4. Load the highest-ranked candidate
+5. If files exist but none belongs to this repository, say so, list the newest few by path with
+   their `**Project:**`, and stop. Never load another project's session unless the user gives
+   its path
+6. If the folder does not exist or has no eligible matching files, tell the user:
    ```
    No session files found in ~/.claude/session-data/
    Run /save-session at the end of a session to create one.
@@ -43,8 +50,9 @@ If an argument is provided:
 
 - If it looks like a date (`YYYY-MM-DD`), search `~/.claude/session-data/` first, then the legacy
   `~/.claude/sessions/`, for files matching `YYYY-MM-DD-session.tmp` (legacy format) or
-  `YYYY-MM-DD-<shortid>-session.tmp` (current format), apply the candidate ranking below across
-  all matches, and load the highest-ranked candidate for that date
+  `YYYY-MM-DD-<shortid>-session.tmp` (current format), keep the ones recorded for this
+  repository as above, apply the candidate ranking below across them, and load the
+  highest-ranked candidate for that date
 - If it looks like a file path, read exactly that file directly. Do not apply candidate ranking or
   substitute a different file, even if the requested file is empty or another file is newer
 - If not found, report clearly and stop
