@@ -1,0 +1,225 @@
+{
+  "entries": {
+    "004a80536afdefb96564701be2f52d0a9da64a9bd13e3fa89bc99bcb2184b2b6": {
+      "finish_reason": "stop",
+      "input_tokens": 584,
+      "latency_ms": 1082,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 56,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description indicates a sudden burst of a pipe, resulting in immediate water damage. None of the clauses explicitly apply to this scenario, as it is neither due to gradual leaks nor wear and tear as described.\"}"
+    },
+    "0125c29995a29ad46e08e8492d75cdc9e59c78c9c56ae08561012369857307cc": {
+      "finish_reason": "stop",
+      "input_tokens": 602,
+      "latency_ms": 992,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 47,
+      "text": "{\"verdict\":\"applies\",\"clause\":\"3.4\",\"rationale\":\"The description mentions a pipe that had been dripping and causing damage over months, which matches the exclusion for gradual leaks in clause 3.4.\"}"
+    },
+    "0b33e1ffb141990ac7926c811bfd1ff79d83da796345497a548b8cefc4e29819": {
+      "finish_reason": "stop",
+      "input_tokens": 673,
+      "latency_ms": 823,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 50,
+      "text": "{\"verdict\":\"applies\",\"clause\":\"3.3\",\"rationale\":\"The description states that the car was driven by a friend without a driving licence, which aligns with the exclusion in clause 3.3 regarding unlicensed drivers.\"}"
+    },
+    "0e40c05dd3304518186cfa3961d70003b63375cbad18aff616bb7b7ca7add796": {
+      "finish_reason": "stop",
+      "input_tokens": 569,
+      "latency_ms": 739,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 41,
+      "text": "{\"grounded\":true,\"reason\":\"The source states exclusions for racing, driving under the influence, and unlicensed drivers, none of which are applicable to the described collision caused by a reversing van.\"}"
+    },
+    "2f612066c02d12d96776a9fbbf228ad495559620205a82a69c09dc2d47e24356": {
+      "finish_reason": "stop",
+      "input_tokens": 396,
+      "latency_ms": 760,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 36,
+      "text": "{\"grounded\":true,\"reason\":\"The source mentions that the exclusion applies to racing or similar activities, which are not described in the incident details, aligning with the statement.\"}"
+    },
+    "53156e9b778e34d93f95851fd891c8b53cb566718f2f2d8f68d017e6b0b6ec96": {
+      "finish_reason": "stop",
+      "input_tokens": 437,
+      "latency_ms": 798,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 38,
+      "text": "{\"grounded\":true,\"reason\":\"The source explicitly states in clause 3.2 that liabilities during timed sessions or track days are excluded, matching the circumstances described in the incident.\"}"
+    },
+    "5402730870d9dc7118554b04bf7b1b7981bad6bd97e8252260207dad1f782b0c": {
+      "finish_reason": "stop",
+      "input_tokens": 524,
+      "latency_ms": 742,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 35,
+      "text": "{\"grounded\":true,\"reason\":\"The source describes the situation as a gradual leak from a dripping pipe, explicitly covered under the exclusion in clause 3.4.\"}"
+    },
+    "583ce301edbedf63c54be06dfc0b60c758b471e504afc4c6ed705db19ef32f34": {
+      "finish_reason": "stop",
+      "input_tokens": 582,
+      "latency_ms": 800,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 40,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description states a sudden burst of a pipe and water causing damage. No exclusion clause directly applies based on the provided information.\"}"
+    },
+    "6b53cf3934d668f0e1ee0486b4eae609145233caa8be29d68e256f49a22d2bc7": {
+      "finish_reason": "stop",
+      "input_tokens": 509,
+      "latency_ms": 1004,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 53,
+      "text": "{\"verdict\":\"applies\",\"clause\":\"3.2\",\"rationale\":\"The description states that the incident occurred during a timed session on a track day, which falls explicitly under the exclusion in clause 3.2 for liability arising in these contexts.\"}"
+    },
+    "6d70f8606879900e2137f871aba2efdb2fc088135e005f22bb7e01d56ef8dfee": {
+      "finish_reason": "stop",
+      "input_tokens": 509,
+      "latency_ms": 2038,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 62,
+      "text": "{\"verdict\":\"applies\",\"clause\":\"3.1\",\"rationale\":\"The description indicates that the roof tiles were old and rotten prior to the storm and had not been maintained. According to clause 3.1, damage resulting from lack of maintenance or affecting parts already worn out is excluded.\"}"
+    },
+    "6f8a2da9d756d0357f7c7dbb53076cfa3d762b9282ba8e85a148485f28bfece1": {
+      "finish_reason": "stop",
+      "input_tokens": 447,
+      "latency_ms": 895,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 50,
+      "text": "{\"grounded\":true,\"reason\":\"The statement aligns with the source's clause 3.1, which excludes damage due to wear, tear, or lack of maintenance, as the roof tiles are described as old and rotten before the storm.\"}"
+    },
+    "86652e4e27ee1fe483aadfe1f95923b077a48591a7960de93cc72db54bc7479c": {
+      "finish_reason": "stop",
+      "input_tokens": 662,
+      "latency_ms": 788,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 38,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description indicates a collision caused by a reversing van, and there are no listed exclusions that align with this scenario.\"}"
+    },
+    "9b4adf4a5cfdf08173affa5c5afa45f19a3c9ec9fcdc798646aa75748c9a4ab7": {
+      "finish_reason": "stop",
+      "input_tokens": 659,
+      "latency_ms": 817,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 46,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description does not mention facts that trigger any exclusions in the listed clauses, such as participation in a prohibited event, intoxication, or unlicensed driving.\"}"
+    },
+    "a84bcf7ca283ddcda4a2e5757436b34760704d1287ec788f7e644c280c172eb0": {
+      "finish_reason": "stop",
+      "input_tokens": 489,
+      "latency_ms": 817,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 36,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description does not mention any involvement in racing, rallies, or similar activities excluded by the specified clause.\"}"
+    },
+    "abe9cc992fa4fb61e8a18a5c76d2da40f4a350c0db7a72d17ecefa699a8c73c1": {
+      "finish_reason": "stop",
+      "input_tokens": 664,
+      "latency_ms": 779,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 42,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description does not indicate any of the exclusions apply, as there is no mention of racing, intoxication, or unlicensed driving.\"}"
+    },
+    "b765b19e6329c94992ad42cd96cba46f025f4894f82d315e4f5510e7ead007a1": {
+      "finish_reason": "stop",
+      "input_tokens": 489,
+      "latency_ms": 942,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 46,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description does not indicate any participation in a race or similar activity as per clause 3.2. The incident appears to involve a regular driving situation.\"}"
+    },
+    "d09ec3618db0673db462bc9d9fe60c899e375d9291391151c3f321636796a94e": {
+      "finish_reason": "stop",
+      "input_tokens": 679,
+      "latency_ms": 889,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 50,
+      "text": "{\"verdict\":\"applies\",\"clause\":\"3.2\",\"rationale\":\"The claimant described consuming alcohol before driving the vehicle, which aligns with the exclusion for losses occurring under the influence of alcohol as outlined in clause 3.2.\"}"
+    },
+    "d1ffb5831ac332948ff66b3d8480c475b0c3c1191c427f284947c248e1dcc3fd": {
+      "finish_reason": "stop",
+      "input_tokens": 406,
+      "latency_ms": 742,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 37,
+      "text": "{\"grounded\":true,\"reason\":\"The description does not mention activities like racing or rallying that would invoke Clause 3.2, so the statement aligns with the source.\"}"
+    },
+    "d74d9dd2ca03044924aec847c6a1103b091d9953f289151653a78bc4ab19d653": {
+      "finish_reason": "stop",
+      "input_tokens": 506,
+      "latency_ms": 795,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 50,
+      "text": "{\"verdict\":\"unsure\",\"clause\":null,\"rationale\":\"The description does not specify whether pre-existing wear and tear contributed to the damage. It's unclear if the exclusion clause applies without further information on the prior condition of the property.\"}"
+    },
+    "dfa6402bd8a449b48fcbb79346cc42acbfdae087ce2120a202d9b9c25c5289c3": {
+      "finish_reason": "stop",
+      "input_tokens": 405,
+      "latency_ms": 677,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 39,
+      "text": "{\"grounded\":true,\"reason\":\"The source does not indicate any involvement in a race, rally, or related activities as mentioned in clause 3.2, thus supporting the statement.\"}"
+    },
+    "e017cddb473110d25e6e0c6d0517a14052ae01b399e9a234e12143f89b22e629": {
+      "finish_reason": "stop",
+      "input_tokens": 596,
+      "latency_ms": 1548,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 45,
+      "text": "{\"grounded\":true,\"reason\":\"The source includes a clause (3.3) excluding coverage for collisions when the vehicle is driven by someone without a valid driving licence, which aligns with the description of the incident.\"}"
+    },
+    "eceaef02b7f6a694433ced4d6cfd43a55c04891adb52e6998498ed1a1dd7e0bb": {
+      "finish_reason": "stop",
+      "input_tokens": 602,
+      "latency_ms": 783,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 35,
+      "text": "{\"grounded\":true,\"reason\":\"The claimant admits to consuming alcohol before driving, which aligns with the exclusion specified in clause 3.2 of the provided terms.\"}"
+    },
+    "f5dc8c67aae823950f907cb1120a97be5622cd788dd263d6a02af3036d87ee82": {
+      "finish_reason": "stop",
+      "input_tokens": 490,
+      "latency_ms": 848,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 44,
+      "text": "{\"verdict\":\"none\",\"clause\":null,\"rationale\":\"The description lacks any indication that the incident was related to a race or similar activity specified in clause 3.2, so no exclusion applies.\"}"
+    },
+    "f840e274106ad272e7bcb774107ba032a57f6184b80f30db1c0e7caa73a9ec7d": {
+      "finish_reason": "stop",
+      "input_tokens": 574,
+      "latency_ms": 818,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 45,
+      "text": "{\"grounded\":true,\"reason\":\"The statement correctly identifies that the exclusions listed are not applicable based on the source description, as there is no mention of racing, intoxication, or unlicensed driving in the source.\"}"
+    },
+    "f89d99ee00660151bc0e22dbc7be3209fdc8f11b21ec3c26b9992897177fd139": {
+      "finish_reason": "stop",
+      "input_tokens": 511,
+      "latency_ms": 916,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 41,
+      "text": "{\"grounded\":true,\"reason\":\"The source describes a sudden burst of a pipe and immediate water damage, which does not fall under gradual leaks or wear and tear exclusions as detailed in the clauses.\"}"
+    },
+    "f9a810cd12dde5163262153cbe64e81db60623e0f0e80b8feed3f5e964791335": {
+      "finish_reason": "stop",
+      "input_tokens": 493,
+      "latency_ms": 747,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 30,
+      "text": "{\"grounded\":true,\"reason\":\"The description specifies a sudden burst of a pipe, and neither clause excludes such an event from coverage clearly.\"}"
+    },
+    "fdc3e235232ee2e90826b68e654b42743b95b9a0380ab0de1bf427d171eb4fb7": {
+      "finish_reason": "stop",
+      "input_tokens": 575,
+      "latency_ms": 687,
+      "model": "gpt-4o-2024-11-20",
+      "output_tokens": 37,
+      "text": "{\"grounded\":true,\"reason\":\"The source text does not mention racing, intoxication, or unlicensed driving as factors in the described incident, thus no exclusion described applies.\"}"
+    }
+  },
+  "format": 1,
+  "recorded_for": {
+    "claims-triage": "cc8e3c33cbde8e76040e80e51f64420aed4b8fc9fb05bf493fbd2a9d78ff3925",
+    "evaluation-judge": "0d63ecf609890bf5003b858b092d0e83b181209f4b667eaef5f9d277026bed03"
+  }
+}

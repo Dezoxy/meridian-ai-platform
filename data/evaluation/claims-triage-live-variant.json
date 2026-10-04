@@ -1,0 +1,3174 @@
+{
+  "absolute": [
+    "completed",
+    "human_oversight"
+  ],
+  "answered_by": {
+    "kind": "live",
+    "label": "real"
+  },
+  "cases": [
+    {
+      "case": "CLM-0001",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2212,
+        "input_tokens": 559,
+        "latency_ms": 2029,
+        "model_calls": 1,
+        "output_tokens": 76
+      },
+      "observed": {
+        "assessment": "applies",
+        "groundedness": "grounded",
+        "judge_reason": "The description provided specifies factors related to wear and tear, which aligns with the conditions in clause 3.1.",
+        "payable_amount": null,
+        "rationale": "The description specifies that 'The roof tiles were old and rotten before the storm and had not been repaired for years,' which aligns with the exclusion in clause 3.1 for damage resulting from 'gradual deterioration, rot, corrosion, age or lack of maintenance.'",
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0049"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0049"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Storm"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for storm."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0001",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0002",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 15,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "policy_inactive",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0036"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0036"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0002",
+            "reason": "policy_inactive"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0003",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2150,
+        "input_tokens": 634,
+        "latency_ms": 991,
+        "model_calls": 1,
+        "output_tokens": 52
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The source details a sudden burst pipe and states that exclusions relate only to gradual issues, which are not present in the statement.",
+        "payable_amount": null,
+        "rationale": "The description states that a pipe 'burst' suddenly under the sink on 26 July 2026, which does not indicate gradual leaks or wear and tear as described in the clauses.",
+        "reason": "missing_documents",
+        "recommendation": null,
+        "route": "request_documents"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0034"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0034"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Burst pipe"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for burst pipe."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0004",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 2820,
+        "rationale": null,
+        "reason": "over_threshold",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0007"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0007"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Flood"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for flood."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0004",
+            "reason": "over_threshold"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0005",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 920,
+        "rationale": null,
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0038"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0038"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Glass"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for glass."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0006",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 32,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 4760,
+        "rationale": null,
+        "reason": "over_threshold",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0004"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0004"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Fire"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for fire."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0006",
+            "reason": "over_threshold"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0007",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2084,
+        "input_tokens": 547,
+        "latency_ms": 1156,
+        "model_calls": 1,
+        "output_tokens": 69
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The incident described pertains to normal road usage and does not involve activities excluded in clause 3.2.",
+        "payable_amount": 2501,
+        "rationale": "The description \"I drove into the back of another car while driving my Škoda Octavia\" describes an incident that seems to involve typical road usage and does not mention any activities listed in clause 3.2, such as a race, rally, or similar.",
+        "reason": "over_threshold",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0010"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0010"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Third-party liability"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "This exclusion applies to claims for third-party liability."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0007",
+            "reason": "over_threshold"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0008",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2438,
+        "input_tokens": 714,
+        "latency_ms": 1424,
+        "model_calls": 1,
+        "output_tokens": 59
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The source description does not mention any of the exclusion conditions such as racing, intoxication, or unlicensed driving.",
+        "payable_amount": 17500,
+        "rationale": "The description states \"a van reversed into my Opel Astra while I was waiting at a junction,\" without mentioning involvement in racing, substance influence, or unlicensed driving. None of the exclusion clauses apply based on this description.",
+        "reason": "over_threshold",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0045"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0045"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Collision"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for collision."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0008",
+            "reason": "over_threshold"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0009",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2358,
+        "input_tokens": 716,
+        "latency_ms": 912,
+        "model_calls": 1,
+        "output_tokens": 51
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The statement correctly interprets that the exclusions in the provided clauses do not apply to the described accident scenario.",
+        "payable_amount": null,
+        "rationale": "The description states, \"a van reversed into my Dacia Duster while I was waiting at a junction,\" which does not indicate facts that meet the exclusions detailed in the clauses.",
+        "reason": "missing_documents",
+        "recommendation": null,
+        "route": "request_documents"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0018"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0018"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Collision"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for collision."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0010",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 1650,
+        "rationale": null,
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0048"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0048"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Storm"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for storm."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0011",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 1828,
+        "input_tokens": 547,
+        "latency_ms": 970,
+        "model_calls": 1,
+        "output_tokens": 45
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The source specifies the exclusion criteria regarding races and similar activities, which are not mentioned in the described incident.",
+        "payable_amount": 460,
+        "rationale": "The description makes no mention of the insured vehicle participating in or being prepared for a race, rally, or similar activity, which would trigger the exclusion.",
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0016"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0016"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Third-party liability"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "This exclusion applies to claims for third-party liability."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0012",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": false,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 41,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "unavailable",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 2470,
+        "rationale": null,
+        "reason": "fraud_indicator",
+        "recommendation": null,
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0008"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0008"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Third-party liability"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "This exclusion applies to claims for third-party liability."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0012",
+            "reason": "fraud_indicator"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0013",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 3250,
+        "rationale": null,
+        "reason": "fraud_indicator",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0031"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0031"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Theft"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for theft."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0013",
+            "reason": "fraud_indicator"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0014",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 15,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "policy_inactive",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0017"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0017"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0014",
+            "reason": "policy_inactive"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0015",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2238,
+        "input_tokens": 711,
+        "latency_ms": 824,
+        "model_calls": 1,
+        "output_tokens": 41
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The description and the clauses provided confirm that none of the exclusions (racing, DUI, unlicensed driver) apply to this specific situation.",
+        "payable_amount": 2500,
+        "rationale": "The description states the car was hit in a car park and does not indicate any activities that match the exclusions described in the clauses.",
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0037"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0037"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Collision"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for collision."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0016",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 34,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 1830,
+        "rationale": null,
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0027"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0027"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Burglary"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for burglary."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0017",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 15,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "policy_inactive",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0050"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0050"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0017",
+            "reason": "policy_inactive"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0018",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 15,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "policy_inactive",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0009"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0009"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0018",
+            "reason": "policy_inactive"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0019",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 1230,
+        "rationale": null,
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0021"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0021"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Flood"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for flood."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0020",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 35,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0035"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0035"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Collision"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "This exclusion applies to claims for collision."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0020",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0021",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 39,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 710,
+        "rationale": null,
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0005"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0005"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Accidental damage"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for accidental damage."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0022",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0040"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0040"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Flood"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for flood."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0022",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0023",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2252,
+        "input_tokens": 636,
+        "latency_ms": 1031,
+        "model_calls": 1,
+        "output_tokens": 61
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The source description indicates a sudden pipe burst on a specific date, which aligns with the scenario not excluded by the provided clauses 3.3 and 3.4.",
+        "payable_amount": 1280,
+        "rationale": "The description indicates \"a pipe burst\" on a specific date, suggesting a sudden escape of water, and does not contain words indicating wear, age, or gradual damage. Hence, no exclusion clause applies based on the provided description.",
+        "reason": "within_threshold",
+        "recommendation": "approve",
+        "route": "auto_approve"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0003"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0003"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Burst pipe"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for burst pipe."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0024",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 11200,
+        "rationale": null,
+        "reason": "over_threshold",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0024"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0024"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Theft"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for theft."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0024",
+            "reason": "over_threshold"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0025",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 34,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 6950,
+        "rationale": null,
+        "reason": "over_threshold",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0014"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0014"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Burglary"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for burglary."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0025",
+            "reason": "over_threshold"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0026",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2670,
+        "input_tokens": 725,
+        "latency_ms": 1124,
+        "model_calls": 1,
+        "output_tokens": 78
+      },
+      "observed": {
+        "assessment": "applies",
+        "groundedness": "grounded",
+        "judge_reason": "The statement accurately interprets the source. Clause 3.3 explicitly excludes coverage if someone without a valid license drives the vehicle with the policyholder's awareness, which corresponds to the described incident.",
+        "payable_amount": null,
+        "rationale": "The description states, \"A friend without a driving licence was at the wheel, because I had let him borrow the car.\" Clause 3.3 excludes losses occurring while the vehicle is driven by a person without a valid licence, received with the policyholder's knowledge, thus applying to this case.",
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0025"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0025"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Collision"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for collision."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0026",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0027",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "missing_documents",
+        "recommendation": null,
+        "route": "request_documents"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0028"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0028"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Flood"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for flood."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0028",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 34,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 3180,
+        "rationale": null,
+        "reason": "fraud_indicator",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0046"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0046"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Burglary"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for burglary."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0028",
+            "reason": "fraud_indicator"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0029",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 1850,
+        "rationale": null,
+        "reason": "fraud_indicator",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0002"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0002"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Glass"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for glass."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0029",
+            "reason": "fraud_indicator"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0030",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 34,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "missing_documents",
+        "recommendation": null,
+        "route": "request_documents"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0001"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0001"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Burglary"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for burglary."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0031",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2449,
+        "input_tokens": 654,
+        "latency_ms": 1255,
+        "model_calls": 1,
+        "output_tokens": 75
+      },
+      "observed": {
+        "assessment": "applies",
+        "groundedness": "grounded",
+        "judge_reason": "The statement accurately refers to clause 3.4 in the source, which excludes coverage for damage from slow or repeated water escape over time, as described in the source details.",
+        "payable_amount": null,
+        "rationale": "The description mentions 'a pipe that was dripping' and 'The leak had been going on for months before I noticed it,' which aligns with the exclusion clause 3.4 that denies coverage for 'damage caused by water that escapes slowly or again and again over a period of time.'",
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0039"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0039"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Burst pipe"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for burst pipe."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0031",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0032",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 33,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "missing_documents",
+        "recommendation": null,
+        "route": "request_documents"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0042"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0042"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Theft"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for theft."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0033",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 39,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0011"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0011"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Accidental damage"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for accidental damage."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0033",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0034",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": false,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2129,
+        "input_tokens": 556,
+        "latency_ms": 1061,
+        "model_calls": 1,
+        "output_tokens": 69
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "ungrounded",
+        "judge_reason": "The source does not explicitly confirm that the damage was not influenced by prior wear or pre-existing conditions unrelated to the storm.",
+        "payable_amount": 2700,
+        "rationale": "The description attributes the damage directly to a severe storm on 6 May 2026, without indicating that the damage was due to wear, tear, or pre-existing deterioration, which makes it unrelated to clause 3.3 on wear and tear.",
+        "reason": "fraud_indicator",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0023"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0023"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Storm"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "This exclusion applies to claims for storm."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0034",
+            "reason": "fraud_indicator"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0035",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 1980,
+        "input_tokens": 548,
+        "latency_ms": 948,
+        "model_calls": 1,
+        "output_tokens": 59
+      },
+      "observed": {
+        "assessment": "none_applies",
+        "groundedness": "grounded",
+        "judge_reason": "The source does not indicate that the event described involved racing or other activities mentioned in clause 3.2.",
+        "payable_amount": null,
+        "rationale": "The description, \"I drove into the back of another car while driving my Dacia Duster,\" does not indicate participation in any of the activities excluded under clause 3.2, such as a race or rally.",
+        "reason": "missing_documents",
+        "recommendation": null,
+        "route": "request_documents"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0026"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0026"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Third-party liability"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "This exclusion applies to claims for third-party liability."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0036",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 15,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "policy_inactive",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0022"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0022"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-STD",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0036",
+            "reason": "policy_inactive"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0037",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2062,
+        "input_tokens": 567,
+        "latency_ms": 1008,
+        "model_calls": 1,
+        "output_tokens": 62
+      },
+      "observed": {
+        "assessment": "applies",
+        "groundedness": "grounded",
+        "judge_reason": "The source clearly outlines the exclusion clause 3.2, which states liability is not covered during a track day or timed session, aligning with the provided description.",
+        "payable_amount": null,
+        "rationale": "The description states \"It happened during a track day, in a timed session for amateur drivers,\" which explicitly matches the exclusion clause for liability arising during \"a race, rally, speed test, timed session or track day.\"",
+        "reason": "excluded",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0019"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0019"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Third-party liability"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "This exclusion applies to claims for third-party liability."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-TPL",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0037",
+            "reason": "excluded"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0038",
+      "grades": {
+        "citations": false,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": false,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": false,
+        "reason": false,
+        "recommendation": false,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 2355,
+        "input_tokens": 731,
+        "latency_ms": 968,
+        "model_calls": 1,
+        "output_tokens": 47
+      },
+      "observed": {
+        "assessment": "unavailable",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 1820,
+        "rationale": null,
+        "reason": "unverified",
+        "recommendation": null,
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0006"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0006"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Collision"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "This exclusion applies to claims for collision."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0038",
+            "reason": "unverified"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0039",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 15,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": null,
+        "rationale": null,
+        "reason": "policy_inactive",
+        "recommendation": "reject",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0030"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0030"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "MOTOR-COMP",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0039",
+            "reason": "policy_inactive"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    },
+    {
+      "case": "CLM-0040",
+      "grades": {
+        "citations": true,
+        "completed": true,
+        "cost": true,
+        "exclusion_clause": true,
+        "fraud_indicators": true,
+        "groundedness": true,
+        "human_oversight": true,
+        "latency": true,
+        "missing_documents": true,
+        "payable_amount": true,
+        "reason": true,
+        "recommendation": true,
+        "route": true
+      },
+      "measured": {
+        "cost_micro_eur": 0,
+        "input_tokens": 32,
+        "latency_ms": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      },
+      "observed": {
+        "assessment": "not_needed",
+        "groundedness": "no-rationale",
+        "judge_reason": null,
+        "payable_amount": 790,
+        "rationale": null,
+        "reason": "fraud_indicator",
+        "recommendation": "approve",
+        "route": "adjuster"
+      },
+      "tools": [
+        {
+          "arguments": {
+            "policy_number": "POL-0020"
+          },
+          "tool": "policy_lookup"
+        },
+        {
+          "arguments": {
+            "policy_number": "POL-0020"
+          },
+          "tool": "claim_history"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Fire"
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "This exclusion applies to claims for fire."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Deductible. Limit."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "product": "HOME-PLUS",
+            "query": "Reporting a claim. Period of cover. Lapse for non-payment."
+          },
+          "tool": "wording_search"
+        },
+        {
+          "arguments": {
+            "claim_id": "CLM-0040",
+            "reason": "fraud_indicator"
+          },
+          "tool": "request_approval"
+        }
+      ]
+    }
+  ],
+  "fingerprints": {
+    "golden_set": {
+      "files": {
+        "claim-history.json": "54d23a46515f7b4c572e02f451330ee0291769d6cd92262497e4c71f07859d0a",
+        "claims.json": "984dfc56d6f395a9151e77fa9882fb3bccf908db6305b2f37ce11ebdec746057",
+        "expected-outcomes.json": "0a7db913ccebd81d7b00b54fe5749b144e1078de3afc52101e7dde275537aeaa",
+        "policies.json": "1f35a6eb7437f139aca70db1f243fcf8f67b2d10ca050f8f2818ff9d73726b9b",
+        "wordings/HOME-PLUS.md": "10457dfe550c4b3f6943f4f9a60f3359b6a1eb76ebd8c91f2cd3d46a975dd9e0",
+        "wordings/HOME-STD.md": "c9e6cb34702902cde640a7f028fb3db273169a197ccab309702350e062e4941a",
+        "wordings/MOTOR-COMP.md": "d5fb9223d41ce5b4a5f1e79fbf293a330c548e5daa60cc415de12e1af32abda7",
+        "wordings/MOTOR-TPL.md": "df33b667c14078a2bc37500c20a9778a787c03818ea3dab781ff06cca7444109"
+      },
+      "generator_version": "1",
+      "manifest": "ec3f1aeec62bc4eacdc2decffb41de0b3a09a5f84265eddae59c6f23cd008544",
+      "seed": 20260929
+    },
+    "judge": "0d63ecf609890bf5003b858b092d0e83b181209f4b667eaef5f9d277026bed03",
+    "prompt": "586d7c78dba6f6f2ba18721458ec9d96cddb14edb5235f43f3c3857e16000754",
+    "recording": null,
+    "tools": "c5ab14cc7351b9a6d8486f90c80edd43b5185cfc8ee6f2fcb0a36ce5773076d2"
+  },
+  "format": 2,
+  "targets": {
+    "route": 0.9
+  },
+  "workload": "claims-triage"
+}
