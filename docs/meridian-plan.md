@@ -294,7 +294,7 @@ that day; the rest stand as their step recorded them.
 | The server span's `http.url` keeps a query string | S049 | closed by S053 | none |
 | A documents failure whose cause races with another move | S049 | done in S052 (`stored`) | S052 |
 | Two resume-race tests in `test_runtime_app.py` rest on a 0.3 s sleep for their overlap | S054 | open | none |
-| One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | open | none |
+| One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | seen again twice on 2026-10-04 with ten workers and 7,600 tests (105 and 42 tests lost); the server's log shows no crash and no refused connection, so the connections are dropped before PostgreSQL (Docker Desktop's port forwarding); two runs with four workers were clean and CI was green throughout; the Makefile's default is now 4 | none |
 | `unused_port()` in `toolsupport.py` closes its socket before the test uses the port | S054 | open | none |
 | Wall-clock limits in four tests (0.5 s to 5 s, thirty times their measured time or more) | S054 | open | none |
 | `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | open | none |

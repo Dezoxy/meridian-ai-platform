@@ -26,7 +26,7 @@ jobs:
   python:
     name: python
     runs-on: ubuntu-24.04
-    # The tests run in parallel (make pytest, -n auto): the job took 4 min 50 s
+    # The tests run in parallel (make pytest, four workers): the job took 4 min 50 s
     # on S054's pull request, against 8 to 9 minutes in one process. 15 is a
     # wide margin, kept until more parallel runs are measured.
     timeout-minutes: 15
