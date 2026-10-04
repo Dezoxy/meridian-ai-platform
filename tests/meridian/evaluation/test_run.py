@@ -4,7 +4,8 @@ The HTTP client is an ``httpx.Client`` over a ``MockTransport``; the workload
 is a stand-in that satisfies ``WorkloadEvaluation``.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+import json
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,7 @@ from meridian.platform.evaluation.report import Report
 from meridian.platform.evaluation.run import (
     ALREADY_THERE,
     CREATED,
+    MAX_ANSWER_BYTES,
     RunOutcome,
     run_cases,
 )
@@ -28,6 +30,7 @@ HOSTILE_BODY = "a-body-that-must-never-be-printed"
 
 class FakeEvaluation:
     workload = "demo"
+    case_field = "case"
 
     def __init__(self, cases: Sequence[str] = CASES) -> None:
         self.cases = tuple(cases)
@@ -305,7 +308,7 @@ def test_the_post_body_is_the_submission_and_the_codes_are_named() -> None:
         if request.method == "POST":
             seen.append(request.read())
             return httpx.Response(201)
-        return httpx.Response(200, json={})
+        return httpx.Response(200, json={"case": "c-1"})
 
     client = httpx.Client(
         base_url="http://stack.test", transport=httpx.MockTransport(respond)
@@ -317,6 +320,198 @@ def test_the_post_body_is_the_submission_and_the_codes_are_named() -> None:
 
     assert seen == [b'{"id":"c-1"}']
     assert (CREATED, ALREADY_THERE) == (201, 409)
+
+
+# ── the answer is for the case it was fetched for, and is bounded (T-78) ───
+def one_case_client(
+    answer: Callable[[], httpx.Response],
+) -> tuple[httpx.Client, list[str]]:
+    """A stack that takes the post and answers the read with ``answer()``."""
+    seen: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(201)
+        return answer()
+
+    client = httpx.Client(
+        base_url="http://stack.test", transport=httpx.MockTransport(respond)
+    )
+    return client, seen
+
+
+def run_one(answer: Callable[[], httpx.Response]) -> RunOutcome:
+    client, _ = one_case_client(answer)
+    return run_cases(
+        client, FakeEvaluation(("c-1",)), GOLDEN, limit=None, pace=0, sleep=Sleeps()
+    )
+
+
+def test_an_answer_for_another_case_is_refused_and_the_run_goes_on() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201)
+        case = request.url.path.split("/")[2]
+        return httpx.Response(200, json={"case": "c-9" if case == "c-2" else case})
+
+    client = httpx.Client(
+        base_url="http://stack.test", transport=httpx.MockTransport(respond)
+    )
+
+    outcome = run_cases(
+        client, FakeEvaluation(), GOLDEN, limit=None, pace=0, sleep=Sleeps()
+    )
+
+    assert outcome.ran == CASES
+    assert outcome.failed == ("c-2",)
+    assert outcome.reasons == {"c-2": "the answer is for another case"}
+    assert set(outcome.answers) == {"c-1", "c-3", "c-4"}
+    assert "c-9" not in repr(outcome)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        pytest.param({}, id="no-field"),
+        pytest.param({"case": None}, id="a-null"),
+        pytest.param({"case": 1}, id="a-number"),
+        pytest.param({"case": ["c-1"]}, id="a-list"),
+        pytest.param({"case": "C-1"}, id="another-case"),
+        pytest.param({"case": "c-1 "}, id="the-case-and-a-space"),
+        pytest.param({"case": "c-1\n"}, id="the-case-and-a-newline"),
+        pytest.param(["c-1"], id="a-list-answer"),
+        pytest.param("c-1", id="a-string-answer"),
+        pytest.param(None, id="a-null-answer"),
+        pytest.param({"CASE": "c-1"}, id="the-field-in-capitals"),
+    ],
+)
+def test_an_answer_that_does_not_name_its_case_is_refused(document: object) -> None:
+    outcome = run_one(lambda: httpx.Response(200, content=json.dumps(document)))
+
+    assert outcome.failed == ("c-1",)
+    assert outcome.reasons == {"c-1": "the answer is for another case"}
+    assert outcome.answers == {}
+
+
+def test_an_answer_that_names_its_case_is_read_whatever_else_it_holds() -> None:
+    document = {"case": "c-1", "proposal": {"route": "adjuster"}, "n": [1, 2]}
+
+    outcome = run_one(lambda: httpx.Response(200, json=document))
+
+    assert outcome.failed == ()
+    assert outcome.answers == {"c-1": document}
+
+
+def body_of(size: int) -> bytes:
+    """A JSON answer for c-1 of exactly ``size`` bytes."""
+    head, tail = b'{"case":"c-1","pad":"', b'"}'
+    return head + b"x" * (size - len(head) - len(tail)) + tail
+
+
+def test_an_answer_of_exactly_the_limit_is_read() -> None:
+    body = body_of(MAX_ANSWER_BYTES)
+    assert len(body) == MAX_ANSWER_BYTES == 1024 * 1024
+
+    outcome = run_one(lambda: httpx.Response(200, content=body))
+
+    assert outcome.failed == ()
+    assert set(outcome.answers) == {"c-1"}
+
+
+def test_an_answer_one_byte_over_the_limit_is_refused() -> None:
+    body = body_of(MAX_ANSWER_BYTES + 1)
+
+    outcome = run_one(lambda: httpx.Response(200, content=body))
+
+    assert outcome.failed == ("c-1",)
+    assert outcome.reasons == {"c-1": "the answer is too large"}
+    assert outcome.answers == {}
+
+
+def test_a_body_is_read_no_further_than_the_limit() -> None:
+    chunk = b"x" * 65536
+    pulled: list[int] = []
+
+    def endless() -> Iterator[bytes]:
+        while True:
+            pulled.append(1)
+            yield chunk
+
+    outcome = run_one(lambda: httpx.Response(200, content=endless()))
+
+    assert outcome.reasons == {"c-1": "the answer is too large"}
+    # The limit is 16 chunks; one more proves it is over. No more is pulled.
+    assert len(pulled) == MAX_ANSWER_BYTES // len(chunk) + 1
+
+
+def test_the_body_of_a_post_is_never_read() -> None:
+    pulled: list[int] = []
+
+    def watched() -> Iterator[bytes]:
+        pulled.append(1)
+        yield b"a body nobody asked for"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(500, content=watched())
+        return httpx.Response(200, json={"case": "c-1"})
+
+    client = httpx.Client(
+        base_url="http://stack.test", transport=httpx.MockTransport(respond)
+    )
+
+    outcome = run_cases(
+        client, FakeEvaluation(("c-1",)), GOLDEN, limit=None, pace=0, sleep=Sleeps()
+    )
+
+    assert outcome.reasons == {"c-1": "status 500"}
+    assert pulled == []
+
+
+def test_the_body_of_an_answer_that_is_not_200_is_never_read() -> None:
+    pulled: list[int] = []
+
+    def watched() -> Iterator[bytes]:
+        pulled.append(1)
+        yield b"a body nobody asked for"
+
+    outcome = run_one(lambda: httpx.Response(404, content=watched()))
+
+    assert outcome.reasons == {"c-1": "status 404"}
+    assert pulled == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[" * 200_000, id="nested-too-deeply"),
+        pytest.param(b'{"a":' * 50_000 + b"1" + b"}" * 50_000, id="objects-too-deep"),
+        pytest.param(b'{"case":"c-1","case":"c-1"}', id="a-duplicate-key"),
+        pytest.param(b'{"case":"c-1","x":"\xff"}', id="not-utf-8"),
+        pytest.param(b"", id="empty"),
+        pytest.param(b'{"case":"c-1"', id="truncated"),
+    ],
+)
+def test_an_answer_that_cannot_be_read_is_not_json_and_the_run_survives(
+    body: bytes,
+) -> None:
+    outcome = run_one(lambda: httpx.Response(200, content=body))
+
+    assert outcome.failed == ("c-1",)
+    assert outcome.reasons == {"c-1": "the answer is not JSON"}
+    assert outcome.answers == {}
+
+
+def test_a_transport_error_while_the_body_is_read_is_a_failure_of_the_case() -> None:
+    def broken() -> Iterator[bytes]:
+        yield b'{"case":'
+        raise httpx.ReadError("connection reset http://secret.example")
+
+    outcome = run_one(lambda: httpx.Response(200, content=broken()))
+
+    assert outcome.reasons == {"c-1": "no answer from the stack"}
+    assert "secret" not in repr(outcome)
 
 
 def test_an_outcome_is_immutable() -> None:

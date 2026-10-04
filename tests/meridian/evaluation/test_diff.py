@@ -123,10 +123,10 @@ def test_two_small_reports_render_byte_for_byte() -> None:
         "| case | what | A | B |\n"
         "| --- | --- | --- | --- |\n"
         "| c-1 | grade beta | passed | failed |\n"
-        "| c-1 | observed alpha | x | y |\n"
-        "| c-2 | observed alpha | x | y |\n"
+        "| c-1 | observed alpha | `x` | `y` |\n"
+        "| c-2 | observed alpha | `x` | `y` |\n"
         "| c-3 | grade beta | failed | passed |\n"
-        "| c-3 | observed alpha | x | y |\n"
+        "| c-3 | observed alpha | `x` | `y` |\n"
         "\n"
         "## Cost and latency\n"
         "\n"
@@ -187,7 +187,7 @@ def test_a_value_absent_on_one_side_is_shown_as_absent_and_null_as_none() -> Non
     rows = lines(make_report(first), make_report(second))
 
     assert "| c-1 | observed k | none | absent |" in rows
-    assert "| c-1 | observed z | absent | 5 |" in rows
+    assert "| c-1 | observed z | absent | `5` |" in rows
 
 
 @pytest.mark.parametrize(
@@ -211,12 +211,71 @@ def test_an_observed_value_is_printed_harmless_inside_a_table_cell(
 
     text = render_markdown(diff_reports(make_report(first), make_report(second)))
 
-    assert f"| c-1 | observed k | {shown} | plain |" in text.splitlines()
+    assert f"| c-1 | observed k | `{shown}` | `plain` |" in text.splitlines()
     for line in text.splitlines():
         assert line == "" or line.startswith(("#", "|", "No "))
         assert "::" not in line
     assert "\x1b" not in text
     assert "\r" not in text
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("[click](https://evil.example/x)", id="a-link"),
+        pytest.param("![pixel](https://evil.example/p.png)", id="an-image"),
+        pytest.param("**bold** and _italic_ and ~~strike~~", id="emphasis"),
+        pytest.param("# a heading", id="a-heading"),
+        pytest.param("https://evil.example/autolink", id="an-autolink"),
+    ],
+)
+def test_an_observed_value_that_is_markdown_is_printed_inside_a_code_span(
+    value: str,
+) -> None:
+    first = [{"case": "c-1", "grades": {"a": True}, "observed": {"k": value}}]
+    second = [{"case": "c-1", "grades": {"a": True}, "observed": {"k": "plain"}}]
+
+    rows = lines(make_report(first), make_report(second))
+
+    # The text, but for the colon (the sanitiser's), is the whole cell between
+    # backticks, and it holds none of its own, so the span cannot end early.
+    shown = value.replace(":", "?")
+    assert f"| c-1 | observed k | `{shown}` | `plain` |" in rows
+    assert "`" not in shown
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        pytest.param("", "empty", id="empty"),
+        pytest.param("   ", "blank", id="spaces-only"),
+        pytest.param("\n\t", "`??`", id="control-characters-only"),
+        pytest.param(" x ", "` x `", id="spaces-kept-around-text"),
+        pytest.param(7, "`7`", id="an-integer"),
+        pytest.param(0, "`0`", id="zero"),
+        pytest.param("absent", "absent", id="the-word-absent"),
+    ],
+)
+def test_an_empty_or_blank_observed_value_stays_readable(
+    value: str | int, shown: str
+) -> None:
+    first = [{"case": "c-1", "grades": {"a": True}, "observed": {"k": value}}]
+    second = [{"case": "c-1", "grades": {"a": True}, "observed": {"k": "plain"}}]
+
+    rows = lines(make_report(first), make_report(second))
+
+    assert f"| c-1 | observed k | {shown} | `plain` |" in rows
+    assert "| `` |" not in " ".join(rows)
+
+
+def test_a_grade_and_the_differs_own_words_are_not_in_a_code_span() -> None:
+    first = [{"case": "c-1", "grades": {"a": True}, "observed": {"k": None}}]
+    second = [{"case": "c-1", "grades": {"a": False}, "observed": {}}]
+
+    rows = lines(make_report(first), make_report(second))
+
+    assert "| c-1 | grade a | passed | failed |" in rows
+    assert "| c-1 | observed k | none | absent |" in rows
 
 
 def test_a_hostile_value_in_b_is_just_as_harmless() -> None:
@@ -225,7 +284,7 @@ def test_a_hostile_value_in_b_is_just_as_harmless() -> None:
 
     rows = lines(make_report(first), make_report(second))
 
-    assert "| c-1 | observed k | plain | ???error??x |" in rows
+    assert "| c-1 | observed k | `plain` | `???error??x` |" in rows
     assert not any(row.startswith("::") for row in rows)
     assert not any("::" in row for row in rows)
 

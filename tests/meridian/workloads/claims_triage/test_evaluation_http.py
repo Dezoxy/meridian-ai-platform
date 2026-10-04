@@ -3,12 +3,16 @@ submits, where it reads the answers, how it grades them and who answered; the
 platform's loader that finds it; and one run over the real services in process.
 """
 
+import hashlib
 import json
+import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from dbsupport import DatabaseHandle
 from servicesupport import REGISTRY_DIR, owner_rows
@@ -34,7 +38,12 @@ from meridian.platform.evaluation.workload import (
 )
 from meridian.platform.registry import load_registry
 from meridian.workloads.claims_triage.evaluation import RULE_GRADERS
-from meridian.workloads.claims_triage.evaluation_http import EVALUATION
+from meridian.workloads.claims_triage.evaluation_http import (
+    CLAIM_ID,
+    EVALUATION,
+    NOT_A_CLAIM_ID,
+)
+from meridian.workloads.claims_triage.models import ClaimFacts
 
 CLAIMS = json.loads((SYNTHETIC_DIR / "claims.json").read_text(encoding="utf-8"))
 REGISTRY = load_registry(REGISTRY_DIR)
@@ -78,6 +87,126 @@ def test_it_submits_every_golden_claim_in_claim_id_order_to_claims() -> None:
 
 def test_the_answer_of_a_case_is_read_under_the_adjusters_path() -> None:
     assert EVALUATION.answer_path("CLM-0007") == "/adjuster/claims/CLM-0007/proposal"
+
+
+def test_an_answer_names_its_case_in_the_claim_id_field() -> None:
+    assert EVALUATION.case_field == "claim_id"
+
+
+# ── a claim ID goes into a path, a log line and a CI annotation (T-78) ──────
+CRAFTED_IDS = [
+    pytest.param("CLM-0001/../../claimant/claims/CLM-0001", id="a-path-climb"),
+    pytest.param("CLM-0001?x=1", id="a-query"),
+    pytest.param("CLM-0001#frag", id="a-fragment"),
+    pytest.param("CLM-0001\n::error::x", id="a-workflow-command"),
+    pytest.param("CLM-0001\n", id="a-trailing-newline"),
+    pytest.param("CLM-0001 ", id="a-trailing-space"),
+    pytest.param("clm-0001", id="lower-case"),
+    pytest.param("CLM-00001", id="five-digits"),
+    pytest.param("CLM-001", id="three-digits"),
+    pytest.param("CLM-١٢٣٤", id="arabic-indic-digits"),
+    pytest.param("", id="empty"),
+]
+
+
+def claims_file(directory: Path, *claim_ids: str) -> None:
+    records = [{"claim_id": claim_id} for claim_id in claim_ids]
+    (directory / "claims.json").write_text(json.dumps(records), encoding="utf-8")
+
+
+def test_the_claim_id_shape_is_the_one_the_claim_model_takes() -> None:
+    # evaluation_http repeats the pattern of ClaimFacts.claim_id.
+    patterns = [
+        part.pattern
+        for part in ClaimFacts.model_fields["claim_id"].metadata
+        if hasattr(part, "pattern")
+    ]
+
+    assert patterns == [f"^{CLAIM_ID.pattern}$"]
+
+
+@pytest.mark.parametrize("claim_id", ["CLM-0000", "CLM-0001", "CLM-9999"])
+def test_a_claim_id_of_the_shape_is_accepted(tmp_path: Path, claim_id: str) -> None:
+    claims_file(tmp_path, claim_id)
+
+    (submission,) = EVALUATION.submissions(tmp_path)
+
+    assert submission.case == claim_id
+    assert EVALUATION.answer_path(claim_id) == f"/adjuster/claims/{claim_id}/proposal"
+
+
+def test_every_claim_id_of_the_golden_set_has_the_shape() -> None:
+    assert all(CLAIM_ID.fullmatch(c["claim_id"]) for c in CLAIMS)
+
+
+@pytest.mark.parametrize("claim_id", CRAFTED_IDS)
+def test_a_claim_with_an_id_of_another_shape_is_refused_without_quoting_it(
+    tmp_path: Path, claim_id: str
+) -> None:
+    claims_file(tmp_path, "CLM-0001", claim_id)
+
+    with pytest.raises(ReportError) as refused:
+        EVALUATION.submissions(tmp_path)
+
+    # The message is one fixed sentence: it can quote nothing of the ID.
+    assert str(refused.value) == NOT_A_CLAIM_ID
+
+
+@pytest.mark.parametrize("claim_id", CRAFTED_IDS)
+def test_the_path_of_an_answer_is_never_built_from_an_id_of_another_shape(
+    claim_id: str,
+) -> None:
+    with pytest.raises(ReportError) as refused:
+        EVALUATION.answer_path(claim_id)
+
+    assert str(refused.value) == NOT_A_CLAIM_ID
+
+
+@pytest.mark.parametrize("claim_id", CRAFTED_IDS)
+def test_the_command_sends_nothing_and_prints_nothing_of_a_crafted_claim_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, claim_id: str
+) -> None:
+    claims_file(tmp_path, "CLM-0001", claim_id)
+    manifest = {
+        "generator_version": "1",
+        "seed": 7,
+        "files": {"claims.json": sha256_of(tmp_path / "claims.json")},
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    requests: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(f"{request.method} {request.url}")
+        return httpx.Response(201)
+
+    monkeypatch.setattr(
+        cli,
+        "new_http_client",
+        lambda base_url: httpx.Client(
+            base_url=base_url, transport=httpx.MockTransport(respond)
+        ),
+    )
+    monkeypatch.setattr(cli, "load_evaluation", lambda name: EVALUATION)
+
+    result = runner.invoke(
+        app,
+        [
+            "eval", "run", "--base-url", "http://stack.test",
+            "--report", str(tmp_path / "report.json"),
+            "--golden-set", str(tmp_path), "--registry", str(REGISTRY_DIR),
+            "--pace", "0",
+        ],
+    )  # fmt: skip
+
+    assert result.exit_code == 2, result.output
+    assert requests == []
+    assert result.stdout == ""
+    assert result.stderr == f"ERROR the golden set: {NOT_A_CLAIM_ID}\n"
+    assert not (tmp_path / "report.json").exists()
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_a_golden_set_that_cannot_be_read_is_a_report_error(tmp_path: Path) -> None:
@@ -305,6 +434,130 @@ def test_a_plugin_from_a_file_outside_the_package_is_refused(
         load_evaluation("claims-triage")
 
 
+class Loads:
+    """An entry point's ``load`` that says whether it was called."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> object:
+        self.calls += 1
+        return EVALUATION
+
+
+def test_a_plugin_from_a_file_outside_the_package_is_refused_before_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    loads = Loads()
+    publish(monkeypatch, entry(loads=loads))
+    monkeypatch.setattr(workload, "TRUSTED_ROOT", tmp_path)
+
+    with pytest.raises(ReportError) as refused:
+        load_evaluation("claims-triage")
+
+    assert str(refused.value) == workload.UNTRUSTED
+    assert loads.calls == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # find_spec finds no module of this name.
+        "meridian.workloads.no_such_module:EVALUATION",
+        # ... and cannot even import the parent of this one.
+        "meridian.workloads.no_such_package.module:EVALUATION",
+        # A name that is not a module name at all.
+        "meridian.workloads..module:EVALUATION",
+    ],
+)
+def test_a_plugin_whose_module_cannot_be_located_is_refused_before_it_runs(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    loads = Loads()
+    publish(monkeypatch, entry(value=value, loads=loads))
+
+    with pytest.raises(ReportError):
+        load_evaluation("claims-triage")
+
+    assert loads.calls == 0
+
+
+def test_a_plugin_whose_module_has_no_file_is_refused_before_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A namespace package (a directory with no __init__.py) has no origin file.
+    package = tmp_path / "namespace_plugin"
+    package.mkdir()
+    monkeypatch.syspath_prepend(str(tmp_path))
+    loads = Loads()
+    publish(monkeypatch, entry(value="namespace_plugin:EVALUATION", loads=loads))
+    monkeypatch.setattr(workload, "TRUSTED_VALUE_PREFIX", "namespace_plugin")
+
+    with pytest.raises(ReportError) as refused:
+        load_evaluation("claims-triage")
+
+    assert str(refused.value) == workload.UNTRUSTED
+    assert loads.calls == 0
+
+
+def test_a_plugin_inside_the_package_loads_after_the_location_is_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loads = Loads()
+    publish(monkeypatch, entry(loads=loads))
+
+    assert load_evaluation("claims-triage") is EVALUATION
+    assert loads.calls == 1
+
+
+def test_the_location_is_checked_again_after_the_plugin_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The first check reads the module's spec; the second reads what loaded. A
+    # module that is somewhere else once loaded is refused.
+    publish(monkeypatch, entry())
+    checked: list[str] = []
+
+    def moved(candidate: object) -> bool:
+        checked.append("after-load")
+        return False
+
+    monkeypatch.setattr(workload, "_in_trusted_root", moved)
+
+    with pytest.raises(ReportError) as refused:
+        load_evaluation("claims-triage")
+
+    assert str(refused.value) == workload.UNTRUSTED
+    assert checked == ["after-load"]
+
+
+def test_loading_the_claims_evaluation_brings_in_no_agent_framework() -> None:
+    # The plugin seam runs workload and runtime code inside the platform's CLI
+    # process. That is its purpose; the agent framework must not ride along.
+    code = (
+        "import sys\n"
+        "from meridian.platform.evaluation.workload import load_evaluation\n"
+        "load_evaluation('claims-triage')\n"
+        "framework = sorted(\n"
+        "    name for name in sys.modules\n"
+        "    if name in ('langgraph', 'langgraph_sdk', 'langchain')\n"
+        "    or name.startswith(('langgraph.', 'langchain'))\n"
+        ")\n"
+        "print('framework:' + ','.join(framework))\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "framework:", completed.stdout
+
+
 def test_an_untrusted_name_beside_the_trusted_one_is_not_listed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,6 +575,7 @@ class FirstThree:
     """The claims plugin, restricted to the first three golden claims."""
 
     workload = EVALUATION.workload
+    case_field = EVALUATION.case_field
     answer_path = staticmethod(EVALUATION.answer_path)
     report = staticmethod(EVALUATION.report)
 

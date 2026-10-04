@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -65,6 +66,16 @@ ANSWER_SCHEMA: dict[str, Any] = {
 }
 # One Markdown code fence around the whole answer, with or without ``json``.
 FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.DOTALL)
+# One of the judge's own answer fields, then any quote, backslash or white
+# space, then a colon: ``"grounded":``, ``'reason' :``, ``reason:``. Built from
+# ANSWER_FIELDS, so a new field is screened too. Linear: one character class
+# between the word and the colon, and each run of it is read once.
+_CURLY_QUOTES = "".join(chr(code) for code in (0x201C, 0x201D, 0x2018, 0x2019))
+_ANSWER_FIELD_LABEL = re.compile(
+    r"\b(?:" + "|".join(sorted(ANSWER_FIELDS)) + r")\b"
+    rf"[\"'`{_CURLY_QUOTES}\\\s]*:"
+)
+_FORMAT_CATEGORY = "Cf"
 
 SYSTEM_MESSAGE = (
     "You check one thing: whether a statement is supported by a source. You do "
@@ -145,6 +156,19 @@ def _prompt_version() -> str:
 
 # Computed once at import: the inputs are module constants and a function.
 JUDGE_PROMPT_VERSION = _prompt_version()
+
+
+def addresses_the_judge(statement: str) -> bool:
+    """Whether ``statement`` carries one of the judge's own answer fields
+    (``grounded`` or ``reason``, then a colon), in any quoting or case. The
+    platform's screen knows the triage's answer fields, not these. The text is
+    normalised as that screen does: NFKC, format characters dropped, casefolded,
+    so a fullwidth letter or a zero-width space inside a word hides nothing."""
+    composed = unicodedata.normalize("NFKC", statement)
+    visible = "".join(
+        c for c in composed if unicodedata.category(c) != _FORMAT_CATEGORY
+    )
+    return _ANSWER_FIELD_LABEL.search(visible.casefold()) is not None
 
 
 def _finished(judgement: Judgement) -> Judgement:
@@ -240,7 +264,7 @@ def judge(
     A gateway that does not answer 200, or a transport error, is ``unanswered``;
     an answer that is not the format is ``unreadable``. Never raises for either:
     the caller records the grade false."""
-    if addresses_the_model(statement):
+    if addresses_the_model(statement) or addresses_the_judge(statement):
         return _finished(Judgement("flagged"))
     messages = build_messages(source, statement)
     if len(messages[1]["content"]) > MAX_USER_MESSAGE_CHARS:

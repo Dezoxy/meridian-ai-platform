@@ -166,3 +166,15 @@ ignore_imports = [
     "meridian.platform.gateway.providers.azure_openai -> openai",
     "meridian.platform.gateway.providers.azure_openai -> azure",
 ]
+
+[[tool.importlinter.contracts]]
+name = "the gateway imports neither the evaluation package nor the CLI"
+type = "forbidden"
+# A deployed service must not depend on the package that loads workloads and
+# holds a client of the gateway (S050, T-76). What both need, the JSON file
+# reader, lives in meridian.platform.common.jsonfile. Indirect imports count.
+source_modules = ["meridian.platform.gateway"]
+forbidden_modules = [
+    "meridian.platform.evaluation",
+    "meridian.platform.cli",
+]

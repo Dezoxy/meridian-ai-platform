@@ -1,7 +1,8 @@
 """``meridian eval compare`` through Typer's test runner."""
 
+import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,7 @@ from meridian.platform.cli.evaluation import (
     EXIT_PASSED,
     EXIT_UNREADABLE,
 )
+from meridian.platform.evaluation import compare as compare_module
 from meridian.platform.evaluation.report import (
     Report,
     ReportError,
@@ -315,7 +317,8 @@ def test_diff_does_not_echo_a_hostile_observed_value_as_a_line(tmp_path: Path) -
     assert result.exit_code == 0, result.output
     assert "::" not in result.stdout
     assert (
-        "| c-1 | observed alpha | ???error??x | absent |" in result.stdout.splitlines()
+        "| c-1 | observed alpha | `???error??x` | absent |"
+        in result.stdout.splitlines()
     )
 
 
@@ -339,6 +342,7 @@ class FakeWorkload:
     """A stand-in plugin: three cases, graded as ``grades`` says."""
 
     workload = "demo"
+    case_field = "id"
 
     def __init__(
         self,
@@ -382,15 +386,27 @@ class Stack:
         if request.method == "POST":
             case = json.loads(request.content)["id"]
             return httpx.Response(self.post.get(case, 201), json={"d": HOSTILE_BODY})
-        case = request.url.path.split("/")[2]
+        case = request.url.path.split("/")[-2]  # a base URL may have a path
         status = self.get.get(case, 200)
-        return httpx.Response(status, json={"d": HOSTILE_BODY})
+        return httpx.Response(status, json={"id": case, "d": HOSTILE_BODY})
+
+
+def plant_golden_set(directory: Path, claims: str = "[]") -> None:
+    """A golden set the command accepts: one file and the manifest that lists it."""
+    (directory / "claims.json").write_text(claims, encoding="utf-8")
+    manifest = {
+        "generator_version": "1",
+        "seed": 7,
+        "files": {"claims.json": hashlib.sha256(claims.encode("utf-8")).hexdigest()},
+    }
+    (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 @pytest.fixture
-def run_env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+def run_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
     """The command with its workload and its HTTP client replaced; ``sleeps``
-    is what it waited."""
+    is what it waited. ``tmp_path`` holds a golden set the command accepts."""
+    plant_golden_set(tmp_path)
     env = SimpleNamespace(
         workload=FakeWorkload(), stack=Stack(), sleeps=[], clients=[], loaded=[]
     )
@@ -585,6 +601,92 @@ def test_run_where_a_grader_that_is_not_absolute_fails_still_exits_0(
     assert "beta: 2/3" in result.stdout.splitlines()
 
 
+def test_run_where_a_target_is_missed_exits_1_and_says_what_compare_says(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    # beta's target is 0.5: one of three passing is below it. alpha, which is
+    # absolute and passes everywhere, says nothing.
+    run_env.workload.grades = {
+        "c-2": {"alpha": True, "beta": False},
+        "c-3": {"alpha": True, "beta": False},
+    }
+
+    result = run_eval(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert "beta: 1/3" in result.stdout.splitlines()
+    assert result.stderr == "ERROR beta: 1/3 passed, below the target 0.50\n"
+    assert result.stdout.splitlines()[-1] == "eval run: failed"
+    # The report is written: a failed run leaves one to read.
+    assert [c.case for c in load_report(tmp_path / "report.json").cases] == [
+        "c-1",
+        "c-2",
+        "c-3",
+    ]
+
+
+def test_run_where_the_cases_that_ran_meet_the_target_exactly_exits_0(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    # Two cases ran, one of them passes beta: 1/2 is the target, not below it.
+    run_env.workload.grades = {"c-2": {"alpha": True, "beta": False}}
+
+    result = run_eval(tmp_path, "--limit", "2")
+
+    assert result.exit_code == 0, result.output
+    assert "beta: 1/2" in result.stdout.splitlines()
+    assert result.stderr == ""
+
+
+def test_run_applies_the_target_to_the_cases_that_ran_not_to_the_golden_set(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    # c-1 fails beta and is the only case that ran: 0/1 is below 0.5, though the
+    # other two cases of the golden set were never posted.
+    run_env.workload.grades = {"c-1": {"alpha": True, "beta": False}}
+
+    result = run_eval(tmp_path, "--limit", "1")
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == "ERROR beta: 0/1 passed, below the target 0.50\n"
+
+
+def test_run_names_an_absolute_failure_and_a_missed_target_together(
+    run_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    run_env.workload.grades = {
+        "c-1": {"alpha": False, "beta": False},
+        "c-2": {"alpha": True, "beta": False},
+    }
+
+    result = run_eval(tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr.splitlines() == [
+        "ERROR absolute grader alpha failed on 1 of 3 cases",
+        "ERROR beta: 1/3 passed, below the target 0.50",
+    ]
+
+
+@pytest.mark.parametrize("target", [0.5, 0.75, 0.9, 1.0, 0.123456, 0.3333333])
+def test_the_sentence_for_a_missed_target_is_the_one_compare_prints(
+    target: float,
+) -> None:
+    report = make_report(
+        {"c-1": OK_GRADES, "c-2": {"alpha": True, "beta": False}},
+        targets={"beta": target},
+    )
+    expected = [
+        problem
+        for problem in compare_module._rule_problems(report)
+        if problem.startswith("beta:")
+    ]
+
+    assert cli._missed_targets(report) == expected
+    # One of two cases passes beta: the rate is 0.5.
+    assert len(expected) == (0 if target <= 0.5 else 1)
+
+
 def test_run_with_proposals_that_disagree_on_who_answered_exits_1(
     run_env: SimpleNamespace, tmp_path: Path
 ) -> None:
@@ -608,6 +710,56 @@ def test_run_with_a_golden_set_that_cannot_be_read_exits_2_before_any_request(
     assert result.stderr == "ERROR the golden set: file not found\n"
     assert run_env.stack.requests == []
     assert run_env.clients == []
+
+
+def damage_the_manifest(directory: Path) -> None:
+    (directory / "manifest.json").unlink()
+
+
+def damage_a_file(directory: Path) -> None:
+    (directory / "claims.json").write_text('[{"claim_id": "CLM-9999"}]', "utf-8")
+
+
+def add_an_unlisted_file(directory: Path) -> None:
+    (directory / "extra.json").write_text("[]", encoding="utf-8")
+
+
+def break_the_manifest(directory: Path) -> None:
+    (directory / "manifest.json").write_text("{not json", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("damage", "message"),
+    [
+        pytest.param(damage_the_manifest, "file not found", id="no-manifest"),
+        pytest.param(
+            damage_a_file,
+            "the golden set's files differ from its manifest: claims.json",
+            id="a-file-that-is-not-the-listed-one",
+        ),
+        pytest.param(
+            add_an_unlisted_file,
+            "the golden set holds a file its manifest does not list: extra.json",
+            id="a-file-the-manifest-leaves-out",
+        ),
+        pytest.param(break_the_manifest, "the file is not valid JSON", id="bad-json"),
+    ],
+)
+def test_run_with_a_golden_set_that_is_not_its_manifest_exits_2_before_any_request(
+    run_env: SimpleNamespace,
+    tmp_path: Path,
+    damage: Callable[[Path], None],
+    message: str,
+) -> None:
+    damage(tmp_path)
+
+    result = run_eval(tmp_path)
+
+    assert result.exit_code == 2, result.output
+    assert result.stderr == f"ERROR the golden set: {message}\n"
+    assert run_env.stack.requests == []
+    assert run_env.clients == []
+    assert not (tmp_path / "report.json").exists()
 
 
 def test_run_with_a_registry_that_cannot_be_read_exits_2_before_any_request(

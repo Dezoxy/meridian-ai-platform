@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from meridian.platform.common import jsonfile
 from meridian.platform.evaluation import report as report_module
 from meridian.platform.evaluation.report import (
     REPORT_FORMAT,
@@ -571,7 +572,7 @@ def test_load_report_names_a_missing_file(tmp_path: Path) -> None:
 def test_load_report_refuses_a_file_over_the_limit_before_parsing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(report_module, "MAX_REPORT_BYTES", 100)
+    monkeypatch.setattr(jsonfile, "MAX_JSON_FILE_BYTES", 100)
     path = write_data(tmp_path / "report.json", report_data())
     assert path.stat().st_size > 100
 
@@ -584,13 +585,19 @@ def test_load_report_accepts_a_file_at_the_limit(
 ) -> None:
     path = tmp_path / "report.json"
     write_report(Report.model_validate(report_data()), path)
-    monkeypatch.setattr(report_module, "MAX_REPORT_BYTES", path.stat().st_size)
+    monkeypatch.setattr(jsonfile, "MAX_JSON_FILE_BYTES", path.stat().st_size)
 
     assert load_report(path).workload == "demo-workload"
 
 
 def test_the_limit_is_five_mebibytes() -> None:
     assert report_module.MAX_REPORT_BYTES == 5 * 1024 * 1024
+    assert jsonfile.MAX_JSON_FILE_BYTES == report_module.MAX_REPORT_BYTES
+
+
+def test_the_names_that_moved_are_the_ones_common_defines() -> None:
+    assert report_module.HexDigest is jsonfile.HexDigest
+    assert report_module.describe_validation_error is jsonfile.describe_validation_error
 
 
 def test_load_report_refuses_invalid_json(tmp_path: Path) -> None:
@@ -897,7 +904,7 @@ def test_the_limit_holds_without_trusting_the_reported_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = write_data(tmp_path / "report.json", report_data())
-    monkeypatch.setattr(report_module, "MAX_REPORT_BYTES", 100)
+    monkeypatch.setattr(jsonfile, "MAX_JSON_FILE_BYTES", 100)
 
     def stat_claiming_an_empty_regular_file(self: Path, **_: Any) -> os.stat_result:
         return os.stat_result((0o100644,) + (0,) * 9)

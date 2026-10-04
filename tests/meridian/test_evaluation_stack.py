@@ -445,6 +445,51 @@ def test_the_committed_recording_holds_only_answers() -> None:
         assert pattern.search(text) is None, f"the recording holds {what}"
 
 
+BASELINE_COMMAND = "run make eval-baseline"
+
+
+@pytest.mark.parametrize(
+    ("path", "command"),
+    [
+        pytest.param(BASELINE_PATH, BASELINE_COMMAND, id="baseline"),
+        pytest.param(LIVE_REPORT_PATH, RECORD_COMMAND, id="live-report"),
+        pytest.param(VARIANT_REPORT_PATH, RECORD_COMMAND, id="variant-report"),
+        pytest.param(COMPARISON_PATH, RECORD_COMMAND, id="prompt-comparison"),
+    ],
+)
+def test_a_committed_report_and_the_comparison_hold_nothing_of_the_service(
+    path: Path, command: str
+) -> None:
+    """The reports hold tool arguments and the comparison holds observed values:
+    the same text a recording may not hold is kept out of them too (T-76)."""
+    if not path.is_file():
+        pytest.fail(f"no {path.name}: {command}")
+    text = path.read_text(encoding="utf-8")
+
+    assert text, path.name
+    for what, pattern in FORBIDDEN.items():
+        assert pattern.search(text) is None, f"{path.name} holds {what}"
+
+
+def test_the_forbidden_patterns_find_what_they_name() -> None:
+    # A pattern that cannot match proves nothing: each one finds its own sample.
+    samples = {
+        "an Azure OpenAI host": "https://x.OpenAI.Azure.com/openai",
+        "an account name": "OAI-MERIDIAN-dev",
+        "an email address": "a.b+c@example.org",
+        "a GUID": "12345678-1234-1234-1234-1234567890AB",
+        "a bearer token": "Authorization: Bearer abc",
+        "an api-key": "API-Key: abc",
+        "an x-ms- header": "X-MS-request-id",
+        "an apim- header": "Apim-Request-Id",
+        "a subscription": "the Subscription id",
+    }
+
+    assert set(samples) == set(FORBIDDEN)
+    for what, sample in samples.items():
+        assert FORBIDDEN[what].search(sample) is not None, what
+
+
 # ── 4. the prompt comparison is the diff of the two live reports ────────────
 def check_comparison(live_path: Path, variant_path: Path, comparison: Path) -> None:
     """The comparison file is the diff of the two live reports, which differ in

@@ -28,12 +28,15 @@ from meridian.platform.gateway import app as gateway_app
 from meridian.platform.gateway.app import NOT_RECORDED, create_app
 from meridian.platform.gateway.budget import cost_micro_eur
 from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest, Message
+from meridian.platform.gateway.providers import azure_openai
 from meridian.platform.gateway.providers.base import (
     EmbeddingReply,
     ProviderError,
     ProviderReply,
 )
 from meridian.platform.gateway.providers.recorded import (
+    MODEL_NAME_PATTERN,
+    ModelName,
     RecordedAnswer,
     RecordedProvider,
     Recording,
@@ -186,6 +189,60 @@ def test_an_answer_refuses_an_extra_field_and_a_count_that_is_not_a_whole_number
 ) -> None:
     with pytest.raises(ValidationError):
         answer(**overrides)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-4o", "gpt-4o-2024-11-20", "a.b_c:d-e", "x", "m" * 128, "0"],
+)
+def test_a_model_name_the_azure_adapter_takes_is_taken(model: str) -> None:
+    assert answer(model=model).model == model
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "",
+        "m" * 129,
+        "gpt 4o",
+        "gpt-4o\n",
+        "gpt-4o\nX-Injected: 1",
+        "gpt/4o",
+        "gpt-4o\x00",
+        "gpt-4ö",
+        'gpt"4o',
+        "gpt-4o;DROP",
+        7,
+        None,
+    ],
+)
+def test_a_model_name_the_azure_adapter_would_refuse_is_refused(model: object) -> None:
+    with pytest.raises(ValidationError):
+        answer(model=model)
+
+
+def test_a_recording_with_a_model_name_that_is_refused_does_not_load(
+    tmp_path: Path,
+) -> None:
+    entry = answer().model_dump(mode="json") | {"model": "gpt 4o " + CANARY}
+    path = write_document(tmp_path / "r.json", document(entries={HEX_A: entry}))
+
+    with pytest.raises(RecordingError) as raised:
+        load_recording(path)
+
+    # The key of an entry is the file's own text, so only a short one is shown.
+    assert str(raised.value) == "entries.?.model: string_pattern_mismatch"
+    assert CANARY not in str(raised.value)
+
+
+def test_the_model_name_is_the_one_the_azure_adapter_takes() -> None:
+    # recorded.py repeats the pattern because the adapter imports the SDK.
+    adapter = azure_openai.MODEL_NAME.pattern
+    assert adapter == MODEL_NAME_PATTERN
+    patterns = [
+        part.pattern for part in ModelName.__metadata__ if hasattr(part, "pattern")
+    ]
+    assert patterns == [f"^{adapter}$"]
 
 
 def test_a_valid_recording_loads(tmp_path: Path) -> None:
@@ -887,3 +944,44 @@ def test_a_live_gateway_refuses_a_chat_route_candidate_of_provider_kind_recorded
 
     with pytest.raises(SettingsError, match="the chat route has a recorded candidate"):
         create_app(settings, providers={"azure-openai": Silent(), "recorded": Silent()})
+
+
+# ── the recorder stays out of the service (T-76) ────────────────────────────
+SOURCE_ROOT = Path(__file__).resolve().parents[3] / "src" / "meridian"
+RECORDER_HOME = SOURCE_ROOT / "platform" / "gateway" / "providers" / "recorded.py"
+RECORDER_NAMES = ("RecordingProvider", "write_recording")
+
+
+def modules_mentioning(root: Path, names: tuple[str, ...], *, apart: Path) -> list[str]:
+    """The source files under ``root``, but ``apart``, whose text holds a name."""
+    return sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if path != apart
+        and any(name in path.read_text(encoding="utf-8") for name in names)
+    )
+
+
+def test_no_module_of_the_service_mentions_the_recorder() -> None:
+    # Only the evaluation's test harness may build the recorder: a service that
+    # could would write a recording of live traffic.
+    app = SOURCE_ROOT / "platform" / "gateway" / "app.py"
+    assert app.is_file()
+    assert RECORDER_HOME.is_file()
+
+    mentions = modules_mentioning(SOURCE_ROOT, RECORDER_NAMES, apart=RECORDER_HOME)
+
+    assert mentions == []
+
+
+def test_the_recorder_scan_finds_a_mention_in_any_module(tmp_path: Path) -> None:
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "clean.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "pkg" / "app.py").write_text(
+        "from m import RecordingProvider\n", encoding="utf-8"
+    )
+    (tmp_path / "home.py").write_text("def write_recording(): ...\n", encoding="utf-8")
+
+    found = modules_mentioning(tmp_path, RECORDER_NAMES, apart=tmp_path / "home.py")
+
+    assert found == ["pkg/app.py"]

@@ -31,13 +31,13 @@ from pydantic import (
     ValidationError,
 )
 
-from meridian.platform.common.wire import WireModel
-from meridian.platform.evaluation.report import (
+from meridian.platform.common.jsonfile import (
     HexDigest,
-    ReportError,
+    JsonFileError,
     describe_validation_error,
     read_json_file,
 )
+from meridian.platform.common.wire import WireModel
 from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
 from meridian.platform.gateway.providers.base import (
     EmbeddingReply,
@@ -49,14 +49,19 @@ from meridian.platform.registry.models import Deployment
 
 RECORDING_FORMAT = 1
 MILLISECONDS_PER_SECOND = 1000
+# What the Azure adapter's MODEL_NAME takes, repeated because the adapter
+# imports the SDK and this module must not (a test keeps the two equal). The
+# replayed model reaches a span attribute and a column with a length check.
+MODEL_NAME_PATTERN = r"[A-Za-z0-9._:-]{1,128}"
 
 Count = Annotated[StrictInt, Field(ge=0)]
+ModelName = Annotated[StrictStr, StringConstraints(pattern=f"^{MODEL_NAME_PATTERN}$")]
 RecordingLabel = Annotated[
     str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$", max_length=64)
 ]
 
 
-class RecordingError(ValueError):
+class RecordingError(JsonFileError):
     """A recording cannot be read; the message never quotes its content."""
 
 
@@ -78,7 +83,7 @@ class RecordedAnswer(WireModel):
 
     text: StrictStr
     finish_reason: Literal["stop", "length"]
-    model: StrictStr
+    model: ModelName
     input_tokens: Count
     output_tokens: Count
     latency_ms: Count
@@ -128,7 +133,7 @@ def load_recording(path: Path) -> Recording:
     with a message that names no content of the file."""
     try:
         document = read_json_file(path)
-    except ReportError as error:
+    except JsonFileError as error:
         raise RecordingError(str(error)) from None
     try:
         return Recording.model_validate(document)

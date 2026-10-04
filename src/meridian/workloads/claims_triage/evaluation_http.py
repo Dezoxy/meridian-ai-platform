@@ -11,6 +11,7 @@ claim data), so the report holds the ten grades and nothing else.
 Published in the entry-point group ``meridian.evaluations`` (pyproject.toml).
 """
 
+import re
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,12 @@ ANSWERED_BY_MODE = {
 }
 # No claim asked the model, so nothing says who would have answered.
 NO_MODEL_ASKED = ANSWERED_BY_MODE["replay"]
+# The shape of a claim ID, repeated from ClaimFacts.claim_id (models.py): a test
+# keeps the two equal. fullmatch, not match: "$" would accept a trailing newline.
+CLAIM_ID = re.compile(r"CLM-[0-9]{4}")
+# Fixed, and it quotes nothing: the ID is the file's own text and goes into a
+# path, a log line and a CI annotation.
+NOT_A_CLAIM_ID = "a claim in the golden set has an ID that is not a claim ID"
 NOT_A_LIST = "a golden set file is not a list of records"
 FILES_DISAGREE = "the golden set's files do not agree"
 UNKNOWN_CASE = "an answer is for a claim the golden set does not hold"
@@ -111,14 +118,21 @@ class ClaimsEvaluation:
     """Satisfies ``WorkloadEvaluation``."""
 
     workload = WORKLOAD
+    # The field of the adjuster's answer that names its claim.
+    case_field = "claim_id"
 
     def submissions(self, golden_set: Path) -> Sequence[Submission]:
         claims = _records(golden_set, CLAIMS_FILE, "claim_id")
+        if not all(CLAIM_ID.fullmatch(case) for case in claims):
+            raise ReportError(NOT_A_CLAIM_ID)
         return tuple(
             Submission(case, CLAIMS_PATH, claims[case]) for case in sorted(claims)
         )
 
     def answer_path(self, case: str) -> str:
+        # The ID goes into a path: only the shape of a claim ID may.
+        if CLAIM_ID.fullmatch(case) is None:
+            raise ReportError(NOT_A_CLAIM_ID)
         return ANSWER_PATH.format(claim_id=case)
 
     def report(

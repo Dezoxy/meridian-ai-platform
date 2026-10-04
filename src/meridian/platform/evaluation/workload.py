@@ -10,9 +10,16 @@ The loader accepts only what this distribution published, only when exactly one
 entry point carries the name, only when the entry point's value names a module
 under ``meridian.workloads`` and only when that module's file lies in the
 installed ``meridian`` package: a second installed package cannot substitute an
-evaluation, and so cannot choose what the command posts and where.
+evaluation, and so cannot choose what the command posts and where. The location
+is read from the module's spec before the entry point runs any of its code, and
+again from the module once it has loaded.
+
+Loading the claims evaluation runs workload and runtime code inside the
+platform's command: that is the seam's purpose. The agent framework must not
+ride along; a test starts a fresh interpreter and looks (T-78).
 """
 
+import importlib.util
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -52,9 +59,12 @@ class Submission:
 @runtime_checkable
 class WorkloadEvaluation(Protocol):
     """A workload's side of ``meridian eval run``. ``answers`` are the JSON
-    bodies read from ``answer_path``, one per case that ran."""
+    bodies read from ``answer_path``, one per case that ran. ``case_field`` is
+    the field of an answer that names its case: the run refuses an answer whose
+    field is not the case it was fetched for."""
 
     workload: str
+    case_field: str
 
     def submissions(self, golden_set: Path) -> Sequence[Submission]: ...
 
@@ -74,10 +84,28 @@ def _from_trusted_distribution(entry: EntryPoint) -> bool:
     return dist is not None and _normalised(dist) == TRUSTED_DISTRIBUTION
 
 
-def _in_trusted_root(entry: EntryPoint) -> bool:
-    module = sys.modules.get(entry.module)
-    file = getattr(module, "__file__", None)
+def _inside_trusted_root(file: str | None) -> bool:
     return file is not None and Path(file).resolve().is_relative_to(TRUSTED_ROOT)
+
+
+def _in_trusted_root(entry: EntryPoint) -> bool:
+    """Whether the module that loaded is a file in the installed package."""
+    module = sys.modules.get(entry.module)
+    return _inside_trusted_root(getattr(module, "__file__", None))
+
+
+def _located_in_trusted_root(entry: EntryPoint) -> bool | None:
+    """Whether the module's spec puts it in the installed package, read before
+    the module runs; ``None`` when the spec cannot be read. ``find_spec`` imports
+    the module's parent packages (under ``meridian.workloads``, by the prefix
+    check), not the module itself."""
+    try:
+        spec = importlib.util.find_spec(entry.module)
+    except Exception:
+        return None
+    if spec is None or not spec.has_location:
+        return False
+    return _inside_trusted_root(spec.origin)
 
 
 def _known_workloads() -> str:
@@ -99,6 +127,11 @@ def load_evaluation(workload: str) -> WorkloadEvaluation:
     if not _from_trusted_distribution(entry):
         raise ReportError(UNTRUSTED)
     if not entry.value.startswith(TRUSTED_VALUE_PREFIX):
+        raise ReportError(UNTRUSTED)
+    located = _located_in_trusted_root(entry)
+    if located is None:
+        raise ReportError(UNLOADABLE)
+    if not located:
         raise ReportError(UNTRUSTED)
     try:
         evaluation = entry.load()

@@ -11,6 +11,7 @@ import typer
 
 from meridian.platform.evaluation.compare import compare
 from meridian.platform.evaluation.diff import diff_reports, render_markdown
+from meridian.platform.evaluation.fingerprints import golden_set_of
 from meridian.platform.evaluation.report import (
     Report,
     ReportError,
@@ -33,6 +34,8 @@ EXIT_UNREADABLE = 2
 DEFAULT_WORKLOAD = "claims-triage"
 DEFAULT_GOLDEN_SET = Path("data/synthetic")
 DEFAULT_REGISTRY_DIR = Path("config/registry")
+# The file that lists a golden set's files and their hashes.
+MANIFEST_FILE = "manifest.json"
 # A triage runs inside the POST, behind a model call.
 REQUEST_TIMEOUT_SECONDS = 120.0
 # The tenant's window is ten seconds (T-78): one case at a time, paced.
@@ -159,7 +162,10 @@ def _prepare(
     workload: str, golden_set: Path, registry_dir: Path
 ) -> tuple[WorkloadEvaluation, Registry, int]:
     """The workload's evaluation, the registry and the number of cases in the
-    golden set, or exit 2: nothing is sent before all three can be read."""
+    golden set, or exit 2: nothing is sent before all three can be read. The
+    golden set is checked against its manifest first (every file's hash, and no
+    file the manifest leaves out), so only the golden set's own claims are ever
+    posted (T-78)."""
     try:
         evaluation = load_evaluation(workload)
     except ReportError as exc:
@@ -171,6 +177,7 @@ def _prepare(
             typer.echo(f"ERROR the registry: {message}", err=True)
         raise typer.Exit(code=EXIT_UNREADABLE) from None
     try:
+        golden_set_of(golden_set / MANIFEST_FILE)
         total = len(evaluation.submissions(golden_set))
     except ReportError as exc:
         _stop(EXIT_UNREADABLE, f"the golden set: {exc}")
@@ -196,9 +203,29 @@ def _echo_report(report: Report, total: int) -> None:
         typer.echo(PARTIAL_RUN)
 
 
+def _target_text(target: float) -> str:
+    """A target as ``compare`` prints it (a test keeps the two sentences equal)."""
+    return f"{target:.2f}" if round(target, 2) == target else f"{target:g}"
+
+
+def _missed_targets(report: Report) -> list[str]:
+    """The report's targets over the cases that ran, as ``compare`` applies them
+    to a new report: a grader whose pass rate is below its target."""
+    total = len(report.cases)
+    missed = []
+    for grader, target in sorted(report.targets.items()):
+        passed = sum(case.grades[grader] for case in report.cases)
+        if passed / total < target:
+            missed.append(
+                f"{grader}: {passed}/{total} passed, below the target "
+                f"{_target_text(target)}"
+            )
+    return missed
+
+
 def _problems(report: Report | None, outcome: RunOutcome) -> list[str]:
-    """Why the run is not a pass: a case that failed, or an absolute grader that
-    failed on a case that ran."""
+    """Why the run is not a pass: a case that failed, an absolute grader that
+    failed on a case that ran, or a target the cases that ran missed."""
     problems = []
     if outcome.failed:
         noun = "case" if len(outcome.failed) == 1 else "cases"
@@ -210,7 +237,7 @@ def _problems(report: Report | None, outcome: RunOutcome) -> list[str]:
                 f"absolute grader {grader} failed on {failed} of {len(report.cases)} "
                 "cases"
             )
-    return problems
+    return problems + (_missed_targets(report) if report else [])
 
 
 def _finish(report: Report | None, outcome: RunOutcome) -> NoReturn:
@@ -282,8 +309,9 @@ def run_command(
     """Post the golden set to a deployed stack, read each answer, grade it.
 
     A case the stack already has (409) is skipped. Exit 0 when at least one
-    case ran, none failed and every absolute grader passed on every case that
-    ran; 1 otherwise; 2 when something cannot be read or the address is refused.
+    case ran, none failed, every absolute grader passed on every case that ran
+    and every target of the report is met over those cases; 1 otherwise; 2 when
+    something cannot be read or the address is refused.
     """
     evaluation, registry, total = _prepare(workload, golden_set, registry_dir)
     if not report_path.parent.is_dir():

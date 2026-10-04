@@ -369,6 +369,79 @@ def test_the_package_inits_that_no_contract_lists_import_nothing(init: Path) -> 
     assert imports == []
 
 
+# ── the gateway does not depend on the evaluation or the CLI (S050, T-76) ─────
+GATEWAY_ISOLATION_CONTRACT = (
+    "the gateway imports neither the evaluation package nor the CLI"
+)
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        "meridian.platform.evaluation",
+        "meridian.platform.evaluation.report",
+        "meridian.platform.cli",
+        "meridian.platform.cli.evaluation",
+    ],
+)
+@pytest.mark.parametrize(
+    "package",
+    [
+        pytest.param(GATEWAY_PACKAGE, id="gateway"),
+        pytest.param(f"{GATEWAY_PACKAGE}.providers", id="another-provider-module"),
+    ],
+)
+def test_a_gateway_module_importing_the_evaluation_or_the_cli_breaks_a_contract(
+    project_copy: Path, package: str, forbidden: str
+) -> None:
+    # Arrange
+    probe = add_probe_in(project_copy, package, f"import {forbidden}\n")
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code != 0, output
+    assert GATEWAY_ISOLATION_CONTRACT in output, output
+    # The report wraps a long line at 80 columns: compare it unwrapped.
+    assert f"{probe} -> {forbidden}" in " ".join(output.split()), output
+
+
+def test_a_gateway_module_importing_the_json_file_reader_keeps_the_contracts(
+    project_copy: Path,
+) -> None:
+    # Arrange: what the recording reader needs lives in common.
+    add_probe_in(
+        project_copy,
+        f"{GATEWAY_PACKAGE}.providers",
+        "from meridian.platform.common.jsonfile import read_json_file\n",
+    )
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code == 0, output
+
+
+def test_the_isolation_contract_forbids_the_evaluation_and_the_cli() -> None:
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    contract = next(
+        c
+        for c in config["tool"]["importlinter"]["contracts"]
+        if c["name"] == GATEWAY_ISOLATION_CONTRACT
+    )
+
+    assert contract["type"] == "forbidden"
+    assert contract["source_modules"] == [GATEWAY_PACKAGE]
+    assert set(contract["forbidden_modules"]) == {
+        "meridian.platform.evaluation",
+        "meridian.platform.cli",
+    }
+    # Indirect imports count: no allowance for them.
+    assert not contract.get("allow_indirect_imports", False)
+
+
 def test_a_gateway_module_importing_the_adapter_keeps_the_contracts(
     project_copy: Path,
 ) -> None:

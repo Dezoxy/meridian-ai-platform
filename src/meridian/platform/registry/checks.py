@@ -299,6 +299,22 @@ def _recorded_price_errors(
     ]
 
 
+def _recorded_class_errors(
+    dep: Deployment, source: Deployment, where: str
+) -> list[str]:
+    """A class is never asserted over a recording made on a deployment that
+    never allowed it (T-76)."""
+    beyond = sorted(set(dep.data_classes) - set(source.data_classes))
+    if not beyond:
+        return []
+    return [
+        f"{where}.data_classes: {', '.join(beyond)} not allowed by deployment "
+        f"{source.id!r} (recorded_from); a class is never asserted over a "
+        "recording made on a deployment that never allowed it "
+        f"(deployment {dep.id!r})"
+    ]
+
+
 def _recorded_from_errors(registry: Registry, dep: Deployment, where: str) -> list[str]:
     if dep.recorded_from is None:
         return [
@@ -321,7 +337,11 @@ def _recorded_from_errors(registry: Registry, dep: Deployment, where: str) -> li
             f"{ref}: deployment {source.id!r} has purpose {source.purpose!r}, "
             f"the recorded deployment's is {dep.purpose!r}"
         )
-    return errors + _recorded_price_errors(dep, source, where)
+    return (
+        errors
+        + _recorded_class_errors(dep, source, where)
+        + _recorded_price_errors(dep, source, where)
+    )
 
 
 def _recorded_field_errors(

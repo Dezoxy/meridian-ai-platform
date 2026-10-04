@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from meridian.platform.registry import load_registry
+from meridian.platform.registry.checks import check_provider_fields
 from meridian.platform.registry.terraform import azure_deployments
 
 Plant = Callable[..., Path]
@@ -288,6 +289,97 @@ def test_a_recorded_price_has_its_own_source_and_the_live_numbers(
     assert recorded.price.output_per_million_tokens == (
         live.price.output_per_million_tokens
     )
+
+
+# The second live deployment's label and classes, unique by its deployment name.
+SECOND_LIVE = (
+    "    deployment_name: gpt-4o-b\n"
+    "    sku: Standard\n"
+    "    region: swedencentral\n"
+    "    residency: eu-region\n"
+)
+SECOND_LIVE_CLASSES = (
+    SECOND_LIVE + "    data_classes: [synthetic, internal, personal]\n"
+)
+POINT_AT_SECOND_LIVE = "    recorded_from: aoai-sdc-gpt-4o-b\n"
+
+
+@pytest.mark.parametrize(
+    ("allowed", "extra"),
+    [
+        pytest.param("[synthetic, internal]", "personal", id="personal"),
+        pytest.param("[synthetic, personal]", "internal", id="internal"),
+        pytest.param("[synthetic]", "internal, personal", id="two-classes"),
+    ],
+)
+def test_a_class_asserted_over_a_recording_its_source_never_allowed_is_reported(
+    plant: Plant, load_errors: LoadErrors, allowed: str, extra: str
+) -> None:
+    source_classes = SECOND_LIVE + f"    data_classes: {allowed}\n"
+    directory = plant(
+        ("models.yaml", SECOND_LIVE_CLASSES, source_classes),
+        ("models.yaml", RECORDED_FROM, POINT_AT_SECOND_LIVE),
+    )
+
+    errors = load_errors(directory)
+
+    assert (
+        f"{WHERE}.data_classes: {extra} not allowed by deployment "
+        "'aoai-sdc-gpt-4o-b' (recorded_from); a class is never asserted over a "
+        "recording made on a deployment that never allowed it "
+        "(deployment 'recorded-chat')"
+    ) in errors
+
+
+def test_the_classes_of_a_recorded_deployment_equal_to_its_sources_are_accepted(
+    real_registry: Path,
+) -> None:
+    registry = load_registry(real_registry)
+
+    recorded = registry.deployment("recorded-chat")
+    live = registry.deployment("aoai-sdc-gpt-4o")
+
+    assert recorded is not None
+    assert live is not None
+    assert set(recorded.data_classes) == set(live.data_classes)
+
+
+def test_a_source_that_allows_more_classes_than_the_recorded_deployment_is_accepted(
+    real_registry: Path,
+) -> None:
+    # The loader's label check keeps a real deployment of the registry from
+    # allowing one more, so the registry is built in memory and the one check
+    # is called on it.
+    registry = load_registry(real_registry)
+    deployments = tuple(
+        d.model_copy(update={"data_classes": (*d.data_classes, "special")})
+        if d.id == "aoai-sdc-gpt-4o"
+        else d
+        for d in registry.deployments
+    )
+    broader = registry.model_copy(update={"deployments": deployments})
+
+    assert check_provider_fields(broader) == []
+
+
+def test_a_recorded_deployment_that_asserts_one_more_class_is_reported_by_the_check(
+    real_registry: Path,
+) -> None:
+    registry = load_registry(real_registry)
+    deployments = tuple(
+        d.model_copy(update={"data_classes": (*d.data_classes, "special")})
+        if d.id == "recorded-chat"
+        else d
+        for d in registry.deployments
+    )
+    wider = registry.model_copy(update={"deployments": deployments})
+
+    errors = check_provider_fields(wider)
+
+    assert any(
+        e.startswith(f"{WHERE}.data_classes: special not allowed by deployment")
+        for e in errors
+    ), errors
 
 
 @pytest.mark.parametrize(

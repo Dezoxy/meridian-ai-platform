@@ -2,8 +2,9 @@
 
 It never gates: the differences are its content. ``diff_reports`` and
 ``render_markdown`` are pure. A report's ``observed`` values are the file's own
-text, so they are cut, stripped to printable ASCII and kept inside a table
-cell; nothing a file says reaches the start of an output line.
+text, so they are cut, stripped to printable ASCII, kept inside a table cell
+and printed in a code span (nothing renders as a link, an image or emphasis);
+nothing a file says reaches the start of an output line.
 """
 
 import re
@@ -20,6 +21,8 @@ UNSAFE_CHARS = re.compile(r"[^\x20-\x7e]|[|`<>:]")
 MICRO_PER_EURO = 1_000_000
 NOT_AVAILABLE = "n/a"
 ABSENT = "absent"
+EMPTY = "empty"  # an observed text of no character
+BLANK = "blank"  # an observed text of spaces only
 REPORT_COLUMNS = ["report", "answered by", "prompt", "judge", "recording"]
 TOTAL_COLUMNS = ["report", "model calls", "input tokens", "output tokens", "cost EUR"]
 Value = str | int | bool | None  # an observed value, or a grade
@@ -149,13 +152,24 @@ def diff_reports(first: Report, second: Report) -> ReportDiff:
 
 
 def _cell(value: Value) -> str:
-    """A value as text for a table cell: a file's own text is cut and stripped
-    before it is printed."""
+    """A value as text for a table cell. A grade and the differ's own words
+    (``none``, ``absent``, ``empty``, ``blank``) are plain. An observed value is
+    the file's own text: it is cut, stripped, and put inside a code span, so
+    that nothing in it renders as a link, an image or emphasis. The sanitised
+    text holds no backtick, so nothing ends the span early. An observed text
+    that is the word ``absent`` is shown as the differ's own."""
     if value is None:
         return "none"
     if isinstance(value, bool):  # a grade
         return "passed" if value else "failed"
-    return UNSAFE_CHARS.sub("?", str(value)[:MAX_OBSERVED_CHARS])
+    text = UNSAFE_CHARS.sub("?", str(value)[:MAX_OBSERVED_CHARS])
+    if text == ABSENT:
+        return ABSENT
+    if not text:
+        return EMPTY
+    if not text.strip():
+        return BLANK
+    return f"`{text}`"
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
