@@ -31,6 +31,7 @@ from opentelemetry.trace import StatusCode
 from retrievalsupport import embed_queries
 from servicesupport import (
     REGISTRY_DIR,
+    FakeClock,
     assert_spans_hold_no_exception_and_no_canary,
     audit_events,
     owner_rows,
@@ -57,6 +58,7 @@ from toolsupport import (
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.knowledge_mcp import tools as tools_module
 from meridian.platform.knowledge_mcp.app import create_app, make_http_client
 from meridian.platform.knowledge_mcp.search import corpus_exists, hybrid_search
 from meridian.platform.knowledge_mcp.store import (
@@ -69,7 +71,7 @@ from meridian.platform.registry import load_registry
 from meridian.platform.toolserver.binding import RunBinding
 from meridian.platform.toolserver.handlers import ToolCall
 from meridian.platform.toolserver.validation import build_validator, fits
-from meridian.platform.toolserver.wire import META_REFUSAL
+from meridian.platform.toolserver.wire import META_REFUSAL, META_TIMEOUT_MS
 from meridian.runtime.tool_client import ToolClient, ToolRefused, ToolUnavailable
 
 # POL-0049, the policy of the seeded claim, is a HOME-PLUS policy.
@@ -914,6 +916,95 @@ def test_a_completed_search_writes_one_completed_audit_row(
         world.claim_id,
     )
     assert row["reason"] is None
+
+
+# ── 10a. a search whose caller has stopped waiting costs nothing (S059) ─────
+LATE_SECONDS = 100.0  # past any budget a call is given
+
+
+def test_a_search_that_is_late_once_the_store_was_asked_never_reaches_the_gateway(
+    world: World, exporter: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = FakeClock()
+    ask_the_store = tools_module.corpus_exists
+
+    def asked_and_then_late(*args: Any, **kwargs: Any) -> bool:
+        found = ask_the_store(*args, **kwargs)
+        clock.advance(LATE_SECONDS)
+        return found
+
+    monkeypatch.setattr(tools_module, "corpus_exists", asked_and_then_late)
+    scripted = ScriptedGateway(script=good_reply)
+    server = create_app(
+        knowledge_settings_for(world.db),
+        http=scripted.http(),
+        tracer_provider=make_tracer_provider(APPLICATION, exporter),
+        clock=clock,
+    ).server
+
+    failed_search(server, world)
+
+    assert scripted.requests == []  # the tenant is not charged
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "timed-out",
+        "wording_search",
+    )
+    assert (row["tenant"], row["run_id"]) == (world.tenant, world.run_id)
+
+
+def search_with_budget(world: World, budget_ms: int | None) -> list[dict[str, float]]:
+    """The timeouts of the gateway request one search sends, over the client the
+    app builds (5 s to read, 2 s to connect) and with the clock still."""
+    timeouts: list[dict[str, float]] = []
+    scripted = ScriptedGateway(script=good_reply)
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions["timeout"])
+        return scripted(request)
+
+    with make_http_client(
+        "http://gateway.invalid", transport=httpx.MockTransport(transport)
+    ) as http:
+        server = create_app(
+            knowledge_settings_for(world.db),
+            http=http,
+            tracer_provider=make_tracer_provider(APPLICATION, InMemorySpanExporter()),
+            clock=FakeClock(),
+        ).server
+        meta = {} if budget_ms is None else {META_TIMEOUT_MS: budget_ms}
+
+        result = run_call(
+            server,
+            "wording_search",
+            {"query": QUERY, "product": PRODUCT},
+            run_id=world.run_id,
+            meta=meta,
+        )
+
+    assert result.is_error is False
+    return timeouts
+
+
+@pytest.mark.parametrize(("budget_ms", "read"), [(1000, 1.0), (250, 0.25)])
+def test_a_search_with_little_time_left_waits_for_the_gateway_no_longer_than_that(
+    world: World, budget_ms: int, read: float
+) -> None:
+    (timeout,) = search_with_budget(world, budget_ms)
+
+    assert timeout["read"] == read
+    assert timeout["connect"] == 2.0  # as configured
+
+
+@pytest.mark.parametrize("budget_ms", [None, 20_000])
+def test_a_search_with_plenty_of_time_left_waits_the_configured_read_timeout(
+    world: World, budget_ms: int | None
+) -> None:
+    (timeout,) = search_with_budget(world, budget_ms)
+
+    assert timeout["read"] == 5.0
+    assert timeout["connect"] == 2.0
 
 
 # ── 11. nothing of a query or a chunk is kept ───────────────────────────────

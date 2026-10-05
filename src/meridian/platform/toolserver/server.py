@@ -49,10 +49,9 @@ from meridian.platform.common.telemetry import (
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
 from meridian.platform.toolserver.contracts import tool_listing
-from meridian.platform.toolserver.handlers import ToolHandler
+from meridian.platform.toolserver.handlers import TIMED_OUT, Deadline, ToolHandler
 from meridian.platform.toolserver.pipeline import (
     Call,
-    Deadline,
     Finished,
     Pipeline,
     _run_id,
@@ -76,10 +75,9 @@ TRACE_KEYS = ("traceparent", "tracestate")
 # Calls in worker threads at once, per app. psycopg is synchronous and every
 # call opens a connection, so the pool of threads is the bound on connections.
 MAX_CONCURRENT_CALLS = 8
-# The reason of a call that waited for a slot as long as its caller would. It
-# is on the call's span and its log line and in no audit row: the write needs
-# the worker thread the call could not get.
-TIMED_OUT = "timed-out"
+# A call that waited for a slot as long as its caller would ends as TIMED_OUT
+# (the handlers' word). It is on the call's span and its log line and in no
+# audit row: the write needs the worker thread the call could not get.
 
 
 @dataclass(frozen=True, slots=True)

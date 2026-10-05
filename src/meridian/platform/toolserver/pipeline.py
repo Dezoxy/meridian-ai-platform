@@ -23,9 +23,8 @@ import hashlib
 import json
 import logging
 import re
-import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -50,7 +49,10 @@ from meridian.platform.toolserver.binding import (
     with_policy_scope,
 )
 from meridian.platform.toolserver.handlers import (
+    NEVER,
+    TIMED_OUT,
     Completed,
+    Deadline,
     Refused,
     ToolCall,
     ToolFailed,
@@ -117,22 +119,6 @@ class Call:
 
 
 @dataclass(frozen=True, slots=True)
-class Deadline:
-    """The moment a call's caller stops waiting for it, on ``clock``'s time (the
-    server's monotonic clock, or a test's)."""
-
-    at: float
-    clock: Callable[[], float] = time.monotonic
-
-    def remaining(self) -> float:
-        """Seconds left, never below zero."""
-        return max(0.0, self.at - self.clock())
-
-    def expired(self) -> bool:
-        return self.clock() >= self.at
-
-
-@dataclass(frozen=True, slots=True)
 class _Done:
     """A handler's answer that fits its schema, and its text."""
 
@@ -180,10 +166,12 @@ class Pipeline:
         deadline: Deadline | None = None,
     ) -> Finished:
         """Never raises: a failure is an outcome, already audited when it could
-        be. ``deadline`` is when the caller stops waiting; the checks inside the
-        call do not read it yet."""
+        be. ``deadline`` is when the caller stops waiting: a call found late,
+        before its work and again before its commit, fails as ``timed-out`` with
+        its work rolled back. None bounds nothing."""
+        deadline = NEVER if deadline is None else deadline
         try:
-            answer = self._decide(call, name, arguments, meta)
+            answer = self._decide(call, name, arguments, meta, deadline)
             if isinstance(answer, Refused):
                 self._audit_refusal(call, answer.reason)
                 return Finished(call, "refused", answer.reason)
@@ -200,6 +188,7 @@ class Pipeline:
         name: str,
         arguments: Mapping[str, Any],
         meta: Mapping[str, Any],
+        deadline: Deadline,
     ) -> _Done | Refused:
         entry = self.entries.get(name)
         if entry is None:
@@ -208,6 +197,10 @@ class Pipeline:
         run_id = _run_id(meta)
         if run_id is None:
             return Refused("unknown-run")
+        # The call has its thread and has read nothing: a caller that has gone
+        # is not served. The refusals above did no work and stay refusals.
+        if deadline.expired():
+            raise _CallFailed(TIMED_OUT)
         with connect(self.dsn, self.service_name) as conn:
             binding = read_binding(conn, run_id)
             if isinstance(binding, BindingRefused):
@@ -228,8 +221,11 @@ class Pipeline:
             key = (
                 _idempotency_key(meta) if entry.tool.idempotency_key_required else None
             )
-            tool_call = ToolCall(binding, arguments, key, _payload_hash(arguments))
-            return self._complete(conn, call, entry, entry.handler.run(conn, tool_call))
+            tool_call = ToolCall(
+                binding, arguments, key, _payload_hash(arguments), deadline
+            )
+            answer = entry.handler.run(conn, tool_call)
+            return self._complete(conn, call, entry, answer, deadline)
 
     def _screen(
         self, entry: _Entry, binding: RunBinding, arguments: Mapping[str, Any]
@@ -264,9 +260,17 @@ class Pipeline:
         return None
 
     def _complete(
-        self, conn: psycopg.Connection, call: Call, entry: _Entry, answer: object
+        self,
+        conn: psycopg.Connection,
+        call: Call,
+        entry: _Entry,
+        answer: object,
+        deadline: Deadline,
     ) -> _Done | Refused:
-        """Check the handler's answer, then commit its work with the audit row."""
+        """Check the handler's answer, then commit its work with the audit row,
+        unless the caller has stopped waiting: then the work is undone and the
+        call fails, never audited as completed (a replay too). The check is
+        before the commit, not during it."""
         if isinstance(answer, Refused):
             conn.rollback()
             return answer
@@ -276,6 +280,9 @@ class Pipeline:
             raise _CallFailed("invalid-result")
         text = json.dumps(answer.result, separators=(",", ":"), ensure_ascii=False)
         done = _Done(answer, text)
+        if deadline.expired():
+            conn.rollback()
+            raise _CallFailed(TIMED_OUT)
         record_event(conn, self._event(call, done.outcome))
         conn.commit()
         return done
