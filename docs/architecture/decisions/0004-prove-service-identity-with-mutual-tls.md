@@ -81,6 +81,17 @@ Claims API (which serves plain HTTP inside the cluster and is a client
 only), picking up a renewed certificate without a restart, revocation, and
 a policy on who may ask cert-manager for a certificate.
 
+Added 2026-10-05 (S056), without changing the decision: two of these are
+built on kind, each the way the owner chose on 2026-10-04. A service still
+loads its certificate once; inside the last 24 hours of the one it loaded
+it answers 503 on `/healthz` as soon as the mounted file holds a renewed
+one, so the kubelet restarts it, and from the certificate's end it is
+unhealthy whatever the file holds. And cert-manager's approver-policy,
+with cert-manager's own approver off, lets the issuer sign only a request
+from the services' namespace with a URI under their prefix. Revocation and
+TLS at the edge stay open. The plan's S056 section has the alternatives
+and what was proved.
+
 ## Consequences
 
 Positive:
@@ -132,7 +143,9 @@ authorised uniformly: that is what a mesh is for.
 
 - An expired certificate stops the services. Mitigation: every deploy
   restarts the pods; an alert on expiry and a restart on renewal are in
-  the backlog.
+  the backlog. Since S056 (2026-10-05): alerts fire at 21 days left and
+  on a certificate that is not Ready, and the service asks for its own
+  restart once a renewed certificate is mounted (T-89).
 - The coupling to uvicorn. Mitigation: the test over real TLS, and the
   services fail closed.
 

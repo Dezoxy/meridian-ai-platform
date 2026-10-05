@@ -174,6 +174,21 @@ def test_every_service_declares_healthz() -> None:
         assert "get" in spec["paths"]["/healthz"]
 
 
+def test_every_service_declares_the_503_of_a_certificate_near_its_end() -> None:
+    """S056: the kubelet's probe restarts the container on this answer, so the
+    contract of every service shows it, with a body of its own."""
+    for spec in SPECS.values():
+        responses = spec["paths"]["/healthz"]["get"]["responses"]
+
+        assert {"200", "503"} <= set(responses)
+        assert responses["503"]["content"]["application/json"]["schema"][
+            "$ref"
+        ].endswith("/CertificateExpiring")
+        assert "certificate" in responses["503"]["description"].lower()
+        expiring = spec["components"]["schemas"]["CertificateExpiring"]
+        assert expiring["properties"]["status"]["const"] == "certificate-expiring"
+
+
 def schema_ref(spec: dict[str, Any], path: str, method: str, status: str) -> str:
     response = spec["paths"][path][method]["responses"][status]
     return response["content"]["application/json"]["schema"]["$ref"]

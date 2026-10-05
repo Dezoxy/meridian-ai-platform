@@ -6,6 +6,10 @@ license = "Apache-2.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "azure-identity==1.26.0",
+    # Reads the dates of the service's own certificate (common/certlife.py) and
+    # makes the test certificates (tests/meridian/tlssupport.py); already
+    # locked, through azure-identity and msal, so pinned directly here.
+    "cryptography==50.0.2",
     "fastapi==0.142.2",
     "httpx==0.28.1",
     "httpx2==2.13.1",
@@ -50,9 +54,6 @@ dev = [
     "pytest==9.1.1",
     "pytest-xdist==3.8.0",
     "import-linter==2.15",
-    # Makes the test certificates (tests/meridian/tlssupport.py); already
-    # locked, through azure-identity and msal.
-    "cryptography==50.0.2",
 ]
 
 [tool.ruff]
