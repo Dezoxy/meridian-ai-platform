@@ -23,7 +23,11 @@ quote a message or a response body, are routed to a content-free handler by
 this module.
 
 The runtime is synchronous (a graph runs in a worker thread), and the SDK's
-client is asynchronous, so each call drives it with ``anyio.run``.
+client is asynchronous. A call to an address goes through the runtime's
+``ToolTransport`` when the client has one: an event loop and an HTTP client for
+each server that outlive the call, so calls share a connection. Without one
+(a command with no application, and a target that is not an address, such as a
+test's in-process server) each call drives the SDK with ``anyio.run``.
 """
 
 import hashlib
@@ -35,7 +39,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 import anyio
 import httpx2
@@ -64,6 +68,10 @@ from meridian.platform.toolserver.wire import (
     META_RUN,
     RefusalReason,
 )
+
+if TYPE_CHECKING:
+    # ``tool_transport`` imports this module for the bound and ``send_call``.
+    from meridian.runtime.tool_transport import ToolTransport
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +207,7 @@ async def _open(
             yield client
         return
     # trust_env=False: a proxy variable must not reroute claimant data. A client
-    # passed to the transport is not closed by it, so it is closed here.
+    # passed to the SDK's transport is not closed by it, so it is closed here.
     async with httpx2.AsyncClient(
         trust_env=False, timeout=TOOL_TIMEOUT_SECONDS, verify=verify
     ) as http:
@@ -210,6 +218,27 @@ async def _open(
             yield client
 
 
+async def send_call(
+    client: Client, tool: str, arguments: dict[str, Any], meta: dict[str, Any]
+) -> types.CallToolResult:
+    """The call on an open SDK client; the part of an exchange that a client
+    made for the call and one over a ``ToolTransport``'s kept HTTP client share."""
+    request = types.CallToolRequest(
+        params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=meta)
+    )
+    # One request. ``Client.call_tool`` goes through the session's
+    # ``call_tool``, which ends in ``validate_tool_result``: with no output
+    # schema cached for the tool (and the SDK client lives for one call) that
+    # sends ``tools/list`` after the call, inside the same bound and after a
+    # write has committed. The runtime checks the result against the registry's
+    # own schema, so that request buys nothing. ``send_request`` is the
+    # session's public method for a request without that step (mcp 2.2.0). It
+    # also skips the ``input_required`` loop, which our servers never use: such
+    # an answer does not parse as a ``CallToolResult`` and so is
+    # ``ToolUnavailable``. The HTTP test pins that a call is one request.
+    return await client.session.send_request(request, types.CallToolResult)
+
+
 async def _exchange(
     target: ToolTarget,
     tool: str,
@@ -217,24 +246,10 @@ async def _exchange(
     meta: dict[str, Any],
     verify: ssl.SSLContext | bool,
 ) -> types.CallToolResult:
-    request = types.CallToolRequest(
-        params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=meta)
-    )
     # Read at call time, so the bound is the constant's current value.
     with anyio.fail_after(TOOL_TIMEOUT_SECONDS):
         async with _open(target, verify) as client:
-            # One request. ``Client.call_tool`` goes through the session's
-            # ``call_tool``, which ends in ``validate_tool_result``: with no
-            # output schema cached for the tool (and a client lives for one
-            # call) that sends ``tools/list`` after the call, inside the same
-            # bound and after a write has committed. The runtime checks the
-            # result against the registry's own schema, so that request buys
-            # nothing. ``send_request`` is the session's public method for a
-            # request without that step (mcp 2.2.0). It also skips the
-            # ``input_required`` loop, which our servers never use: such an
-            # answer does not parse as a ``CallToolResult`` and so is
-            # ``ToolUnavailable``. The HTTP test pins that a call is one request.
-            return await client.session.send_request(request, types.CallToolResult)
+            return await send_call(client, tool, arguments, meta)
 
 
 class ToolClient:
@@ -247,7 +262,9 @@ class ToolClient:
     one too, and the one past it raises ``ToolCallLimit`` before the allowlist.
     ``verify`` is how a call to an address is made over TLS (S055): the context
     of the runtime's own certificate and CA, or the default verification, never
-    off."""
+    off. ``transport`` (S059) is the runtime's kept HTTP client for each
+    address, shared by its runs: a call to an address goes through it, and
+    without one each call opens its own."""
 
     def __init__(
         self,
@@ -260,9 +277,11 @@ class ToolClient:
         on_refusal: Callable[[str | None], None],
         max_calls: int,
         verify: ssl.SSLContext | bool = True,
+        transport: "ToolTransport | None" = None,
     ) -> None:
         prepare_sdk()
         self._verify = verify
+        self._transport = transport
         self._max_calls = max_calls
         self._calls = 0
         self._lock = threading.Lock()
@@ -372,9 +391,14 @@ class ToolClient:
         # The SDK does not carry the trace; the server reads it from ``_meta``.
         propagate.inject(meta)
         try:
-            answer = anyio.run(
-                _exchange, target, spec.id, dict(arguments), meta, self._verify
-            )
+            if self._transport is not None and isinstance(target, str):
+                answer = self._transport.exchange(
+                    target, spec.id, dict(arguments), meta
+                )
+            else:
+                answer = anyio.run(
+                    _exchange, target, spec.id, dict(arguments), meta, self._verify
+                )
         except Exception as error:
             # An exception group of ordinary exceptions is an ``Exception``; a
             # group holding a cancellation or ``SystemExit`` is not, and goes on.

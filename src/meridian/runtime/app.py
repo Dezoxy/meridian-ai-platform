@@ -77,6 +77,7 @@ from meridian.runtime.tool_client import (
     ToolTarget,
     prepare_sdk,
 )
+from meridian.runtime.tool_transport import ToolTransport
 
 GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
@@ -345,8 +346,10 @@ def tool_client_for(
     identity: RunIdentity,
     throttle: RefusalAuditThrottle,
     verify: ssl.SSLContext | bool = True,
+    transport: ToolTransport | None = None,
 ) -> ToolClient:
-    """The run's tool client. A call its allowlist refuses is audited here,
+    """The run's tool client, over the app's ``transport`` when it has one (the
+    runs share its connections). A call its allowlist refuses is audited here,
     with the tool's registry ID or none, at most one row per tenant and tool per
     window (T-49; from S014 a model may choose the tool); a failed audit write
     propagates and fails the run (QA-05). ``ToolNotAllowed`` is raised either
@@ -387,6 +390,7 @@ def tool_client_for(
         on_refusal=audit_refusal,
         max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
         verify=verify,
+        transport=transport,
     )
 
 
@@ -430,12 +434,24 @@ def create_app(
     # certificate or key that cannot be loaded stops the start.
     verify = verify_of(settings.client_tls)
     http = http_client or make_gateway_client(settings, verify)
+    # One kept HTTP client for each tool server, shared by every run; closed
+    # at shutdown, with the gateway client when the app made that itself.
+    tool_transport = ToolTransport(verify)
     dsn = settings.database_url
 
     # An injected checkpointer (tests) serves every request; otherwise each
     # request opens the PostgreSQL saver on a connection of its own (S015).
     def saver_scope() -> AbstractContextManager[BaseCheckpointSaver]:
         return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
+
+    def close() -> None:
+        # The gateway client is closed only when the app made it: an injected
+        # one is its owner's.
+        try:
+            tool_transport.close()
+        finally:
+            if http_client is None:
+                http.close()
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -444,7 +460,7 @@ def create_app(
         tracer_name="meridian.runtime",
         max_body_bytes=SMALL_BODY_LIMIT_BYTES,
         tracer_provider=tracer_provider,
-        close=http.close if http_client is None else None,
+        close=close,
     )
     app, tracer = service.app, service.tracer
 
@@ -541,6 +557,7 @@ def create_app(
                 identity=identity,
                 throttle=refusal_throttle,
                 verify=verify,
+                transport=tool_transport,
             )
             outcome = runs.execute(
                 factory, saver, http, tools, tracer, identity, run_input, resume=resume
