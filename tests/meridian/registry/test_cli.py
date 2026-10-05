@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
+from directorysupport import CANARY, FAILURES, Failure, make_unreadable
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
@@ -269,3 +270,46 @@ def test_a_mistyped_registry_dir_is_refused_and_nothing_is_created(
     assert result.exit_code != 0
     assert not missing.exists()
     assert not (tmp_path / "confg").exists()
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+@pytest.mark.parametrize(
+    "command", [["validate"], ["contracts"], ["contracts", "--check"]]
+)
+def test_a_registry_dir_that_cannot_be_read_ends_in_an_error_line_not_a_traceback(
+    registry_copy: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: list[str],
+    failure: Failure,
+) -> None:
+    make_unreadable(monkeypatch, registry_copy, failure)
+
+    result = runner.invoke(
+        app, ["registry", *command, "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy}: registry directory cannot be read: PermissionError\n"
+    )
+    assert result.stdout == ""
+    assert CANARY not in result.output
+    assert not isinstance(result.exception, PermissionError)
+
+
+def test_schemas_check_on_a_registry_dir_that_cannot_be_read_ends_in_an_error_line(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_unreadable(monkeypatch, registry_copy, "stat")
+
+    result = runner.invoke(
+        app,
+        ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy}: registry directory cannot be read: PermissionError\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, PermissionError)

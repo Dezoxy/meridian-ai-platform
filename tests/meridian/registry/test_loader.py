@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from directorysupport import CANARY, FAILURES, Failure, make_unreadable
 from registrysupport import Change, add_field, apply_changes, planted, set_field
 
 from meridian.platform.registry import RegistryError, load_registry
@@ -164,6 +165,37 @@ def test_missing_directory_is_reported(tmp_path: Path, load_errors: LoadErrors) 
 
     assert len(errors) == 1
     assert "registry directory not found" in errors[0]
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+def test_a_directory_that_cannot_be_read_is_one_registry_error_naming_the_class(
+    registry_copy: Path,
+    load_errors: LoadErrors,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Failure,
+) -> None:
+    make_unreadable(monkeypatch, registry_copy, failure)
+
+    errors = load_errors(registry_copy)
+
+    assert errors == (
+        f"{registry_copy}: registry directory cannot be read: PermissionError",
+    )
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+def test_a_directory_that_cannot_be_read_does_not_repeat_the_os_error_text(
+    registry_copy: Path,
+    load_errors: LoadErrors,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Failure,
+) -> None:
+    make_unreadable(monkeypatch, registry_copy, failure)
+
+    errors = load_errors(registry_copy)
+
+    assert CANARY not in " ".join(errors)
+    assert "Traceback" not in " ".join(errors)
 
 
 def test_invalid_id_is_reported(plant: Plant, load_errors: LoadErrors) -> None:

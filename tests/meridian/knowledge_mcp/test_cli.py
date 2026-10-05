@@ -9,6 +9,8 @@ import httpx
 import psycopg
 import pytest
 from dbsupport import OWNER, DatabaseHandle
+from directorysupport import CANARY as OS_ERROR_CANARY
+from directorysupport import FAILURES, Failure, make_unreadable
 from knowledgesupport import (
     CANARY,
     REAL_SOURCE,
@@ -218,6 +220,26 @@ def test_a_registry_that_does_not_load_exits_1(
 
     assert result.exit_code == 1
     assert result.output.startswith("ERROR the registry does not load: ")
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+def test_a_registry_dir_that_cannot_be_read_exits_1_on_an_error_line(
+    monkeypatch: pytest.MonkeyPatch, registry_copy: Path, failure: Failure
+) -> None:
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, GATEWAY_URL)
+    monkeypatch.setenv(REGISTRY_DIR_ENV, str(registry_copy))
+    make_unreadable(monkeypatch, registry_copy, failure)
+
+    result = runner.invoke(app, ingest_args())
+
+    assert result.exit_code == 1, result.output
+    assert result.output == (
+        f"ERROR the registry does not load: {registry_copy}: "
+        "registry directory cannot be read: PermissionError\n"
+    )
+    assert OS_ERROR_CANARY not in result.output
+    assert not isinstance(result.exception, PermissionError)
 
 
 def test_a_tenant_the_registry_refuses_exits_1_and_calls_nothing(
