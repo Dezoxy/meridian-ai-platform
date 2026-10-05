@@ -7816,6 +7816,11 @@ backlog, without a change to the triage graph, its rules or a prompt.
 - **A flaky test of this step's own**, found by the first whole run:
   two claims made a second apart were compared by pages that show when
   each was received. Both now get one fixed time.
+- **The secret scan stopped the first push.** A test constant for the
+  text an exception is raised with had a name the scan reads as a key
+  (a made-up canary, no secret). It was renamed, and since CI scans
+  every commit of a pull request, the step's eight commits, none of
+  them pushed, became one.
 
 **Result / verification:**
 
