@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +13,7 @@ from meridian.platform.knowledge_mcp.chunking import (
 )
 from meridian.platform.knowledge_mcp.search import MAX_QUERY_CHARACTERS, MAX_TOP_K
 from meridian.platform.registry import load_registry
+from meridian.platform.registry.tool_schema import input_schema_errors
 
 Plant = Callable[..., Path]
 LoadErrors = Callable[[Path], tuple[str, ...]]
@@ -22,6 +24,7 @@ NOTE_ID = (
     f'        note_id: {{type: string, pattern: "{UUID_PATTERN}", maxLength: 36}}\n'
 )
 ENTRIES = "        entries:\n          type: array\n          maxItems: 100\n"
+THEN_LINE = "      then: {required: [policy]}\n"
 NOTE_ROOT_END = (
     "      required: [note_id, replayed]\n      additionalProperties: false\n"
 )
@@ -188,6 +191,325 @@ def test_the_bounds_of_wording_search_equal_the_store_and_the_search_limits(
     assert chunk["section"]["maxLength"] == TITLE_MAX_CHARACTERS
 
 
+IF_FOUND = {"properties": {"found": {"const": True}}, "required": ["found"]}
+THEN_POLICY = {"required": ["policy"]}
+
+
+def answer(**keywords: Any) -> dict[str, Any]:
+    """An output schema shaped like policy_lookup's, with the keywords given."""
+    return {
+        "type": "object",
+        "properties": {
+            "found": {"type": "boolean"},
+            "kind": {"type": "string", "enum": ["a", "b"]},
+            "policy": {
+                "type": "object",
+                "properties": {"policy_number": {"type": "string", "maxLength": 8}},
+                "additionalProperties": False,
+            },
+        },
+        "required": ["found"],
+        "additionalProperties": False,
+        **keywords,
+    }
+
+
+def output_errors(schema: dict[str, Any]) -> list[str]:
+    return input_schema_errors(schema, "output_schema", allow_conditionals=True)
+
+
+INPUT_ONLY = "'if' and 'then' are allowed only in an output schema"
+
+
+def test_the_accepted_if_and_then_shape_is_refused_in_an_input_schema() -> None:
+    schema = answer(**{"if": IF_FOUND, "then": THEN_POLICY})
+
+    errors = input_schema_errors(schema)
+
+    assert errors == [f"input_schema: {INPUT_ONLY}"]
+
+
+def test_an_if_and_a_then_on_a_nested_object_are_refused_in_an_input_schema() -> None:
+    schema = answer()
+    schema["properties"]["policy"]["properties"]["kind"] = {
+        "type": "object",
+        "properties": {"found": {"type": "boolean"}},
+        "if": {"properties": {"found": {"const": True}}, "required": ["found"]},
+        "then": {"required": ["found"]},
+        "additionalProperties": False,
+    }
+
+    errors = input_schema_errors(schema)
+
+    assert errors == [f"input_schema.properties.policy.properties.kind: {INPUT_ONLY}"]
+
+
+def test_an_if_alone_in_an_input_schema_is_refused_as_an_output_only_keyword() -> None:
+    schema = answer(**{"if": IF_FOUND})
+
+    errors = input_schema_errors(schema)
+
+    assert errors == [f"input_schema: {INPUT_ONLY}"]
+
+
+def test_an_if_and_a_then_inside_an_array_of_an_output_schema_are_checked() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "entries": {
+                "type": "array",
+                "maxItems": 5,
+                "items": answer(**{"if": IF_FOUND}),
+            }
+        },
+        "required": ["entries"],
+        "additionalProperties": False,
+    }
+
+    errors = output_errors(schema)
+
+    assert errors == [
+        "output_schema.properties.entries.items: 'if' and 'then' must appear together"
+    ]
+
+
+def test_an_if_found_then_policy_required_shape_is_accepted() -> None:
+    schema = answer(**{"if": IF_FOUND, "then": THEN_POLICY})
+
+    errors = output_errors(schema)
+
+    assert errors == []
+
+
+def test_a_string_number_or_boolean_const_in_an_if_is_accepted() -> None:
+    for const in ("a", 3, 2.5, False):
+        condition = {
+            "properties": {"kind": {"const": const}},
+            "required": ["kind"],
+        }
+        schema = answer(**{"if": condition, "then": THEN_POLICY})
+
+        assert output_errors(schema) == []
+
+
+def test_an_if_without_a_then_is_refused() -> None:
+    schema = answer(**{"if": IF_FOUND})
+
+    errors = output_errors(schema)
+
+    assert errors == ["output_schema: 'if' and 'then' must appear together"]
+
+
+def test_a_then_without_an_if_is_refused() -> None:
+    schema = answer(then=THEN_POLICY)
+
+    errors = output_errors(schema)
+
+    assert errors == ["output_schema: 'if' and 'then' must appear together"]
+
+
+def test_an_else_beside_an_if_and_a_then_is_refused() -> None:
+    schema = answer(**{"if": IF_FOUND, "then": THEN_POLICY, "else": THEN_POLICY})
+
+    errors = output_errors(schema)
+
+    assert errors == ["output_schema.else: keyword is not allowed"]
+
+
+def test_an_if_and_a_then_on_a_node_that_is_not_an_object_are_refused() -> None:
+    schema = answer()
+    schema["properties"]["found"] = {
+        "type": "boolean",
+        "if": IF_FOUND,
+        "then": THEN_POLICY,
+    }
+
+    errors = output_errors(schema)
+
+    assert errors == [
+        "output_schema.properties.found: 'if' and 'then' are allowed only on an object"
+    ]
+
+
+def test_an_if_on_a_nested_object_names_that_objects_own_properties() -> None:
+    schema = answer()
+    schema["properties"]["policy"]["if"] = {
+        "properties": {"found": {"const": True}},
+        "required": ["found"],
+    }
+    schema["properties"]["policy"]["then"] = {"required": ["policy_number"]}
+
+    errors = output_errors(schema)
+
+    assert errors == [
+        "output_schema.properties.policy.if.properties.found: "
+        "'found' is not in properties"
+    ]
+
+
+BAD_CONDITIONS = [
+    pytest.param(
+        {**IF_FOUND, "not": {}},
+        "output_schema.if.not: keyword is not allowed",
+        id="if-with-an-extra-keyword",
+    ),
+    pytest.param(
+        {"properties": IF_FOUND["properties"]},
+        "output_schema.if.required: is required",
+        id="if-without-required",
+    ),
+    pytest.param(
+        {"required": ["found"]},
+        "output_schema.if.properties: is required",
+        id="if-without-properties",
+    ),
+    pytest.param(
+        {"properties": {"found": {"const": {"a": 1}}}, "required": ["found"]},
+        "output_schema.if.properties.found.const: must be a string, number or boolean",
+        id="object-const",
+    ),
+    pytest.param(
+        {"properties": {"found": {"const": None}}, "required": ["found"]},
+        "output_schema.if.properties.found.const: must be a string, number or boolean",
+        id="null-const",
+    ),
+    pytest.param(
+        {"properties": {"found": {"enum": [True]}}, "required": ["found"]},
+        "output_schema.if.properties.found: must hold exactly const",
+        id="enum-instead-of-const",
+    ),
+    pytest.param(
+        {
+            "properties": {"found": {"const": True, "type": "boolean"}},
+            "required": ["found"],
+        },
+        "output_schema.if.properties.found: must hold exactly const",
+        id="const-with-another-keyword",
+    ),
+    pytest.param(
+        {"properties": {"ghost": {"const": True}}, "required": ["ghost"]},
+        "output_schema.if.properties.ghost: 'ghost' is not in properties",
+        id="property-not-declared",
+    ),
+    pytest.param(
+        {"properties": {"found": {"const": True}}, "required": []},
+        "output_schema.if.required: must list exactly the names in properties",
+        id="required-does-not-name-the-property",
+    ),
+    pytest.param(
+        {"properties": {"found": {"const": True}}, "required": ["found", "kind"]},
+        "output_schema.if.required: must list exactly the names in properties",
+        id="required-names-another-property",
+    ),
+    pytest.param(
+        {"properties": {}, "required": []},
+        "output_schema.if.properties: must name at least one property",
+        id="empty-if",
+    ),
+]
+
+
+@pytest.mark.parametrize(("condition", "expected"), BAD_CONDITIONS)
+def test_an_if_that_is_not_constants_on_declared_properties_is_refused(
+    condition: dict[str, Any], expected: str
+) -> None:
+    schema = answer(**{"if": condition, "then": THEN_POLICY})
+
+    errors = output_errors(schema)
+
+    assert errors == [expected]
+
+
+BAD_CONSEQUENCES = [
+    pytest.param(
+        {"required": ["policy"], "properties": {}},
+        "output_schema.then.properties: keyword is not allowed",
+        id="then-with-properties",
+    ),
+    pytest.param(
+        {},
+        "output_schema.then.required: is required",
+        id="then-without-required",
+    ),
+    pytest.param(
+        {"required": ["ghost"]},
+        "output_schema.then.required: 'ghost' is not in properties",
+        id="then-names-an-undeclared-property",
+    ),
+    pytest.param(
+        {"required": "policy"},
+        "output_schema.then.required: must be a list of names",
+        id="then-required-not-a-list",
+    ),
+    pytest.param(
+        {"required": []},
+        "output_schema.then.required: must be a list of names",
+        id="then-requires-nothing",
+    ),
+    pytest.param(
+        "policy",
+        "output_schema.then: must be a mapping",
+        id="then-not-a-mapping",
+    ),
+]
+
+
+@pytest.mark.parametrize(("consequence", "expected"), BAD_CONSEQUENCES)
+def test_a_then_that_is_not_a_required_list_of_declared_properties_is_refused(
+    consequence: Any, expected: str
+) -> None:
+    schema = answer(**{"if": IF_FOUND, "then": consequence})
+
+    errors = output_errors(schema)
+
+    assert errors == [expected]
+
+
+def test_a_nested_object_may_not_hide_a_keyword_in_an_if_body() -> None:
+    condition = {
+        "properties": {"found": {"const": True, "anyOf": [{"type": "string"}]}},
+        "required": ["found"],
+    }
+    schema = answer(**{"if": condition, "then": THEN_POLICY})
+
+    errors = output_errors(schema)
+
+    assert errors == ["output_schema.if.properties.found: must hold exactly const"]
+
+
+def test_the_registry_refuses_policy_lookups_output_with_the_then_removed(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    directory = plant(("tools.yaml", THEN_LINE, ""))
+
+    errors = load_errors(directory)
+
+    assert (
+        "tools.yaml: tools[0].output_schema: 'if' and 'then' must appear together "
+        "(tool 'policy_lookup')"
+    ) in errors
+
+
+def test_the_registry_refuses_an_if_and_a_then_in_policy_lookups_input_schema(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    tail = "      additionalProperties: false\n    output"
+    old = "      required: [policy_number]\n" + tail
+    new = (
+        "      required: [policy_number]\n"
+        "      if: {properties: {policy_number: {const: POL-0001}},"
+        " required: [policy_number]}\n"
+        "      then: {required: [policy_number]}\n" + tail
+    )
+    directory = plant(("tools.yaml", old, new))
+
+    errors = load_errors(directory)
+
+    assert (
+        f"tools.yaml: tools[0].input_schema: {INPUT_ONLY} (tool 'policy_lookup')"
+    ) in errors
+
+
 def test_the_output_schemas_name_the_agreed_fields(real_registry: Path) -> None:
     registry = load_registry(real_registry)
 
@@ -203,6 +525,12 @@ def test_the_output_schemas_name_the_agreed_fields(real_registry: Path) -> None:
     entry = history["properties"]["entries"]["items"]
 
     assert lookup["required"] == ["found"]
+    # A found policy is promised: the graph reads ``policy`` without a guard.
+    assert lookup["if"] == {
+        "properties": {"found": {"const": True}},
+        "required": ["found"],
+    }
+    assert lookup["then"] == {"required": ["policy"]}
     assert set(lookup["properties"]) == {"found", "policy"}
     assert set(policy["required"]) == set(policy["properties"]) - {
         "lapsed_on",

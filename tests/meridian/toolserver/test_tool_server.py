@@ -823,6 +823,44 @@ def test_a_result_that_misses_its_schema_fails_the_call_and_writes_nothing(
     )
 
 
+def test_a_found_policy_answer_without_the_policy_fails_the_call_as_invalid_result(
+    world: World,
+) -> None:
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", lambda conn, call: Completed({"found": True}))
+        + other_handler("policy_lookup"),
+    )
+
+    with pytest.raises(MCPError) as raised:
+        run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert raised.value.error.message == UNAVAILABLE
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "invalid-result",
+        "policy_lookup",
+    )
+
+
+def test_a_not_found_policy_answer_without_a_policy_passes(world: World) -> None:
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", lambda conn, call: Completed({"found": False}))
+        + other_handler("policy_lookup"),
+    )
+
+    result = run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert not result.is_error
+    assert result.structured_content == {"found": False}
+    (row,) = audit_rows(world.db)
+    assert row["outcome"] == "completed"
+
+
 @pytest.mark.parametrize(
     "error",
     [

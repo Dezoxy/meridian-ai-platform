@@ -673,6 +673,30 @@ def test_a_result_with_a_field_the_output_schema_does_not_allow_is_unavailable(
     assert CANARY not in everything_spans_carry(exporter)
 
 
+def test_a_found_policy_answer_without_the_policy_is_unavailable(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    stand_in = StandIn(answer=lambda name, args: structured({"found": True}))
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    with pytest.raises(ToolUnavailable) as raised:
+        tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert raised.value.tool == "policy_lookup"
+    assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
+
+
+def test_a_not_found_answer_without_a_policy_is_a_result(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    stand_in = StandIn(answer=lambda name, args: structured({"found": False}))
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    result = tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert result.data == {"found": False}
+
+
 def written(records: list[logging.LogRecord]) -> str:
     """What a handler would write for the records, tracebacks included."""
     return "\n".join(logging.Formatter().format(record) for record in records)

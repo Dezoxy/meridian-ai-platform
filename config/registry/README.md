@@ -53,8 +53,11 @@ job. Beyond the schemas, validation refuses:
   schema that is not closed and bounded at every depth: every object refuses
   extra properties, every string has a maximum length or a fixed set of
   values, a string with a pattern always has a maximum length, every number
-  a range, and `$ref` is refused (hard rule 6); a tool's output schema,
-  where it has one, is held to the same rules;
+  a range, and `$ref` is refused (hard rule 6); the only conditional is
+  an object's `if` (constants on its own properties) with a `then` (names
+  of its own properties that become required), admitted in an output
+  schema only, so an answer can promise a field when a flag says so; a
+  tool's output schema, where it has one, is held to the same rules;
 - a decision tool in any agent's allowlist, and an allowlisted tool whose
   name or scope carries a decision word (decide, approve, reject, decline
   or deny, in any inflection): adjusters decide in the Claims Triage App,

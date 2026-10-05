@@ -487,7 +487,7 @@ def check_tools(registry: Registry) -> list[str]:
             errors += [
                 f"{where}.{message} {suffix}"
                 for message in input_schema_errors(
-                    tool.output_schema, root="output_schema"
+                    tool.output_schema, root="output_schema", allow_conditionals=True
                 )
             ]
     return errors
