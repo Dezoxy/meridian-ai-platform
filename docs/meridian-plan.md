@@ -7570,10 +7570,11 @@ readable by the service's own user and group alone.
   tests run it with stub commands; the issuer was not taken from the
   live cluster; the check for the add-on did stop a real deploy, above);
   a renewal.
-- **Left as it is:** the cluster made on 2026-10-05 at 08:13 UTC, with
-  `make smoke` green, the six services on image `473847335d80`, eight
-  certificates Ready and no probe object. Its database is new, so every
-  golden claim is unused.
+- **Left as it is:** the cluster made on 2026-10-05 at 08:13 UTC, on
+  what `main` holds after this step: after S060 was merged in, `make
+  deploy` again (image `dc960ac33fc7`, exit 0) and `make smoke` (exit 0,
+  24 PASS). Eight certificates Ready, no probe object. Its database is
+  new, so every golden claim is unused.
 - **Gates.** `uv run ruff check . --no-cache`: `All checks passed!`.
   `make docs`: `docs consistency: 13 checks passed`. `make test`: exit
   0, `codex agents: 11 twins current`. `make lint`: `Contracts: 5 kept,
@@ -7588,9 +7589,13 @@ readable by the service's own user and group alone.
   the review fixes, and `8888 passed, 11 skipped` after them (27 minutes,
   beside two other steps' suites). The two test files that were split
   afterwards ran alone: `171 passed`, the same 171 names as before the
-  split. One test of this step failed once in an implementer's run,
-  under load, on an exact number of seconds; it was rewritten to hold by
-  a floor and has passed since.
+  split. After S060 was merged in, a third run was stopped by the owner
+  at 79 per cent, with no failure until then, the laptop at a load of 60
+  under other steps' suites; on that tree the quick gates and the tests
+  that read the merged documents passed, and CI runs the whole suite on
+  the pull request. One test of this step failed once in an
+  implementer's run, under load, on an exact number of seconds; it was
+  rewritten to hold by a floor and has passed since.
 - **Not run:** `make eval` (no prompt, graph or recording changed);
   `make demo`; anything against Azure.
 
