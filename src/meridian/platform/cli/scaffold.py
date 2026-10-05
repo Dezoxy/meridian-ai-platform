@@ -544,15 +544,21 @@ def _replace(path: Path, data: bytes) -> None:
 
 def _make_directories(directory: Path, made: list[Path]) -> None:
     """Create ``directory`` and the parents that are missing, noting each one
-    this call made in ``made``, outermost first."""
+    this call made in ``made``, outermost first. A directory is noted before it
+    is made, so that an interrupt between the two is undone; one that turns out to
+    exist already is not this call's, and is taken out again."""
     missing = []
     current = directory
     while not os.path.lexists(current):
         missing.append(current)
         current = current.parent
     for each in reversed(missing):
-        each.mkdir()
         made.append(each)
+        try:
+            each.mkdir()
+        except FileExistsError:
+            made.remove(each)
+            raise
 
 
 def _failure(exc: OSError) -> str:
@@ -563,6 +569,19 @@ def _failure(exc: OSError) -> str:
     return f"{type(exc).__name__}: {os.strerror(exc.errno)}"
 
 
+def _put_back(path: Path, old: bytes) -> None:
+    """Make ``path`` hold ``old`` again. A file that already does (its replacement
+    never happened, perhaps because it is the one that failed) is left alone: the
+    same failure would otherwise be met again and reported as an undo that failed.
+    A file that cannot be read is replaced."""
+    try:
+        if path.read_bytes() == old:
+            return
+    except OSError:
+        pass
+    _replace(path, old)
+
+
 def _undo(
     root: Path,
     files: list[Path],
@@ -570,8 +589,12 @@ def _undo(
     replaced: list[tuple[Path, bytes]],
 ) -> list[str]:
     """Put back what a failed write changed; the relative paths that did not go
-    back, in the order tried. ``replaced`` holds each edited file and its old
-    bytes, in the order they were replaced, and goes back in the reverse order.
+    back, in the order tried. Everything is noted before it is done, so an entry
+    may be one whose change never happened: ``replaced`` holds each edited file and
+    its old bytes, in the order they were replaced, and goes back in the reverse
+    order (a file not yet replaced already holds them and is left alone); a file
+    in ``files`` or a directory in ``directories`` that was never created is
+    skipped.
     Once a file will not go back, the files replaced before it are left as they
     are and named: undoing the agents file while the services file still lets the
     runtime name the agent would leave a registry that does not validate."""
@@ -579,7 +602,7 @@ def _undo(
     for path, old in reversed(replaced):
         if not left:
             try:
-                _replace(path, old)
+                _put_back(path, old)
                 continue
             except OSError:
                 pass
@@ -592,19 +615,65 @@ def _undo(
     for directory in reversed(directories):
         try:
             directory.rmdir()
+        except FileNotFoundError:
+            pass
         except OSError:
             left.append(directory)
     return [path.relative_to(root).as_posix() for path in left]
+
+
+def _create_files(
+    targets: list[tuple[Path, str]], files: list[Path], directories: list[Path]
+) -> None:
+    """Create each file of ``targets`` with its text, and the directories it
+    needs, noting what this call made in ``files`` and ``directories``. A file is
+    noted before it is created, so that an interrupt between the two is undone;
+    one that turns out to exist already is not this call's, and is taken out
+    again so that the undo leaves it alone."""
+    for path, text in targets:
+        _make_directories(path.parent, directories)
+        files.append(path)
+        try:
+            with open(path, "x", encoding="utf-8", newline="\n") as stream:
+                stream.write(text)
+        except FileExistsError:  # only the exclusive creation can say so
+            files.remove(path)
+            raise
+
+
+def _read_as_planned(path: Path, digest: str) -> bytes:
+    """The bytes of ``path``, which must be what the plan was made from: raise the
+    stale plan's own error when it cannot be read or hashes to something else."""
+    try:
+        old = path.read_bytes()
+    except OSError:
+        raise ScaffoldError(STALE_PLAN) from None
+    if hashlib.sha256(old).hexdigest() != digest:
+        raise ScaffoldError(STALE_PLAN)
+    return old
+
+
+def _replace_files(root: Path, plan: Plan, replaced: list[tuple[Path, bytes]]) -> None:
+    """Replace the edited files in ``WRITE_ORDER``. Each is noted, with the bytes
+    it was planned from, before it is replaced, so that an interrupt between the
+    two is undone; a file that is not what the plan was made from (saved after
+    the check at the start of ``write_plan``) is not touched."""
+    for relative in WRITE_ORDER:
+        path = root / relative
+        replaced.append((path, _read_as_planned(path, plan.base[relative])))
+        _replace(path, plan.changed[relative].encode("utf-8"))
 
 
 def write_plan(root: Path, plan: Plan) -> None:
     """Write ``plan`` under ``root``: the new files, then ``agents.yaml``, then
     ``services.yaml`` (``WRITE_ORDER``), then ``pyproject.toml``, whose entry
     points are what makes the platform load the workload. Refuse, before the first
-    write, a plan whose three edited files are no longer what it was planned from.
-    When a write fails, or the process is interrupted, remove what this call made
-    and put the edited files back; an ``OSError`` becomes a ``ScaffoldWriteError``
-    and anything else propagates unchanged."""
+    write, a plan whose three edited files are no longer what it was planned from;
+    each is checked again just before its own replacement, and a file that
+    changed since ends the write with the same refusal. When a write fails, or the
+    process is interrupted, remove what this call made and put the edited files
+    back; an ``OSError`` becomes a ``ScaffoldWriteError`` and anything else
+    propagates unchanged."""
     targets = [(root / relative, text) for relative, text in plan.created.items()]
     if any(os.path.lexists(path) for path, _ in targets):
         raise ScaffoldError(PATH_EXISTS)
@@ -613,16 +682,8 @@ def write_plan(root: Path, plan: Plan) -> None:
     directories: list[Path] = []
     replaced: list[tuple[Path, bytes]] = []
     try:
-        for path, text in targets:
-            _make_directories(path.parent, directories)
-            with open(path, "x", encoding="utf-8", newline="\n") as stream:
-                files.append(path)
-                stream.write(text)
-        for relative in WRITE_ORDER:
-            path = root / relative
-            old = path.read_bytes()
-            _replace(path, plan.changed[relative].encode("utf-8"))
-            replaced.append((path, old))
+        _create_files(targets, files, directories)
+        _replace_files(root, plan, replaced)
     except BaseException as exc:
         left = _undo(root, files, directories, replaced)
         if not isinstance(exc, OSError):

@@ -7,6 +7,7 @@ repository's ``pyproject.toml`` and registry and an empty workloads directory.
 """
 
 import json
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
     AGENTS_NO_FINAL_NEWLINE,
+    PYPROJECT_EDIT_UNVERIFIED,
+    PYPROJECT_HEADER_UNUSABLE,
     ScaffoldError,
     plan_workload,
 )
@@ -295,3 +298,52 @@ def test_the_same_block_scalar_with_a_final_newline_is_accepted(root: Path) -> N
     new = yaml.safe_load(plan.changed[AGENTS_FILE])["agents"]
     assert len(new) == agents_before + 1
     assert new[-2]["description"] == "Grades whether a rationale is grounded\n"
+
+
+TOML_WITH_A_HEADER_IN_A_STRING = (
+    '[project]\nname = "meridian"\ndescription = """\n'
+    '[project.entry-points."meridian.graphs"]\n"""\n\n'
+    '[ project.entry-points."meridian.graphs" ]\nclaims-triage = "a.b:c"\n\n'
+    '[project.entry-points."meridian.evaluations"]\nclaims-triage = "d.e:f"\n'
+)
+# The first header is the real one, so an edit that took it would be right: only
+# the refusal of a header seen twice stops this one.
+TOML_WITH_A_HEADER_TWICE = (
+    '[project]\nname = "meridian"\n\n'
+    '[project.entry-points."meridian.graphs"]\nclaims-triage = "a.b:c"\n\n'
+    '[project.entry-points."meridian.evaluations"]\nclaims-triage = "d.e:f"\n\n'
+    '[tool.x]\nnote = """\n[project.entry-points."meridian.graphs"]\n"""\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_EDIT_UNVERIFIED),
+        (
+            TOML_WITH_A_HEADER_TWICE,
+            # The header is on lines 4 and 12 of the text.
+            PYPROJECT_HEADER_UNUSABLE.format(
+                '[project.entry-points."meridian.graphs"]', "4 and 12"
+            ),
+        ),
+    ],
+    ids=["insertion-lands-in-the-string", "header-seen-twice"],
+)
+def test_a_header_line_inside_a_string_fails_the_pyproject_edit(
+    root: Path, text: str, message: str
+) -> None:
+    (root / "pyproject.toml").write_text(text, encoding="utf-8")
+    before = snapshot(root)
+
+    with pytest.raises(ScaffoldError) as refused:
+        plan_workload(root, NAME)
+
+    assert str(refused.value) == message
+    assert snapshot(root) == before
+
+
+def test_the_trees_with_a_header_line_in_a_string_are_valid_toml() -> None:
+    for text in (TOML_WITH_A_HEADER_IN_A_STRING, TOML_WITH_A_HEADER_TWICE):
+        document = tomllib.loads(text)
+        assert document["project"]["entry-points"][GRAPHS] == {"claims-triage": "a.b:c"}

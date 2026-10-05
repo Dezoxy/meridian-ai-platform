@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app, scaffold
 from meridian.platform.cli.scaffold import (
     PATH_OUTSIDE,
+    REGISTRY_INVALID,
     ROLLBACK_FAILED,
     STALE_PLAN,
     WRITE_FAILED,
@@ -49,6 +51,34 @@ REGISTRY = "config/registry"
 RUNTIME_ENTRY = "  - id: agent-runtime"
 AGENTS_KEY = "    agents:"
 RUNTIME_LINE = "    agents: [claims-triage]"
+RUNTIME_COMMENT = "  # the agent of the run it was asked for"
+# The edit logic is tested on this text, not on the committed file, whose list
+# changes whenever the runtime may name another agent. It holds what the edit
+# reads: the runtime's entry with one agent and a comment on the edited line, one
+# other service, and the file's own header comment.
+SMALL_SERVICES = "\n".join(
+    [
+        "# the platform's services",
+        "services:",
+        "  - id: claims-api",
+        "    description: Takes a claim.",
+        "    calls: [agent-runtime]",
+        "    tenants: [claims-triage]",
+        "    agents: [claims-triage]",
+        RUNTIME_ENTRY,
+        "    description: Runs the agent graphs.",
+        "    calls: [claims-mcp]",
+        "    tenants: [claims-triage]",
+        RUNTIME_LINE + RUNTIME_COMMENT,
+        "  - id: claims-mcp",
+        "    description: Claim notes.",
+        "    calls: []",
+        "    tenants: []",
+        "    agents: []",
+        "",
+    ]
+)
+REPO = Path(__file__).resolve().parents[3]
 LEAKED = "a-path-or-a-name-the-error-must-not-repeat"
 EXIT_REFUSED = 2
 EXIT_FAILED = 1
@@ -193,9 +223,9 @@ def test_a_second_workload_is_appended_after_the_first(root: Path) -> None:
     ],
 )
 def test_the_name_goes_inside_the_brackets_and_a_trailing_comment_survives(
-    root: Path, line: str, expected: str
+    line: str, expected: str
 ) -> None:
-    old = with_runtime_agents(read(root), line)
+    old = with_runtime_agents(SMALL_SERVICES, line)
 
     new = services_edit(old, NAME)
 
@@ -214,18 +244,27 @@ def test_a_comment_on_the_runtime_line_survives_the_whole_command(root: Path) ->
     assert f"    agents: [claims-triage, {NAME}]  # kept" in read(root).split("\n")
 
 
-def test_a_file_with_crlf_line_endings_keeps_every_other_line_as_it_was(
-    root: Path,
-) -> None:
-    old = read(root).replace("\n", "\r\n")
+def test_a_file_with_crlf_line_endings_keeps_every_other_line_as_it_was() -> None:
+    old = SMALL_SERVICES.replace("\n", "\r\n")
 
     new = services_edit(old, NAME)
 
     old_lines, new_lines = old.split("\r\n"), new.split("\r\n")
     assert len(new_lines) == len(old_lines)
     changed = [a for a, b in zip(old_lines, new_lines, strict=True) if a != b]
-    assert changed == [RUNTIME_LINE]
-    assert f"    agents: [claims-triage, {NAME}]" in new_lines
+    assert changed == [RUNTIME_LINE + RUNTIME_COMMENT]
+    assert f"    agents: [claims-triage, {NAME}]{RUNTIME_COMMENT}" in new_lines
+
+
+def test_the_edit_of_the_committed_file_is_the_old_parse_plus_the_name() -> None:
+    old = (REPO / SERVICES).read_text(encoding="utf-8")
+
+    new = services_edit(old, NAME)
+
+    expected = yaml.safe_load(old)
+    runtime = next(s for s in expected["services"] if s["id"] == "agent-runtime")
+    runtime["agents"].append(NAME)
+    assert yaml.safe_load(new) == expected
 
 
 def twice(text: str) -> str:
@@ -301,12 +340,9 @@ def refusal_cases(text: str) -> list[tuple[str, str, str]]:
     ]
 
 
-REAL = (Path(__file__).resolve().parents[3] / SERVICES).read_text(encoding="utf-8")
-
-
 @pytest.mark.parametrize(
     ("text", "message"),
-    [pytest.param(t, m, id=i) for i, t, m in refusal_cases(REAL)],
+    [pytest.param(t, m, id=i) for i, t, m in refusal_cases(SMALL_SERVICES)],
 )
 def test_the_edit_refuses_what_it_cannot_extend_with_the_line_and_never_the_name(
     text: str, message: str
@@ -346,6 +382,56 @@ def test_a_runtime_list_the_edit_cannot_extend_is_refused_and_nothing_is_written
     assert result.exit_code == EXIT_REFUSED
     assert result.stdout == ""
     assert result.stderr == "ERROR " + SERVICES_AGENTS_UNUSABLE.format(line) + "\n"
+    assert NAME not in result.stderr
+    assert snapshot(root) == before
+
+
+def entry_agents_index(text: str, entry: str) -> int:
+    """The 0-based index of the line of the ``agents`` of the entry ``entry``."""
+    lines = text.split("\n")
+    start = lines.index(entry)
+    return next(i for i in range(start, len(lines)) if lines[i].startswith(AGENTS_KEY))
+
+
+def share_the_runtimes_agents_with_another_service(text: str) -> str:
+    """``text`` where the runtime's ``agents`` is an anchor and the model gateway's
+    ``agents`` an alias of it: appending to the one list changes both."""
+    lines = text.split("\n")
+    runtime = runtime_line_index(text)
+    lines[runtime] = lines[runtime].replace("agents:", "agents: &shared", 1)
+    lines[entry_agents_index(text, "  - id: model-gateway")] = "    agents: *shared"
+    return "\n".join(lines)
+
+
+def merge_an_entry_into_the_runtime(text: str) -> str:
+    """``text`` where the Claims API's entry (it comes first: an anchor is defined
+    before its alias) is an anchor and the runtime's entry merges it with
+    ``<<: *rt`` after its own ``agents``."""
+    lines = text.split("\n")
+    lines[lines.index("  - id: claims-api")] = "  - &rt\n    id: claims-api"
+    runtime = runtime_line_index(text)
+    lines[runtime] += "\n    <<: *rt"
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize(
+    "arrange",
+    [share_the_runtimes_agents_with_another_service, merge_an_entry_into_the_runtime],
+    ids=["a shared list", "a merged entry"],
+)
+def test_an_anchor_or_alias_in_services_yaml_is_refused_and_nothing_is_written(
+    root: Path, arrange: Callable[[str], str]
+) -> None:
+    edit(root / SERVICES, arrange)
+    before = snapshot(root)
+
+    result = new_workload(root)
+
+    assert result.exit_code == EXIT_REFUSED
+    assert result.stdout == ""
+    first, *details = result.stderr.splitlines()
+    assert first == "ERROR " + REGISTRY_INVALID
+    assert any("anchors and aliases are not allowed" in line for line in details)
     assert NAME not in result.stderr
     assert snapshot(root) == before
 

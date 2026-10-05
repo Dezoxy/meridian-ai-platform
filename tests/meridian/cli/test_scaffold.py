@@ -660,55 +660,6 @@ def test_a_pyproject_table_the_text_edit_cannot_find_fails_the_pyproject_edit(
     assert str(refused.value) == PYPROJECT_EDIT_UNVERIFIED
 
 
-TOML_WITH_A_HEADER_IN_A_STRING = (
-    '[project]\nname = "meridian"\ndescription = """\n'
-    '[project.entry-points."meridian.graphs"]\n"""\n\n'
-    '[ project.entry-points."meridian.graphs" ]\nclaims-triage = "a.b:c"\n\n'
-    '[project.entry-points."meridian.evaluations"]\nclaims-triage = "d.e:f"\n'
-)
-# The first header is the real one, so an edit that took it would be right: only
-# the refusal of a header seen twice stops this one.
-TOML_WITH_A_HEADER_TWICE = (
-    '[project]\nname = "meridian"\n\n'
-    '[project.entry-points."meridian.graphs"]\nclaims-triage = "a.b:c"\n\n'
-    '[project.entry-points."meridian.evaluations"]\nclaims-triage = "d.e:f"\n\n'
-    '[tool.x]\nnote = """\n[project.entry-points."meridian.graphs"]\n"""\n'
-)
-
-
-@pytest.mark.parametrize(
-    ("text", "message"),
-    [
-        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_EDIT_UNVERIFIED),
-        (
-            TOML_WITH_A_HEADER_TWICE,
-            # The header is on lines 4 and 12 of the text.
-            PYPROJECT_HEADER_UNUSABLE.format(
-                '[project.entry-points."meridian.graphs"]', "4 and 12"
-            ),
-        ),
-    ],
-    ids=["insertion-lands-in-the-string", "header-seen-twice"],
-)
-def test_a_header_line_inside_a_string_fails_the_pyproject_edit(
-    root: Path, text: str, message: str
-) -> None:
-    (root / "pyproject.toml").write_text(text, encoding="utf-8")
-    before = snapshot(root)
-
-    with pytest.raises(ScaffoldError) as refused:
-        plan_workload(root, NAME)
-
-    assert str(refused.value) == message
-    assert snapshot(root) == before
-
-
-def test_the_trees_with_a_header_line_in_a_string_are_valid_toml() -> None:
-    for text in (TOML_WITH_A_HEADER_IN_A_STRING, TOML_WITH_A_HEADER_TWICE):
-        document = tomllib.loads(text)
-        assert document["project"]["entry-points"][GRAPHS] == {"claims-triage": "a.b:c"}
-
-
 def nothing_to_arrange(root: Path) -> None:
     return None
 
@@ -802,7 +753,7 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         WRITE_FAILED,
         ROLLBACK_FAILED,
     ]
-    # The first four take the type of an error; the last three take what the
+    # The first four take the type of an error; the other eight take what the
     # refusal says of the person's own tree: what holds a name, a line, a header.
     taking_a_type = {
         REGISTRY_UNREADABLE,

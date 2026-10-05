@@ -511,3 +511,149 @@ def test_running_the_scaffold_twice_is_refused_and_changes_nothing(
 
     assert str(refused.value).startswith(NAME_TAKEN.format(""))
     assert snapshot(root) == before
+
+
+def interrupt_after_replacing(
+    monkeypatch: pytest.MonkeyPatch, root: Path, relative: str
+) -> list[Path]:
+    """Make the first replacement of ``relative`` raise ``KeyboardInterrupt`` once
+    the real replacement is done; the undo's own replacement is left alone. The
+    returned list holds the path once the interrupt was raised."""
+    real = scaffold._replace
+    interrupted: list[Path] = []
+
+    def replace(path: Path, data: bytes) -> None:
+        real(path, data)
+        if path == root / relative and not interrupted:
+            interrupted.append(path)
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(scaffold, "_replace", replace)
+    return interrupted
+
+
+@pytest.mark.parametrize("relative", scaffold.WRITE_ORDER)
+def test_an_interrupt_right_after_a_replacement_leaves_the_tree_byte_identical(
+    root: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    interrupted = interrupt_after_replacing(monkeypatch, root, relative)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    assert interrupted == [root / relative]  # the interrupt came where it should
+    assert snapshot(root) == before
+
+
+@pytest.mark.parametrize("relative", sorted(created_paths()))
+def test_an_interrupt_right_after_a_file_was_created_leaves_the_tree_byte_identical(
+    root: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    real_open = open
+    interrupted: list[Path] = []
+
+    def fake_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        stream = real_open(path, *args, **kwargs)
+        if Path(path) == root / relative:
+            stream.close()
+            interrupted.append(Path(path))
+            raise KeyboardInterrupt
+        return stream
+
+    monkeypatch.setattr(scaffold, "open", fake_open, raising=False)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    assert interrupted == [root / relative]
+    assert snapshot(root) == before
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        f"src/meridian/workloads/{MODULE}",
+        "tests",
+        "tests/meridian",
+        "tests/meridian/workloads",
+        f"tests/meridian/workloads/{MODULE}",
+        "data",
+        "data/evaluation",
+        f"data/evaluation/{NAME}",
+        f"data/evaluation/{NAME}/golden",
+    ],
+)
+def test_an_interrupt_right_after_a_directory_was_made_leaves_the_tree_byte_identical(
+    root: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    real = Path.mkdir
+    interrupted: list[Path] = []
+
+    def mkdir(self: Path, *args: Any, **kwargs: Any) -> None:
+        real(self, *args, **kwargs)
+        if self == root / relative:
+            interrupted.append(self)
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    assert interrupted == [root / relative]
+    assert snapshot(root) == before
+
+
+def save_after_the_stale_check(
+    monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]
+) -> None:
+    """Make ``change`` happen right after the check that the plan is current."""
+    real = scaffold._refuse_a_stale_plan
+
+    def check(root: Path, plan: Plan) -> None:
+        real(root, plan)
+        change()
+
+    monkeypatch.setattr(scaffold, "_refuse_a_stale_plan", check)
+
+
+@pytest.mark.parametrize("relative", scaffold.WRITE_ORDER)
+def test_a_file_saved_after_the_stale_check_is_not_overwritten_and_the_rest_is_undone(
+    root: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    saved = (root / relative).read_bytes() + b"\n# saved by the person\n"
+    save_after_the_stale_check(
+        monkeypatch, lambda: (root / relative).write_bytes(saved)
+    )
+
+    with pytest.raises(ScaffoldError) as refused:
+        write_plan(root, plan)
+
+    assert str(refused.value) == STALE_PLAN
+    assert not isinstance(refused.value, ScaffoldWriteError)
+    assert refused.value.details == ()
+    assert snapshot(root) == {**before, relative: saved}
+
+
+@pytest.mark.parametrize("relative", scaffold.WRITE_ORDER)
+def test_a_file_that_cannot_be_read_when_its_turn_comes_is_a_stale_plan_too(
+    root: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    save_after_the_stale_check(monkeypatch, (root / relative).unlink)
+
+    with pytest.raises(ScaffoldError) as refused:
+        write_plan(root, plan)
+
+    assert str(refused.value) == STALE_PLAN
+    assert not isinstance(refused.value, ScaffoldWriteError)
+    assert snapshot(root) == {k: v for k, v in before.items() if k != relative}
