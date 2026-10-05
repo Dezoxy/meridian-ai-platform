@@ -4,6 +4,8 @@ operating system chose (uvicorn in a thread), called with the SDK's client."""
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -19,6 +21,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from servicesupport import REGISTRY_DIR
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
+from tlssupport import loopback_sans, make_ca
 from toolsupport import (
     CANARY,
     CLAIM,
@@ -35,6 +38,7 @@ from toolsupport import (
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.common.tls import CERT_FILE_ENV
 from meridian.platform.policy_mcp.app import create_app, create_app_from_env
 from meridian.platform.toolserver import server as server_module
 from meridian.platform.toolserver.settings import ALLOWED_HOSTS_ENV, ToolServerSettings
@@ -271,6 +275,120 @@ def test_the_hosts_are_split_on_commas_and_trimmed() -> None:
 
     assert settings.allowed_hosts == ("policy-mcp:8080", "policy-mcp.meridian:8080")
     assert "pw" not in repr(settings)
+
+
+# ── health follows the certificate the process loaded (S056, T-89) ─────────
+# The tool servers read the variable of the process, so these tests set it.
+# A certificate that began 55 minutes ago for an hour is five minutes from its
+# end, inside its margin (a sixth of its hour); one that began a minute ago is
+# far from it.
+EXPIRING = {"status": "certificate-expiring"}
+
+
+def certificate_file(
+    directory: Path, began_ago: timedelta, lasts: timedelta, stem: str = "tool"
+) -> Path:
+    ca = make_ca(directory, f"{stem}-ca")
+    now = datetime.now(UTC)
+    return ca.issue(
+        stem, stem, loopback_sans(), now - began_ago, now - began_ago + lasts
+    ).cert
+
+
+def health_client(monkeypatch: pytest.MonkeyPatch, cert: Path | None) -> TestClient:
+    if cert is None:
+        monkeypatch.delenv(CERT_FILE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(CERT_FILE_ENV, str(cert))
+    return TestClient(create_app(lifespan_settings()).app)
+
+
+def test_healthz_is_200_while_the_certificate_is_far_from_its_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cert = certificate_file(tmp_path, timedelta(minutes=1), timedelta(hours=1))
+
+    response = health_client(monkeypatch, cert).get("/healthz")
+
+    assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_healthz_is_503_once_the_certificate_is_near_its_end_and_a_newer_one_is_on_disk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cert = certificate_file(tmp_path, timedelta(minutes=55), timedelta(hours=1))
+    client = health_client(monkeypatch, cert)
+    renewed = certificate_file(
+        tmp_path, timedelta(minutes=1), timedelta(hours=1), stem="renewed"
+    )
+    cert.write_bytes(renewed.read_bytes())
+
+    response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+
+
+def test_healthz_is_200_with_no_certificate_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = health_client(monkeypatch, None).get("/healthz")
+
+    assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_a_renewed_file_after_the_start_does_not_turn_the_tool_server_healthy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cert = certificate_file(tmp_path, timedelta(minutes=55), timedelta(hours=1))
+    client = health_client(monkeypatch, cert)
+    # What the kubelet does at renewal: the same file, a new certificate.
+    renewed = certificate_file(
+        tmp_path, timedelta(minutes=1), timedelta(hours=1), stem="renewed"
+    )
+    cert.write_bytes(renewed.read_bytes())
+
+    assert client.get("/healthz").status_code == 503
+
+
+def test_near_its_end_the_tool_server_stays_healthy_while_the_file_is_not_renewed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cert = certificate_file(tmp_path, timedelta(minutes=55), timedelta(hours=1))
+    client = health_client(monkeypatch, cert)
+
+    with caplog.at_level(logging.DEBUG, logger="meridian.platform.common.certlife"):
+        unchanged = [client.get("/healthz") for _ in range(2)]
+        cert.write_text("not a certificate any more")
+        garbage = client.get("/healthz")
+        cert.unlink()
+        missing = client.get("/healthz")
+
+    answers = [*unchanged, garbage, missing]
+    assert [(a.status_code, a.json()) for a in answers] == [(200, {"status": "ok"})] * 4
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    assert str(cert) not in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
+def test_after_its_end_the_tool_server_is_503_whatever_the_file_holds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cert = certificate_file(tmp_path, timedelta(hours=2), timedelta(hours=1))
+    client = health_client(monkeypatch, cert)
+    cert.unlink()
+
+    response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+
+
+def test_a_tool_server_refuses_to_start_on_an_unreadable_certificate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(SettingsError, match=CERT_FILE_ENV):
+        health_client(monkeypatch, tmp_path / "missing.crt")
 
 
 # ── the tracer provider's lifetime ──────────────────────────────────────────

@@ -50,9 +50,11 @@ def test_smoke_runs_the_network_policy_check_after_the_sweep_check() -> None:
         "check_sweep",
     ]
     assert calls[7] == "check_network_policy"
-    # Only the service identity check (S055) runs after it.
+    # Only the service identity check (S055) and the certificate policy check
+    # (S056) run after it.
     assert calls[8] == "check_service_identity"
-    assert calls[9].startswith("if ((failures")
+    assert calls[9] == "check_certificate_policy"
+    assert calls[10].startswith("if ((failures")
 
 
 def run_network_policy_check(

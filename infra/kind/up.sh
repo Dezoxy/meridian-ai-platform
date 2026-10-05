@@ -2,7 +2,9 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces, the database's NetworkPolicy, Envoy Gateway and the edge Gateway
-#      cert-manager and the CA that signs the services' certificates
+#      cert-manager (its own approver off), approver-policy with the policies
+#      that say who may ask for a certificate, and the CA that signs the
+#      services' certificates
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its eight roles (the owner, six services and
 #      the scheduled sweep's); their password Secrets are created first, only if
@@ -11,7 +13,8 @@
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
 #      there is deleted), Meridian's alert rules (infra/kind/alerts, one
-#      PrometheusRule), Tempo, Loki, OpenTelemetry Collector
+#      PrometheusRule), a ServiceMonitor for cert-manager's metrics, Tempo,
+#      Loki, OpenTelemetry Collector
 # Every version is pinned in pins.env.
 set -euo pipefail
 
@@ -21,6 +24,8 @@ set -euo pipefail
 readonly HELM_TIMEOUT=10m
 readonly ROLES_TIMEOUT=300
 readonly ROLES_INTERVAL=3
+readonly POLICY_TIMEOUT=120
+readonly POLICY_INTERVAL=3
 # platform-db-rw is the read-write Service; its name is in the server
 # certificate, so verify-full checks it. The CA reaches each pod at this path.
 readonly DATABASE_HOST=platform-db-rw.meridian.svc
@@ -65,6 +70,23 @@ create_cluster() {
   log "creating kind cluster ${CLUSTER_NAME} (first run pulls the node image)"
   kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" \
     --config "${KIND_DIR}/cluster.yaml" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s
+}
+
+# Apply the policies for approver-policy, trying again until the API server
+# accepts them. Helm's --wait returns when the pod is Ready (its /readyz, port
+# 6060), which on the first run came eight seconds after the container started
+# and before its webhook (port 10250, failurePolicy: Fail) answered: all three
+# policies were refused with "failed calling webhook "policy.cert-manager.io":
+# ... connection refused". Server-side apply is idempotent, so a retry after a
+# partial apply is safe. kubectl's error is printed only when the time is up.
+apply_certificate_policy() {
+  local deadline=$((SECONDS + POLICY_TIMEOUT)) out
+  until out="$(kctl apply --server-side --force-conflicts \
+    -f "${KIND_DIR}/manifests/certificate-policy.yaml" 2>&1)"; do
+    ((SECONDS < deadline)) ||
+      die "approver-policy's webhook did not accept the policies in ${POLICY_TIMEOUT}s (look with: kubectl -n cert-manager get pods, and the logs of the approver-policy pod); kubectl said: ${out}"
+    sleep "${POLICY_INTERVAL}"
+  done
 }
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
@@ -166,15 +188,31 @@ install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
   "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yaml" >/dev/null
 
-log "identity: cert-manager and the CA for the services"
+log "identity: cert-manager, who may ask for a certificate, and the CA for the services"
 install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
   "${CERT_MANAGER_VERSION}" "${CERT_MANAGER_REPO}" cert-manager.yaml
+# cert-manager's own approver is off (values/cert-manager.yaml), so nothing is
+# approved until approver-policy and its policies are there. On a cluster where
+# cert-manager already ran with its approver on, this order turns the approver
+# off first and brings the policies later: the certificates already issued are
+# not touched, and a request made in between waits and is then decided. Later
+# can be minutes (Helm's wait for approver-policy, then the apply's retries).
+install_release approver-policy cert-manager "${APPROVER_POLICY_CHART}" \
+  "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml
+apply_certificate_policy
+# The policies must be Ready before the CA is requested, or its request would
+# find none that is appropriate and wait.
+kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
+  certificaterequestpolicy/meridian-services-ca \
+  certificaterequestpolicy/meridian-deny-unlisted --timeout=2m >/dev/null ||
+  die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
 # webhook answers); the issuer is Ready once the CA certificate is issued and
 # its Secret holds the key.
 kctl wait --for=condition=Ready clusterissuer/meridian-services \
-  --timeout=5m >/dev/null
+  --timeout=5m >/dev/null ||
+  die "the issuer meridian-services was not Ready in 5m: read the CertificateRequest of the Certificate meridian-services-ca in cert-manager (kubectl -n cert-manager get certificaterequest; describe it) for its Approved or Denied condition, and the Certificate's events"
 
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
@@ -204,6 +242,8 @@ kctl -n observability wait --for=condition=Available \
 apply_dashboards
 log "observability: Meridian's alert rules"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/alerts/meridian.yaml" >/dev/null
+log "observability: Prometheus scrapes cert-manager's metrics"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml

@@ -300,8 +300,12 @@ def test_a_certificate_names_its_secret_its_uri_and_the_issuer(name: str) -> Non
     }
     assert spec["uris"] == [f"spiffe://{TRUST_DOMAIN}/ns/{NAMESPACE}/sa/{name}"]
     assert spec["issuerRef"] == {**ISSUER, "group": "cert-manager.io"}
-    # cert-manager's own lifetime: 90 days, renewed at 60.
-    assert not {"duration", "renewBefore"} & set(spec)
+    # 90 days, said explicitly: the issuer's policy (S056) caps the duration and
+    # never decides a request that names none, so none would be issued. No
+    # renewBefore: cert-manager's default (a third of the lifetime, 30 days)
+    # stays.
+    assert spec["duration"] == "2160h"
+    assert "renewBefore" not in spec
 
 
 def test_every_certificate_gets_a_new_key_at_renewal_by_an_explicit_setting() -> None:
@@ -539,14 +543,112 @@ def test_the_hosts_a_tool_server_allows_carry_no_scheme() -> None:
 # ── the variables ────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", ALL_WORKLOADS)
-def test_the_tls_files_go_to_the_workloads_that_call_another_service(
+def every_pod(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    """The pod spec of every Deployment, Job and CronJob, by the object's name."""
+    pods = {}
+    for document in documents:
+        if document["kind"] in ("Deployment", "Job"):
+            pods[document["metadata"]["name"]] = document["spec"]["template"]["spec"]
+        elif document["kind"] == "CronJob":
+            template = document["spec"]["jobTemplate"]["spec"]["template"]
+            pods[document["metadata"]["name"]] = template["spec"]
+    return pods
+
+
+def mounts_tls(container: dict) -> bool:
+    return any(m["name"] == "tls" for m in container.get("volumeMounts", []))
+
+
+def test_the_tls_files_go_to_every_container_that_mounts_the_certificate() -> None:
+    pods = every_pod(rendered_chart())
+    mounting = 0
+
+    # Ten pods: six Deployments, three Jobs and the sweep's CronJob.
+    assert len(pods) == 10
+    for name, pod in pods.items():
+        for container in pod["containers"]:
+            given = {
+                item["name"]: item["value"]
+                for item in container.get("env", [])
+                if item["name"] in TLS_VARIABLES
+            }
+            if mounts_tls(container):
+                mounting += 1
+                # Each variable is a path under the mount, the very file named.
+                assert given == TLS_VARIABLES, name
+            else:
+                assert given == {}, name
+    # The six services and the ingestion Job; the migrate and seed Jobs and the
+    # sweep call nobody and mount no certificate.
+    assert mounting == 7
+
+
+@pytest.mark.parametrize("name", TLS_SERVICES)
+def test_the_health_check_watches_the_certificate_the_server_serves(
     name: str,
 ) -> None:
-    environment = env_of(workloads(rendered_chart())[name])
-    given = {k: v for k, v in environment.items() if k in TLS_VARIABLES}
+    workload = workloads(rendered_chart())[name]
+    command = container_of(workload)["command"]
 
-    assert given == (TLS_VARIABLES if name in CLIENTS else {})
+    served = command[command.index("--ssl-certfile") + 1]
+
+    assert env_of(workload)["MERIDIAN_TLS_CERT_FILE"] == served
+
+
+# ── the key file ─────────────────────────────────────────────────────────────
+
+
+def test_every_pod_has_fs_group_equal_to_its_user_and_group() -> None:
+    pods = every_pod(rendered_chart())
+
+    assert len(pods) == 10
+    for name, pod in pods.items():
+        context = pod["securityContext"]
+        assert context["runAsUser"] == context["runAsGroup"], name
+        assert context["fsGroup"] == context["runAsUser"], name
+        assert context["fsGroup"] == 10001, name
+
+
+def test_fs_group_follows_the_one_user_value() -> None:
+    pods = every_pod(render([*helm_arguments(), "--set", "runAsId=20000"]))
+
+    for name, pod in pods.items():
+        assert pod["securityContext"]["fsGroup"] == 20000, name
+
+
+def tls_volumes(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    return {
+        name: volume
+        for name, pod in every_pod(documents).items()
+        for volume in pod["volumes"]
+        if volume["name"] == "tls"
+    }
+
+
+def test_every_certificate_volume_is_mode_0440_and_no_value_changes_it() -> None:
+    volumes = tls_volumes(rendered_chart())
+
+    # The six services and the ingestion Job.
+    assert len(volumes) == 7
+    for name, volume in volumes.items():
+        assert volume["secret"]["defaultMode"] == 0o440 == 288, name
+    # Not a value: a --set of any plausible name leaves the rendering as it is.
+    loosened = render(
+        [
+            *helm_arguments(),
+            "--set",
+            "defaultMode=420",
+            "--set",
+            "tlsDefaultMode=420",
+            "--set",
+            "tls.defaultMode=420",
+            "--set",
+            "identity.defaultMode=420",
+            "--set",
+            "podSecurityContext.fsGroup=0",
+        ]
+    )
+    assert loosened == list(rendered_chart())
 
 
 @pytest.mark.parametrize("name", ALL_WORKLOADS)
@@ -719,11 +821,21 @@ def script_function(script: str, name: str) -> str:
 
 
 def run_identity_check(
-    tmp_path: Path, *, deployed: str = "deployment.apps/claims-api", answers: str
+    tmp_path: Path,
+    *,
+    deployed: str = "deployment.apps/claims-api",
+    answers: str,
+    primary: str = "platform-db-1",
+    audit: str = "6",
+    audit_after: int = 0,
 ) -> tuple[list[str], str]:
     """``check_service_identity`` from smoke.sh in bash against a stub ``kctl``.
     ``answers`` is what the probe prints for each mode, as ``mode=answer`` pairs
     (``mode=FAIL`` makes the probe exit non-zero with a traceback on stderr).
+    ``primary`` is the database's primary pod (empty: none), ``audit`` what
+    ``psql`` prints for the audit query (empty: no row; ``FAIL``: the query
+    fails), after ``audit_after`` queries that print nothing. ``sleep`` does
+    nothing, so a wait for the row costs no time.
     Returns the output lines and what ``kctl`` was asked."""
     asked = tmp_path / "kctl-calls"
     asked.touch()
@@ -734,12 +846,21 @@ def run_identity_check(
             'pass() { echo "PASS  $*"; }',
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
+            "sleep() { :; }",
             re.search(r"^readonly IDENTITY_.*?\n\n", SMOKE_SH, re.M | re.S).group(0),
             script_function(SMOKE_SH, "clean_lines"),
             "kctl() {",
             f'  echo "$*" >>"{asked}"',
             '  case "$*" in',
             '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            '    *"get pod"*) printf "%s" "${PRIMARY}" ;;',
+            '    *" -c postgres "*)',
+            '      if [[ "${AUDIT}" == FAIL ]]; then',
+            '        echo "psql: could not connect" >&2; return 1',
+            "      fi",
+            f'      queries="$(grep -c "psql -d meridian" "{asked}")"',
+            "      if ((queries <= AUDIT_AFTER)); then return 0; fi",
+            '      printf "%s" "${AUDIT}"; return 0 ;;',
             '    *" exec "*)',
             '      mode="${@: -4:1}"',
             "      for pair in ${ANSWERS}; do",
@@ -755,6 +876,7 @@ def run_identity_check(
             script_function(SMOKE_SH, "deployed_services"),
             script_function(SMOKE_SH, "identity_status"),
             script_function(SMOKE_SH, "expect_identity_status"),
+            script_function(SMOKE_SH, "check_gateway_refusal_row"),
             script_function(SMOKE_SH, "check_service_identity"),
             "check_service_identity",
         ]
@@ -763,21 +885,34 @@ def run_identity_check(
         ["bash", "-c", script],
         capture_output=True,
         text=True,
-        env={"PATH": os.environ["PATH"], "DEPLOYED": deployed, "ANSWERS": answers},
+        env={
+            "PATH": os.environ["PATH"],
+            "DEPLOYED": deployed,
+            "ANSWERS": answers,
+            "PRIMARY": primary,
+            "AUDIT": audit,
+            "AUDIT_AFTER": str(audit_after),
+        },
         check=True,
     )
     return done.stdout.splitlines(), asked.read_text()
 
 
-GOOD = "health=200 anonymous=401 foreign-tenant=403"
+GOOD = "health=200 anonymous=401 foreign-tenant=403 foreign-ca=refused"
+# The probe runs four times: three statuses, then the certificate of another CA.
+PROBE_RUNS = 4
+LINES = 5
 
 
-def test_smoke_runs_the_identity_check_last_and_it_is_documented() -> None:
+def test_smoke_runs_the_identity_check_after_the_network_check_and_documents_it() -> (
+    None
+):
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
 
     assert calls[7:9] == ["check_network_policy", "check_service_identity"]
-    assert "9. service identity" in SMOKE_SH
+    assert "9. service identity: five lines" in SMOKE_SH
+    assert "three lines, from the Agent Runtime" not in SMOKE_SH
 
 
 def test_the_identity_probe_is_python_that_compiles_and_reads_the_pods_own_files() -> (
@@ -803,21 +938,23 @@ def test_the_identity_check_passes_when_the_gateway_answers_200_401_403(
 ) -> None:
     lines, asked = run_identity_check(tmp_path, answers=GOOD)
 
-    assert [line.split("  ")[0] for line in lines] == ["PASS"] * 3
+    assert [line.split("  ")[0] for line in lines] == ["PASS"] * LINES
     # From the runtime's pod: the only one that reaches the gateway and holds a
     # certificate the registry lets call it.
-    assert asked.count("-n meridian exec deploy/agent-runtime -- python -c") == 3
+    assert (
+        asked.count("-n meridian exec deploy/agent-runtime -- python -c") == PROBE_RUNS
+    )
     assert "deploy/claims-api" not in asked
 
 
 @pytest.mark.parametrize(
     ("answers", "failing"),
     [
-        ("health=503 anonymous=401 foreign-tenant=403", 0),
-        ("health=200 anonymous=200 foreign-tenant=403", 1),
-        ("health=200 anonymous=403 foreign-tenant=403", 1),
-        ("health=200 anonymous=401 foreign-tenant=200", 2),
-        ("health=200 anonymous=401 foreign-tenant=401", 2),
+        ("health=503 anonymous=401 foreign-tenant=403 foreign-ca=refused", 0),
+        ("health=200 anonymous=200 foreign-tenant=403 foreign-ca=refused", 1),
+        ("health=200 anonymous=403 foreign-tenant=403 foreign-ca=refused", 1),
+        ("health=200 anonymous=401 foreign-tenant=200 foreign-ca=refused", 2),
+        ("health=200 anonymous=401 foreign-tenant=401 foreign-ca=refused", 2),
     ],
 )
 def test_the_identity_check_fails_on_any_other_status(
@@ -826,16 +963,20 @@ def test_the_identity_check_fails_on_any_other_status(
     lines, _ = run_identity_check(tmp_path, answers=answers)
 
     verdicts = [line.split("  ")[0] for line in lines]
-    assert verdicts == ["FAIL" if i == failing else "PASS" for i in range(3)]
+    assert verdicts == ["FAIL" if i == failing else "PASS" for i in range(LINES)]
 
 
 def test_a_probe_that_raises_is_a_failure_not_a_refusal(tmp_path: Path) -> None:
     lines, _ = run_identity_check(
-        tmp_path, answers="health=FAIL anonymous=FAIL foreign-tenant=FAIL"
+        tmp_path,
+        answers="health=FAIL anonymous=FAIL foreign-tenant=FAIL foreign-ca=FAIL",
     )
 
-    assert [line.split("  ")[0] for line in lines] == ["FAIL"] * 3
+    # The audit line (4th) asks the database, not the probe: it still passes.
+    verdicts = [line.split("  ")[0] for line in lines]
+    assert verdicts == ["FAIL", "FAIL", "FAIL", "PASS", "FAIL"]
     assert "Traceback" in lines[0]
+    assert "Traceback" in lines[4]
 
 
 def test_the_identity_check_skips_while_the_services_are_not_deployed(

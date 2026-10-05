@@ -7,7 +7,9 @@
   kind with `make demo`, from one hardened Helm chart under a default-deny
   network policy (S019), where the runtime, the gateway and the tool servers
   know the calling service from its certificate (mutual TLS, S055) and
-  refuse a tenant or agent the registry does not let it name, the gateway
+  refuse a tenant or agent the registry does not let it name, the issuer
+  signs only for the services' namespace and a service asks for its own
+  restart once a renewed certificate is mounted (S056), the gateway
   routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
   the same region and holds each tenant to its rate limits and budgets
@@ -330,7 +332,7 @@ milestone's exit.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | todo | S055, S024 |
+| S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | done | S055, S024 |
 | S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table (not done: the checker is development-base's to change first, and the backlog row stays open); `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | done | S054 |
 | S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
 | S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | doing | S046, S052 |
@@ -536,14 +538,14 @@ that day; the rest stand as their step recorded them.
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | closed on 2026-10-04 outside a step, in development-base first (its pull request 45), then copied in: the rule reads what follows `get` in a command segment, whatever stands before it, and denies a get of a Secret with any output format but `name` and `wide`; a command that lists the Secrets in one segment and prints what a variable or xargs hands it in another is denied as a pair, which a security review of the first version found missing by running the old and the new hook side by side. The owner decided the other two that day: `psql` through `kubectl exec` asks on every call, and `make grafana-password` asks (a person's own terminal never meets the hook). 125 cases added; 38 mutants of the patterns each fail one | none |
 | The command guard is a pattern on what a session types, and these ways to a Secret's values or to superuser SQL give no answer: `kubectl exec` with `env`, `printenv` or `cat` of a mounted file, `kubectl get --raw`, `kubectl config view --raw`, `kubectl create token`, `helm get manifest`, a cloud CLI's secret commands, `pg_dump` or `pg_restore` through `kubectl exec`, and `psql` reached by `kubectl run`, `kubectl debug`, a plugin or `docker exec`. Listed by the security review of the Secret rule on 2026-10-04. A rule for one of them goes into development-base first; the hook stays a guard for habits, not a boundary, as its header says | S024 | open | none |
 | Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | open; a rule on absent series and a NetworkPolicy for `observability` | S064 |
-| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | open; before the chart goes to AKS | S056 |
-| Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | open; split on 2026-10-04: a policy that limits the issuer to `meridian` and its URI prefix is S056's; revocation and a CA key outside a Kubernetes Secret stay for before the chart goes to AKS | S056, S020 |
+| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | closed by S056 (inside the last 24 hours of the certificate it loaded, a service answers 503 on `/healthz` once the mounted file holds a renewed one, and from the certificate's end whatever the file holds; alerts at 21 days left, on a certificate that is not Ready, on the metrics going missing and on the two Deployments that issue). The restart itself was not seen on the cluster | S056 |
+| Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | partly closed by S056 (cert-manager's own approver is off and approver-policy lets the issuer sign only a request made in `meridian` with a URI under its prefix; on the cluster a request from another namespace was denied). Open, for before the chart goes to AKS: revocation; a CA key outside a Kubernetes Secret; inside `meridian` the policy does not tell one service's request from another's | S020 |
 | Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | open | S063 |
 | `meridian workload new` adds a new agent to the registry but not to the Agent Runtime's entry in `services.yaml`, so on a cluster the gateway would refuse the scaffolded workload's calls (S055's name rule) | S055 | closed in part by S055's review: `meridian registry validate` now fails for a graph agent a tenant may run that the runtime may not name, and says where to add it; the scaffold still does not write the entry, and a new workload's own API needs an entry too | S061 |
 | The audit has no column for the calling service: a refused caller's ID is written to `reference`, which a run's rows use for the claim | S055 | open | S033 |
-| A pod's certificate Secret is mounted with the default file mode (0644, owned by root), so the key is readable by any user in the container; each container runs one process as one user. The fix is `fsGroup` in the pod's security context with `defaultMode: 0440`; `0400` alone would stop the non-root process reading it | S055 | open | S056 |
-| `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | open | S056 |
-| `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | open; split on 2026-10-04: the check for the issuer is S056's, the first upgrade's outage stays with S020 | S056, S020 |
+| A pod's certificate Secret is mounted with the default file mode (0644, owned by root), so the key is readable by any user in the container; each container runs one process as one user. The fix is `fsGroup` in the pod's security context with `defaultMode: 0440`; `0400` alone would stop the non-root process reading it | S055 | closed by S056 (`fsGroup` and mode 0440; on the cluster the key file was mode 440, owner root, group 10001 in all six pods) | S056 |
+| `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | closed by S056 (two more lines in check 9: the refusal's row in the audit table, by its reason and the calling service, and a certificate of another CA with the runtime's own URI, refused). The audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row: the row below, S062 | S056 |
+| `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | partly closed by S056 (`make deploy` requires the issuer, the three certificate policies and approver-policy before it builds). Open: the first upgrade's outage | S020 |
 | Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
 | `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | open | S059 |
 | On macOS `unused_port()` still releases its port before the test connects: a bound socket that does not listen drops a connect there, which then waits out its timeout, so a kept port cannot refuse | S057 | open; an observation: the required check runs on Linux, where the port is kept | none |
@@ -553,6 +555,15 @@ that day; the rest stand as their step recorded them.
 | The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | open | none |
 | The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | open | none |
 | A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
+| The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | open | none |
+| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | open | S062 |
+| The pods of one deploy hold certificates that end in the same minute, so they turn unhealthy and restart together: about a minute without an answer from a service with one replica (readiness fails after 10 to 15 seconds, liveness after 60). With one replica each that is the shortest total; with more, the pods of one service should not go together, which needs a margin that differs per pod | S056 | open | S020 |
+| `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | open | S062 |
+| approver-policy has a readiness probe and no liveness probe, so a hung pod is not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | open | S063 |
+| The certificate policy is kind's: the namespace, the trust domain and the issuer are literals in `infra/kind/manifests/certificate-policy.yaml`, so the chart in another namespace, with another trust domain or with a namespaced Issuer is denied or never decided, and nothing says so before the pods wait for a Secret. The policy also lets a request made in `meridian` name any DNS name under `meridian.svc`, and a request with no usage gets cert-manager's default usages | S056 | open | S020 |
+| After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open | none |
+| `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | open | S062 |
+| The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | open; a guard or a rule is the owner's | none |
 
 ## Part C — Step details
 
@@ -7252,6 +7263,361 @@ and not a reason; `make deploy` on a cluster without cert-manager; the
 implementer and the edit gate. The first two are for before the chart
 goes to AKS (S020).
 
+### S056 — Certificate lifecycle
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-05
+**Goal:** on kind, no service goes on serving a certificate past its end
+with green probes, the `meridian-services` issuer signs only for the
+`meridian` namespace and its URI prefix, and a certificate's key is
+readable by the service's own user and group alone.
+
+**Decisions:**
+
+- **Renewal, by the owner (2026-10-04): "Health check restarts it".**
+  `/healthz` answers 503 once the loaded certificate is near its end, so
+  the kubelet restarts the container and it loads the renewed one; plus
+  an alert on cert-manager's expiry metric. No new component. Rejected by
+  the owner: a restart on renewal by a controller.
+- **Issuer scope, by the owner (2026-10-04): "approver-policy".**
+  cert-manager's policy add-on; a rule allows requests only from
+  namespace `meridian` with the Meridian URI prefix, and the built-in
+  approve-everything is switched off. One more small pinned chart. The
+  CA's key stays outside `meridian`.
+- **How the built-in approver is switched off: `disableAutoApproval:
+  true`**, read in the values file of the installed chart (cert-manager
+  v1.21.2) and rendered: the controller gets
+  `--controllers=-certificaterequests-approver`. The installation guide
+  of approver-policy names the same value for cert-manager v1.15.0 and
+  later.
+- **The chart version: `cert-manager-approver-policy` v0.28.0**
+  (2026-09-16), the newest in `charts.jetstack.io`. Its `go.mod` and its
+  release notes build it against cert-manager v1.21.2, the installed
+  version. The project publishes no table of versions that fit; that
+  line is the evidence there is.
+- **A restart only when it helps, after the infrastructure review.** The
+  first rule was the clock alone: 503 from 24 hours before the end. If
+  cert-manager had not renewed, the restarted container would load the
+  same certificate, answer 503 from its first probe and never be Ready:
+  all six services looping through the certificate's last day, an outage
+  a day earlier than doing nothing. The rule now is the owner's in the
+  case the owner described and silent in the other: inside the last 24
+  hours a service answers 503 once the mounted file holds a certificate
+  that ends later than the one it loaded; while the file is not renewed
+  it stays healthy; from the certificate's end it answers 503 whatever
+  the file holds, so none serves past its end with green probes. The
+  file is compared with the certificate that was loaded, never with the
+  clock: a check that judged the file by the clock would stay green on
+  an old certificate in memory. Rejected: restarting as soon as a renewed
+  file is there, a month early, which the owner's "near its end" does
+  not say.
+- **The margin is the smaller of 24 hours and a sixth of the lifetime**,
+  so "renewed, then restarted, then ended" holds for any lifetime;
+  cert-manager renews with a third left. A fixed 24 hours would make a
+  certificate of a day or less unhealthy at birth.
+- **Every Certificate names its 90 days.** The policy caps a request at
+  2160 hours, and approver-policy v0.28.0 never decides a request that
+  names no duration while a cap is set (read in its source: it calls a
+  method on the missing value; the first contract's "denies" was wrong).
+  Rejected: dropping the cap, which would let a request in `meridian`
+  ask for ten years, when the end is the only revocation there is.
+- **Three policies, the namespace held twice.** One allows the services'
+  requests, one the CA's own (or its renewal would wait for ever), and
+  one that allows nothing a Certificate can ask for selects the two
+  Meridian issuers, so a request no policy permits is Denied and not
+  left waiting. cert-manager's account may `use` the two that allow
+  through a RoleBinding in one namespace each. approver-policy may act
+  for the two issuers and no other signer; the chart's default is all.
+- **`cryptography` is a dependency of the platform now**, pinned
+  directly: the standard library cannot read a leaf certificate's dates.
+  It was in the image already, through azure-identity.
+- **Every pod that mounts a certificate gets the three file variables**,
+  the services that call nobody too; `/healthz` reads the path from
+  them. Rejected: a fourth variable for the same file.
+- **Two more alerts and three smoke lines, after the review.** With the
+  controller down, renewal and its metrics stop together, so the expiry
+  alert would have gone quiet when it mattered; and Renovate's gate for
+  a platform pin, `make up` and `make smoke`, made no request, so an
+  update that turned cert-manager's approver back on would have passed.
+
+**Threat model (before the code, `feature-threat-model`):**
+
+- *Flow.* No personal data, prompt or budget. A workload's Certificate
+  becomes a CertificateRequest made by cert-manager's own account;
+  approver-policy reads the request and the policies, asks the API
+  server whether that account may `use` a policy, and writes Approved or
+  Denied; the issuer signs an approved request only. The kubelet asks
+  `GET /healthz` with no certificate. Prometheus reads cert-manager's
+  metrics. Boundaries: TB-3, TB-4 and TB-6 (the services' identity),
+  TB-9 (what reaches the cluster).
+- *Assets.* The CA's signing authority; each service's key; the
+  services' availability, which a health check that is wrongly red takes
+  away.
+- *Threats and what answers them.*
+  1. S, E: a Certificate from another namespace, with a URI outside the
+     prefix, or for a CA, against `meridian-services` (T-88). A policy
+     selects that issuer in namespace `meridian` and allows the prefix,
+     `*.meridian.svc` and the three usages; a second policy of the same
+     issuer allows nothing, so a request the first does not permit is
+     Denied and not left waiting; a third covers the CA's own request,
+     or its renewal would wait for ever. approver-policy may approve for
+     the cluster's two issuers and no other signer.
+  2. D: with the built-in approver off, issuance rests on approver-policy
+     running and on the policy allowing what the chart asks for. A test
+     holds every Certificate the chart renders to the policy; a denied
+     or waiting request fails `make deploy` at its wait, and an alert
+     fires on a Certificate that is not Ready.
+  3. E, T: approver-policy is one more component that can approve.
+     Whoever may change a policy, its binding or cert-manager's values
+     undoes the limit; on kind that is the cluster's administrator.
+  4. D: a health check that restarts pods (T-89). The date is read once,
+     when the application is built, and the file is never opened again:
+     the Secret's file changes at renewal, and a check that read it
+     would stay green on the old certificate in memory. If the renewal
+     failed, the restart loads the same certificate and the pod loops,
+     an outage that starts a margin before the certificate's end; the
+     alert comes weeks before that. Pods started together turn red
+     together.
+  5. I: the 503 says a fixed word and no date; the path still reads
+     nothing of the caller's (T-90).
+  6. I: the key file, mode 0644 and root's, is readable by any user in
+     the container: group of the pod's `fsGroup`, mode 0440.
+  7. R: `make smoke`'s 403 for the wrong reason; a certificate of
+     another CA never tried on the cluster. The key smoke makes for that
+     is a throwaway of a CA nothing trusts, never printed, removed after.
+- *Hard rules.* No model call, tool, provider SDK or framework import
+  is touched; nothing secret is written to a file. No tension.
+- *Gates.* `security-reviewer` and `infra-reviewer`, each given the code
+  and claims to break.
+- *Residual.* Inside `meridian` the policy does not tell one service
+  from another: whoever may create a Certificate there has any service's
+  identity issued. Revocation, the CA's key in a Secret and the first
+  upgrade's outage stay with S020.
+
+**Work log:**
+
+- The cluster was not the one S055 left. Its node was created at
+  18:16 UTC on 2026-10-04, sixteen minutes before this session's first
+  command against it, by a `make up` of a checkout without cert-manager
+  (every release but cert-manager was at revision 1). This session did
+  not delete or recreate it. `make up` from this branch installed
+  cert-manager and the CA; the `meridian` namespace held the database
+  and nothing else, so the services were deployed from this branch. The
+  proof that seven existing certificates stay Ready across the switch
+  became the proof that seven new ones are approved by the policy; the
+  CA's certificate, issued before the switch, stayed at revision 1
+  through it. The database was new too, so every golden claim is unused
+  again. `make demo` was not run.
+- Run unattended, by the owner's instruction of 2026-10-04, beside S057
+  and S058, which merged first. `main` was merged into this branch once
+  for them (two conflicts, both in this file) and the cluster proof
+  repeated on the merged code, with S058's migration 0015 applied.
+- Read before any code: the values file of the installed cert-manager
+  chart, approver-policy's installation guide, its chart at v0.28.0
+  rendered, its `go.mod`, and cert-manager's metrics on the cluster (the
+  names and labels of the two series the alerts read).
+- Nine contracts to `implementer`, up to three at a time on disjoint
+  files, each told to use the Edit tool:
+  1. `common/certlife.py` and the 503 in the two places every service's
+     health route comes from (`create_service_app`, `create_tool_app`);
+     no service's own application file changed.
+  2. The pin with its Renovate reader, cert-manager's approver off, the
+     three policies and their bindings, the order in `make up`.
+  3. The chart: `fsGroup`, mode 0440, the file variables for every pod
+     that mounts a certificate, the 90 days named.
+  4. `make deploy`'s check for the issuer; `make smoke`'s audit line and
+     its certificate of another CA.
+  5. A ServiceMonitor for cert-manager, two alert rules with their
+     promtool tests, an objective and a runbook.
+  6. What the cluster showed (below).
+  7. to 9. What the two reviews found: the health rule; the policies,
+     the alerts and `make up`; `make deploy`, `make smoke` and the kind
+     README.
+- What the contracts got wrong, found by an implementer or on the
+  cluster: "denies a request with no duration" (it is never decided, and
+  with the cap in the policy the chart's Certificates, which named none,
+  would never have been issued: the second implementer read it in the
+  add-on's source before anything reached the cluster); the alert's
+  namespace label and the wait for the add-on (below).
+- **What the cluster showed that no test could.**
+  - `make up` stopped on its first run: Helm's wait for approver-policy
+    returned when its pod was Ready, eight seconds after the container
+    started, and the API server refused the three policies because the
+    add-on's webhook did not answer yet (`connection refused`). The
+    apply is tried again for up to two minutes since.
+  - Prometheus wrote the scrape target's namespace over each
+    certificate's own, so every series said `namespace="cert-manager"`
+    and the rules' namespace matcher held for any certificate in the
+    cluster. The promtool tests could not see it: their series are
+    typed by hand. `honorLabels` on the endpoint, as the stack's own
+    monitor for kube-state-metrics has it.
+- The main session read every changed source, chart, manifest and
+  script file, ran every gate, and compared the tests' model of
+  approver-policy with what the cluster decided for seven probe
+  requests.
+- **Two reviews**, each given the code and nine or ten claims to break.
+  Neither found a way to a certificate a service would accept without
+  rights in `meridian`, in `cert-manager` or on the cluster-wide policy
+  objects. The infrastructure review said block, with three findings
+  rated high. What they found, and what was done:
+  - Fixed. The health rule (infrastructure, high: the decision above).
+    The alerts were blind with the controller down, and nothing watched
+    approver-policy (high): an alert on the CA's series or the scrape
+    missing, and one on the two Deployments that issue. A pin that broke
+    approval would have passed `make up` and `make smoke` (high): three
+    smoke lines. The policy that denies selected every issuer in the
+    cluster, where the add-on may act for two, so a request for another
+    issuer would have had it retrying a denial for ever (security): it
+    selects the two Meridian issuers, and on the cluster a request for
+    another issuer was left with no decision. `make deploy` passed its
+    check with the add-on down and then blamed the issuer at its wait.
+    The expiry alert fired for a Certificate never issued. Any
+    namespace's Certificates added series to Prometheus. The probe read
+    a TLS 1.2 alert as a failure. Two waits in `make up` ended without a
+    word on where to look. One test of this step rested on exact
+    seconds and failed once under load; it holds by a floor now.
+  - Into the backlog, each with the reviewer's way out: the moment
+    between the server's read of the file and the check's; a request
+    that must be refused, made by `make smoke`; the audit line and the
+    width of `refused`; approver-policy's probes, limit and pins; the
+    policy's literals; cert-manager's wait after a failed request.
+  - Recorded as what is left (T-88, T-91): inside `meridian` the policy
+    does not tell one service's request from another's, lets any name
+    under `meridian.svc` through and gives a request without a usage
+    cert-manager's defaults.
+
+- The unattended run was cut off by its usage limit on 2026-10-05, with
+  everything committed and nothing pushed, and went on when the owner
+  said to. `main` moved once more before the push, by S060: merged in
+  (one conflict, the changelog, where this step's entry became v0.41),
+  T-91 still free, and the gates run again on the merged tree.
+- **The cluster was gone a second time.** It ran, with `make smoke`
+  green, at 05:10 UTC; at 08:11 `kind get clusters` found none and no
+  kind container existed. This session had run no command that removes
+  anything. Asked, the owner chose to have it made again from this
+  branch before the step closed (2026-10-05), over closing without it
+  and over making it after the merge. That gave the proof the step still
+  lacked: a cold `make up`, where the CA's own request has to be
+  approved by the policy.
+
+**Result / verification:**
+
+- **On the kind cluster** (2026-10-05, node created 2026-10-04 18:16
+  UTC; three deploys of this branch, the last on image `473847335d80`
+  with `main` merged in, whose results these are unless a line says
+  otherwise):
+  - `make up`: exit 0, `release approver-policy v0.28.0 ready in
+    cert-manager`. The controller runs with
+    `--controllers=-certificaterequests-approver`; the ClusterRole
+    `cert-manager-controller-approve:cert-manager-io` is not found; the
+    add-on's ClusterRole may `approve` for
+    `clusterissuers.cert-manager.io/meridian-services` and
+    `.../meridian-selfsigned` only. The three policies are Ready. The
+    CA's Certificate stayed Ready at revision 1 through the switch.
+  - Asked of the API server as cert-manager's account: `use` on
+    `meridian-services` yes in `meridian` and no in `default`; on
+    `meridian-services-ca` yes in `cert-manager` and no in `meridian`;
+    on `meridian-deny-unlisted` yes in `default`.
+  - `make deploy`: exit 0, `the services' certificates are ready`. Each
+    of the seven requests carries `Approved by CertificateRequestPolicy:
+    "meridian-services"`, reason `policy.cert-manager.io`, duration
+    `2160h0m0s`. Pods at no restart after each deploy.
+  - **A request from another namespace is refused.** Seven Certificates
+    made by hand, read and removed again. Denied, each with its reason
+    in the request: `default`, with the Agent Runtime's own URI (only
+    the denying policy was considered, twice: before and after its
+    selector was narrowed); `meridian`, a URI of another trust domain;
+    `meridian`, asking to be a CA; `meridian`, ten years
+    (`maxDuration: Invalid value: "87600h0m0s": 2160h0m0s`). Approved
+    by `meridian-services-ca`: a Certificate of the CA's own shape in
+    `cert-manager` under another name, so the CA's renewal will be
+    approved; its Secret, a self-signed CA nothing trusts, was removed.
+    Left with no condition at all: a request for an issuer that is not
+    Meridian's.
+  - **The key file's mode**, by `stat` in each of the six pods: `440
+    0:10001`, the process running as uid and gid 10001.
+  - **The health check**, in the gateway's pod and in the claims tool
+    server's, which calls nobody: the dates of the mounted certificate
+    (`not_after 2027-01-03T03:45:43+00:00`, `restart_at` a day before);
+    by the rule it is `far` now, `not-renewed` at the restart time with
+    the file as it is, `ended` at the end.
+  - **`make smoke`: exit 0, 24 PASS**, among them `the gateway's audit
+    log has a refusal for caller-name-not-allowed by agent-runtime
+    (tenant evaluation), 1 s old`, `POST /v1/chat with a certificate of
+    the Agent Runtime's own name from another CA -> refused`, and the
+    three lines of the certificate policy. After the second deploy it
+    was 21 PASS, before those three lines existed.
+  - Prometheus: the target `cert-manager` up; the expiry series one for
+    `cert-manager` (the CA's, 364 days left) and seven for `meridian`
+    (89 days), eight Ready; the four rules of `meridian.certificates`
+    loaded, healthy and inactive; no Meridian alert pending or firing.
+    approver-policy's pod used 30 MiB of its 96 Mi.
+- **From no cluster** (2026-10-05, node created 08:13 UTC, this branch,
+  image `473847335d80`):
+  - `make up`: exit 0 in one run. The CA's request reads `Approved by
+    CertificateRequestPolicy: "meridian-services-ca"`, so nothing on
+    this cluster was ever approved by cert-manager's own approver; both
+    issuers and the three policies Ready.
+  - `make deploy`, started at once: stopped before it built anything,
+    `the Deployment cert-manager-approver-policy in cert-manager has no
+    available replica`. The add-on had exited with `leader election
+    lost` and was back in twenty seconds, the one pod of the cluster
+    that restarted, with the laptop at a load of 27 under other steps'
+    suites. The second run: exit 0, fifteen migrations, `the services'
+    certificates are ready`, the seven requests `Approved by
+    CertificateRequestPolicy: "meridian-services"`, six pods at no
+    restart, the key file `440 0:10001`.
+  - `make smoke`: exit 0, 24 PASS, the five lines of service identity
+    and the three of the certificate policy among them.
+- **Not proved on the cluster:** a service turning unhealthy and being
+  restarted near its certificate's end, which needs a certificate that
+  lasts an hour (the tests over real TLS show the 503 and the new
+  process loading the renewed file); an alert firing (promtool's tests
+  do); `make deploy` stopping without the issuer or the policies (the
+  tests run it with stub commands; the issuer was not taken from the
+  live cluster; the check for the add-on did stop a real deploy, above);
+  a renewal.
+- **Left as it is:** the cluster made on 2026-10-05 at 08:13 UTC, on
+  what `main` holds after this step: after S060 was merged in, `make
+  deploy` again (image `dc960ac33fc7`, exit 0) and `make smoke` (exit 0,
+  24 PASS). Eight certificates Ready, no probe object. Its database is
+  new, so every golden claim is unused.
+- **Gates.** `uv run ruff check . --no-cache`: `All checks passed!`.
+  `make docs`: `docs consistency: 13 checks passed`. `make test`: exit
+  0, `codex agents: 11 twins current`. `make lint`: `Contracts: 5 kept,
+  0 broken.` `make helm-lint`: `1 chart(s) linted, 0 chart(s) failed`.
+  `make alerts`: `SUCCESS: 13 rules found`, then `SUCCESS`. `make
+  check`: exit 0, no ERROR line (ADR 4 has a dated note). `shellcheck`
+  on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0. `make secret-scan`:
+  `no leaks found`.
+- **The whole suite**, `GITHUB_ACTIONS=true make pytest-db` with three
+  workers and the step's own database container, twice, each exit 0:
+  `8758 passed, 11 skipped` on the tree with `main` merged in, before
+  the review fixes, and `8888 passed, 11 skipped` after them (27 minutes,
+  beside two other steps' suites). The two test files that were split
+  afterwards ran alone: `171 passed`, the same 171 names as before the
+  split. After S060 was merged in, a third run was stopped by the owner
+  at 79 per cent, with no failure until then, the laptop at a load of 60
+  under other steps' suites; on that tree the quick gates and the tests
+  that read the merged documents passed, and CI runs the whole suite on
+  the pull request. One test of this step failed once in an
+  implementer's run, under load, on an exact number of seconds; it was
+  rewritten to hold by a floor and has passed since.
+- **Not run:** `make eval` (no prompt, graph or recording changed);
+  `make demo`; anything against Azure.
+
+**Follow-ups:** in Part B's backlog. Closed: the expired certificate
+with green probes and no alert; the key file's mode; the smoke line that
+read a status and not a reason, and the certificate of another CA.
+Closed in part: the issuer's scope (revocation and the CA's key stay
+with S020) and `make deploy` without cert-manager (the first upgrade's
+outage stays with S020). New: the moment between the server's read of
+the certificate and the check's; a restart seen on the cluster, which
+needs a short-lived certificate; pods that restart in the same minute;
+a request `make smoke` makes to be refused, its audit line and the
+width of `refused`; approver-policy's probes, limit and pins; the
+policy's literals for another namespace or issuer; cert-manager's wait
+after a failed request; and a cluster replaced by an older checkout,
+which is the owner's to decide.
+
 ### S057 — Test and tooling hygiene
 
 **Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
@@ -8142,3 +8508,20 @@ backlog, without a change to the triage graph, its rules or a prompt.
   call to the runtime has a timeout per phase. Ten backlog rows closed,
   one moved to S067 (the wording version: it would change how the triage
   routes a claim), four new ones.
+- **v0.41, 2026-10-05:** S056 done, unattended, owning the kind cluster
+  beside S057 and S058. cert-manager's own approver is off and its
+  approver-policy (v0.28.0, one more pin) lets the issuer sign only a
+  request made in `meridian` with a URI under the Meridian prefix; a
+  service answers 503 on `/healthz` inside the last day of the
+  certificate it loaded once a renewed one is mounted, and from its end
+  whatever is mounted; a key file is its service's own user's and
+  group's alone; four alerts watch the certificates; `make deploy`
+  requires the issuer and what approves its requests; `make smoke` reads
+  its 403's reason, tries another CA's certificate and reads that the
+  policy stands. T-91 is new. The health rule changed after the review:
+  by the clock alone, a failed renewal would have had every service
+  looping for a day. The cluster was found replaced by an older
+  checkout's `make up` when the step began and was gone again before it
+  closed: a backlog row, for the owner, who had it made again from this
+  branch, which proved a cold `make up`. Three backlog rows closed and
+  two in part; nine new ones.

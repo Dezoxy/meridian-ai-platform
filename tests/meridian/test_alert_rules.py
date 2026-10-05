@@ -47,7 +47,24 @@ OTHER_SERIES = {
     # kube-state-metrics v2.20.0 documents it with the labels cronjob and
     # namespace; its value is the creation time.
     "kube_cronjob_created",
+    # cert-manager v1.21.2's controller, read on the cluster (S056): both carry
+    # the labels name, namespace and issuer_*; the second one adds `condition`.
+    "certmanager_certificate_expiration_timestamp_seconds",
+    "certmanager_certificate_ready_status",
 }
+EXPIRY_SERIES = "certmanager_certificate_expiration_timestamp_seconds"
+READY_SERIES = "certmanager_certificate_ready_status"
+CERTIFICATE_ALERTS = (
+    "MeridianCertificateNotRenewed",
+    "MeridianCertificateNotReady",
+    "MeridianCertificateMetricsMissing",
+    "MeridianCertificateApproverDown",
+)
+# Where Meridian's certificates are: the chart's, in the namespace it installs
+# into, and the CA's, in cert-manager's (manifests/service-ca.yaml).
+CERTIFICATE_NAMESPACES = {"meridian", "cert-manager"}
+METRICS_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "cert-manager-metrics.yaml"
+SERVICE_CA_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "service-ca.yaml"
 # What a gateway series' label can be: the metric attribute keys with each "."
 # as "_" (how Prometheus names a label that came in over OTLP; see
 # test_kind_manifests.py's METRIC_LABELS), and "job" from the collector.
@@ -164,13 +181,14 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
         "meridian.gateway.recording",
         "meridian.gateway",
         "meridian.workloads",
+        "meridian.certificates",
     ]
 
 
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 8
+    assert len(found) == 12
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -194,7 +212,7 @@ def test_every_slo_label_names_an_objective_the_document_defines() -> None:
         a["alert"]: a["labels"]["slo"] for a in alerts() if "slo" in a["labels"]
     }
 
-    assert len(labelled) == 6
+    assert len(labelled) == 10
     assert set(labelled.values()) <= objectives, labelled
 
 
@@ -306,7 +324,229 @@ def test_the_workload_alerts_stay_in_the_namespace_the_chart_installs_into() -> 
         assert 'namespace="meridian"' in expression, alert["alert"]
 
 
+# ── The certificate alerts (S056) ────────────────────────────────────────────
+def certificate_rules() -> dict[str, dict]:
+    return {rule["alert"]: rule for rule in groups()["meridian.certificates"]}
+
+
+def test_the_certificate_group_holds_the_four_alerts_with_their_thresholds() -> None:
+    rules = certificate_rules()
+
+    assert tuple(rules) == CERTIFICATE_ALERTS
+    expiring = rules["MeridianCertificateNotRenewed"]
+    # Renewal is due at 30 days left, this fires at 21, the services turn
+    # unhealthy at 1 (src/meridian/platform/common/certlife.py). A Certificate
+    # that was never issued has the expiry 0, which is not "close to its end":
+    # only a series above 0 counts.
+    assert expiring["expr"].strip() == (
+        f'({EXPIRY_SERIES}{{namespace=~"meridian|cert-manager"}} > 0)'
+        " - time() < 21 * 86400"
+    )
+    assert expiring["for"] == "1h"
+    unready = rules["MeridianCertificateNotReady"]
+    assert unready["expr"].strip() == (
+        f'{READY_SERIES}{{namespace=~"meridian|cert-manager", condition!="True"}} == 1'
+    )
+    assert unready["for"] == "15m"
+    # The CA's series, not a service's: after `make up` and before `make deploy`
+    # nothing is in `meridian` and the alert must stay quiet.
+    missing = rules["MeridianCertificateMetricsMissing"]
+    assert missing["expr"].strip() == (
+        f"absent({EXPIRY_SERIES}"
+        '{namespace="cert-manager", name="meridian-services-ca"})\n'
+        "or\n"
+        'up{job="cert-manager"} == 0'
+    )
+    assert missing["for"] == "15m"
+    down = rules["MeridianCertificateApproverDown"]
+    assert down["expr"].strip() == (
+        'kube_deployment_status_replicas_available{namespace="cert-manager", '
+        'deployment=~"cert-manager|cert-manager-approver-policy"} == 0'
+    )
+    assert down["for"] == "15m"
+    for name, rule in rules.items():
+        assert rule["labels"]["severity"] == "warning", name
+        assert rule["labels"]["slo"] == "certificate-validity", name
+        assert rule["annotations"]["runbook_url"] == (
+            RUNBOOK_PREFIX + "certificate-expiry.md"
+        ), name
+
+
+def test_the_certificate_alerts_read_the_series_cert_manager_and_the_stack_serve() -> (
+    None
+):
+    rules = certificate_rules()
+
+    assert series_named(rules["MeridianCertificateNotRenewed"]["expr"]) == {
+        EXPIRY_SERIES
+    }
+    assert series_named(rules["MeridianCertificateNotReady"]["expr"]) == {READY_SERIES}
+    # `up` is Prometheus's own: the scrape of cert-manager's controller.
+    assert series_named(rules["MeridianCertificateMetricsMissing"]["expr"]) == {
+        EXPIRY_SERIES,
+        "up",
+    }
+    assert series_named(rules["MeridianCertificateApproverDown"]["expr"]) == {
+        "kube_deployment_status_replicas_available"
+    }
+
+
+def service_ca_certificate() -> dict:
+    (ca,) = [
+        d
+        for d in yaml.safe_load_all(SERVICE_CA_FILE.read_text("utf-8"))
+        if d and d["kind"] == "Certificate"
+    ]
+    return ca
+
+
+def test_the_certificate_alerts_name_only_the_two_namespaces_of_the_certificates() -> (
+    None
+):
+    for name, rule in certificate_rules().items():
+        matchers = re.findall(r'namespace\s*(=~|=)\s*"([^"]*)"', rule["expr"])
+
+        assert matchers, name
+        for operator, value in matchers:
+            if operator == "=~":
+                # Both of them: the services' certificates and the CA's.
+                assert set(value.split("|")) == CERTIFICATE_NAMESPACES, name
+            else:
+                # One: the series of the CA, or of cert-manager's Deployments.
+                assert value == "cert-manager", name
+    for name in ("MeridianCertificateNotRenewed", "MeridianCertificateNotReady"):
+        regex = re.findall(r'namespace\s*=~\s*"', certificate_rules()[name]["expr"])
+        assert len(regex) == 1, name
+    # The CA's certificate is in cert-manager's namespace; the chart's in the
+    # release's, which the workload alerts already pin to "meridian".
+    assert service_ca_certificate()["metadata"]["namespace"] in CERTIFICATE_NAMESPACES
+
+
+def test_the_missing_metrics_alert_names_the_series_of_the_cas_own_certificate() -> (
+    None
+):
+    # The CA's series, because a cluster after `make up` and before `make
+    # deploy` has no Certificate in `meridian`, and must stay quiet.
+    ca = service_ca_certificate()
+    (selector,) = re.findall(
+        rf"absent\({EXPIRY_SERIES}\{{([^}}]*)\}}\)",
+        certificate_rules()["MeridianCertificateMetricsMissing"]["expr"],
+    )
+
+    assert dict(re.findall(r'(\w+)="([^"]*)"', selector)) == {
+        "namespace": ca["metadata"]["namespace"],
+        "name": ca["metadata"]["name"],
+    }
+
+
+def test_the_approver_alert_names_the_two_deployments_of_the_issuing_path() -> None:
+    # cert-manager's controller (nothing is requested without it) and
+    # approver-policy (nothing is approved without it). Their release names and
+    # namespace are up.sh's install_release lines; approver-policy's chart names
+    # its Deployment cert-manager-approver-policy whatever the release is called.
+    expression = certificate_rules()["MeridianCertificateApproverDown"]["expr"]
+    (names,) = re.findall(r'deployment=~"([^"]*)"', expression)
+    lines = UP_SH.read_text("utf-8").splitlines()
+
+    assert set(names.split("|")) == {"cert-manager", "cert-manager-approver-policy"}
+    for release in ("cert-manager", "approver-policy"):
+        prefix = f"install_release {release} cert-manager "
+        assert any(line.startswith(prefix) for line in lines), release
+
+
+def test_the_certificate_runbook_exists_and_names_the_three_policies() -> None:
+    runbook = (
+        REPO_ROOT / "docs" / "operations" / "runbooks" / "certificate-expiry.md"
+    ).read_text("utf-8")
+    policies = [
+        d["metadata"]["name"]
+        for d in yaml.safe_load_all(
+            (REPO_ROOT / "infra/kind/manifests/certificate-policy.yaml").read_text(
+                "utf-8"
+            )
+        )
+        if d and d["kind"] == "CertificateRequestPolicy"
+    ]
+
+    assert len(policies) == 3
+    for policy in policies:
+        assert f"`{policy}`" in runbook, policy
+    for alert in CERTIFICATE_ALERTS:
+        assert alert in runbook, alert
+    assert "runbooks/certificate-expiry.md" in (
+        SLO_FILE.parent / "README.md"
+    ).read_text("utf-8")
+
+
+def metrics_monitor() -> dict:
+    (document,) = [d for d in yaml.safe_load_all(METRICS_FILE.read_text("utf-8")) if d]
+    return document
+
+
+def test_the_service_monitor_selects_the_controllers_metrics_service() -> None:
+    document = metrics_monitor()
+    spec = document["spec"]
+
+    assert document["apiVersion"] == "monitoring.coreos.com/v1"
+    assert document["kind"] == "ServiceMonitor"
+    assert document["metadata"]["name"] == "cert-manager"
+    # The Prometheus selects ServiceMonitors in every namespace with no label,
+    # so the monitor lives beside the rules.
+    assert document["metadata"]["namespace"] == "observability"
+    assert document["metadata"]["labels"]["app.kubernetes.io/part-of"] == "meridian"
+    assert spec["namespaceSelector"] == {"matchNames": ["cert-manager"]}
+    assert spec["selector"] == {
+        "matchLabels": {
+            "app.kubernetes.io/name": "cert-manager",
+            "app.kubernetes.io/component": "controller",
+            "app.kubernetes.io/instance": "cert-manager",
+        }
+    }
+    # honorLabels: the series carry the certificate's own `namespace` and
+    # `name`. Without it Prometheus writes the target's namespace (cert-manager)
+    # over the certificate's (it keeps the metric's own as `exported_namespace`),
+    # and the rules' namespace matcher would hold for every certificate in the
+    # cluster. The target is cert-manager's controller, a platform component.
+    (endpoint,) = spec["endpoints"]
+    assert {k: v for k, v in endpoint.items() if k != "metricRelabelings"} == {
+        "port": "http-metrics",
+        "interval": "60s",
+        "honorLabels": True,
+    }
+    # Any namespace's Certificates would add series to Prometheus through this
+    # monitor; only the two namespaces the rules read are kept. With honorLabels
+    # the controller's own series carry the target's namespace, cert-manager.
+    (relabeling,) = endpoint["metricRelabelings"]
+    assert relabeling == {
+        "action": "keep",
+        "sourceLabels": ["namespace"],
+        "regex": "meridian|cert-manager",
+    }
+    assert set(relabeling["regex"].split("|")) == CERTIFICATE_NAMESPACES
+
+
 # ── up.sh ────────────────────────────────────────────────────────────────────
+def test_up_applies_the_service_monitor_after_the_stack_beside_the_rules() -> None:
+    text = UP_SH.read_text(encoding="utf-8")
+    header = text.split("\n\n", 1)[0]
+    lines = text.splitlines()
+    (stack,) = [
+        i for i, line in enumerate(lines) if line.startswith("install_release kube-")
+    ]
+    (rules,) = [i for i, line in enumerate(lines) if "alerts/meridian.yaml" in line]
+    (monitor,) = [
+        i
+        for i, line in enumerate(lines)
+        if "manifests/cert-manager-metrics.yaml" in line
+    ]
+
+    assert "ServiceMonitor for cert-manager's metrics" in header
+    assert stack < rules < monitor
+    assert lines[monitor].startswith("kctl apply --server-side --force-conflicts -f ")
+    assert lines[monitor].endswith(">/dev/null")
+    assert lines[monitor - 1].startswith("log ")
+
+
 def test_up_applies_the_rules_right_after_the_dashboards() -> None:
     text = UP_SH.read_text(encoding="utf-8")
     header = text.split("\n\n", 1)[0]

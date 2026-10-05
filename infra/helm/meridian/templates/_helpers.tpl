@@ -153,10 +153,13 @@ root. Zero is root, and the chart refuses it.
 {{- /*
 podSecurityContext: the pod's, the same for every pod of the chart; takes the
 root. A literal, not a value: a `--set` or a values file cannot loosen it (see
-values.yaml). The user and the group are runAsId.
+values.yaml). The user, the group and fsGroup are runAsId. fsGroup gives a
+mounted Secret volume to that group (see meridian.tlsVolume); the helper is
+shared, so every pod of the chart gets it, the Jobs' and the sweep's too, and
+it also gives the group to the pod's /tmp.
 */ -}}
 {{- define "meridian.podSecurityContext" -}}
-{{- toYaml (dict "runAsNonRoot" true "runAsUser" (include "meridian.runAsId" . | int64) "runAsGroup" (include "meridian.runAsId" . | int64) "seccompProfile" (dict "type" "RuntimeDefault")) -}}
+{{- toYaml (dict "runAsNonRoot" true "runAsUser" (include "meridian.runAsId" . | int64) "runAsGroup" (include "meridian.runAsId" . | int64) "fsGroup" (include "meridian.runAsId" . | int64) "seccompProfile" (dict "type" "RuntimeDefault")) -}}
 {{- end -}}
 
 {{- /*
@@ -232,12 +235,18 @@ spiffe://{{ $identity.trustDomain }}/ns/{{ .Release.Namespace }}/sa/
 {{- /*
 tlsVolume: the Secret cert-manager makes for the workload's Certificate
 (<name>-tls: tls.crt, tls.key and ca.crt). Takes the workload's name: a pod
-mounts its own and no other.
+mounts its own and no other. defaultMode is 0440, a literal that Go's template
+reads as octal and prints as the integer 288 (YAML 1.2 would read 0440 as 440):
+with the pod's fsGroup (meridian.podSecurityContext) the files are root's and
+the pod's group's, so the one user the container runs as reads them through its
+group and no other user in the container does. 0400 would stop that user
+reading its own key.
 */ -}}
 {{- define "meridian.tlsVolume" -}}
 - name: tls
   secret:
     secretName: {{ . }}-tls
+    defaultMode: {{ 0440 }}
 {{- end -}}
 
 {{- /*
@@ -265,13 +274,16 @@ the root.
 {{- end -}}
 
 {{- /*
-tlsEnv: the variables a workload's identity needs; takes root, env (its values
-`env` list) and serves (it serves TLS). One that calls another service gets its
-client's files; one that serves TLS gets the prefix its callers' URIs start with.
+tlsEnv: the variables a workload's identity needs; takes root, mounts (it mounts
+its certificate: the caller sets it, as every service does and a Job does when
+it has an identity) and serves (it serves TLS). A container that mounts the
+certificate gets the three files' paths, to load its client context and for
+/healthz to watch the certificate's end; one that serves TLS gets the prefix its
+callers' URIs start with. No container without the mount gets any of them.
 */ -}}
 {{- define "meridian.tlsEnv" -}}
 {{- $directory := include "meridian.tlsDirectory" .root -}}
-{{- if include "meridian.callees" .env | fromJsonArray }}
+{{- if .mounts }}
 - name: MERIDIAN_TLS_CERT_FILE
   value: {{ $directory }}/tls.crt
 - name: MERIDIAN_TLS_KEY_FILE
@@ -289,8 +301,14 @@ client's files; one that serves TLS gets the prefix its callers' URIs start with
 certificate: one workload's Certificate, after a `---`; takes root, identity (the
 output of meridian.identity, as a dict), name (the workload's, also its
 ServiceAccount's) and server (it serves TLS: it also gets a DNS name and the
-server usage). templates/certificates.yaml says what each field is for. No
-duration: cert-manager's default, 90 days renewed at 60. The key is new at every
+server usage). templates/certificates.yaml says what each field is for. The
+duration is 90 days, a literal and said explicitly: the policy that lets the
+issuer sign (infra/kind/manifests/certificate-policy.yaml) caps it at 2160h and
+approver-policy (v0.28.0) cannot evaluate a request that names none while a cap
+is set: it panics, the request is tried again for ever and is neither approved
+nor denied, so a Certificate without one would never be issued. No renewBefore:
+cert-manager's default, a third of the lifetime (30 days), stays. The key is
+new at every
 renewal by an explicit rotationPolicy: Always, not by cert-manager's default,
 which was Never before v1.18.0 (the CA's key, kept by Never, is in
 infra/kind/manifests/service-ca.yaml).
@@ -306,6 +324,7 @@ metadata:
     {{- include "meridian.labels" .name | nindent 4 }}
 spec:
   secretName: {{ .name }}-tls
+  duration: 2160h
   privateKey:
     algorithm: ECDSA
     size: 256
@@ -533,7 +552,7 @@ spec:
             {{- range $job.env }}
             {{- include "meridian.envItem" (dict "root" $root "item" .) | nindent 12 }}
             {{- end }}
-            {{- with include "meridian.tlsEnv" (dict "root" $root "env" $job.env "serves" false) | trim }}
+            {{- with include "meridian.tlsEnv" (dict "root" $root "mounts" $hasIdentity "serves" false) | trim }}
             {{- . | nindent 12 }}
             {{- end }}
           resources:

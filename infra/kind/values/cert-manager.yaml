@@ -10,6 +10,13 @@
 crds:
   enabled: true
 
+# cert-manager's built-in approver approves every CertificateRequest. Off here:
+# the controller no longer approves or denies any request, and approver-policy
+# (values/approver-policy.yaml, the policies in manifests/certificate-policy.yaml)
+# decides instead (S056). With this on and no policy, nothing is issued: every
+# request waits for an approval that never comes.
+disableAutoApproval: true
+
 # The controller, the webhook that validates the objects and the cainjector
 # that fills in webhook CA bundles. One small pod each on a one-node cluster.
 resources:

@@ -9,7 +9,7 @@ thresholds and S028 runs the game day.
 
 | What | Where | Status |
 |---|---|---|
-| Service level objectives | [slo.md](slo.md) | Four with an indicator on kind, three designed; every target unmeasured |
+| Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, three designed; every target unmeasured |
 | Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; evaluated on kind once `make up` has run; notification designed |
 | Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code, not yet seen on a cluster |
 | Runbooks | [runbooks/](#runbooks) | Written from the code; none exercised |
@@ -69,6 +69,8 @@ the owner's to run (hard rule 8 in `CLAUDE.md`); a session asks first.
   things worse.
 - [Secret rotation](runbooks/secret-rotation.md): a credential leaked, or
   a provider refuses the gateway's.
+- [Certificate expiry](runbooks/certificate-expiry.md): a certificate is
+  close to its end and was not renewed, or is not Ready.
 
 ## Looking into the database on kind
 
@@ -128,9 +130,10 @@ applied to one. The session that owns the cluster checks, on `main`:
    applied`; a second run changes nothing.
 2. The rule object exists:
    `kubectl -n observability get prometheusrule meridian`.
-3. Prometheus loaded the three groups and each is healthy: its
-   `/api/v1/rules` lists `meridian.gateway.recording`, `meridian.gateway`
-   and `meridian.workloads`, and every rule's `health` is `ok`.
+3. Prometheus loaded the four groups and each is healthy: its
+   `/api/v1/rules` lists `meridian.gateway.recording`, `meridian.gateway`,
+   `meridian.workloads` and `meridian.certificates`, and every rule's
+   `health` is `ok`.
 4. Every series a rule or the new dashboard names exists. Each of these
    returns a number in Grafana's Explore:
    - `count(kube_deployment_status_replicas_available{namespace="meridian"})`,
@@ -143,6 +146,10 @@ applied to one. The session that owns the cluster checks, on `main`:
      expected 1;
    - `count(kube_pod_container_status_restarts_total{namespace="meridian"})`;
    - `count(up{job="kube-state-metrics"} == 1)`, expected 1;
+   - `count(certmanager_certificate_expiration_timestamp_seconds{namespace=~"meridian|cert-manager"})`
+     and `count(certmanager_certificate_ready_status{namespace=~"meridian|cert-manager", condition="True"})`,
+     expected one per certificate (the CA's and the services'), which
+     needs the ServiceMonitor `cert-manager` in `observability` (S056);
    - `count(meridian:gateway_calls:delta15m)`, after one `make demo` and a
      minute's wait.
 5. No Meridian alert fires on a healthy cluster:
@@ -150,9 +157,18 @@ applied to one. The session that owns the cluster checks, on `main`:
 6. Grafana serves **Meridian: platform health** (uid
    `meridian-platform-health`) and every panel shows data or, for the
    alert table, nothing.
-7. `make smoke` passes, 19 of 19 lines (S055 added three, for service
-   identity). It does not check the rules or the new dashboard; that is in
-   the plan's backlog.
+7. `make smoke` passes, 24 of 24 lines (S055 added three, for service
+   identity; S056 two more for it and three for the certificate policy).
+   It does not check the rules or the new dashboard; that is in the plan's
+   backlog.
 
 A series that is missing in step 4 is a wrong name in the rule file, and
 the fix is there and in the pinned set of the file's test.
+
+S056 owned the cluster and ran steps 3 to 5 and 7 on its branch for what
+it added (2026-10-05): the group `meridian.certificates` was loaded with
+its four rules healthy and inactive, the two certificate counts were 8
+each (the CA's and seven services'), no Meridian alert fired, and `make
+smoke` printed 24 PASS lines. The first scrape showed every certificate
+under the namespace `cert-manager`, the scrape target's; the
+ServiceMonitor keeps the certificate's own since.
