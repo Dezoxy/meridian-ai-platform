@@ -181,8 +181,13 @@ def finish_run(
     status: RunState,
     reason: str | None = None,
     tool: str | None = None,
-) -> None:
-    """Move the row to its new status and write the matching event, atomically.
+) -> bool:
+    """Move a ``Running`` row to its new status and write the matching event,
+    atomically; return whether it moved.
+
+    A run that is not ``Running`` is left as it is and no event is written: the
+    sweep, or another leg, ended it first, and a late leg must not overwrite
+    that. A retry of a write that did commit adds nothing either.
 
     ``reason`` (a ``failure_reason`` word) and ``tool`` (a registry ID) go into
     the event of a ``Failed`` run, and of no other state.
@@ -191,11 +196,15 @@ def finish_run(
         raise ValueError("only a Failed run has a reason or a tool")
     event, outcome = AUDIT_FOR_STATE[status]
     with connect(dsn, SERVICE_NAME) as conn:
-        conn.execute(
-            "UPDATE runtime.runs SET status = %s, updated_at = now() WHERE run_id = %s",
+        row = conn.execute(
+            "UPDATE runtime.runs SET status = %s, updated_at = now() "
+            "WHERE run_id = %s AND status = 'Running' RETURNING run_id",
             (status, identity.run_id),
-        )
+        ).fetchone()
+        if row is None:
+            return False
         record_event(conn, _audit(identity, event, outcome, reason, tool))
+        return True
 
 
 def pause_after_failed_resume(
