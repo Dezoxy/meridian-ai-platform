@@ -52,14 +52,18 @@ def expected_stdout(name: str, module: str) -> str:
     lines = [f"created {path}" for path in created]
     lines += [
         "changed config/registry/agents.yaml",
+        "changed config/registry/services.yaml",
         "changed pyproject.toml",
         "workload new: done",
         "generated: a graph with one node that calls no model and no tool, an "
         "evaluation with no grader, a golden set with no case and an agent with "
         "no tool",
-        "still by hand: a tenant that lists the agent, its tools, a prompt, "
-        "synthetic cases from a seeded generator and their graders, an API and its "
-        "deployment",
+        "still by hand: the agent in the `agents` of a tenant in tenants.yaml (no "
+        "call for it is admitted before), its tools, a prompt, synthetic cases "
+        "from a seeded generator and their graders; for an API of the workload's "
+        "own, an entry in services.yaml (`id`, `description`, `calls: "
+        "[agent-runtime]`, `tenants: []` until a tenant lists the agent, and "
+        "`agents` with the new agent) and a chart entry with a certificate",
         "first run, from the checkout's root:",
         "  uv run meridian registry validate",
         "  uv run lint-imports",

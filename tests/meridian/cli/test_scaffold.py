@@ -21,6 +21,7 @@ from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
     AGENTS_LIST_UNUSABLE,
+    AGENTS_NO_FINAL_NEWLINE,
     AMBIGUOUS_NAME,
     BAD_NAME,
     MAX_NAME_CHARS,
@@ -41,6 +42,15 @@ from meridian.platform.cli.scaffold import (
     ScaffoldError,
     ScaffoldWriteError,
     plan_workload,
+)
+from meridian.platform.cli.scaffold_services import (
+    SERVICES_AGENT_LISTED,
+    SERVICES_AGENTS_MISSING,
+    SERVICES_AGENTS_UNUSABLE,
+    SERVICES_EDIT_UNVERIFIED,
+    SERVICES_NOT_YAML,
+    SERVICES_RUNTIME_MISSING,
+    SERVICES_RUNTIME_TWICE,
 )
 from meridian.platform.registry.loader import RegistryError, load_registry
 
@@ -92,7 +102,7 @@ def comment_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.lstrip()[:1] == "#"]
 
 
-def test_a_plan_creates_six_files_and_changes_two_and_writes_nothing(
+def test_a_plan_creates_six_files_and_changes_three_and_writes_nothing(
     root: Path,
 ) -> None:
     before = snapshot(root)
@@ -103,7 +113,11 @@ def test_a_plan_creates_six_files_and_changes_two_and_writes_nothing(
     assert plan.module == MODULE
     assert set(plan.created) == created_paths()
     assert len(plan.created) == 6
-    assert set(plan.changed) == {"config/registry/agents.yaml", "pyproject.toml"}
+    assert set(plan.changed) == {
+        "config/registry/agents.yaml",
+        "config/registry/services.yaml",
+        "pyproject.toml",
+    }
     assert snapshot(root) == before
 
 
@@ -588,7 +602,7 @@ def test_the_parse_step_alone_refuses_an_edit_the_registry_check_would_accept(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     flow_style_agents(root)
-    monkeypatch.setattr(scaffold, "_registry_with", lambda directory, text: None)
+    monkeypatch.setattr(scaffold, "_registry_with", lambda directory, texts: None)
 
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
@@ -599,7 +613,7 @@ def test_the_parse_step_alone_refuses_an_edit_the_registry_check_would_accept(
 def test_the_registry_check_alone_refuses_an_edit_the_parse_step_accepts(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def invalid(directory: Path, text: str) -> None:
+    def invalid(directory: Path, texts: dict[str, str]) -> None:
         raise RegistryError(["agents.yaml: agents.9: a message of the registry's own"])
 
     monkeypatch.setattr(scaffold, "_registry_with", invalid)
@@ -769,6 +783,14 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         NAME_TAKEN,
         AGENTS_EDIT_UNVERIFIED,
         AGENTS_LIST_UNUSABLE,
+        AGENTS_NO_FINAL_NEWLINE,
+        SERVICES_NOT_YAML,
+        SERVICES_RUNTIME_MISSING,
+        SERVICES_RUNTIME_TWICE,
+        SERVICES_AGENTS_MISSING,
+        SERVICES_AGENTS_UNUSABLE,
+        SERVICES_AGENT_LISTED,
+        SERVICES_EDIT_UNVERIFIED,
         PYPROJECT_EDIT_UNVERIFIED,
         PYPROJECT_HEADER_UNUSABLE,
         PYPROJECT_NOT_TOML,
@@ -790,6 +812,11 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         NAME_TAKEN,
         AGENTS_LIST_UNUSABLE,
         PYPROJECT_HEADER_UNUSABLE,
+        SERVICES_RUNTIME_TWICE,
+        SERVICES_AGENTS_MISSING,
+        SERVICES_AGENTS_UNUSABLE,
+        SERVICES_AGENT_LISTED,
+        SERVICES_EDIT_UNVERIFIED,
     }
     assert len(set(texts)) == len(texts)
     assert all(text.strip() for text in texts)

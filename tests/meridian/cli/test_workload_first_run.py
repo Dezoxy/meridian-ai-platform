@@ -37,6 +37,7 @@ NAME = "first-run-probe"
 MODULE = "first_run_probe"
 TIMEOUT_SECONDS = 300
 AGENTS = "config/registry/agents.yaml"
+SERVICES = "config/registry/services.yaml"
 PYPROJECT = "pyproject.toml"
 WORKLOAD_SOURCE = f"src/meridian/workloads/{MODULE}"
 WORKLOAD_TESTS = f"tests/meridian/workloads/{MODULE}"
@@ -103,7 +104,8 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     tree = tmp_path / "tree"
     copy_of_the_tree(tree)
     environment = {k: v for k, v in os.environ.items() if k not in DROPPED}
-    repo_before = {path: (REPO / path).read_bytes() for path in (PYPROJECT, AGENTS)}
+    edited = (PYPROJECT, AGENTS, SERVICES)
+    repo_before = {path: (REPO / path).read_bytes() for path in edited}
     repo_agents = len(load_registry(REPO / "config" / "registry").agents)
 
     def run(label: str, *command: str, expect: int = 0) -> subprocess.CompletedProcess:
@@ -126,7 +128,8 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     run("0 the environment (uv, its cache, the lock) works", "python", "-c", "pass")
 
     run("1 workload new", "meridian", "workload", "new", NAME)
-    after_first = {path: (tree / path).read_bytes() for path in (PYPROJECT, AGENTS)}
+    after_first = {path: (tree / path).read_bytes() for path in edited}
+    assert after_first[SERVICES] != repo_before[SERVICES]
 
     validated = run("2 registry validate", "meridian", "registry", "validate")
     assert agent_count(validated.stdout) == repo_agents + 1, validated.stdout

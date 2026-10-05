@@ -17,6 +17,7 @@ import yaml
 from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
+    AGENTS_NO_FINAL_NEWLINE,
     ScaffoldError,
     plan_workload,
 )
@@ -255,8 +256,34 @@ def test_an_edit_that_changes_the_last_agent_is_refused_by_the_comparison_alone(
 
     message = refusal(root)
 
-    assert message == AGENTS_EDIT_UNVERIFIED
+    assert message == AGENTS_NO_FINAL_NEWLINE
+    assert "newline" in message
     assert snapshot(root) == before
+
+
+def test_a_comparison_that_fails_with_a_final_newline_keeps_the_old_text() -> None:
+    # A key after the list takes the appended entry for one of its own items:
+    # the parse succeeds and the comparison fails, whatever the file ends with.
+    old = "agents: []\nother:\n  - x\n"
+
+    with pytest.raises(ScaffoldError) as refused:
+        scaffold._agents_edit(old, NAME)
+
+    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
+    assert "block style" in AGENTS_EDIT_UNVERIFIED
+    assert "newline" not in AGENTS_EDIT_UNVERIFIED
+
+
+def test_the_same_comparison_without_a_final_newline_is_not_blamed_on_the_newline() -> (
+    None
+):
+    # Ending the file with a newline would not change the value before the list.
+    old = "agents: []\nother:\n  - x"
+
+    with pytest.raises(ScaffoldError) as refused:
+        scaffold._agents_edit(old, NAME)
+
+    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
 
 
 def test_the_same_block_scalar_with_a_final_newline_is_accepted(root: Path) -> None:

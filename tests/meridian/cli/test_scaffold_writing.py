@@ -44,6 +44,11 @@ LEAKED = "a-path-or-a-name-the-error-must-not-repeat"
 # The small tree has no ``meridian.platform`` for ruff's import sorter to find, so
 # it is told what the real checkout's layout shows it: ``meridian`` is ours.
 FIRST_PARTY = ("--config", 'lint.isort.known-first-party = ["meridian"]')
+EDITED = (
+    "pyproject.toml",
+    "config/registry/agents.yaml",
+    "config/registry/services.yaml",
+)
 
 
 def created_paths(module: str = MODULE, name: str = NAME) -> set[str]:
@@ -97,7 +102,7 @@ def written(root: Path, name: str = NAME) -> Plan:
     return plan
 
 
-def test_write_plan_writes_the_files_and_the_two_edits(root: Path) -> None:
+def test_write_plan_writes_the_files_and_the_three_edits(root: Path) -> None:
     plan = written(root)
 
     for relative, text in {**plan.created, **plan.changed}.items():
@@ -122,13 +127,10 @@ def test_the_entry_points_are_added_and_every_old_key_is_unchanged(
     assert new == expected
 
 
-def test_every_comment_of_the_two_edited_files_is_still_there_in_order(
+def test_every_comment_of_the_three_edited_files_is_still_there_in_order(
     root: Path,
 ) -> None:
-    old = {
-        name: (root / name).read_text(encoding="utf-8")
-        for name in ("pyproject.toml", "config/registry/agents.yaml")
-    }
+    old = {name: (root / name).read_text(encoding="utf-8") for name in EDITED}
 
     written(root)
 
@@ -142,10 +144,11 @@ def test_the_registry_with_the_new_agent_validates_and_grants_it_nothing(
     root: Path,
 ) -> None:
     old_tenants = (root / "config/registry/tenants.yaml").read_bytes()
+    edited = {"agents.yaml", "services.yaml"}
     others = {
         path.name: path.read_bytes()
         for path in (root / "config/registry").glob("*.yaml")
-        if path.name != "agents.yaml"
+        if path.name not in edited
     }
 
     written(root)
@@ -156,11 +159,14 @@ def test_the_registry_with_the_new_agent_validates_and_grants_it_nothing(
     assert agent.kind == "graph"
     assert agent.tools == ()
     assert all(NAME not in tenant.agents for tenant in registry.tenants)
+    runtime = registry.service("agent-runtime")
+    assert runtime is not None
+    assert NAME in runtime.agents
     assert (root / "config/registry/tenants.yaml").read_bytes() == old_tenants
     assert {
         path.name: path.read_bytes()
         for path in (root / "config/registry").glob("*.yaml")
-        if path.name != "agents.yaml"
+        if path.name not in edited
     } == others
 
 
@@ -182,12 +188,12 @@ def test_the_old_agents_are_unchanged_after_the_write(root: Path) -> None:
 
 
 def test_the_files_replaced_keep_their_mode(root: Path) -> None:
-    for relative in ("pyproject.toml", "config/registry/agents.yaml"):
+    for relative in EDITED:
         (root / relative).chmod(0o640)
 
     written(root)
 
-    for relative in ("pyproject.toml", "config/registry/agents.yaml"):
+    for relative in EDITED:
         assert stat.S_IMODE((root / relative).stat().st_mode) == 0o640
 
 
@@ -232,7 +238,7 @@ def failure_text(template: str, exc_type: str, code: int | None) -> str:
     return template.format(f"{exc_type}: {os.strerror(code)}")
 
 
-@pytest.mark.parametrize("target", ["pyproject.toml", "agents.yaml"])
+@pytest.mark.parametrize("target", ["pyproject.toml", "agents.yaml", "services.yaml"])
 def test_a_failed_replacement_leaves_the_tree_byte_identical(
     root: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
@@ -256,12 +262,11 @@ def test_a_plan_records_the_hash_of_each_file_it_was_planned_from(root: Path) ->
     plan = plan_workload(root, NAME)
 
     assert dict(plan.base) == {
-        path: hashlib.sha256((root / path).read_bytes()).hexdigest()
-        for path in ("config/registry/agents.yaml", "pyproject.toml")
+        path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in EDITED
     }
 
 
-@pytest.mark.parametrize("relative", ["config/registry/agents.yaml", "pyproject.toml"])
+@pytest.mark.parametrize("relative", EDITED)
 def test_a_plan_that_went_stale_is_refused_and_nothing_is_written(
     root: Path, relative: str
 ) -> None:

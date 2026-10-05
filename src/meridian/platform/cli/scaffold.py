@@ -2,14 +2,18 @@
 
 ``plan_workload`` reads the tree and returns what would be written; it writes
 nothing. ``write_plan`` writes it. Every edit of an existing file is made as
-text, after the last line of its table or list (a YAML or TOML writer would drop
-the file's comments), and is verified before the plan is returned: the new
-``pyproject.toml`` must parse to the old one plus exactly two entry points, and
-a copy of the registry with the new ``agents.yaml`` must validate.
+text, after the last line of its table or list or inside the brackets of one
+line (a YAML or TOML writer would drop the file's comments), and is verified
+before the plan is returned: the new ``pyproject.toml`` must parse to the old
+one plus exactly two entry points, and a copy of the registry with the new
+``agents.yaml`` and ``services.yaml`` must validate (``scaffold_services`` makes
+the second edit and checks it parses to the old one plus one name).
 
 The command declares and never grants: the agent lists no tool and no tenant
 lists it, so the gateway refuses its model calls and no tool server answers it
-until a person adds both in a reviewed change (T-81).
+until a person adds both in a reviewed change (T-81). The one thing it writes
+beyond the agent itself is the Agent Runtime's right to name it in a call
+(``services.yaml``); no call is admitted before a tenant lists the agent.
 
 The templates are text files filled with ``string.Template``: a ``.py`` file
 under ``meridian.platform`` that imports LangGraph would break the import
@@ -37,6 +41,11 @@ from typing import Any
 
 import yaml
 
+from meridian.platform.cli.scaffold_services import (
+    SERVICES_PATH,
+    ServicesEditError,
+    services_edit,
+)
 from meridian.platform.common.entry_points import EVALUATIONS_GROUP, GRAPHS_GROUP
 from meridian.platform.registry.loader import RegistryError, load_registry
 
@@ -78,6 +87,14 @@ AGENTS_EDIT_UNVERIFIED = (
     "the edit of agents.yaml does not verify: the text edit extends only a list in "
     "block style with `agents` last in the file; nothing was written"
 )
+# The file's last value is a block scalar with no final newline: the newline the
+# new entry needs would become part of that value.
+AGENTS_NO_FINAL_NEWLINE = (
+    "the edit of agents.yaml does not verify: the file does not end with a newline, "
+    "and adding one changes the value before the new entry (a block scalar at the "
+    "end of the file); end the file with a newline and run the command again; "
+    "nothing was written"
+)
 # The field is the line, in the person's own file, where the `agents` list starts.
 AGENTS_LIST_UNUSABLE = (
     "the edit of agents.yaml does not verify: the `agents` list starts on line {}; "
@@ -98,8 +115,8 @@ PYPROJECT_HEADER_UNUSABLE = (
 )
 PATH_EXISTS = "a file or directory the workload would create already exists"
 STALE_PLAN = (
-    "agents.yaml or pyproject.toml changed after the plan was made, or cannot be "
-    "read again: nothing was written; run the command again"
+    "agents.yaml, services.yaml or pyproject.toml changed after the plan was made, "
+    "or cannot be read again: nothing was written; run the command again"
 )
 PATH_OUTSIDE = (
     "a path the workload would be written to leaves the checkout or is a symbolic link"
@@ -137,7 +154,11 @@ CONTAINED_WHEN_PRESENT = (
     "data",
 )
 # Files the command replaces: a symbolic link would send the edit elsewhere.
-EDITED_FILES = (PYPROJECT_PATH, AGENTS_PATH)
+EDITED_FILES = (PYPROJECT_PATH, AGENTS_PATH, SERVICES_PATH)
+# The order of the writes. A half-written tree must still validate and must never
+# let the runtime name an agent that does not exist: the agent comes first, then
+# the runtime's right to name it, then the entry points that load the workload.
+WRITE_ORDER = (AGENTS_PATH, SERVICES_PATH, PYPROJECT_PATH)
 GOLDEN_DIRECTORY = "data/evaluation/{name}/golden"
 CASES = "[]\n"
 AGENT_DESCRIPTION = (
@@ -305,15 +326,16 @@ def _refuse_a_stale_plan(root: Path, plan: Plan) -> None:
         raise ScaffoldError(STALE_PLAN)
 
 
-def _read_agents(root: Path) -> str:
+def _read_text(root: Path, relative: str) -> str:
     try:
-        return (root / AGENTS_PATH).read_bytes().decode("utf-8")
+        return (root / relative).read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
         raise ScaffoldError(NOT_A_CHECKOUT) from None
 
 
-def _agents_edit(root: Path, old: str, name: str) -> str:
-    """``old``, the text of ``agents.yaml``, with the new agent appended, verified."""
+def _agents_edit(old: str, name: str) -> str:
+    """``old``, the text of ``agents.yaml``, with the new agent appended, verified
+    as a parse: the registry check is made on both registry files together."""
     description = AGENT_DESCRIPTION.format(name=name)
     ending = "\r\n" if "\r\n" in old else "\n"
     block = ending.join(
@@ -332,17 +354,35 @@ def _agents_edit(root: Path, old: str, name: str) -> str:
         if line is None:
             raise ScaffoldError(AGENTS_EDIT_UNVERIFIED) from None
         raise ScaffoldError(AGENTS_LIST_UNUSABLE.format(line)) from None
-    if not verified:
-        raise ScaffoldError(AGENTS_EDIT_UNVERIFIED)
+    if verified:
+        return new
+    # With no final newline the new entry's newline can change the last value (a
+    # block scalar); the text for that case says so, the other keeps its reason.
+    if not old.endswith("\n") and yaml.safe_load(old + ending) != yaml.safe_load(old):
+        raise ScaffoldError(AGENTS_NO_FINAL_NEWLINE)
+    raise ScaffoldError(AGENTS_EDIT_UNVERIFIED)
+
+
+def _services_edit(old: str, name: str) -> str:
+    """``old``, the text of ``services.yaml``, with the agent in the runtime's
+    ``agents``, verified as a parse."""
     try:
-        _registry_with(root / REGISTRY_DIRECTORY, new)
+        return services_edit(old, name)
+    except ServicesEditError as exc:
+        raise ScaffoldError(str(exc)) from None
+
+
+def _validated(root: Path, texts: Mapping[str, str]) -> None:
+    """Refuse when a copy of the registry holding the new registry files, by file
+    name, does not validate."""
+    try:
+        _registry_with(root / REGISTRY_DIRECTORY, texts)
     except RegistryError as exc:
         raise ScaffoldError(
             REGISTRY_EDIT_INVALID, details=_registry_details(exc)
         ) from None
     except OSError as exc:
         raise ScaffoldError(REGISTRY_COPY_FAILED.format(type(exc).__name__)) from None
-    return new
 
 
 def _agents_list_line(text: str) -> int | None:
@@ -365,12 +405,14 @@ def _registry_details(exc: RegistryError) -> tuple[str, ...]:
     return tuple(f"the registry: {message}" for message in exc.errors)
 
 
-def _registry_with(registry_directory: Path, agents_text: str) -> None:
-    """Validate a copy of the registry whose ``agents.yaml`` is ``agents_text``."""
+def _registry_with(registry_directory: Path, texts: Mapping[str, str]) -> None:
+    """Validate a copy of the registry in which each file of ``texts`` (by file
+    name, as ``agents.yaml``) has the text it maps to."""
     with tempfile.TemporaryDirectory() as temporary:
         staged = Path(temporary) / "registry"
         shutil.copytree(registry_directory, staged)
-        (staged / "agents.yaml").write_bytes(agents_text.encode("utf-8"))
+        for file, text in texts.items():
+            (staged / file).write_bytes(text.encode("utf-8"))
         load_registry(staged)
 
 
@@ -445,7 +487,8 @@ def plan_workload(root: Path, name: str) -> Plan:
     """What ``meridian workload new NAME`` would write under ``root``. Reads
     only. Refuse, in this order: a bad name, a tree that is not a checkout of
     this repository, a path that leaves it or a link, a registry that does not
-    validate, a name that is taken and an edit that does not verify."""
+    validate, a name that is taken and an edit that does not verify (the agents
+    file, the services file, the two together as a registry, then pyproject)."""
     module = _module_of(name)
     pyproject, document = _read_pyproject(root)
     _refuse_paths_outside_the_checkout(root)
@@ -457,12 +500,21 @@ def plan_workload(root: Path, name: str) -> Plan:
         raise ScaffoldError(REGISTRY_UNREADABLE.format(type(exc).__name__)) from None
     _refuse_a_taken_name(root, name, module, document, registry.agent(name) is not None)
     created = _created_files(name, module)
-    agents = _read_agents(root)
+    agents = _read_text(root, AGENTS_PATH)
+    services = _read_text(root, SERVICES_PATH)
+    new_agents = _agents_edit(agents, name)
+    new_services = _services_edit(services, name)
+    _validated(root, {"agents.yaml": new_agents, "services.yaml": new_services})
     changed = {
-        AGENTS_PATH: _agents_edit(root, agents, name),
+        AGENTS_PATH: new_agents,
+        SERVICES_PATH: new_services,
         PYPROJECT_PATH: _pyproject_edit(pyproject, document, name, module),
     }
-    base = {AGENTS_PATH: _digest(agents), PYPROJECT_PATH: _digest(pyproject)}
+    base = {
+        AGENTS_PATH: _digest(agents),
+        SERVICES_PATH: _digest(services),
+        PYPROJECT_PATH: _digest(pyproject),
+    }
     return Plan(
         name=name,
         module=module,
@@ -514,17 +566,23 @@ def _undo(
     root: Path,
     files: list[Path],
     directories: list[Path],
-    restore: Path | None,
-    old: bytes,
+    replaced: list[tuple[Path, bytes]],
 ) -> list[str]:
     """Put back what a failed write changed; the relative paths that did not go
-    back, in the order tried."""
+    back, in the order tried. ``replaced`` holds each edited file and its old
+    bytes, in the order they were replaced, and goes back in the reverse order.
+    Once a file will not go back, the files replaced before it are left as they
+    are and named: undoing the agents file while the services file still lets the
+    runtime name the agent would leave a registry that does not validate."""
     left: list[Path] = []
-    if restore is not None:
-        try:
-            _replace(restore, old)
-        except OSError:
-            left.append(restore)
+    for path, old in reversed(replaced):
+        if not left:
+            try:
+                _replace(path, old)
+                continue
+            except OSError:
+                pass
+        left.append(path)
     for file in files:
         try:
             file.unlink(missing_ok=True)
@@ -540,33 +598,32 @@ def _undo(
 
 def write_plan(root: Path, plan: Plan) -> None:
     """Write ``plan`` under ``root``: the new files, then ``agents.yaml``, then
-    ``pyproject.toml``, whose entry points are what makes the platform load the
-    workload. Refuse, before the first write, a plan whose two edited files are no
-    longer what it was planned from. When a write fails, or the process is
-    interrupted, remove what this call made and put ``agents.yaml`` back; an
-    ``OSError`` becomes a ``ScaffoldWriteError`` and anything else propagates
-    unchanged."""
+    ``services.yaml`` (``WRITE_ORDER``), then ``pyproject.toml``, whose entry
+    points are what makes the platform load the workload. Refuse, before the first
+    write, a plan whose three edited files are no longer what it was planned from.
+    When a write fails, or the process is interrupted, remove what this call made
+    and put the edited files back; an ``OSError`` becomes a ``ScaffoldWriteError``
+    and anything else propagates unchanged."""
     targets = [(root / relative, text) for relative, text in plan.created.items()]
     if any(os.path.lexists(path) for path, _ in targets):
         raise ScaffoldError(PATH_EXISTS)
     _refuse_a_stale_plan(root, plan)
     files: list[Path] = []
     directories: list[Path] = []
-    agents = root / AGENTS_PATH
-    old_agents = b""
-    replaced: Path | None = None
+    replaced: list[tuple[Path, bytes]] = []
     try:
         for path, text in targets:
             _make_directories(path.parent, directories)
             with open(path, "x", encoding="utf-8", newline="\n") as stream:
                 files.append(path)
                 stream.write(text)
-        old_agents = agents.read_bytes()
-        _replace(agents, plan.changed[AGENTS_PATH].encode("utf-8"))
-        replaced = agents
-        _replace(root / PYPROJECT_PATH, plan.changed[PYPROJECT_PATH].encode("utf-8"))
+        for relative in WRITE_ORDER:
+            path = root / relative
+            old = path.read_bytes()
+            _replace(path, plan.changed[relative].encode("utf-8"))
+            replaced.append((path, old))
     except BaseException as exc:
-        left = _undo(root, files, directories, replaced, old_agents)
+        left = _undo(root, files, directories, replaced)
         if not isinstance(exc, OSError):
             raise
         if not left:
