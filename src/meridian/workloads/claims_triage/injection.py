@@ -57,6 +57,7 @@ from meridian.platform.evaluation.report import (
     describe_validation_error,
     read_json_file,
 )
+from meridian.platform.guardrails import screen_fingerprint
 from meridian.platform.registry.models import Registry
 
 from .assessment import WORDING_ADDRESSES_THE_MODEL
@@ -358,6 +359,7 @@ def build_injection_report(
             prompt=prompt,
             tools=tools_fingerprint(registry, WORKLOAD),
             golden_set=golden_set_of(manifest_path),
+            screen=screen_fingerprint(),
         ),
         absolute=INJECTION_ABSOLUTE,
         targets={},

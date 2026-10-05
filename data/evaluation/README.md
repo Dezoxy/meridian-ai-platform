@@ -24,7 +24,7 @@ on a changed fingerprint. The baseline is the recorded real model's run
 (the owner's decision, 2026-10-04): 38 of 40 on `recommendation`, 40 of 40
 on every other grader.
 
-A report carries five fingerprints, and a change to any of them asks for a
+A report carries six fingerprints, and a change to any of them asks for a
 new baseline in the same reviewed change (T-29, T-72):
 
 - `prompt`: what the model is sent, the system message, the user message's
@@ -32,6 +32,11 @@ new baseline in the same reviewed change (T-29, T-72):
   (`assessment.py`); not the model, the deployment or the answer parser.
 - `judge`: the same for the judge's prompt (`evaluation/judge.py`).
 - `recording`: the recording file's bytes.
+- `screen`: what the two guardrail screens match, the patterns of the
+  injection screen and of the special-category screen with their flags, and
+  the text normalisation they read through (`guardrails/screening.py`); a
+  baseline made before it existed asks for a new one. It is not part of the
+  prompt's version, which labels the recording.
 - `tools`: the agent's registry entry, with its allowlist, and the registry
   entries of the tools on it; not the tool servers' entries.
 - `golden_set`: the generator's version and seed, the hash of the whole

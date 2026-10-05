@@ -21,7 +21,7 @@ from meridian.platform.evaluation.report import (
     ReportError,
     ToolCall,
 )
-from meridian.platform.guardrails import addresses_the_model
+from meridian.platform.guardrails import addresses_the_model, screen_fingerprint
 from meridian.platform.registry import load_registry
 from meridian.workloads.claims_triage.evaluation import (
     ABSOLUTE,
@@ -308,6 +308,7 @@ def test_the_report_has_one_sorted_case_per_claim_and_the_real_golden_set() -> N
     assert report.targets == TARGETS
     assert report.answered_by == SCRIPTED
     assert report.fingerprints.prompt == PROMPT
+    assert report.fingerprints.screen == screen_fingerprint()
     assert report.fingerprints.golden_set == golden_set_of(MANIFEST)
     assert report.fingerprints.tools == tools_fingerprint(
         load_registry(REGISTRY_DIR), WORKLOAD

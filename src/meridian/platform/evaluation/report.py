@@ -90,6 +90,7 @@ class Fingerprints(WireModel):
     golden_set: GoldenSet
     judge: HexDigest | None = None  # the judge's prompt, when a judge grades
     recording: HexDigest | None = None  # the recording file's bytes, when replayed
+    screen: HexDigest | None = None  # the guardrail screens' patterns, when it ran
 
 
 Count = Annotated[StrictInt, Field(ge=0)]

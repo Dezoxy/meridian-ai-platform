@@ -13,7 +13,7 @@ import base64
 import copy
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
 from . import GENERATOR_VERSION, WORKLOAD
@@ -24,6 +24,7 @@ from .injection_text import (
     BASE64_PREFIX,
     BENIGN_CASES,
     CLAUSE_ATTACKS,
+    CLAUSE_BENIGN,
     HYPHENATED_TEXT,
     LEET_TEXT,
     NAME_MASKED_ATTACKS,
@@ -34,6 +35,7 @@ from .injection_text import (
     PREPEND,
     REVERSED_PREFIX,
     SPACED_TEXT,
+    ClauseText,
 )
 from .records import Record
 from .scenarios import Dataset
@@ -48,9 +50,19 @@ CLAUSE_BASES = (
     ("CLM-0037", "3.2"),
     ("CLM-0038", "3.2"),
 )
+# Claims no exclusion applies to (the oracle routes them on the amount, and the
+# stand-in model's answer of none is right), each with an exclusion clause of
+# the claim's own wording that the triage retrieves for its peril.
+BENIGN_CLAUSE_BASES = (
+    ("CLM-0011", "3.2"),
+    ("CLM-0015", "3.3"),
+    ("CLM-0023", "3.4"),
+    ("CLM-0008", "3.2"),
+)
 DESCRIPTION_ATTACK_FIRST_ID = 1001
 CLAUSE_ATTACK_FIRST_ID = 2001
 BENIGN_FIRST_ID = 3001
+CLAUSE_BENIGN_FIRST_ID = 4001
 CASES_FILE = "cases.json"
 ZERO_WIDTH_SPACE = chr(0x200B)
 CYRILLIC_O = chr(0x043E)
@@ -158,7 +170,13 @@ def _description_case(
 
 
 def _clause_case(
-    dataset: Dataset, number: int, base_id: str, clause: str, family: str, text: str
+    dataset: Dataset,
+    label: str,
+    number: int,
+    base_id: str,
+    clause: str,
+    family: str,
+    text: str,
 ) -> Record:
     base = _find(dataset, base_id)
     policy = _policy_of(dataset, base)
@@ -167,7 +185,7 @@ def _clause_case(
     claim["claim_id"] = case
     return {
         "case": case,
-        "label": ATTACK,
+        "label": label,
         "carrier": CARRIER_CLAUSE,
         "family": family,
         "base_claim": base_id,
@@ -179,6 +197,26 @@ def _clause_case(
             "inserted": text,
         },
     }
+
+
+def _clause_cases(
+    dataset: Dataset,
+    label: str,
+    first_id: int,
+    texts: Sequence[ClauseText],
+    bases: Sequence[tuple[str, str]],
+) -> list[Record]:
+    """One clause case per text, over ``bases`` (base claim, clause) in turn."""
+    cases = []
+    for index, added in enumerate(texts):
+        base_id, clause = bases[index % len(bases)]
+        number = first_id + index
+        cases.append(
+            _clause_case(
+                dataset, label, number, base_id, clause, added.family, added.text
+            )
+        )
+    return cases
 
 
 def _attack_base(index: int) -> str:
@@ -202,18 +240,12 @@ def build_cases(dataset: Dataset) -> list[Record]:
         )
         for index, spec in enumerate(_description_attack_specs())
     ]
-    for index, attack in enumerate(CLAUSE_ATTACKS):
-        base_id, clause = CLAUSE_BASES[index % len(CLAUSE_BASES)]
-        cases.append(
-            _clause_case(
-                dataset,
-                CLAUSE_ATTACK_FIRST_ID + index,
-                base_id,
-                clause,
-                attack.family,
-                attack.text,
-            )
-        )
+    cases += _clause_cases(
+        dataset, ATTACK, CLAUSE_ATTACK_FIRST_ID, CLAUSE_ATTACKS, CLAUSE_BASES
+    )
+    cases += _clause_cases(
+        dataset, BENIGN, CLAUSE_BENIGN_FIRST_ID, CLAUSE_BENIGN, BENIGN_CLAUSE_BASES
+    )
     cases += [
         _description_case(
             dataset,

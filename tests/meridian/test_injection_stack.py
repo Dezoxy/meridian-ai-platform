@@ -1,7 +1,7 @@
 """S032's done-when: the injection cases run through the real services with a
 model that obeys every injection, and the platform's answers are graded.
 
-One stack test posts the 90 cases (a claimant's description, or a clause of a
+One stack test posts the 94 cases (a claimant's description, or a clause of a
 wording that carries the attack, and benign cases that look alike) and writes
 the report; `make eval-baseline` commits it, `make eval` and CI compare with it.
 The model is scripted to obey, so a case the screen does not stop is a case that
@@ -46,11 +46,19 @@ from stacksupport import (
 from meridian.platform.evaluation.compare import compare
 from meridian.platform.evaluation.fingerprints import golden_set_of
 from meridian.platform.evaluation.report import ReportError, load_report, write_report
-from meridian.platform.guardrails import holds_special_category, redact
+from meridian.platform.guardrails import (
+    holds_special_category,
+    redact,
+    screen_fingerprint,
+)
 from meridian.platform.registry import load_registry
 from meridian.workloads.claims_triage import assessment
 from meridian.workloads.claims_triage.injection import (
+    ENDED,
     INJECTION_ABSOLUTE,
+    RECOMMENDATION_HELD,
+    ROUTE_HELD,
+    SCREENED,
     InjectionCase,
     build_injection_report,
     load_cases,
@@ -210,6 +218,70 @@ def test_the_committed_summary_is_the_summary_of_the_committed_baseline() -> Non
     assert INJECTION_SUMMARY_PATH.read_text(encoding="utf-8") == rendered, (
         f"the summary is not the baseline's: {BASELINE_COMMAND}"
     )
+
+
+def test_a_benign_clause_case_is_not_flagged_and_ends_as_designed() -> None:
+    # A changed clause alone does not flag a claim: the model is asked, no run
+    # fails, and every grader of the case holds.
+    cases = load_cases(INJECTION_CASES)
+    baseline = committed_baseline()
+    benign = [c.case for c in cases if c.label == "benign" and c.carrier == "clause"]
+    by_case = {entry.case: entry for entry in baseline.cases}
+
+    assert benign == ["CLM-4001", "CLM-4002", "CLM-4003", "CLM-4004"]
+    for name in benign:
+        entry = by_case[name]
+        assert entry.observed["flagged"] == 0, name
+        assert entry.observed["model_asked"] == 1, name
+        assert entry.observed["failure"] is None, name
+        assert entry.grades[SCREENED], name
+        assert entry.grades[ENDED], name
+        assert entry.grades[ROUTE_HELD], name
+        assert entry.grades[RECOMMENDATION_HELD], name
+
+
+def test_a_benign_clause_case_ends_like_its_base_claim_with_its_clause_shown(
+    fresh_database: DatabaseHandle, tmp_path: Path
+) -> None:
+    # The model answers none to everything: a base claim no exclusion applies to
+    # ends as its oracle says, and a clause the triage never retrieves would
+    # leave the case measuring nothing, so the sentence must reach the model.
+    cases = [c for c in load_cases(INJECTION_CASES) if c.label == "benign" and c.clause]
+    model = ObedientModel()
+    stack = build_stack(fresh_database, runtime_http=model.http())
+    capture = ToolCapture()
+    with pytest.MonkeyPatch.context() as patch:
+        capture.install(patch)
+        outcomes = run_cases(stack, cases, capture, model=model)
+
+    report = build_injection_report(
+        cases,
+        outcomes,
+        EXPECTED,
+        manifest_path=INJECTION_MANIFEST,
+        golden_manifest_path=MANIFEST,
+        registry=load_registry(REGISTRY_DIR),
+        answered_by=SCRIPTED,
+        prompt=assessment.PROMPT_VERSION,
+    )
+
+    assert [c.case for c in cases] == ["CLM-4001", "CLM-4002", "CLM-4003", "CLM-4004"]
+    for case, entry in zip(cases, report.cases, strict=True):
+        assert case.clause is not None
+        sent = model.messages_for(case.case)
+        assert entry.case == case.case
+        assert entry.observed["flagged"] == 0, case.case
+        assert entry.observed["model_asked"] == 1, case.case
+        assert entry.grades[ENDED], case.case
+        assert entry.grades[ROUTE_HELD], case.case
+        assert entry.grades[RECOMMENDATION_HELD], case.case
+        assert any(reached(m, case.clause.inserted) for m in sent), case.case
+
+
+def test_the_committed_baseline_carries_the_fingerprint_of_the_screens() -> None:
+    baseline = committed_baseline()
+
+    assert baseline.fingerprints.screen == screen_fingerprint()
 
 
 @pytest.mark.parametrize(

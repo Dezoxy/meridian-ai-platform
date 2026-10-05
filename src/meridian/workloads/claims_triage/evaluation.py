@@ -33,6 +33,7 @@ from meridian.platform.evaluation.report import (
     ToolCall,
     read_json_file,
 )
+from meridian.platform.guardrails import screen_fingerprint
 from meridian.platform.registry.models import Registry
 
 from .proposal import TriageProposal
@@ -364,6 +365,7 @@ def build_report(
             golden_set=golden_set_of(manifest_path),
             judge=judge_fingerprint,
             recording=recording_fingerprint,
+            screen=screen_fingerprint(),
         ),
         absolute=ABSOLUTE,
         targets=TARGETS,

@@ -483,6 +483,7 @@ def test_a_report_may_carry_tools_measures_a_judge_and_a_recording(
     data = report_data(answered_by={"kind": "recorded", "label": "real"})
     data["fingerprints"]["judge"] = "cd" * 32
     data["fingerprints"]["recording"] = "ef" * 32
+    data["fingerprints"]["screen"] = "12" * 32
     for case in data["cases"]:
         case["tools"] = [
             {"tool": "lookup", "arguments": {"id": "p-1", "n": [1, None, {"a": 2.5}]}},
@@ -497,6 +498,7 @@ def test_a_report_may_carry_tools_measures_a_judge_and_a_recording(
 
     assert report.fingerprints.judge == "cd" * 32
     assert report.fingerprints.recording == "ef" * 32
+    assert report.fingerprints.screen == "12" * 32
     assert report.cases[0].tools is not None
     assert report.cases[0].tools[0].arguments["n"] == [1, None, {"a": 2.5}]
     assert report.cases[0].measured is not None
@@ -528,9 +530,40 @@ def test_the_committed_live_reports_load_though_their_golden_set_names_no_worklo
         assert report.fingerprints.golden_set.workload is None, name
 
 
+def test_a_report_may_carry_a_screen_fingerprint_or_leave_it_out() -> None:
+    with_one = report_data()
+    with_one["fingerprints"]["screen"] = "ab" * 32
+
+    carrying = Report.model_validate(with_one)
+    without = Report.model_validate(report_data())
+
+    assert carrying.fingerprints.screen == "ab" * 32
+    assert without.fingerprints.screen is None
+
+
+def test_a_screen_fingerprint_must_be_a_sha256_digest() -> None:
+    data = report_data()
+    data["fingerprints"]["screen"] = DIGEST
+    assert Report.model_validate(data).fingerprints.screen == DIGEST
+    data["fingerprints"]["screen"] = "ABC"
+
+    with pytest.raises(ValidationError):
+        Report.model_validate(data)
+
+
+def test_the_committed_live_reports_load_though_they_carry_no_screen(
+    repo_root: Path,
+) -> None:
+    for name in ("claims-triage-live.json", "claims-triage-live-variant.json"):
+        report = load_report(repo_root / "data" / "evaluation" / name)
+
+        assert report.fingerprints.screen is None, name
+
+
 def test_the_dump_writes_a_missing_optional_as_null() -> None:
     dumped = json.loads(dump_report(Report.model_validate(report_data())))
 
+    assert dumped["fingerprints"]["screen"] is None
     assert dumped["fingerprints"]["judge"] is None
     assert dumped["fingerprints"]["recording"] is None
     assert all(case["tools"] is None for case in dumped["cases"])

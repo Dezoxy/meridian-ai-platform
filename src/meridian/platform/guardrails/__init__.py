@@ -21,6 +21,7 @@ from meridian.platform.guardrails.redaction import (
 from meridian.platform.guardrails.screening import (
     addresses_the_model,
     holds_special_category,
+    screen_fingerprint,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "holds_special_category",
     "parse_data_class",
     "redact",
+    "screen_fingerprint",
 ]

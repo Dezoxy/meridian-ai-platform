@@ -1,5 +1,8 @@
 """Screens for text that a model should not be sent as it stands."""
 
+import hashlib
+import inspect
+import json
 import re
 import unicodedata
 
@@ -158,3 +161,33 @@ def addresses_the_model(text: str) -> bool:
     the text."""
     normalised = _normalise(text)
     return any(pattern.search(normalised) for pattern in _ADDRESSES_THE_MODEL)
+
+
+def screen_fingerprint() -> str:
+    """The SHA-256, in hex, of everything that decides what the two screens
+    match: the normalisation, the special-category pattern and each pattern
+    that addresses the model, with its flags.
+
+    An evaluation report carries it, so that a changed screen asks for a new
+    baseline instead of passing because no grade happened to regress.
+
+    ``_normalise`` is code that uses two pieces of data, so its source text
+    (``inspect.getsource``, docstring and comments included: any edit to the
+    function changes the digest) is hashed with that data. The text is the
+    same in a source tree and in an installed package, which ships its
+    ``.py`` files; a package without them cannot be fingerprinted. The
+    Unicode database of the interpreter, which NFKC and the category check
+    read, is not part of it: a baseline is made under the pinned Python."""
+    parts = [
+        inspect.getsource(_normalise),
+        _SPACES.pattern,
+        _SPACES.flags,
+        _FORMAT_CATEGORY,
+        _SPECIAL_CATEGORY.pattern,
+        _SPECIAL_CATEGORY.flags,
+        # In the order they are tried: the order is part of the screen's source.
+        *[(pattern.pattern, pattern.flags) for pattern in _ADDRESSES_THE_MODEL],
+    ]
+    # JSON, so that two parts cannot run together into the same bytes.
+    encoded = json.dumps(parts, ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
