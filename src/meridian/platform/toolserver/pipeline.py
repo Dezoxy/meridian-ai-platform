@@ -23,8 +23,9 @@ import hashlib
 import json
 import logging
 import re
+import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -116,6 +117,22 @@ class Call:
 
 
 @dataclass(frozen=True, slots=True)
+class Deadline:
+    """The moment a call's caller stops waiting for it, on ``clock``'s time (the
+    server's monotonic clock, or a test's)."""
+
+    at: float
+    clock: Callable[[], float] = time.monotonic
+
+    def remaining(self) -> float:
+        """Seconds left, never below zero."""
+        return max(0.0, self.at - self.clock())
+
+    def expired(self) -> bool:
+        return self.clock() >= self.at
+
+
+@dataclass(frozen=True, slots=True)
 class _Done:
     """A handler's answer that fits its schema, and its text."""
 
@@ -160,9 +177,11 @@ class Pipeline:
         name: str,
         arguments: Mapping[str, Any],
         meta: Mapping[str, Any],
+        deadline: Deadline | None = None,
     ) -> Finished:
         """Never raises: a failure is an outcome, already audited when it could
-        be."""
+        be. ``deadline`` is when the caller stops waiting; the checks inside the
+        call do not read it yet."""
         try:
             answer = self._decide(call, name, arguments, meta)
             if isinstance(answer, Refused):

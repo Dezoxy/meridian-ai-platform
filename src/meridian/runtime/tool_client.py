@@ -9,8 +9,9 @@ that belong to the caller, and the server checks the same rules again:
 * the key that makes a write happen once is derived here from the run, the tool
   and a label the graph's code gives the call site, so a model can neither mint
   nor reuse one (T-23);
-* the call carries the run ID and the trace context, never tenant, agent or
-  claim, which the server reads from the runtime's own run row (T-22);
+* the call carries the run ID, the trace context and the time the runtime will
+  still wait, never tenant, agent or claim, which the server reads from the
+  runtime's own run row (T-22);
 * the answer must fit the registry's output schema before the graph sees it:
   a tool result enters a prompt (TB-7).
 
@@ -66,6 +67,8 @@ from meridian.platform.toolserver.wire import (
     META_IDEMPOTENCY_KEY,
     META_REFUSAL,
     META_RUN,
+    META_TIMEOUT_MS,
+    MILLISECONDS_PER_SECOND,
     RefusalReason,
 )
 
@@ -223,8 +226,17 @@ async def send_call(
 ) -> types.CallToolResult:
     """The call on an open SDK client; the part of an exchange that a client
     made for the call and one over a ``ToolTransport``'s kept HTTP client share."""
+    # The time left of the bound the caller put around this call, so the server
+    # does not queue the call for longer than the runtime will wait (T-62). Read
+    # here, as late as the code allows, so connecting has already been counted. A
+    # new dict: ``meta`` is the caller's.
+    left = min(
+        anyio.current_effective_deadline() - anyio.current_time(),
+        TOOL_TIMEOUT_SECONDS,
+    )
+    sent = {**meta, META_TIMEOUT_MS: max(1, int(left * MILLISECONDS_PER_SECOND))}
     request = types.CallToolRequest(
-        params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=meta)
+        params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=sent)
     )
     # One request. ``Client.call_tool`` goes through the session's
     # ``call_tool``, which ends in ``validate_tool_result``: with no output

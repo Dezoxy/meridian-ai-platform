@@ -16,9 +16,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import anyio
 import mcp_types as types
 import pytest
 from dbsupport import DatabaseHandle
+from mcp.client import Client
 from mcp.shared.exceptions import MCPError
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -49,6 +51,11 @@ from toolsupport import (
 
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
+from meridian.platform.toolserver.wire import (
+    MAX_CALL_SECONDS,
+    META_RUN,
+    META_TIMEOUT_MS,
+)
 from meridian.runtime import tool_client
 from meridian.runtime.app import tool_client_for
 from meridian.runtime.runs import RunIdentity
@@ -497,6 +504,62 @@ def test_a_read_call_sends_the_run_and_no_key(
     assert "meridian/idempotency-key" not in seen.meta
     assert seen.arguments == {"policy_number": POLICY}
     assert "traceparent" in seen.meta
+
+
+def test_a_call_sends_the_time_it_has_left_as_whole_milliseconds(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    stand_in = StandIn()
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    tools.call("policy_lookup", {"policy_number": POLICY})
+
+    (seen,) = stand_in.calls
+    sent = seen.meta[META_TIMEOUT_MS]
+    assert isinstance(sent, int)
+    assert not isinstance(sent, bool)
+    assert 1 <= sent <= tool_client.TOOL_TIMEOUT_SECONDS * 1000
+
+
+def test_the_time_a_call_sends_follows_the_bound_the_client_works_under(
+    registry: Registry,
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool_client, "TOOL_TIMEOUT_SECONDS", 2.0)
+    stand_in = StandIn()
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    tools.call("policy_lookup", {"policy_number": POLICY})
+
+    (seen,) = stand_in.calls
+    assert 1 <= seen.meta[META_TIMEOUT_MS] <= 2_000
+
+
+def test_the_clients_bound_is_not_more_than_a_server_works_on_one_call() -> None:
+    assert tool_client.TOOL_TIMEOUT_SECONDS <= MAX_CALL_SECONDS
+
+
+def test_sending_a_call_leaves_the_callers_meta_as_it_was() -> None:
+    stand_in = StandIn()
+    meta: dict[str, Any] = {META_RUN: str(uuid.uuid4())}
+    before = dict(meta)
+
+    async def send() -> None:
+        async with Client(
+            stand_in.server, mode=tool_client.CONNECT_MODE, cache=None
+        ) as client:
+            with anyio.fail_after(tool_client.TOOL_TIMEOUT_SECONDS):
+                await tool_client.send_call(
+                    client, "policy_lookup", {"policy_number": POLICY}, meta
+                )
+
+    anyio.run(send)
+
+    assert meta == before
+    (seen,) = stand_in.calls
+    assert seen.meta[META_RUN] == before[META_RUN]
+    assert META_TIMEOUT_MS in seen.meta
 
 
 @pytest.mark.parametrize(

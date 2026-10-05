@@ -35,7 +35,11 @@ from toolsupport import (
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
-from meridian.platform.toolserver.wire import META_IDEMPOTENCY_KEY, META_RUN
+from meridian.platform.toolserver.wire import (
+    META_IDEMPOTENCY_KEY,
+    META_RUN,
+    META_TIMEOUT_MS,
+)
 from meridian.runtime import tool_client
 from meridian.runtime.tool_client import ToolClient, ToolUnavailable
 from meridian.runtime.tool_transport import THREAD_NAME, ToolTransport
@@ -215,6 +219,15 @@ def test_a_call_through_a_transport_is_one_request(
 
     # A list, so a probe, an older handshake or a ``tools/list`` shows.
     assert live.recorder.methods == ["tools/call", "tools/call"]
+
+
+def test_a_call_through_a_transport_sends_the_time_it_has_left(
+    live: Live, transport: ToolTransport
+) -> None:
+    lookup(live, transport)
+
+    (meta,) = live.recorder.metas
+    assert 1 <= meta[META_TIMEOUT_MS] <= tool_client.TOOL_TIMEOUT_SECONDS * 1000
 
 
 def test_calls_from_eight_threads_at_once_all_succeed(

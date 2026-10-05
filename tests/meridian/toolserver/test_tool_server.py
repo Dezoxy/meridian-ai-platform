@@ -12,6 +12,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
@@ -47,9 +48,11 @@ from toolsupport import (
     revoke_audit_insert,
     run_call,
     seed_world,
+    serve,
     settings_for,
     table_rows,
     text_of,
+    tracer_of,
     with_client,
     without_output_schema,
 )
@@ -58,7 +61,9 @@ from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
+from meridian.platform.registry import load_registry
 from meridian.platform.toolserver import server as server_module
+from meridian.platform.toolserver import wire
 from meridian.platform.toolserver.handlers import (
     Completed,
     Refused,
@@ -66,6 +71,7 @@ from meridian.platform.toolserver.handlers import (
     ToolFailed,
     ToolHandler,
 )
+from meridian.platform.toolserver.pipeline import Deadline
 from meridian.platform.toolserver.server import (
     MAX_CONCURRENT_CALLS,
     ToolApp,
@@ -75,8 +81,10 @@ from meridian.platform.toolserver.wire import (
     META_CALL_ID,
     META_REFUSAL,
     META_RUN,
+    META_TIMEOUT_MS,
     RefusalReason,
 )
+from meridian.runtime.tool_client import ToolClient, ToolUnavailable
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
@@ -1427,6 +1435,405 @@ def test_no_more_than_the_limit_of_handlers_run_at_once(world: World) -> None:
     assert peak[0] == MAX_CONCURRENT_CALLS
     assert len(answers) == CONCURRENT_CALLS
     assert all(answer.is_error is False for answer in answers)
+
+
+# ── a call waits for a slot only as long as its caller does (S059) ──────────
+CALL_WAIT_SECONDS = 30
+# A budget in milliseconds that the call of a test cannot meet while the slots
+# are held: whether it is met is decided by the events, not by this number.
+SMALL_BUDGET_MS = 5
+
+
+class Held:
+    """Handlers that hold their slot until ``gate`` is set, and count
+    themselves. ``full`` is set when as many are inside as the server allows."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.entered = 0
+        self.running = 0
+        self.peak = 0
+        self.gate = threading.Event()
+        self.full = threading.Event()
+
+    def rearm(self) -> None:
+        """Close the gate again, for a second round of held calls."""
+        with self.lock:
+            self.entered = 0
+            self.gate = threading.Event()
+            self.full = threading.Event()
+
+    def run(self, conn: psycopg.Connection, call: ToolCall) -> Completed:
+        with self.lock:
+            gate, full = self.gate, self.full
+            self.entered += 1
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+            if self.entered >= MAX_CONCURRENT_CALLS:
+                full.set()
+        try:
+            assert gate.wait(timeout=CALL_WAIT_SECONDS)
+        finally:
+            with self.lock:
+                self.running -= 1
+        return Completed({"found": False})
+
+
+def held_app(world: World, held: Held, **kwargs: Any) -> ToolApp:
+    return build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", held.run) + other_handler("policy_lookup"),
+        **kwargs,
+    )
+
+
+async def until(event: threading.Event) -> None:
+    with anyio.fail_after(CALL_WAIT_SECONDS):
+        assert await anyio.to_thread.run_sync(event.wait, CALL_WAIT_SECONDS)
+
+
+async def try_call(client: Client, run_id: uuid.UUID, **meta: Any) -> Any:
+    """The answer to one ``policy_lookup``, or the protocol error the server
+    answered instead."""
+    with anyio.fail_after(CALL_WAIT_SECONDS):
+        try:
+            return await client.call_tool(
+                "policy_lookup", LOOKUP, meta={META_RUN: str(run_id), **meta}
+            )
+        except MCPError as error:
+            return error
+
+
+def assert_shed(answer: Any) -> None:
+    assert isinstance(answer, MCPError)
+    assert answer.error.code == INTERNAL_ERROR
+    assert answer.error.message == UNAVAILABLE
+
+
+def test_a_call_with_no_slot_in_its_budget_fails_and_its_handler_never_runs(
+    world: World, exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    held = Held()
+    app = held_app(world, held, exporter=exporter)
+    caplog.set_level(logging.DEBUG)
+    answers: list[Any] = []
+    seen: dict[str, Any] = {}
+
+    async def drive(client: Client) -> None:
+        async def one() -> None:
+            answers.append(await try_call(client, world.run_id))
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            seen["shed"] = await try_call(
+                client,
+                world.run_id,
+                **{META_TIMEOUT_MS: SMALL_BUDGET_MS, "meridian/probe": CANARY},
+            )
+            seen["entered"] = held.entered
+            held.gate.set()
+        seen["tenth"] = await try_call(client, world.run_id)
+
+    with_client(app.server, drive)
+
+    assert_shed(seen["shed"])
+    assert seen["entered"] == MAX_CONCURRENT_CALLS
+    assert len(answers) == MAX_CONCURRENT_CALLS
+    assert all(answer.is_error is False for answer in answers)
+    assert seen["tenth"].structured_content == {"found": False}
+    assert held.entered == MAX_CONCURRENT_CALLS + 1  # the eight and the tenth
+    rows = audit_rows(world.db)
+    assert [row["outcome"] for row in rows] == ["completed"] * (
+        MAX_CONCURRENT_CALLS + 1
+    )
+    assert "timed-out" not in repr(rows)
+
+
+def test_a_shed_call_is_logged_once_with_its_run_and_tool_and_nothing_else(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    caplog.set_level(logging.DEBUG)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            assert_shed(
+                await try_call(
+                    client,
+                    world.run_id,
+                    **{META_TIMEOUT_MS: SMALL_BUDGET_MS, "meridian/probe": CANARY},
+                )
+            )
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if r.name == server_module.__name__ and r.levelno == logging.WARNING
+    ]
+    message = record.getMessage()
+    assert str(world.run_id) in message
+    assert "policy_lookup" in message
+    assert CANARY not in caplog.text
+    assert POLICY not in caplog.text
+
+
+def test_the_span_of_a_shed_call_names_the_reason_the_run_and_the_tool(
+    world: World, exporter: InMemorySpanExporter
+) -> None:
+    held = Held()
+    app = held_app(world, held, exporter=exporter)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            await try_call(client, world.run_id, **{META_TIMEOUT_MS: SMALL_BUDGET_MS})
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    (span,) = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "tool.call" and s.attributes.get("meridian.reason") == "timed-out"
+    ]
+    assert span.attributes["meridian.tool_outcome"] == "failed"
+    assert span.attributes["meridian.run_id"] == str(world.run_id)
+    assert span.attributes["meridian.tool"] == "policy_lookup"
+    assert uuid.UUID(span.attributes["meridian.call_id"])
+
+
+def test_a_shed_call_that_names_no_registry_tool_or_run_logs_neither(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    caplog.set_level(logging.DEBUG)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            with anyio.fail_after(CALL_WAIT_SECONDS):
+                try:
+                    await client.call_tool(
+                        CANARY,
+                        LOOKUP,
+                        meta={META_RUN: CANARY, META_TIMEOUT_MS: SMALL_BUDGET_MS},
+                    )
+                except MCPError as error:
+                    assert_shed(error)
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if r.name == server_module.__name__ and r.levelno == logging.WARNING
+    ]
+    assert CANARY not in caplog.text
+    assert record.getMessage().endswith("(run -, tool -)")
+
+
+def test_a_call_with_budget_to_spare_waits_for_a_slot_and_completes(
+    world: World,
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    answers: list[Any] = []
+
+    async def drive(client: Client) -> None:
+        async def one(**meta: Any) -> None:
+            answers.append(await try_call(client, world.run_id, **meta))
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            group.start_soon(partial(one, **{META_TIMEOUT_MS: 20_000}))
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    assert len(answers) == MAX_CONCURRENT_CALLS + 1
+    assert all(
+        not isinstance(answer, MCPError) and answer.is_error is False
+        for answer in answers
+    )
+    assert held.entered == MAX_CONCURRENT_CALLS + 1
+    assert held.peak == MAX_CONCURRENT_CALLS
+    assert len(audit_rows(world.db)) == MAX_CONCURRENT_CALLS + 1
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        pytest.param({}, id="no-key"),
+        pytest.param({META_TIMEOUT_MS: "soon"}, id="a-string"),
+        pytest.param({META_TIMEOUT_MS: True}, id="a-bool"),
+        pytest.param({META_TIMEOUT_MS: 0}, id="zero"),
+        pytest.param({META_TIMEOUT_MS: -3}, id="negative"),
+        pytest.param({META_TIMEOUT_MS: 10**9}, id="over-the-maximum"),
+    ],
+)
+def test_a_call_without_a_usable_budget_waits_as_long_as_the_servers_maximum(
+    world: World, meta: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The maximum is short here, so a call held to it is shed within a moment.
+    monkeypatch.setattr(wire, "MAX_CALL_SECONDS", 0.05)
+    held = Held()
+    app = held_app(world, held)
+    seen: dict[str, Any] = {}
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            seen["shed"] = await try_call(client, world.run_id, **meta)
+            seen["entered"] = held.entered
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    assert_shed(seen["shed"])
+    assert seen["entered"] == MAX_CONCURRENT_CALLS
+
+
+def test_a_call_with_a_free_slot_is_answered_whatever_its_budget(world: World) -> None:
+    app = spy_app(world.db, "policy_lookup", Spy())
+    budgets: list[Any] = [None, "soon", True, 0, -3, 1, 10**9]
+
+    results = [
+        run_call(
+            app.server,
+            "policy_lookup",
+            LOOKUP,
+            run_id=world.run_id,
+            meta={} if budget is None else {META_TIMEOUT_MS: budget},
+        )
+        for budget in budgets
+    ]
+
+    assert [r.structured_content for r in results] == [{"found": False}] * len(budgets)
+
+
+def test_shed_calls_leave_all_the_slots_usable_and_the_limit_in_force(
+    world: World,
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    shed: list[Any] = []
+    answers: list[Any] = []
+
+    async def drive(client: Client) -> None:
+        async def one() -> None:
+            answers.append(await try_call(client, world.run_id))
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            for _ in range(3):
+                shed.append(
+                    await try_call(
+                        client, world.run_id, **{META_TIMEOUT_MS: SMALL_BUDGET_MS}
+                    )
+                )
+            held.gate.set()
+        held.rearm()
+        # All eight must be inside together again: a slot lost to a shed call
+        # would leave one of these waiting, and ``full`` would never be set.
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    for answer in shed:
+        assert_shed(answer)
+    assert len(answers) == 2 * MAX_CONCURRENT_CALLS
+    assert all(answer.is_error is False for answer in answers)
+    assert held.peak == MAX_CONCURRENT_CALLS
+    assert len(audit_rows(world.db)) == 2 * MAX_CONCURRENT_CALLS
+
+
+def test_a_call_the_server_shed_reaches_the_runtimes_tool_client_as_unavailable(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The client sends the whole of its bound; the server bounds it by its own
+    # maximum, short here, so the answer is the server's and not the client's.
+    monkeypatch.setattr(wire, "MAX_CALL_SECONDS", 0.05)
+    held = Held()
+    app = create_tool_app(
+        settings_for(world.db, "policy_mcp", hosts=("127.0.0.1:*",)),
+        server_id="policy-mcp",
+        service_name="policy-mcp",
+        handlers=custom("policy_lookup", held.run) + other_handler("policy_lookup"),
+    )
+    answers: list[Any] = []
+
+    def tools_for(base: str) -> ToolClient:
+        return ToolClient(
+            {"policy-mcp": base},
+            registry=load_registry(REGISTRY_DIR),
+            agent=AGENT,
+            run_id=world.run_id,
+            tracer=tracer_of(InMemorySpanExporter()),
+            on_refusal=lambda tool: None,
+            max_calls=2,
+        )
+
+    with serve(app.app) as base:
+        threads = [
+            threading.Thread(
+                target=lambda: answers.append(
+                    tools_for(base).call("policy_lookup", LOOKUP).data
+                )
+            )
+            for _ in range(MAX_CONCURRENT_CALLS)
+        ]
+        for thread in threads:
+            thread.start()
+        assert held.full.wait(timeout=CALL_WAIT_SECONDS)
+
+        with pytest.raises(ToolUnavailable):
+            tools_for(base).call("policy_lookup", LOOKUP)
+
+        held.gate.set()
+        for thread in threads:
+            thread.join(timeout=CALL_WAIT_SECONDS)
+
+    assert answers == [{"found": False}] * MAX_CONCURRENT_CALLS
+    assert held.entered == MAX_CONCURRENT_CALLS
+
+
+def test_a_deadline_counts_down_on_its_clock() -> None:
+    clock = FakeClock()
+    deadline = Deadline(clock() + 2.5, clock)
+
+    assert (deadline.remaining(), deadline.expired()) == (2.5, False)
+    clock.advance(2.0)
+    assert (deadline.remaining(), deadline.expired()) == (0.5, False)
+    clock.advance(0.5)
+    assert (deadline.remaining(), deadline.expired()) == (0.0, True)
+    clock.advance(10.0)
+    assert (deadline.remaining(), deadline.expired()) == (0.0, True)
 
 
 # ── a failure outside the pipeline is audited too ───────────────────────────
