@@ -553,7 +553,8 @@ that day; the rest stand as their step recorded them.
 | approver-policy has a readiness probe and no liveness probe, so a hung pod is not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | open | S063 |
 | The certificate policy is kind's: the namespace, the trust domain and the issuer are literals in `infra/kind/manifests/certificate-policy.yaml`, so the chart in another namespace, with another trust domain or with a namespaced Issuer is denied or never decided, and nothing says so before the pods wait for a Secret. The policy also lets a request made in `meridian` name any DNS name under `meridian.svc`, and a request with no usage gets cert-manager's default usages | S056 | open | S020 |
 | After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open | none |
-| The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager). Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, and with several worktrees one of them always is | S056 | open; a guard or a rule is the owner's | none |
+| `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | open | S062 |
+| The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | open; a guard or a rule is the owner's | none |
 
 ## Part C — Step details
 
@@ -7474,15 +7475,17 @@ readable by the service's own user and group alone.
     under `meridian.svc` through and gives a request without a usage
     cert-manager's defaults.
 
-- **Where the first run stopped (2026-10-05, its usage limit).** All
-  code, the cluster proof and the documents are committed on the branch;
-  nothing is pushed and no pull request is open. Owed before the step
-  closes: the result of the whole suite on the final tree (running when
-  the run stopped; 8758 passed, 11 skipped on the merged tree before
-  the review fixes), `gitleaks git --log-opts="origin/main..HEAD"
-  --redact`, the advisor before declaring done, a merge of `main` if it
-  moved (T-91 and v0.40 were free then), this section's status, the
-  step table's row, the pull request and its merge.
+- The unattended run was cut off by its usage limit on 2026-10-05, with
+  everything committed and nothing pushed, and went on when the owner
+  said to. `main` had not moved, so T-91 and v0.40 stood.
+- **The cluster was gone a second time.** It ran, with `make smoke`
+  green, at 05:10 UTC; at 08:11 `kind get clusters` found none and no
+  kind container existed. This session had run no command that removes
+  anything. Asked, the owner chose to have it made again from this
+  branch before the step closed (2026-10-05), over closing without it
+  and over making it after the merge. That gave the proof the step still
+  lacked: a cold `make up`, where the CA's own request has to be
+  approved by the policy.
 
 **Result / verification:**
 
@@ -7536,23 +7539,52 @@ readable by the service's own user and group alone.
     (89 days), eight Ready; the four rules of `meridian.certificates`
     loaded, healthy and inactive; no Meridian alert pending or firing.
     approver-policy's pod used 30 MiB of its 96 Mi.
+- **From no cluster** (2026-10-05, node created 08:13 UTC, this branch,
+  image `473847335d80`):
+  - `make up`: exit 0 in one run. The CA's request reads `Approved by
+    CertificateRequestPolicy: "meridian-services-ca"`, so nothing on
+    this cluster was ever approved by cert-manager's own approver; both
+    issuers and the three policies Ready.
+  - `make deploy`, started at once: stopped before it built anything,
+    `the Deployment cert-manager-approver-policy in cert-manager has no
+    available replica`. The add-on had exited with `leader election
+    lost` and was back in twenty seconds, the one pod of the cluster
+    that restarted, with the laptop at a load of 27 under other steps'
+    suites. The second run: exit 0, fifteen migrations, `the services'
+    certificates are ready`, the seven requests `Approved by
+    CertificateRequestPolicy: "meridian-services"`, six pods at no
+    restart, the key file `440 0:10001`.
+  - `make smoke`: exit 0, 24 PASS, the five lines of service identity
+    and the three of the certificate policy among them.
 - **Not proved on the cluster:** a service turning unhealthy and being
   restarted near its certificate's end, which needs a certificate that
   lasts an hour (the tests over real TLS show the 503 and the new
   process loading the renewed file); an alert firing (promtool's tests
   do); `make deploy` stopping without the issuer or the policies (the
   tests run it with stub commands; the issuer was not taken from the
-  live cluster); a cold `make up` from no cluster; a renewal.
-- **Left as it is:** the cluster, with `make smoke` green, the six
-  services on image `473847335d80`, eight certificates Ready, no probe
-  object. It is the one made on 2026-10-04 at 18:16 UTC, not S055's.
+  live cluster; the check for the add-on did stop a real deploy, above);
+  a renewal.
+- **Left as it is:** the cluster made on 2026-10-05 at 08:13 UTC, with
+  `make smoke` green, the six services on image `473847335d80`, eight
+  certificates Ready and no probe object. Its database is new, so every
+  golden claim is unused.
 - **Gates.** `uv run ruff check . --no-cache`: `All checks passed!`.
   `make docs`: `docs consistency: 13 checks passed`. `make test`: exit
   0, `codex agents: 11 twins current`. `make lint`: `Contracts: 5 kept,
   0 broken.` `make helm-lint`: `1 chart(s) linted, 0 chart(s) failed`.
   `make alerts`: `SUCCESS: 13 rules found`, then `SUCCESS`. `make
   check`: exit 0, no ERROR line (ADR 4 has a dated note). `shellcheck`
-  on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0.
+  on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0. `make secret-scan`:
+  `no leaks found`.
+- **The whole suite**, `GITHUB_ACTIONS=true make pytest-db` with three
+  workers and the step's own database container, twice, each exit 0:
+  `8758 passed, 11 skipped` on the tree with `main` merged in, before
+  the review fixes, and `8888 passed, 11 skipped` after them (27 minutes,
+  beside two other steps' suites). The two test files that were split
+  afterwards ran alone: `171 passed`, the same 171 names as before the
+  split. One test of this step failed once in an implementer's run,
+  under load, on an exact number of seconds; it was rewritten to hold by
+  a floor and has passed since.
 - **Not run:** `make eval` (no prompt, graph or recording changed);
   `make demo`; anything against Azure.
 
@@ -8291,5 +8323,7 @@ tokens would meet.
   policy stands. T-91 is new. The health rule changed after the review:
   by the clock alone, a failed renewal would have had every service
   looping for a day. The cluster was found replaced by an older
-  checkout's `make up` when the step began: a backlog row, for the
-  owner. Three backlog rows closed and two in part; eight new ones.
+  checkout's `make up` when the step began and was gone again before it
+  closed: a backlog row, for the owner, who had it made again from this
+  branch, which proved a cold `make up`. Three backlog rows closed and
+  two in part; nine new ones.
