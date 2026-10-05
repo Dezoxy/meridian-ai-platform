@@ -157,9 +157,18 @@ applied to one. The session that owns the cluster checks, on `main`:
 6. Grafana serves **Meridian: platform health** (uid
    `meridian-platform-health`) and every panel shows data or, for the
    alert table, nothing.
-7. `make smoke` passes, 19 of 19 lines (S055 added three, for service
-   identity). It does not check the rules or the new dashboard; that is in
-   the plan's backlog.
+7. `make smoke` passes, 24 of 24 lines (S055 added three, for service
+   identity; S056 two more for it and three for the certificate policy).
+   It does not check the rules or the new dashboard; that is in the plan's
+   backlog.
 
 A series that is missing in step 4 is a wrong name in the rule file, and
 the fix is there and in the pinned set of the file's test.
+
+S056 owned the cluster and ran steps 3 to 5 and 7 on its branch for what
+it added (2026-10-05): the group `meridian.certificates` was loaded with
+its four rules healthy and inactive, the two certificate counts were 8
+each (the CA's and seven services'), no Meridian alert fired, and `make
+smoke` printed 24 PASS lines. The first scrape showed every certificate
+under the namespace `cert-manager`, the scrape target's; the
+ServiceMonitor keeps the certificate's own since.
