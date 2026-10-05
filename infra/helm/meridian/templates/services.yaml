@@ -8,8 +8,11 @@ read-only; the pod's /tmp is the one writable path. Their NetworkPolicies are in
 networkpolicy.yaml.
 
 Each pod also mounts its own certificate (the Secret <name>-tls that
-certificates.yaml asks cert-manager for) at /etc/meridian/tls, read-only (S055).
-A service with `tls: true` in the values serves TLS and asks its callers for a
+certificates.yaml asks cert-manager for) at /etc/meridian/tls, read-only (S055),
+with mode 0440 and the pod's fsGroup, so the key is readable by the service's
+own user and group alone (S056). Every service gets the three file paths in
+MERIDIAN_TLS_*, so its /healthz turns 503 near its certificate's end whether
+it calls another service or not. A service with `tls: true` in the values serves TLS and asks its callers for a
 certificate: the template, not the values, appends uvicorn's flags to its
 command and sets the probes' scheme to HTTPS. The port, the container's port
 name and the Service do not change. A service that another workload calls (a
@@ -85,7 +88,7 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ . | quote }}
             {{- end }}
-            {{- with include "meridian.tlsEnv" (dict "root" $ "env" $service.env "serves" $service.tls) | trim }}
+            {{- with include "meridian.tlsEnv" (dict "root" $ "env" $service.env "mounts" true "serves" $service.tls) | trim }}
             {{- . | nindent 12 }}
             {{- end }}
           readinessProbe:

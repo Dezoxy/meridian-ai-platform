@@ -300,8 +300,11 @@ def test_a_certificate_names_its_secret_its_uri_and_the_issuer(name: str) -> Non
     }
     assert spec["uris"] == [f"spiffe://{TRUST_DOMAIN}/ns/{NAMESPACE}/sa/{name}"]
     assert spec["issuerRef"] == {**ISSUER, "group": "cert-manager.io"}
-    # cert-manager's own lifetime: 90 days, renewed at 60.
-    assert not {"duration", "renewBefore"} & set(spec)
+    # 90 days, said explicitly: the issuer's policy (S056) caps the duration and
+    # denies a request that names none. No renewBefore: cert-manager's default
+    # (a third of the lifetime, 30 days) stays.
+    assert spec["duration"] == "2160h"
+    assert "renewBefore" not in spec
 
 
 def test_every_certificate_gets_a_new_key_at_renewal_by_an_explicit_setting() -> None:
@@ -539,14 +542,112 @@ def test_the_hosts_a_tool_server_allows_carry_no_scheme() -> None:
 # ── the variables ────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", ALL_WORKLOADS)
-def test_the_tls_files_go_to_the_workloads_that_call_another_service(
+def every_pod(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    """The pod spec of every Deployment, Job and CronJob, by the object's name."""
+    pods = {}
+    for document in documents:
+        if document["kind"] in ("Deployment", "Job"):
+            pods[document["metadata"]["name"]] = document["spec"]["template"]["spec"]
+        elif document["kind"] == "CronJob":
+            template = document["spec"]["jobTemplate"]["spec"]["template"]
+            pods[document["metadata"]["name"]] = template["spec"]
+    return pods
+
+
+def mounts_tls(container: dict) -> bool:
+    return any(m["name"] == "tls" for m in container.get("volumeMounts", []))
+
+
+def test_the_tls_files_go_to_every_container_that_mounts_the_certificate() -> None:
+    pods = every_pod(rendered_chart())
+    mounting = 0
+
+    # Ten pods: six Deployments, three Jobs and the sweep's CronJob.
+    assert len(pods) == 10
+    for name, pod in pods.items():
+        for container in pod["containers"]:
+            given = {
+                item["name"]: item["value"]
+                for item in container.get("env", [])
+                if item["name"] in TLS_VARIABLES
+            }
+            if mounts_tls(container):
+                mounting += 1
+                # Each variable is a path under the mount, the very file named.
+                assert given == TLS_VARIABLES, name
+            else:
+                assert given == {}, name
+    # The six services and the ingestion Job; the migrate and seed Jobs and the
+    # sweep call nobody and mount no certificate.
+    assert mounting == 7
+
+
+@pytest.mark.parametrize("name", TLS_SERVICES)
+def test_the_health_check_watches_the_certificate_the_server_serves(
     name: str,
 ) -> None:
-    environment = env_of(workloads(rendered_chart())[name])
-    given = {k: v for k, v in environment.items() if k in TLS_VARIABLES}
+    workload = workloads(rendered_chart())[name]
+    command = container_of(workload)["command"]
 
-    assert given == (TLS_VARIABLES if name in CLIENTS else {})
+    served = command[command.index("--ssl-certfile") + 1]
+
+    assert env_of(workload)["MERIDIAN_TLS_CERT_FILE"] == served
+
+
+# ── the key file ─────────────────────────────────────────────────────────────
+
+
+def test_every_pod_has_fs_group_equal_to_its_user_and_group() -> None:
+    pods = every_pod(rendered_chart())
+
+    assert len(pods) == 10
+    for name, pod in pods.items():
+        context = pod["securityContext"]
+        assert context["runAsUser"] == context["runAsGroup"], name
+        assert context["fsGroup"] == context["runAsUser"], name
+        assert context["fsGroup"] == 10001, name
+
+
+def test_fs_group_follows_the_one_user_value() -> None:
+    pods = every_pod(render([*helm_arguments(), "--set", "runAsId=20000"]))
+
+    for name, pod in pods.items():
+        assert pod["securityContext"]["fsGroup"] == 20000, name
+
+
+def tls_volumes(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    return {
+        name: volume
+        for name, pod in every_pod(documents).items()
+        for volume in pod["volumes"]
+        if volume["name"] == "tls"
+    }
+
+
+def test_every_certificate_volume_is_mode_0440_and_no_value_changes_it() -> None:
+    volumes = tls_volumes(rendered_chart())
+
+    # The six services and the ingestion Job.
+    assert len(volumes) == 7
+    for name, volume in volumes.items():
+        assert volume["secret"]["defaultMode"] == 0o440 == 288, name
+    # Not a value: a --set of any plausible name leaves the rendering as it is.
+    loosened = render(
+        [
+            *helm_arguments(),
+            "--set",
+            "defaultMode=420",
+            "--set",
+            "tlsDefaultMode=420",
+            "--set",
+            "tls.defaultMode=420",
+            "--set",
+            "identity.defaultMode=420",
+            "--set",
+            "podSecurityContext.fsGroup=0",
+        ]
+    )
+    assert loosened == list(rendered_chart())
 
 
 @pytest.mark.parametrize("name", ALL_WORKLOADS)

@@ -531,6 +531,7 @@ def test_every_pod_has_the_pod_level_security_context() -> None:
             "runAsNonRoot": True,
             "runAsUser": USER_ID,
             "runAsGroup": USER_ID,
+            "fsGroup": USER_ID,
             "seccompProfile": {"type": "RuntimeDefault"},
         }, workload["metadata"]["name"]
 

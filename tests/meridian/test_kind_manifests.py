@@ -348,9 +348,12 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
         ALLOWED_HOSTS_ENV,
         OTLP_ENDPOINT_ENV,
         IDENTITY_PREFIX_ENV,
+        # Every container that mounts its certificate names its files, so
+        # /healthz watches the one the server serves (S056).
+        *TLS_ENV,
     }
     if name == KNOWLEDGE_SERVER:
-        expected |= {GATEWAY_URL_ENV, *TLS_ENV}
+        expected |= {GATEWAY_URL_ENV}
 
     address = urlsplit(runtime_tool_servers()[name])
     # DNS rebinding protection compares the Host header, byte for byte.
