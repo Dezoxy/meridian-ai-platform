@@ -393,9 +393,9 @@ that day; the rest stand as their step recorded them.
 | An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open; left by S019 (not in its "done when") | S021 |
 | `create_app` cut into a handler class | S011 | declined in S011, with reasons | none |
 | `NOT VALID` checks when a column is added to a large audit table | S011 | declined in S011, with reasons | none |
-| A tool-server client that lives longer than one call | S013 | open | S059 |
-| An OpenAPI or health entry for the tool servers in `test_openapi.py` | S013 | open | S059 |
-| Length checks on `runtime.runs` text columns | S013 | open | S059 |
+| A tool-server client that lives longer than one call | S013 | closed by S059 (the runtime keeps one HTTP client for each tool server on a loop of its own; the SDK's session is still one per call) | S059 |
+| An OpenAPI or health entry for the tool servers in `test_openapi.py` | S013 | closed by S059 (each tool server declares `GET /healthz` and publishes its contract file) | S059 |
+| Length checks on `runtime.runs` text columns | S013 | closed by S059 (migration 0016: 64 characters, the HTTP edge's bound) | S059 |
 | An upper bound on a provider's token counts | S045 | closed by S058 (an input count over four times the estimate, an output count over the wire's cap or a negative count is a bad response of that candidate) | S058 |
 | A purpose on the gateway's refusal rows | S045 | closed by S058 (a column, written on refusal rows) | S058 |
 | 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | closed by S058 (an input of more than 8,191 UTF-8 bytes is a 422) | S058 |
@@ -403,10 +403,10 @@ that day; the rest stand as their step recorded them.
 | After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
 | Ingestion tests that run without a database | S012 | open | S065 |
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
-| The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | open | S059 |
-| One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | open | S059 |
+| The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | closed by S059 (`tool-unavailable`; a reason the client does not know stays `unknown`) | S059 |
+| One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | closed by S059 (the knowledge server's check, moved; the evaluation CLI's check of an option stays where it is) | S059 |
 | The count of a refusal flood's last window is never written | S046 | closed by S058 for the gateway's own refusals (a row with the outcome `suppressed`); the caller check and the other services have a row below | S058 |
-| `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | S059 |
+| `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | closed by S059 (one conditional form, admitted in an output schema only) | S059 |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open; moved from S060 on 2026-10-05: the one reader of the table is `select_terms`, where a missing pair is never complete and the claim goes to an adjuster as unverified, so a failure there changes how the triage routes a claim | S067 |
 | The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | open; both of S060's reviewers rated it medium | S062 |
 | The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed | S065 |
@@ -452,9 +452,9 @@ that day; the rest stand as their step recorded them.
 | Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | open | S067 |
 | A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | closed by S060 (handlers and a middleware of the workload's own) | S060 |
 | The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | open; left by S019 (application and edge logging, not the chart) | S064 |
-| The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | open | S059 |
+| The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | closed by S059 (the query is set aside before the instrumentation runs and given back to the routes) | S059 |
 | The claimant's status page picks the latest proposal by `created_at` with no tie-break; the decided-claims view and 0009 break a tie by `proposal_id` | S053 | closed by S060 (the three statements of the pages break the tie by `proposal_id`) | S060 |
-| `finish_run` writes a run's status without checking the one it replaces, so a leg that outlives the ten-minute lease would overwrite the sweep's `Failed` (a live leg is bounded near 280 s) | S052 | open | S059 |
+| `finish_run` writes a run's status without checking the one it replaces, so a leg that outlives the ten-minute lease would overwrite the sweep's `Failed` (a live leg is bounded near 280 s) | S052 | closed by S059 (`finish_run` and the pause after a failed resume write over `Running` only and say whether they did) | S059 |
 | `AGENT` and `TRIAGE_LEASE_SECONDS` live in `triaging.py`, which loads FastAPI and httpx; the sweep keeps copies that a test holds equal | S052 | closed by S060 (they live in `lifecycle.py`; a test imports the sweep in a fresh interpreter) | S060 |
 | The claimant's page does not say by when the documents are due | S052 | closed by S060 (the day before which they are needed) | S060 |
 | Documents posted after the deadline are refused (409) and the adjuster does not see that they were tried | S052 | closed by S060 (one audit event per referral, and a sentence on the adjuster's page) | S060 |
@@ -476,7 +476,7 @@ that day; the rest stand as their step recorded them.
 | On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | none |
 | A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | open; left by S019 (roles, grants and a migration, not the chart) | S063 |
 | The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open; S019: the chart refuses a second gateway replica, and leaves the rolling update alone (its decisions say why); windows shared between processes are the fix | S066 |
-| A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | open; left by S019 (application code) | S059 |
+| A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | closed by S059 as far as a tool server can (a call carries the time the runtime will wait; no slot in that time, or late before its work or its commit, is `failed`, `timed-out`); a search already at the gateway is still charged | S059 |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace (T-68) | threat model, S018 | open; left by S019 (the observability chart's values, not the Meridian chart) | S063 |
 | Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | closed by S058 (the limiter admits the estimate of the text as sent, and redaction runs after it) | S058 |
 | The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open; left by S019 (application code) | S021 |
@@ -547,7 +547,14 @@ that day; the rest stand as their step recorded them.
 | `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | closed by S056 (two more lines in check 9: the refusal's row in the audit table, by its reason and the calling service, and a certificate of another CA with the runtime's own URI, refused). The audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row: the row below, S062 | S056 |
 | `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | partly closed by S056 (`make deploy` requires the issuer, the three certificate policies and approver-policy before it builds). Open: the first upgrade's outage | S020 |
 | Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
-| `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | open | S059 |
+| `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | closed by S059 (the stand-in waits until it is cancelled, and the test reads that) | S059 |
+| The gateway's client of the runtime has a timeout per phase (30 s each), not per call, so "a live leg is bounded near 280 s" (four model calls, sixteen tool calls) understates what a slow, trickling gateway can take; a test holds 280 s under the 600 s lease, and no constant bounds a whole model call | S059 | open | none |
+| A resumed leg that outlives its lease while another resume takes the run over can still write its end over the other leg's `Running` (the guard is the status alone, not who holds the run); it needs a leg hung past 600 s | S059 | open | S065 |
+| `httpx2` logs each request's URL at INFO; the services' loggers stay at WARNING and the settings refuse an address with a query or a password, but nothing sets that logger's level as `quiet_sdk_logging` does for the SDK | S059 | open | S064 |
+| S059 set a request's query aside before the middleware stack; where a middleware forwards a copy of the scope (the caller's identity check), the server's access log no longer has the query, and where none does (the Claims API) it still has | S059 | open; S064's access-log row covers the rest | S064 |
+| `service_url_problem` still accepts some addresses the HTTP client refuses (an address of four numbers over 255, a host with a combining mark or an emoji); the second net, the client's own refusal at start, catches them | S059 | open | none |
+| `test_after_the_threshold_the_next_call_skips_the_first_candidate` (`tests/meridian/gateway/test_gateway_fallback.py`) failed in a whole run on a machine at a load over 60 and passes alone; S057 made five timing tests hold by construction and this one was not among them | S059 | open | none |
+| A shed call's audit row and span have no run: the run's ID in `_meta` is not verified on that path, so only the server's warning line names it | S059 | open; by design until a tool server can check a run without a worker | none |
 | On macOS `unused_port()` still releases its port before the test connects: a bound socket that does not listen drops a connect there, which then waits out its timeout, so a kept port cannot refuse | S057 | open; an observation: the required check runs on Linux, where the port is kept | none |
 | `tests/meridian/guardrails/test_redaction.py` has its own copy of the CPU-time measurement that is now `tests/meridian/cputime.py` | S057 | open | none |
 | The advisory hook reports `ubuntu-26.04` as an unknown runner label on every edit of a workflow: the laptop's actionlint is older than the label the runs use | S057 | open | none |
@@ -8243,7 +8250,226 @@ backlog, without a change to the triage graph, its rules or a prompt.
   that log no field (no home).
 
 ### S059 — Runtime and tool server loose ends
-**Status:** doing
+**Status:** doing · **Started:** 2026-10-05 · **Finished:** —
+**Goal:** close the ten runtime and tool server items of the follow-up
+backlog, T-62 among them, without touching a `/healthz` route or the
+identity files S056 is changing.
+
+**Decisions:**
+
+- **Run inside the orchestrating session, by the owner's instruction
+  (2026-10-05):** "Start S059 and S060 in this session, and S061 when a
+  slot frees." A suggested task and a routine's run do not show on the
+  owner's phone; this session does. Part A's "Working in parallel" says
+  so from this pull request on.
+- **In parallel with S056 and S060.** S056 owns the kind cluster: this
+  step ran no command against it and none against Azure.
+- **Before any code.** The threat-model note (`feature-threat-model`).
+  The step crosses TB-4 (the runtime to a tool server) and TB-6 (a tool
+  server to the gateway). What is worth protecting: the audit trail (a
+  row that says `completed` is a call the runtime had an answer to), a
+  tenant's windows and budget (T-62), a run's final status, and what a
+  span may hold (no query string). The threats taken: a search the
+  runtime gave up on is charged and audited as done; calls wait without
+  limit for one of eight threads; a leg that outlives its lease writes
+  over the sweep's `Failed`; a processor or sampler added later reads a
+  URL with its query; an error answer that is not ours is read as a
+  refusal. Nothing here is in tension with a hard rule: no provider SDK,
+  no agent framework in a platform package, no new tool.
+- **An error answer without a reason is `tool-unavailable`.** A tool
+  server of ours puts a reason on every refusal, so an error answer with
+  none, or with one that is not a string, did not come from the kit: the
+  run fails as unavailable. A reason that is a string the client does
+  not know stays the refusal `unknown`, since a newer server may have a
+  reason an older runtime has not heard of. Rejected: `unknown` for
+  both, as before, which reports a broken server as a decision it took.
+- **A leg's end is written over `Running` only.** `finish_run` and the
+  pause after a failed resume name the status they replace and say
+  whether they moved the run. A leg whose write moved nothing reads the
+  stored status: its own status means its earlier write had committed
+  (the connection dropped before the answer, and the retry found the
+  run no longer `Running`), so it answers as usual, with its output;
+  any other status is what the sweep wrote, and the leg answers that,
+  with no output and 200, since the leg itself did not fail. Rejected:
+  a trigger in the database, which would need the runtime's role told
+  apart from a migration's and guards one caller. The first version of
+  this answered a committed-then-dropped write as "ended by someone
+  else" and lost a completed triage's output; the `implementer` said so
+  in its own report, and the pause path was found by two reviewers.
+- **The text columns of `runtime.runs` hold 64 characters**, the bound
+  the HTTP edge already puts on an agent, a tenant and a reference.
+  Rejected: 128, the audit table's bound for a tenant, which would let
+  the table hold what no request can send; and `NOT VALID` with a later
+  `VALIDATE`, which in one migration file holds the same lock.
+- **One URL check for a service address, the strictest of the three.**
+  `common/env.py` takes the knowledge server's check: no whitespace or
+  control character, a valid port that is not 0, `http` or `https`, a
+  host, no user or password, no query and no fragment. The tool
+  servers' addresses add "no path" on top of it. A gateway or runtime
+  address may keep a path. The evaluation CLI's check of a command-line
+  option stays where it is (S061 works in that folder).
+- **`policy` when `found` is true: one conditional form, in an output
+  schema only.** The registry's schema subset has no keyword that can
+  say it, so an output schema may hold `if` and `then` in one shape:
+  `if` names the object's own properties by `const` and requires them,
+  `then` holds `required` alone. An input schema still refuses both at
+  every depth: a model sees it, and a provider's strict mode takes no
+  conditional. The first version admitted it in both; reading the diff
+  found it. Rejected: checking it in the handler and the client, which
+  leaves the published contract saying less than the servers enforce;
+  and `oneOf` of two closed objects. The evaluation baselines carry a
+  hash of the tools' contracts, so both were regenerated by replaying
+  the committed recording (`make eval-baseline`, no model call): the
+  hash is the one line that differs in either, and no grade changed.
+- **The runtime keeps one HTTP client for each tool server, on a loop
+  of its own.** A client cannot outlive the event loop it was used in,
+  and a call ran its own loop, so every call paid a TLS handshake. The
+  application now owns one loop in one thread and one client per
+  address, and closes both when it stops. What a connection carries is
+  the runtime's own certificate, not a run's or a tenant's; the run's
+  ID still travels with each call, and the client keeps no cookie, as
+  the knowledge server's shared client does not (T-61): a probe in
+  review showed one run's cookie on the next run's request. An idle
+  connection is kept 2 s, under the 5 s a tool server keeps one. The
+  SDK's session is still one per call (the servers are stateless). The
+  probe (`toolprobe`) has no application and keeps a client per call.
+- **T-62: a call carries how long the runtime will wait, and the server
+  keeps to it.** The client sends the milliseconds it has left with
+  each call; the server bounds that by its own ten seconds and never
+  trusts more. A call that has not got one of the eight slots by then
+  is ended without running, so the queue is bounded in time, not in
+  count. A call that got its thread is checked again after every
+  refusal check and before its handler, a search checks before it asks
+  the gateway and waits for it no longer than the call has left, and a
+  call whose time is up when its work is done is rolled back. Each of
+  these is `failed` with the reason `timed-out`. What stays: a search
+  already at the gateway is charged; the server's clock for a call
+  starts when it arrives, a little after the runtime's, and the check
+  is before the commit, so a call that commits in the moment after it
+  is `completed` although the runtime may have just stopped waiting
+  (for a write the idempotency key makes its retry find the work done).
+  Rejected: a count of waiting calls, which refuses a short burst that
+  would have been served in time; and a new refusal reason on the wire.
+- **A call the server ends without running is audited, through the
+  throttle.** The first decision here was a log line and no audit row
+  for a call that got no slot, on the ground that the write needs the
+  thread the call could not get. The boundary review showed the ground
+  false (the server already writes a row from its own thread on another
+  path) and the rule broken: T-14 asks for a row for every call that
+  reaches the handler, and the runtime's row cannot tell a shed call
+  from a server that is down. So a shed call and a call found late
+  before its handler leave a `failed`, `timed-out` row behind the
+  throttle that bounds refusal rows (T-49): one per tenant, tool and
+  window, with the count it left out. That also answers the other
+  finding on the same lines: a caller that sends a budget of 1 ms could
+  otherwise write one row per call into an insert-only table. A shed
+  call's row has the tool and no run, since the run's ID is not checked
+  on that path; a call found late after its work has its own row every
+  time, bounded by the work.
+- **No span attribute is ever built from the query.** The
+  instrumentation reads the ASGI scope when it starts the span, before
+  any hook, so the service app sets the query aside before its
+  middleware stack runs and a middleware inside the instrumentation
+  gives it back to the routes. The hook that removes the attributes
+  stays as a second net.
+
+**Work log:**
+
+- **Mapping first.** An Explore subagent mapped the ten rows to files,
+  functions, callers and tests.
+- **Nine contracts to the `implementer`, one after another**, since
+  four of them share `tool_client.py`: the error answer and the
+  slow-server test; the run's end and the migration; the address check;
+  the schema and `test_openapi.py`; the kept client; the time a call
+  has and the wait for a slot; the checks inside a call; the span; and
+  the reviews' findings. The main session read each diff and committed
+  it, and sent two back before committing (the lost output, the input
+  schema).
+- **Reviews**, `security-reviewer`, `platform-boundary-reviewer` and
+  `database-reviewer`, on the eight commits. The boundary review
+  blocked on the shed call's missing audit row (above). Taken in the
+  ninth contract besides: the pause path, the cookie jar and explicit
+  connection limits, a budget too large for a float (the reader that
+  "never raises" raised), a gateway wait cut by the call's own deadline
+  recorded as `timed-out` and not as the gateway's fault, whitespace,
+  control characters and port 0 in an address, a public name for the
+  reader of a run's ID, a test that a row over the migration's bound
+  fails the whole file, and the tool server's factory back under its
+  old length. The security review's simulation of 3,000 calls against
+  the slot limiter found no leak, no double release and never more
+  handlers than slots.
+- **The whole suite found what the contracts' own gates had not**: the
+  two baseline tests (above).
+
+**Result / verification:**
+
+- **The runtime's tool client lives longer than one call.** Tests: two
+  calls through the transport use one connection and two without it use
+  two; eight threads at once; a hanging server and then a healthy call;
+  close twice; one request per call; no cookie crosses runs.
+- **`runtime.runs` text columns have length checks.** Tests against
+  PostgreSQL: 64 characters held and 65 refused for each column; a row
+  over the bound fails the migration and leaves the database as it was.
+- **An error answer without a reason is not the refusal `unknown`.**
+- **One URL check in `common/env.py` serves every service address.**
+  Every address the chart renders passes it.
+- **`policy_lookup`'s output schema requires `policy` when `found` is
+  true.** Tests on the registry's rule (each refused shape, and the
+  input schema at every depth), the server (`invalid-result`), the
+  client (unavailable) and the regenerated contract; `make registry`
+  exits 0.
+- **`finish_run` writes a status only over the one it expects.** Tests:
+  a leg whose run the sweep ended, a write that committed before the
+  connection dropped (with and without a failure), and a resumed leg
+  that fails on an ended run.
+- **A tool server's waiting calls are bounded, and a search the runtime
+  gave up on is not charged or audited as completed.** Tests: eight
+  handlers held by an event and a ninth call with a small budget (never
+  run, one throttled row); three shed calls in a window (one row, the
+  next carries the count); a call late before its handler (a row with
+  its run and tenant; ten in a window, one row); a handler that
+  outlives its deadline and a replay found late (failed, rolled back,
+  and for a write the retry does it once); a search late after the
+  store was asked (the gateway had no request).
+- **No span processor or sampler can see a URL with its query.** Tests
+  with a recording sampler and a recording processor, through each of
+  the three services.
+- **The tool servers have their entry in `test_openapi.py`.**
+- **Gates so far, run by the main session.** On the branch before `main`
+  was merged in, with all nine contracts: the whole suite,
+  `GITHUB_ACTIONS=true make pytest-db`, 8,935 passed, 11 skipped, exit 0.
+  After S060 and then S056 were merged in: `ruff check --no-cache` and
+  `lint-imports` (5 kept) exit 0, and the secret scan found no leaks.
+  The whole suite did NOT finish on the merged branch: three runs on a
+  laptop at a load of 60 to 130 (the kind cluster and the test database
+  share one small virtual machine) were stopped at 98%, 51% and 47%,
+  each with one failure. The third run named it:
+  `tests/meridian/gateway/test_gateway_fallback.py::test_after_the_threshold_the_next_call_skips_the_first_candidate`,
+  a gateway test this step does not touch, which passes alone (the
+  file: 39 passed) and passed in the 8,935. The first two runs were
+  stopped before they named theirs.
+- **To finish (the owner stopped the work here on 2026-10-05, to move it
+  to a dedicated VM):** on a quiet machine merge `main`, run
+  `GITHUB_ACTIONS=true make pytest-db` once to the end, then `make docs`,
+  `make test`, `make registry` and `make secret-scan`; set this section
+  and the step's row to `done` with the suite's line; add the changelog
+  entry with the next free version (Part A's new sentence on steps run
+  inside one session is in this branch); open the pull request and set
+  it to merge on green. No code is known to be missing.
+- **Not run:** anything on the kind cluster (S056 owns it), so the kept
+  client and the 2 s keep-alive have met no real tool server pod; a
+  branch whose migration is not on `main` is not deployed. `make eval`
+  by name: its two tests are in the whole suite and passed on the
+  existing recording.
+
+**Follow-ups:**
+
+- In the backlog: a leg hung past its lease against a second resume (S065); `httpx2`'s
+  request line at INFO and the access log's query (S064); no bound on a whole
+  model call of the runtime, addresses the check still takes and the
+  client refuses, and a shed call's row with no run (no home).
+- For S064 when it adds the tool servers' metrics: `timed-out` is a new
+  value of a failed call's reason.
 
 ## Part D — Open questions
 
