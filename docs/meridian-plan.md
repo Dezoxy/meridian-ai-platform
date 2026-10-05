@@ -7,7 +7,9 @@
   kind with `make demo`, from one hardened Helm chart under a default-deny
   network policy (S019), where the runtime, the gateway and the tool servers
   know the calling service from its certificate (mutual TLS, S055) and
-  refuse a tenant or agent the registry does not let it name, the gateway
+  refuse a tenant or agent the registry does not let it name, the issuer
+  signs only for the services' namespace and a service asks for its own
+  restart once a renewed certificate is mounted (S056), the gateway
   routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
   the same region and holds each tenant to its rate limits and budgets
@@ -7472,9 +7474,101 @@ readable by the service's own user and group alone.
     under `meridian.svc` through and gives a request without a usage
     cert-manager's defaults.
 
-**Result / verification:** —
+- **Where the first run stopped (2026-10-05, its usage limit).** All
+  code, the cluster proof and the documents are committed on the branch;
+  nothing is pushed and no pull request is open. Owed before the step
+  closes: the result of the whole suite on the final tree (running when
+  the run stopped; 8758 passed, 11 skipped on the merged tree before
+  the review fixes), `gitleaks git --log-opts="origin/main..HEAD"
+  --redact`, the advisor before declaring done, a merge of `main` if it
+  moved (T-91 and v0.40 were free then), this section's status, the
+  step table's row, the pull request and its merge.
 
-**Follow-ups:** —
+**Result / verification:**
+
+- **On the kind cluster** (2026-10-05, node created 2026-10-04 18:16
+  UTC; three deploys of this branch, the last on image `473847335d80`
+  with `main` merged in, whose results these are unless a line says
+  otherwise):
+  - `make up`: exit 0, `release approver-policy v0.28.0 ready in
+    cert-manager`. The controller runs with
+    `--controllers=-certificaterequests-approver`; the ClusterRole
+    `cert-manager-controller-approve:cert-manager-io` is not found; the
+    add-on's ClusterRole may `approve` for
+    `clusterissuers.cert-manager.io/meridian-services` and
+    `.../meridian-selfsigned` only. The three policies are Ready. The
+    CA's Certificate stayed Ready at revision 1 through the switch.
+  - Asked of the API server as cert-manager's account: `use` on
+    `meridian-services` yes in `meridian` and no in `default`; on
+    `meridian-services-ca` yes in `cert-manager` and no in `meridian`;
+    on `meridian-deny-unlisted` yes in `default`.
+  - `make deploy`: exit 0, `the services' certificates are ready`. Each
+    of the seven requests carries `Approved by CertificateRequestPolicy:
+    "meridian-services"`, reason `policy.cert-manager.io`, duration
+    `2160h0m0s`. Pods at no restart after each deploy.
+  - **A request from another namespace is refused.** Seven Certificates
+    made by hand, read and removed again. Denied, each with its reason
+    in the request: `default`, with the Agent Runtime's own URI (only
+    the denying policy was considered, twice: before and after its
+    selector was narrowed); `meridian`, a URI of another trust domain;
+    `meridian`, asking to be a CA; `meridian`, ten years
+    (`maxDuration: Invalid value: "87600h0m0s": 2160h0m0s`). Approved
+    by `meridian-services-ca`: a Certificate of the CA's own shape in
+    `cert-manager` under another name, so the CA's renewal will be
+    approved; its Secret, a self-signed CA nothing trusts, was removed.
+    Left with no condition at all: a request for an issuer that is not
+    Meridian's.
+  - **The key file's mode**, by `stat` in each of the six pods: `440
+    0:10001`, the process running as uid and gid 10001.
+  - **The health check**, in the gateway's pod and in the claims tool
+    server's, which calls nobody: the dates of the mounted certificate
+    (`not_after 2027-01-03T03:45:43+00:00`, `restart_at` a day before);
+    by the rule it is `far` now, `not-renewed` at the restart time with
+    the file as it is, `ended` at the end.
+  - **`make smoke`: exit 0, 24 PASS**, among them `the gateway's audit
+    log has a refusal for caller-name-not-allowed by agent-runtime
+    (tenant evaluation), 1 s old`, `POST /v1/chat with a certificate of
+    the Agent Runtime's own name from another CA -> refused`, and the
+    three lines of the certificate policy. After the second deploy it
+    was 21 PASS, before those three lines existed.
+  - Prometheus: the target `cert-manager` up; the expiry series one for
+    `cert-manager` (the CA's, 364 days left) and seven for `meridian`
+    (89 days), eight Ready; the four rules of `meridian.certificates`
+    loaded, healthy and inactive; no Meridian alert pending or firing.
+    approver-policy's pod used 30 MiB of its 96 Mi.
+- **Not proved on the cluster:** a service turning unhealthy and being
+  restarted near its certificate's end, which needs a certificate that
+  lasts an hour (the tests over real TLS show the 503 and the new
+  process loading the renewed file); an alert firing (promtool's tests
+  do); `make deploy` stopping without the issuer or the policies (the
+  tests run it with stub commands; the issuer was not taken from the
+  live cluster); a cold `make up` from no cluster; a renewal.
+- **Left as it is:** the cluster, with `make smoke` green, the six
+  services on image `473847335d80`, eight certificates Ready, no probe
+  object. It is the one made on 2026-10-04 at 18:16 UTC, not S055's.
+- **Gates.** `uv run ruff check . --no-cache`: `All checks passed!`.
+  `make docs`: `docs consistency: 13 checks passed`. `make test`: exit
+  0, `codex agents: 11 twins current`. `make lint`: `Contracts: 5 kept,
+  0 broken.` `make helm-lint`: `1 chart(s) linted, 0 chart(s) failed`.
+  `make alerts`: `SUCCESS: 13 rules found`, then `SUCCESS`. `make
+  check`: exit 0, no ERROR line (ADR 4 has a dated note). `shellcheck`
+  on `up.sh`, `deploy.sh` and `smoke.sh`: exit 0.
+- **Not run:** `make eval` (no prompt, graph or recording changed);
+  `make demo`; anything against Azure.
+
+**Follow-ups:** in Part B's backlog. Closed: the expired certificate
+with green probes and no alert; the key file's mode; the smoke line that
+read a status and not a reason, and the certificate of another CA.
+Closed in part: the issuer's scope (revocation and the CA's key stay
+with S020) and `make deploy` without cert-manager (the first upgrade's
+outage stays with S020). New: the moment between the server's read of
+the certificate and the check's; a restart seen on the cluster, which
+needs a short-lived certificate; pods that restart in the same minute;
+a request `make smoke` makes to be refused, its audit line and the
+width of `refused`; approver-policy's probes, limit and pins; the
+policy's literals for another namespace or issuer; cert-manager's wait
+after a failed request; and a cluster replaced by an older checkout,
+which is the owner's to decide.
 
 ### S057 — Test and tooling hygiene
 
@@ -8184,3 +8278,18 @@ tokens would meet.
   refusal flood's last window is a row of its own, and the rate limiter
   runs before redaction, on one estimate of the text as sent. Five
   backlog rows closed; three new ones, none with a home that is running.
+- **v0.40, 2026-10-05:** S056 done, unattended, owning the kind cluster
+  beside S057 and S058. cert-manager's own approver is off and its
+  approver-policy (v0.28.0, one more pin) lets the issuer sign only a
+  request made in `meridian` with a URI under the Meridian prefix; a
+  service answers 503 on `/healthz` inside the last day of the
+  certificate it loaded once a renewed one is mounted, and from its end
+  whatever is mounted; a key file is its service's own user's and
+  group's alone; four alerts watch the certificates; `make deploy`
+  requires the issuer and what approves its requests; `make smoke` reads
+  its 403's reason, tries another CA's certificate and reads that the
+  policy stands. T-91 is new. The health rule changed after the review:
+  by the clock alone, a failed renewal would have had every service
+  looping for a day. The cluster was found replaced by an older
+  checkout's `make up` when the step began: a backlog row, for the
+  owner. Three backlog rows closed and two in part; eight new ones.
