@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -582,7 +581,7 @@ def test_an_error_answer_with_an_unknown_reason_is_refused_as_unknown(
     assert CANARY not in everything_spans_carry(exporter)
 
 
-def test_an_error_answer_without_a_reason_is_refused_as_unknown(
+def test_an_error_answer_without_a_reason_is_unavailable(
     registry: Registry, exporter: InMemorySpanExporter
 ) -> None:
     bare = types.CallToolResult(
@@ -591,10 +590,30 @@ def test_an_error_answer_without_a_reason_is_refused_as_unknown(
     stand_in = StandIn(answer=lambda name, args: bare)
     tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
 
-    with pytest.raises(ToolRefused) as raised:
+    with pytest.raises(ToolUnavailable) as raised:
         tools.call("policy_lookup", {"policy_number": POLICY})
 
-    assert raised.value.reason == "unknown"
+    assert raised.value.tool == "policy_lookup"
+    assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
+
+
+@pytest.mark.parametrize("reason", [7, ["outside-claim"], {"reason": "x"}, None])
+def test_an_error_answer_with_a_reason_that_is_not_a_string_is_unavailable(
+    registry: Registry, exporter: InMemorySpanExporter, reason: Any
+) -> None:
+    odd = types.CallToolResult(
+        is_error=True,
+        content=[types.TextContent(type="text", text="no")],
+        meta={"meridian/refusal": reason},
+    )
+    stand_in = StandIn(answer=lambda name, args: odd)
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    with pytest.raises(ToolUnavailable) as raised:
+        tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert raised.value.tool == "policy_lookup"
+    assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
 
 
 # Written out here on purpose: a list taken from the kit's own type could not
@@ -825,14 +844,14 @@ def test_a_server_slower_than_the_timeout_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(tool_client, "TOOL_TIMEOUT_SECONDS", 0.3)
-    stand_in = StandIn(delay=10.0)
+    stand_in = StandIn(hang=True)
     tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
-    started = time.monotonic()
 
     with pytest.raises(ToolUnavailable) as raised:
         tools.call("policy_lookup", {"policy_number": POLICY})
 
-    assert time.monotonic() - started < 5
+    assert stand_in.entered
+    assert stand_in.cancelled
     assert POLICY not in str(raised.value)
     assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
 

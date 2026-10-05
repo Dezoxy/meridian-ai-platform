@@ -389,9 +389,16 @@ class ToolClient:
         self, spec: Tool, answer: types.CallToolResult, call_id: str | None
     ) -> ToolResult | ToolRefused:
         if answer.is_error:
+            # A tool server of ours always sets a string reason on a refusal. An
+            # error answer without one is a server not behaving, so the call is
+            # unavailable; a string this client does not list is a newer
+            # server's reason, still a refusal, read as ``unknown``.
             reason = (answer.meta or {}).get(META_REFUSAL)
-            known = isinstance(reason, str) and reason in REFUSAL_REASONS
-            return ToolRefused(spec.id, reason if known else UNKNOWN_REASON)
+            if not isinstance(reason, str):
+                raise ToolUnavailable(spec.id)
+            return ToolRefused(
+                spec.id, reason if reason in REFUSAL_REASONS else UNKNOWN_REASON
+            )
         data = answer.structured_content
         if not isinstance(data, dict) or not fits(self._validator(spec), data):
             raise ToolUnavailable(spec.id)
