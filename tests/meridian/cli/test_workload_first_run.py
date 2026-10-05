@@ -176,7 +176,14 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
 
     again = run("9 workload new again", "meridian", "workload", "new", NAME, expect=2)
     # The last line: uv may print a notice of its own before the command's.
-    assert again.stderr.splitlines()[-1:] == [f"ERROR {NAME_TAKEN}"], again.stderr
+    held = (
+        "an agent of the registry, an entry point of the meridian.graphs group, "
+        "an entry point of the meridian.evaluations group, the workload's package, "
+        "the workload's tests and the workload's evaluation data"
+    )
+    assert again.stderr.splitlines()[-1:] == [f"ERROR {NAME_TAKEN.format(held)}"], (
+        again.stderr
+    )
     for path, content in after_first.items():
         assert (tree / path).read_bytes() == content, path
 

@@ -63,17 +63,38 @@ REGISTRY_INVALID = (
 )
 REGISTRY_UNREADABLE = "the registry cannot be read ({})"
 AMBIGUOUS_NAME = "the name is a word YAML reads as something other than text"
-NAME_TAKEN = (
-    "the name is taken: an agent, an entry point or a workload directory has it"
+# The field holds the kinds of thing that hold the name, never the name or a path.
+NAME_TAKEN = "the name is taken: held by {}"
+HELD_BY_AGENT = "an agent of the registry"
+HELD_BY_ENTRY_POINT = "an entry point of the {} group"
+# What each path ``_taken_paths`` checks is, in the same order.
+HELD_BY_PATH = (
+    "the workload's package",
+    "the workload's module file",
+    "the workload's tests",
+    "the workload's evaluation data",
 )
 AGENTS_EDIT_UNVERIFIED = (
     "the edit of agents.yaml does not verify: the text edit extends only a list in "
     "block style with `agents` last in the file; nothing was written"
 )
+# The field is the line, in the person's own file, where the `agents` list starts.
+AGENTS_LIST_UNUSABLE = (
+    "the edit of agents.yaml does not verify: the `agents` list starts on line {}; "
+    "the text edit extends only a list in block style with `agents` last in the "
+    "file; nothing was written"
+)
 REGISTRY_EDIT_INVALID = "the registry with the new agent does not validate"
 REGISTRY_COPY_FAILED = "the registry could not be copied to check the edit ({})"
 PYPROJECT_EDIT_UNVERIFIED = (
     "the edit of pyproject.toml does not verify; nothing was written"
+)
+# The fields are the table header and the lines of the person's own file that
+# start with it.
+PYPROJECT_HEADER_UNUSABLE = (
+    "the edit of pyproject.toml does not verify: the scaffold needs the table "
+    "header {} alone on its line, and once; lines that start with it: {}; "
+    "nothing was written"
 )
 PATH_EXISTS = "a file or directory the workload would create already exists"
 STALE_PLAN = (
@@ -222,12 +243,24 @@ def _refuse_a_taken_name(
     root: Path, name: str, module: str, document: Mapping[str, Any], agent_exists: bool
 ) -> None:
     entry_points = document["project"]["entry-points"]
-    published = any(name in entry_points[g] for g in (GRAPHS_GROUP, EVALUATIONS_GROUP))
-    occupied = any(
-        os.path.lexists(root / relative) for relative in _taken_paths(name, module)
-    )
-    if agent_exists or published or occupied:
-        raise ScaffoldError(NAME_TAKEN)
+    holders = [HELD_BY_AGENT] if agent_exists else []
+    holders += [
+        HELD_BY_ENTRY_POINT.format(group)
+        for group in (GRAPHS_GROUP, EVALUATIONS_GROUP)
+        if name in entry_points[group]
+    ]
+    holders += [
+        kind
+        for kind, relative in zip(HELD_BY_PATH, _taken_paths(name, module), strict=True)
+        if os.path.lexists(root / relative)
+    ]
+    if holders:
+        raise ScaffoldError(NAME_TAKEN.format(_listed(holders)))
+
+
+def _listed(items: list[str]) -> str:
+    """``items`` as prose: "a", "a and b", "a, b and c"."""
+    return " and ".join([", ".join(items[:-1]), items[-1]] if items[1:] else items)
 
 
 def _template(file: str) -> string.Template:
@@ -293,7 +326,12 @@ def _agents_edit(root: Path, old: str, name: str) -> str:
         expected = {**before, "agents": [*before["agents"], agent]}
         verified = yaml.safe_load(new) == expected
     except (yaml.YAMLError, TypeError, KeyError):
-        raise ScaffoldError(AGENTS_EDIT_UNVERIFIED) from None
+        # The parse error's own mark is on the line the scaffold appended, not on
+        # one of the person's: the person's list is found in the old text.
+        line = _agents_list_line(old)
+        if line is None:
+            raise ScaffoldError(AGENTS_EDIT_UNVERIFIED) from None
+        raise ScaffoldError(AGENTS_LIST_UNUSABLE.format(line)) from None
     if not verified:
         raise ScaffoldError(AGENTS_EDIT_UNVERIFIED)
     try:
@@ -305,6 +343,21 @@ def _agents_edit(root: Path, old: str, name: str) -> str:
     except OSError as exc:
         raise ScaffoldError(REGISTRY_COPY_FAILED.format(type(exc).__name__)) from None
     return new
+
+
+def _agents_list_line(text: str) -> int | None:
+    """The 1-based line of ``text`` where the value of its top-level ``agents`` key
+    starts, or ``None`` when ``text`` has no such key."""
+    try:
+        document = yaml.compose(text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(document, yaml.MappingNode):
+        return None
+    for key, value in document.value:
+        if isinstance(key, yaml.ScalarNode) and key.value == "agents":
+            return value.start_mark.line + 1
+    return None
 
 
 def _registry_details(exc: RegistryError) -> tuple[str, ...]:
@@ -321,18 +374,31 @@ def _registry_with(registry_directory: Path, agents_text: str) -> None:
         load_registry(staged)
 
 
+def _header_line(lines: list[str], group: str) -> int:
+    """The index in ``lines`` of the header line of the table of ``group``, which
+    must be the header alone on its line, once. Raise ``ScaffoldError`` otherwise:
+    with the 1-based numbers of the lines that start with the header when there
+    are any (a trailing comment, a second copy), without them when there are none."""
+    header = f'[project.entry-points."{group}"]'
+    starting = [i for i, each in enumerate(lines) if each.lstrip().startswith(header)]
+    alone = [i for i in starting if lines[i].strip() == header]
+    if len(starting) == 1 and alone == starting:
+        return starting[0]
+    if not starting:
+        raise ScaffoldError(PYPROJECT_EDIT_UNVERIFIED)
+    numbers = _listed([str(i + 1) for i in starting])
+    raise ScaffoldError(PYPROJECT_HEADER_UNUSABLE.format(header, numbers))
+
+
 def _with_entry_point(text: str, group: str, line: str) -> str:
     """``text`` with ``line`` after the last key line of the table of ``group``;
     the table ends at the next line that starts with ``[`` or at the end of the
     file, and the blank and comment lines after its last key stay after ``line``.
-    Raise ``ScaffoldError`` when the table's header line is not found."""
+    Raise ``ScaffoldError`` when the table's header line is not usable."""
     lines = LINES.findall(text)
-    header = f'[project.entry-points."{group}"]'
-    starts = [i for i, each in enumerate(lines) if each.strip() == header]
-    if len(starts) != 1:
-        raise ScaffoldError(PYPROJECT_EDIT_UNVERIFIED)
-    last = starts[0]
-    for index in range(starts[0] + 1, len(lines)):
+    start = _header_line(lines, group)
+    last = start
+    for index in range(start + 1, len(lines)):
         if lines[index].startswith("["):
             break
         if lines[index].strip() and not lines[index].lstrip().startswith("#"):
@@ -356,6 +422,10 @@ def _pyproject_edit(
         GRAPHS_GROUP: f"meridian.workloads.{module}.graph:build",
         EVALUATIONS_GROUP: f"meridian.workloads.{module}.evaluation:EVALUATION",
     }
+    # Checked in the person's own text first: once the first line is inserted, a
+    # line number found in the edited text would be off by one for a later table.
+    for group in values:
+        _header_line(LINES.findall(old), group)
     new = old
     for group, value in values.items():
         new = _with_entry_point(new, group, f'{name} = "{value}"')

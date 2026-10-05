@@ -504,5 +504,5 @@ def test_running_the_scaffold_twice_is_refused_and_changes_nothing(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
     assert snapshot(root) == before

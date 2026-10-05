@@ -20,6 +20,7 @@ import yaml
 from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
+    AGENTS_LIST_UNUSABLE,
     AMBIGUOUS_NAME,
     BAD_NAME,
     MAX_NAME_CHARS,
@@ -28,6 +29,7 @@ from meridian.platform.cli.scaffold import (
     PATH_EXISTS,
     PATH_OUTSIDE,
     PYPROJECT_EDIT_UNVERIFIED,
+    PYPROJECT_HEADER_UNUSABLE,
     PYPROJECT_NOT_TOML,
     REGISTRY_COPY_FAILED,
     REGISTRY_EDIT_INVALID,
@@ -401,7 +403,7 @@ def test_a_name_an_agent_already_has_is_refused(root: Path) -> None:
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, "claims-triage")
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
     assert snapshot(root) == before
 
 
@@ -417,7 +419,7 @@ def test_a_name_only_an_agent_has_is_refused_with_no_entry_point_or_directory(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, agent)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
 
 
 @pytest.mark.parametrize("group", [GRAPHS, EVALUATIONS])
@@ -433,7 +435,7 @@ def test_a_name_in_only_one_entry_point_table_is_refused(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
 
 
 def occupy_with_a_directory(path: Path) -> None:
@@ -474,7 +476,7 @@ def test_a_path_the_workload_would_take_is_refused_whatever_is_there(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
     assert snapshot(root) == before
 
 
@@ -575,9 +577,10 @@ def test_an_agents_file_in_flow_style_fails_the_agents_edit(root: Path) -> None:
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
-    assert "block style" in AGENTS_EDIT_UNVERIFIED
-    assert "`agents` last" in AGENTS_EDIT_UNVERIFIED
+    # The whole file is one line of JSON: the list starts on line 1.
+    assert str(refused.value) == AGENTS_LIST_UNUSABLE.format(1)
+    assert "block style" in AGENTS_LIST_UNUSABLE
+    assert "`agents` last" in AGENTS_LIST_UNUSABLE
     assert snapshot(root) == before
 
 
@@ -590,7 +593,7 @@ def test_the_parse_step_alone_refuses_an_edit_the_registry_check_would_accept(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
+    assert str(refused.value) == AGENTS_LIST_UNUSABLE.format(1)
 
 
 def test_the_registry_check_alone_refuses_an_edit_the_parse_step_accepts(
@@ -660,12 +663,21 @@ TOML_WITH_A_HEADER_TWICE = (
 
 
 @pytest.mark.parametrize(
-    "text",
-    [TOML_WITH_A_HEADER_IN_A_STRING, TOML_WITH_A_HEADER_TWICE],
+    ("text", "message"),
+    [
+        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_EDIT_UNVERIFIED),
+        (
+            TOML_WITH_A_HEADER_TWICE,
+            # The header is on lines 4 and 12 of the text.
+            PYPROJECT_HEADER_UNUSABLE.format(
+                '[project.entry-points."meridian.graphs"]', "4 and 12"
+            ),
+        ),
+    ],
     ids=["insertion-lands-in-the-string", "header-seen-twice"],
 )
 def test_a_header_line_inside_a_string_fails_the_pyproject_edit(
-    root: Path, text: str
+    root: Path, text: str, message: str
 ) -> None:
     (root / "pyproject.toml").write_text(text, encoding="utf-8")
     before = snapshot(root)
@@ -673,7 +685,7 @@ def test_a_header_line_inside_a_string_fails_the_pyproject_edit(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == PYPROJECT_EDIT_UNVERIFIED
+    assert str(refused.value) == message
     assert snapshot(root) == before
 
 
@@ -689,6 +701,19 @@ def nothing_to_arrange(root: Path) -> None:
 
 def occupy_the_module_directory(root: Path) -> None:
     occupy_with_a_file(root / f"src/meridian/workloads/{MODULE}")
+
+
+def publish_the_name_in_the_graphs_group(root: Path) -> None:
+    header = f'[project.entry-points."{GRAPHS}"]\n'
+    edit(
+        root / "pyproject.toml",
+        lambda t: t.replace(header, header + f'{NAME} = "x.y:z"\n'),
+    )
+
+
+def comment_on_the_graphs_header(root: Path) -> None:
+    header = f'[project.entry-points."{GRAPHS}"]'
+    edit(root / "pyproject.toml", lambda t: t.replace(header, header + "  # note"))
 
 
 def break_pyproject_toml(root: Path) -> None:
@@ -709,6 +734,10 @@ def break_the_registry(root: Path) -> None:
         pytest.param("import", nothing_to_arrange, id="keyword-import"),
         pytest.param("claims-triage", nothing_to_arrange, id="agent-exists"),
         pytest.param(NAME, occupy_the_module_directory, id="directory-taken"),
+        pytest.param(
+            NAME, publish_the_name_in_the_graphs_group, id="entry-point-taken"
+        ),
+        pytest.param(NAME, comment_on_the_graphs_header, id="header-with-a-comment"),
         pytest.param(NAME, break_layout_no_agents_file, id="not-a-checkout"),
         pytest.param(NAME, break_the_registry, id="registry-invalid"),
         pytest.param(NAME, break_pyproject_toml, id="pyproject-not-toml"),
@@ -739,7 +768,9 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         REGISTRY_INVALID,
         NAME_TAKEN,
         AGENTS_EDIT_UNVERIFIED,
+        AGENTS_LIST_UNUSABLE,
         PYPROJECT_EDIT_UNVERIFIED,
+        PYPROJECT_HEADER_UNUSABLE,
         PYPROJECT_NOT_TOML,
         PATH_EXISTS,
         STALE_PLAN,
@@ -749,11 +780,16 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         WRITE_FAILED,
         ROLLBACK_FAILED,
     ]
+    # The first four take the type of an error; the last three take what the
+    # refusal says of the person's own tree: what holds a name, a line, a header.
     taking_a_type = {
         REGISTRY_UNREADABLE,
         REGISTRY_COPY_FAILED,
         WRITE_FAILED,
         ROLLBACK_FAILED,
+        NAME_TAKEN,
+        AGENTS_LIST_UNUSABLE,
+        PYPROJECT_HEADER_UNUSABLE,
     }
     assert len(set(texts)) == len(texts)
     assert all(text.strip() for text in texts)
