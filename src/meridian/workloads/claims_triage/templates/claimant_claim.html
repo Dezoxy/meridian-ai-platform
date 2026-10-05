@@ -28,6 +28,9 @@
 {% else %}
 <p>Tell us below which documents you are sending.</p>
 {% endif %}
+{% if due %}
+<p>We need the documents before {{ due }}. If they have not arrived by then, your claim goes to a person for review.</p>
+{% endif %}
 {% endif %}
 {% if arrived %}
 <h2>Documents that arrived</h2>
