@@ -7708,26 +7708,104 @@ follow-up backlog, without a prompt change and without a live recording.
 - **Run inside the orchestrating session, by the owner's instruction
   (2026-10-05):** "Start S059 and S060 in this session, and S061 when a
   slot frees."
-- **Beside S056 and S059.** S056 owns the kind cluster: this step runs
-  no command against it and none against Azure. S059 changed the
-  registry's tool schema rules, `tools.yaml` and the evaluation
-  baselines: the contracts that regenerate a baseline wait until S059 is
-  on `main` and merged into this branch.
+- **Beside S056 and S059.** This step ran no command against the kind
+  cluster and none against Azure. S059 changed the registry's tool
+  schema rules, `tools.yaml` and the evaluation baselines: the two
+  contracts that regenerate a baseline wait until S059 is on `main` and
+  merged into this branch.
 - **The scaffold writes the new agent into the runtime's entry, by the
   owner's decision (2026-10-05): "option 1, write it".** The question
   put to the owner: T-81 says the command "declares and never grants",
   and writing the agent into the `agents` of `agent-runtime` in
   `services.yaml` lets the runtime's identity name the new agent. The
   write alone admits no call: a tenant has to list the agent too, and
-  that stays a hand edit, as does the new workload's own API entry.
-  The other option was to print what to add and write nothing. T-81 is
-  reworded with the change.
+  that stays a hand edit, as does the new workload's own API entry
+  (the chart tests ask every registry service for a certificate). The
+  other option was to print what to add and write nothing. The three
+  files are written agents first, then services, then `pyproject.toml`,
+  and put back in reverse, so no half-written tree lets the runtime
+  name an agent that does not exist. T-81 is still to be reworded.
+- **An unreadable registry directory is the loader's to report.**
+  `load_registry` turns an `OSError` from the directory into a
+  `RegistryError` that names the error's class and never its text, so
+  every command that loads the registry ends in its own error line.
+  Rejected: a catch in each command, which the next caller forgets.
+- **One loader for the two entry-point groups, in the stricter order.**
+  A function in `platform/common/entry_points.py` does the trust checks
+  for graphs and evaluations: the module's place under the installed
+  package is read from its spec before any of its code runs, and again
+  once it has loaded. The graphs' loader had only the later check, so a
+  graph's code ran before it was judged. Each loader keeps its own
+  error type and words.
+- **A refusal of the scaffold names kinds and lines, never the name.**
+  A taken name says what kinds of thing hold it; an unusable table
+  header or `agents` list says which line of the person's own file.
+  Python's TOML error carries no line as an attribute, so a
+  `pyproject.toml` that is not TOML is refused as before.
+- **Decided, not yet built (the two contracts left):**
+  - A golden set's manifest names its workload, and the key is
+    required: `eval run` refuses a set whose manifest has none or
+    another's, before a case is read, empty or not, with and without
+    `--allow-empty`. The generator and the scaffold write the key.
+    Required, not "checked when present": a check an absent key passes
+    is the gap again. The golden manifest's bytes change, so both
+    baselines' golden-set fingerprint changes: `make synthetic`, then
+    `make eval-baseline` (a replay, no model call). Never
+    `make eval-record`.
+  - A benign clause group in the injection suite, CLM-4001 and on,
+    four cases over at least two products and clauses: sentences a
+    policy could hold, which do not address a model. And a sixth
+    fingerprint, `screen`: one digest over both screens' patterns and
+    the normalisation, optional on a report so an old one still loads,
+    carried by both baselines, and a baseline without it asks for a
+    new one. It is not part of the prompt's hash, which labels the
+    recording. `diff.py` stays as it is: its columns render the
+    committed prompt comparison, which only a live recording rewrites.
 
 **Work log:**
 
+- **Mapping first.** An Explore subagent mapped the seven rows to
+  files, functions, callers and tests, and found that none needs the
+  three registry files S059 changed.
+- **Five contracts to the `implementer`, one after another**, each read
+  and committed by the main session: the unreadable directory; the
+  shared loader; the scaffold's refusals and the test that reaches the
+  comparison "the old agents plus exactly one" alone; `injection.py`
+  without a private import or a copied word (the prompt's hash was
+  printed before and after and is the same); and the runtime's entry in
+  `services.yaml`.
+- **Stopped here on the owner's word (2026-10-05)**, to move the work
+  to a dedicated VM.
+
 **Result / verification:**
 
+- **Done, with tests, on this branch:** `meridian registry validate`,
+  `contracts`, `schemas --check`, `eval run` and `knowledge ingest`
+  answer an unreadable registry directory with a message; the two
+  entry-point groups share one loader and its trust checks; the
+  scaffold says which line it refuses and what holds a taken name, and
+  its comparison has a test that reaches it alone; `injection.py`
+  imports no private name; `meridian workload new` writes the new agent
+  into the Agent Runtime's entry.
+- **Gates so far:** each contract's own test paths (the last: 869
+  passed over the CLI, the registry and the identity tests; the CLI's
+  tests also with `GITHUB_ACTIONS=true`), `ruff check --no-cache`,
+  `ruff format --check` and `lint-imports` (5 kept), exit 0 each; the
+  secret scan, no leaks.
+- **Not yet done:** the two contracts above (the golden set's workload;
+  the benign clause case and the screen fingerprint); T-81's wording
+  and `docs-sync`; the reviews (`security-reviewer` for the scaffold's
+  write and the loader, `platform-boundary-reviewer`, `python-reviewer`);
+  the whole suite; the close.
+- **To finish:** merge `main` once S059 is on it (the baselines
+  conflict: take either side and regenerate with `make eval-baseline`);
+  run the two contracts; review; `GITHUB_ACTIONS=true make pytest-db`,
+  `make docs`, `make test`, `make registry`, `make secret-scan`; close.
+
 **Follow-ups:**
+
+- `registry schemas` without `--check` still ends in a traceback when
+  it cannot write into the directory (a write path, not this row).
 
 ## Part D — Open questions
 
