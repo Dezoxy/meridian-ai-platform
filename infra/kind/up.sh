@@ -24,6 +24,8 @@ set -euo pipefail
 readonly HELM_TIMEOUT=10m
 readonly ROLES_TIMEOUT=300
 readonly ROLES_INTERVAL=3
+readonly POLICY_TIMEOUT=120
+readonly POLICY_INTERVAL=3
 # platform-db-rw is the read-write Service; its name is in the server
 # certificate, so verify-full checks it. The CA reaches each pod at this path.
 readonly DATABASE_HOST=platform-db-rw.meridian.svc
@@ -68,6 +70,23 @@ create_cluster() {
   log "creating kind cluster ${CLUSTER_NAME} (first run pulls the node image)"
   kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" \
     --config "${KIND_DIR}/cluster.yaml" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s
+}
+
+# Apply the policies for approver-policy, trying again until the API server
+# accepts them. Helm's --wait returns when the pod is Ready (its /readyz, port
+# 6060), which on the first run came eight seconds after the container started
+# and before its webhook (port 10250, failurePolicy: Fail) answered: all three
+# policies were refused with "failed calling webhook "policy.cert-manager.io":
+# ... connection refused". Server-side apply is idempotent, so a retry after a
+# partial apply is safe. kubectl's error is printed only when the time is up.
+apply_certificate_policy() {
+  local deadline=$((SECONDS + POLICY_TIMEOUT)) out
+  until out="$(kctl apply --server-side --force-conflicts \
+    -f "${KIND_DIR}/manifests/certificate-policy.yaml" 2>&1)"; do
+    ((SECONDS < deadline)) ||
+      die "approver-policy's webhook did not accept the policies in ${POLICY_TIMEOUT}s (look with: kubectl -n cert-manager get pods, and the logs of the approver-policy pod); kubectl said: ${out}"
+    sleep "${POLICY_INTERVAL}"
+  done
 }
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
@@ -180,7 +199,7 @@ install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
 # decided.
 install_release approver-policy cert-manager "${APPROVER_POLICY_CHART}" \
   "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/certificate-policy.yaml" >/dev/null
+apply_certificate_policy
 # The policies must be Ready before the CA is requested, or its request would
 # find none that is appropriate and wait.
 kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \

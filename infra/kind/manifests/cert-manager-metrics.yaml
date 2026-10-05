@@ -28,5 +28,13 @@ spec:
       app.kubernetes.io/component: controller
       app.kubernetes.io/instance: cert-manager
   endpoints:
+    # The series carry the certificate's own `namespace` and `name`. Without
+    # honorLabels Prometheus writes the scrape target's namespace (cert-manager)
+    # over the certificate's and keeps the metric's own as `exported_namespace`,
+    # so the rules' namespace matcher would hold for every certificate in the
+    # cluster and their annotations would say cert-manager for all. The target
+    # is cert-manager's controller, a component of the platform, so what it says
+    # about a certificate's namespace is trusted.
     - port: http-metrics
       interval: 60s
+      honorLabels: true

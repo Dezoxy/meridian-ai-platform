@@ -425,7 +425,14 @@ def test_the_service_monitor_selects_the_controllers_metrics_service() -> None:
             "app.kubernetes.io/instance": "cert-manager",
         }
     }
-    assert spec["endpoints"] == [{"port": "http-metrics", "interval": "60s"}]
+    # honorLabels: the series carry the certificate's own `namespace` and
+    # `name`. Without it Prometheus writes the target's namespace (cert-manager)
+    # over the certificate's (it keeps the metric's own as `exported_namespace`),
+    # and the rules' namespace matcher would hold for every certificate in the
+    # cluster. The target is cert-manager's controller, a platform component.
+    assert spec["endpoints"] == [
+        {"port": "http-metrics", "interval": "60s", "honorLabels": True}
+    ]
 
 
 # ── up.sh ────────────────────────────────────────────────────────────────────

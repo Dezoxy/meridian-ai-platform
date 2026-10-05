@@ -12,7 +12,9 @@ the RBAC ``use`` that binds a policy to the requester).
 """
 
 import copy
+import os
 import re
+import subprocess
 
 import pytest
 import yaml
@@ -316,17 +318,157 @@ def test_up_decides_who_may_ask_before_it_creates_the_ca_and_waits_for_the_issue
     lines = script_lines()
     cert_manager = line_index("install_release cert-manager ")
     approver = line_index("install_release approver-policy ")
-    applied = line_containing("manifests/certificate-policy.yaml")
+    applied = lines.index("apply_certificate_policy")
     ready = line_containing("certificaterequestpolicy")
     ca_applied = line_containing("manifests/service-ca.yaml")
     issuer = line_containing("clusterissuer/meridian-services")
 
     assert cert_manager < approver < applied < ready < ca_applied < issuer
-    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
     assert lines[ready].startswith("kctl wait --for=condition=Ready ")
     assert "--timeout=" in lines[ready]
     for name in sorted(POLICY_NAMES):
         assert f"certificaterequestpolicy/{name}" in lines[ready]
+
+
+# ── the apply of the policies is tried again until the webhook answers ───────
+# On the kind cluster (2026-10-05) helm's --wait returned for approver-policy
+# and the apply of the policy file was refused three times, once per policy:
+# "failed calling webhook "policy.cert-manager.io": ... connection refused".
+# The pod was Ready (/readyz on 6060) eight seconds after its container started,
+# before its webhook on 10250 (failurePolicy: Fail) answered.
+
+
+def up_function(name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", UP_SH, re.MULTILINE | re.DOTALL)
+    assert match, f"no function {name}"
+    return match.group(0)
+
+
+def up_constant(name: str) -> int:
+    (value,) = re.findall(rf"^readonly {name}=(\d+)$", UP_SH, re.MULTILINE)
+    return int(value)
+
+
+def run_apply_certificate_policy(
+    tmp_path, *, failures: int | None
+) -> tuple[subprocess.CompletedProcess[str], list[tuple[int, str]]]:
+    """``apply_certificate_policy`` from up.sh in bash with up.sh's two
+    constants, a ``kctl`` that fails ``failures`` times (always when ``None``)
+    and a ``sleep`` that only moves ``SECONDS`` on, so the run is instant.
+    Returns the process and each ``kctl`` call as (``SECONDS``, arguments)."""
+    calls = tmp_path / "calls"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "SECONDS=0",
+            f"POLICY_TIMEOUT={up_constant('POLICY_TIMEOUT')}",
+            f"POLICY_INTERVAL={up_constant('POLICY_INTERVAL')}",
+            "KIND_DIR=/kind",
+            'log() { echo "LOG $*"; }',
+            'die() { echo "DIE $*" >&2; exit 1; }',
+            "sleep() { SECONDS=$((SECONDS + $1)); }",
+            "kctl() {",
+            f'  echo "${{SECONDS}} $*" >>"{calls}"',
+            f'  n=$(($(wc -l <"{calls}")))',
+            '  if [[ -z "${FAILURES}" ]] || ((n <= FAILURES)); then',
+            '    echo "Error from server (InternalError): refused #${n}" >&2',
+            "    return 1",
+            "  fi",
+            '  echo "certificaterequestpolicy.policy.cert-manager.io/x applied"',
+            "}",
+            up_function("apply_certificate_policy"),
+            "apply_certificate_policy",
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "FAILURES": "" if failures is None else str(failures),
+        },
+        check=False,
+    )
+    made = []
+    for line in calls.read_text().splitlines() if calls.exists() else []:
+        seconds, _, arguments = line.partition(" ")
+        made.append((int(seconds), arguments))
+    return done, made
+
+
+def test_up_names_how_long_it_tries_the_policy_apply_and_how_often() -> None:
+    assert up_constant("POLICY_TIMEOUT") == 120
+    assert up_constant("POLICY_INTERVAL") == 3
+
+
+def test_up_applies_the_policy_file_only_inside_a_loop_that_ends_at_a_deadline() -> (
+    None
+):
+    body = re.sub(r"\\\n\s*", "", up_function("apply_certificate_policy"))
+    lines = script_lines()
+
+    assert "SECONDS" in body
+    assert "${POLICY_TIMEOUT}" in body
+    assert "${POLICY_INTERVAL}" in body
+    assert re.search(r"^\s*(until|while) ", body, re.MULTILINE)
+    assert (
+        'kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/'
+        'certificate-policy.yaml"'
+    ) in body
+    # The one place the file is named, and the function is called once.
+    assert sum("manifests/certificate-policy.yaml" in line for line in lines) == 1
+    assert lines.count("apply_certificate_policy") == 1
+
+
+def test_a_policy_apply_refused_twice_and_then_accepted_succeeds_in_silence(
+    tmp_path,
+) -> None:
+    done, calls = run_apply_certificate_policy(tmp_path, failures=2)
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+    assert done.stderr == ""
+    assert len(calls) == 3
+    assert [seconds for seconds, _ in calls] == [0, 3, 6]
+    assert {arguments for _, arguments in calls} == {
+        "apply --server-side --force-conflicts "
+        "-f /kind/manifests/certificate-policy.yaml"
+    }
+
+
+def test_a_policy_apply_accepted_at_once_is_not_repeated(tmp_path) -> None:
+    done, calls = run_apply_certificate_policy(tmp_path, failures=0)
+
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 1
+
+
+def test_a_policy_apply_never_accepted_ends_at_the_deadline_and_says_what_failed(
+    tmp_path,
+) -> None:
+    timeout = up_constant("POLICY_TIMEOUT")
+    interval = up_constant("POLICY_INTERVAL")
+
+    done, calls = run_apply_certificate_policy(tmp_path, failures=None)
+
+    assert done.returncode == 1
+    assert done.stdout == ""
+    # It tried for the whole time and no longer: it gave up after a try made at
+    # or past the deadline, and made no try after one that the check at the
+    # deadline had let through. (SECONDS also counts real time, so a loaded
+    # machine can add a second to a try: only these two bounds are exact.)
+    times = [seconds for seconds, _ in calls]
+    assert times == sorted(times)
+    assert times[-1] >= timeout
+    assert times[-2] < timeout
+    assert len(calls) <= timeout // interval + 1
+    # kctl's last error, and what did not answer and where to look.
+    assert f"refused #{len(calls)}" in done.stderr
+    assert "approver-policy" in done.stderr
+    assert "webhook" in done.stderr
+    assert "kubectl -n cert-manager get pods" in done.stderr
+    assert "logs" in done.stderr
 
 
 # ── approver-policy's values ─────────────────────────────────────────────────
