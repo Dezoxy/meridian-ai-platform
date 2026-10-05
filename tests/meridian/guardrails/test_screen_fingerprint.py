@@ -3,10 +3,15 @@
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
-from meridian.platform.guardrails import screen_fingerprint, screening
+from meridian.platform.guardrails import (
+    ScreenSourceUnavailable,
+    screen_fingerprint,
+    screening,
+)
 
 HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 PRINT_IT = (
@@ -125,3 +130,71 @@ def test_changed_code_of_the_normalisation_changes_the_fingerprint(
     monkeypatch.setattr(screening, "_normalise", _normalise)
 
     assert screen_fingerprint() != before
+
+
+@pytest.mark.parametrize("name", ["holds_special_category", "addresses_the_model"])
+def test_a_screen_with_another_body_changes_the_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    before = screen_fingerprint()
+
+    def never(text: str) -> bool:
+        return False
+
+    monkeypatch.setattr(screening, name, never)
+
+    assert screen_fingerprint() != before
+
+
+def test_the_two_screens_are_hashed_apart_not_as_one_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = screen_fingerprint()
+    first = screening.holds_special_category
+    second = screening.addresses_the_model
+
+    monkeypatch.setattr(screening, "holds_special_category", second)
+    monkeypatch.setattr(screening, "addresses_the_model", first)
+
+    assert screen_fingerprint() != before
+
+
+@pytest.mark.parametrize("name", ["_SPECIAL_CATEGORY", "_SPACES"])
+def test_a_changed_flag_of_a_pattern_changes_the_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    before = screen_fingerprint()
+    pattern = getattr(screening, name)
+
+    monkeypatch.setattr(screening, name, re.compile(pattern.pattern, re.DOTALL))
+
+    assert screen_fingerprint() != before
+
+
+def test_parts_that_concatenate_to_the_same_text_still_differ() -> None:
+    assert "".join(["ab", "c"]) == "".join(["a", "bc"])
+
+    assert screening._digest(["ab", "c"]) != screening._digest(["a", "bc"])
+
+
+UNREADABLE = [
+    pytest.param(OSError("CANARY-/srv/path/screening.py"), id="no-source-file"),
+    pytest.param(TypeError("CANARY-not-a-python-object"), id="no-python-source"),
+]
+
+
+@pytest.mark.parametrize("failure", UNREADABLE)
+def test_source_that_cannot_be_read_raises_the_packages_own_error(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    def unreadable(_function: object) -> str:
+        raise failure
+
+    monkeypatch.setattr(screening, "inspect", SimpleNamespace(getsource=unreadable))
+
+    with pytest.raises(ScreenSourceUnavailable) as raised:
+        screen_fingerprint()
+
+    assert str(raised.value) == screening.SOURCE_UNAVAILABLE
+    assert "CANARY" not in str(raised.value)
+    assert raised.value.__cause__ is failure

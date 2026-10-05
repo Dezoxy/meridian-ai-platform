@@ -6,6 +6,7 @@ a test can craft one the graph would refuse).
 """
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,7 +22,11 @@ from meridian.platform.evaluation.report import (
     ReportError,
     ToolCall,
 )
-from meridian.platform.guardrails import addresses_the_model, screen_fingerprint
+from meridian.platform.guardrails import (
+    addresses_the_model,
+    screen_fingerprint,
+    screening,
+)
 from meridian.platform.registry import load_registry
 from meridian.workloads.claims_triage.evaluation import (
     ABSOLUTE,
@@ -32,6 +37,7 @@ from meridian.workloads.claims_triage.evaluation import (
     MAX_COST_MICRO_EUR_PER_CLAIM,
     MAX_MODEL_LATENCY_MS_PER_CLAIM,
     RULE_GRADERS,
+    SCREENS_UNREADABLE,
     TARGETS,
     WORKLOAD,
     build_report,
@@ -313,6 +319,22 @@ def test_the_report_has_one_sorted_case_per_claim_and_the_real_golden_set() -> N
     assert report.fingerprints.tools == tools_fingerprint(
         load_registry(REGISTRY_DIR), WORKLOAD
     )
+
+
+def test_screens_whose_source_cannot_be_read_stop_the_report_with_a_fixed_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unreadable(_function: object) -> str:
+        raise OSError("CANARY-/srv/path/screening.py")
+
+    monkeypatch.setattr(screening, "inspect", SimpleNamespace(getsource=unreadable))
+    proposals: dict[str, TriageProposal | None] = {c: oracle(c) for c in EXPECTED}
+
+    with pytest.raises(ReportError) as raised:
+        report_for(proposals)
+
+    assert str(raised.value) == SCREENS_UNREADABLE
+    assert "CANARY" not in str(raised.value)
 
 
 def test_a_claim_with_no_proposal_is_a_case_that_fails_every_grader() -> None:

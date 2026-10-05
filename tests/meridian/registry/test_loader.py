@@ -1,8 +1,10 @@
 """The loader: files, YAML strictness, schema errors and error collection."""
 
+import errno
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -374,6 +376,26 @@ def test_invalid_utf8_is_reported_not_raised(
 
     assert len(errors) == 1
     assert errors[0].startswith("agents.yaml: cannot read: ")
+
+
+def test_a_file_that_cannot_be_read_is_named_with_the_error_class_only(
+    registry_copy: Path, load_errors: LoadErrors, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_read_text = Path.read_text
+    unreadable = registry_copy / "agents.yaml"
+
+    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == unreadable:
+            raise PermissionError(errno.EACCES, CANARY, str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    errors = load_errors(registry_copy)
+
+    assert errors == ("agents.yaml: cannot read: PermissionError",)
+    assert CANARY not in errors[0]
+    assert str(registry_copy) not in errors[0]
 
 
 @pytest.mark.parametrize(

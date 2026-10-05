@@ -32,13 +32,14 @@ def entry(
     *,
     value: str = REAL_VALUE,
     dist: str | None = "meridian",
-    loads: Callable[[], object] = lambda: "loaded",
+    loads: Callable[[], object] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         name=name,
         value=value,
         dist=None if dist is None else SimpleNamespace(name=dist),
-        load=loads,
+        # Like the real one, it imports the module the entry names.
+        load=Loads() if loads is None else loads,
     )
 
 
@@ -242,6 +243,26 @@ def test_a_module_whose_spec_cannot_be_read_is_refused_before_it_loads(
     refused = refusal_of(entry(value=value, loads=loads))
 
     assert refused.reason is Refusal.UNLOCATABLE
+    assert loads.calls == 0
+
+
+def test_a_parent_package_that_fails_to_import_is_the_cause_of_the_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "broken_parent_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text("def (:\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    loads = Loads()
+
+    refused = refusal_of(
+        entry(value="broken_parent_plugin.module:VALUE", loads=loads),
+        value_prefix="broken_parent_plugin.",
+    )
+
+    assert refused.reason is Refusal.UNLOCATABLE
+    assert isinstance(refused.__cause__, SyntaxError)
     assert loads.calls == 0
 
 

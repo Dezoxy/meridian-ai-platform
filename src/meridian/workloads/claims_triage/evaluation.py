@@ -33,7 +33,7 @@ from meridian.platform.evaluation.report import (
     ToolCall,
     read_json_file,
 )
-from meridian.platform.guardrails import screen_fingerprint
+from meridian.platform.guardrails import ScreenSourceUnavailable, screen_fingerprint
 from meridian.platform.registry.models import Registry
 
 from .proposal import TriageProposal
@@ -290,6 +290,18 @@ def auto_approval_limit(manifest_path: Path) -> int:
     return limit
 
 
+SCREENS_UNREADABLE = "the source of the screens cannot be read to fingerprint them"
+
+
+def screens_fingerprint() -> str:
+    """The fingerprint of the screens for a report; ``ReportError`` with a
+    fixed text where their source cannot be read. Both report builders use it."""
+    try:
+        return screen_fingerprint()
+    except ScreenSourceUnavailable as exc:
+        raise ReportError(SCREENS_UNREADABLE) from exc
+
+
 def _check_parts(
     parts: Sequence[object | None], fingerprints: Sequence[str | None]
 ) -> None:
@@ -365,7 +377,7 @@ def build_report(
             golden_set=golden_set_of(manifest_path),
             judge=judge_fingerprint,
             recording=recording_fingerprint,
-            screen=screen_fingerprint(),
+            screen=screens_fingerprint(),
         ),
         absolute=ABSOLUTE,
         targets=TARGETS,

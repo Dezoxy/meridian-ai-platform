@@ -17,6 +17,7 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import assert_never
 
 from langgraph.graph import StateGraph
 
@@ -62,6 +63,8 @@ def _refusal_message(agent_id: str, refused: EntryPointRefused) -> str:
             return f"graph {agent_id!r} failed to import"
         case Refusal.MOVED_OUTSIDE_ROOT:
             return f"graph {agent_id!r} comes from a file outside the meridian package"
+        case _:
+            assert_never(refused.reason)
 
 
 def load_graph_factory(agent_id: str, registry: Registry) -> GraphFactory:

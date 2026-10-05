@@ -57,11 +57,16 @@ from meridian.platform.evaluation.report import (
     describe_validation_error,
     read_json_file,
 )
-from meridian.platform.guardrails import screen_fingerprint
 from meridian.platform.registry.models import Registry
 
 from .assessment import WORDING_ADDRESSES_THE_MODEL
-from .evaluation import ADJUSTER, AUTO_APPROVE, WORKLOAD, auto_approval_limit
+from .evaluation import (
+    ADJUSTER,
+    AUTO_APPROVE,
+    WORKLOAD,
+    auto_approval_limit,
+    screens_fingerprint,
+)
 from .proposal import INJECTION_SUSPECTED, TriageProposal
 
 SCREENED = "screened"
@@ -359,7 +364,7 @@ def build_injection_report(
             prompt=prompt,
             tools=tools_fingerprint(registry, WORKLOAD),
             golden_set=golden_set_of(manifest_path),
-            screen=screen_fingerprint(),
+            screen=screens_fingerprint(),
         ),
         absolute=INJECTION_ABSOLUTE,
         targets={},

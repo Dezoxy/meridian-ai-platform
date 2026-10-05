@@ -11,8 +11,8 @@ entry point carries the name, only when the entry point's value names a module
 under ``meridian.workloads`` and only when that module's file lies in the
 installed ``meridian`` package: a second installed package cannot substitute an
 evaluation, and so cannot choose what the command posts and where. The location
-is read from the module's spec before the entry point runs any of its code, and
-again from the module once it has loaded. The checks are shared with the graphs'
+is read from the module's spec before the module's own code runs, and again
+from the module once it has loaded. The checks are shared with the graphs'
 loader, in ``meridian.platform.common.entry_points``; this module words their
 refusals and checks the protocol.
 
@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, assert_never, runtime_checkable
 
 from pydantic import JsonValue
 
@@ -91,6 +91,8 @@ def _fixed_text(refused: EntryPointRefused) -> str:
             | Refusal.MOVED_OUTSIDE_ROOT
         ):
             return UNTRUSTED
+        case _:
+            assert_never(refused.reason)
 
 
 def load_evaluation(workload: str) -> WorkloadEvaluation:
@@ -106,7 +108,7 @@ def load_evaluation(workload: str) -> WorkloadEvaluation:
             value_prefix=TRUSTED_VALUE_PREFIX,
         )
     except EntryPointRefused as refused:
-        raise ReportError(_fixed_text(refused)) from None
+        raise ReportError(_fixed_text(refused)) from refused.__cause__
     if not isinstance(evaluation, WorkloadEvaluation):
         raise ReportError(NOT_AN_EVALUATION)
     return evaluation

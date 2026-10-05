@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -132,6 +133,13 @@ def test_an_agent_without_an_entry_point_is_refused(
 
     with pytest.raises(GraphLoadError, match="no graph"):
         load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_refusal_the_wording_does_not_know_is_an_error_not_silence() -> None:
+    unknown = SimpleNamespace(reason="a reason added later", distribution=None)
+
+    with pytest.raises(AssertionError):
+        graphs._refusal_message("claims-triage", unknown)
 
 
 def test_an_entry_point_that_fails_to_import_is_a_load_error(

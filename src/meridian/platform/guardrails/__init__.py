@@ -19,6 +19,7 @@ from meridian.platform.guardrails.redaction import (
     redact,
 )
 from meridian.platform.guardrails.screening import (
+    ScreenSourceUnavailable,
     addresses_the_model,
     holds_special_category,
     screen_fingerprint,
@@ -32,6 +33,7 @@ __all__ = [
     "PHONE_PLACEHOLDER",
     "PLACEHOLDERS",
     "Redaction",
+    "ScreenSourceUnavailable",
     "addresses_the_model",
     "higher_class",
     "holds_special_category",

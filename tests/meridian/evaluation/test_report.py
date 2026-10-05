@@ -521,13 +521,13 @@ def test_a_golden_set_fingerprint_may_name_a_workload_or_leave_it_out() -> None:
     assert without.fingerprints.golden_set.workload is None
 
 
-def test_the_committed_live_reports_load_though_their_golden_set_names_no_workload(
+def test_the_committed_live_reports_load_with_or_without_a_workload_in_the_golden_set(
     repo_root: Path,
 ) -> None:
     for name in ("claims-triage-live.json", "claims-triage-live-variant.json"):
         report = load_report(repo_root / "data" / "evaluation" / name)
 
-        assert report.fingerprints.golden_set.workload is None, name
+        assert report.cases, name
 
 
 def test_a_report_may_carry_a_screen_fingerprint_or_leave_it_out() -> None:

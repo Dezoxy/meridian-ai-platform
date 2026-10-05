@@ -100,8 +100,11 @@ def _parse_file(path: Path) -> tuple[Any, list[str]]:
     """Return the parsed document, or the errors that stopped it."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+    except UnicodeDecodeError as exc:
         return None, [f"{path.name}: cannot read: {exc}"]
+    except OSError as exc:
+        # The error's class, never its text (which holds the full path).
+        return None, [f"{path.name}: cannot read: {type(exc).__name__}"]
     try:
         # UniqueKeyLoader is a SafeLoader subclass.
         return yaml.load(text, Loader=UniqueKeyLoader), []  # noqa: S506

@@ -7,8 +7,10 @@ the name, only when the entry point's value names a module under
 ``meridian.workloads`` and only when that module's file lies in the installed
 ``meridian`` package: a second installed package, or a distribution that calls
 itself ``meridian`` and hides the real one, cannot substitute a graph or an
-evaluation. The location is read from the module's spec before the entry point
-runs any of its code, and again from the module once it has loaded.
+evaluation. The location is read from the module's spec before the module's own
+code runs, and again from the module once it has loaded. Finding the spec
+imports the module's parent packages, so a parent package's ``__init__`` has
+run by then, whatever the check decides; only the module itself waits for it.
 
 ``load_trusted_entry_point`` does these checks, in that order, and returns the
 loaded object or raises ``EntryPointRefused`` with a closed reason. It words
@@ -96,15 +98,16 @@ def _inside(root: Path, file: str | None) -> bool:
     return file is not None and Path(file).resolve().is_relative_to(root)
 
 
-def _located_in(root: Path, module: str) -> bool | None:
+def _located_in(root: Path, module: str) -> bool:
     """Whether the module's spec puts it under ``root``, read before the module
-    runs; ``None`` when the spec cannot be read. ``find_spec`` imports the
-    module's parent packages (under ``meridian.workloads``, by the prefix
-    check), not the module itself."""
+    runs. ``find_spec`` imports the module's parent packages (under
+    ``meridian.workloads``, by the prefix check), not the module itself. When it
+    raises (a parent that does not import, a name that is no module name), the
+    refusal is ``UNLOCATABLE`` and its cause is what ``find_spec`` raised."""
     try:
         spec = importlib.util.find_spec(module)
-    except Exception:
-        return None
+    except Exception as exc:
+        raise EntryPointRefused(Refusal.UNLOCATABLE) from exc
     if spec is None or not spec.has_location:
         return False
     return _inside(root, spec.origin)
@@ -140,10 +143,7 @@ def load_trusted_entry_point(
     if not entry.value.startswith(value_prefix):
         raise EntryPointRefused(Refusal.OUTSIDE_WORKLOADS)
     module = _module_of(entry)
-    located = _located_in(trusted_root, module)
-    if located is None:
-        raise EntryPointRefused(Refusal.UNLOCATABLE)
-    if not located:
+    if not _located_in(trusted_root, module):
         raise EntryPointRefused(Refusal.OUTSIDE_ROOT)
     try:
         loaded = entry.load()

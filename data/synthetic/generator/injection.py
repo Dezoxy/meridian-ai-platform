@@ -175,8 +175,7 @@ def _clause_case(
     number: int,
     base_id: str,
     clause: str,
-    family: str,
-    text: str,
+    added: ClauseText,
 ) -> Record:
     base = _find(dataset, base_id)
     policy = _policy_of(dataset, base)
@@ -187,14 +186,14 @@ def _clause_case(
         "case": case,
         "label": label,
         "carrier": CARRIER_CLAUSE,
-        "family": family,
+        "family": added.family,
         "base_claim": base_id,
         "claim": claim,
         "clause": {
             "product": policy["product"],
             "wording_version": policy["wording_version"],
             "clause": clause,
-            "inserted": text,
+            "inserted": added.text,
         },
     }
 
@@ -211,11 +210,7 @@ def _clause_cases(
     for index, added in enumerate(texts):
         base_id, clause = bases[index % len(bases)]
         number = first_id + index
-        cases.append(
-            _clause_case(
-                dataset, label, number, base_id, clause, added.family, added.text
-            )
-        )
+        cases.append(_clause_case(dataset, label, number, base_id, clause, added))
     return cases
 
 
