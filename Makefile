@@ -21,6 +21,10 @@ GENERATED := $(ARCH_DIR)/generated
 PORT      ?= 8080
 # The registry's copy of Terraform's deployment outputs (T-12).
 REGISTRY_SNAPSHOT := config/registry/snapshots/terraform-openai-deployments.json
+# Where `make secret-scan` starts: it scans the commits from here to HEAD, the
+# ones a push would add. CI's secret scan job scans every commit of a pull
+# request, so a finding in an early commit is not fixed by a later one.
+SECRET_SCAN_BASE ?= origin/main
 # The throwaway PostgreSQL of `make pytest-db`; the image is the one the python
 # workflow runs as its service container (a test compares the two strings), so
 # it is pinned with := and a command line does not override it. It is
@@ -32,7 +36,8 @@ REGISTRY_SNAPSHOT := config/registry/snapshots/terraform-openai-deployments.json
 PYTEST_DB_IMAGE     := pgvector/pgvector:0.8.7-pg17-trixie@sha256:7a7e9f22015b67edb4bef5c59daeebcd7e74bfa570df6ce60ae01237c8648a84
 PYTEST_DB_CONTAINER ?= meridian-pytest-db
 PYTEST_DB_PORT      ?= 55432
-# Extra pytest arguments for `make pytest-db`, e.g. one test file.
+# Extra pytest arguments for `make pytest` and `make pytest-db`, e.g. one test
+# file, or --durations=25 as CI passes.
 PYTEST_ARGS         ?=
 # Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
 # number, or auto for one per CPU core; 0 runs the tests in one process. Four,
@@ -69,7 +74,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -96,6 +101,12 @@ docs:
 ## test            unit tests for the checker and the Mermaid and PDF scripts
 test:
 	python3 -m unittest discover -s tests
+
+## secret-scan     scan the commits a push would add (SECRET_SCAN_BASE..HEAD, default origin/main) for secrets, as CI's secret scan job does; run it before every push (needs gitleaks)
+secret-scan:
+	@git rev-parse --verify --quiet "$(SECRET_SCAN_BASE)^{commit}" >/dev/null || { echo "secret-scan: git knows no commit $(SECRET_SCAN_BASE); fetch it, or set SECRET_SCAN_BASE" >&2; exit 1; }
+	@command -v gitleaks >/dev/null 2>&1 || { echo "secret-scan: gitleaks is not on the PATH; CI's version is in .github/workflows/docs.yml" >&2; exit 1; }
+	gitleaks git --log-opts="$(SECRET_SCAN_BASE)..HEAD" --redact
 
 ## view            browse the workspace at http://localhost:8080/workspace/1 (PORT=... to change; Ctrl-C stops it)
 view:
@@ -147,7 +158,7 @@ lint:
 
 ## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process)
 pytest:
-	uv run pytest -n $(PYTEST_WORKERS)
+	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
 ## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests (needs Docker and uv)
 alerts:

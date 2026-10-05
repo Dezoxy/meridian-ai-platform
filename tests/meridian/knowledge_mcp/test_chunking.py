@@ -2,10 +2,10 @@
 
 import dataclasses
 import json
-import time
 from pathlib import Path
 
 import pytest
+from cputime import MAX_GROWTH, growth
 from servicesupport import REPO_ROOT
 
 from meridian.platform.knowledge_mcp.chunking import (
@@ -429,11 +429,13 @@ def test_the_four_real_wordings_skip_five_lines_each_all_in_section_introduction
 
 # ── the cost of a refusal ───────────────────────────────────────────────────
 def test_a_clause_of_sixty_thousand_lines_is_refused_quickly() -> None:
-    text = GOOD.replace("Body one.", "\n".join(["x"] * 60_000))
+    def with_lines(count: int) -> str:
+        return GOOD.replace("Body one.", "\n".join(["x"] * count))
 
-    started = time.perf_counter()
-    error = refused(text)
-    elapsed = time.perf_counter() - started
+    small, large = with_lines(15_000), with_lines(60_000)
 
-    assert "longer than" in str(error)
-    assert elapsed < 1.0
+    assert "longer than" in str(refused(small))
+    assert "longer than" in str(refused(large))
+    # CPU time at a small and a large count, not a limit on the wall clock: the
+    # refusal costs time in proportion to the text.
+    assert growth(refused, small, large) < MAX_GROWTH

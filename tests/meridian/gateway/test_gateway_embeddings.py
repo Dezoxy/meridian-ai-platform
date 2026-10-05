@@ -27,6 +27,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from pydantic import ValidationError
 from servicesupport import (
     GLOBAL_EMBEDDING_YAML,
     REGISTRY_DIR,
@@ -47,9 +48,6 @@ from meridian.platform.gateway import app as gateway_app
 from meridian.platform.gateway.app import (
     PROVIDER_FAILED,
     PROVIDER_TIMED_OUT,
-    TENANT_BUDGET_USED_UP,
-    TENANT_RATE_LIMIT_REACHED,
-    TENANT_REQUEST_TOO_LARGE,
     create_app,
 )
 from meridian.platform.gateway.budget import (
@@ -58,13 +56,23 @@ from meridian.platform.gateway.budget import (
     cost_micro_eur,
     embedding_estimate,
 )
-from meridian.platform.gateway.models import ChatRequest, EmbeddingRequest
+from meridian.platform.gateway.models import (
+    EMBEDDING_INPUT_REFUSAL,
+    MAX_EMBEDDING_INPUT_BYTES,
+    ChatRequest,
+    EmbeddingRequest,
+)
 from meridian.platform.gateway.operations import embedding_operation
 from meridian.platform.gateway.providers.azure_openai import AzureOpenAIProvider
 from meridian.platform.gateway.providers.base import (
     EmbeddingReply,
     ProviderError,
     ProviderReply,
+)
+from meridian.platform.gateway.refusals import (
+    TENANT_BUDGET_USED_UP,
+    TENANT_RATE_LIMIT_REACHED,
+    TENANT_REQUEST_TOO_LARGE,
 )
 from meridian.platform.gateway.replay import ReplayProvider, replay_embedding
 from meridian.platform.gateway.settings import GatewaySettings
@@ -596,6 +604,13 @@ def message_body(inputs: object) -> dict:
         pytest.param(message_body(["x"] * 17), id="seventeen-inputs"),
         pytest.param(message_body([""]), id="empty-input"),
         pytest.param(message_body(["x" * 8001]), id="8001-characters"),
+        pytest.param(message_body(["é" * 4096]), id="8192-bytes"),
+        pytest.param(message_body(["é" * 8000]), id="8000-two-byte-characters"),
+        pytest.param(message_body(["中" * 2731]), id="8193-bytes-of-cjk"),
+        pytest.param(
+            message_body([*(["short"] * 15), "é" * 4096]),
+            id="one-over-the-byte-bound-among-fifteen-short",
+        ),
         pytest.param(message_body(["fine", ""]), id="one-empty-among-others"),
         pytest.param(message_body(["before\x00after"]), id="nul"),
         pytest.param(message_body(["x", 3]), id="a-number"),
@@ -625,7 +640,8 @@ def test_an_invalid_body_is_a_422_and_reaches_no_provider(
         pytest.param(["x"], id="one"),
         pytest.param([f"text {n}" for n in range(16)], id="sixteen"),
         pytest.param(["x" * 8000], id="8000-characters"),
-        pytest.param(["é" * 8000], id="8000-two-byte-characters"),
+        pytest.param(["é" * 4095], id="8190-bytes"),
+        pytest.param(["é" * 4095 + "x"], id="8191-bytes-the-bound-itself"),
     ],
 )
 def test_the_limits_themselves_are_accepted(replay: Gateway, inputs: list[str]) -> None:
@@ -633,6 +649,50 @@ def test_the_limits_themselves_are_accepted(replay: Gateway, inputs: list[str]) 
 
     assert response.status_code == 200
     assert len(response.json()["embeddings"]) == len(inputs)
+
+
+def test_an_input_over_the_byte_bound_is_a_422_that_echoes_nothing_of_it(
+    replay: Gateway,
+) -> None:
+    response, _ = replay.post(body=message_body([INPUT_CANARY + "é" * 4096]))
+
+    assert response.status_code == 422
+    assert INPUT_CANARY not in response.text
+    assert EMBEDDING_INPUT_REFUSAL in response.text
+    assert replay.provider.called == []
+    assert replay.usage() == []
+
+
+def test_a_lone_surrogate_is_a_422_that_echoes_nothing(replay: Gateway) -> None:
+    # Raw JSON bytes: json= would fail in the test client, not in the route.
+    response = replay.client.post(
+        PATH,
+        content=b'{"inputs": ["\\ud800"]}',
+        headers={
+            "Content-Type": "application/json",
+            "X-Meridian-Tenant": "claims-triage",
+            "X-Meridian-Agent": "claims-triage",
+            "X-Meridian-Run": str(uuid.uuid4()),
+        },
+    )
+
+    assert response.status_code == 422
+    assert "ud800" not in response.text.lower()
+    assert "\\ud800" not in response.text
+    assert replay.provider.called == []
+    assert replay.usage() == []
+
+
+def test_the_byte_bound_is_checked_without_the_app() -> None:
+    at_the_bound = EmbeddingRequest.model_validate({"inputs": ["é" * 4095 + "x"]})
+    assert len(at_the_bound.inputs[0].encode()) == MAX_EMBEDDING_INPUT_BYTES
+
+    with pytest.raises(ValidationError) as refused:
+        EmbeddingRequest.model_validate({"inputs": ["é" * 4096]})
+
+    first = refused.value.errors()[0]
+    assert first["loc"] == ("inputs", 0)
+    assert first["msg"] == f"Value error, {EMBEDDING_INPUT_REFUSAL}"
 
 
 def test_a_422_does_not_echo_what_was_sent(replay: Gateway) -> None:
@@ -1217,7 +1277,11 @@ def test_a_deployment_without_dimensions_cannot_be_called_for_embeddings() -> No
     nameless = nameless.model_copy(update={"dimensions": None})
 
     with pytest.raises(ValueError, match="dimensions"):
-        embedding_operation(REQUEST).call(provider, nameless, 1.0)  # type: ignore[arg-type]
+        embedding_operation(REQUEST, embedding_estimate(REQUEST)).call(
+            provider,  # type: ignore[arg-type]
+            nameless,
+            1.0,
+        )
 
     assert provider.called == []  # refused before any request, as the adapters do
 

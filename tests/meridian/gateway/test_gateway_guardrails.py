@@ -511,7 +511,7 @@ def test_a_json_message_still_parses_and_differs_only_in_the_redacted_values(
     }
 
 
-def test_the_estimate_is_computed_from_the_redacted_text(two: Gateway) -> None:
+def test_the_estimate_is_computed_from_the_text_as_sent(two: Gateway) -> None:
     original = ChatRequest.model_validate(PII_BODY)
     redacted = ChatRequest.model_validate(
         {
@@ -535,10 +535,10 @@ def test_the_estimate_is_computed_from_the_redacted_text(two: Gateway) -> None:
     two.post(CHAT, PII_BODY)
 
     (reserved,) = two.usage()
-    assert reserved["reserved_tokens"] == chat_estimate(redacted).tokens
+    assert reserved["reserved_tokens"] == chat_estimate(original).tokens
 
 
-def test_the_embedding_estimate_is_computed_from_the_redacted_text(
+def test_the_embedding_estimate_is_computed_from_the_text_as_sent(
     registry_with: Callable[..., Path], build: Callable[[Path], Gateway]
 ) -> None:
     gateway = build(registry_with(FIRST))
@@ -551,10 +551,10 @@ def test_the_embedding_estimate_is_computed_from_the_redacted_text(
     gateway.post(EMBEDDINGS)
 
     (reserved,) = gateway.usage()
-    assert reserved["reserved_tokens"] == embedding_estimate(redacted).tokens
+    assert reserved["reserved_tokens"] == embedding_estimate(original).tokens
 
 
-def test_the_rate_limiter_admits_the_redacted_estimate_not_the_original(
+def test_the_rate_limiter_refuses_a_request_whose_original_does_not_fit(
     registry_with: Callable[..., Path], build: Callable[[Path], Gateway]
 ) -> None:
     redacted_tokens = chat_estimate(
@@ -567,9 +567,11 @@ def test_the_rate_limiter_admits_the_redacted_estimate_not_the_original(
     # A window that fits the redacted request and not the original.
     gateway = build(registry_with(FIRST, tokens_per_minute=redacted_tokens + 5))
 
-    response, _ = gateway.post(CHAT, body)
+    response, run_id = gateway.post(CHAT, body)
 
-    assert response.status_code == 200
+    assert response.status_code == 413
+    (row,) = gateway.rows(run_id)
+    assert (row["outcome"], row["reason"]) == ("refused", "tenant-request-too-large")
 
 
 @pytest.mark.parametrize("path", [CHAT, EMBEDDINGS])

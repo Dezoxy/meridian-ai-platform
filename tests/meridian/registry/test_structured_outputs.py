@@ -9,6 +9,8 @@ cannot serve at run time. The boundary of each rule gets both sides.
 from collections.abc import Callable
 from pathlib import Path
 
+from registrysupport import add_field, apply_changes, remove_field
+
 from meridian.platform.registry import load_registry
 from meridian.platform.registry.models import Agent, Deployment
 
@@ -17,8 +19,8 @@ LoadErrors = Callable[[Path], tuple[str, ...]]
 Edit = tuple[str, str, str]
 
 DECLARED = "    structured_outputs: true\n"
-EMBEDDING_ANCHOR = "    dimensions: 1024\n"
-REPLAY_EMBEDDING_ANCHOR = '    model: replay-embedding\n    version: "1"\n'
+EMBEDDING = "aoai-sdc-text-embedding-3-large"
+REPLAY_EMBEDDING = "replay-embedding"
 AGENT_DECLARED: Edit = (
     "agents.yaml",
     "    description: Triages a new claim and prepares it for an adjuster.\n"
@@ -40,14 +42,9 @@ RECORDED_CHAT = "recorded-chat"
 
 def undeclare(directory: Path, *deployments: str) -> Path:
     """Take the declaration off each named deployment of the copy."""
-    path = directory / "models.yaml"
-    text = path.read_text(encoding="utf-8")
-    for name in deployments:
-        head, found, tail = text.partition("  - id: " + name + "\n")
-        assert DECLARED in tail, f"{name} declares nothing to take off"
-        text = head + found + tail.replace(DECLARED, "", 1)
-    path.write_text(text, encoding="utf-8")
-    return directory
+    return apply_changes(
+        directory, *(remove_field(name, "structured_outputs") for name in deployments)
+    )
 
 
 def strip_every_declaration(plant: Plant) -> Path:
@@ -102,7 +99,7 @@ def test_an_embedding_deployment_that_declares_it_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
     errors = load_errors(
-        plant(("models.yaml", EMBEDDING_ANCHOR, EMBEDDING_ANCHOR + DECLARED))
+        apply_changes(plant(), add_field(EMBEDDING, "structured_outputs", "true"))
     )
 
     assert errors == (
@@ -115,12 +112,8 @@ def test_a_replay_embedding_deployment_that_declares_it_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
     errors = load_errors(
-        plant(
-            (
-                "models.yaml",
-                REPLAY_EMBEDDING_ANCHOR,
-                REPLAY_EMBEDDING_ANCHOR + DECLARED,
-            )
+        apply_changes(
+            plant(), add_field(REPLAY_EMBEDDING, "structured_outputs", "true")
         )
     )
 
@@ -135,7 +128,7 @@ def test_an_embedding_deployment_that_declares_it_is_reported_with_no_agent_aski
 ) -> None:
     strip_every_declaration(plant)
     errors = load_errors(
-        plant(("models.yaml", EMBEDDING_ANCHOR, EMBEDDING_ANCHOR + DECLARED))
+        apply_changes(plant(), add_field(EMBEDDING, "structured_outputs", "true"))
     )
 
     assert len(errors) == 1

@@ -1,8 +1,7 @@
 """Special-category screening: health first, the other Article 9 phrases."""
 
-import time
-
 import pytest
+from cputime import MAX_GROWTH, growth
 
 from meridian.platform.guardrails import holds_special_category
 
@@ -198,13 +197,14 @@ def test_exactly_one_golden_set_description_is_special_category(
 
 
 def test_a_long_text_is_screened_in_linear_time() -> None:
-    texts = [
-        "a " * 10_000,
-        "mental" + " " * 20_000,
-        ZERO_WIDTH_JOINER * 20_000,
-        "x" * 20_000,
-    ]
-    for text in texts:
-        started = time.perf_counter()
-        holds_special_category(text)
-        assert time.perf_counter() - started < 0.5
+    # Each shape builds a text of about the given length.
+    shapes = {
+        "words": lambda n: "a " * (n // 2),
+        "phrase-start": lambda n: "mental" + " " * n,
+        "joiners": lambda n: ZERO_WIDTH_JOINER * n,
+        "letters": lambda n: "x" * n,
+    }
+    # CPU time at a small and a large length, not a limit on the wall clock.
+    for name, shape in shapes.items():
+        grown = growth(holds_special_category, shape(20_000), shape(80_000))
+        assert grown < MAX_GROWTH, f"{name}: {grown:.1f} times"

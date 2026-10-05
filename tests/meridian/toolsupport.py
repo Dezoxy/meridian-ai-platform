@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -287,11 +288,31 @@ def tracer_of(exporter: InMemorySpanExporter) -> Any:
     return make_tracer_provider("agent-runtime", exporter).get_tracer("test")
 
 
+# Whether a port can be kept and still refuse a connection. Linux answers a
+# connect to a bound socket that does not listen with a reset. macOS drops it,
+# so the connect waits out its timeout, and nothing there both keeps a port
+# and refuses at once (measured on both, S057).
+HOLDS_A_REFUSING_PORT = sys.platform.startswith("linux")
+_HELD_PORTS: list[socket.socket] = []
+
+
 def unused_port() -> int:
-    """A loopback port nothing listens on (just released)."""
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    """A loopback port nothing listens on.
+
+    On Linux the socket stays bound for the life of the process and never
+    listens: a connect is refused, and the port cannot be handed to another
+    socket between this call and the test's connect. Elsewhere the port is
+    released (see ``HOLDS_A_REFUSING_PORT``), so another process may be given
+    it before the test connects.
+    """
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    if HOLDS_A_REFUSING_PORT:
+        _HELD_PORTS.append(sock)
+    else:
+        sock.close()
+    return port
 
 
 def structured(result: dict[str, Any], **meta: Any) -> types.CallToolResult:

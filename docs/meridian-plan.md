@@ -109,9 +109,11 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 
 **Before pushing.**
 
-- `gitleaks git --log-opts="origin/main..HEAD" --redact`. CI scans every
-  commit of a pull request, so a finding in an early commit is not fixed by
-  a later one.
+- `make secret-scan` (it runs
+  `gitleaks git --log-opts="origin/main..HEAD" --redact`, and refuses a base
+  git does not know, which gitleaks alone passes with nothing scanned). CI
+  scans every commit of a pull request, so a finding in an early commit is
+  not fixed by a later one.
 - `GITHUB_ACTIONS=true make pytest-db` once, when the step changed Python.
   A tool can behave differently when CI's variables are set; Typer's usage
   errors did, on pull request 27.
@@ -324,8 +326,8 @@ milestone's exit.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | doing | S055, S024 |
-| S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table; `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | todo | S054 |
-| S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | todo | S045 |
+| S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table (not done: the checker is development-base's to change first, and the backlog row stays open); `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | done | S054 |
+| S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
 | S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | todo | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI; a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it | todo | S053 |
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | todo | S039, S050 |
@@ -378,7 +380,7 @@ that day; the rest stand as their step recorded them.
 | A deployment past its `retires` date still routes | S010 | open | S030 |
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
-| A `make` target for the secret scan, so it gates a push and not only CI | S042 | open | S057 |
+| A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
 | Retention for `audit.events` and `gateway.usage` | S011 | open | S065 |
 | A connection pool (a request opens about three connections) | S011 | open | S027 |
 | An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open; left by S019 (not in its "done when") | S021 |
@@ -387,16 +389,16 @@ that day; the rest stand as their step recorded them.
 | A tool-server client that lives longer than one call | S013 | open | S059 |
 | An OpenAPI or health entry for the tool servers in `test_openapi.py` | S013 | open | S059 |
 | Length checks on `runtime.runs` text columns | S013 | open | S059 |
-| An upper bound on a provider's token counts | S045 | open | S058 |
-| A purpose on the gateway's refusal rows | S045 | open | S058 |
-| 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | open | S058 |
+| An upper bound on a provider's token counts | S045 | closed by S058 (an input count over four times the estimate, an output count over the wire's cap or a negative count is a bad response of that candidate) | S058 |
+| A purpose on the gateway's refusal rows | S045 | closed by S058 (a column, written on refusal rows) | S058 |
+| 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | closed by S058 (an input of more than 8,191 UTF-8 bytes is a 422) | S058 |
 | Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | closed on 2026-10-04 outside a step: Renovate reads it in the `Makefile` and in `python.yml` and moves both in one pull request (the app was installed the same day) | none |
 | After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
 | Ingestion tests that run without a database | S012 | open | S065 |
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
 | The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | open | S059 |
 | One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | open | S059 |
-| The count of a refusal flood's last window is never written | S046 | open; left by S024 (the gateway's code, which S055 held while S024 ran) | S058 |
+| The count of a refusal flood's last window is never written | S046 | closed by S058 for the gateway's own refusals (a row with the outcome `suppressed`); the caller check and the other services have a row below | S058 |
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | S059 |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open | S060 |
 | The tool-call limits are the same for every agent | S014 | open | S031 |
@@ -420,18 +422,18 @@ that day; the rest stand as their step recorded them.
 | HTML pages for the shared JSON answers under `/claimant/` | S049 | closed by S053 (422, 404, 405, 413, 400) | none |
 | The server span's `http.url` keeps a query string | S049 | closed by S053 | none |
 | A documents failure whose cause races with another move | S049 | done in S052 (`stored`) | S052 |
-| Two resume-race tests in `test_runtime_app.py` rest on a 0.3 s sleep for their overlap | S054 | open | S057 |
+| Two resume-race tests in `test_runtime_app.py` rest on a 0.3 s sleep for their overlap | S054 | closed by S057 (the winner's leg waits for the other request's answer, so a run without the overlap fails; 25 of 25 runs beside the whole suite) | S057 |
 | One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | seen again twice on 2026-10-04 with ten workers and 7,600 tests (105 and 42 tests lost); the server's log shows no crash and no refused connection, so the connections are dropped before PostgreSQL (Docker Desktop's port forwarding); two runs with four workers were clean and CI was green throughout; the Makefile's default is now 4 | none |
-| `unused_port()` in `toolsupport.py` closes its socket before the test uses the port | S054 | open | S057 |
-| Wall-clock limits in four tests (0.5 s to 5 s, thirty times their measured time or more) | S054 | open | S057 |
+| `unused_port()` in `toolsupport.py` closes its socket before the test uses the port | S054 | closed by S057 on Linux, where CI runs: the socket stays bound and never listens, so the port is refused and taken; macOS has a row of its own | S057 |
+| Wall-clock limits in four tests (0.5 s to 5 s, thirty times their measured time or more) | S054 | closed by S057 for five of the six there were: four compare CPU time at a length and at four times that length, one records which patterns are searched; the sixth has a row of its own | S057 |
 | `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | open | S065 |
 | A coverage gate in CI (measured once: 99.2 % of lines; coverage adds about a third to the run) | S054 | open, the owner's decision | none |
 | Template databases, so a test database is copied and not migrated | S054 | open | S065 |
-| The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | open | S057 |
+| The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | closed by S057 (kept at 15: twice the slowest of 47 successful runs, 7 min 30 s; the median is 6 min 47 s, and the job prints its slowest tests) | S057 |
 | Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | S022 |
 | A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open; not taken by S032, which makes no live call. A live run of the injection cases (the row below) is where one could be provoked | none |
 | The estimate of a response schema's tokens (its compact JSON's bytes over three) rests on one live measurement, 43 counted against 64 reserved | S051 | open | S050 |
-| Registry tests anchor on adjacent lines of `models.yaml`, so a field added inside a deployment's entry breaks them | S051 | open | S057 |
+| Registry tests anchor on adjacent lines of `models.yaml`, so a field added inside a deployment's entry breaks them | S051 | closed by S057 (`tests/meridian/registrysupport.py` finds the entry by its key and the field by its name; with a line added after every field, 19 tests failed before and none after) | S057 |
 | S053 on kind: the stamped report date, the error pages, migration 0013 and the history view, and no query string on a span in Tempo (the cluster was held by S052 while S053 ran) | S053 | closed by S018: all five looked at on the cluster made from a fresh clone | S018 |
 | The JSON route `POST /claims` takes its caller's report date until callers are identified (T-66) | S053 | open, the owner's accepted residual | S021 |
 | The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | none |
@@ -452,31 +454,31 @@ that day; the rest stand as their step recorded them.
 | The sweep's listing of leftover threads reads every checkpoint row each pass (160 ms at 390,000 rows) | S052 | open | S065 |
 | The trigger that confines the sweep's role runs, and returns at once, for every role's update of a claim or a run | S052 | open | S065 |
 | Migration numbers collide between parallel steps (S052 and S053 both wrote a 0013); the kind ledger was renamed by hand | S052 | open | S065 |
-| `test_scheduled_sweep_migration.py` and `test_sweep.py` are over the 800-line ceiling | S052 | open | S057 |
+| `test_scheduled_sweep_migration.py` and `test_sweep.py` are over the 800-line ceiling | S052 | closed by S057 (each is three files and a support module, cut along its sections; the largest has 649 lines) | S057 |
 | One loader for the two entry-point groups (`meridian.graphs`, `meridian.evaluations`), which copy each other's trust checks | S050 | open | S061 |
 | The evaluation's embeddings are simulated in every run, the recording run included: retrieval with a real embedding is not measured | S050 | open | none |
 | The LLM judge is not calibrated against people's labels, and a rationale that holds a word its screen knows is graded ungrounded without a call (T-79) | S050 | open; not taken by S032: it needs people's labels, and no judge runs in the injection suite. S032 counted that screen's false alarms on claimant text: 16 of 22 look-alike sentences | none |
 | Golden-set cases on the fraud indicators' boundaries and an unknown policy number | S003, S017 | open; not taken by S050 | S067 |
 | A view that shows the Evaluation Harness's edges (Containers leaves the harness out, Governance the Claims Triage App) | S017 | open; not taken by S050 | S035 |
 | T-45's read limit was measured once (1,024 output tokens in 10.1 s on 2026-10-03); S020 accepts that or repeats it before the gateway reaches Azure from a cluster | S050 | open | S020 |
-| The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | open | S057 |
+| The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 42 s and 16 s of one worker in CI (pull request 79; four workers, the Tests step 5 min 34 s); the job prints its slowest tests from S057 on | S057 |
 | On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | none |
 | A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | open; left by S019 (roles, grants and a migration, not the chart) | S063 |
 | The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open; S019: the chart refuses a second gateway replica, and leaves the rolling update alone (its decisions say why); windows shared between processes are the fix | S066 |
 | A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | open; left by S019 (application code) | S059 |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace (T-68) | threat model, S018 | open; left by S019 (the observability chart's values, not the Meridian chart) | S063 |
-| Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | open; left by S019 (application code) | S058 |
+| Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | closed by S058 (the limiter admits the estimate of the text as sent, and redaction runs after it) | S058 |
 | The pages' same-origin check needs a list of the pages' own names behind a port-forward or an edge that rewrites the host (T-70) | threat model, S018 | open; left by S019 (application code) | S021 |
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
 | Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | done in S055 (mutual TLS, ADR 4): a call with no identity, from an unmapped service or naming a tenant or agent outside the caller's registry entry is refused | S055 |
 | A web application firewall in the Azure design (T-02) | threat model, S018 | open | S020 |
 | No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open; left by S024 (the services' telemetry setup, or a log collector on the node, which a session without the cluster cannot try). So no alert rule reads a log | S064 |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
-| `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open | S057 |
+| `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open; not built by S057: the checker and its test are copies of development-base's, where the fix goes first and is then re-copied. S057's section says what the check is; tried from a scratch folder, it finds no split table in the tree today | none |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | S062 |
 | 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | open | S037 |
 | No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open | S037 |
-| The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | open | S057 |
+| The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | closed by S057, accepted with its number: 11 s of one worker in CI (pull request 79), 30 to 39 s on a laptop | S057 |
 | The scaffold's comparison "the old agents plus exactly one" has no test that reaches it alone (the YAML parse and the registry validation refuse first) | S039 | open | S061 |
 | The scaffold refuses valid but unusual files without saying which line (a table header with a trailing comment, a flow-style list), and `the name is taken` does not say by what | S039 | open | S061 |
 | `meridian registry validate` ends in a traceback when the registry directory cannot be listed (older than S039; the scaffold catches it for itself) | S039 | open | S061 |
@@ -486,7 +488,7 @@ that day; the rest stand as their step recorded them.
 | The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | open | S067 |
 | A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | open | S067 |
 | A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open | S031 |
-| The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | open | S057 |
+| The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | closed by S057, accepted with its number: 34 s of one worker in CI (pull request 79), 50 to 55 s on a laptop | S057 |
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once | none |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | open | S061 |
 | TLS at the edge: `infra/kind/README.md` had named S019 for it, and no step's "done when" holds it; on kind the edge listens on loopback only | S006, S019 | open | S020 |
@@ -501,7 +503,7 @@ that day; the rest stand as their step recorded them.
 | On a cluster whose services were first applied as raw manifests, the field manager `kubectl` still co-owns their fields, so a field a later chart version drops would stay | S019 | open; a new cluster ends it | none |
 | Private endpoints or IP rules for the vault, the Azure OpenAI account and the state storage, and diagnostics settings: `infra/terraform/README.md` had named S019 for "the hardening" | S007, S019 | open | S020 |
 | `tests/meridian/test_helm_chart.py` is over the 800-line ceiling (about 1,080 lines); its network-policy tests could be a file of their own | S019 | open; not taken by S057, which runs beside S056 while that step changes the chart's tests | S062 |
-| The advisory hook `check-iac.sh` runs `helm lint` on the chart with no values, so every edit of the chart reports the image and the policy peers as missing; `make helm-lint` is the gate | S019 | open | S057 |
+| The advisory hook `check-iac.sh` runs `helm lint` on the chart with no values, so every edit of the chart reports the image and the policy peers as missing; `make helm-lint` is the gate | S019 | closed by S057 (for the chart that `make helm-lint` lints, the hook runs that target) | S057 |
 | A tag that is valid for an image but not for an object's name (upper case, `_`, more than 46 characters) passes the chart and fails when the Job is applied; `deploy.sh` passes twelve hex digits | S019 | open | S022 |
 | `make smoke` proves one denied path (Claims API to Model Gateway); egress to an address outside the cluster and the database's policy were proved by hand in S019 | S019 | open | S062 |
 | A first `helm upgrade --install` that fails may leave a release Helm refuses to upgrade ("has no deployed releases"); `deploy.sh` names `status` and `history`, and the cure, an uninstall, needs the owner (not tried) | S019 | open | none |
@@ -534,6 +536,14 @@ that day; the rest stand as their step recorded them.
 | `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | open | S056 |
 | `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | open; split on 2026-10-04: the check for the issuer is S056's, the first upgrade's outage stays with S020 | S056, S020 |
 | Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
+| `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | open | S059 |
+| On macOS `unused_port()` still releases its port before the test connects: a bound socket that does not listen drops a connect there, which then waits out its timeout, so a kept port cannot refuse | S057 | open; an observation: the required check runs on Linux, where the port is kept | none |
+| `tests/meridian/guardrails/test_redaction.py` has its own copy of the CPU-time measurement that is now `tests/meridian/cputime.py` | S057 | open | none |
+| The advisory hook reports `ubuntu-26.04` as an unknown runner label on every edit of a workflow: the laptop's actionlint is older than the label the runs use | S057 | open | none |
+| `test_misses_and_hits_are_counted_exactly_under_threads` in `tests/meridian/gateway/test_recorded.py` takes 33 s of one worker in CI, the third slowest test of the job (read from pull request 79, the first run that printed durations) | S057 | open; an observation with its number: S058 works in the gateway's tests while S057 runs | none |
+| The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | open | none |
+| The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | open | none |
+| A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
 
 ## Part C — Step details
 
@@ -7332,6 +7342,461 @@ readable by the service's own user and group alone.
 
 **Follow-ups:** —
 
+### S057 — Test and tooling hygiene
+
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
+**Goal:** the tests and the tooling that twelve backlog rows name hold by
+construction, not by a margin, and what the suite costs in CI is measured.
+
+**Decisions:**
+
+- **Run unattended, beside S056 and S058, by the owner (2026-10-04).**
+  This session has a worktree, a branch and a test database of its own,
+  changes nothing under `src/meridian/` and runs no command against the
+  kind cluster. Nobody answered a question, so what follows is the
+  session's, and the two items it could not decide are under "Left open".
+- **A race is made, not waited for.** The two resume-race tests slept
+  0.3 s in the winner's leg and hoped the other request arrived meanwhile.
+  `claim_paused_run` commits its claim before the leg runs, so a request
+  that came later found a finished run and every assertion still held:
+  the test passed without racing. The leg now waits for an event that the
+  first answered request sets, so it cannot end before the other request
+  has been answered, and the loser's answer is pinned to `Running`.
+  Rejected: an event set by the claim that loses (the advisor's form),
+  which proves the claim was exclusive but not that the loser was
+  answered while the leg ran.
+- **"Linear" is a ratio, "did not run" is a spy.** Six tests measured the
+  wall clock, not four. Four show a call is linear: they now compare the
+  thread's CPU time at a length and at four times that length (linear is
+  4, quadratic 16, the limit 8), the form S054 gave `test_redaction.py`,
+  from one helper, `tests/meridian/cputime.py`. One shows a pattern is not
+  run on a string over its maximum; a clock cannot show that, since a
+  faster machine finishes the pattern inside any limit, so the test
+  records which patterns `re.search` is asked for, and first shows the
+  record does see the pattern for a short string. The sixth
+  (`test_a_server_slower_than_the_timeout_is_unavailable`, a limit of 5 s)
+  is in `tests/meridian/runtime/`, S059's ground, and stays.
+- **`unused_port()` keeps its port on Linux and releases it on macOS.**
+  Measured on both: Linux answers a connect to a bound socket that does
+  not listen with a reset, so the port can be kept for the life of the
+  process and still refuse. macOS drops that connect, which then waits
+  out its timeout, and no variant tried there both kept the port and
+  refused at once. CI, where the required check runs, has the property by
+  construction; on a laptop the port is released as before. Rejected:
+  keeping it everywhere, which turns three test files' refusals into
+  timeouts on macOS; a port outside the range the kernel hands out, which
+  no bind proves free.
+- **The hook runs the gate.** `check-iac.sh` is this repository's own
+  (one line differs from the base's, and it has no other commit): for the
+  chart that `make helm-lint` lints it now runs that target, found by
+  reading the recipe, so the two cannot name different values again.
+  Another chart is still linted bare. `.codex/hooks` is a link to
+  `.claude/hooks`, so Codex runs the same file.
+- **`make secret-scan` checks its base first.** gitleaks 8.30.1 answers a
+  base git does not know with "0 commits scanned", "no leaks found" and
+  exit 0, so the command Part A named passed on a typo or an unfetched
+  `origin/main`. The target refuses such a base before it scans. Named
+  after CI's job; no version pin in the Makefile (CI's is the one pin,
+  and Renovate reads it there).
+- **The limit stays 15 minutes, now from numbers.** 47 successful runs of
+  the python job on 2026-10-04: 4 min 59 s to 7 min 30 s, the median
+  6 min 47 s, the Tests step all but half a minute of it. 15 is twice the
+  slowest. The limit ends a job that hangs; it is no budget. Rejected: 12
+  (1.6 times), since the job grew from 4 min 50 s to this in one day and
+  six more steps are adding tests. The one run that took 12 min 43 s
+  waited 5 min 24 s for a runner, which the limit does not count.
+- **CI prints its slowest tests** (`--durations=25`), so what a test adds
+  can be read from any run; until now no run said.
+- **The three slow tests are accepted, with their numbers** (below). Two
+  are in files other steps own (`tests/meridian/cli/`, the evaluation
+  stack), and none is slow by accident: each runs a whole set through the
+  stack once.
+- **A registry test names the entry and the field.**
+  `tests/meridian/registrysupport.py` finds `- id: <key>`, then the field
+  inside it, and edits that as text (the files keep their comments, and
+  the loader's messages name positions). It fails when the entry or the
+  field is missing or there twice, as `plant` does. Rejected: a YAML
+  round trip, which loses the comments and the order.
+- **Each long file became three and a support module**, cut along its
+  section comments, nothing renamed and no body changed.
+- **Small tooling changes were made in the main session**, test first: the
+  Makefile target, the hook, the workflow's comment and step, and the
+  rewrite of `unused_port()` after its implementer stopped on the macOS
+  finding. Six contracts went to the `implementer`.
+
+**Work log:**
+
+- Six contracts, each one concern and about a page, three at a time on
+  disjoint files: the two races; `unused_port()`; the wall-clock limits;
+  the registry anchors; and one per file split. The implementers ran
+  plain `pytest` against one PostgreSQL the main session started under
+  this step's container name, since `make pytest-db` removes that
+  container when it starts and two of them would have ended each other.
+- The `unused_port()` implementer stopped, as its contract said to, when
+  the contract's premise ("a reset on both") proved false on macOS. The
+  main session measured both kernels (a probe on this laptop and in the
+  `Dockerfile`'s base image) and wrote the split.
+- The main session read every changed file and checked each report:
+  - both splits against the committed files, unit by unit (every
+    top-level function, class and assignment by exact source text);
+  - the registry conversion by what each test plants: a pytest plugin
+    recorded the parsed registry copy after every test, once with the
+    committed test files and once with the new ones;
+  - the registry tests with a line added after every field of every
+    entry of `models.yaml`, before and after;
+  - `make secret-scan` on a throwaway repository with a made-up token in
+    an early commit that a later commit removes.
+- The `docs-sync` pass: Part A's "Before pushing", the secret rotation
+  runbook, the README's command list and `.gitleaks.toml`'s header name
+  `make secret-scan`; the Makefile's comment on `PYTEST_ARGS`.
+- Pull request 79, in two commits: the change, then the numbers its own
+  first run printed.
+
+**Result / verification:**
+
+Run by the main session on the final tree, on a laptop where two other
+steps' suites and the kind cluster ran (load average 13 to 22).
+
+- **The races.** With a claim that hands the run to both callers (the
+  implementer's scratch plugin), both tests fail: `[False, False] ==
+  [True]`, the other request never answered while the leg ran. With the
+  wait taken out and the second request a second late, the old assertions
+  pass and the new one fails (`['Completed', 'Completed']`): the old test
+  proved nothing then. The two tests, 25 times while the whole suite ran
+  beside them: 25 of 25, the slowest run 10 s (the bound is 30 s).
+- **The limits.** A quadratic stand-in measures 9.1 to 12.7 times and
+  fails all four growth tests; a linear run measured 3.9 to 4.6, and at
+  most 5.9 over 25 loaded runs (the chunker). With the size-first
+  ordering taken away, the tool server's test fails on `'^(a+)+$' not in
+  ['^(a+)+$']` after the pattern ran for 29 s. The five tests and the
+  port tests, 25 times beside the whole suite: 25 of 25.
+- **`unused_port()`.** The probe, on macOS 27: a bound socket that does
+  not listen holds its port (a second bind: `EADDRINUSE`) and a connect
+  times out after 2.02 s; on Linux 7.0 in the `Dockerfile`'s base image:
+  the port is held and the connect is refused. The test file in that
+  image, the tree mounted read-only: 25 of 25 runs, four tests each, none
+  skipped; the three files that call it: `83 passed`, the same 83 as on
+  macOS. On macOS three of the four tests are skipped, by design.
+- **The registry tests.** With a line added after every field of every
+  entry of `models.yaml` (67 lines): 19 of 434 failed before, `456
+  passed` after, and the gateway's tests (`1254 passed, 6 skipped`) were
+  never affected. What each test plants, compared between the committed
+  files and the new ones: 224 tests on both sides, 223 planting a registry
+  that parses the same. The one that differs (`empty-price-source`) used
+  to empty `price.source` and leave a stray `x:` key beside it; it now
+  plants the empty source alone, which is what its name says.
+- **The splits.** Every unit of the committed files is in the new ones,
+  by exact source text: 79 of 79 (48 test functions) and 102 of 102 (60),
+  none missing, none added, none changed; the collected tests are the
+  same 71 and 143. Lines: `test_sweep.py` 649, `test_sweep_failures.py`
+  316, `test_sweep_main.py` 222, `sweepsupport.py` 170;
+  `test_scheduled_sweep_migration.py` 489, `..._runs.py` 273,
+  `..._trail.py` 441, `sweepmigrationsupport.py` 279.
+- **`make secret-scan`.** On this branch: `0 commits scanned`, exit 0.
+  With `SECRET_SCAN_BASE=no-such-ref`: "git knows no commit no-such-ref",
+  exit 2, and gitleaks never runs. On a throwaway repository with a
+  made-up token in one commit and its removal in the next: `leaks found:
+  1`, exit 2, the token not printed.
+- **The hook.** Before, on the chart as committed: `[ERROR] templates/:
+  meridian/templates/networkpolicy.yaml:80:8`, while `make helm-lint`
+  passed. After: nothing; a template that refers to a value nothing sets
+  is reported under `make helm-lint:`, and a chart the target does not
+  lint is linted bare. Three tests, which failed before the change.
+- **What the three tests cost.** In CI, read from this step's pull
+  request (four workers; the Tests step ran 5 min 34 s, the job 6 min
+  20 s): the fake model's whole-set test 42.2 s and the recorded
+  evaluation 16.0 s (the row's "about a minute" is these two); the
+  injection stack test 33.7 s, where its row said 45 to 80 s; the
+  scaffold's first run 11.2 s, where its row said 15 to 40 s. Together
+  103 s of that run's 1,336 worker-seconds, under 8 %. Accepted. On this
+  laptop, three workers, three whole runs: 50 to 79 s and 22 to 27 s; 50
+  to 55 s; 30 to 39 s. The same output shows a test no row named:
+  `test_misses_and_hits_are_counted_exactly_under_threads`, 33.4 s in CI;
+  it is in the backlog.
+- **The gates.** `uv run ruff check . --no-cache`: `All checks passed!`;
+  `ruff format --check`: 386 files; `lint-imports`: `5 kept, 0 broken`;
+  `make docs`: 13 checks passed; `make test`: `Ran 153 tests`, `OK`;
+  `make helm-lint`: `0 chart(s) failed`. `GITHUB_ACTIONS=true make
+  pytest-db`, three workers, beside the two loops above: `1 failed, 8554
+  passed, 11 skipped` in 9 min 51 s. The one failure was this step's:
+  `test_helm_chart.py` (S056's file) looks for the step whose command is
+  exactly `make pytest`, and the workflow had gained an argument there.
+  The option now reaches pytest through the step's environment and the
+  command is unchanged. The gate again on the final tree: `8555 passed, 11
+  skipped` in 10 min 32 s (8 skipped before; the three more are the tests
+  of the kept port, on macOS). On the pull request's Linux runner those
+  three run: `8558 passed, 8 skipped`.
+- **Not run:** `make eval` (no prompt, graph or recording changed), any
+  command against the kind cluster, anything against Azure.
+
+**Left open:**
+
+- **`make docs` does not yet fail on a blank line that splits a table.**
+  `scripts/check_docs_consistency.py` and its test are byte-for-byte the
+  development base's (re-copied by pull requests 16 and 52), the fix
+  belongs there first, and that repository was not this session's. The
+  check, tried from the scratchpad: a table row (a line that starts and
+  ends with `|`, outside a fence) that follows one or more blank lines
+  which follow another table row, and whose next line is not a delimiter
+  row (`|---|`: one hyphen or more a cell, colons allowed), is a row the
+  blank line cut off. A row followed by a delimiter row starts a new
+  table. On this tree it finds nothing in 112 files; on a sample with
+  S017's shape it finds the row after one blank line and after two, and
+  reports neither a second table nor rows inside a fence. The backlog row
+  stays open. The session's advisor would have built it here and recorded
+  the divergence; the step's brief says to leave a copy from the base
+  alone, so that is what was done.
+- **The sixth wall-clock limit**, in `tests/meridian/runtime/`, is S059's.
+
+**Follow-ups:** in Part B's backlog. Closed: the secret scan's target, the
+two races, five of the six limits, `unused_port()` where CI runs, the
+registry anchors, the two long files, the job's limit, the hook, and the
+three measurements. Open: the split-table check (the base's), the sixth
+limit (S059), `test_redaction.py`'s own copy of the CPU-time helper,
+`unused_port()` on macOS, actionlint's report of `ubuntu-26.04` on every
+edit of a workflow, and a gateway test of 33 s that the job's new output
+showed.
+
+### S058 — Gateway loose ends
+**Status:** done · **Started:** 2026-10-04 · **Finished:** 2026-10-04
+**Goal:** close the five gateway items of the follow-up backlog: bounded
+token counts, a purpose on refusal rows, an answer of the gateway's own
+for an embedding input that is too long, the last window's count of a
+refusal flood, and the rate limit before redaction (T-73).
+
+**Decisions:**
+
+- **Unattended, by the owner's instruction (2026-10-04).** Nobody
+  answered a question during this session, so everything below was
+  decided here. None of it changes a security boundary, a cost or the
+  roadmap; the two that touch what a caller sees (the byte bound and the
+  order) say why they could be decided from the threat register.
+- **In parallel with S056 and S057.** This session ran no command against
+  the kind cluster and none against Azure.
+- **Three files outside the gateway's folder.** The brief kept this step
+  inside `platform/gateway/`, and two items cannot be done there: a
+  purpose needs a column (a migration and `common/audit.py`), and the
+  last window's count needs the throttle to hand it out
+  (`common/throttle.py`). No running step owns those files (S056 has
+  `identity.py`, `tls.py` and `peercert.py`; S059 has `env.py`), both
+  changes only add, and the open pull requests were read before this one
+  was opened.
+- **Token counts are bounded against the request, where the vectors are
+  checked.** A reply's input count may be at most four times the
+  estimate, its output count at most the wire's cap of 1,024; anything
+  else, a negative count too, is `bad-response`. A token of a byte-level
+  BPE is at least one byte and the estimate is the UTF-8 bytes over
+  three, so a count over three times the estimate cannot be of the
+  request; four leaves room for redaction's placeholders and the
+  provider's framing. The check sits in `operations.py` inside the call,
+  like the check of a vector's length, so the walk does the rest: the
+  reservation stays as the charge, the circuit counts it and the next
+  candidate is tried. Rejected: one constant for every request (four
+  million tokens is the most the wire could hold), which stops an
+  overflow and still lets one reply use up a tenant's day. Rejected: the
+  request's own `max_output_tokens` as the output bound, because the
+  replay provider ignores that cap and tests send caps of 7, 10 and 16.
+  The risk taken: a bound that is too tight counts against a circuit
+  (`bad-response` is a deployment's failure, T-45), which is why it is
+  provable and not measured.
+- **An embedding input is bounded in bytes, as a 422.** The gateway has
+  no tokenizer. What it can prove is that an input of at most 8,191
+  UTF-8 bytes cannot pass 8,191 tokens, so a longer one is refused when
+  the body is read, as 8,001 characters are. The price: inputs that
+  would have fitted are refused too (Cyrillic past 4,095 characters, CJK
+  past 2,730). No caller meets it: a search query is at most 500
+  characters, and the largest whole wording is 7,812 bytes, so no clause
+  of it is longer.
+  Rejected: `tiktoken`, a dependency that fetches its vocabulary from
+  the internet at first use, which a pod behind S019's egress policy
+  cannot. Rejected: the gateway's own estimate (bytes over three) as the
+  bound, which refuses almost nothing and leaves the 502. Rejected:
+  reading the provider's 400 for this case, whose code no live call has
+  shown. A tokenizer could later relax the bound without breaking a
+  caller that passes it.
+- **One estimate, of the text as sent.** To refuse before redaction the
+  limiter needs a number before redaction, so the estimate is computed
+  from the request as it arrived, and the ledger reserves the same
+  number: a request is still held to one number. S047 estimated from the
+  redacted text because redaction ran first; three of its tests pinned
+  that and say the new order now. The provider gets the redacted text
+  only, as before. Decided from the threat register, as the brief asked:
+  a row of a 429 or a 413 holds what it held (IDs, the route's facts, a
+  reason, a count), the estimate is a byte count and never text (T-56),
+  a refused request reaches no provider (T-20), and the one change in a
+  span is that a rate-refused request has no `meridian.redactions`.
+  Rejected: the limiter on the text as sent and the ledger on the
+  redacted text, two numbers for one request.
+- **The purpose is a column, on refusal rows, and the throttle's key
+  stays.** `audit.events.purpose`, nullable, as 0002 and 0003 added their
+  columns. A row's purpose is that of the call that wrote the row; its
+  `suppressed` count is of both purposes, because the key is still
+  tenant and reason. Rejected: a key with the purpose in it, which would
+  double the rows a flood may leave (T-49). Rows that name a deployment
+  need no purpose and get none. The row of a caller the check refuses
+  before the body is read (S055) has none either: that code is
+  `common/identity.py`, which S056 holds.
+- **The last window's count is a row of its own, written by the next
+  request.** A row with the outcome `suppressed` carries the count once
+  no row of that tenant and reason was claimed for two windows, written
+  when the next request of any tenant arrives, and at shutdown for every
+  count still held. It is not a refusal, so the refusals of a key are its
+  `refused` rows plus the `suppressed` counts of both kinds of row. Two
+  windows and not one: a flood that goes on claims a row each window and
+  that row carries the count, so one key still leaves one row a minute
+  on average (T-49). Rejected: a timer thread, a second clock beside the
+  injected one and a thread to stop in every test. Rejected: a row with
+  the outcome `refused`, which would count as one refusal more. A
+  process that is killed loses the counts it holds, as it loses its rate
+  windows (C-01).
+- **A count that could not be written waits, too.** A refusal row or a
+  summary whose write fails puts its count back and notes the time; the
+  next refusal of that key still carries it at once, and the summary is
+  tried again after two windows. The first version tried it with every
+  request, which the security review found: with the database down each
+  request of any tenant paid a failing connect, where a suppressed
+  refusal had cost no write at all.
+
+**Work log:**
+
+- **Before any code.** The threat-model note (`feature-threat-model`):
+  the five items sit inside TB-4 and TB-5, no new data crosses a
+  boundary, and what moves is the order of limiter and redaction and
+  what a refusal row holds. The advisor then changed two things in the
+  first design: one estimate for the limiter and the ledger, not two,
+  and the token bound made provable because a wrong refusal counts
+  against a circuit.
+- **Five contracts to the `implementer`, one after another**, since they
+  share one test database container and, from the third on, `app.py`:
+  1. `operations.py`: `_bounded`, beside the check of a vector's length.
+  2. `models.py`: `MAX_EMBEDDING_INPUT_BYTES` and one fixed sentence for
+     the 422. A lone surrogate was a 422 before and is one still:
+     Pydantic refuses it before the byte check.
+  3. `app.py`, `operations.py`: the estimate of the text as sent, the
+     limiter, then redaction. Three of S047's tests pinned the old order
+     and were renamed with their assertions turned.
+  4. Migration `0015_audit_purpose.sql`, `common/audit.py`, `app.py`: the
+     purpose on the three refusals that have a route.
+  5. `common/throttle.py` (`take_ended`, `restore`), a new
+     `gateway/refusals.py` (`RefusalAudit`, and the answers of a tenant
+     limit, moved from `app.py`), `app.py`: the summary row, and a
+     throttle of its own for the caller check.
+- **`app.py` and the 800 lines.** It was 789 lines, 810 after the third
+  contract (a call of nine arguments is nine lines) and 787 after the
+  fifth moved the refusal rows and the limit answers out.
+- **A mistake in the fifth contract, the main session's.** It said a
+  count released by a failed write is handed out at once. The
+  implementer did that and reported that an existing test had to change
+  for it: after a failed refusal row the next request wrote a summary
+  and then its own row, two rows where the next row had carried the
+  count. Corrected: a release notes its time and the count waits two
+  windows; that test is as it was on `main`.
+- **Reviews**, `security-reviewer` and `platform-boundary-reviewer`, on
+  the committed change. No critical and no high finding; both traced
+  that no text reaches a provider unredacted and that nothing a caller
+  chose reaches a row, a span, a metric or the new log line. Fixed: the
+  retry of a failed summary with every request (medium, found by both);
+  `close_all`'s docstring, which promised a shutdown loses no count; the
+  first line of `redaction.py`'s docstring and T-16's row, which still
+  said the limiter sees redacted text; the runbooks' cells for
+  `bad-response` and `kept`; the README's row, which did not say the
+  caller check is left out. Recorded and not fixed, in the threat
+  register: a text made of the shortest e-mail addresses reaches the
+  provider with about an eighth more estimated tokens than the minute
+  window counted (T-73); a count that is too low is not caught, and the
+  bound's room for a response schema is measured, not proven (T-47);
+  the summary of an unknown tenant's refusals has no tenant (T-49).
+- **Four mutations the reviewers asked for, run by the main session.**
+  Redaction before the limiter, and the estimate taken from the redacted
+  text: 11 tests failed. The summary's wait cut to one window: 7 failed.
+  The bound's factor cut to two: none failed, because the bound's tests
+  used the constant itself. Two tests were added for it (one token per
+  byte of a redacted text is within the bound, chat and embeddings),
+  seen failing with the factor at two and passing at four.
+- **The implementer and the edit gate.** The third contract's run
+  rewrote part of a test file it had just created with a script, which
+  it reported; every source file was changed with the Edit tool. The
+  main session read every changed source file and made the mutations,
+  two docstring lines and the two tests above itself. The edit gate
+  denied the main session's first edit of ten files (the plan, the
+  threat register, the README, two runbooks, a docstring, the three
+  mutated source files and a test file); each went through on the retry,
+  after the facts it asks for were stated in the session. Two of the
+  implementer's runs reported that the gate never fired for them.
+
+**Result / verification:**
+
+- **A provider's token counts are bounded before they reach the ledger.**
+  `test_gateway_token_bounds.py`: a reply of two thousand million input
+  tokens answers 502, its audit row is `failed` with `bad-response`, its
+  usage row is `kept` with the charge equal to the reservation, and the
+  day's counter equals the reservation, for chat and for embeddings;
+  with two candidates the second answers. Every recorded answer of a
+  real deployment passes the bound: the recorded evaluation runs through
+  it.
+- **A refusal row carries the call's purpose.**
+  `test_gateway_refusal_purpose.py`, for both routes: a policy refusal, a
+  rate refusal, a budget refusal and a caller that names a tenant it may
+  not each leave a row with `chat` or `embedding`; a completed call's
+  row has none; in one window the second purpose writes no row and is
+  counted by the next. `test_audit_purpose_migration.py`: the column is
+  nullable text of at most 128 characters, and the gateway's role
+  inserts it.
+- **An embedding input that would pass 8,191 tokens is refused with an
+  answer of its own.** `test_gateway_embeddings.py`: 8,191 bytes are
+  accepted; 8,192, 8,000 two-byte characters and 2,731 CJK characters
+  are a 422 that reaches no provider, leaves no usage row and echoes
+  nothing of the input.
+- **The count of a refusal flood's last window is written.**
+  `test_gateway_refusal_summary.py`: three refusals leave one row, and
+  after two windows a request of another tenant answers 200 and a
+  `suppressed` row holds the tenant, the reason and the count 2 and
+  nothing else; a flood that goes on writes none; a write that fails
+  leaves the answer alone, logs one warning with the exception's class
+  and no text, and is tried once in two windows; closing the app writes
+  what is held. `test_throttle.py` holds the same for the throttle
+  alone, and that `due` and `release` behave as before.
+- **A request over its rate limit is refused before its text is
+  redacted.** `test_gateway_order.py`, for both routes: over the request
+  window, over the token window and larger than the token limit, the
+  redaction is never called and the span has no `meridian.redactions`;
+  a request the budget refuses has been redacted.
+- **Contract tests pass.** The whole suite, `GITHUB_ACTIONS=true make
+  pytest-db` with three workers and this step's own container: `8596
+  passed, 8 skipped` in 11 min 6 s, exit 0, before the review fixes, and
+  `8602 passed, 8 skipped` in 6 min 12 s, exit 0, after them and the two
+  added tests; a run after a later merge of `main` is in the pull
+  request. `gitleaks detect --log-opts="origin/main..HEAD" --redact`: `no
+  leaks found`. `uv run ruff check . --no-cache`: `All checks passed!`. `uv
+  run ruff format --check .`: `381 files already formatted`. `uv run
+  lint-imports`: `Contracts: 5 kept, 0 broken.` `make docs`: `docs
+  consistency: 13 checks passed`. `make test`: exit 0, `codex agents: 11
+  twins current`.
+- **The recorded evaluation.** The two tests `make eval` runs
+  (`test_the_recorded_model_answers_the_golden_set_through_the_gateway`
+  and the injection cases) ran alone with their report paths set, `2
+  passed`, exit 0; each compares its report with the committed baseline
+  inside the test. No prompt, graph or recording changed, and the
+  recording's key is the redacted request, which this step does not
+  change.
+- **Not run:** `make eval` and `make eval-compare` by name: the
+  harness's worktree guard refuses any command that holds the word
+  `eval`, taking the target for the shell builtin, for a subagent too,
+  and the command was not disguised to pass it; CI runs the comparison
+  on the pull request. No live call, so the bound has met a real
+  provider's counts only through the recording. Nothing on the kind
+  cluster: migration 0015 is not applied there, and `make deploy` runs
+  the migration Job before it starts the services, which the shared
+  insert of `common/audit.py` needs. `make check` and `make mermaid`
+  (the model and the diagrams did not change).
+
+**Follow-ups:** in Part B's backlog. Closed: the five rows whose home
+was S058. New: the last window's count for the caller check's refusals
+and for the tool servers' and the runtime's throttles; a tokenizer, so
+that an embedding input is bounded by tokens and not by bytes; the
+output bound as the wire's cap, and what a model that bills reasoning
+tokens would meet.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -7565,3 +8030,23 @@ readable by the service's own user and group alone.
   failed the required `python` check at random, because promtool
   evaluates rule groups in no fixed order; the test file now names the
   recording group first.
+- **v0.38, 2026-10-04:** S057 done, run unattended beside S056 and S058.
+  Eleven of its twelve backlog rows close: `make secret-scan`, which
+  refuses a base git does not know; two race tests and five timing tests
+  that hold by construction (an event, a growth of CPU time, a record of
+  what ran), shown by 25 runs each beside the whole suite; `unused_port()`
+  keeps its port on Linux; the registry tests name an entry and a field;
+  two test files of over 1,200 lines are three files each; the hook runs
+  `make helm-lint`; the python job's limit stays 15 minutes, twice the
+  slowest of 47 measured runs, and the job prints its slowest tests; three
+  slow tests are accepted with their numbers. One row stays open:
+  `make docs` and a split table, because the checker is a copy of
+  development-base's. Part A's "Before pushing" names `make secret-scan`.
+  Five new rows, one of them S059's. Pull request 79.
+- **v0.39, 2026-10-04:** S058 done, unattended and beside S056 and S057.
+  In the Model Gateway a provider's token counts are bounded against the
+  request, a refusal row carries the call's purpose (migration 0015), an
+  embedding input of more than 8,191 UTF-8 bytes is a 422, the count of a
+  refusal flood's last window is a row of its own, and the rate limiter
+  runs before redaction, on one estimate of the text as sent. Five
+  backlog rows closed; three new ones, none with a home that is running.

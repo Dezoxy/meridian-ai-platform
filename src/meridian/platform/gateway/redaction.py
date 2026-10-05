@@ -1,15 +1,16 @@
-"""Redaction of a request's text before the gateway does anything with it (T-20).
+"""Redaction of a request's text before the gateway sends it anywhere (T-20).
 
 Every chat message and every embedding input has its personal identifiers
 replaced (``meridian.platform.guardrails.redact``), whatever the request's data
 class: the class decides where a request may go, never whether an e-mail address
 or a card number is sent. It runs when the operation is built, after the route
-decision's refusals (403) and before the rate limiter, so the estimate, the
-limiter, the ledger, the provider and the replay provider all see the redacted
-text and nothing below the route decision sees the original. A request policy
-refuses is never redacted: it costs time in proportion to its text. A request
-the limiter or the budget refuses (429, 413) has been redacted: those refusals
-come after this step.
+decision's refusals (403) and the rate limiter's (429, 413), so the provider and
+the replay provider see the redacted text. The limiter and the ledger see one
+number, the estimate of the text as sent, and nothing else below the route
+decision sees the original. A request a policy or a rate window
+refuses is never redacted (T-73): it costs time in proportion to its text. A
+request the budget refuses (429) has been redacted: that refusal comes after
+this step.
 
 Roles, and the number and order of messages and inputs, are kept. The new
 request is copied, not validated again: a placeholder can be one character
