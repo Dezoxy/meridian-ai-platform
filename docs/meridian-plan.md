@@ -187,6 +187,12 @@ Cost rules:
 - Broad searches go to an Explore subagent, which returns conclusions instead
   of file dumps.
 - The Azure environment exists only on demo days (C-04).
+- One whole suite at a time on a machine, and none beside a busy cluster
+  unless the machine was measured to carry both: on the laptop the suite
+  took 9 minutes alone and did not finish in 35 beside a fresh deploy
+  ([development environment](development-environment.md)).
+- Push a step's branch at the end of a working day, finished or not, with
+  its Part C section filled in.
 - Ask the owner only when an answer changes the design, the cost or a
   security boundary; otherwise decide, and record the decision in the step.
 
@@ -325,14 +331,37 @@ milestone's exit.
 - S065 to S067 follow the steps whose files they share. S067 is the one
   step here that changes the triage graph's rules.
 
+**In flight on 2026-10-05.** The owner stopped the work that day to move
+it from the laptop to a dedicated virtual machine
+([development environment](development-environment.md) says why, what the
+machine needs and what to carry over). Two steps are open on branches
+that are pushed; each branch's own section in Part C says what is done,
+what was decided and what to run to finish. Take them in this order, and
+remove this paragraph when both are closed:
+
+1. **S059**, branch `s059-runtime-toolserver-loose-ends`: all nine
+   contracts are built and reviewed, and `main` is merged in. What is
+   missing is one whole run of the suite on a quiet machine (it passed
+   before `main` was merged in and did not finish after), then the close
+   and the pull request. Part A's sentence on steps run inside one
+   session is in this branch.
+2. **S061**, branch `s061-scaffold-registry-eval`: five of seven
+   contracts are built. The two left regenerate the evaluation baselines
+   by replay, so they follow S059 onto `main`; then the reviews and the
+   close.
+
+S062 is unblocked by S056 and owns the cluster: start it on the new
+machine with `make up` and `make deploy`, which also show whether the
+pinned images resolve there.
+
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | done | S055, S024 |
 | S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table (not done: the checker is development-base's to change first, and the backlog row stays open); `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | done | S054 |
 | S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
-| S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | todo | S046, S052 |
+| S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | doing | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI | done | S053 |
-| S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | todo | S039, S050 |
+| S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | doing | S039, S050 |
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | todo | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
@@ -8517,3 +8546,10 @@ backlog, without a change to the triage graph, its rules or a prompt.
   closed: a backlog row, for the owner, who had it made again from this
   branch, which proved a cold `make up`. Three backlog rows closed and
   two in part; nine new ones.
+- **v0.42, 2026-10-05:** the work moves from the laptop to a dedicated
+  virtual machine, on the owner's word. `docs/development-environment.md`
+  says what the machine needs, what git does not carry and how to start on
+  it. S059 and S061 are `doing` on pushed branches, each with its section
+  written; "In flight" under the backlog steps says what is left of
+  each. Two cost rules: one whole suite at a time, and a step's branch is
+  pushed at the end of a day.
