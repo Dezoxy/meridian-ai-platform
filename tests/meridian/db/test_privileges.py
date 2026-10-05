@@ -597,6 +597,8 @@ def test_the_audit_log_has_no_content_columns(
         "suppressed",
         # 0004: the tool a tool server ran or refused.
         "tool",
+        # 0015: the call's purpose on a refusal row of the Model Gateway.
+        "purpose",
     }
 
 

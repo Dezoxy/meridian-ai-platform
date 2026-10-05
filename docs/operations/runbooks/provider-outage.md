@@ -87,7 +87,7 @@ stays quiet. What it cannot answer:
    | `timeout` | No answer inside the attempt's time, or a 408 | The provider is slow, or the output is long |
    | `unavailable` | A 5xx, no connection, or a 404 | An outage; a 404 is a deployment that was deleted or has retired (the chat deployments on 2027-04-14, the embedding one on 2028-02-09) |
    | `rate-limited` | The provider's own 429 | The deployment's quota: 20 requests per 10 seconds, 20,000 tokens per minute |
-   | `bad-response` | A reply the gateway cannot read | A change at the provider |
+   | `bad-response` | A reply the gateway cannot read, or whose token counts cannot be the request's (input over four times the estimate, output over 1,024) | A change at the provider; a model that bills reasoning tokens as output would show here on every call |
 
 4. The provider itself: Azure's service health for Sweden Central, and
    `make azure-smoke`, which makes one tiny call to each deployment (well

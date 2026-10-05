@@ -109,9 +109,9 @@ def utc_today() -> date:
 
 @dataclass(frozen=True, slots=True)
 class TokenEstimate:
-    """What a call may use, as both purposes estimate it: the input tokens and
-    the largest reply. The rate limiter admits ``tokens`` and the ledger
-    reserves it, so a request is held to one number."""
+    """What a call may use, as both purposes estimate it from the text as sent:
+    the input tokens and the largest reply. The rate limiter admits ``tokens``
+    and the ledger reserves it, so a request is held to one number."""
 
     input_tokens: int
     max_output_tokens: int

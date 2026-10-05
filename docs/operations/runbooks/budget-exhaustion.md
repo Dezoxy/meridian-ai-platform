@@ -101,7 +101,7 @@ Read the second query's `state` column:
 |---|---|---|
 | `settled` | The provider answered | The provider's own token counts |
 | `released` | The provider refused the request, or it was never sent | Nothing |
-| `kept` | A timeout, a lost connection, a 5xx or an unreadable reply | The whole reservation, because the provider may have billed it |
+| `kept` | A timeout, a lost connection, a 5xx, an unreadable reply or one whose token counts are out of bounds | The whole reservation, because the provider may have billed it |
 | `reserved` | Still open: a call in flight, or a process that died | The whole reservation, until the period ends |
 
 - **Mostly `settled`**: real use. The budget is too small for the load,

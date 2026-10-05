@@ -5,14 +5,18 @@ ledger, the candidate walk, the circuit breaker and the audit row do not care
 what is being asked. Each purpose builds one ``Operation`` per request, which is
 all that differs: the estimate the limiter admits and the ledger reserves, the
 call to make on a provider, and the wire response to build from the reply of
-the candidate that answered. Nothing built here touches the request's text
-beyond handing it to the provider (T-56).
+the candidate that answered. The estimate is of the request as sent and the
+request handed to the provider is the redacted one (T-73). A reply whose token
+counts are out of bounds for the request is a bad response of that candidate
+(S058). Nothing built here touches the request's text beyond handing it to the
+provider (T-56).
 """
 
 import uuid
 
-from meridian.platform.gateway.budget import chat_estimate, embedding_estimate
+from meridian.platform.gateway.budget import TokenEstimate
 from meridian.platform.gateway.models import (
+    MAX_OUTPUT_TOKENS,
     ChatOutput,
     ChatRequest,
     ChatResponse,
@@ -26,17 +30,46 @@ from meridian.platform.gateway.providers.base import (
     ModelProvider,
     ProviderError,
     ProviderReply,
+    Reply,
 )
 from meridian.platform.gateway.settings import GatewayMode
 from meridian.platform.gateway.walk import Operation
 from meridian.platform.registry.models import Deployment
 
+# A token of a byte-level BPE is at least one byte, and the estimate is the
+# UTF-8 bytes over three, so a count over three times the estimate cannot be of
+# this request. Four leaves room for what redaction's placeholders add and for
+# the provider's framing of a message and a schema.
+INPUT_TOKEN_FACTOR = 4
 
-def chat_operation(body: ChatRequest) -> Operation[ProviderReply, ChatResponse]:
+
+def _bounded[ReplyT: Reply](reply: ReplyT, estimate: TokenEstimate) -> ReplyT:
+    """The reply when its counts are credible for this request; anything else
+    is a bad response, whichever provider gave it (S058).
+
+    The input count may not exceed ``INPUT_TOKEN_FACTOR`` times the estimate.
+    The output count is held to the wire's cap, ``MAX_OUTPUT_TOKENS``, and not
+    to the request's own ``max_output_tokens``: the replay provider ignores
+    that cap (its text is fixed), so a request's cap is not a bound on a
+    reply."""
+    if not (
+        0 <= reply.input_tokens <= INPUT_TOKEN_FACTOR * estimate.input_tokens
+        and 0 <= reply.output_tokens <= MAX_OUTPUT_TOKENS
+    ):
+        raise ProviderError("bad-response")
+    return reply
+
+
+def chat_operation(
+    body: ChatRequest, estimate: TokenEstimate
+) -> Operation[ProviderReply, ChatResponse]:
     def call(
         provider: ModelProvider, deployment: Deployment, timeout_seconds: float
     ) -> ProviderReply:
-        return provider.chat(deployment, body, timeout_seconds=timeout_seconds)
+        # Bounded inside the call, so the walk sees a count out of bounds as
+        # this deployment's failure, as it sees a wrong vector length below.
+        reply = provider.chat(deployment, body, timeout_seconds=timeout_seconds)
+        return _bounded(reply, estimate)
 
     def respond(
         call_id: uuid.UUID,
@@ -56,7 +89,7 @@ def chat_operation(body: ChatRequest) -> Operation[ProviderReply, ChatResponse]:
             ),
         )
 
-    return Operation(chat_estimate(body), call, respond)
+    return Operation(estimate, call, respond)
 
 
 def _dimensions_of(deployment: Deployment) -> int:
@@ -77,7 +110,7 @@ def _checked(reply: EmbeddingReply, inputs: int, dimensions: int) -> EmbeddingRe
 
 
 def embedding_operation(
-    body: EmbeddingRequest,
+    body: EmbeddingRequest, estimate: TokenEstimate
 ) -> Operation[EmbeddingReply, EmbeddingResponse]:
     def call(
         provider: ModelProvider, deployment: Deployment, timeout_seconds: float
@@ -87,7 +120,7 @@ def embedding_operation(
         # charged and the next candidate is tried.
         dimensions = _dimensions_of(deployment)
         reply = provider.embed(deployment, body, timeout_seconds=timeout_seconds)
-        return _checked(reply, len(body.inputs), dimensions)
+        return _bounded(_checked(reply, len(body.inputs), dimensions), estimate)
 
     def respond(
         call_id: uuid.UUID,
@@ -109,4 +142,4 @@ def embedding_operation(
             usage=EmbeddingUsage(input_tokens=reply.input_tokens),
         )
 
-    return Operation(embedding_estimate(body), call, respond)
+    return Operation(estimate, call, respond)
