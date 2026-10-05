@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from registrysupport import Change, add_field, apply_changes, planted, set_field
 
 from meridian.platform.registry import RegistryError, load_registry
 from meridian.platform.registry.loader import UniqueKeyLoader
@@ -16,6 +17,9 @@ from meridian.platform.registry.terraform import (
 
 Plant = Callable[..., Path]
 LoadErrors = Callable[[Path], tuple[str, ...]]
+
+# The first deployment, found by its key (registrysupport).
+GPT4O = "aoai-sdc-gpt-4o"
 
 
 def yaml_length(directory: Path, name: str, key: str) -> int:
@@ -74,13 +78,7 @@ def test_embedding_has_no_output_price(real_registry: Path) -> None:
 def test_unknown_key_is_reported_with_file_and_path(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        (
-            "models.yaml",
-            '    version: "2024-11-20"\n',
-            '    version: "2024-11-20"\n    bogus: 1\n',
-        )
-    )
+    directory = apply_changes(plant(), add_field(GPT4O, "bogus", "1"))
 
     errors = load_errors(directory)
 
@@ -179,8 +177,9 @@ def test_invalid_id_is_reported(plant: Plant, load_errors: LoadErrors) -> None:
 def test_errors_from_several_files_are_all_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        ("models.yaml", "    residency: eu-region\n", "    residency: mars\n"),
+    directory = planted(
+        plant,
+        set_field(GPT4O, "residency", "mars"),
         ("agents.yaml", "agents:\n", "agents:\n  - {id: x, tools: [], extra: 1}\n"),
     )
 
@@ -244,12 +243,12 @@ def test_empty_file_uses_the_file_path(
     ("edit", "path"),
     [
         pytest.param(
-            ("models.yaml", 'version: "2024-11-20"', "version: 1"),
+            set_field(GPT4O, "version", "1"),
             "models.yaml: deployments[0].version",
             id="int-for-version",
         ),
         pytest.param(
-            ("models.yaml", 'version: "2024-11-20"', "version: 2024-11-20"),
+            set_field(GPT4O, "version", "2024-11-20"),
             "models.yaml: deployments[0].version",
             id="date-for-version",
         ),
@@ -270,9 +269,12 @@ def test_empty_file_uses_the_file_path(
     ],
 )
 def test_yaml_scalars_are_not_coerced_into_strings(
-    plant: Plant, load_errors: LoadErrors, edit: tuple[str, str, str], path: str
+    plant: Plant,
+    load_errors: LoadErrors,
+    edit: tuple[str, str, str] | Change,
+    path: str,
 ) -> None:
-    errors = load_errors(plant(edit))
+    errors = load_errors(planted(plant, edit))
 
     assert any(
         e.startswith(f"{path}: Input should be a valid string") for e in errors
@@ -283,21 +285,21 @@ def test_yaml_scalars_are_not_coerced_into_strings(
     ("edit", "bad_date"),
     [
         pytest.param(
-            ("models.yaml", "retires: 2027-04-14", "retires: 2027-02-30"),
+            set_field(GPT4O, "retires", "2027-02-30"),
             "2027-02-30",
             id="february-30",
         ),
         pytest.param(
-            ("models.yaml", "checked: 2026-09-30", "checked: 2026-13-45"),
+            set_field(GPT4O, "price.checked", "2026-13-45"),
             "2026-13-45",
             id="month-13",
         ),
     ],
 )
 def test_calendar_invalid_date_is_an_error_line_not_a_traceback(
-    plant: Plant, load_errors: LoadErrors, edit: tuple[str, str, str], bad_date: str
+    plant: Plant, load_errors: LoadErrors, edit: Change, bad_date: str
 ) -> None:
-    errors = load_errors(plant(edit))
+    errors = load_errors(apply_changes(plant(), edit))
 
     assert len(errors) == 1
     assert errors[0].startswith("models.yaml: line ")

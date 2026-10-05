@@ -18,8 +18,19 @@ case "$f" in
     chart="$(dirname "$f")"
     while [ "$chart" != "/" ] && [ ! -f "$chart/Chart.yaml" ]; do chart="$(dirname "$chart")"; done
     if [ -f "$chart/Chart.yaml" ] && command -v helm >/dev/null 2>&1; then
-      lint="$(helm lint "$chart" 2>&1 | grep -E '\[(ERROR|WARNING)\]' || true)"
-      [ -n "$lint" ] && out="helm lint ${chart}:\n${lint}"
+      # The chart `make helm-lint` lints gets that target, so the hook and the
+      # gate read the same values (the kind values, an image, the Jobs on).
+      # Bare `helm lint` has none of them and reported the image and the policy
+      # peers as missing on every edit. Another chart is still linted bare.
+      root="${chart%/infra/helm/*}"
+      if grep -Eq "^[[:space:]]+helm lint .*[[:space:]]${chart#"$root"/}([[:space:]]|\$)" "$root/Makefile" 2>/dev/null; then
+        label="make helm-lint"
+        lint="$(make -s -C "$root" helm-lint 2>&1 | grep -E '\[(ERROR|WARNING)\]' || true)"
+      else
+        label="helm lint ${chart}"
+        lint="$(helm lint "$chart" 2>&1 | grep -E '\[(ERROR|WARNING)\]' || true)"
+      fi
+      [ -n "$lint" ] && out="${label}:\n${lint}"
     fi
   ;;
   */.github/workflows/*.yml|*/.github/workflows/*.yaml)

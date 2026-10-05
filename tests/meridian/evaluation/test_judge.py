@@ -6,7 +6,6 @@ gateway app in replay mode and need the database (``make pytest-db``)."""
 import json
 import logging
 import re
-import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import Any
 
 import httpx
 import pytest
+from cputime import MAX_GROWTH, growth
 from dbsupport import DatabaseHandle
 from servicesupport import audit_events
 from stacksupport import replay_gateway
@@ -243,12 +243,15 @@ def test_the_screen_names_every_field_of_the_answer_and_is_linear() -> None:
     # The pattern is built from the answer's fields, so a new one is screened.
     for field in ANSWER_FIELDS:
         assert judge.addresses_the_judge(f"{field}:")
-    hostile = "reason" + " " * 200_000 + "grounded" + "\"'" * 100_000
-    started = time.perf_counter()
 
-    assert not judge.addresses_the_judge(hostile)
+    def hostile(length: int) -> str:
+        return "reason" + " " * length + "grounded" + "\"'" * (length // 2)
 
-    assert time.perf_counter() - started < 2.0
+    small, large = hostile(20_000), hostile(80_000)
+    assert not judge.addresses_the_judge(small)
+    assert not judge.addresses_the_judge(large)
+    # CPU time at a small and a large length, not a limit on the wall clock.
+    assert growth(judge.addresses_the_judge, small, large) < MAX_GROWTH
 
 
 def test_a_user_message_over_the_gateways_limit_makes_no_call() -> None:

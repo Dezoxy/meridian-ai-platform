@@ -1,6 +1,7 @@
 # gitleaks configuration: the default rules plus one narrow allowlist.
-# Local: `gitleaks dir .`; CI: the secret scan job (gitleaks-action) reads this
-# file from the repository root.
+# Local: `make secret-scan` before a push (the commits it would add); CI: the
+# secret scan job (gitleaks-action). Both read this file from the repository
+# root.
 
 [extend]
 useDefault = true
