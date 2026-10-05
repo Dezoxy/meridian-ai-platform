@@ -22,12 +22,14 @@ import httpx
 import psycopg
 import pytest
 from dbsupport import DatabaseHandle
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import SpanKind
 from servicesupport import claim_with_id, owner_rows
+from sweepsupport import one_pass
 from workloads.claims_triage.test_adjuster_pages import (
     OTHER_TENANT,
     Page,
@@ -54,7 +56,11 @@ from workloads.claims_triage.test_claims_app import (
 )
 
 from meridian.platform.common.audit import AuditUnavailable
+from meridian.platform.common.http import UnexpectedErrorMiddleware
+from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.workloads.claims_triage import claimant, triaging
+from meridian.workloads.claims_triage.adjuster import SecurityHeadersMiddleware
+from meridian.workloads.claims_triage.app import create_app
 from meridian.workloads.claims_triage.lifecycle import TRIAGE_FAILED
 from meridian.workloads.claims_triage.models import MAX_DOCUMENTS, DecisionFailure
 from meridian.workloads.claims_triage.moves import (
@@ -62,6 +68,7 @@ from meridian.workloads.claims_triage.moves import (
     TOO_MANY_DOCUMENTS_DETAIL,
     RefusedAfterStoring,
 )
+from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 CLAIMANT_MODULE = "meridian.workloads.claims_triage.claimant"
 TRIAGING_MODULE = "meridian.workloads.claims_triage.triaging"
@@ -937,6 +944,18 @@ def assert_filled_in_form(response: httpx.Response, form: dict[str, str]) -> Non
     assert sorted(found) == sorted((needle, "textarea") for needle in needles)
 
 
+def logged_with_claim(caplog: pytest.LogCaptureFixture, claim_id: str) -> bool:
+    """Whether an error line holds the claim's ID with the class of a database
+    error and its SQLSTATE (the shared line, which names no claim, is another)."""
+    return any(
+        r.levelno == logging.ERROR
+        and claim_id in r.getMessage()
+        and "OperationalError" in r.getMessage()
+        and "sqlstate none" in r.getMessage()
+        for r in caplog.records
+    )
+
+
 def raising_once(
     real: Callable[..., Any], error: Exception
 ) -> tuple[Callable[..., Any], list[object]]:
@@ -953,7 +972,9 @@ def raising_once(
 
 
 def test_a_database_failure_in_the_triage_step_is_the_filled_in_form_503(
-    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     db = fresh_database
     form = sentinel_form()
@@ -964,7 +985,8 @@ def test_a_database_failure_in_the_triage_step_is_the_filled_in_form_503(
     )
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.triage_claim", once)
 
-    response = post_claim(client, form)
+    with caplog.at_level(logging.DEBUG):
+        response = post_claim(client, form)
 
     # The claim is stored: the form comes back as it was sent, so that sending it
     # again unchanged (the only submission the ID accepts) is one click.
@@ -972,6 +994,7 @@ def test_a_database_failure_in_the_triage_step_is_the_filled_in_form_503(
     assert DATABASE_DOWN not in response.text
     assert claims_held(db) == 1
     assert claim_state(db, "CLM-9501") == ("submitted", None)
+    assert logged_with_claim(caplog, "CLM-9501")
 
     again = post_claim(client, form)
 
@@ -982,7 +1005,9 @@ def test_a_database_failure_in_the_triage_step_is_the_filled_in_form_503(
 
 
 def test_a_database_failure_reading_the_state_after_the_triage_is_the_filled_in_form(
-    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     db = fresh_database
     form = sentinel_form()
@@ -992,10 +1017,12 @@ def test_a_database_failure_reading_the_state_after_the_triage_is_the_filled_in_
     )
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.load_status", once)
 
-    response = post_claim(client, form)
+    with caplog.at_level(logging.DEBUG):
+        response = post_claim(client, form)
 
     assert_filled_in_form(response, form)
     assert claim_state(db, "CLM-9501")[0] == "triage_failed"
+    assert logged_with_claim(caplog, "CLM-9501")
 
     again = post_claim(client, form)
 
@@ -1004,14 +1031,15 @@ def test_a_database_failure_reading_the_state_after_the_triage_is_the_filled_in_
 
 
 def test_a_database_failure_storing_the_claim_is_still_the_error_page(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def store_down(*_: object, **__: object) -> None:
         raise psycopg.OperationalError("the connection was lost")
 
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.store_claim", store_down)
 
-    response = post_claim(make_client(), sentinel_form())
+    with caplog.at_level(logging.DEBUG):
+        response = post_claim(make_client(), sentinel_form())
 
     # Nothing is stored: there is nothing to send again, so no form and no
     # promise that the claim is stored.
@@ -1019,6 +1047,52 @@ def test_a_database_failure_storing_the_claim_is_still_the_error_page(
     assert DATABASE_DOWN in page.text
     assert UNASSESSED_TEXT not in page.text
     assert page.attributes("form") == []
+    assert logged_with_claim(caplog, "CLM-9501")
+    assert NAME_SENTINEL not in caplog.text
+
+
+def test_a_stored_submission_that_is_not_valid_is_the_error_page_with_no_field(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime = Runtime()
+    real_store = claimant.store_claim
+    stored_value = "stored-value-canary-31"
+
+    def stored_invalid(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # The row the claim holds is not what the form said: a row written by
+        # hand, or by an older version.
+        return {**real_store(*args, **kwargs), "peril": stored_value}
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.store_claim", stored_invalid)
+    client = client_for(fresh_database, runtime)
+
+    with caplog.at_level(logging.DEBUG):
+        response = post_claim(client, sentinel_form())
+
+    # The claimant's page, not the API's JSON, and neither a field nor a value
+    # on it; the claim is stored and nothing was sent to the runtime.
+    page = refused_page(response, 500)
+    # The text of every other 500 page of the claimant.
+    assert FAILED_TEXT in page.text
+    assert "internal error" not in page.text
+    assert BANNER in page.text
+    for needle in (stored_value, "peril", "literal_error", "ValidationError"):
+        assert needle not in response.text
+    assert runtime.requests == []
+    assert claim_state(fresh_database, "CLM-9501") == ("submitted", None)
+    # The log has the claim, the class, the field and the error's type.
+    assert any(
+        r.levelno == logging.ERROR
+        and "CLM-9501" in r.getMessage()
+        and "ValidationError" in r.getMessage()
+        and "'peril'" in r.getMessage()
+        and "literal_error" in r.getMessage()
+        for r in caplog.records
+    )
+    for needle in (stored_value, NAME_SENTINEL, EMAIL_SENTINEL, "input_value"):
+        assert needle not in caplog.text
 
 
 def fail_triage_down(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1066,6 +1140,7 @@ def test_a_stored_claim_whose_triage_never_started_is_not_left_unseen(
     assert runtime.requests == []
     logged = [r.getMessage() for r in caplog.records if r.name == CLAIMANT_MODULE]
     assert any("CLM-9501" in message and "503" in message for message in logged)
+    assert logged_with_claim(caplog, "CLM-9501")
     for needle in (NAME_SENTINEL, EMAIL_SENTINEL):
         assert needle not in caplog.text
 
@@ -1148,6 +1223,153 @@ def test_a_claim_referred_as_overdue_reads_to_the_claimant_as_any_claim_in_revie
     assert ALL_STATES["awaiting_adjuster"] in Page(pages["CLM-9701"]).text
     for word in ("overdue", "sweep", "deadline", "did not arrive", "in time"):
         assert word not in text, word
+
+
+REQUESTED_AT = datetime(2026, 10, 1, 12, 30, 5, tzinfo=UTC)
+DUE_AFTER_14_DAYS = "2026-10-15"
+DUE_AFTER_3_DAYS = "2026-10-04"
+DUE_SENTENCE_START = "We need the documents before "
+DUE_SENTENCE_END = (
+    "If they have not arrived by then, your claim goes to a person for review."
+)
+
+
+def deadline_client(db: DatabaseHandle, days: int) -> TestClient:
+    """A Claims API whose documents are due ``days`` days after the request."""
+    app = create_app(
+        ClaimsSettings(
+            runtime_url="http://runtime.invalid",
+            database_url=claims_dsn(db),
+            tenant="claims-triage",
+            documents_deadline_days=days,
+        ),
+        tracer_provider=make_tracer_provider("claims-api"),
+        http_client=Runtime().client,
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_the_status_page_of_a_claim_waiting_for_documents_says_by_when_for_14_days(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9311", "documents_requested", changed_at=REQUESTED_AT)
+
+    response = client_for(db).get(status_url("CLM-9311"))
+
+    assert response.status_code == 200
+    text = Page(response.text).text
+    assert f"{DUE_SENTENCE_START}{DUE_AFTER_14_DAYS}." in text
+    assert DUE_SENTENCE_END in text
+    for word in ("overdue", "deadline"):
+        assert word not in text.lower()
+
+
+def test_the_due_sentence_holds_a_date_and_no_time_of_day(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9311", "documents_requested", changed_at=REQUESTED_AT)
+
+    response = client_for(db).get(status_url("CLM-9311"))
+
+    text = Page(response.text).text
+    start = text.index(DUE_SENTENCE_START)
+    sentence = text[start : text.index(DUE_SENTENCE_END) + len(DUE_SENTENCE_END)]
+    # The page's received time is 12:30:05; the due moment is not shown.
+    assert sentence == f"{DUE_SENTENCE_START}{DUE_AFTER_14_DAYS}. {DUE_SENTENCE_END}"
+    assert "12:30" not in sentence
+    assert "UTC" not in sentence
+
+
+@pytest.mark.parametrize(
+    "requested_at",
+    [
+        pytest.param(datetime(2026, 10, 1, 0, 0, 1, tzinfo=UTC), id="00:00:01"),
+        pytest.param(datetime(2026, 10, 1, 23, 59, 59, tzinfo=UTC), id="23:59:59"),
+    ],
+)
+def test_the_first_and_the_last_second_of_a_day_show_the_same_due_day(
+    fresh_database: DatabaseHandle, requested_at: datetime
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9311", "documents_requested", changed_at=requested_at)
+
+    response = client_for(db).get(status_url("CLM-9311"))
+
+    text = Page(response.text).text
+    assert f"{DUE_SENTENCE_START}{DUE_AFTER_14_DAYS}." in text
+
+
+def test_the_due_moment_follows_the_days_the_api_is_set_to(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9311", "documents_requested", changed_at=REQUESTED_AT)
+
+    response = deadline_client(db, 3).get(status_url("CLM-9311"))
+
+    assert response.status_code == 200
+    text = Page(response.text).text
+    assert f"{DUE_SENTENCE_START}{DUE_AFTER_3_DAYS}." in text
+    assert DUE_AFTER_14_DAYS not in text
+
+
+def test_no_other_state_shows_a_due_moment_or_the_sentence_about_it(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    client = client_for(db)
+    others = [state for state in ALL_STATES if state != "documents_requested"]
+    for number, state in enumerate(others, start=1):
+        claim_id = f"CLM-931{number}"
+        put_claim(db, claim_id, state, changed_at=REQUESTED_AT)
+
+        response = client.get(status_url(claim_id))
+
+        assert response.status_code == 200, state
+        text = Page(response.text).text
+        assert DUE_SENTENCE_START not in text, state
+        assert DUE_SENTENCE_END not in text, state
+        assert DUE_AFTER_14_DAYS not in text, state
+
+
+def test_the_sweep_and_the_status_page_agree_on_when_the_documents_are_due(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    days = 3
+    now = datetime.now(UTC)
+    # One claim an hour short of the deadline, one an hour past it.
+    early = now - timedelta(days=days) + timedelta(hours=1)
+    late = now - timedelta(days=days) - timedelta(hours=1)
+    put_claim(db, "CLM-9321", "documents_requested", changed_at=early)
+    put_claim(db, "CLM-9322", "documents_requested", changed_at=late)
+    client = deadline_client(db, days)
+    shown = {}
+    due = {}
+    for claim_id in ("CLM-9321", "CLM-9322"):
+        page = Page(client.get(status_url(claim_id)).text).text
+        shown[claim_id] = page.split(DUE_SENTENCE_START)[1].split(". ")[0]
+        view = claimant.load_status(claims_dsn(db), "claims-triage", claim_id, days)
+        assert view is not None
+        due[claim_id] = view.due
+
+    swept = one_pass(db, days)
+
+    # The view keeps the exact moment, and the sweep acts on it: ahead of now
+    # for the claim it leaves alone, past for the claim it refers.
+    assert due["CLM-9321"] is not None and due["CLM-9322"] is not None
+    assert due["CLM-9321"] > now > due["CLM-9322"]
+    assert swept.overdue == 1
+    assert claim_state(db, "CLM-9321")[0] == "documents_requested"
+    assert claim_state(db, "CLM-9322")[0] == "awaiting_adjuster"
+    # It is the claim's last move plus the days, to the second; the page shows
+    # that moment's UTC day, and no more.
+    for claim_id, moved in (("CLM-9321", early), ("CLM-9322", late)):
+        expected = (moved + timedelta(days=days)).replace(microsecond=0)
+        assert abs(due[claim_id] - expected) <= timedelta(seconds=1)
+        assert shown[claim_id] == due[claim_id].astimezone(UTC).strftime("%Y-%m-%d")
 
 
 MARKERS = {
@@ -1261,6 +1483,33 @@ def test_documents_asked_for_are_the_latest_proposals_list(
     assert "Documents asked for:" in Page(response.text).text
     assert "Tell us below which documents you are sending." not in response.text
     assert "old receipt" not in response.text
+
+
+@pytest.mark.parametrize(
+    "larger_first", [True, False], ids=["larger-first", "smaller-first"]
+)
+def test_two_proposals_made_at_one_moment_give_the_documents_of_the_smaller_id(
+    fresh_database: DatabaseHandle, larger_first: bool
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9301", "documents_requested")
+    smaller = (uuid.UUID(int=1), ["police report"])
+    larger = (uuid.UUID(int=2), ["repair estimate"])
+    for proposal_id, documents in (
+        (larger, smaller) if larger_first else (smaller, larger)
+    ):
+        put_proposal(
+            db,
+            "CLM-9301",
+            REQUEST_DOCUMENTS_OUTPUT | {"missing_documents": documents},
+            proposal_id=proposal_id,
+        )
+
+    response = client_for(db).get(status_url("CLM-9301"))
+
+    # The one the decided-claims view and the adjuster's pages read: ORDER BY
+    # created_at DESC, proposal_id.
+    assert Items(response.text).items == ["police report"]
 
 
 EMPTY_LISTS = {
@@ -1459,6 +1708,38 @@ def test_a_documents_post_on_a_claim_that_does_not_wait_for_them_is_a_409_notice
     assert NOT_AWAITING_DOCUMENTS_DETAIL in page.text
     assert "An adjuster is reviewing your claim." in page.text
     assert arrived_names(db, DOCUMENTS_ID) == []
+
+
+def test_a_late_documents_post_gets_the_notice_of_any_claim_in_review(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """T-65: the claimant learns nothing from the event the refusal leaves."""
+    db = fresh_database
+    notices = {}
+    for claim_id, reason in (("CLM-9701", "documents-overdue"), ("CLM-9702", None)):
+        put_claim(db, claim_id, "awaiting_adjuster")
+        # The page shows when the claim was received: one moment for both, or
+        # two claims made a second apart differ by that and nothing else.
+        put_received(db, claim_id)
+        if reason:
+            put_sweep_event(db, claim_id, "claim.awaiting_adjuster", reason)
+        response = post_to(
+            client_for(db, MoveRuntime()),
+            documents_url(claim_id),
+            {"documents": "photos"},
+        )
+        notices[claim_id] = refused_page(response, 409).text.replace(claim_id, "ID")
+
+    assert notices["CLM-9701"] == notices["CLM-9702"]
+    assert NOT_AWAITING_DOCUMENTS_DETAIL in notices["CLM-9701"]
+    refused = owner_rows(
+        db,
+        "SELECT reference, reason FROM audit.events "
+        "WHERE event = 'claim.documents_refused'",
+    )
+    assert refused == [("CLM-9701", "after-deadline")]
+    for word in ("overdue", "deadline", "sweep", "did not arrive", "in time"):
+        assert word not in notices["CLM-9701"].lower(), word
 
 
 DOCUMENTS_REFUSED = {
@@ -1681,7 +1962,7 @@ def test_a_documents_refusal_that_stored_nothing_is_the_notice_with_its_status(
 
 
 def test_a_documents_failure_and_then_the_database_down_is_the_answers_error_page(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def triage_failed(*_: object) -> DecisionFailure:
         return DecisionFailure(502, RUN_FAILED)
@@ -1692,11 +1973,15 @@ def test_a_documents_failure_and_then_the_database_down_is_the_answers_error_pag
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.add_documents", triage_failed)
     monkeypatch.setattr(f"{CLAIMANT_MODULE}.load_status", database_down)
 
-    response = post_to(make_client(), documents_url(), {"documents": "police report"})
+    with caplog.at_level(logging.DEBUG):
+        response = post_to(
+            make_client(), documents_url(), {"documents": "police report"}
+        )
 
     # The answer's status and text, not the read's (503, "the database is
     # unavailable"), on the claimant's error page.
     page = refused_page(response, 502)
+    assert logged_with_claim(caplog, DOCUMENTS_ID)
     assert RUN_FAILED in page.text
     assert DATABASE_DOWN not in page.text
     assert BANNER in page.text
@@ -2175,3 +2460,284 @@ def test_the_adjusters_shared_answers_are_still_json() -> None:
     assert [r.status_code for r in (missing, wrong_method, bad_id)] == [404, 405, 422]
     for response in (missing, wrong_method, bad_id):
         assert response.headers["content-type"] == "application/json"
+
+
+# ── a 500 or a 503 under /claimant/ is a page too ───────────────────────────
+FAILED_TEXT = "It did not work. Please try again later."
+NOT_AVAILABLE_TEXT = "This is not available just now. Please try again later."
+# The text an exception is raised with: it must reach no page and no log.
+RAISED = "raised-canary-7750"
+# What an exception no route caught is on a claimant page and as the JSON of the
+# Claims API: the page's status and text, what the log must say, the JSON's body.
+# An audit failure keeps the text of ``audit_unavailable`` and its log line.
+UNCAUGHT = {
+    "unavailable-database": (
+        psycopg.OperationalError(RAISED),
+        (503, NOT_AVAILABLE_TEXT, "OperationalError"),
+        (503, {"detail": DATABASE_DOWN}),
+    ),
+    "other-database-error": (
+        psycopg.DataError(RAISED),
+        (500, FAILED_TEXT, "DataError"),
+        (500, {"detail": "internal error"}),
+    ),
+    "audit-unavailable": (
+        AuditUnavailable(RAISED),
+        (503, AUDIT_DOWN, "audit write failed"),
+        (503, {"detail": AUDIT_DOWN}),
+    ),
+    "http-500": (
+        HTTPException(500, RAISED),
+        (500, FAILED_TEXT, "HTTPException"),
+        (500, {"detail": RAISED}),
+    ),
+    "http-503": (
+        HTTPException(503, RAISED),
+        (503, NOT_AVAILABLE_TEXT, "HTTPException"),
+        (503, {"detail": RAISED}),
+    ),
+    "unhandled": (
+        RuntimeError(RAISED),
+        (500, FAILED_TEXT, "RuntimeError"),
+        (500, {"detail": "internal error"}),
+    ),
+}
+FAILURES = list(UNCAUGHT)
+
+
+def app_log(caplog: pytest.LogCaptureFixture) -> str:
+    """What the app logged: not the test client's own line for each request,
+    which holds the URL it was asked for."""
+    return "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("meridian.")
+    )
+
+
+def failing_client(path: str, failure: Exception) -> TestClient:
+    """A Claims API with one more route, ``path``, that raises ``failure``."""
+    client = make_client()
+
+    async def fail() -> None:
+        raise failure
+
+    client.app.add_api_route(path, fail, methods=["GET"], include_in_schema=False)
+    return client
+
+
+@pytest.mark.parametrize("name", FAILURES)
+def test_an_error_no_route_caught_under_the_claimant_prefix_is_the_claimant_page(
+    name: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    failure, (status, text, logged), _ = UNCAUGHT[name]
+    client = failing_client("/claimant/boom", failure)
+
+    with caplog.at_level(logging.INFO):
+        response = client.get(f"/claimant/boom?q={BODY_CANARY}", headers=CANARY_HEADERS)
+
+    page = assert_claimant_error_page(response, status, text)
+    # Nothing of the exception, of the route or of the request is on the page.
+    for needle in (RAISED, "boom", type(failure).__name__, "Internal Server Error"):
+        assert needle not in page.text, needle
+        assert needle not in str(response.headers), needle
+    for header, value in SECURITY_HEADERS.items():
+        assert response.headers[header] == value
+    assert logged in app_log(caplog)
+    assert BODY_CANARY not in app_log(caplog)
+    assert HEADER_CANARY not in app_log(caplog)
+
+
+@pytest.mark.parametrize("name", FAILURES)
+@pytest.mark.parametrize("path", ["/adjuster/boom", "/boom"])
+def test_the_same_errors_outside_the_claimant_prefix_answer_what_they_always_did(
+    name: str, path: str
+) -> None:
+    failure, _, (status, body) = UNCAUGHT[name]
+    client = failing_client(path, failure)
+
+    response = client.get(path)
+
+    assert response.status_code == status
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == body
+
+
+def test_the_claimant_prefix_alone_decides_what_is_a_claimant_page() -> None:
+    client = failing_client("/claimants/boom", RuntimeError(RAISED))
+
+    response = client.get("/claimants/boom")
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"detail": "internal error"}
+
+
+def test_an_unhandled_error_is_logged_with_its_class_and_the_route_not_the_path(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = failing_client("/claimant/boom/{token}", RuntimeError(RAISED))
+
+    with caplog.at_level(logging.INFO):
+        response = client.get(f"/claimant/boom/{PATH_CANARY}", headers=CANARY_HEADERS)
+
+    assert_claimant_error_page(response, 500, FAILED_TEXT)
+    ours = [r.getMessage() for r in caplog.records if r.name == CLAIMANT_MODULE]
+    assert len(ours) == 1
+    assert "RuntimeError" in ours[0]
+    assert "/claimant/boom/{token}" in ours[0]
+    for needle in (PATH_CANARY, RAISED, HEADER_CANARY):
+        assert needle not in app_log(caplog)
+
+
+def test_an_unhandled_error_on_a_claims_page_logs_the_claims_id_as_its_own_field(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = failing_client("/claimant/claims/{claim_id}/boom", RuntimeError(RAISED))
+
+    with caplog.at_level(logging.INFO):
+        response = client.get("/claimant/claims/CLM-4417/boom")
+
+    assert_claimant_error_page(response, 500, FAILED_TEXT)
+    ours = [r.getMessage() for r in caplog.records if r.name == CLAIMANT_MODULE]
+    assert len(ours) == 1
+    assert "RuntimeError" in ours[0]
+    assert "CLM-4417" in ours[0]
+    assert "/claimant/claims/CLM-4417/boom" not in ours[0]
+    assert RAISED not in app_log(caplog)
+
+
+def test_a_database_error_no_route_caught_on_a_claim_is_logged_with_the_claim(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = failing_client("/claimant/claims/{claim_id}/boom", psycopg.DataError())
+
+    with caplog.at_level(logging.INFO):
+        response = client.get("/claimant/claims/CLM-4417/boom")
+
+    assert_claimant_error_page(response, 500, FAILED_TEXT)
+    assert any(
+        "CLM-4417" in r.getMessage() and "DataError" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_a_value_in_the_path_that_is_not_a_claims_id_is_not_logged_as_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = failing_client("/claimant/boom/{claim_id}", RuntimeError(RAISED))
+
+    with caplog.at_level(logging.INFO):
+        response = client.get(f"/claimant/boom/{PATH_CANARY}")
+
+    assert_claimant_error_page(response, 500, FAILED_TEXT)
+    assert "RuntimeError" in app_log(caplog)
+    assert PATH_CANARY not in app_log(caplog)
+
+
+@pytest.mark.parametrize("name", ["unhandled", "other-database-error", "http-500"])
+def test_a_claimant_page_that_fails_to_render_ends_as_the_shared_json_500(
+    name: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    failure = UNCAUGHT[name][0]
+    client = failing_client("/claimant/boom", failure)
+
+    def broken(*_: Any, **__: Any) -> None:
+        raise ValueError(RAISED)
+
+    monkeypatch.setattr(f"{CLAIMANT_MODULE}.render_error", broken)
+
+    with caplog.at_level(logging.INFO):
+        response = client.get("/claimant/boom")
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"detail": "internal error"}
+    assert "ValueError" in app_log(caplog)
+    assert RAISED not in app_log(caplog)
+
+
+def test_the_claimants_error_middleware_sits_inside_the_shared_ones() -> None:
+    app = make_client().app
+
+    order = [middleware.cls for middleware in app.user_middleware]
+
+    # Outermost first: the headers, then the shared 500, then the claimant's.
+    assert order.index(SecurityHeadersMiddleware) < order.index(
+        UnexpectedErrorMiddleware
+    )
+    assert order.index(UnexpectedErrorMiddleware) < order.index(
+        claimant.ClaimantErrorMiddleware
+    )
+    assert order[-1] is claimant.ClaimantErrorMiddleware
+
+
+def asgi_scope(path: str, kind: str = "http") -> dict[str, Any]:
+    return {"type": kind, "path": path, "headers": [], "query_string": b""}
+
+
+def test_an_error_after_the_response_started_is_left_to_propagate() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def started_then_failed(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        raise RuntimeError(RAISED)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    middleware = claimant.ClaimantErrorMiddleware(
+        started_then_failed, server_error_page=claimant.server_error_page
+    )
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(middleware(asgi_scope("/claimant/claims"), receive, send))
+
+    assert [message["type"] for message in sent] == ["http.response.start"]
+
+
+def test_a_cancellation_is_not_answered_as_a_page() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def cancelled(scope: Any, receive: Any, send: Any) -> None:
+        raise asyncio.CancelledError
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    middleware = claimant.ClaimantErrorMiddleware(
+        cancelled, server_error_page=claimant.server_error_page
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(middleware(asgi_scope("/claimant/claims"), receive, send))
+
+    assert sent == []
+
+
+def test_an_error_on_another_prefix_passes_through_the_claimants_middleware() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def failing(scope: Any, receive: Any, send: Any) -> None:
+        raise RuntimeError(RAISED)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    middleware = claimant.ClaimantErrorMiddleware(
+        failing, server_error_page=claimant.server_error_page
+    )
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(middleware(asgi_scope("/adjuster/claims"), receive, send))
+
+    assert sent == []

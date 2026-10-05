@@ -25,7 +25,6 @@ any item or the connection failed, 2 for a setting that is missing or invalid.
 
 import logging
 import os
-import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -48,28 +47,21 @@ from meridian.runtime.sweep import (
     leftover_threads,
 )
 from meridian.workloads.claims_triage.lifecycle import (
-    DOCUMENTS_DEADLINE_DAYS,
+    AGENT,
+    DOCUMENTS_DEADLINE_ENV,
     DOCUMENTS_OVERDUE,
     TRIAGE_ABANDONED,
+    TRIAGE_LEASE_SECONDS,
     TRIAGE_NOT_STARTED,
     Transition,
+    deadline_days_of,
+    deadline_seconds,
     move_claim,
 )
 
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "claims-sweep"
-# Copies of ``AGENT`` and ``TRIAGE_LEASE_SECONDS`` of ``triaging.py`` (a test
-# keeps them equal): importing that module loads FastAPI, httpx and OpenTelemetry,
-# and this job needs none of them. The lease is how long a claim may stay
-# ``submitted`` or ``triaging`` before another post takes the triage over, twice
-# the longest a runtime call lasts.
-AGENT = "claims-triage"
-TRIAGE_LEASE_SECONDS = 120.0
-DOCUMENTS_DEADLINE_ENV = "MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS"
-MIN_DEADLINE_DAYS = 1
-MAX_DEADLINE_DAYS = 365
-SECONDS_PER_DAY = 24 * 60 * 60
 # What one pass takes: at most this many claims from each listing (one per move),
 # runs and threads; the rest wait for the next pass. The CronJob gives a pass
 # 120 s, and every statement runs under the connection's 10 s limit. A listing is
@@ -168,21 +160,8 @@ def read_settings(environ: Mapping[str, str]) -> SweepSettings:
     """Read the variables; raise ``SettingsError`` naming the one that is missing
     or invalid, never its value (a database URL can carry a password)."""
     database_url = require_env(environ, DATABASE_URL_ENV)
-    raw = environ.get(DOCUMENTS_DEADLINE_ENV)
-    days = DOCUMENTS_DEADLINE_DAYS if raw is None else _whole_days(raw)
+    days = deadline_days_of(environ.get(DOCUMENTS_DEADLINE_ENV))
     return SweepSettings(database_url, days)
-
-
-def _whole_days(raw: str) -> int:
-    # ASCII digits only: ``\d`` and ``int`` accept other scripts' digits.
-    if re.fullmatch(r"[0-9]{1,4}", raw):
-        days = int(raw)
-        if MIN_DEADLINE_DAYS <= days <= MAX_DEADLINE_DAYS:
-            return days
-    raise SettingsError(
-        f"{DOCUMENTS_DEADLINE_ENV} must be a whole number of days "
-        f"from {MIN_DEADLINE_DAYS} to {MAX_DEADLINE_DAYS}"
-    )
 
 
 def _attempt(
@@ -287,7 +266,7 @@ def _sweep_claims(
 ) -> None:
     for transition in MOVES:
         seconds = (
-            float(deadline_days * SECONDS_PER_DAY)
+            deadline_seconds(deadline_days)
             if transition is DOCUMENTS_OVERDUE
             else TRIAGE_LEASE_SECONDS
         )

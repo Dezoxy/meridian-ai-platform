@@ -26,20 +26,29 @@ from fastapi import HTTPException
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
 
+from meridian.platform.common.audit import AuditEvent, record_event
 from meridian.platform.common.db import connect
-from meridian.platform.common.http import INTERNAL_ERROR, database_failure
+from meridian.platform.common.http import INTERNAL_ERROR
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
     start_span,
 )
-from meridian.workloads.claims_triage.adjuster import NO_SUCH_CLAIM_DETAIL
+from meridian.workloads.claims_triage.adjuster import (
+    DOCUMENTS_OVERDUE_REASON,
+    NO_SUCH_CLAIM_DETAIL,
+    REASON_SQL,
+    documents_refused_since_referral,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_SENT_BACK,
+    AFTER_DEADLINE_REASON,
     CLAIMANT_WITHDREW_DOCUMENTS,
     CLAIMANT_WITHDREW_WAITING,
     DOCUMENTS_ARRIVED,
     DOCUMENTS_AT_CAP,
+    DOCUMENTS_REFUSED_EVENT,
+    DOCUMENTS_REFUSED_OUTCOME,
     MAX_TRIAGES_PER_CLAIM,
     SERVICE_NAME,
     TRIAGE_RETRIED,
@@ -61,8 +70,10 @@ from meridian.workloads.claims_triage.triaging import (
     TRIAGE_CAP_DETAIL,
     TRIAGE_LEASE_SECONDS,
     arrived_documents,
+    claim_database_failure,
     end_run,
     facts_for_run,
+    invalid_fields,
     run_taken_triage,
     take_over_lapsed_triage,
 )
@@ -124,9 +135,10 @@ def _submission(conn: psycopg.Connection, claim_id: str) -> ClaimSubmission:
         return ClaimSubmission.model_validate(stored)
     except ValidationError as exc:
         logger.error(
-            "the stored submission of claim %s is not valid: %s",
+            "the stored submission of claim %s is not valid: %s %s",
             claim_id,
             type(exc).__name__,
+            invalid_fields(exc),
         )
         raise StoredSubmissionInvalid("the stored submission is not valid") from None
 
@@ -273,7 +285,7 @@ def triage_again(
             taken = _take_again(dsn, tenant, claim_id, page_run)
         except psycopg.Error as exc:
             mark_error(span, exc)
-            return DecisionFailure(*database_failure(exc))
+            return DecisionFailure(*claim_database_failure(exc, claim_id))
         except StoredSubmissionInvalid as exc:
             mark_error(span, exc)
             return DecisionFailure(500, INTERNAL_ERROR)
@@ -346,7 +358,7 @@ def withdraw(
             to_end = _record_withdrawal(dsn, tenant, claim_id)
         except psycopg.Error as exc:
             mark_error(span, exc)
-            return DecisionFailure(*database_failure(exc))
+            return DecisionFailure(*claim_database_failure(exc, claim_id))
         run_status = None
         if to_end is not None:
             set_span_attributes(span, {"meridian.run_id": str(to_end)})
@@ -372,29 +384,82 @@ def _store_arrival(
     moved and the facts to triage it with, or, when it has been triaged as often
     as the cap allows, to ``awaiting_adjuster`` (no triage). Either move drops the
     claim's run, so the run it held is returned: it may still be paused (an
-    adjuster's request for documents whose resume failed)."""
+    adjuster's request for documents whose resume failed). A claim in any other
+    state is a 409; one referred because its documents did not arrive leaves an
+    event of it (see ``_record_late_documents``)."""
     with connect(dsn, SERVICE_NAME) as conn:
         state, old_run, triages = _lock_claim(conn, tenant, claim_id)
-        if state != "documents_requested":
-            raise HTTPException(409, NOT_AWAITING_DOCUMENTS_DETAIL)
-        submission = _submission(conn, claim_id)
-        held = {*submission.documents, *arrived_documents(conn, claim_id)}
-        if len(held | set(documents)) > MAX_DOCUMENTS:
-            raise HTTPException(409, TOO_MANY_DOCUMENTS_DETAIL)
-        for name in documents:
-            conn.execute(RECORD_DOCUMENT_SQL, (claim_id, name))
-        if triages >= MAX_TRIAGES_PER_CLAIM:
-            _refuse_move(
-                move_claim(conn, DOCUMENTS_AT_CAP, claim_id=claim_id, tenant=tenant),
-                NOT_AWAITING_DOCUMENTS_DETAIL,
-            )
-            return _Arrival(old_run, None)
-        taken_at = _refuse_move(
-            move_claim(conn, DOCUMENTS_ARRIVED, claim_id=claim_id, tenant=tenant),
+        if state == "documents_requested":
+            return _take_documents(conn, tenant, claim_id, documents, old_run, triages)
+        try:
+            _record_late_documents(conn, tenant, claim_id, state)
+        except psycopg.Error as exc:
+            # The event is best effort: a claimant must read the same 409 from a
+            # claim waiting for an adjuster as from any other state, database
+            # fault or not (T-65). The lock read above is not covered.
+            claim_database_failure(exc, claim_id)
+            conn.rollback()
+    # Raised after the block, which commits, as ``_take_again`` does: the event
+    # stands although the request is refused.
+    raise HTTPException(409, NOT_AWAITING_DOCUMENTS_DETAIL)
+
+
+def _record_late_documents(
+    conn: psycopg.Connection, tenant: str, claim_id: str, state: LifecycleState
+) -> None:
+    """Write the event that documents were posted after the deadline, once per
+    referral: for a claim in ``awaiting_adjuster`` whose latest referral says its
+    documents did not arrive, and that has no such event since. Called with the
+    claim locked, so two posts at once write one row. The event says that
+    documents were sent, not which: no name, count or content."""
+    if state != "awaiting_adjuster":
+        return
+    referral = conn.execute(REASON_SQL, (claim_id, tenant, f"claim.{state}")).fetchone()
+    if referral is None or referral[0] != DOCUMENTS_OVERDUE_REASON:
+        return
+    if documents_refused_since_referral(conn, claim_id, tenant):
+        return
+    record_event(
+        conn,
+        AuditEvent(
+            service=SERVICE_NAME,
+            event=DOCUMENTS_REFUSED_EVENT,
+            outcome=DOCUMENTS_REFUSED_OUTCOME,
+            reason=AFTER_DEADLINE_REASON,
+            tenant=tenant,
+            reference=claim_id,
+        ),
+    )
+
+
+def _take_documents(
+    conn: psycopg.Connection,
+    tenant: str,
+    claim_id: str,
+    documents: Sequence[str],
+    old_run: UUID | None,
+    triages: int,
+) -> _Arrival:
+    """The names stored and the claim moved, in the caller's transaction, for a
+    claim locked in ``documents_requested``."""
+    submission = _submission(conn, claim_id)
+    held = {*submission.documents, *arrived_documents(conn, claim_id)}
+    if len(held | set(documents)) > MAX_DOCUMENTS:
+        raise HTTPException(409, TOO_MANY_DOCUMENTS_DETAIL)
+    for name in documents:
+        conn.execute(RECORD_DOCUMENT_SQL, (claim_id, name))
+    if triages >= MAX_TRIAGES_PER_CLAIM:
+        _refuse_move(
+            move_claim(conn, DOCUMENTS_AT_CAP, claim_id=claim_id, tenant=tenant),
             NOT_AWAITING_DOCUMENTS_DETAIL,
         )
-        facts = facts_for_run(submission, arrived_documents(conn, claim_id))
-        return _Arrival(old_run, (taken_at, facts))
+        return _Arrival(old_run, None)
+    taken_at = _refuse_move(
+        move_claim(conn, DOCUMENTS_ARRIVED, claim_id=claim_id, tenant=tenant),
+        NOT_AWAITING_DOCUMENTS_DETAIL,
+    )
+    facts = facts_for_run(submission, arrived_documents(conn, claim_id))
+    return _Arrival(old_run, (taken_at, facts))
 
 
 class RefusedAfterStoring(HTTPException):
@@ -436,7 +501,7 @@ def add_documents(
             arrival = _store_arrival(dsn, tenant, claim_id, documents)
         except psycopg.Error as exc:
             mark_error(span, exc)
-            return DecisionFailure(*database_failure(exc))
+            return DecisionFailure(*claim_database_failure(exc, claim_id))
         except StoredSubmissionInvalid as exc:
             mark_error(span, exc)
             return DecisionFailure(500, INTERNAL_ERROR)
