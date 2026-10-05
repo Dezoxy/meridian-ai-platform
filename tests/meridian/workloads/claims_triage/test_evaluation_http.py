@@ -511,18 +511,21 @@ def test_a_plugin_inside_the_package_loads_after_the_location_is_checked(
 
 
 def test_the_location_is_checked_again_after_the_plugin_loaded(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The first check reads the module's spec; the second reads what loaded. A
     # module that is somewhere else once loaded is refused.
-    publish(monkeypatch, entry())
+    name = "meridian.workloads.claims_triage.evaluation_http"
     checked: list[str] = []
 
-    def moved(candidate: object) -> bool:
+    def moved() -> object:
         checked.append("after-load")
-        return False
+        monkeypatch.setitem(
+            sys.modules, name, SimpleNamespace(__file__=str(tmp_path / "moved.py"))
+        )
+        return EVALUATION
 
-    monkeypatch.setattr(workload, "_in_trusted_root", moved)
+    publish(monkeypatch, entry(loads=moved))
 
     with pytest.raises(ReportError) as refused:
         load_evaluation("claims-triage")

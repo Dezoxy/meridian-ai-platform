@@ -37,6 +37,7 @@ from typing import Any
 
 import yaml
 
+from meridian.platform.common.entry_points import EVALUATIONS_GROUP, GRAPHS_GROUP
 from meridian.platform.registry.loader import RegistryError, load_registry
 
 MAX_NAME_CHARS = 40
@@ -92,8 +93,6 @@ LEFT_BEHIND = "left behind: {}"
 AGENTS_PATH = "config/registry/agents.yaml"
 PYPROJECT_PATH = "pyproject.toml"
 REGISTRY_DIRECTORY = "config/registry"
-GRAPHS_GROUP = "meridian.graphs"
-EVALUATIONS_GROUP = "meridian.evaluations"
 TEMPLATES = ("templates", "workload")
 # Template file -> where its rendering goes; {module} and {name} are filled in.
 RENDERED_FILES = {
