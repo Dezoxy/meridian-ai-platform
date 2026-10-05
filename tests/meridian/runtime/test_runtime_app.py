@@ -1555,12 +1555,17 @@ def test_two_resumes_at_the_same_time_run_the_resumed_part_once_and_both_answer_
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     resumed_parts: list[Any] = []
+    waits: list[bool] = []
+    first_answer_is_back = threading.Event()
 
-    def slowly(answer: Any) -> None:
+    # The winner's leg ends only after the other request has been answered, so
+    # the overlap is made, not hoped for. The timeout only bounds a broken
+    # claim; it is never what the test waits for.
+    def until_the_other_request_is_answered(answer: Any) -> None:
         resumed_parts.append(answer)
-        time.sleep(0.3)  # long enough for the other request to arrive meanwhile
+        waits.append(first_answer_is_back.wait(timeout=30))
 
-    register(monkeypatch, resumable(after=slowly))
+    register(monkeypatch, resumable(after=until_the_other_request_is_answered))
     client = make_client(fresh_database)
     run_id = paused_run(client)
     start_together = threading.Barrier(2)
@@ -1570,6 +1575,7 @@ def test_two_resumes_at_the_same_time_run_the_resumed_part_once_and_both_answer_
         own = TestClient(client.app, raise_server_exceptions=False)
         start_together.wait()
         answers.append(resume(own, run_id))
+        first_answer_is_back.set()
 
     racers = [threading.Thread(target=send) for _ in range(2)]
     for racer in racers:
@@ -1577,9 +1583,14 @@ def test_two_resumes_at_the_same_time_run_the_resumed_part_once_and_both_answer_
     for racer in racers:
         racer.join()
 
+    assert waits == [True], "the other request never answered while the leg ran"
     assert [a.status_code for a in answers] == [200, 200]
     assert resumed_parts == [APPROVAL]
     assert sorted(a.json()["output"] is None for a in answers) == [False, True]
+    assert sorted(a.json()["status"] for a in answers) == ["Completed", "Running"]
+    assert {a.json()["status"] for a in answers if a.json()["output"] is None} == {
+        "Running"
+    }
     assert run_rows(fresh_database)[0][5] == "Completed"
     assert event_names(fresh_database, run_id) == [
         "run.started",
@@ -2235,12 +2246,17 @@ def test_two_takeovers_of_a_stale_running_run_at_the_same_time_run_one_leg(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     resumed_parts: list[Any] = []
+    waits: list[bool] = []
+    first_answer_is_back = threading.Event()
 
-    def slowly(answer: Any) -> None:
+    # The winner's leg ends only after the other request has been answered, so
+    # the overlap is made, not hoped for. The timeout only bounds a broken
+    # claim; it is never what the test waits for.
+    def until_the_other_request_is_answered(answer: Any) -> None:
         resumed_parts.append(answer)
-        time.sleep(0.3)  # long enough for the other request to arrive meanwhile
+        waits.append(first_answer_is_back.wait(timeout=30))
 
-    register(monkeypatch, resumable(after=slowly))
+    register(monkeypatch, resumable(after=until_the_other_request_is_answered))
     client = make_client(fresh_database)
     run_id = paused_run(client)
     make_running(fresh_database, run_id, idle_seconds=PAST_THE_LEASE)
@@ -2251,6 +2267,7 @@ def test_two_takeovers_of_a_stale_running_run_at_the_same_time_run_one_leg(
         own = TestClient(client.app, raise_server_exceptions=False)
         start_together.wait()
         answers.append(resume(own, run_id))
+        first_answer_is_back.set()
 
     racers = [threading.Thread(target=send) for _ in range(2)]
     for racer in racers:
@@ -2258,9 +2275,14 @@ def test_two_takeovers_of_a_stale_running_run_at_the_same_time_run_one_leg(
     for racer in racers:
         racer.join()
 
+    assert waits == [True], "the other request never answered while the leg ran"
     assert [a.status_code for a in answers] == [200, 200]
     assert resumed_parts == [APPROVAL]
     assert sorted(a.json()["output"] is None for a in answers) == [False, True]
+    assert sorted(a.json()["status"] for a in answers) == ["Completed", "Running"]
+    assert {a.json()["status"] for a in answers if a.json()["output"] is None} == {
+        "Running"
+    }
     assert event_names(fresh_database, run_id) == [
         "run.started",
         "run.awaiting_approval",

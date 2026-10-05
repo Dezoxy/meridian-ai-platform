@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from registrysupport import add_field, apply_changes, remove_field, set_field
 
 from meridian.platform.registry import compare_with_terraform, load_registry
 from meridian.platform.registry.models import Registry
@@ -17,11 +18,10 @@ LoadErrors = Callable[[Path], tuple[str, ...]]
 Edit = tuple[str, str, str]
 
 GPT4O = "sdc/gpt-4o"
-RATE_BLOCK = (
-    "    rate_limits:\n"
-    "      requests_per_10_seconds: 20\n"
-    "      tokens_per_minute: 20000\n"
-)
+# The deployments these tests edit, found by their keys (registrysupport).
+FIRST_AZURE = "aoai-sdc-gpt-4o"
+SECOND_AZURE = "aoai-sdc-gpt-4o-b"
+RATE_LIMITS = "{requests_per_10_seconds: 20, tokens_per_minute: 20000}"
 CLAIMS_LIMITS = (
     "    limits:\n"
     "      requests_per_10_seconds: 10\n"
@@ -197,7 +197,9 @@ def test_an_exchange_rate_of_zero_or_below_fails_to_load(
 def test_an_azure_deployment_without_rate_limits_is_one_message(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    errors = load_errors(plant(("models.yaml", RATE_BLOCK, "")))
+    errors = load_errors(
+        apply_changes(plant(), remove_field(FIRST_AZURE, "rate_limits"))
+    )
 
     assert errors == (
         "models.yaml: deployments[0].rate_limits: required for provider kind "
@@ -208,9 +210,9 @@ def test_an_azure_deployment_without_rate_limits_is_one_message(
 def test_a_replay_deployment_with_rate_limits_is_one_message(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    anchor = "    model: replay-chat\n"
-
-    errors = load_errors(plant(("models.yaml", anchor, anchor + RATE_BLOCK)))
+    errors = load_errors(
+        apply_changes(plant(), add_field("replay-chat", "rate_limits", RATE_LIMITS))
+    )
 
     assert errors == (
         "models.yaml: deployments[3].rate_limits: must not be set for provider "
@@ -222,10 +224,9 @@ def test_a_replay_deployment_with_rate_limits_is_one_message(
 def test_a_deployment_rate_limit_of_zero_fails_to_load(
     plant: Plant, load_errors: LoadErrors, field: str
 ) -> None:
-    line = next(ln for ln in RATE_BLOCK.splitlines(True) if field in ln)
-    zero = line.rsplit(":", 1)[0] + ": 0\n"
+    zero = set_field(FIRST_AZURE, f"rate_limits.{field}", "0")
 
-    errors = load_errors(plant(("models.yaml", line, zero)))
+    errors = load_errors(apply_changes(plant(), zero))
 
     assert len(errors) == 1
     assert errors[0].startswith(f"models.yaml: deployments[0].rate_limits.{field}: ")
@@ -289,13 +290,9 @@ def test_both_fields_over_give_one_message_per_field_and_candidate(
 def test_only_the_candidate_with_the_smaller_limit_is_named(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    second = (
-        "    terraform_key: sdc/gpt-4o-b\n"
-        "    rate_limits:\n"
-        "      requests_per_10_seconds: "
-    )
+    smaller = set_field(SECOND_AZURE, "rate_limits.requests_per_10_seconds", "19")
 
-    errors = load_errors(plant(("models.yaml", second + "20", second + "19")))
+    errors = load_errors(apply_changes(plant(), smaller))
 
     assert errors == (
         "policies.yaml: routes[0].candidates[1]: deployment 'aoai-sdc-gpt-4o-b' "
@@ -307,11 +304,9 @@ def test_a_candidate_without_rate_limits_is_not_compared(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
     # Only the missing-field message; the sum check has nothing to compare.
+    directory = plant(raise_limit("requests_per_10_seconds", "10", "11"))
     errors = load_errors(
-        plant(
-            ("models.yaml", RATE_BLOCK, ""),
-            raise_limit("requests_per_10_seconds", "10", "11"),
-        )
+        apply_changes(directory, remove_field(FIRST_AZURE, "rate_limits"))
     )
 
     assert [e for e in errors if "add up to" in e] == [

@@ -10,44 +10,38 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from registrysupport import (
+    Change,
+    add_field,
+    apply_changes,
+    remove_field,
+    set_field,
+)
 from servicesupport import REPLAY_ENTRY, SECOND_EMBEDDING_YAML, pin_embedding_route
 
 from meridian.platform.registry import load_registry
 
 Plant = Callable[..., Path]
 LoadErrors = Callable[[Path], tuple[str, ...]]
-Edit = tuple[str, str, str]
 
+# The entries these tests edit, found by their keys (registrysupport).
 EMBEDDING = "aoai-sdc-text-embedding-3-large"
 SECOND = "aoai-sdc-text-embedding-3-large-second"
-DIMENSIONS_LINE = "    dimensions: 1024\n"
-# The anchors of the first chat deployment and of the two replay ones.
-AZURE_CHAT_VERSION = '    version: "2024-11-20"\n'
-REPLAY_CHAT_MODEL = "    model: replay-chat\n"
-REPLAY_EMBEDDING_ANCHOR = '    model: replay-embedding\n    version: "1"\n'
-REPLAY_EMBEDDING_DIMENSIONS = REPLAY_EMBEDDING_ANCHOR + DIMENSIONS_LINE
-EMBEDDING_RATE_LIMITS = (
-    "    terraform_key: sdc/text-embedding-3-large\n"
-    "    rate_limits:\n"
-    "      requests_per_10_seconds: 20\n"
-    "      tokens_per_minute: 20000\n"
-)
+GPT4O_B = "aoai-sdc-gpt-4o-b"
+AZURE_CHAT = "aoai-sdc-gpt-4o"
+REPLAY_CHAT = "replay-chat"
+REPLAY_EMBEDDING = "replay-embedding"
 
 
-def with_second_candidate(plant: Plant, *edits: Edit) -> Path:
+def with_second_candidate(plant: Plant, *changes: Change) -> Path:
     """A registry whose embedding route lists the real deployment and a second
-    one; each edit changes the first match inside the second one's entry."""
+    one; each change edits a field of the second one's entry (its key is
+    ``SECOND``)."""
     directory = plant(
         ("models.yaml", REPLAY_ENTRY, SECOND_EMBEDDING_YAML + REPLAY_ENTRY)
     )
     pin_embedding_route(directory, EMBEDDING, SECOND)
-    path = directory / "models.yaml"
-    for _name, old, new in edits:
-        text = path.read_text(encoding="utf-8")
-        head, found, tail = text.partition("  - id: " + SECOND)
-        assert old in tail, f"the {SECOND} entry has no {old!r} to replace"
-        path.write_text(head + found + tail.replace(old, new, 1), encoding="utf-8")
-    return directory
+    return apply_changes(directory, *changes)
 
 
 # ── the real registry ───────────────────────────────────────────────────────
@@ -71,14 +65,11 @@ def test_the_seeded_embedding_deployments_carry_1024_and_the_chat_ones_none(
 # ── the field ───────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("dimensions", [1, 2000])
 def test_dimensions_at_the_limits_are_accepted(plant: Plant, dimensions: int) -> None:
-    directory = plant(
-        ("models.yaml", DIMENSIONS_LINE, f"    dimensions: {dimensions}\n"),
+    directory = apply_changes(
+        plant(),
+        set_field(EMBEDDING, "dimensions", str(dimensions)),
         # the replay deployment must say the same, or the replay check refuses
-        (
-            "models.yaml",
-            REPLAY_EMBEDDING_DIMENSIONS,
-            REPLAY_EMBEDDING_ANCHOR + f"    dimensions: {dimensions}\n",
-        ),
+        set_field(REPLAY_EMBEDDING, "dimensions", str(dimensions)),
     )
 
     registry = load_registry(directory)
@@ -93,7 +84,7 @@ def test_dimensions_outside_one_to_2000_or_not_a_whole_number_fail_to_load(
     plant: Plant, load_errors: LoadErrors, dimensions: str
 ) -> None:
     errors = load_errors(
-        plant(("models.yaml", DIMENSIONS_LINE, f"    dimensions: {dimensions}\n"))
+        apply_changes(plant(), set_field(EMBEDDING, "dimensions", dimensions))
     )
 
     assert len(errors) == 1
@@ -102,11 +93,11 @@ def test_dimensions_outside_one_to_2000_or_not_a_whole_number_fail_to_load(
 
 # ── an embedding deployment has dimensions, a chat one has none ─────────────
 @pytest.mark.parametrize(
-    ("edit", "index", "deployment"),
+    ("change", "index", "deployment"),
     [
-        pytest.param(("models.yaml", DIMENSIONS_LINE, ""), 2, EMBEDDING, id="azure"),
+        pytest.param(remove_field(EMBEDDING, "dimensions"), 2, EMBEDDING, id="azure"),
         pytest.param(
-            ("models.yaml", REPLAY_EMBEDDING_DIMENSIONS, REPLAY_EMBEDDING_ANCHOR),
+            remove_field(REPLAY_EMBEDDING, "dimensions"),
             4,
             "replay-embedding",
             id="replay",
@@ -116,11 +107,11 @@ def test_dimensions_outside_one_to_2000_or_not_a_whole_number_fail_to_load(
 def test_an_embedding_deployment_without_dimensions_is_reported(
     plant: Plant,
     load_errors: LoadErrors,
-    edit: Edit,
+    change: Change,
     index: int,
     deployment: str,
 ) -> None:
-    errors = load_errors(plant(edit))
+    errors = load_errors(apply_changes(plant(), change))
 
     assert errors == (
         f"models.yaml: deployments[{index}].dimensions: required for purpose "
@@ -129,16 +120,16 @@ def test_an_embedding_deployment_without_dimensions_is_reported(
 
 
 @pytest.mark.parametrize(
-    ("edit", "index", "deployment"),
+    ("change", "index", "deployment"),
     [
         pytest.param(
-            ("models.yaml", AZURE_CHAT_VERSION, AZURE_CHAT_VERSION + DIMENSIONS_LINE),
+            add_field(AZURE_CHAT, "dimensions", "1024"),
             0,
             "aoai-sdc-gpt-4o",
             id="azure",
         ),
         pytest.param(
-            ("models.yaml", REPLAY_CHAT_MODEL, REPLAY_CHAT_MODEL + DIMENSIONS_LINE),
+            add_field(REPLAY_CHAT, "dimensions", "1024"),
             3,
             "replay-chat",
             id="replay",
@@ -148,11 +139,11 @@ def test_an_embedding_deployment_without_dimensions_is_reported(
 def test_a_chat_deployment_with_dimensions_is_reported(
     plant: Plant,
     load_errors: LoadErrors,
-    edit: Edit,
+    change: Change,
     index: int,
     deployment: str,
 ) -> None:
-    errors = load_errors(plant(edit))
+    errors = load_errors(apply_changes(plant(), change))
 
     assert errors == (
         f"models.yaml: deployments[{index}].dimensions: must not be set for "
@@ -172,28 +163,24 @@ def test_a_second_candidate_of_the_same_model_version_and_size_is_accepted(
 
 
 @pytest.mark.parametrize(
-    ("edit", "field", "value", "first_value"),
+    ("change", "field", "value", "first_value"),
     [
         pytest.param(
-            (
-                "models.yaml",
-                "    model: text-embedding-3-large\n",
-                "    model: other\n",
-            ),
+            set_field(SECOND, "model", "other"),
             "model",
             "'other'",
             "'text-embedding-3-large'",
             id="model",
         ),
         pytest.param(
-            ("models.yaml", '    version: "1"\n', '    version: "2"\n'),
+            set_field(SECOND, "version", '"2"'),
             "version",
             "'2'",
             "'1'",
             id="version",
         ),
         pytest.param(
-            ("models.yaml", DIMENSIONS_LINE, "    dimensions: 2000\n"),
+            set_field(SECOND, "dimensions", "2000"),
             "dimensions",
             "2000",
             "1024",
@@ -204,12 +191,12 @@ def test_a_second_candidate_of_the_same_model_version_and_size_is_accepted(
 def test_candidates_of_the_embedding_route_that_differ_are_reported(
     plant: Plant,
     load_errors: LoadErrors,
-    edit: Edit,
+    change: Change,
     field: str,
     value: str,
     first_value: str,
 ) -> None:
-    errors = load_errors(with_second_candidate(plant, edit))
+    errors = load_errors(with_second_candidate(plant, change))
 
     assert (
         f"policies.yaml: routes[1].candidates[1]: deployment {SECOND!r} has "
@@ -224,8 +211,8 @@ def test_every_difference_is_reported_not_only_the_first(
 ) -> None:
     directory = with_second_candidate(
         plant,
-        ("models.yaml", "    model: text-embedding-3-large\n", "    model: other\n"),
-        ("models.yaml", '    version: "1"\n', '    version: "2"\n'),
+        set_field(SECOND, "model", "other"),
+        set_field(SECOND, "version", '"2"'),
     )
 
     errors = load_errors(directory)
@@ -237,14 +224,10 @@ def test_every_difference_is_reported_not_only_the_first(
 
 def test_a_chat_route_may_mix_models(plant: Plant) -> None:
     # T-54 is about vectors; two chat models answer the same question.
-    directory = plant(
-        (
-            "models.yaml",
-            '    model: gpt-4o\n    version: "2024-11-20"\n'
-            "    deployment_name: gpt-4o-b\n",
-            '    model: gpt-4o-mini\n    version: "2024-07-18"\n'
-            "    deployment_name: gpt-4o-b\n",
-        )
+    directory = apply_changes(
+        plant(),
+        set_field(GPT4O_B, "model", "gpt-4o-mini"),
+        set_field(GPT4O_B, "version", '"2024-07-18"'),
     )
 
     registry = load_registry(directory)
@@ -259,13 +242,7 @@ def test_a_chat_route_may_mix_models(plant: Plant) -> None:
 def test_a_replay_embedding_of_another_size_than_the_route_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        (
-            "models.yaml",
-            REPLAY_EMBEDDING_DIMENSIONS,
-            REPLAY_EMBEDDING_ANCHOR + "    dimensions: 768\n",
-        )
-    )
+    directory = apply_changes(plant(), set_field(REPLAY_EMBEDDING, "dimensions", "768"))
 
     errors = load_errors(directory)
 
@@ -279,9 +256,7 @@ def test_a_replay_embedding_of_another_size_than_the_route_is_reported(
 def test_a_replay_embedding_is_compared_with_every_candidate(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = with_second_candidate(
-        plant, ("models.yaml", DIMENSIONS_LINE, "    dimensions: 2000\n")
-    )
+    directory = with_second_candidate(plant, set_field(SECOND, "dimensions", "2000"))
 
     errors = load_errors(directory)
 
@@ -300,11 +275,9 @@ def test_a_replay_embedding_is_compared_with_every_candidate(
 def test_an_embedding_candidate_the_tenants_could_exhaust_is_reported(
     plant: Plant, load_errors: LoadErrors, field: str, limit: int
 ) -> None:
-    lowered = EMBEDDING_RATE_LIMITS.replace(
-        f"{field}: {limit}", f"{field}: {limit - 1}"
-    )
+    lowered = set_field(EMBEDDING, f"rate_limits.{field}", str(limit - 1))
 
-    errors = load_errors(plant(("models.yaml", EMBEDDING_RATE_LIMITS, lowered)))
+    errors = load_errors(apply_changes(plant(), lowered))
 
     assert errors == (
         f"policies.yaml: routes[1].candidates[0]: deployment {EMBEDDING!r} allows "
@@ -316,12 +289,7 @@ def test_every_candidate_of_the_embedding_route_is_compared(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
     directory = with_second_candidate(
-        plant,
-        (
-            "models.yaml",
-            "      requests_per_10_seconds: 20\n",
-            "      requests_per_10_seconds: 5\n",
-        ),
+        plant, set_field(SECOND, "rate_limits.requests_per_10_seconds", "5")
     )
 
     errors = load_errors(directory)

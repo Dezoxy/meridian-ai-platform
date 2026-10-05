@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from registrysupport import Change, apply_changes, planted, remove_field, set_field
 
 from meridian.platform.registry import load_registry
 
@@ -11,21 +12,19 @@ Plant = Callable[..., Path]
 LoadErrors = Callable[[Path], tuple[str, ...]]
 Edit = tuple[str, str, str]
 
-# Edits that turn the first deployment (gpt-4o) into a GlobalStandard one.
-GLOBAL_SKU: Edit = ("models.yaml", "    sku: Standard\n", "    sku: GlobalStandard\n")
-GLOBAL_LABEL: Edit = (
-    "models.yaml",
-    "    residency: eu-region\n",
-    "    residency: global\n",
-)
-GPT4O_CLASSES = "    data_classes: [synthetic, internal, personal]\n"
+# The deployments these tests edit, found by their keys (registrysupport).
+GPT4O = "aoai-sdc-gpt-4o"
+REPLAY_DEPLOYMENT = "replay-chat"
+# Changes that turn the first deployment (gpt-4o) into a GlobalStandard one.
+GLOBAL_SKU = set_field(GPT4O, "sku", "GlobalStandard")
+GLOBAL_LABEL = set_field(GPT4O, "residency", "global")
 FIRST_TOOL_ROW = "    effect: read\n"
 # A decision tool needs an idempotency key too, so plant both lines.
 DECISION_ROWS = "    effect: decision\n    idempotency_key_required: true\n"
 
 REFERENCE_CASES = [
     pytest.param(
-        [("models.yaml", "provider: azure-openai", "provider: ghost")],
+        [set_field(GPT4O, "provider", "ghost")],
         "models.yaml: deployments[0].provider: unknown provider 'ghost'",
         id="deployment-provider",
     ),
@@ -93,9 +92,9 @@ REFERENCE_CASES = [
 
 @pytest.mark.parametrize(("edits", "expected"), REFERENCE_CASES)
 def test_unresolved_or_repeated_reference_is_reported(
-    plant: Plant, load_errors: LoadErrors, edits: list[Edit], expected: str
+    plant: Plant, load_errors: LoadErrors, edits: list[Edit | Change], expected: str
 ) -> None:
-    errors = load_errors(plant(*edits))
+    errors = load_errors(planted(plant, *edits))
 
     assert expected in errors
 
@@ -119,31 +118,19 @@ def test_incomplete_data_classes_are_reported(
 
 
 @pytest.mark.parametrize(
-    ("edit", "field"),
+    "field",
     [
-        pytest.param(("models.yaml", "    sku: Standard\n", ""), "sku", id="sku"),
-        pytest.param(
-            ("models.yaml", "    terraform_key: sdc/gpt-4o\n", ""),
-            "terraform_key",
-            id="terraform-key",
-        ),
-        pytest.param(
-            ("models.yaml", "    retires: 2027-04-14\n", ""), "retires", id="retires"
-        ),
-        pytest.param(
-            ("models.yaml", "    region: swedencentral\n", ""), "region", id="region"
-        ),
-        pytest.param(
-            ("models.yaml", "    deployment_name: gpt-4o\n", ""),
-            "deployment_name",
-            id="deployment-name",
-        ),
+        pytest.param("sku", id="sku"),
+        pytest.param("terraform_key", id="terraform-key"),
+        pytest.param("retires", id="retires"),
+        pytest.param("region", id="region"),
+        pytest.param("deployment_name", id="deployment-name"),
     ],
 )
 def test_azure_deployment_missing_a_required_field_is_reported(
-    plant: Plant, load_errors: LoadErrors, edit: Edit, field: str
+    plant: Plant, load_errors: LoadErrors, field: str
 ) -> None:
-    errors = load_errors(plant(edit))
+    errors = load_errors(apply_changes(plant(), remove_field(GPT4O, field)))
 
     assert (
         f"models.yaml: deployments[0].{field}: required for provider kind "
@@ -175,45 +162,36 @@ def test_replay_deployment_with_azure_fields_is_reported(
 
 LABEL_CASES = [
     pytest.param(
-        [("models.yaml", "    sku: Standard\n", "    sku: DataZoneStandard\n")],
+        [set_field(GPT4O, "sku", "DataZoneStandard")],
         "label 'eu-region' does not match sku 'DataZoneStandard' in region "
         "'swedencentral'; expected 'eu-zone'",
         id="datazone-labelled-eu-region",
     ),
     pytest.param(
-        [("models.yaml", "region: swedencentral", "region: eastus")],
+        [set_field(GPT4O, "region", "eastus")],
         "label 'eu-region' does not match sku 'Standard' in region 'eastus'; "
         "expected 'global'",
         id="standard-in-eastus-labelled-eu-region",
     ),
     pytest.param(
-        [("models.yaml", "region: swedencentral", "region: switzerlandnorth")],
+        [set_field(GPT4O, "region", "switzerlandnorth")],
         "in region 'switzerlandnorth'; expected 'global'",
         id="switzerland-is-not-eu",
     ),
     pytest.param(
-        [
-            GLOBAL_SKU,
-            ("models.yaml", "    residency: eu-region\n", "    residency: eu-zone\n"),
-        ],
+        [GLOBAL_SKU, set_field(GPT4O, "residency", "eu-zone")],
         "label 'eu-zone' does not match sku 'GlobalStandard' in region "
         "'swedencentral'; expected 'global'",
         id="globalstandard-labelled-eu-zone",
     ),
     pytest.param(
-        [
-            (
-                "models.yaml",
-                '    version: "1"\n    residency: eu-region\n',
-                '    version: "1"\n    residency: global\n',
-            )
-        ],
+        [set_field(REPLAY_DEPLOYMENT, "residency", "global")],
         "label 'global' does not match the replay provider runs inside the "
         "platform; expected 'eu-region'",
         id="replay-labelled-global",
     ),
     pytest.param(
-        [("models.yaml", "    residency: eu-region\n", "    residency: eu-zone\n")],
+        [set_field(GPT4O, "residency", "eu-zone")],
         "label 'eu-zone' does not match sku 'Standard' in region 'swedencentral'; "
         "expected 'eu-region'",
         id="standard-in-eu-labelled-eu-zone",
@@ -221,11 +199,11 @@ LABEL_CASES = [
 ]
 
 
-@pytest.mark.parametrize(("edits", "fragment"), LABEL_CASES)
+@pytest.mark.parametrize(("changes", "fragment"), LABEL_CASES)
 def test_residency_label_that_contradicts_the_facts_is_reported(
-    plant: Plant, load_errors: LoadErrors, edits: list[Edit], fragment: str
+    plant: Plant, load_errors: LoadErrors, changes: list[Change], fragment: str
 ) -> None:
-    errors = load_errors(plant(*edits))
+    errors = load_errors(apply_changes(plant(), *changes))
 
     assert any(fragment in e and e.startswith("models.yaml: ") for e in errors), errors
 
@@ -233,7 +211,7 @@ def test_residency_label_that_contradicts_the_facts_is_reported(
 def test_personal_data_on_a_global_deployment_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(GLOBAL_SKU, GLOBAL_LABEL)
+    directory = apply_changes(plant(), GLOBAL_SKU, GLOBAL_LABEL)
 
     errors = load_errors(directory)
 
@@ -248,8 +226,8 @@ def test_personal_data_on_a_global_deployment_is_reported(
 def test_special_data_on_any_deployment_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        ("models.yaml", GPT4O_CLASSES, "    data_classes: [synthetic, special]\n")
+    directory = apply_changes(
+        plant(), set_field(GPT4O, "data_classes", "[synthetic, special]")
     )
 
     errors = load_errors(directory)
@@ -338,10 +316,11 @@ def test_duplicate_route_purpose_is_reported(
 def test_tenant_with_no_allowed_candidate_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
+    directory = planted(
+        plant,
         GLOBAL_SKU,
         GLOBAL_LABEL,
-        ("models.yaml", GPT4O_CLASSES, "    data_classes: [synthetic]\n"),
+        set_field(GPT4O, "data_classes", "[synthetic]"),
         # The route's second candidate would still serve personal data.
         (
             "policies.yaml",
@@ -440,7 +419,7 @@ def test_label_listed_twice_in_a_data_class_is_reported(
 
 # ── deployments: terraform key, uniqueness, strings, region ─────────────────
 def test_empty_terraform_key_is_rejected(plant: Plant, load_errors: LoadErrors) -> None:
-    directory = plant(("models.yaml", "terraform_key: sdc/gpt-4o", 'terraform_key: ""'))
+    directory = apply_changes(plant(), set_field(GPT4O, "terraform_key", '""'))
 
     errors = load_errors(directory)
 
@@ -451,9 +430,7 @@ def test_empty_terraform_key_is_rejected(plant: Plant, load_errors: LoadErrors) 
 def test_terraform_key_without_a_location_alias_is_rejected(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        ("models.yaml", "terraform_key: sdc/gpt-4o", "terraform_key: gpt-4o")
-    )
+    directory = apply_changes(plant(), set_field(GPT4O, "terraform_key", "gpt-4o"))
 
     errors = load_errors(directory)
 
@@ -496,13 +473,14 @@ def test_duplicate_deployment_name_in_one_region_is_reported(
 
 
 def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> None:
-    directory = plant(
+    directory = planted(
+        plant,
         (
             "models.yaml",
             "deployment_name: text-embedding-3-large",
             "deployment_name: gpt-4o",
         ),
-        ("models.yaml", "region: swedencentral", "region: francecentral"),
+        set_field(GPT4O, "region", "francecentral"),
     )
 
     registry = load_registry(directory)
@@ -514,12 +492,12 @@ def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> Non
     ("edit", "path"),
     [
         pytest.param(
-            ("models.yaml", "region: swedencentral", "region: Sweden Central"),
+            set_field(GPT4O, "region", "Sweden Central"),
             "models.yaml: deployments[0].region",
             id="region-display-name",
         ),
         pytest.param(
-            ("models.yaml", "region: swedencentral", 'region: ""'),
+            set_field(GPT4O, "region", '""'),
             "models.yaml: deployments[0].region",
             id="region-empty",
         ),
@@ -533,7 +511,7 @@ def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> Non
             id="empty-description",
         ),
         pytest.param(
-            ("models.yaml", "    model: gpt-4o\n", '    model: ""\n'),
+            set_field(GPT4O, "model", '""'),
             "models.yaml: deployments[0].model",
             id="empty-model",
         ),
@@ -547,11 +525,7 @@ def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> Non
             id="empty-deployment-name",
         ),
         pytest.param(
-            (
-                "models.yaml",
-                "      source: Runs inside",
-                '      source: ""\n      x: Runs inside',
-            ),
+            set_field(REPLAY_DEPLOYMENT, "price.source", '""'),
             "models.yaml: deployments[3].price.source",
             id="empty-price-source",
         ),
@@ -582,9 +556,9 @@ def test_same_deployment_name_in_another_region_is_accepted(plant: Plant) -> Non
     ],
 )
 def test_constrained_string_rejects_a_bad_value_at_its_path(
-    plant: Plant, load_errors: LoadErrors, edit: Edit, path: str
+    plant: Plant, load_errors: LoadErrors, edit: Edit | Change, path: str
 ) -> None:
-    errors = load_errors(plant(edit))
+    errors = load_errors(planted(plant, edit))
 
     assert any(e.startswith(f"{path}: ") for e in errors), errors
 
@@ -966,16 +940,8 @@ def test_replay_entries_in_the_other_order_are_accepted(plant: Plant) -> None:
 def test_a_replay_deployment_that_does_not_allow_a_tenants_class_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
-    directory = plant(
-        (
-            "models.yaml",
-            "    residency: eu-region\n    data_classes: [synthetic, internal, "
-            "personal]\n    price:\n      currency: USD\n      "
-            "input_per_million_tokens: 0\n      output_per_million_tokens: 0\n",
-            "    residency: eu-region\n    data_classes: [synthetic]\n    price:\n"
-            "      currency: USD\n      input_per_million_tokens: 0\n      "
-            "output_per_million_tokens: 0\n",
-        )
+    directory = apply_changes(
+        plant(), set_field(REPLAY_DEPLOYMENT, "data_classes", "[synthetic]")
     )
 
     errors = load_errors(directory)

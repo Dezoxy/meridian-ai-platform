@@ -21,7 +21,7 @@ and the harness asks the owner before a session may run it.
   403 to the gateway's own credential. See
   [the gateway's credential](#the-gateways-credential-at-the-provider).
 - A finding of the secret scan: the required check `secret scan` in CI,
-  GitHub's push protection, or `gitleaks` before a push. See
+  GitHub's push protection, or `make secret-scan` before a push. See
   [a secret in the repository](#a-secret-in-the-repository).
 - A password that was printed, pasted, shown on a shared screen or kept
   in a file that left the laptop.
@@ -200,9 +200,11 @@ moment it is pushed, whether or not the commit is later removed.
    force-push.
 4. Report it as `SECURITY.md` says if someone else's data was exposed.
 
-Before every push: `gitleaks git --log-opts="origin/main..HEAD" --redact`.
-CI scans every commit of a pull request, so a finding in an early commit
-is not fixed by a later one.
+Before every push: `make secret-scan`, which runs
+`gitleaks git --log-opts="origin/main..HEAD" --redact` after checking that
+git knows `origin/main` (gitleaks answers a base it cannot find with "0
+commits scanned" and success). CI scans every commit of a pull request, so
+a finding in an early commit is not fixed by a later one.
 
 ## What not to do
 
