@@ -304,9 +304,11 @@ ServiceAccount's) and server (it serves TLS: it also gets a DNS name and the
 server usage). templates/certificates.yaml says what each field is for. The
 duration is 90 days, a literal and said explicitly: the policy that lets the
 issuer sign (infra/kind/manifests/certificate-policy.yaml) caps it at 2160h and
-approver-policy denies a request that names none while a cap is set, so a
-Certificate without one would never be issued. No renewBefore: cert-manager's
-default, a third of the lifetime (30 days), stays. The key is new at every
+approver-policy (v0.28.0) cannot evaluate a request that names none while a cap
+is set: it panics, the request is tried again for ever and is neither approved
+nor denied, so a Certificate without one would never be issued. No renewBefore:
+cert-manager's default, a third of the lifetime (30 days), stays. The key is
+new at every
 renewal by an explicit rotationPolicy: Always, not by cert-manager's default,
 which was Never before v1.18.0 (the CA's key, kept by Never, is in
 infra/kind/manifests/service-ca.yaml).

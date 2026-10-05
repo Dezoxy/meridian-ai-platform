@@ -4,8 +4,16 @@ Status on 2026-10-04 (S024): every target on this page is a proposal that
 nobody has measured. Five objectives have an indicator that the kind
 cluster's Prometheus can compute and an alert rule; three have no indicator
 yet and are designed. None of the expressions below has been run against a
-cluster: S024 ran beside the step that owned it, and the checks that are
-still owed are in the [operations index](README.md#not-proved-on-a-cluster).
+cluster, except those of `certificate-validity` noted next: S024 ran beside
+the step that owned it, and the checks that are still owed are in the
+[operations index](README.md#not-proved-on-a-cluster).
+
+For `certificate-validity` (S056), the ServiceMonitor and the first two of
+its four alerts have been seen on the kind cluster (2026-10-05): the
+target up, the series for the CA and the seven services, the rules loaded
+and inactive. The two alerts added after that,
+`MeridianCertificateMetricsMissing` and `MeridianCertificateApproverDown`,
+have not.
 S027 measures latency and error rate under load and sets thresholds from
 the measurements.
 
@@ -27,7 +35,7 @@ would be watched while the platform runs.
 | `service-availability` | Each of the six services has a replica that is ready | Minutes in which a Deployment in `meridian` reports at least one available replica, from kube-state-metrics | 99.5 % of minutes, per service | Implemented on kind, unmeasured |
 | `database-availability` | The Platform Database accepts connections (QA-10 covers its loss) | Minutes in which the database's pod is ready, from kube-state-metrics | 99.5 % of minutes | Implemented on kind, unmeasured |
 | `sweep-freshness` | Overdue claims and stranded runs are picked up within a quarter of an hour | Time since the sweep's CronJob last succeeded, from kube-state-metrics | Under 15 minutes for 99 % of the time | Implemented on kind, unmeasured |
-| `certificate-validity` | Each certificate that identifies a service, and the CA that signs them, is renewed before it ends (S056) | Time until each certificate's end and whether it is Ready, from cert-manager's metrics | No certificate under 21 days from its end for an hour, none not Ready for 15 minutes | Implemented as code on kind (S056), not yet seen on a cluster, unmeasured |
+| `certificate-validity` | Each certificate that identifies a service, and the CA that signs them, is renewed before it ends (S056) | Time until each certificate's end and whether it is Ready, from cert-manager's metrics | No certificate under 21 days from its end for an hour, none not Ready for 15 minutes; the metrics reach Prometheus and cert-manager and approver-policy run | Implemented on kind (S056); the first two alerts seen loaded and inactive, the other two not seen, unmeasured |
 | `triage-latency` | A claim's triage drafts a proposal quickly (QA-01) | The duration of a triage run, as a histogram | p95 under 10 s with the replay provider, under 30 s with `gpt-4o` | Designed: no service records a duration metric; S027 measures it with a load test |
 | `gateway-overhead` | The gateway adds little to a model call (QA-02) | The gateway's own time per call, excluding the provider's | p95 under 50 ms | Designed: the time is in the gateway's spans only |
 | `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Designed: the Agent Runtime records no metric; its run table holds the answer |
@@ -77,12 +85,19 @@ time() - kube_cronjob_status_last_successful_time{namespace="meridian", cronjob=
 query is 1 for each certificate that is not Ready:
 
 ```promql
-certmanager_certificate_expiration_timestamp_seconds{namespace=~"meridian|cert-manager"} - time()
+(certmanager_certificate_expiration_timestamp_seconds{namespace=~"meridian|cert-manager"} > 0) - time()
 ```
 
 ```promql
 certmanager_certificate_ready_status{namespace=~"meridian|cert-manager", condition!="True"} == 1
 ```
+
+The first query leaves out a series of 0: cert-manager reports that expiry
+for a Certificate that was never issued. That Certificate is the second
+query's. Neither can say anything when cert-manager's controller is down or
+its metrics do not reach Prometheus, so two more alerts watch that the
+metrics are there and that the Deployments of cert-manager and
+approver-policy have a replica.
 
 ## Why the gateway's counter is not read with `increase()`
 
@@ -128,7 +143,9 @@ proposal, like the targets.
 | `MeridianDatabaseNotReady` | The database's pod has not been ready for 2 minutes | `database-availability` | [Database failure](runbooks/database-failure.md) |
 | `MeridianSweepStale` | The sweep has not succeeded for 15 minutes, three runs, counted from its last success or, if it never succeeded, from when its CronJob was created | `sweep-freshness` | [Database failure](runbooks/database-failure.md) |
 | `MeridianCertificateNotRenewed` | A certificate of `meridian` or `cert-manager` has been under 21 days from its end for an hour: cert-manager renews a service's at 30 days left, so the renewal has failed for nine days, and the services turn unhealthy at one day left | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
-| `MeridianCertificateNotReady` | A certificate of `meridian` or `cert-manager` has not been Ready for 15 minutes, as when a request was denied or waits for an approval | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
+| `MeridianCertificateNotReady` | A certificate of `meridian` or `cert-manager` has not been Ready for 15 minutes, as when a first request was denied or waits for an approval (a renewal that waits leaves the Certificate Ready) | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
+| `MeridianCertificateMetricsMissing` | For 15 minutes Prometheus has no expiry series for the CA's certificate `meridian-services-ca`, or its scrape of cert-manager's controller is down: the two alerts above are blind | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
+| `MeridianCertificateApproverDown` | The Deployment of cert-manager's controller or of approver-policy has had no available replica for 15 minutes: nothing is requested or approved, and a renewal that waits leaves the Certificate Ready | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
 
 The 5 % in the first rule is QA-04's number ("under 5 % of calls in that
 minute fail"), five times the rate the `model-calls` budget allows. The

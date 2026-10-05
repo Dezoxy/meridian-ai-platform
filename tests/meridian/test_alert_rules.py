@@ -54,7 +54,12 @@ OTHER_SERIES = {
 }
 EXPIRY_SERIES = "certmanager_certificate_expiration_timestamp_seconds"
 READY_SERIES = "certmanager_certificate_ready_status"
-CERTIFICATE_ALERTS = ("MeridianCertificateNotRenewed", "MeridianCertificateNotReady")
+CERTIFICATE_ALERTS = (
+    "MeridianCertificateNotRenewed",
+    "MeridianCertificateNotReady",
+    "MeridianCertificateMetricsMissing",
+    "MeridianCertificateApproverDown",
+)
 # Where Meridian's certificates are: the chart's, in the namespace it installs
 # into, and the CA's, in cert-manager's (manifests/service-ca.yaml).
 CERTIFICATE_NAMESPACES = {"meridian", "cert-manager"}
@@ -183,7 +188,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 10
+    assert len(found) == 12
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -207,7 +212,7 @@ def test_every_slo_label_names_an_objective_the_document_defines() -> None:
         a["alert"]: a["labels"]["slo"] for a in alerts() if "slo" in a["labels"]
     }
 
-    assert len(labelled) == 8
+    assert len(labelled) == 10
     assert set(labelled.values()) <= objectives, labelled
 
 
@@ -324,15 +329,18 @@ def certificate_rules() -> dict[str, dict]:
     return {rule["alert"]: rule for rule in groups()["meridian.certificates"]}
 
 
-def test_the_certificate_group_holds_the_two_alerts_with_their_thresholds() -> None:
+def test_the_certificate_group_holds_the_four_alerts_with_their_thresholds() -> None:
     rules = certificate_rules()
 
     assert tuple(rules) == CERTIFICATE_ALERTS
     expiring = rules["MeridianCertificateNotRenewed"]
     # Renewal is due at 30 days left, this fires at 21, the services turn
-    # unhealthy at 1 (src/meridian/platform/common/certlife.py).
+    # unhealthy at 1 (src/meridian/platform/common/certlife.py). A Certificate
+    # that was never issued has the expiry 0, which is not "close to its end":
+    # only a series above 0 counts.
     assert expiring["expr"].strip() == (
-        f'{EXPIRY_SERIES}{{namespace=~"meridian|cert-manager"}} - time() < 21 * 86400'
+        f'({EXPIRY_SERIES}{{namespace=~"meridian|cert-manager"}} > 0)'
+        " - time() < 21 * 86400"
     )
     assert expiring["for"] == "1h"
     unready = rules["MeridianCertificateNotReady"]
@@ -340,6 +348,22 @@ def test_the_certificate_group_holds_the_two_alerts_with_their_thresholds() -> N
         f'{READY_SERIES}{{namespace=~"meridian|cert-manager", condition!="True"}} == 1'
     )
     assert unready["for"] == "15m"
+    # The CA's series, not a service's: after `make up` and before `make deploy`
+    # nothing is in `meridian` and the alert must stay quiet.
+    missing = rules["MeridianCertificateMetricsMissing"]
+    assert missing["expr"].strip() == (
+        f"absent({EXPIRY_SERIES}"
+        '{namespace="cert-manager", name="meridian-services-ca"})\n'
+        "or\n"
+        'up{job="cert-manager"} == 0'
+    )
+    assert missing["for"] == "15m"
+    down = rules["MeridianCertificateApproverDown"]
+    assert down["expr"].strip() == (
+        'kube_deployment_status_replicas_available{namespace="cert-manager", '
+        'deployment=~"cert-manager|cert-manager-approver-policy"} == 0'
+    )
+    assert down["for"] == "15m"
     for name, rule in rules.items():
         assert rule["labels"]["severity"] == "warning", name
         assert rule["labels"]["slo"] == "certificate-validity", name
@@ -348,13 +372,32 @@ def test_the_certificate_group_holds_the_two_alerts_with_their_thresholds() -> N
         ), name
 
 
-def test_the_certificate_alerts_read_the_two_series_cert_manager_serves() -> None:
+def test_the_certificate_alerts_read_the_series_cert_manager_and_the_stack_serve() -> (
+    None
+):
     rules = certificate_rules()
 
     assert series_named(rules["MeridianCertificateNotRenewed"]["expr"]) == {
         EXPIRY_SERIES
     }
     assert series_named(rules["MeridianCertificateNotReady"]["expr"]) == {READY_SERIES}
+    # `up` is Prometheus's own: the scrape of cert-manager's controller.
+    assert series_named(rules["MeridianCertificateMetricsMissing"]["expr"]) == {
+        EXPIRY_SERIES,
+        "up",
+    }
+    assert series_named(rules["MeridianCertificateApproverDown"]["expr"]) == {
+        "kube_deployment_status_replicas_available"
+    }
+
+
+def service_ca_certificate() -> dict:
+    (ca,) = [
+        d
+        for d in yaml.safe_load_all(SERVICE_CA_FILE.read_text("utf-8"))
+        if d and d["kind"] == "Certificate"
+    ]
+    return ca
 
 
 def test_the_certificate_alerts_name_only_the_two_namespaces_of_the_certificates() -> (
@@ -363,18 +406,52 @@ def test_the_certificate_alerts_name_only_the_two_namespaces_of_the_certificates
     for name, rule in certificate_rules().items():
         matchers = re.findall(r'namespace\s*(=~|=)\s*"([^"]*)"', rule["expr"])
 
-        assert len(matchers) == 1, name
-        operator, value = matchers[0]
-        assert operator == "=~", name
-        assert set(value.split("|")) == CERTIFICATE_NAMESPACES, name
+        assert matchers, name
+        for operator, value in matchers:
+            if operator == "=~":
+                # Both of them: the services' certificates and the CA's.
+                assert set(value.split("|")) == CERTIFICATE_NAMESPACES, name
+            else:
+                # One: the series of the CA, or of cert-manager's Deployments.
+                assert value == "cert-manager", name
+    for name in ("MeridianCertificateNotRenewed", "MeridianCertificateNotReady"):
+        regex = re.findall(r'namespace\s*=~\s*"', certificate_rules()[name]["expr"])
+        assert len(regex) == 1, name
     # The CA's certificate is in cert-manager's namespace; the chart's in the
     # release's, which the workload alerts already pin to "meridian".
-    (ca,) = [
-        d
-        for d in yaml.safe_load_all(SERVICE_CA_FILE.read_text("utf-8"))
-        if d and d["kind"] == "Certificate"
-    ]
-    assert ca["metadata"]["namespace"] in CERTIFICATE_NAMESPACES
+    assert service_ca_certificate()["metadata"]["namespace"] in CERTIFICATE_NAMESPACES
+
+
+def test_the_missing_metrics_alert_names_the_series_of_the_cas_own_certificate() -> (
+    None
+):
+    # The CA's series, because a cluster after `make up` and before `make
+    # deploy` has no Certificate in `meridian`, and must stay quiet.
+    ca = service_ca_certificate()
+    (selector,) = re.findall(
+        rf"absent\({EXPIRY_SERIES}\{{([^}}]*)\}}\)",
+        certificate_rules()["MeridianCertificateMetricsMissing"]["expr"],
+    )
+
+    assert dict(re.findall(r'(\w+)="([^"]*)"', selector)) == {
+        "namespace": ca["metadata"]["namespace"],
+        "name": ca["metadata"]["name"],
+    }
+
+
+def test_the_approver_alert_names_the_two_deployments_of_the_issuing_path() -> None:
+    # cert-manager's controller (nothing is requested without it) and
+    # approver-policy (nothing is approved without it). Their release names and
+    # namespace are up.sh's install_release lines; approver-policy's chart names
+    # its Deployment cert-manager-approver-policy whatever the release is called.
+    expression = certificate_rules()["MeridianCertificateApproverDown"]["expr"]
+    (names,) = re.findall(r'deployment=~"([^"]*)"', expression)
+    lines = UP_SH.read_text("utf-8").splitlines()
+
+    assert set(names.split("|")) == {"cert-manager", "cert-manager-approver-policy"}
+    for release in ("cert-manager", "approver-policy"):
+        prefix = f"install_release {release} cert-manager "
+        assert any(line.startswith(prefix) for line in lines), release
 
 
 def test_the_certificate_runbook_exists_and_names_the_three_policies() -> None:
@@ -430,9 +507,22 @@ def test_the_service_monitor_selects_the_controllers_metrics_service() -> None:
     # over the certificate's (it keeps the metric's own as `exported_namespace`),
     # and the rules' namespace matcher would hold for every certificate in the
     # cluster. The target is cert-manager's controller, a platform component.
-    assert spec["endpoints"] == [
-        {"port": "http-metrics", "interval": "60s", "honorLabels": True}
-    ]
+    (endpoint,) = spec["endpoints"]
+    assert {k: v for k, v in endpoint.items() if k != "metricRelabelings"} == {
+        "port": "http-metrics",
+        "interval": "60s",
+        "honorLabels": True,
+    }
+    # Any namespace's Certificates would add series to Prometheus through this
+    # monitor; only the two namespaces the rules read are kept. With honorLabels
+    # the controller's own series carry the target's namespace, cert-manager.
+    (relabeling,) = endpoint["metricRelabelings"]
+    assert relabeling == {
+        "action": "keep",
+        "sourceLabels": ["namespace"],
+        "regex": "meridian|cert-manager",
+    }
+    assert set(relabeling["regex"].split("|")) == CERTIFICATE_NAMESPACES
 
 
 # ── up.sh ────────────────────────────────────────────────────────────────────

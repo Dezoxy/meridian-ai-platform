@@ -13,30 +13,44 @@
 # `allowed`, a field that is left out is "deny all" and `*` stands for any
 # string.
 #
+# A request that names no duration is not denied by a policy that sets
+# `maxDuration`: in v0.28.0 (pkg/internal/approver/constraints/evaluator.go) the
+# evaluator calls `.String()` on the request's missing duration, a nil pointer.
+# controller-runtime recovers the panic, so the request is tried again for ever
+# and is never Approved or Denied, and nothing is issued. That is why the
+# chart's Certificates and service-ca.yaml name a duration.
+#
 #   meridian-services       the services' certificates: issuer
 #                           `meridian-services`, requested in `meridian`; a URI
 #                           of the form spiffe://meridian.kind/ns/meridian/sa/*
 #                           (required, the chart's identity prefix), a DNS name
 #                           of the form *.meridian.svc, the usages digital
 #                           signature, client auth and server auth, and at most
-#                           90 days (cert-manager's default lifetime). No CA and
-#                           no common name: neither is allowed, so a request
-#                           that sets one is denied
+#                           90 days (cert-manager's default lifetime), which
+#                           the request must name. No CA and no common name:
+#                           neither is allowed, so a request that sets one is
+#                           denied
 #   meridian-services-ca    the CA's own request, which the policy above does not
 #                           permit (it is a CA, with a common name, signed by the
 #                           self-signed issuer, in `cert-manager`): issuer
 #                           `meridian-selfsigned`, requested in `cert-manager`,
 #                           common name `meridian-services-ca` and `isCA`, at
-#                           most a year. Without it the CA's renewal would wait
-#                           for ever
-#   meridian-deny-unlisted  selects every request and allows nothing, so a
-#                           request for either issuer that no other policy
-#                           permits is denied, not left waiting. It is not a
-#                           wall around the cluster: approver-policy acts only
-#                           for the two signers it is given (approveSignerNames),
-#                           and a request for any other issuer is left alone,
-#                           which with the built-in approver off means it is
-#                           never approved
+#                           most a year, which the request must name. Without
+#                           this policy the CA's renewal would wait for ever
+#   meridian-deny-unlisted  selects a request for the two Meridian
+#                           ClusterIssuers (`meridian-*`, kind ClusterIssuer,
+#                           group cert-manager.io) from any namespace, and has
+#                           no `allowed`. That is not a literal deny-all: a
+#                           field left out of `allowed` allows nothing, but a
+#                           request with no name, subject, usage or CA flag at
+#                           all would still pass it, and no Certificate makes
+#                           one. So a request for either issuer that no other
+#                           policy permits is denied, not left waiting. It is
+#                           not a wall around the cluster: a request for any
+#                           other issuer, or for an Issuer, meets no policy and
+#                           is never approved (approver-policy acts only for the
+#                           two signers it is given, approveSignerNames, and the
+#                           built-in approver is off), and nothing denies it
 #
 # Who is bound: the requester of every Certificate is cert-manager's own
 # account, `system:serviceaccount:cert-manager:cert-manager`, and it is the only
@@ -105,7 +119,16 @@ metadata:
   name: meridian-deny-unlisted
 spec:
   selector:
-    issuerRef: {}
+    # The two Meridian ClusterIssuers and no other. `*` stands for any string in
+    # an issuerRef selector (approver-policy v0.28.0, predicate.go and
+    # util/wildcard.go), so `meridian-*` is `meridian-selfsigned` and
+    # `meridian-services`. A selector of `{}` would select a request for every
+    # issuer in the cluster, and approver-policy, which acts for these two
+    # signers only, could not write its decision on one for another.
+    issuerRef:
+      name: meridian-*
+      kind: ClusterIssuer
+      group: cert-manager.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

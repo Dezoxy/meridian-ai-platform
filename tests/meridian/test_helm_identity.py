@@ -301,8 +301,9 @@ def test_a_certificate_names_its_secret_its_uri_and_the_issuer(name: str) -> Non
     assert spec["uris"] == [f"spiffe://{TRUST_DOMAIN}/ns/{NAMESPACE}/sa/{name}"]
     assert spec["issuerRef"] == {**ISSUER, "group": "cert-manager.io"}
     # 90 days, said explicitly: the issuer's policy (S056) caps the duration and
-    # denies a request that names none. No renewBefore: cert-manager's default
-    # (a third of the lifetime, 30 days) stays.
+    # never decides a request that names none, so none would be issued. No
+    # renewBefore: cert-manager's default (a third of the lifetime, 30 days)
+    # stays.
     assert spec["duration"] == "2160h"
     assert "renewBefore" not in spec
 
@@ -903,7 +904,9 @@ PROBE_RUNS = 4
 LINES = 5
 
 
-def test_smoke_runs_the_identity_check_last_and_it_is_documented() -> None:
+def test_smoke_runs_the_identity_check_after_the_network_check_and_documents_it() -> (
+    None
+):
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
 

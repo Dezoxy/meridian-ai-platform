@@ -7,7 +7,7 @@ import json
 import ssl
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -85,10 +85,23 @@ def serve_tls(
     ca: CertificateAuthority,
     server: KeyPair,
     cert_reqs: ssl.VerifyMode = ssl.CERT_OPTIONAL,
+    max_version: ssl.TLSVersion | None = None,
 ) -> Iterator[str]:
     """Run ``app`` over TLS; yield its base URL (``https://127.0.0.1:<port>``).
     ``cert_reqs`` is what the server asks of a client's certificate: optional
-    (the platform's setting) unless a test needs ``ssl.CERT_NONE``."""
+    (the platform's setting) unless a test needs ``ssl.CERT_NONE``.
+    ``max_version`` caps the protocol (``ssl.TLSVersion.TLSv1_2`` makes a server
+    that raises a client certificate's alert inside the handshake, as TLS 1.3
+    does not); unset, the library's default, which negotiates 1.3."""
+
+    def capped_context(
+        _config: uvicorn.Config, default: Callable[[], ssl.SSLContext]
+    ) -> ssl.SSLContext:
+        context = default()
+        if max_version is not None:
+            context.maximum_version = max_version
+        return context
+
     config = uvicorn.Config(
         app,
         host=LOOPBACK,
@@ -99,6 +112,7 @@ def serve_tls(
         ssl_keyfile=str(server.key),
         ssl_ca_certs=str(ca.ca_file),
         ssl_cert_reqs=cert_reqs,
+        ssl_context_factory=capped_context if max_version is not None else None,
     )
     instance = uvicorn.Server(config)
     thread = threading.Thread(target=instance.run, daemon=True)

@@ -15,6 +15,7 @@ import copy
 import os
 import re
 import subprocess
+from itertools import pairwise
 
 import pytest
 import yaml
@@ -71,8 +72,10 @@ def pins() -> dict[str, str]:
 
 
 def script_lines() -> list[str]:
-    """up.sh with each backslash continuation folded into one line."""
-    return re.sub(r"\\\n\s*", "", UP_SH).splitlines()
+    """up.sh with each backslash continuation, and each ``||`` that ends a line,
+    folded into one line."""
+    joined = re.sub(r"\\\n\s*", "", UP_SH)
+    return re.sub(r"\|\|\n\s*", "|| ", joined).splitlines()
 
 
 def line_index(prefix: str) -> int:
@@ -143,7 +146,8 @@ def request_of(certificate: dict, namespace: str | None = None) -> dict:
     spec = certificate["spec"]
     return {
         "namespace": namespace or certificate["metadata"]["namespace"],
-        "issuer": {"group": "cert-manager.io", **spec["issuerRef"]},
+        # cert-manager's defaults for an issuerRef that leaves them out.
+        "issuer": {"group": "cert-manager.io", "kind": "Issuer", **spec["issuerRef"]},
         "uris": spec.get("uris", []),
         "dnsNames": spec.get("dnsNames", []),
         "ipAddresses": spec.get("ipAddresses", []),
@@ -187,14 +191,22 @@ def common_name_ok(rule: dict | None, common_name: str) -> bool:
     return not common_name or wildcard(rule["value"], common_name)
 
 
+def never_decides(policy: dict, request: dict) -> bool:
+    """constraints/evaluator.go at approver-policy v0.28.0: with maxDuration
+    set and no duration in the request, ``request.Spec.Duration.String()`` is
+    called on a nil pointer. controller-runtime recovers the panic and the
+    request is tried again, for ever: no Approved and no Denied."""
+    constraints = policy["spec"].get("constraints", {})
+    return "maxDuration" in constraints and request["hours"] is None
+
+
 def allows(policy: dict, request: dict) -> bool:
     spec = policy["spec"]
-    if "allowed" not in spec:
-        return False
-    allowed = spec["allowed"]
+    # allowed/evaluator.go: a policy with no `allowed` is evaluated against an
+    # empty one, which permits a request that has no name, subject, usage or CA
+    # flag at all and nothing else.
+    allowed = spec.get("allowed", {})
     maximum = spec.get("constraints", {}).get("maxDuration")
-    # constraints/evaluator.go at approver-policy v0.28.0: with maxDuration
-    # set, a request that names no duration is a violation.
     within = maximum is None or (
         request["hours"] is not None and request["hours"] <= hours(maximum)
     )
@@ -247,15 +259,28 @@ def may_use(policy_name: str, namespace: str) -> bool:
     return False
 
 
-def decision(request: dict) -> str:
-    appropriate = [
-        policy
-        for name, policy in policies().items()
-        if selects(policy, request) and may_use(name, request["namespace"])
-    ]
+def verdict(appropriate: list[dict], request: dict) -> str:
+    """What approver-policy does with a request the ``appropriate`` policies
+    apply to. manager/review.go evaluates each of them and approves at the first
+    that permits; the list's order is not promised, so a request is "never
+    decided" when any policy would panic on it. (None of Meridian's policies
+    permits a request that names no duration, so the order cannot matter.)"""
+    if any(never_decides(policy, request) for policy in appropriate):
+        return "never decided"
     if any(allows(policy, request) for policy in appropriate):
         return "approved"
     return "denied" if appropriate else "left waiting"
+
+
+def decision(request: dict) -> str:
+    return verdict(
+        [
+            policy
+            for name, policy in policies().items()
+            if selects(policy, request) and may_use(name, request["namespace"])
+        ],
+        request,
+    )
 
 
 def changed(certificate: dict, *, namespace: str | None = None, **spec) -> dict:
@@ -328,6 +353,57 @@ def test_up_decides_who_may_ask_before_it_creates_the_ca_and_waits_for_the_issue
     assert "--timeout=" in lines[ready]
     for name in sorted(POLICY_NAMES):
         assert f"certificaterequestpolicy/{name}" in lines[ready]
+
+
+def wait_and_die_message(prefix: str) -> tuple[str, str]:
+    """The --timeout of the ``kctl wait`` line that starts with ``prefix`` and
+    the text of the ``die`` that ends it (it must end in one)."""
+    line = script_lines()[line_index(prefix)]
+    found = re.search(r'--timeout=(\d+m) >/dev/null \|\| die "([^"]+)"$', line)
+    assert found, f"no `|| die` ends: {line}"
+    return found.group(1), found.group(2)
+
+
+def test_up_s_wait_for_the_policies_dies_naming_what_to_look_at() -> None:
+    timeout, message = wait_and_die_message(
+        "kctl wait --for=condition=Ready certificaterequestpolicy/"
+    )
+
+    assert timeout == "2m"
+    # The time it waited, the condition that was not met and where the cause is.
+    assert timeout in message
+    assert "Ready" in message
+    assert "approver-policy" in message
+    assert "kubectl -n cert-manager get pods" in message
+
+
+def test_up_s_wait_for_the_issuer_dies_naming_what_to_look_at() -> None:
+    timeout, message = wait_and_die_message(
+        "kctl wait --for=condition=Ready clusterissuer/meridian-services "
+    )
+
+    assert timeout == "5m"
+    assert timeout in message
+    # The CA's request is what the issuer waits for, and its Approved or Denied
+    # condition says whether the policies decided it.
+    assert "meridian-services-ca" in message
+    assert "CertificateRequest" in message
+    assert "Approved" in message
+    assert "Denied" in message
+
+
+def test_up_s_comment_does_not_promise_that_a_request_made_in_between_is_quick() -> (
+    None
+):
+    # Helm's wait for approver-policy and the apply's retries can take minutes.
+    (comment,) = re.findall(
+        r"^# cert-manager's own approver is off.*?(?=^install_release)",
+        UP_SH,
+        re.MULTILINE | re.DOTALL,
+    )
+
+    assert "seconds" not in comment
+    assert "minutes" in comment
 
 
 # ── the apply of the policies is tried again until the webhook answers ───────
@@ -430,7 +506,12 @@ def test_a_policy_apply_refused_twice_and_then_accepted_succeeds_in_silence(
     assert done.stdout == ""
     assert done.stderr == ""
     assert len(calls) == 3
-    assert [seconds for seconds, _ in calls] == [0, 3, 6]
+    # The stub's sleep adds the interval to bash's SECONDS, which also counts
+    # real time: a loaded machine can add a second, never take one away. So the
+    # gaps have a floor and no exact value.
+    times = [seconds for seconds, _ in calls]
+    interval = up_constant("POLICY_INTERVAL")
+    assert all(later - earlier >= interval for earlier, later in pairwise(times))
     assert {arguments for _, arguments in calls} == {
         "apply --server-side --force-conflicts "
         "-f /kind/manifests/certificate-policy.yaml"
@@ -609,11 +690,15 @@ def test_the_services_policy_boundaries_are_inclusive() -> None:
     assert not permitted_by(policy, request_of(changed(gateway, duration="2160h1m")))
 
 
-def test_a_policy_with_a_longest_lifetime_denies_a_request_that_names_none() -> None:
-    # approver-policy v0.28.0 (constraints/evaluator.go): "If the request
-    # contains no duration ... append error", and cert-manager's request has
-    # none when the Certificate sets none. A synthetic policy, so the answer
-    # does not depend on the policy under test.
+def test_a_policy_with_a_longest_lifetime_never_decides_a_request_that_names_none() -> (
+    None
+):
+    # approver-policy v0.28.0 (constraints/evaluator.go): with maxDuration set
+    # and no duration in the request, the evaluator calls `.String()` on a nil
+    # *metav1.Duration. controller-runtime recovers the panic, so the request is
+    # tried again for ever and is never Approved or Denied; nothing is issued.
+    # cert-manager's request has no duration when the Certificate sets none. A
+    # synthetic policy, so the answer does not depend on the policy under test.
     synthetic = {
         "spec": {
             "selector": {"issuerRef": {}},
@@ -627,11 +712,33 @@ def test_a_policy_with_a_longest_lifetime_denies_a_request_that_names_none() -> 
     }
 
     assert request_of(certificate)["hours"] is None
-    assert not allows(synthetic, request_of(certificate))
+    assert verdict([synthetic], request_of(certificate)) == "never decided"
     named = changed(certificate, duration=NINETY_DAYS)
-    assert allows(synthetic, request_of(named))
+    assert verdict([synthetic], request_of(named)) == "approved"
+    longer = changed(certificate, duration="2161h")
+    assert verdict([synthetic], request_of(longer)) == "denied"
     synthetic["spec"]["constraints"] = {}
-    assert allows(synthetic, request_of(certificate))
+    assert verdict([synthetic], request_of(certificate)) == "approved"
+
+
+@pytest.mark.parametrize(
+    ("what", "certificate", "namespace"),
+    [
+        ("a service's", lambda: chart_certificates()["model-gateway"], NAMESPACE),
+        ("the CA's", service_ca_certificate, CERT_MANAGER_NAMESPACE),
+    ],
+)
+def test_a_certificate_with_no_duration_is_never_decided_by_the_real_policies(
+    what: str, certificate, namespace: str
+) -> None:
+    # Why the chart and service-ca.yaml name a duration: without one nothing is
+    # approved or denied, and the Certificate waits for ever.
+    request = request_of(changed(certificate(), duration=None))
+
+    assert request["namespace"] == namespace
+    assert request["hours"] is None
+    assert decision(request) == "never decided", what
+    assert decision(request_of(certificate())) == "approved", what
 
 
 def test_a_services_request_in_the_cert_manager_namespace_is_denied() -> None:
@@ -720,10 +827,26 @@ def test_a_services_certificate_with_is_ca_in_meridian_is_denied() -> None:
 # ── the policy that denies the rest ──────────────────────────────────────────
 
 
-def test_the_deny_policy_selects_every_request_and_allows_nothing() -> None:
+def service_ca_issuers() -> list[str]:
+    return [
+        d["metadata"]["name"]
+        for d in documents(SERVICE_CA_FILE)
+        if d["kind"] == "ClusterIssuer"
+    ]
+
+
+def test_the_deny_policy_selects_the_meridian_issuers_and_permits_nothing_named() -> (
+    None
+):
     policy = policies()[DENY_POLICY]
 
-    assert policy["spec"]["selector"] == {"issuerRef": {}}
+    assert policy["spec"]["selector"] == {
+        "issuerRef": {
+            "name": "meridian-*",
+            "kind": "ClusterIssuer",
+            "group": "cert-manager.io",
+        }
+    }
     assert "allowed" not in policy["spec"]
     assert "constraints" not in policy["spec"]
     assert "plugins" not in policy["spec"]
@@ -733,20 +856,103 @@ def test_the_deny_policy_selects_every_request_and_allows_nothing() -> None:
         assert not allows(policy, request)
 
 
-def test_the_deny_policy_selects_a_request_for_another_issuer_and_permits_nothing() -> (
-    None
-):
-    # What the policies decide for such a request. Whether approver-policy is
-    # asked at all is the chart's `approveSignerNames`, which this model does
-    # not evaluate (it is checked against service-ca.yaml above): for a signer
-    # outside it the request is left alone.
+def test_the_deny_policy_is_not_a_literal_deny_all() -> None:
+    # No `allowed` is evaluated as an empty one (allowed/evaluator.go at
+    # approver-policy v0.28.0): a request with no name, subject, usage or CA
+    # flag at all passes it. No Certificate makes such a request: cert-manager
+    # needs a name and adds usages.
+    policy = policies()[DENY_POLICY]
+    empty = {
+        "namespace": NAMESPACE,
+        "issuer": kind_issuer(),
+        "uris": [],
+        "dnsNames": [],
+        "ipAddresses": [],
+        "emailAddresses": [],
+        "usages": [],
+        "isCA": False,
+        "commonName": "",
+        "hours": hours(NINETY_DAYS),
+    }
+
+    assert allows(policy, empty)
+    assert not allows(policy, {**empty, "usages": ["server auth"]})
+    assert not allows(policy, {**empty, "dnsNames": ["a.meridian.svc"]})
+    assert not allows(policy, {**empty, "commonName": "x"})
+    assert not allows(policy, {**empty, "isCA": True})
+
+
+@pytest.mark.parametrize("namespace", [NAMESPACE, CERT_MANAGER_NAMESPACE, "elsewhere"])
+@pytest.mark.parametrize("issuer", service_ca_issuers())
+def test_the_deny_policy_selects_a_request_for_each_meridian_issuer_in_any_namespace(
+    issuer: str, namespace: str
+) -> None:
     certificate = changed(
         chart_certificates()["model-gateway"],
-        issuerRef={"name": "someone-elses", "kind": "ClusterIssuer"},
+        namespace=namespace,
+        issuerRef={"name": issuer, "kind": "ClusterIssuer"},
         duration=NINETY_DAYS,
     )
 
-    assert decision(request_of(certificate)) == "denied"
+    assert selects(policies()[DENY_POLICY], request_of(certificate))
+
+
+def test_the_deny_policys_pattern_covers_the_two_issuers_the_signers_name() -> None:
+    pattern = policies()[DENY_POLICY]["spec"]["selector"]["issuerRef"]["name"]
+    signers = yaml.safe_load(APPROVER_VALUES.read_text(encoding="utf-8"))["app"][
+        "approveSignerNames"
+    ]
+
+    assert len(service_ca_issuers()) == 2
+    assert all(wildcard(pattern, name) for name in service_ca_issuers())
+    assert sorted(signers) == sorted(
+        f"clusterissuers.cert-manager.io/{name}" for name in service_ca_issuers()
+    )
+
+
+@pytest.mark.parametrize(
+    ("what", "issuer_ref"),
+    [
+        ("another ClusterIssuer", {"name": "someone-elses", "kind": "ClusterIssuer"}),
+        (
+            "a name that only ends alike",
+            {"name": "xmeridian-services", "kind": "ClusterIssuer"},
+        ),
+        ("a name without the dash", {"name": "meridian", "kind": "ClusterIssuer"}),
+        (
+            "an Issuer of the same name",
+            {"name": "meridian-services", "kind": "Issuer"},
+        ),
+        ("an issuerRef with no kind (an Issuer)", {"name": "meridian-services"}),
+        (
+            "another group",
+            {
+                "name": "meridian-services",
+                "kind": "ClusterIssuer",
+                "group": "elsewhere.example",
+            },
+        ),
+    ],
+)
+@pytest.mark.parametrize("namespace", [NAMESPACE, CERT_MANAGER_NAMESPACE, "elsewhere"])
+def test_a_request_for_another_issuer_meets_no_policy_and_is_left_waiting(
+    what: str, issuer_ref: dict, namespace: str
+) -> None:
+    # Whether approver-policy is asked at all is the chart's `approveSignerNames`
+    # (checked above). For a request it is asked about, the deny policy must not
+    # select one for an issuer it cannot decide for: its decision could not be
+    # written, and it would be tried again for ever. With the built-in approver
+    # off, such a request is never approved.
+    certificate = changed(
+        chart_certificates()["model-gateway"],
+        namespace=namespace,
+        issuerRef=issuer_ref,
+        duration=NINETY_DAYS,
+    )
+    request = request_of(certificate)
+
+    assert not selects(policies()[DENY_POLICY], request), what
+    assert decision(request) == "left waiting", what
 
 
 def test_without_the_deny_policy_a_request_no_policy_permits_would_wait() -> None:

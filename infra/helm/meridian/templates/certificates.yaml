@@ -26,8 +26,9 @@ What a certificate says:
                 that `make up` installs, one CA for every certificate
 
 The lifetime is 90 days (duration: 2160h, said explicitly: the issuer's policy
-caps it and denies a request that names none), renewed at 60 by cert-manager's
-default renewBefore. A service reads its certificate when it starts and does not
+caps it and cannot evaluate a request that names none, which is then never
+approved or denied), renewed at 60 by cert-manager's default renewBefore. A
+service reads its certificate when it starts and does not
 reload it; instead it turns unhealthy near the end of the one it loaded
 (/healthz answers 503), the kubelet restarts the container and it loads the
 renewed one. With the values' liveness probe (periodSeconds 10, failureThreshold

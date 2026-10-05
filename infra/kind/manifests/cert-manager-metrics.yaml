@@ -35,6 +35,19 @@ spec:
     # cluster and their annotations would say cert-manager for all. The target
     # is cert-manager's controller, a component of the platform, so what it says
     # about a certificate's namespace is trusted.
+    #
+    # The controller serves a series for every Certificate in the cluster, and
+    # without a filter any namespace's would be stored in Prometheus (a
+    # namespace of someone else's, a series per name and issuer). The rules read
+    # two namespaces, and only those are kept: a series whose `namespace` is
+    # `meridian` (the chart's certificates) or `cert-manager` (the CA's, and,
+    # with honorLabels, the controller's own series, which carry the target's
+    # namespace). A relabel regex is anchored at both ends.
     - port: http-metrics
       interval: 60s
       honorLabels: true
+      metricRelabelings:
+        - action: keep
+          sourceLabels:
+            - namespace
+          regex: meridian|cert-manager

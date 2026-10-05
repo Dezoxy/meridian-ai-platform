@@ -6,7 +6,12 @@
 #      ClusterIssuer `meridian-services` (S056), which must exist and be Ready:
 #      without it the Certificates of step 3 are never issued, and a cluster
 #      made before S055 does not know the Certificate kind, so the upgrade would
-#      fail after the Jobs of step 2 had run
+#      fail after the Jobs of step 2 had run; and what approves them (S056): the
+#      three CertificateRequestPolicies (meridian-services, meridian-services-ca,
+#      meridian-deny-unlisted) Ready and approver-policy running, because the
+#      issuer is Ready without them and with cert-manager's own approver off
+#      nothing would approve a request, so the wait of step 4 would run out. A
+#      cluster made before S056 does not know the policy kind: the same refusal
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
 #   2. the migration Job, then the policy seed Job, each as the database owner
@@ -55,6 +60,12 @@ readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
 # The ClusterIssuer of kind's values (identity.issuer.name), made by `make up`.
 readonly ISSUER_NAME=meridian-services
+# What approves the Certificates' requests (S056): the CertificateRequestPolicies
+# that manifests/certificate-policy.yaml applies (a test keeps the two equal) and
+# the Deployment of approver-policy, which `make up` installs.
+readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted)
+readonly APPROVER_NAMESPACE=cert-manager
+readonly APPROVER_DEPLOYMENT=cert-manager-approver-policy
 # One list: each service is a Deployment of the same name, and each has a
 # Secret <service>-db (tests/meridian/test_kind_manifests.py checks the
 # chart against it). The role Secrets come from DATABASE_ROLES (common.sh).
@@ -119,6 +130,30 @@ require_issuer() {
     -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" || ready=""
   [[ "${ready}" == True ]] ||
     die "the ClusterIssuer '${ISSUER_NAME}' is missing or not Ready (a cluster made before S055 does not even know the kind), so the chart's Certificates would never be issued, and the Jobs would already have run by then; run 'make up' first"
+}
+
+# What approves the services' certificates (S056). cert-manager's own approver
+# is off, so a Certificate's request waits for approver-policy: the three
+# CertificateRequestPolicies must exist and be Ready and the add-on must have a
+# replica available. The issuer is Ready without them, so require_issuer does not
+# see this; the deploy would build, run its Jobs and die at the wait for the
+# Certificates. A cluster made before S056 does not know the policy kind, and
+# kubectl then fails: that is the same refusal, with its own error left out.
+# Every one that is wrong is named, not the first.
+require_approval() {
+  local policy ready available wrong=""
+  for policy in "${CERTIFICATE_POLICIES[@]}"; do
+    ready="$(kctl get certificaterequestpolicy "${policy}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" || ready=""
+    [[ "${ready}" == True ]] || wrong+="; the CertificateRequestPolicy '${policy}' is missing or not Ready"
+  done
+  available="$(kctl -n "${APPROVER_NAMESPACE}" get deployment "${APPROVER_DEPLOYMENT}" \
+    -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" || available=""
+  if ! [[ "${available}" =~ ^[0-9]+$ ]] || ((10#${available} == 0)); then
+    wrong+="; the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} has no available replica"
+  fi
+  [[ -z "${wrong}" ]] ||
+    die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then${wrong} (a cluster made before S056 does not know the policy kind); run 'make up' first"
 }
 
 # Build the image and tag it by content. Sets ${image} and ${tag}. Docker's
@@ -272,7 +307,7 @@ ingest_corpus() {
 wait_for_certificates() {
   kctl -n "${NAMESPACE}" wait --for=condition=Ready certificate \
     -l app.kubernetes.io/part-of=meridian --timeout="${CERTIFICATE_TIMEOUT}" >/dev/null ||
-    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT} (kubectl -n ${NAMESPACE} describe certificate; is the issuer 'meridian-services' Ready? run 'make up' first)"
+    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT}. Look at the requests first (since S056 the usual cause is one that approver-policy denied or never decided): kubectl -n ${NAMESPACE} get certificaterequest, then describe the one of the Certificate that is not Ready and read its Approved or Denied condition and the reason. Then the issuer '${ISSUER_NAME}': is it Ready? (kubectl get clusterissuer ${ISSUER_NAME}; 'make up' makes it). The runbook: docs/operations/runbooks/certificate-expiry.md"
   log "the services' certificates are ready"
 }
 
@@ -311,6 +346,7 @@ wait_for_token_window() {
 
 require_database
 require_issuer
+require_approval
 build_image
 run_job "meridian-migrate-${tag}" migrate
 run_job "meridian-seed-${tag}" seed

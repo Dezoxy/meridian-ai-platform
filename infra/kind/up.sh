@@ -194,9 +194,9 @@ install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
 # cert-manager's own approver is off (values/cert-manager.yaml), so nothing is
 # approved until approver-policy and its policies are there. On a cluster where
 # cert-manager already ran with its approver on, this order turns the approver
-# off first and brings the policies seconds later: the certificates already
-# issued are not touched, and a request made in between waits and is then
-# decided.
+# off first and brings the policies later: the certificates already issued are
+# not touched, and a request made in between waits and is then decided. Later
+# can be minutes (Helm's wait for approver-policy, then the apply's retries).
 install_release approver-policy cert-manager "${APPROVER_POLICY_CHART}" \
   "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml
 apply_certificate_policy
@@ -204,13 +204,15 @@ apply_certificate_policy
 # find none that is appropriate and wait.
 kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/meridian-services-ca \
-  certificaterequestpolicy/meridian-deny-unlisted --timeout=2m >/dev/null
+  certificaterequestpolicy/meridian-deny-unlisted --timeout=2m >/dev/null ||
+  die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
 # webhook answers); the issuer is Ready once the CA certificate is issued and
 # its Secret holds the key.
 kctl wait --for=condition=Ready clusterissuer/meridian-services \
-  --timeout=5m >/dev/null
+  --timeout=5m >/dev/null ||
+  die "the issuer meridian-services was not Ready in 5m: read the CertificateRequest of the Certificate meridian-services-ca in cert-manager (kubectl -n cert-manager get certificaterequest; describe it) for its Approved or Denied condition, and the Certificate's events"
 
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
