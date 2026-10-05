@@ -54,6 +54,8 @@ HEALTH_PATH = "/healthz"
 # under the old and the new HTTP semantic conventions (T-03).
 URL_ATTRIBUTES = ("http.url", "http.target", "url.full")
 QUERY_ATTRIBUTE = "url.query"
+# Where the scope keeps the real query string while the instrumentation runs.
+HELD_QUERY_KEY = "meridian.held_query_string"
 
 # The answer for a request whose declared body is over the limit, by its scope.
 type ScopeAnswer = Callable[[Scope], Response]
@@ -240,10 +242,48 @@ class UnexpectedErrorMiddleware:
             await error_answer(500, INTERNAL_ERROR)(scope, receive, send)
 
 
+class QueryHidingFastAPI(FastAPI):
+    """A FastAPI app whose instrumentation never sees a request's query (T-03).
+
+    The ASGI instrumentation builds ``http.url`` and ``http.target`` from the
+    scope's ``query_string`` and starts the span with them, so a sampler's
+    ``should_sample`` and every span processor's ``on_start`` would read the
+    query before ``drop_query_from_span`` runs. The query is what a person
+    typed or a link carried. This class sets it aside before the middleware
+    stack runs, and ``RestoreQueryMiddleware``, which sits inside the
+    instrumentation and outside the routes, puts it back.
+
+    It overrides ``__call__`` rather than wrapping ``build_middleware_stack``:
+    the instrumentation patches that method (and ``uninstrument_app`` puts the
+    original back), whereas ``__call__`` is outside the stack whichever way it
+    is built, lazily or again. Websocket and lifespan scopes pass untouched.
+    """
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            scope[HELD_QUERY_KEY] = scope.get("query_string", b"")
+            scope["query_string"] = b""
+        await super().__call__(scope, receive, send)
+
+
+class RestoreQueryMiddleware:
+    """Gives the routes the query string ``QueryHidingFastAPI`` set aside."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and HELD_QUERY_KEY in scope:
+            scope["query_string"] = scope.pop(HELD_QUERY_KEY)
+        await self.app(scope, receive, send)
+
+
 def drop_query_from_span(span: Span, scope: Scope) -> None:
     """The server span's URL attributes without the query string (T-03).
 
-    The instrumentation sets ``http.url`` with the query (and, under the new
+    A second net: ``QueryHidingFastAPI`` keeps the query from the span's start,
+    this hook still strips it from the attributes of a span that somehow got
+    it. The instrumentation sets ``http.url`` with the query (and, under the new
     conventions, ``url.full`` and ``url.query``) before it calls this hook. The
     query is what a person typed or what a link carried, and a span leaves the
     process; the path stays. An attribute cannot be removed from a started
@@ -305,7 +345,7 @@ def create_service_app(
     # global tracer, meter and logger providers with the default resource. The
     # MCP client's spans and the HTTP metrics would then leave under
     # unknown_service:python. The service's own provider does the tracing.
-    app = FastAPI(
+    app = QueryHidingFastAPI(
         title=title,
         description=description,
         lifespan=lifespan,
@@ -323,6 +363,8 @@ def create_service_app(
     app.add_middleware(
         BodyLimitMiddleware, max_bytes=max_body_bytes, too_large=too_large
     )
+    # Outermost of ours, so inside the instrumentation (see QueryHidingFastAPI).
+    app.add_middleware(RestoreQueryMiddleware)
     FastAPIInstrumentor.instrument_app(
         app, tracer_provider=provider, server_request_hook=drop_query_from_span
     )
