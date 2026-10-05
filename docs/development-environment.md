@@ -100,7 +100,7 @@ make demo                                    # one claim, end to end
 ```
 
 Record how long the whole suite takes alone and beside the cluster; the
-plan's Part A sizes parallel work on that number.
+plan's Part A rests its rule on a suite beside the cluster on that number.
 
 ## Rules that came out of the move
 

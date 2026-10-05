@@ -124,15 +124,25 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**Working in parallel.** Steps whose dependencies are `done` and whose files
-do not overlap may run in separate sessions, each in its own worktree and on
-its own branch; one step per session still holds. When the owner follows the
-work from a phone, one session may run two or three such steps itself, each
-in its own worktree and on its own branch, with the subagents it starts: a
-suggested task and a routine's run do not reach the phone, a session with
-Remote Control on does. What follows holds for that session's steps as for
-separate sessions, and it runs one whole test suite at a time. The brief of
-each session says:
+**One step at a time.** The owner's decision of 2026-10-05: "Work one step
+at a time, nothing in parallel: no parallel steps and no parallel
+implementers." One step is open at a time: it is finished, merged and
+confirmed on `main` before the next branch is cut. Inside a step one
+`implementer` works at a time, contract after contract, and so do the
+reviewers at its end (the session's reading of "nothing", until the owner
+says otherwise). A command of the step's own that runs in the background, a
+test run or a wait for checks, is not a parallel step. The decision replaces
+what stood here: steps without shared files in separate sessions, and, for
+some hours of that day, two or three steps inside one session with the
+subagents it started.
+
+**If steps run in parallel again.** Only on the owner's word. What it needed
+is kept, and two of its rules hold for a single step too, since a version
+update or the owner's own change can move `main` under it: numbers are taken
+late, and `main` is merged in before the pull request. Steps whose
+dependencies are `done` and whose files do not overlap ran in separate
+sessions, each in its own worktree and on its own branch, and the brief of
+each session said:
 
 - **What is shared, and who owns it.** There is one kind cluster and one
   Azure environment: one session owns them, and the others run no
@@ -326,8 +336,9 @@ what exists and add no capability; none needs Azure, and none costs
 money unless its row says so. They sit beside M2 and M3, not in a
 milestone's exit.
 
-- S056 to S061 change different files and may run in parallel, S056
-  owning the cluster. Two places are shared, so the session that
+- S056 to S061 change different files and were made to run in parallel,
+  S056 owning the cluster; since 2026-10-05 steps run one at a time
+  (Part A). Two places are shared, so the session that
   finishes later expects a merge there: S056 changes the `/healthz` route
   in the application files S058 and S059 work in, and nothing else in
   them; S060 and S061 both work under `workloads/claims_triage/`, S061 in
@@ -344,12 +355,8 @@ that are pushed; each branch's own section in Part C says what is done,
 what was decided and what to run to finish. Take them in this order, and
 remove this paragraph when both are closed:
 
-1. **S059**, branch `s059-runtime-toolserver-loose-ends`: all nine
-   contracts are built and reviewed, and `main` is merged in. What is
-   missing is one whole run of the suite on a quiet machine (it passed
-   before `main` was merged in and did not finish after), then the close
-   and the pull request. Part A's sentence on steps run inside one
-   session is in this branch.
+1. **S059**: closed on the new machine the same day, where the whole
+   suite ran to its end; its section in Part C has the numbers.
 2. **S061**, branch `s061-scaffold-registry-eval`: five of seven
    contracts are built. The two left regenerate the evaluation baselines
    by replay, so they follow S059 onto `main`; then the reviews and the
@@ -364,7 +371,7 @@ pinned images resolve there.
 | S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | done | S055, S024 |
 | S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table (not done: the checker is development-base's to change first, and the backlog row stays open); `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | done | S054 |
 | S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
-| S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | doing | S046, S052 |
+| S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | done | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI | done | S053 |
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | doing | S039, S050 |
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
@@ -582,7 +589,7 @@ that day; the rest stand as their step recorded them.
 | `httpx2` logs each request's URL at INFO; the services' loggers stay at WARNING and the settings refuse an address with a query or a password, but nothing sets that logger's level as `quiet_sdk_logging` does for the SDK | S059 | open | S064 |
 | S059 set a request's query aside before the middleware stack; where a middleware forwards a copy of the scope (the caller's identity check), the server's access log no longer has the query, and where none does (the Claims API) it still has | S059 | open; S064's access-log row covers the rest | S064 |
 | `service_url_problem` still accepts some addresses the HTTP client refuses (an address of four numbers over 255, a host with a combining mark or an emoji); the second net, the client's own refusal at start, catches them | S059 | open | none |
-| `test_after_the_threshold_the_next_call_skips_the_first_candidate` (`tests/meridian/gateway/test_gateway_fallback.py`) failed in a whole run on a machine at a load over 60 and passes alone; S057 made five timing tests hold by construction and this one was not among them | S059 | open | none |
+| `test_after_the_threshold_the_next_call_skips_the_first_candidate` (`tests/meridian/gateway/test_gateway_fallback.py`) failed in a whole run on a machine at a load over 60 and passes alone, and in the whole run on a quiet machine that closed S059; S057 made five timing tests hold by construction and this one was not among them | S059 | open | none |
 | A shed call's audit row and span have no run: the run's ID in `_meta` is not verified on that path, so only the server's warning line names it | S059 | open; by design until a tool server can check a run without a worker | none |
 | On macOS `unused_port()` still releases its port before the test connects: a bound socket that does not listen drops a connect there, which then waits out its timeout, so a kept port cannot refuse | S057 | open; an observation: the required check runs on Linux, where the port is kept | none |
 | `tests/meridian/guardrails/test_redaction.py` has its own copy of the CPU-time measurement that is now `tests/meridian/cputime.py` | S057 | open | none |
@@ -8279,7 +8286,7 @@ backlog, without a change to the triage graph, its rules or a prompt.
   that log no field (no home).
 
 ### S059 — Runtime and tool server loose ends
-**Status:** doing · **Started:** 2026-10-05 · **Finished:** —
+**Status:** done · **Started:** 2026-10-05 · **Finished:** 2026-10-05
 **Goal:** close the ten runtime and tool server items of the follow-up
 backlog, T-62 among them, without touching a `/healthz` route or the
 identity files S056 is changing.
@@ -8289,8 +8296,13 @@ identity files S056 is changing.
 - **Run inside the orchestrating session, by the owner's instruction
   (2026-10-05):** "Start S059 and S060 in this session, and S061 when a
   slot frees." A suggested task and a routine's run do not show on the
-  owner's phone; this session does. Part A's "Working in parallel" says
-  so from this pull request on.
+  owner's phone; this session does. A sentence in Part A said so on this
+  branch for some hours and never reached `main`: the owner reversed it
+  the same day, after the work had moved to the virtual machine ("Work
+  one step at a time, nothing in parallel: no parallel steps and no
+  parallel implementers"), and Part A's "One step at a time" records
+  that from this pull request on. The step was closed alone, in a
+  session of its own.
 - **In parallel with S056 and S060.** S056 owns the kind cluster: this
   step ran no command against it and none against Azure.
 - **Before any code.** The threat-model note (`feature-threat-model`).
@@ -8464,32 +8476,39 @@ identity files S056 is changing.
   with a recording sampler and a recording processor, through each of
   the three services.
 - **The tool servers have their entry in `test_openapi.py`.**
-- **Gates so far, run by the main session.** On the branch before `main`
-  was merged in, with all nine contracts: the whole suite,
+- **Gates, run by the main session.** On the laptop, before `main` was
+  merged in, with all nine contracts: the whole suite,
   `GITHUB_ACTIONS=true make pytest-db`, 8,935 passed, 11 skipped, exit 0.
-  After S060 and then S056 were merged in: `ruff check --no-cache` and
-  `lint-imports` (5 kept) exit 0, and the secret scan found no leaks.
-  The whole suite did NOT finish on the merged branch: three runs on a
-  laptop at a load of 60 to 130 (the kind cluster and the test database
-  share one small virtual machine) were stopped at 98%, 51% and 47%,
-  each with one failure. The third run named it:
+  After S060 and then S056 were merged in, the whole suite did not
+  finish there: three runs at a load of 60 to 130 (the kind cluster and
+  the test database shared one small virtual machine) were stopped at
+  98%, 51% and 47%, each with one failure. The third run named it:
   `tests/meridian/gateway/test_gateway_fallback.py::test_after_the_threshold_the_next_call_skips_the_first_candidate`,
   a gateway test this step does not touch, which passes alone (the
-  file: 39 passed) and passed in the 8,935. The first two runs were
-  stopped before they named theirs.
-- **To finish (the owner stopped the work here on 2026-10-05, to move it
-  to a dedicated VM):** on a quiet machine merge `main`, run
-  `GITHUB_ACTIONS=true make pytest-db` once to the end, then `make docs`,
-  `make test`, `make registry` and `make secret-scan`; set this section
-  and the step's row to `done` with the suite's line; add the changelog
-  entry with the next free version (Part A's new sentence on steps run
-  inside one session is in this branch); open the pull request and set
-  it to merge on green. No code is known to be missing.
-- **Not run:** anything on the kind cluster (S056 owns it), so the kept
-  client and the 2 s keep-alive have met no real tool server pod; a
-  branch whose migration is not on `main` is not deployed. `make eval`
-  by name: its two tests are in the whole suite and passed on the
-  existing recording.
+  file: 39 passed) and passed in the 8,935; it has a backlog row.
+- **The run that closes the step**, on the virtual machine the work
+  moved to (12 cores, 11 GB, no cluster, nothing else running), after
+  `main` was merged in once more (pull request 83, documents only), on
+  commit 6651669 and before any edit of the close:
+  `GITHUB_ACTIONS=true make pytest-db PYTEST_ARGS="-v"`, 9,316 passed,
+  8 skipped, exit 0, in 2 min 31 s; no test failed, the gateway test
+  above among them. Then `make lint` (`ruff check`, `ruff format
+  --check`, `lint-imports`: 5 kept, 0 broken) and `make registry`, each
+  exit 0; and on the closed tree `make docs`, `make test` and
+  `make secret-scan` (no leaks), each exit 0.
+- **Documents read against the diff** (`docs-sync`): the root README's
+  rows for the Agent Runtime and the tool servers each gained a sentence
+  for this step; `docs/development-environment.md` no longer says that
+  Part A sizes parallel work; the threat model and the registry's README
+  were written with the code.
+- **Not run:** anything on the kind cluster (S056 owned it, and the new
+  machine has none yet), so the kept client and the 2 s keep-alive have
+  met no real tool server pod; a branch whose migration is not on `main`
+  is not deployed. The first `make deploy` and `make demo` on the new
+  machine, which S062 starts with, are where they meet one (`make smoke`
+  uses the probe, which keeps a client per call). `make eval` by name:
+  its two tests are in the whole suite and passed on the existing
+  recording.
 
 **Follow-ups:**
 
@@ -8787,3 +8806,17 @@ identity files S056 is changing.
   written; "In flight" under the backlog steps says what is left of
   each. Two cost rules: one whole suite at a time, and a step's branch is
   pushed at the end of a day.
+- **v0.43, 2026-10-05:** S059 done, the first step closed on the virtual
+  machine. Part A's "Working in parallel" is now "One step at a time",
+  the owner's decision of that day: no parallel steps and no parallel
+  implementers; what parallel work needed is kept for the day the owner
+  allows it again. The runtime keeps one HTTP client for each tool
+  server; a tool call carries the time the runtime will wait, and a call
+  with no slot in that time, or late before its work or its commit, is
+  `failed`, `timed-out`, the first two behind the refusal throttle; a
+  leg's end is written over `Running` only (migration 0016 bounds the
+  text columns of `runtime.runs`); one address check serves every
+  service; `policy_lookup`'s output schema requires `policy` when
+  `found` is true; no sampler or span processor sees a query string. Ten
+  backlog rows closed, six new ones. The whole suite there: 9,316
+  passed in 2 min 31 s, alone.
