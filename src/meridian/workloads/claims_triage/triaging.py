@@ -24,6 +24,7 @@ from opentelemetry import propagate
 from opentelemetry.trace import Span
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.http import database_failure, error_answer
@@ -31,12 +32,18 @@ from meridian.platform.common.telemetry import mark_error, set_span_attributes
 from meridian.platform.guardrails import EMAIL_PLACEHOLDER, PLACEHOLDERS, redact
 from meridian.runtime.models import RunResponse, RunState
 from meridian.workloads.claims_triage.lifecycle import (
+    AGENT,
     MAX_TRIAGES_PER_CLAIM,
     RULES_APPROVED,
     RULES_REFERRED,
     RULES_REQUESTED_DOCUMENTS,
+    RUNTIME_CONNECT_TIMEOUT_SECONDS,
+    RUNTIME_POOL_TIMEOUT_SECONDS,
+    RUNTIME_TIMEOUT_SECONDS,
+    RUNTIME_WRITE_TIMEOUT_SECONDS,
     SERVICE_NAME,
     TRIAGE_FAILED,
+    TRIAGE_LEASE_SECONDS,
     TRIAGE_RECLAIMED,
     TRIAGE_RETRIED,
     TRIAGE_STARTED,
@@ -46,6 +53,7 @@ from meridian.workloads.claims_triage.lifecycle import (
 )
 from meridian.workloads.claims_triage.models import (
     Claimant,
+    ClaimFacts,
     ClaimResponse,
     ClaimSubmission,
     DecisionFailure,
@@ -54,15 +62,27 @@ from meridian.workloads.claims_triage.models import (
 )
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
-AGENT = "claims-triage"
-RUNTIME_TIMEOUT_SECONDS = 60.0
-# Ending a run is best effort (the claim's move stands), and a send-back runs a
-# new triage after it inside the claim's lease (``TRIAGE_LEASE_SECONDS``), so
-# this call must stay short.
+# Ending a run is best effort (the claim's move stands), and ``add_documents``
+# and ``triage_again`` run a new triage after it, one after the other, inside
+# one lease (``TRIAGE_LEASE_SECONDS``), so this call must stay short: its read
+# timeout, the other phases being the same.
 END_RUN_TIMEOUT_SECONDS = 15.0
-# How long a claim may stay ``triaging`` before another post takes the triage
-# over: twice the longest a runtime call lasts, so a live request is not robbed.
-TRIAGE_LEASE_SECONDS = 2 * RUNTIME_TIMEOUT_SECONDS
+
+
+def runtime_timeout(read_seconds: float = RUNTIME_TIMEOUT_SECONDS) -> httpx.Timeout:
+    """The timeout of a call to the runtime: a value for each phase, so a
+    connection that never opens does not wait as long as a slow answer. The
+    values bound each phase, not the call: connect is given twice over TLS and a
+    read is each wait for bytes. A runtime that answers in one piece is waited
+    for at most pool + 2 x connect + write + read."""
+    return httpx.Timeout(
+        connect=RUNTIME_CONNECT_TIMEOUT_SECONDS,
+        read=read_seconds,
+        write=RUNTIME_WRITE_TIMEOUT_SECONDS,
+        pool=RUNTIME_POOL_TIMEOUT_SECONDS,
+    )
+
+
 RUN_FAILED_DETAIL = "the triage run did not complete; the claim is stored"
 RUN_TIMEOUT_DETAIL = "the triage run timed out; the claim is stored"
 PROPOSAL_LOST_DETAIL = "the proposal could not be stored; the claim is stored"
@@ -92,6 +112,42 @@ RUN_OUTCOMES: Mapping[tuple[RunState, Route], Transition] = {
 }
 
 logger = logging.getLogger(__name__)
+
+# What stands for a key of the data in a location: ``extra="forbid"`` puts the
+# key an unknown field was sent under in the error's location, and the key is
+# the caller's (or the stored row's), not the model's.
+DATA_KEY = "*"
+
+
+def claim_database_failure(exc: psycopg.Error, claim_id: str) -> tuple[int, str]:
+    """``database_failure`` for a failure that has a claim: the same answer, and
+    one line more that names the claim with the error's class and SQLSTATE (the
+    shared line cannot). Never the message, the SQL or its parameters."""
+    logger.error(
+        "database error on claim %s: %s (sqlstate %s)",
+        claim_id,
+        type(exc).__name__,
+        exc.sqlstate or "none",
+    )
+    return database_failure(exc)
+
+
+def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
+    """What failed to validate, as ``(dotted location, error type)`` pairs and
+    nothing else: never the message, the input or the context, which quote the
+    claimant's values. A list index is kept (``documents.3``); a key of the data
+    is replaced (``DATA_KEY``). No model of the workload has a free-keyed
+    mapping, so the keys of the data come only from an undeclared field."""
+    errors = exc.errors(include_url=False, include_input=False, include_context=False)
+    return tuple((_dotted(error), error["type"]) for error in errors)
+
+
+def _dotted(error: ErrorDetails) -> str:
+    parts = [str(part) for part in error["loc"]]
+    if error["type"] == "extra_forbidden" and parts:
+        parts[-1] = DATA_KEY
+    return ".".join(parts)
+
 
 NAME_PLACEHOLDER = "[name]"
 # The shortest part of a name that is replaced on its own: a shorter one ("Li",
@@ -184,6 +240,17 @@ def facts_for_run(
         submission.description, submission.claimant
     )
     facts["documents"] = list(dict.fromkeys([*submission.documents, *arrived]))
+    # The graph validates these as ``ClaimFacts`` at every node. Facts that
+    # would not validate fail the run as they always did; the log says why.
+    try:
+        ClaimFacts.model_validate(facts)
+    except ValidationError as exc:
+        logger.warning(
+            "the facts of claim %s are not valid for the run: %s %s",
+            submission.claim_id,
+            type(exc).__name__,
+            invalid_fields(exc),
+        )
     return facts
 
 
@@ -237,7 +304,7 @@ def _call_runtime(
     http: httpx.Client,
     path: str,
     body: dict[str, Any],
-    timeout: float | None = None,
+    timeout: httpx.Timeout | None = None,
 ) -> RunResponse:
     """Post to the runtime with the trace context; raise ``RuntimeCallError``
     for any failure. ``timeout`` replaces the client's for this call."""
@@ -283,7 +350,7 @@ def resume_run(
     tenant: str,
     claim_id: str,
     run_id: UUID,
-    timeout: float | None = None,
+    timeout: httpx.Timeout | None = None,
 ) -> RunResponse:
     """Resume the paused run. The resume carries no decision: the run reads the
     one recorded here (T-31), so a caller of the runtime cannot make one up."""
@@ -307,7 +374,9 @@ def end_run(
     ERROR too, with the IDs and its status only. The claim's move stands either
     way."""
     try:
-        run = resume_run(http, tenant, claim_id, run_id, END_RUN_TIMEOUT_SECONDS)
+        run = resume_run(
+            http, tenant, claim_id, run_id, runtime_timeout(END_RUN_TIMEOUT_SECONDS)
+        )
     except RuntimeCallError as exc:
         logger.error(
             "ending run %s of claim %s failed: %s: %s "
@@ -593,7 +662,7 @@ def triage_claim(
         taken_at, found_in, arrived, old_run = take_triage(dsn, tenant, claim_id)
     except psycopg.Error as exc:
         mark_error(span, exc)
-        return answer(*database_failure(exc), claim_id)
+        return answer(*claim_database_failure(exc, claim_id), claim_id)
     if taken_at is None:
         raise HTTPException(
             409,

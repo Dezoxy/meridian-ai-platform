@@ -329,14 +329,14 @@ milestone's exit.
 | S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table (not done: the checker is development-base's to change first, and the backlog row stays open); `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | done | S054 |
 | S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
 | S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | todo | S046, S052 |
-| S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI; a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it | todo | S053 |
+| S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI | done | S053 |
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | todo | S039, S050 |
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | todo | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | todo | S057, S059, S060 |
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | todo | S058, S065 |
-| S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
+| S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
 
 ### M3 — Reliability and operations
 
@@ -400,21 +400,25 @@ that day; the rest stand as their step recorded them.
 | One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | open | S059 |
 | The count of a refusal flood's last window is never written | S046 | closed by S058 for the gateway's own refusals (a row with the outcome `suppressed`); the caller check and the other services have a row below | S058 |
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | open | S059 |
-| A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open | S060 |
+| A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open; moved from S060 on 2026-10-05: the one reader of the table is `select_terms`, where a missing pair is never complete and the claim goes to an adjuster as unverified, so a failure there changes how the triage routes a claim | S067 |
+| The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | open; both of S060's reviewers rated it medium | S062 |
+| The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed | S065 |
+| A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | open | S067 |
+| Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | open | none |
 | The tool-call limits are the same for every agent | S014 | open | S031 |
-| Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | open | S060 |
+| Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | closed by S060 for the Claims API (a stored submission, a stored proposal and the facts a run gets are logged as location and error type); the graph's own validation is S067's row below | S060 |
 | A migration that adds columns locks `claims.claims` for its backfill | S015 | open | S065 |
 | After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
-| The adjuster's queue shows at most 100 claims with no next page | S016 | open | S060 |
+| The adjuster's queue shows at most 100 claims with no next page | S016 | closed by S060 (a keyset on the queue's own order and index, 100 to a page) | S060 |
 | `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
 | A file in the golden set's directory that the manifest does not list is not noticed | S017 | closed by S050 (refused when the report is built and before `eval run` sends anything) | S050 |
 | Hungarian forms of names and identifiers in the screening | S047 | open; not taken by S032, which measures injection (these are forms the redaction misses). S032 did measure injections written in Hungarian and German: none of 9 stopped | S067 |
 | The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | none |
 | `drafted_by` on a completion the filter withheld but the provider billed | S047 | open; left by S050, with its reason there | none |
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | open | S065 |
-| `database_failure` without the claim's ID | S048 | open | S060 |
-| A per-phase httpx timeout | S048 | open | S060 |
+| `database_failure` without the claim's ID | S048 | closed by S060 (a wrapper of the workload's logs the ID at twelve call sites; the queue has no claim) | S060 |
+| A per-phase httpx timeout | S048 | closed by S060 (3 s to connect, 5 s to write, 3 s for the pool, 60 s to read) | S060 |
 | Uploads (T-38) | S048 | open | none |
 | A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | closed by S052: the tests' one-second budget met bash's whole-second clock, so a tick skipped the loop; the budget is two seconds | none |
 | The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
@@ -439,15 +443,15 @@ that day; the rest stand as their step recorded them.
 | The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | none |
 | `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-76) | S053 | open | S021 |
 | Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | open | S067 |
-| A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | open | S060 |
+| A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | closed by S060 (handlers and a middleware of the workload's own) | S060 |
 | The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | open; left by S019 (application and edge logging, not the chart) | S064 |
 | The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | open | S059 |
-| The claimant's status page picks the latest proposal by `created_at` with no tie-break; the decided-claims view and 0009 break a tie by `proposal_id` | S053 | open | S060 |
+| The claimant's status page picks the latest proposal by `created_at` with no tie-break; the decided-claims view and 0009 break a tie by `proposal_id` | S053 | closed by S060 (the three statements of the pages break the tie by `proposal_id`) | S060 |
 | `finish_run` writes a run's status without checking the one it replaces, so a leg that outlives the ten-minute lease would overwrite the sweep's `Failed` (a live leg is bounded near 280 s) | S052 | open | S059 |
-| `AGENT` and `TRIAGE_LEASE_SECONDS` live in `triaging.py`, which loads FastAPI and httpx; the sweep keeps copies that a test holds equal | S052 | open | S060 |
-| The claimant's page does not say by when the documents are due | S052 | open | S060 |
-| Documents posted after the deadline are refused (409) and the adjuster does not see that they were tried | S052 | open | S060 |
-| The adjuster's queue shows a referred claim's last proposal reason, not that its documents are overdue (the claim's page says it) | S052 | open | S060 |
+| `AGENT` and `TRIAGE_LEASE_SECONDS` live in `triaging.py`, which loads FastAPI and httpx; the sweep keeps copies that a test holds equal | S052 | closed by S060 (they live in `lifecycle.py`; a test imports the sweep in a fresh interpreter) | S060 |
+| The claimant's page does not say by when the documents are due | S052 | closed by S060 (the day before which they are needed) | S060 |
+| Documents posted after the deadline are refused (409) and the adjuster does not see that they were tried | S052 | closed by S060 (one audit event per referral, and a sentence on the adjuster's page) | S060 |
+| The adjuster's queue shows a referred claim's last proposal reason, not that its documents are overdue (the claim's page says it) | S052 | closed by S060 ("Documents overdue" beside the reason) | S060 |
 | `make smoke` cannot see a schedule that stopped after a success: it has no server clock to compare with (the controller manager's Lease would be one) | S052 | open | S062 |
 | No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | partly closed by S024: an alert on the CronJob's last success, from kube-state-metrics, checked offline and not yet on a cluster. Still open: a metric of the sweep's own (what a pass found is in its log line only) | S064 |
 | A NetworkPolicy for the sweep's pod: egress to DNS and the database only | S052 | done in S019 | S019 |
@@ -7698,6 +7702,170 @@ that an embedding input is bounded by tokens and not by bytes; the
 output bound as the wire's cap, and what a model that bills reasoning
 tokens would meet.
 
+### S060 — Claims pages and API loose ends
+**Status:** done · **Started:** 2026-10-05 · **Finished:** 2026-10-05
+**Goal:** close the eleven claims workload items of the follow-up
+backlog, without a change to the triage graph, its rules or a prompt.
+
+**Decisions:**
+
+- **Run inside the orchestrating session, by the owner's instruction
+  (2026-10-05):** "Start S059 and S060 in this session, and S061 when a
+  slot frees." A suggested task and a routine's run do not show on the
+  owner's phone; this session does.
+- **In parallel with S056 and S059.** S056 owns the kind cluster: this
+  step ran no command against it and none against Azure.
+- **Inside the workload's folder.** Three items have their literal place
+  in a file another step is changing (`common/http.py`: S059's span
+  work, S056's `/healthz`) or that this step may not change (`graph.py`).
+  Each is done from the workload's side: the claim's ID is logged by a
+  wrapper of the workload's around `database_failure`; a 500 or 503
+  under `/claimant/` becomes a page through the claimant pages' own
+  handlers and a middleware of their own for what nothing handled; and
+  a claim that is not valid facts is found where the Claims API builds
+  the facts (`facts_for_run`), which logs each field and error type with
+  the claim's ID and then starts the run as before, so the triage's
+  route does not change.
+- **The wording version item goes to S067.** "A wording version missing
+  from `wording.EXCLUSION_CLAUSES` fails with a message that names it"
+  can only fail in `select_terms`, the one reader of the table. Today a
+  missing pair is never complete, the rules name the gap
+  `exclusion_clauses`, and the claim goes to an adjuster as unverified;
+  two tests pin that, and a third keeps the table equal to the
+  catalogue. A raise there turns a referral into a failed run, which is
+  a change to how the triage routes a claim, and this step makes none.
+  S067 changes the rules and has the item now. Ten of the eleven rows
+  are closed here.
+- **A timeout per phase: 3 s to connect, 5 s to write, 60 s to read,
+  3 s for a connection from the pool.** One number for all four let a
+  runtime that does not accept a connection hold a request for a
+  minute. The read value is the one that was there, so a triage has the
+  time it had. The values are not a deadline for a whole call: the
+  connect value counts for the TCP connection and again for the TLS
+  handshake, and a read is each wait for bytes. A runtime that answers
+  in one piece is waited for 74 s at most, and ending a run 29 s; a
+  send-back does both inside one lease, 103 s of its 120 s, and a test
+  holds that sum. The first values, 5, 10 and 5, summed to 125 s once
+  the handshake was counted, which both reviewers found.
+- **The day the documents are due, not the moment.** The sweep refers a
+  claim when the moment it began to wait plus the deadline's days has
+  passed; the page says "We need the documents before" the UTC day that
+  moment falls in, so before that day is always in time. A time to the
+  second, beside the time the claim was received, would let a claimant
+  work out whether the request came within seconds (the rules) or later
+  (a person), and T-65 keeps what produced a state off the page. The
+  date is shown only while the claim waits for documents.
+- **One name, one parser and one sum for the deadline.** The Claims API
+  reads the number of days from the variable the sweep reads
+  (`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`) through one function in
+  `lifecycle.py`, with the same default and bounds, so the two agree
+  when both are given the same value. The chart gives it to the sweep's
+  CronJob alone. Setting it on the Claims API too is a chart change,
+  S056 is changing the chart now and nothing here is deployed, so it is
+  in the backlog for S062; until then the default, 14 days, is the only
+  value under which the page is right. Both reviewers rated this medium.
+- **Documents posted too late leave one audit row.** A post that is
+  refused because the claim was referred for overdue documents writes
+  `claim.documents_refused` with the reason `after-deadline`, once per
+  referral (a second late post finds the row and writes nothing, so
+  nobody can fill the audit table), with no document's name. The
+  adjuster's claim page says "Documents were posted for this claim
+  after the deadline and were not taken": not "the claimant sent",
+  since the pages have no sign-in yet (T-01). The answer to the
+  claimant is the 409 it was, also when the row cannot be written: the
+  event is best effort, so a database fault does not make
+  `awaiting_adjuster` answer differently from any other state.
+  Rejected: a row in `claims.claim_documents`, which feeds the next
+  triage's facts and the claimant's list of what arrived.
+- **The queue's next page is a keyset**, on the order it already has
+  (`state_changed_at`, `claim_id`) and the index it already uses, 100
+  to a page. Rejected: an offset, which skips or repeats a claim when
+  the queue changes between two pages. A page asked for after the last
+  claim says so and links to the first.
+- **The latest proposal is the same one everywhere**: the three
+  statements of the pages break a tie on `created_at` by `proposal_id`,
+  as the decided-claims view and migration 0009 do.
+
+**Work log:**
+
+- **Mapping first.** An Explore subagent mapped the eleven rows to
+  files, functions, callers and tests, and marked four that could not
+  be done as worded; the decisions above answer them.
+- **Six contracts to the `implementer`, one after another**, since they
+  share `claimant.py`, `adjuster.py` and `moves.py`: the constants and
+  the timeouts; the two kinds of log line; the queue; the claimant's
+  error pages and the due date; the late documents; and the reviews'
+  findings. The main session read each diff and committed it.
+- **A mistake in the third contract, the main session's.** It called a
+  claim's ID a UUID. The `implementer` found the column's check
+  (`CLM-` and four digits) and validated the page cursor against that.
+- **Reviews**, `fastapi-reviewer` and `security-reviewer`, on the five
+  commits: no critical or high finding. Both found the lease's sum and
+  the chart's variable (above). Taken in the sixth contract besides:
+  the due day, the late post that stays a 409, the adjuster's sentence,
+  the page after the last claim, one text for a claimant's 500, a guard
+  test that fails when a model whose errors are logged gains a
+  free-keyed mapping or a discriminated union, and two files at the
+  800-line ceiling (the error middleware and the queue's reading moved
+  to modules of their own: `claimant.py` 759 lines, `adjuster.py` 764).
+- **One measurement, nothing changed on it.** `EXPLAIN (ANALYZE)` of
+  the queue as `claims_api`, 100 waiting claims: 2.4 ms with 5,000
+  audit rows, 100 to 330 ms with 200,000 (200 events a claim). The
+  claim's ID reaches an index in both branches of `audit.claim_trail`;
+  the tenant and the event are filters. In the backlog for S065.
+- **A flaky test of this step's own**, found by the first whole run:
+  two claims made a second apart were compared by pages that show when
+  each was received. Both now get one fixed time.
+
+**Result / verification:**
+
+- **The adjuster's queue has a next page past 100 claims and shows that
+  a referred claim's documents are overdue.** Tests: 101 claims, exactly
+  100, claims sharing a moment over the page boundary, another tenant's
+  claims, six cursors that are a 422, the notice beside the reason and
+  its four negatives.
+- **Documents posted after the deadline are shown to the adjuster as
+  tried.** Tests: one row per referral, two posts at once (made to
+  overlap on the claim's lock, one row), the other six states and the
+  other referral reasons (no row), no document's name in a row, a log
+  record or a span, and the page's sentence.
+- **The claimant's page says by when documents are due and picks the
+  latest proposal with the tie-break the views use.** Tests: the day
+  for 14 days and for another number, the first and the last second of
+  a day, no other state shows it, and the sweep's own pass refers a
+  claim an hour past the moment the page's day is taken from and leaves
+  one an hour short.
+- **A 500 or 503 under `/claimant/` is a page.** Tests: six kinds of
+  failure are the claimant's page there and the old answer on
+  `/adjuster/` and the JSON routes; a page that cannot be built ends as
+  the shared JSON 500; a cancellation and a response that has started
+  pass through.
+- **`database_failure` carries the claim's ID, and a record that is not
+  valid is logged by field and error type, never by its text.** Tests
+  at each call site group, and for the helper: a value never appears.
+- **The calls to the runtime have a timeout per phase**, and the lease
+  holds the end of a run and a triage (the test with the sum).
+- **`AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports
+  them without FastAPI.** A test imports the sweep in a fresh
+  interpreter and finds no FastAPI, httpx, Starlette, LangGraph or
+  Claims API module loaded.
+- **Gates, run by the main session on the merged branch:** `make docs`
+  and `make test` exit 0; `uv run ruff check . --no-cache`, `ruff
+  format --check` and `lint-imports` (5 kept) exit 0; the whole suite,
+  `GITHUB_ACTIONS=true make pytest-db`: 8,754 passed, 11 skipped, exit 0; `make secret-scan`: no
+  leaks.
+- **Not run:** anything on the kind cluster (S056 owns it): the pages
+  were tested with the application in process. `make eval` by name: the
+  two tests it runs are in the whole suite and passed on the existing
+  recording.
+
+**Follow-ups:**
+
+- In the backlog: the chart's variable (S062); the queue's lookup in
+  the trail (S065); the graph's own validation of a claim, and the
+  wording version (S067); two `except ValidationError` in `triaging.py`
+  that log no field (no home).
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -7951,3 +8119,13 @@ tokens would meet.
   refusal flood's last window is a row of its own, and the rate limiter
   runs before redaction, on one estimate of the text as sent. Five
   backlog rows closed; three new ones, none with a home that is running.
+- **v0.40, 2026-10-05:** S060 done, in the orchestrating session beside
+  S056 and S059. The adjuster's queue has a next page and says when a
+  referred claim's documents are overdue; documents posted after the
+  deadline leave one audit event and a sentence for the adjuster; the
+  claimant's page names the day documents are needed before, and a 500 or
+  503 under `/claimant/` is a page; a database failure is logged with the
+  claim's ID and a record that is not valid by field and error type; a
+  call to the runtime has a timeout per phase. Ten backlog rows closed,
+  one moved to S067 (the wording version: it would change how the triage
+  routes a claim), four new ones.

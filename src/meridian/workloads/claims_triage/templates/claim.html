@@ -76,6 +76,9 @@
 <p>The triage failed and there is no proposal to read; a decision refers the claim to you and records it.</p>
 {% elif overdue %}
 <p>The documents asked for did not arrive in time, so the claim is referred to you. There is no paused run; a decision here is recorded and moves the claim on.</p>
+{% if documents_refused %}
+<p>Documents were posted for this claim after the deadline and were not taken; you can ask for them again with Request documents.</p>
+{% endif %}
 {% elif no_run and view.proposal %}
 <p>There is no paused run and no new proposal: the claim was triaged {{ cap_words }} times, and the proposal shown predates the documents that arrived.</p>
 {% elif no_run %}

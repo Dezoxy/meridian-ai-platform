@@ -13,13 +13,15 @@ the diagram, and the edges not implemented are listed there by name.
 Every change of state goes through ``move_claim``, in the caller's transaction.
 """
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Literal, NamedTuple
 from uuid import UUID
 
 import psycopg
 
 from meridian.platform.common.audit import AuditEvent, record_event
+from meridian.platform.common.env import SettingsError
 
 SERVICE_NAME = "claims-api"
 # How many times a claim may be taken for triage, whatever starts one (a post, a
@@ -30,6 +32,36 @@ MAX_TRIAGES_PER_CLAIM = 5
 # to an adjuster (S052): the owner's decision of 2026-10-03, counted from the
 # claim's last move to ``documents_requested``. The sweep's setting may change it.
 DOCUMENTS_DEADLINE_DAYS = 14
+# The variable that sets those days, for the sweep (which acts on it) and for the
+# Claims API (whose status page tells the claimant the day): one name, one parser
+# and one sum, here, so the two agree when both are given the same value. The
+# chart sets it on the sweep's CronJob alone today (a step that works on the chart
+# will set it on the Claims API too), so a deployment that changes it sets it on
+# both. Whole days, ASCII digits.
+DOCUMENTS_DEADLINE_ENV = "MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS"
+MIN_DEADLINE_DAYS = 1
+MAX_DEADLINE_DAYS = 365
+SECONDS_PER_DAY = 24 * 60 * 60
+# The agent a claim's triage runs. Here, not in ``triaging.py``, with the lease
+# below: the sweep imports them, and ``triaging.py`` loads FastAPI, httpx and
+# OpenTelemetry, which a job that needs only PostgreSQL does not.
+AGENT = "claims-triage"
+# What a call to the Agent Runtime may take, per phase (httpx's four timeouts;
+# ``triaging.runtime_timeout`` builds them). Each value bounds one phase, not the
+# call: the connect value is given to the TCP connect and again to the TLS
+# handshake, and a read is each wait for bytes, so a runtime that sends its answer
+# in pieces can take longer. One that answers in one piece is waited for at most
+# pool + 2 x connect + write + read.
+RUNTIME_TIMEOUT_SECONDS = 60.0
+RUNTIME_CONNECT_TIMEOUT_SECONDS = 3.0
+RUNTIME_WRITE_TIMEOUT_SECONDS = 5.0
+RUNTIME_POOL_TIMEOUT_SECONDS = 3.0
+# How long a claim may stay ``triaging`` before another post takes the triage
+# over: twice the read timeout, so a live request is not robbed. The lease has to
+# cover two calls one after the other: the end of the old run (``end_run``, a
+# shorter read) and the new triage, in ``add_documents`` and ``triage_again``.
+# With the values above that is 29 s + 74 s = 103 s of 120 s (a test holds it).
+TRIAGE_LEASE_SECONDS = 2 * RUNTIME_TIMEOUT_SECONDS
 
 LifecycleState = Literal[
     "submitted",
@@ -90,6 +122,16 @@ DOCUMENTS_OVERDUE = Transition(
 TRIAGE_NOT_STARTED = Transition("submitted", "triage_failed", "triage-not-started")
 TRIAGE_ABANDONED = Transition("triaging", "triage_failed", "triage-abandoned")
 
+# The one audit event that is no move (S060): documents posted for a claim that was
+# referred because its documents did not arrive. The post is refused (409) and
+# the claim stays where it is; the event says that documents were tried, so that the
+# adjuster's page can. Not ``claim.awaiting_adjuster``, which is the referral the
+# page reads its reason from. Closed vocabulary: the reason is a fixed word, and the
+# event holds no document's name, count or content.
+DOCUMENTS_REFUSED_EVENT = "claim.documents_refused"
+DOCUMENTS_REFUSED_OUTCOME = "refused"
+AFTER_DEADLINE_REASON = "after-deadline"
+
 TRANSITIONS: frozenset[Transition] = frozenset(
     {
         TRIAGE_STARTED,
@@ -113,6 +155,38 @@ TRANSITIONS: frozenset[Transition] = frozenset(
         TRIAGE_ABANDONED,
     }
 )
+
+
+def deadline_days_of(raw: str | None) -> int:
+    """The days a claim waits for documents from the variable's value: the
+    default when it is unset (``None``), else a whole number from
+    ``MIN_DEADLINE_DAYS`` to ``MAX_DEADLINE_DAYS``. Raises ``SettingsError``
+    naming the variable, never its value."""
+    if raw is None:
+        return DOCUMENTS_DEADLINE_DAYS
+    # ASCII digits only: ``\d`` and ``int`` accept other scripts' digits.
+    if re.fullmatch(r"[0-9]{1,4}", raw):
+        days = int(raw)
+        if MIN_DEADLINE_DAYS <= days <= MAX_DEADLINE_DAYS:
+            return days
+    raise SettingsError(
+        f"{DOCUMENTS_DEADLINE_ENV} must be a whole number of days "
+        f"from {MIN_DEADLINE_DAYS} to {MAX_DEADLINE_DAYS}"
+    )
+
+
+def deadline_seconds(days: int) -> float:
+    """How long a claim may wait for documents, in seconds: what the sweep tests
+    a claim's age against."""
+    return float(days * SECONDS_PER_DAY)
+
+
+def documents_due(requested_at: datetime, days: int) -> datetime:
+    """The moment the sweep refers a claim whose documents were asked for at
+    ``requested_at`` (its ``state_changed_at``): the moment its age passes
+    ``deadline_seconds``."""
+    return requested_at + timedelta(seconds=deadline_seconds(days))
+
 
 MOVE_CLAIM = """
 UPDATE claims.claims

@@ -9,15 +9,17 @@ name, description or claimant field reaches a log or a span.
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
 import httpx
 import psycopg
 import pytest
-from dbsupport import DatabaseHandle
+from dbsupport import OWNER, DatabaseHandle
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from opentelemetry import trace
@@ -25,6 +27,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from psycopg.types.json import Jsonb
+from pydantic import ValidationError
 from servicesupport import (
     assert_spans_hold_no_exception_and_no_canary,
     claim_with_id,
@@ -44,8 +47,13 @@ from workloads.claims_triage.test_claims_app import (
     make_client,
 )
 
+from meridian.platform.common.db import connect
 from meridian.workloads.claims_triage import moves, triaging
-from meridian.workloads.claims_triage.models import ClaimSubmission, DecisionFailure
+from meridian.workloads.claims_triage.models import (
+    MAX_DOCUMENTS,
+    ClaimSubmission,
+    DecisionFailure,
+)
 
 MOVE_ID = "CLM-9301"
 TENANT = "claims-triage"
@@ -57,6 +65,10 @@ NOT_AWAITING_DOCUMENTS_DETAIL = "the claim does not wait for documents"
 TOO_MANY_DOCUMENTS_DETAIL = "the claim would hold more than 20 documents"
 NOT_WAITING_DETAIL = "the claim does not wait for an adjuster"
 NO_SUCH_CLAIM = {"detail": "no such claim"}
+SWEEP_ROLE = "claims_sweep"
+SWEEP_SERVICE = "claims-sweep"
+OVERDUE_REASON = "documents-overdue"
+REFUSED_EVENT = "claim.documents_refused"
 CLAIMANT = {"name": "Bence Novak", "email": "bence.novak49@example.com"}
 
 
@@ -182,6 +194,53 @@ def audit_rows(db: DatabaseHandle) -> int:
     return owner_rows(db, "SELECT count(*) FROM audit.events")[0][0]
 
 
+def put_referral(
+    db: DatabaseHandle,
+    claim_id: str = MOVE_ID,
+    reason: str | None = OVERDUE_REASON,
+    tenant: str = TENANT,
+) -> None:
+    """The event that brought a claim to an adjuster, as the sweep writes it: by
+    its own role and service (``audit.claim_trail`` shows both roles' rows)."""
+    with connect(db.dsn(SWEEP_ROLE), SWEEP_SERVICE) as conn:
+        conn.execute(
+            "INSERT INTO audit.events (service, event, outcome, tenant, reference, "
+            "reason) VALUES (%s, 'claim.awaiting_adjuster', 'awaiting_adjuster', "
+            "%s, %s, %s)",
+            (SWEEP_SERVICE, tenant, claim_id, reason),
+        )
+        conn.commit()
+
+
+def put_referred_claim(db: DatabaseHandle, reason: str | None = OVERDUE_REASON) -> None:
+    """A claim in ``awaiting_adjuster`` that its referral brought there."""
+    put_claim(db, MOVE_ID, "awaiting_adjuster", triages=1)
+    put_referral(db, reason=reason)
+
+
+def refused_rows(db: DatabaseHandle, claim_id: str = MOVE_ID) -> list[tuple]:
+    """The rows that say documents were tried after the deadline: service, event,
+    outcome, reason, tenant, reference, run and the role the database stamped."""
+    return owner_rows(
+        db,
+        "SELECT service, event, outcome, reason, tenant, reference, run_id, db_role "
+        "FROM audit.events WHERE event = %s AND reference = %s",
+        (REFUSED_EVENT, claim_id),
+    )
+
+
+LATE_ROW = (
+    "claims-api",
+    "claim.documents_refused",
+    "refused",
+    "after-deadline",
+    TENANT,
+    MOVE_ID,
+    None,
+    "claims_api",
+)
+
+
 def triage_url(claim_id: str = MOVE_ID) -> str:
     return f"/claims/{claim_id}/triage"
 
@@ -233,6 +292,93 @@ def test_the_facts_hold_each_name_once_the_submissions_own_repeats_included() ->
     assert len(documents) == 20
 
 
+def test_the_fields_of_a_validation_error_are_locations_and_types_and_no_value() -> (
+    None
+):
+    claim = {
+        **with_documents(MOVE_ID, ["photos", ""]),
+        "peril": CANARY,
+        "loss_location": {"city": "Győr", "country": CANARY},
+    }
+    with pytest.raises(ValidationError) as refused:
+        ClaimSubmission.model_validate(claim)
+
+    fields = triaging.invalid_fields(refused.value)
+
+    # A nested location is dotted, a list index is kept, and the pair holds the
+    # error's type only: not its message, its input or its context.
+    assert set(fields) == {
+        ("peril", "literal_error"),
+        ("loss_location.country", "string_pattern_mismatch"),
+        ("documents.1", "string_too_short"),
+    }
+    assert all(isinstance(pair, tuple) and len(pair) == 2 for pair in fields)
+    for needle in (CANARY, "should", "Input", "expected", "^[A-Z]"):
+        assert needle not in repr(fields)
+
+
+def test_a_key_the_model_does_not_declare_is_a_star_in_the_fields() -> None:
+    # ``extra="forbid"`` puts the key the data brought in the error's location.
+    claim = {
+        **claim_with_id(MOVE_ID),
+        CANARY: 1,
+        "loss_location": {"city": "Győr", "country": "HU", f"{CANARY}-2": 2},
+    }
+    with pytest.raises(ValidationError) as refused:
+        ClaimSubmission.model_validate(claim)
+
+    fields = triaging.invalid_fields(refused.value)
+
+    assert set(fields) == {
+        ("*", "extra_forbidden"),
+        ("loss_location.*", "extra_forbidden"),
+    }
+    assert CANARY not in repr(fields)
+
+
+def test_an_error_of_the_whole_model_has_an_empty_location() -> None:
+    claim = {**claim_with_id(MOVE_ID), "reported_on": "2026-01-01"}
+    with pytest.raises(ValidationError) as refused:
+        ClaimSubmission.model_validate(claim)
+
+    assert triaging.invalid_fields(refused.value) == (("", "value_error"),)
+
+
+def test_facts_that_are_not_valid_are_logged_by_field_and_returned_as_they_are(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    submission = ClaimSubmission.model_validate(with_documents(MOVE_ID, ["photos"]))
+    arrived = [f"{CANARY}-{n}" for n in range(MAX_DOCUMENTS)]
+
+    with caplog.at_level(logging.DEBUG):
+        facts = triaging.facts_for_run(submission, arrived)
+
+    # The run starts as before and fails as before: the log line is all that is
+    # new, and it holds the claim, the field and the type, not a name.
+    assert facts["documents"] == ["photos", *arrived]
+    assert "claimant" not in facts
+    (warning,) = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    message = warning.getMessage()
+    assert warning.levelno == logging.WARNING
+    assert MOVE_ID in message
+    assert "documents" in message
+    assert "too_long" in message
+    assert CANARY not in caplog.text
+
+
+def test_facts_at_the_documents_bound_are_valid_and_log_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    submission = ClaimSubmission.model_validate(with_documents(MOVE_ID, ["photos"]))
+    arrived = [f"name-{n}" for n in range(MAX_DOCUMENTS - 1)]
+
+    with caplog.at_level(logging.DEBUG):
+        facts = triaging.facts_for_run(submission, arrived)
+
+    assert len(facts["documents"]) == MAX_DOCUMENTS
+    assert caplog.records == []
+
+
 def test_a_submission_that_repeats_a_name_is_sent_twenty_names_at_most(
     fresh_database: DatabaseHandle,
 ) -> None:
@@ -269,6 +415,11 @@ def test_ending_a_run_resumes_it_with_its_own_short_timeout() -> None:
     assert triaging.END_RUN_TIMEOUT_SECONDS == 15.0
     # The test client's own timeout is httpx's default: this one is the call's.
     assert request.extensions["timeout"]["read"] == triaging.END_RUN_TIMEOUT_SECONDS
+    # The other phases are the runtime client's, only the read is shorter.
+    assert request.extensions["timeout"]["connect"] == 3.0
+    assert request.extensions["timeout"]["write"] == 5.0
+    assert request.extensions["timeout"]["pool"] == 3.0
+    assert triaging.END_RUN_TIMEOUT_SECONDS < triaging.RUNTIME_TIMEOUT_SECONDS
     assert triaging.END_RUN_TIMEOUT_SECONDS < triaging.TRIAGE_LEASE_SECONDS
 
 
@@ -1280,6 +1431,247 @@ def test_documents_for_a_claim_that_does_not_wait_for_them_are_409(
     assert arrived_names(fresh_database, MOVE_ID) == []
     assert claim_snapshot(fresh_database) == before
     assert runtime.calls == []
+    assert refused_rows(fresh_database) == []
+
+
+def test_documents_posted_after_the_deadline_are_409_and_one_event_says_so(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_referred_claim(fresh_database)
+    before = claim_snapshot(fresh_database)
+    runtime = MoveRuntime()
+    client = client_for(fresh_database, runtime)
+
+    first = client.post(documents_url(), json={"documents": ["photos"]})
+    second = client.post(documents_url(), json={"documents": ["invoice"]})
+
+    # The answer is the one any claim that does not wait for documents gets.
+    for response in (first, second):
+        assert response.status_code == 409
+        assert response.json() == {"detail": NOT_AWAITING_DOCUMENTS_DETAIL}
+    # One row, written by the Claims API's role although the request was
+    # refused, and the second post added none.
+    assert refused_rows(fresh_database) == [LATE_ROW]
+    assert arrived_names(fresh_database, MOVE_ID) == []
+    assert claim_snapshot(fresh_database) == before
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        pytest.param("rules-referred", id="rules-referred"),
+        pytest.param("triage-cap-reached", id="cap"),
+        pytest.param(None, id="no-reason"),
+    ],
+)
+def test_documents_for_a_claim_referred_for_another_reason_are_409_and_leave_no_event(
+    fresh_database: DatabaseHandle, reason: str | None
+) -> None:
+    put_referred_claim(fresh_database, reason)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": NOT_AWAITING_DOCUMENTS_DETAIL}
+    assert refused_rows(fresh_database) == []
+
+
+def test_documents_for_a_claim_referred_a_second_time_for_another_reason_leave_no_event(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_referred_claim(fresh_database)
+    put_referral(fresh_database, reason="triage-cap-reached")
+
+    response = client_for(fresh_database, MoveRuntime()).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    # The latest referral decides, as it does on the adjuster's pages.
+    assert response.status_code == 409
+    assert refused_rows(fresh_database) == []
+
+
+def test_documents_for_a_claim_that_has_no_referral_event_leave_no_event(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", triages=1)
+
+    response = client_for(fresh_database, MoveRuntime()).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    assert response.status_code == 409
+    assert refused_rows(fresh_database) == []
+
+
+def test_documents_for_another_tenants_claim_are_404_and_leave_no_event(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", tenant=OTHER_TENANT)
+    put_referral(fresh_database, tenant=OTHER_TENANT)
+
+    response = client_for(fresh_database, MoveRuntime()).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    assert response.status_code == 404
+    assert refused_rows(fresh_database) == []
+
+
+def test_a_claim_that_is_overdue_again_records_the_next_late_post_again(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_referred_claim(fresh_database)
+    client = client_for(fresh_database, MoveRuntime())
+    client.post(documents_url(), json={"documents": ["photos"]})
+    assert len(refused_rows(fresh_database)) == 1
+    # The claim was asked for documents again, and they did not come again.
+    put_referral(fresh_database)
+
+    response = client.post(documents_url(), json={"documents": ["invoice"]})
+
+    assert response.status_code == 409
+    assert refused_rows(fresh_database) == [LATE_ROW, LATE_ROW]
+
+
+def fail_in_the_database(conn: psycopg.Connection, *_: object) -> None:
+    """A real database error, in the caller's transaction (which it aborts)."""
+    conn.execute("SELECT 1 / 0")
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        pytest.param("documents_refused_since_referral", id="the-trail-read"),
+        pytest.param("record_event", id="the-insert"),
+    ],
+)
+def test_a_late_post_the_database_cannot_record_is_still_the_409_notice(
+    fresh_database: DatabaseHandle,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    step: str,
+) -> None:
+    put_referred_claim(fresh_database)
+    before = claim_snapshot(fresh_database)
+    monkeypatch.setattr(moves, step, fail_in_the_database)
+    runtime = MoveRuntime()
+
+    with caplog.at_level(logging.DEBUG):
+        response = client_for(fresh_database, runtime).post(
+            documents_url(), json={"documents": ["photos"]}
+        )
+
+    # The answer is the one a claim in any other state gets (T-65).
+    assert response.status_code == 409
+    assert response.json() == {"detail": NOT_AWAITING_DOCUMENTS_DETAIL}
+    claim_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("database error on claim")
+    ]
+    assert claim_lines == [
+        f"database error on claim {MOVE_ID}: DivisionByZero (sqlstate 22012)"
+    ]
+    assert refused_rows(fresh_database) == []
+    assert claim_snapshot(fresh_database) == before
+    assert runtime.calls == []
+
+
+def test_a_database_error_in_the_lock_read_of_a_late_post_still_fails_it(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put_referred_claim(fresh_database)
+    monkeypatch.setattr(moves, "LOCK_CLAIM_SQL", "SELECT 1 / 0, %s, %s")
+
+    response = client_for(fresh_database, MoveRuntime()).post(
+        documents_url(), json={"documents": ["photos"]}
+    )
+
+    # Only the event is best effort: the lock read fails as it always did.
+    assert response.status_code == 500
+    assert refused_rows(fresh_database) == []
+
+
+def blocked_on_a_lock(db: DatabaseHandle) -> int:
+    """How many backends of the database wait for a lock (seen by the admin,
+    who alone may read their state)."""
+    with psycopg.connect(db.admin_dsn) as admin:
+        row = admin.execute(
+            "SELECT count(*) FROM pg_stat_activity "
+            "WHERE datname = %s AND wait_event_type = 'Lock'",
+            (db.name,),
+        ).fetchone()
+    assert row is not None
+    return row[0]
+
+
+def test_two_late_posts_at_once_leave_one_event(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_referred_claim(db)
+    dsn = claims_dsn(db)
+    # Both apps are built before the posts go out, so the 8 s window below
+    # covers the requests only, not the start of an app.
+    clients = {
+        name: make_client(dsn, MoveRuntime())  # type: ignore[arg-type]
+        for name in ("photos", "invoice")
+    }
+
+    def post_late(name: str) -> int:
+        client = clients[name]
+        return client.post(documents_url(), json={"documents": [name]}).status_code
+
+    with connect(db.dsn(OWNER), "test-lock") as holder:
+        # The claim is locked, so both requests reach their lock and wait there:
+        # they overlap by construction, and neither has read the trail yet.
+        holder.execute(
+            "SELECT 1 FROM claims.claims WHERE claim_id = %s FOR NO KEY UPDATE",
+            (MOVE_ID,),
+        )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            posts = [pool.submit(post_late, name) for name in clients]
+            give_up = time.monotonic() + 8
+            while blocked_on_a_lock(db) < 2:
+                assert time.monotonic() < give_up, "the posts did not both wait"
+                time.sleep(0.02)
+            holder.rollback()
+            statuses = [post.result(timeout=30) for post in posts]
+
+    assert statuses == [409, 409]
+    assert refused_rows(db) == [LATE_ROW]
+
+
+CANARY_DOCUMENT = "canary-document-name-3141"
+
+
+def test_no_row_log_or_span_of_a_late_post_holds_a_document_name(
+    fresh_database: DatabaseHandle, caplog: pytest.LogCaptureFixture
+) -> None:
+    db = fresh_database
+    put_referred_claim(db)
+    exporter = InMemorySpanExporter()
+
+    with caplog.at_level(logging.DEBUG):
+        response = client_for(db, MoveRuntime(), exporter).post(
+            documents_url(), json={"documents": [CANARY_DOCUMENT, "photos"]}
+        )
+
+    assert response.status_code == 409
+    assert refused_rows(db) == [LATE_ROW]
+    assert CANARY_DOCUMENT not in caplog.text
+    assert "photos" not in caplog.text
+    assert_spans_hold_no_exception_and_no_canary(exporter, CANARY_DOCUMENT)
+    # Every row of every table the post could write: the event is no more than
+    # that documents were sent.
+    for table in ("audit.events", "claims.claims", "claims.claim_documents"):
+        stored = owner_rows(db, f"SELECT t::text FROM {table} AS t")  # noqa: S608
+        assert CANARY_DOCUMENT not in str(stored), table
 
 
 def test_documents_that_arrive_at_the_cap_are_stored_and_refer_the_claim_with_no_run(
@@ -1871,6 +2263,11 @@ def test_a_stored_submission_that_is_not_valid_is_a_500_with_the_claim_and_no_va
         MOVE_ID in r.getMessage() and "ValidationError" in r.getMessage()
         for r in error_lines
     )
+    # The field and the type of the error are in the line; the value is not.
+    assert any(
+        "'peril'" in r.getMessage() and "literal_error" in r.getMessage()
+        for r in error_lines
+    )
     assert CANARY not in response.text + caplog.text
     assert "input_value" not in caplog.text
     assert runtime.calls == []
@@ -1969,6 +2366,14 @@ def test_when_the_database_is_down_a_move_is_503_and_no_run_starts_or_ends(
     assert response.json()["claim_id"] == MOVE_ID
     assert CANARY not in response.text + caplog.text
     assert runtime.calls == []
+    # One line carries the claim's ID with the class and the SQLSTATE.
+    assert any(
+        r.levelno == logging.ERROR
+        and MOVE_ID in r.getMessage()
+        and "OperationalError" in r.getMessage()
+        and "sqlstate none" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 # ── what no log or span holds (T-03) ────────────────────────────────────────

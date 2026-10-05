@@ -27,15 +27,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path as FilePath
 from typing import Annotated, NamedTuple
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, Form, HTTPException, Path, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from opentelemetry.trace import Tracer
-from pydantic import ValidationError
+from pydantic import AwareDatetime, ValidationError
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -52,8 +53,15 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.runtime.sweep import ABANDONED_REASON
+from meridian.workloads.claims_triage.adjuster_queue import (
+    QUEUE_LIMIT,
+    QueueCursor,
+    QueueRow,
+    load_queue,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     DOCUMENTS_OVERDUE,
+    DOCUMENTS_REFUSED_EVENT,
     MAX_TRIAGES_PER_CLAIM,
     SERVICE_NAME,
 )
@@ -64,7 +72,12 @@ from meridian.workloads.claims_triage.models import (
     DecisionResponse,
 )
 from meridian.workloads.claims_triage.proposal import TriageProposal
-from meridian.workloads.claims_triage.triaging import NUMBER_WORDS, arrived_documents
+from meridian.workloads.claims_triage.triaging import (
+    NUMBER_WORDS,
+    arrived_documents,
+    claim_database_failure,
+    invalid_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +92,6 @@ NO_PROPOSAL_TEXT = "no proposal is stored"
 ARRIVED_LABEL = "Documents that arrived later"
 NO_STRUCTURED_PROPOSAL_TEXT = "no structured proposal"
 UNREADABLE_PROPOSAL_TEXT = "the stored proposal could not be read"
-# The queue's two states are literals in QUEUE_SQL: the partial index of
-# migration 0011 serves a query only when its WHERE implies the index's.
-QUEUE_LIMIT = 100
 TRAIL_LIMIT = 200
 HTTP_OK = 200
 HTTP_FORBIDDEN = 403
@@ -134,22 +144,13 @@ TEMPLATES = Environment(
     auto_reload=False,
 )
 
-QUEUE_SQL = (
-    "SELECT c.claim_id, c.state, c.state_changed_at, c.submission ->> 'peril', "
-    "c.submission -> 'claimed_amount', p.reason "
-    "FROM claims.claims AS c "
-    "LEFT JOIN LATERAL (SELECT reason FROM claims.triage_proposals "
-    "WHERE claim_id = c.claim_id ORDER BY created_at DESC LIMIT 1) AS p ON true "
-    "WHERE c.tenant = %s AND c.state IN ('awaiting_adjuster', 'triage_failed') "
-    "ORDER BY c.state_changed_at, c.claim_id LIMIT %s"
-)
 CLAIM_SQL = (
     "SELECT state, state_changed_at, received_at, submission, run_id, triages "
     "FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 )
 PROPOSAL_SQL = (
     "SELECT proposal FROM claims.triage_proposals "
-    "WHERE claim_id = %s ORDER BY created_at DESC LIMIT 1"
+    "WHERE claim_id = %s ORDER BY created_at DESC, proposal_id LIMIT 1"
 )
 STATE_SQL = "SELECT state FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 # The decision that moved the claim into its state: a word of the three, for
@@ -193,6 +194,25 @@ REASON_SQL = (
 )
 # The reason of the sweep's move of a claim whose documents did not come.
 DOCUMENTS_OVERDUE_REASON = DOCUMENTS_OVERDUE.trigger
+# The refusal's event after the claim's latest referral (a claim referred again
+# starts over): one row or none, asked of the database like ``REASON_SQL``.
+LATE_DOCUMENTS_SQL = (
+    "SELECT 1 FROM audit.claim_trail AS late "
+    "WHERE late.claim_id = %(claim)s AND late.tenant = %(tenant)s "
+    "AND late.event = %(late)s AND late.recorded_at > ("
+    "SELECT max(recorded_at) FROM audit.claim_trail "
+    "WHERE claim_id = %(claim)s AND tenant = %(tenant)s "
+    "AND event = 'claim.awaiting_adjuster') LIMIT 1"
+)
+
+
+def documents_refused_since_referral(
+    conn: psycopg.Connection, claim_id: str, tenant: str
+) -> bool:
+    """Whether documents were refused after the deadline since the latest
+    referral; the refusal asks it too, with the claim locked."""
+    params = {"claim": claim_id, "tenant": tenant, "late": DOCUMENTS_REFUSED_EVENT}
+    return conn.execute(LATE_DOCUMENTS_SQL, params).fetchone() is not None
 
 
 class TrailRow(NamedTuple):
@@ -201,15 +221,6 @@ class TrailRow(NamedTuple):
     service: str
     event: str
     outcome: str
-    reason: str | None
-
-
-class QueueRow(NamedTuple):
-    claim_id: str
-    state: str
-    since: datetime
-    peril: str | None
-    claimed_amount: object
     reason: str | None
 
 
@@ -226,7 +237,8 @@ class ClaimView:
     none) and ``triages`` the number of times it has been triaged.
     ``referral_reason`` is the reason of the move that brought a waiting claim
     to the adjuster (``None`` for a claim in another state, or a move with no
-    reason)."""
+    reason). ``documents_refused``: documents were posted after the deadline
+    since a referral for overdue documents."""
 
     claim_id: str
     state: str
@@ -242,6 +254,7 @@ class ClaimView:
     run_id: UUID | None = None
     triages: int = 0
     referral_reason: str | None = None
+    documents_refused: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,7 +377,27 @@ def facts_of(submission: object, arrived: Sequence[str] = ()) -> dict[str, str]:
     }
 
 
-def render_queue(rows: list[QueueRow]) -> str:
+def _next_page_path(cursor: QueueCursor) -> str:
+    """The link to the page after ``cursor``: the row's full moment (microseconds
+    and offset, which ``_when`` cuts) and its claim, URL-encoded."""
+    query = urlencode(
+        {
+            "after_time": cursor.since.astimezone(UTC).isoformat(),
+            "after_claim": cursor.claim_id,
+        }
+    )
+    return f"{QUEUE_PATH}?{query}"
+
+
+def render_queue(
+    rows: list[QueueRow],
+    next_page: QueueCursor | None = None,
+    *,
+    after_cursor: bool = False,
+) -> str:
+    """The queue page. ``after_cursor`` is a page asked for with a cursor: it has
+    a way back to the first page, and when empty says no claim follows the
+    cursor (the claims before it may still wait)."""
     shown = [
         {
             "claim_id": r.claim_id,
@@ -373,10 +406,18 @@ def render_queue(rows: list[QueueRow]) -> str:
             "peril": _text(r.peril),
             "amount": _euros(r.claimed_amount),
             "reason": _text(r.reason),
+            # The same test as the claim's page: the sweep referred it.
+            "overdue": r.state == "awaiting_adjuster"
+            and r.referral_reason == DOCUMENTS_OVERDUE_REASON,
         }
         for r in rows
     ]
-    return TEMPLATES.get_template("queue.html").render(rows=shown, limit=QUEUE_LIMIT)
+    return TEMPLATES.get_template("queue.html").render(
+        rows=shown,
+        limit=QUEUE_LIMIT,
+        next_page=None if next_page is None else _next_page_path(next_page),
+        first_page=QUEUE_PATH if after_cursor else None,
+    )
 
 
 def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
@@ -407,6 +448,7 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         no_run=waiting and not has_run,
         # The sweep referred it: the documents asked for did not arrive.
         overdue=overdue,
+        documents_refused=view.documents_refused,
         # Triaging again is a send-back of a paused run, or a retry of a failed
         # triage; at the cap it is neither, and the page says why.
         send_back=waiting and has_run and not at_cap,
@@ -443,12 +485,7 @@ def render_error(
 
 
 # ── what the pages read ─────────────────────────────────────────────────────
-def load_queue(dsn: str, tenant: str) -> list[QueueRow]:
-    with connect(dsn, SERVICE_NAME) as conn:
-        rows = conn.execute(QUEUE_SQL, (tenant, QUEUE_LIMIT)).fetchall()
-    return [QueueRow(*row) for row in rows]
-
-
+# (the queue's reading is in ``adjuster_queue.py``)
 def _proposal_of(
     claim_id: str, row: tuple | None
 ) -> tuple[TriageProposal | None, str | None]:
@@ -460,13 +497,33 @@ def _proposal_of(
     try:
         return TriageProposal.model_validate(row[0]), None
     except ValidationError as exc:
-        # The claim's ID and the class only: the document is the model's text.
+        # The claim's ID, the class, the fields and the error types only: the
+        # document is the model's text.
         logger.warning(
-            "the stored proposal of claim %s is not valid: %s",
+            "the stored proposal of claim %s is not valid: %s %s",
             claim_id,
             type(exc).__name__,
+            invalid_fields(exc),
         )
         return None, UNREADABLE_PROPOSAL_TEXT
+
+
+def _referral_of(
+    conn: psycopg.Connection, claim_id: str, tenant: str
+) -> tuple[str | None, bool]:
+    """For a claim in ``awaiting_adjuster``: the reason of the move that referred
+    it (``None`` when there is none) and whether documents were refused after the
+    deadline since that referral."""
+    referral = conn.execute(
+        REASON_SQL, (claim_id, tenant, "claim.awaiting_adjuster")
+    ).fetchone()
+    referral_reason = None if referral is None else referral[0]
+    # Asked of the database: the listed trail cuts off the newest rows.
+    documents_refused = (
+        referral_reason == DOCUMENTS_OVERDUE_REASON
+        and documents_refused_since_referral(conn, claim_id, tenant)
+    )
+    return referral_reason, documents_refused
 
 
 def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
@@ -491,12 +548,11 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
             ended = conn.execute(ENDED_SQL, (claim_id, tenant, decision[1])).fetchone()
             resend_due = ended is None
             swept = ended == SWEPT_END
-        referral_reason = None
-        if state == "awaiting_adjuster":
-            referral = conn.execute(
-                REASON_SQL, (claim_id, tenant, f"claim.{state}")
-            ).fetchone()
-            referral_reason = None if referral is None else referral[0]
+        referral_reason, documents_refused = (
+            _referral_of(conn, claim_id, tenant)
+            if state == "awaiting_adjuster"
+            else (None, False)
+        )
     proposal, note = _proposal_of(claim_id, proposal_row)
     return ClaimView(
         claim_id=claim_id,
@@ -513,6 +569,7 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         run_id=run_id,
         triages=triages,
         referral_reason=referral_reason,
+        documents_refused=documents_refused,
     )
 
 
@@ -566,15 +623,39 @@ def add_adjuster_pages(
         return Response(stylesheet, media_type="text/css")
 
     @app.get(QUEUE_PATH, include_in_schema=False, response_class=HTMLResponse)
-    def adjuster_queue() -> Response:
+    def adjuster_queue(
+        after_time: Annotated[AwareDatetime | None, Query()] = None,
+        after_claim: Annotated[str | None, Query(pattern=CLAIM_ID_PATTERN)] = None,
+    ) -> Response:
+        # The two name the last row of the page before: both or neither. The
+        # shared 422 answers, as it does for a value that does not parse.
+        if (after_time is None) != (after_claim is None):
+            missing = "after_claim" if after_claim is None else "after_time"
+            raise RequestValidationError(
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("query", missing),
+                        "msg": "Field required together with the other cursor field",
+                        "input": None,
+                    }
+                ]
+            )
+        after = (
+            None
+            if after_time is None or after_claim is None
+            else QueueCursor(after_time, after_claim)
+        )
         with start_span(tracer, "claims.adjuster.queue") as span:
             set_span_attributes(span, {"meridian.tenant": tenant})
             try:
-                rows = load_queue(dsn, tenant)
+                rows, next_page = load_queue(dsn, tenant, after)
             except psycopg.Error as exc:
                 mark_error(span, exc)
                 return render_error(*database_failure(exc))
-        return HTMLResponse(render_queue(rows))
+        return HTMLResponse(
+            render_queue(rows, next_page, after_cursor=after is not None)
+        )
 
     @app.get(
         QUEUE_PATH + "/{claim_id}", include_in_schema=False, response_class=HTMLResponse
@@ -588,7 +669,7 @@ def add_adjuster_pages(
                 view = load_claim(dsn, tenant, claim_id)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                return render_error(*database_failure(exc))
+                return render_error(*claim_database_failure(exc, claim_id))
         if view is None:
             return render_error(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
         return HTMLResponse(render_claim(view))
@@ -606,7 +687,7 @@ def add_adjuster_pages(
                 found = load_proposal(dsn, tenant, claim_id)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                return error_answer(*database_failure(exc))
+                return error_answer(*claim_database_failure(exc, claim_id))
         if found is None:
             return error_answer(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
         state, proposal = found
@@ -626,7 +707,7 @@ def add_adjuster_pages(
         try:
             view = load_claim(dsn, tenant, claim_id)
         except psycopg.Error as exc:
-            database_failure(exc)  # logs the class and SQLSTATE
+            claim_database_failure(exc, claim_id)  # logs the claim, class, SQLSTATE
             view = None
         if view is None:
             return render_error(failure.status, failure.detail)
