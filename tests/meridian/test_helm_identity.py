@@ -820,11 +820,21 @@ def script_function(script: str, name: str) -> str:
 
 
 def run_identity_check(
-    tmp_path: Path, *, deployed: str = "deployment.apps/claims-api", answers: str
+    tmp_path: Path,
+    *,
+    deployed: str = "deployment.apps/claims-api",
+    answers: str,
+    primary: str = "platform-db-1",
+    audit: str = "6",
+    audit_after: int = 0,
 ) -> tuple[list[str], str]:
     """``check_service_identity`` from smoke.sh in bash against a stub ``kctl``.
     ``answers`` is what the probe prints for each mode, as ``mode=answer`` pairs
     (``mode=FAIL`` makes the probe exit non-zero with a traceback on stderr).
+    ``primary`` is the database's primary pod (empty: none), ``audit`` what
+    ``psql`` prints for the audit query (empty: no row; ``FAIL``: the query
+    fails), after ``audit_after`` queries that print nothing. ``sleep`` does
+    nothing, so a wait for the row costs no time.
     Returns the output lines and what ``kctl`` was asked."""
     asked = tmp_path / "kctl-calls"
     asked.touch()
@@ -835,12 +845,21 @@ def run_identity_check(
             'pass() { echo "PASS  $*"; }',
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
+            "sleep() { :; }",
             re.search(r"^readonly IDENTITY_.*?\n\n", SMOKE_SH, re.M | re.S).group(0),
             script_function(SMOKE_SH, "clean_lines"),
             "kctl() {",
             f'  echo "$*" >>"{asked}"',
             '  case "$*" in',
             '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            '    *"get pod"*) printf "%s" "${PRIMARY}" ;;',
+            '    *" -c postgres "*)',
+            '      if [[ "${AUDIT}" == FAIL ]]; then',
+            '        echo "psql: could not connect" >&2; return 1',
+            "      fi",
+            f'      queries="$(grep -c "psql -d meridian" "{asked}")"',
+            "      if ((queries <= AUDIT_AFTER)); then return 0; fi",
+            '      printf "%s" "${AUDIT}"; return 0 ;;',
             '    *" exec "*)',
             '      mode="${@: -4:1}"',
             "      for pair in ${ANSWERS}; do",
@@ -856,6 +875,7 @@ def run_identity_check(
             script_function(SMOKE_SH, "deployed_services"),
             script_function(SMOKE_SH, "identity_status"),
             script_function(SMOKE_SH, "expect_identity_status"),
+            script_function(SMOKE_SH, "check_gateway_refusal_row"),
             script_function(SMOKE_SH, "check_service_identity"),
             "check_service_identity",
         ]
@@ -864,13 +884,23 @@ def run_identity_check(
         ["bash", "-c", script],
         capture_output=True,
         text=True,
-        env={"PATH": os.environ["PATH"], "DEPLOYED": deployed, "ANSWERS": answers},
+        env={
+            "PATH": os.environ["PATH"],
+            "DEPLOYED": deployed,
+            "ANSWERS": answers,
+            "PRIMARY": primary,
+            "AUDIT": audit,
+            "AUDIT_AFTER": str(audit_after),
+        },
         check=True,
     )
     return done.stdout.splitlines(), asked.read_text()
 
 
-GOOD = "health=200 anonymous=401 foreign-tenant=403"
+GOOD = "health=200 anonymous=401 foreign-tenant=403 foreign-ca=refused"
+# The probe runs four times: three statuses, then the certificate of another CA.
+PROBE_RUNS = 4
+LINES = 5
 
 
 def test_smoke_runs_the_identity_check_last_and_it_is_documented() -> None:
@@ -878,7 +908,8 @@ def test_smoke_runs_the_identity_check_last_and_it_is_documented() -> None:
     calls = [line for line in lines[lines.index("check_edge") :] if line]
 
     assert calls[7:9] == ["check_network_policy", "check_service_identity"]
-    assert "9. service identity" in SMOKE_SH
+    assert "9. service identity: five lines" in SMOKE_SH
+    assert "three lines, from the Agent Runtime" not in SMOKE_SH
 
 
 def test_the_identity_probe_is_python_that_compiles_and_reads_the_pods_own_files() -> (
@@ -904,21 +935,23 @@ def test_the_identity_check_passes_when_the_gateway_answers_200_401_403(
 ) -> None:
     lines, asked = run_identity_check(tmp_path, answers=GOOD)
 
-    assert [line.split("  ")[0] for line in lines] == ["PASS"] * 3
+    assert [line.split("  ")[0] for line in lines] == ["PASS"] * LINES
     # From the runtime's pod: the only one that reaches the gateway and holds a
     # certificate the registry lets call it.
-    assert asked.count("-n meridian exec deploy/agent-runtime -- python -c") == 3
+    assert (
+        asked.count("-n meridian exec deploy/agent-runtime -- python -c") == PROBE_RUNS
+    )
     assert "deploy/claims-api" not in asked
 
 
 @pytest.mark.parametrize(
     ("answers", "failing"),
     [
-        ("health=503 anonymous=401 foreign-tenant=403", 0),
-        ("health=200 anonymous=200 foreign-tenant=403", 1),
-        ("health=200 anonymous=403 foreign-tenant=403", 1),
-        ("health=200 anonymous=401 foreign-tenant=200", 2),
-        ("health=200 anonymous=401 foreign-tenant=401", 2),
+        ("health=503 anonymous=401 foreign-tenant=403 foreign-ca=refused", 0),
+        ("health=200 anonymous=200 foreign-tenant=403 foreign-ca=refused", 1),
+        ("health=200 anonymous=403 foreign-tenant=403 foreign-ca=refused", 1),
+        ("health=200 anonymous=401 foreign-tenant=200 foreign-ca=refused", 2),
+        ("health=200 anonymous=401 foreign-tenant=401 foreign-ca=refused", 2),
     ],
 )
 def test_the_identity_check_fails_on_any_other_status(
@@ -927,16 +960,20 @@ def test_the_identity_check_fails_on_any_other_status(
     lines, _ = run_identity_check(tmp_path, answers=answers)
 
     verdicts = [line.split("  ")[0] for line in lines]
-    assert verdicts == ["FAIL" if i == failing else "PASS" for i in range(3)]
+    assert verdicts == ["FAIL" if i == failing else "PASS" for i in range(LINES)]
 
 
 def test_a_probe_that_raises_is_a_failure_not_a_refusal(tmp_path: Path) -> None:
     lines, _ = run_identity_check(
-        tmp_path, answers="health=FAIL anonymous=FAIL foreign-tenant=FAIL"
+        tmp_path,
+        answers="health=FAIL anonymous=FAIL foreign-tenant=FAIL foreign-ca=FAIL",
     )
 
-    assert [line.split("  ")[0] for line in lines] == ["FAIL"] * 3
+    # The audit line (4th) asks the database, not the probe: it still passes.
+    verdicts = [line.split("  ")[0] for line in lines]
+    assert verdicts == ["FAIL", "FAIL", "FAIL", "PASS", "FAIL"]
     assert "Traceback" in lines[0]
+    assert "Traceback" in lines[4]
 
 
 def test_the_identity_check_skips_while_the_services_are_not_deployed(

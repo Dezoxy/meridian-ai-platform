@@ -1269,9 +1269,12 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # table would get a stored proposal "policy not found", which is final. The
     # ingestion calls the gateway, so it follows the gateway's rollout. The
     # certificates come right after the release: the ingestion Job mounts a
-    # Secret that cert-manager makes from one of them (S055).
+    # Secret that cert-manager makes from one of them (S055). The issuer is a
+    # precondition like the database: it is checked before the image is built
+    # and before any Job runs (S056).
     assert main_sequence() == [
         "require_database",
+        "require_issuer",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',

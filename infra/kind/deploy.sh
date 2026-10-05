@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Put the walking skeleton on the local platform: `make deploy`. Safe to run
 # again; it converges. Needs `make up` first.
+#   0. the preconditions, before anything is built or run: the Database, its
+#      NetworkPolicy, its roles and their Secrets from `make up`; and the
+#      ClusterIssuer `meridian-services` (S056), which must exist and be Ready:
+#      without it the Certificates of step 3 are never issued, and a cluster
+#      made before S055 does not know the Certificate kind, so the upgrade would
+#      fail after the Jobs of step 2 had run
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
 #   2. the migration Job, then the policy seed Job, each as the database owner
@@ -47,6 +53,8 @@ readonly RELEASE=meridian
 readonly IMAGE_REPOSITORY=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
+# The ClusterIssuer of kind's values (identity.issuer.name), made by `make up`.
+readonly ISSUER_NAME=meridian-services
 # One list: each service is a Deployment of the same name, and each has a
 # Secret <service>-db (tests/meridian/test_kind_manifests.py checks the
 # chart against it). The role Secrets come from DATABASE_ROLES (common.sh).
@@ -97,6 +105,20 @@ require_database() {
   done
   database_roles_reconciled ||
     die "the database roles are not all reconciled; run 'make up' first"
+}
+
+# The issuer of the services' certificates (S056): the ClusterIssuer that kind's
+# values name (identity.issuer; a test keeps the two equal) must exist and be
+# Ready, or the chart's Certificates would never be issued, and the migration
+# and seed Jobs would already have run when the upgrade found out. A cluster
+# made before S055 does not know the kind at all, and kubectl then fails: that
+# is the same refusal, with its own error left out.
+require_issuer() {
+  local ready
+  ready="$(kctl get clusterissuer "${ISSUER_NAME}" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" || ready=""
+  [[ "${ready}" == True ]] ||
+    die "the ClusterIssuer '${ISSUER_NAME}' is missing or not Ready (a cluster made before S055 does not even know the kind), so the chart's Certificates would never be issued, and the Jobs would already have run by then; run 'make up' first"
 }
 
 # Build the image and tag it by content. Sets ${image} and ${tag}. Docker's
@@ -288,6 +310,7 @@ wait_for_token_window() {
 }
 
 require_database
+require_issuer
 build_image
 run_job "meridian-migrate-${tag}" migrate
 run_job "meridian-seed-${tag}" seed

@@ -80,8 +80,15 @@ async def echo_the_caller(scope: Scope, receive: Receive, send: Send) -> None:
 
 
 @contextmanager
-def serve_tls(app: ASGIApp, ca: CertificateAuthority, server: KeyPair) -> Iterator[str]:
-    """Run ``app`` over TLS; yield its base URL (``https://127.0.0.1:<port>``)."""
+def serve_tls(
+    app: ASGIApp,
+    ca: CertificateAuthority,
+    server: KeyPair,
+    cert_reqs: ssl.VerifyMode = ssl.CERT_OPTIONAL,
+) -> Iterator[str]:
+    """Run ``app`` over TLS; yield its base URL (``https://127.0.0.1:<port>``).
+    ``cert_reqs`` is what the server asks of a client's certificate: optional
+    (the platform's setting) unless a test needs ``ssl.CERT_NONE``."""
     config = uvicorn.Config(
         app,
         host=LOOPBACK,
@@ -91,7 +98,7 @@ def serve_tls(app: ASGIApp, ca: CertificateAuthority, server: KeyPair) -> Iterat
         ssl_certfile=str(server.cert),
         ssl_keyfile=str(server.key),
         ssl_ca_certs=str(ca.ca_file),
-        ssl_cert_reqs=ssl.CERT_OPTIONAL,
+        ssl_cert_reqs=cert_reqs,
     )
     instance = uvicorn.Server(config)
     thread = threading.Thread(target=instance.run, daemon=True)

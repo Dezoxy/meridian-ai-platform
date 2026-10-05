@@ -271,7 +271,7 @@ node image, Kubernetes components and the platform).
    proof (line 3). It fails when the connection is made, and when the
    NetworkPolicy `default-deny` is missing. Before `make deploy` this line
    prints SKIP.
-9. **Service identity.** Three lines, run with Python in the Agent Runtime's
+9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
    from the gateway altogether, so the runtime's is the pod that reaches it).
@@ -280,11 +280,24 @@ node image, Kubernetes components and the platform).
    401: the gateway knows no caller. The same request with the runtime's own
    certificate, naming the tenant `evaluation`, which is real and may run the
    triage agent but is not one the registry lets the runtime name, answers
-   403 (so only the identity rule refuses it, not the gateway's own tenant
-   check). The probe checks the gateway's certificate against the CA and
-   its DNS name; a traceback (a name that does not resolve, a certificate that
-   does not verify) is a FAIL, never a refusal. Before `make deploy` this
-   check prints SKIP.
+   403. The 403 alone does not say who refused (the gateway answers 403 for
+   its own policy too), so the fourth line reads the audit table in the
+   database's primary pod: a row of the gateway's refusal with the reason the
+   identity rule writes (`caller-name-not-allowed`), the Agent Runtime as the
+   calling service and the tenant `evaluation`, recorded in the last 120
+   seconds by the database's own clock. The gateway writes it in a worker
+   thread and at most once per reason, tenant and minute, so the check asks
+   for a row that exists and is recent, never for a count that went up, and
+   tries for about ten seconds; the line says the row's age. The fifth line
+   presents a certificate of another CA: the probe makes a throwaway key and a
+   self-signed certificate that carries the runtime's own URI (the right name,
+   the wrong CA) in a directory under `/tmp` that is removed when the probe
+   ends, and the gateway must end the connection with a TLS alert, or close
+   it, before it answers: a status is a FAIL. The key is never printed, passed
+   as an argument or kept. The probe checks the gateway's certificate against
+   the CA and its DNS name; a traceback (a name that does not resolve, a
+   certificate that does not verify, a refused connection) is a FAIL, never a
+   refusal. Before `make deploy` this check prints SKIP.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -333,6 +346,13 @@ In order, `make deploy`:
    applied, a role is not reconciled, a role Secret is missing or the
    database's NetworkPolicy `platform-db` is absent (the chart's
    `default-deny` would otherwise cut the database off from its operator).
+   It refuses the same way, before it builds anything or runs a Job, when the
+   ClusterIssuer `meridian-services` (the issuer in
+   [`values/meridian.yaml`](values/meridian.yaml)) is missing or not Ready,
+   or when the cluster does not know the kind at all (a cluster made before
+   S055): the chart's Certificates would never be issued, and the
+   Jobs would already have run when the upgrade found out. `make up` installs
+   the issuer.
 2. Builds and loads the image.
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as

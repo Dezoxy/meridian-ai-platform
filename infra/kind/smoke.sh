@@ -53,24 +53,38 @@
 #                 the connection succeeds (the cluster does not enforce
 #                 NetworkPolicy, or a rule is too wide). Skipped while the
 #                 Claims API is not deployed (`make deploy`).
-#   9. service identity: three lines, from the Agent Runtime's pod to the Model
-#                 Gateway (S055; the Claims API's pod cannot reach the gateway,
-#                 which check 8 proves, so the runtime's does). The image has no
-#                 curl, so Python opens the connection and checks the gateway's
-#                 certificate against the CA. `GET /healthz` with no client
-#                 certificate answers 200 (the kubelet's probe presents none);
-#                 a `POST /v1/chat` with none answers 401 (no identity); the
-#                 same with the runtime's own certificate, naming a tenant the
-#                 registry's services.yaml does not let it name (a real tenant,
-#                 so the gateway's own tenant check would let it through),
-#                 answers 403. The tools check
-#                 above is the fourth proof: its calls run over TLS with the
-#                 runtime's certificate. The two refusals (the 401 and the 403)
-#                 leave two refusal rows in the audit table on each run, one
-#                 per reason (the gateway throttles its refusal rows to one per
-#                 reason and minute). Skipped while the Meridian services are
-#                 not deployed (`make deploy`). A traceback is a failure, not a
-#                 refusal.
+#   9. service identity: five lines, from the Agent Runtime's pod to the Model
+#                 Gateway (S055, S056; the Claims API's pod cannot reach the
+#                 gateway, which check 8 proves, so the runtime's does). The
+#                 image has no curl, so Python opens the connection and checks
+#                 the gateway's certificate against the CA. `GET /healthz` with
+#                 no client certificate answers 200 (the kubelet's probe
+#                 presents none); a `POST /v1/chat` with none answers 401 (no
+#                 identity); the same with the runtime's own certificate,
+#                 naming a tenant the registry's services.yaml does not let it
+#                 name (a real tenant, so the gateway's own tenant check would
+#                 let it through), answers 403. The fourth line reads the
+#                 reason of that 403 from the audit table, in the database's
+#                 primary pod: a row of the gateway's refusal for the identity
+#                 rule's reason (`caller-name-not-allowed`), naming the
+#                 runtime as the calling service, recorded in the last 120
+#                 seconds by the database's clock. The gateway writes it in a
+#                 worker thread, at most one per reason and tenant and minute,
+#                 so the check asks for a row that exists and is recent, never
+#                 for a count that went up, and tries for about ten seconds;
+#                 without it a 403 from the gateway's own policy would pass for
+#                 the wrong reason. The fifth presents a certificate of another
+#                 CA: the probe makes a throwaway key and a self-signed
+#                 certificate with the runtime's own URI (the right name, the
+#                 wrong CA), and the gateway must end the connection (a TLS
+#                 alert, or a close after its own certificate verified) before
+#                 any answer: a status is a FAIL. The tools check above is a
+#                 further proof: its calls run over TLS with the runtime's
+#                 certificate. The two refusals (the 401 and the 403) leave two
+#                 refusal rows in the audit table on each run, one per reason
+#                 (the gateway throttles its refusal rows to one per reason and
+#                 minute). Skipped while the Meridian services are not deployed
+#                 (`make deploy`). A traceback is a failure, not a refusal.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -103,7 +117,8 @@ except TimeoutError:
     print("blocked")'
 # The service identity check (9): the Model Gateway's Service from the Agent
 # Runtime's pod, with the pod's own certificate files (MERIDIAN_TLS_*). The probe
-# prints the HTTP status of one request and nothing else; its argument says which:
+# prints the HTTP status of one request and nothing else (but for the last mode);
+# its argument says which:
 #   health          GET /healthz, no client certificate
 #   anonymous       POST /v1/chat, no client certificate
 #   foreign-tenant  POST /v1/chat with the runtime's certificate, naming a tenant
@@ -111,24 +126,86 @@ except TimeoutError:
 #                   gateway would serve (tenants.yaml: `evaluation` may run the
 #                   claims-triage agent), so only the identity rule refuses it;
 #                   an unknown tenant would be refused without S055
+#   foreign-ca      the same request with a throwaway key and a self-signed
+#                   certificate that carries the runtime's own URI (the pod's
+#                   MERIDIAN_IDENTITY_PREFIX and the service's ID): the right
+#                   name, the wrong CA. The key and certificate are made here,
+#                   written to a directory under /tmp (the pod's one writable
+#                   path) that is removed when the probe ends, and never printed
+#                   or passed as an argument. It prints "refused" when the
+#                   server ends the connection with a TLS alert or closes it
+#                   once its own certificate verified (under TLS 1.3 the alert
+#                   reaches the client with the first request, not the
+#                   handshake), and the status when an answer came, which is a
+#                   FAIL. Anything else (the server's certificate not
+#                   verifying, a name that does not resolve, a refused
+#                   connection, a timeout) stays a traceback.
+# The audit line's constants (the row of the 403 above): the gateway's service
+# name, the reason the identity rule writes for a name the caller may not use
+# (a test keeps it equal to NAME_REFUSAL_REASON), the calling service, which is
+# the deployment the probe runs in, and how far back and how long to look.
 readonly IDENTITY_HOST=model-gateway.meridian.svc
 readonly IDENTITY_PORT=8000
 readonly IDENTITY_FOREIGN_TENANT=evaluation
-readonly IDENTITY_PROBE='import http.client, json, os, ssl, sys, uuid
+readonly IDENTITY_CALLER=agent-runtime
+readonly IDENTITY_GATEWAY_SERVICE=model-gateway
+readonly IDENTITY_AUDIT_REASON=caller-name-not-allowed
+readonly IDENTITY_AUDIT_WINDOW=120
+readonly IDENTITY_AUDIT_ATTEMPTS=6
+readonly IDENTITY_AUDIT_INTERVAL=2
+readonly IDENTITY_PROBE='import datetime, http.client, json, os, ssl, sys, tempfile, uuid
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 mode, host, port, tenant = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 context = ssl.create_default_context(cafile=os.environ["MERIDIAN_TLS_CA_FILE"])
-if mode == "foreign-tenant":
-    context.load_cert_chain(os.environ["MERIDIAN_TLS_CERT_FILE"], os.environ["MERIDIAN_TLS_KEY_FILE"])
-connection = http.client.HTTPSConnection(host, port, context=context, timeout=10)
-if mode == "health":
-    connection.request("GET", "/healthz")
+def answer():
+    connection = http.client.HTTPSConnection(host, port, context=context, timeout=10)
+    connection.connect()
+    try:
+        if mode == "health":
+            connection.request("GET", "/healthz")
+        else:
+            headers = {"Content-Type": "application/json"}
+            if mode != "anonymous":
+                headers.update({"X-Meridian-Tenant": tenant, "X-Meridian-Agent": "claims-triage", "X-Meridian-Run": str(uuid.uuid4())})
+            body = json.dumps({"messages": [{"role": "user", "content": "identity check"}]})
+            connection.request("POST", "/v1/chat", body=body, headers=headers)
+        return str(connection.getresponse().status)
+    except ssl.SSLCertVerificationError:
+        raise
+    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+        if mode != "foreign-ca":
+            raise
+        return "refused"
+if mode == "foreign-ca":
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "foreign-ca probe")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    uri = os.environ["MERIDIAN_IDENTITY_PREFIX"] + "agent-runtime"
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(minutes=10))
+        .add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(uri)]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    with tempfile.TemporaryDirectory(prefix="foreign-ca-", dir="/tmp") as directory:
+        with open(directory + "/tls.crt", "wb") as file:
+            file.write(certificate.public_bytes(serialization.Encoding.PEM))
+        with open(directory + "/tls.key", "wb") as file:
+            file.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        context.load_cert_chain(directory + "/tls.crt", directory + "/tls.key")
+        print(answer())
 else:
-    headers = {"Content-Type": "application/json"}
     if mode == "foreign-tenant":
-        headers.update({"X-Meridian-Tenant": tenant, "X-Meridian-Agent": "claims-triage", "X-Meridian-Run": str(uuid.uuid4())})
-    body = json.dumps({"messages": [{"role": "user", "content": "identity check"}]})
-    connection.request("POST", "/v1/chat", body=body, headers=headers)
-print(connection.getresponse().status)'
+        context.load_cert_chain(os.environ["MERIDIAN_TLS_CERT_FILE"], os.environ["MERIDIAN_TLS_KEY_FILE"])
+    print(answer())'
 
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
@@ -909,6 +986,52 @@ expect_identity_status() {
   fi
 }
 
+# check_gateway_refusal_row: the audit row of the 403 above, read in the
+# database's primary pod the way check_cost_series reads the ledger. The reason
+# the identity rule writes for a caller that names a tenant it may not
+# (NAME_REFUSAL_REASON), the gateway as the service that wrote it (`service`),
+# the calling service in `reference` (refuse_name in the gateway) and the tenant
+# the probe named; `recorded_at` is the database's own clock (a timestamptz its
+# insert trigger sets), so the age is the database's, not this laptop's. The
+# gateway writes in a worker thread and at most one such row per reason, tenant
+# and minute, so the query asks for a row that exists and is recent (never for a
+# count that went up) and runs again for about ten seconds while there is none.
+# Every value in the SQL is a constant of this script; none came from a pod.
+check_gateway_refusal_row() {
+  local primary err_file detail answer attempt what
+  what="a refusal for ${IDENTITY_AUDIT_REASON} by ${IDENTITY_CALLER} (tenant ${IDENTITY_FOREIGN_TENANT})"
+  err_file="$(mktemp)"
+  if ! primary="$(kctl -n meridian get pod \
+    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>"${err_file}")" || [[ -z "${primary}" ]]; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "service identity: no primary pod found for platform-db to read the audit row of the 403${detail:+ (kubectl said: ${detail})}"
+    return
+  fi
+  for ((attempt = 1; attempt <= IDENTITY_AUDIT_ATTEMPTS; attempt++)); do
+    if ! answer="$(kctl -n meridian exec "${primary}" -c postgres -- \
+      psql -d meridian -tAc "SELECT floor(extract(epoch FROM now() - recorded_at))::bigint FROM audit.events WHERE service = '${IDENTITY_GATEWAY_SERVICE}' AND event = 'model.call' AND outcome = 'refused' AND reason = '${IDENTITY_AUDIT_REASON}' AND reference = '${IDENTITY_CALLER}' AND tenant = '${IDENTITY_FOREIGN_TENANT}' AND recorded_at > now() - interval '${IDENTITY_AUDIT_WINDOW} seconds' ORDER BY recorded_at DESC LIMIT 1" \
+      2>"${err_file}")"; then
+      detail="$(clean_lines "$(<"${err_file}")")"
+      rm -f "${err_file}"
+      fail "service identity: could not read audit.events in ${primary}${detail:+ (kubectl said: ${detail})}"
+      return
+    fi
+    answer="$(clean_lines "${answer}")"
+    [[ -z "${answer}" ]] || break
+    ((attempt == IDENTITY_AUDIT_ATTEMPTS)) || sleep "${IDENTITY_AUDIT_INTERVAL}"
+  done
+  rm -f "${err_file}"
+  if [[ -z "${answer}" ]]; then
+    fail "service identity: the gateway's audit log has no row for ${what} in the last ${IDENTITY_AUDIT_WINDOW} s after ${IDENTITY_AUDIT_ATTEMPTS} tries: the 403 was not recorded, or was not the identity rule's"
+  elif [[ "${answer}" =~ ^[0-9]+$ ]]; then
+    pass "service identity: the gateway's audit log has ${what}, ${answer} s old"
+  else
+    fail "service identity: the audit query's answer was not a number of seconds"
+  fi
+}
+
 check_service_identity() {
   local found
   if ! found="$(deployed_services)"; then
@@ -922,6 +1045,8 @@ check_service_identity() {
   expect_identity_status health 200 "GET /healthz on the Model Gateway with no certificate (the kubelet's probe sends none)"
   expect_identity_status anonymous 401 "POST /v1/chat on the Model Gateway with no certificate"
   expect_identity_status foreign-tenant 403 "POST /v1/chat with the Agent Runtime's certificate, naming a tenant it may not name"
+  check_gateway_refusal_row
+  expect_identity_status foreign-ca refused "POST /v1/chat with a certificate of the Agent Runtime's own name from another CA"
 }
 
 trap cleanup EXIT
