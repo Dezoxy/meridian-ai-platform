@@ -13,7 +13,8 @@
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
 #      there is deleted), Meridian's alert rules (infra/kind/alerts, one
-#      PrometheusRule), Tempo, Loki, OpenTelemetry Collector
+#      PrometheusRule), a ServiceMonitor for cert-manager's metrics, Tempo,
+#      Loki, OpenTelemetry Collector
 # Every version is pinned in pins.env.
 set -euo pipefail
 
@@ -220,6 +221,8 @@ kctl -n observability wait --for=condition=Available \
 apply_dashboards
 log "observability: Meridian's alert rules"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/alerts/meridian.yaml" >/dev/null
+log "observability: Prometheus scrapes cert-manager's metrics"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml

@@ -195,3 +195,55 @@ spec:
               counted from its last success or, if it never succeeded, from its
               creation (proposed threshold: 15 minutes, three missed runs).
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md
+
+    # From cert-manager's controller, which manifests/cert-manager-metrics.yaml
+    # has Prometheus scrape (S056). Only the two namespaces where Meridian's
+    # certificates are: the chart's, in meridian, and the CA's, in cert-manager.
+    - name: meridian.certificates
+      rules:
+        # The numbers keep an order. A service's certificate lasts 90 days and
+        # cert-manager renews it 30 days before its end; this fires at 21 days
+        # left, when the renewal has failed for nine days; the services turn
+        # unhealthy at one day left (src/meridian/platform/common/certlife.py),
+        # so this is the warning long before a restart happens. The CA's
+        # certificate lasts a year and is renewed about four months before its
+        # end, so it too fires only after a renewal that did not happen. Like
+        # every threshold in this file, 21 days and the hour are a proposal
+        # nobody measured.
+        - alert: MeridianCertificateNotRenewed
+          expr: |
+            certmanager_certificate_expiration_timestamp_seconds{namespace=~"meridian|cert-manager"} - time() < 21 * 86400
+          for: 1h
+          labels:
+            severity: warning
+            platform: meridian
+            slo: certificate-validity
+          annotations:
+            summary: A certificate is close to its end and has not been renewed.
+            description: >-
+              Certificate {{ $labels.name }} in {{ $labels.namespace }} ends in
+              {{ $value | humanizeDuration }}; cert-manager should have renewed
+              it 30 days before its end (proposed threshold: 21 days left, for
+              an hour).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md
+
+        # With approver-policy deciding every request (S056), a request that no
+        # policy permits is denied, and one that no policy applies to, or that
+        # approver-policy is down for, is never approved: in both cases nothing
+        # is issued and the Certificate stays not Ready.
+        - alert: MeridianCertificateNotReady
+          expr: |
+            certmanager_certificate_ready_status{namespace=~"meridian|cert-manager", condition!="True"} == 1
+          for: 15m
+          labels:
+            severity: warning
+            platform: meridian
+            slo: certificate-validity
+          annotations:
+            summary: A certificate is not Ready.
+            description: >-
+              Certificate {{ $labels.name }} in {{ $labels.namespace }} has
+              reported Ready={{ $labels.condition }} for 15 minutes (proposed
+              threshold). A request that was denied, or one waiting for an
+              approval, is the usual cause.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md

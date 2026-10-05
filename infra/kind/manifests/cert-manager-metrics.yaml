@@ -1,0 +1,32 @@
+# Prometheus scrapes cert-manager's controller (S056): the alerts in
+# alerts/meridian.yaml (group meridian.certificates) read when each certificate
+# ends and whether it is Ready. Applied by up.sh after kube-prometheus-stack,
+# which brings the ServiceMonitor CRD; cert-manager's own chart option for a
+# ServiceMonitor cannot be used, because cert-manager is installed first.
+#
+# The Prometheus the chart renders selects ServiceMonitors in every namespace
+# with no label (values/kube-prometheus-stack.yaml), so this one lives beside the
+# rules and reaches the controller's Service in cert-manager through
+# namespaceSelector. The metrics carry the names of certificates and of issuers
+# and their expiry times; no key and no Secret is in them.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: meridian
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    # The labels of the controller's Service in cert-manager v1.21.2; the
+    # webhook and the cainjector have Services too, with another component.
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+  endpoints:
+    - port: http-metrics
+      interval: 60s

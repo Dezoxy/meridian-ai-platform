@@ -20,6 +20,7 @@ group_eval_order:
   - meridian.gateway.recording
   - meridian.gateway
   - meridian.workloads
+  - meridian.certificates
 
 tests:
   # ── MeridianModelCallsFailing ───────────────────────────────────────────────
@@ -569,4 +570,226 @@ tests:
     alert_rule_test:
       - eval_time: 35m
         alertname: MeridianSweepStale
+        exp_alerts: []
+
+  # ── MeridianCertificateNotRenewed ───────────────────────────────────────────
+  # The expiry series' value is a Unix time, and promtool's clock starts at 0, so
+  # a value of 1814400 + 600 is a certificate 21 days (1814400 s) plus 10 minutes
+  # from its end at t=0: it crosses below 21 days at t=600 s, strictly after
+  # that second, so the first evaluation that sees it is the one at 11m. With a
+  # `for` of 1h the alert fires at 71m.
+  - name: a certificate under 21 days from its end for an hour fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io"}'
+        values: "1815000x100"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+      # Under 21 days since the 11th minute, but not yet for an hour.
+      - eval_time: 70m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+      - eval_time: 71m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: claims-api
+              namespace: meridian
+              issuer_name: meridian-services
+              issuer_kind: ClusterIssuer
+              issuer_group: cert-manager.io
+            exp_annotations:
+              summary: "A certificate is close to its end and has not been renewed."
+              description: "Certificate claims-api in meridian ends in 20d 22h 59m 0s; cert-manager should have renewed it 30 days before its end (proposed threshold: 21 days left, for an hour)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  # 1818600 is 21 days plus 70 minutes: at t=70m the certificate is exactly 21
+  # days from its end, which is not under 21 days. It is under from 71m, so the
+  # hour is over at 131m, and at 130m a `<=` would already have fired.
+  - name: a certificate exactly 21 days from its end does not count
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io"}'
+        values: "1818600x140"
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+      - eval_time: 131m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: claims-api
+              namespace: meridian
+              issuer_name: meridian-services
+              issuer_kind: ClusterIssuer
+              issuer_group: cert-manager.io
+            exp_annotations:
+              summary: "A certificate is close to its end and has not been renewed."
+              description: "Certificate claims-api in meridian ends in 20d 22h 59m 0s; cert-manager should have renewed it 30 days before its end (proposed threshold: 21 days left, for an hour)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  # A certificate 30 days from its end is where cert-manager renews it: due, not
+  # yet late, so the alert stays quiet.
+  - name: a certificate 30 days from its end stays quiet
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io"}'
+        values: "2592000x100"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+
+  # Renewed after 30 minutes under the line: the value jumps to a new 90 days.
+  - name: a certificate renewed before the hour is over does not fire
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io"}'
+        values: "1815000x40 7776000x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+
+  # The CA's certificate is in cert-manager's namespace and counts.
+  - name: the CA's certificate under 21 days from its end fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="meridian-services-ca", namespace="cert-manager", issuer_name="meridian-selfsigned", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io"}'
+        values: "1815000x100"
+    alert_rule_test:
+      - eval_time: 71m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: meridian-services-ca
+              namespace: cert-manager
+              issuer_name: meridian-selfsigned
+              issuer_kind: ClusterIssuer
+              issuer_group: cert-manager.io
+            exp_annotations:
+              summary: "A certificate is close to its end and has not been renewed."
+              description: "Certificate meridian-services-ca in cert-manager ends in 20d 22h 59m 0s; cert-manager should have renewed it 30 days before its end (proposed threshold: 21 days left, for an hour)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  - name: a certificate in another namespace does not fire
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="someone-elses", namespace="default", issuer_name="other", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io"}'
+        values: "1815000x100"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts: []
+
+  # ── MeridianCertificateNotReady ─────────────────────────────────────────────
+  # cert-manager reports one series per condition, 1 for the one that holds.
+  # The first evaluation is at t=0, so a `for` of 15m ends at 15m.
+  - name: a certificate that is not Ready for 15 minutes fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="False"}'
+        values: "1x40"
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="True"}'
+        values: "0x40"
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="Unknown"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: MeridianCertificateNotReady
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: MeridianCertificateNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: claims-api
+              namespace: meridian
+              issuer_name: meridian-services
+              issuer_kind: ClusterIssuer
+              issuer_group: cert-manager.io
+              condition: "False"
+            exp_annotations:
+              summary: "A certificate is not Ready."
+              description: "Certificate claims-api in meridian has reported Ready=False for 15 minutes (proposed threshold). A request that was denied, or one waiting for an approval, is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  # A request nobody approves leaves the condition Unknown, and the CA's
+  # certificate is in cert-manager's namespace.
+  - name: the CA's certificate with an Unknown condition fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_ready_status{name="meridian-services-ca", namespace="cert-manager", issuer_name="meridian-selfsigned", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="Unknown"}'
+        values: "1x40"
+      - series: 'certmanager_certificate_ready_status{name="meridian-services-ca", namespace="cert-manager", issuer_name="meridian-selfsigned", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="True"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MeridianCertificateNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: meridian-services-ca
+              namespace: cert-manager
+              issuer_name: meridian-selfsigned
+              issuer_kind: ClusterIssuer
+              issuer_group: cert-manager.io
+              condition: Unknown
+            exp_annotations:
+              summary: "A certificate is not Ready."
+              description: "Certificate meridian-services-ca in cert-manager has reported Ready=Unknown for 15 minutes (proposed threshold). A request that was denied, or one waiting for an approval, is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  - name: a Ready certificate stays quiet
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="True"}'
+        values: "1x40"
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="False"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianCertificateNotReady
+        exp_alerts: []
+
+  # Not Ready for 10 minutes, then Ready again: under the `for`.
+  - name: a certificate that is Ready again within 15 minutes does not fire
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="False"}'
+        values: "1x10 0x30"
+      - series: 'certmanager_certificate_ready_status{name="claims-api", namespace="meridian", issuer_name="meridian-services", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="True"}'
+        values: "0x10 1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MeridianCertificateNotReady
+        exp_alerts: []
+
+  - name: a certificate in another namespace that is not Ready does not fire
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_ready_status{name="someone-elses", namespace="default", issuer_name="other", issuer_kind="ClusterIssuer", issuer_group="cert-manager.io", condition="False"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianCertificateNotReady
         exp_alerts: []
