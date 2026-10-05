@@ -232,8 +232,10 @@ def create_tool_app(
         if not isinstance(middleware, OpenTelemetryMiddleware)
     ]
 
-    # Read once, here: the file on disk changes at renewal, this process's
-    # certificate does not, so near its end it says so and is restarted (S056).
+    # Loaded here: the file on disk changes at renewal, this process's
+    # certificate does not. Inside its margin the check reads the file again
+    # and says so only when a newer certificate is there, so the restart loads
+    # it, or when this one has ended (S056).
     near_end = expiry_check(load_certificate(os.environ))
 
     async def healthz(request: Request) -> JSONResponse:

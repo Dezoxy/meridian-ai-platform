@@ -311,10 +311,11 @@ def create_service_app(
     declared body over the limit (see ``BodyLimitMiddleware``). No server span
     keeps a query string (see ``drop_query_from_span``).
 
-    The certificate ``environ`` names is read once, here (S056, T-89): once
-    ``clock`` says it is near its end (see ``certlife``), ``/healthz`` answers
-    503 until the container is restarted and loads the renewed file. Raise
-    ``SettingsError`` when that file cannot be read.
+    The certificate ``environ`` names is loaded here (S056, T-89). Inside its
+    margin, ``/healthz`` reads the file again: it answers 503 when the file
+    holds a newer certificate (the container is restarted and loads it) or the
+    loaded one has ended, and 200 while the file is not renewed (see
+    ``certlife``). Raise ``SettingsError`` when that file cannot be read here.
     """
     near_end = expiry_check(load_certificate(environ), clock)
     configure_propagation()

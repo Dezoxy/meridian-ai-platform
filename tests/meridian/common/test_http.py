@@ -214,6 +214,30 @@ class Certificate:
         self.restart_at = self.not_after - timedelta(hours=24)
         self.directory = directory
 
+    def reissue(self, not_before: datetime, not_after: datetime) -> None:
+        """A new certificate in the same file, as the kubelet leaves it."""
+        self.ca.issue("service", "service", loopback_sans(), not_before, not_after)
+
+    def renew(self) -> None:
+        """A certificate that ends 60 days after the loaded one is on disk."""
+        later = timedelta(days=60)
+        self.reissue(self.not_before + later, self.not_after + later)
+
+    def change_file(self, how: str) -> None:
+        if how == "renewed":
+            self.renew()
+        elif how == "garbage":
+            self.pair.cert.write_text("not a certificate any more")
+        elif how == "missing":
+            self.pair.cert.unlink()
+        elif how == "older":
+            earlier = timedelta(days=60)
+            self.reissue(self.not_before - earlier, self.not_after - earlier)
+        elif how == "equal":
+            self.reissue(self.not_before, self.not_after)
+        else:
+            assert how == "unchanged", how
+
 
 @pytest.fixture
 def certificate(tmp_path: Path) -> Certificate:
@@ -234,30 +258,70 @@ def test_healthz_is_200_far_from_the_end_of_the_certificate(
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
 
 
-def test_healthz_is_200_a_second_before_the_restart_time_and_503_at_it(
+def test_healthz_is_200_a_second_before_the_restart_time_and_503_at_it_when_renewed(
     certificate: Certificate,
 ) -> None:
     just_before = build(
         environ=certificate.environ,
         clock=at(certificate.restart_at - timedelta(seconds=1)),
-    ).get("/healthz")
-    at_restart = build(
-        environ=certificate.environ, clock=at(certificate.restart_at)
-    ).get("/healthz")
+    )
+    at_restart = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.renew()  # after both apps loaded the old one
 
-    assert just_before.status_code == 200
-    assert (at_restart.status_code, at_restart.json()) == (503, EXPIRING)
+    assert just_before.get("/healthz").status_code == 200
+    response = at_restart.get("/healthz")
+    assert (response.status_code, response.json()) == (503, EXPIRING)
 
 
-def test_healthz_stays_503_after_the_certificate_ended(
+@pytest.mark.parametrize("how", ["unchanged", "garbage", "missing", "older", "equal"])
+def test_healthz_is_200_at_the_restart_time_when_the_file_holds_no_newer_one(
+    certificate: Certificate, how: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.change_file(how)
+
+    with caplog.at_level(logging.DEBUG, logger=certlife.__name__):
+        answers = [client.get("/healthz") for _ in range(3)]
+
+    assert [(a.status_code, a.json()) for a in answers] == [(200, {"status": "ok"})] * 3
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    assert certificate.not_after.isoformat() in caplog.records[0].getMessage()
+    assert str(certificate.pair.cert) not in caplog.text
+    assert str(certificate.directory) not in caplog.text
+
+
+@pytest.mark.parametrize("how", ["unchanged", "garbage", "missing", "renewed"])
+@pytest.mark.parametrize("after", [timedelta(0), timedelta(days=1)])
+def test_healthz_is_503_once_the_certificate_ended_whatever_the_file_holds(
+    certificate: Certificate,
+    how: str,
+    after: timedelta,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_after + after))
+    certificate.change_file(how)
+
+    with caplog.at_level(logging.DEBUG, logger=certlife.__name__):
+        response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+    assert str(certificate.pair.cert) not in caplog.text
+    assert str(certificate.directory) not in caplog.text
+
+
+def test_healthz_follows_a_restart_the_old_app_asks_the_new_one_is_ready(
     certificate: Certificate,
 ) -> None:
-    client = build(
-        environ=certificate.environ,
-        clock=at(certificate.not_after + timedelta(days=1)),
-    )
+    clock = at(certificate.restart_at)
+    old = build(environ=certificate.environ, clock=clock)
+    assert old.get("/healthz").status_code == 200  # nothing renewed yet
+    certificate.renew()
 
-    assert client.get("/healthz").status_code == 503
+    asks = old.get("/healthz")
+    restarted = build(environ=certificate.environ, clock=clock)  # the new container
+
+    assert (asks.status_code, asks.json()) == (503, EXPIRING)
+    assert restarted.get("/healthz").status_code == 200
 
 
 def test_an_app_with_no_certificate_answers_200_whatever_the_clock_says() -> None:
@@ -290,20 +354,22 @@ def test_a_certificate_replaced_on_disk_after_the_start_does_not_turn_it_healthy
     assert (response.status_code, response.json()) == (503, EXPIRING)
 
 
-def test_the_certificate_is_read_when_the_app_is_built_not_per_request(
-    certificate: Certificate,
+@pytest.mark.parametrize("how", ["garbage", "missing", "renewed"])
+def test_far_from_the_end_the_file_is_not_read_per_request(
+    certificate: Certificate, how: str
 ) -> None:
-    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
-    certificate.pair.cert.write_text("not a certificate any more")
+    client = build(environ=certificate.environ, clock=at(certificate.not_before))
+    certificate.change_file(how)
 
-    assert client.get("/healthz").status_code == 503
-    assert client.get("/healthz").status_code == 503
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/healthz").status_code == 200
 
 
 def test_the_first_503_warns_once_with_the_end_date_and_no_path(
     certificate: Certificate, caplog: pytest.LogCaptureFixture
 ) -> None:
     client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.renew()
 
     with caplog.at_level(logging.WARNING, logger=certlife.__name__):
         answers = [client.get("/healthz") for _ in range(3)]
@@ -338,16 +404,29 @@ def test_an_unreadable_certificate_stops_the_app_from_being_built(
 
 # ── the same over real TLS, the way the kubelet asks ────────────────────────
 @pytest.mark.parametrize(
-    ("valid_from", "valid_for", "status"),
+    ("valid_from", "valid_for", "renewed", "status"),
     [
-        # Past the margin of a sixth of its hour: the service must say so.
-        (timedelta(minutes=55), timedelta(minutes=5), 503),
-        (timedelta(minutes=1), timedelta(minutes=59), 200),
+        # Past the margin of a sixth of its hour, and the file now holds a
+        # renewed certificate: a restart helps, the service must say so.
+        (timedelta(minutes=55), timedelta(minutes=5), True, 503),
+        # Past the margin, the file unchanged: a restart would not help.
+        (timedelta(minutes=55), timedelta(minutes=5), False, 200),
+        (timedelta(minutes=1), timedelta(minutes=59), True, 200),
+        (timedelta(minutes=1), timedelta(minutes=59), False, 200),
     ],
-    ids=["near-its-end", "far-from-its-end"],
+    ids=[
+        "near-its-end-renewed",
+        "near-its-end-not-renewed",
+        "far-from-its-end-renewed",
+        "far-from-its-end-not-renewed",
+    ],
 )
 def test_over_tls_a_client_with_no_certificate_gets_the_health_answer(
-    tmp_path: Path, valid_from: timedelta, valid_for: timedelta, status: int
+    tmp_path: Path,
+    valid_from: timedelta,
+    valid_for: timedelta,
+    renewed: bool,
+    status: int,
 ) -> None:
     ca = make_ca(tmp_path, "tls-health-ca")
     now = datetime.now(UTC)
@@ -364,6 +443,16 @@ def test_over_tls_a_client_with_no_certificate_gets_the_health_answer(
     ).app
 
     with serve_tls(app, ca, server) as url:
+        if renewed:
+            # What the kubelet does at renewal. The server keeps the TLS
+            # certificate it started with; the app reads the file again.
+            ca.issue(
+                "server",
+                "server",
+                loopback_sans(),
+                now - timedelta(minutes=1),
+                now + timedelta(hours=1),
+            )
         response = httpx.get(f"{url}/healthz", verify=client_context(ca, None))
 
     assert response.status_code == status
