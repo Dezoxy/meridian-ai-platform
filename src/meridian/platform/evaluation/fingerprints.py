@@ -16,7 +16,7 @@ from meridian.platform.evaluation.report import (
 )
 from meridian.platform.registry.models import Registry
 
-GOLDEN_SET_KEYS = ("generator_version", "seed", "files")
+GOLDEN_SET_KEYS = ("workload", "generator_version", "seed", "files")
 FILES_DIFFER = "the golden set's files differ from its manifest"
 UNLISTED_FILE = "the golden set holds a file its manifest does not list"
 # A path from the manifest is the file's own text: it is named in an error only
@@ -111,13 +111,18 @@ def _verify_no_unlisted_file(manifest_path: Path, files: Mapping[str, str]) -> N
 
 
 def golden_set_of(manifest_path: Path) -> GoldenSet:
-    """The version, seed and file hashes of a golden set's ``manifest.json``,
-    after checking the files themselves and that the manifest leaves out no
-    file (a regular file of a listed suffix in a directory that holds a listed
-    file), and the hash of the whole manifest."""
+    """The workload, version, seed and file hashes of a golden set's
+    ``manifest.json``, after checking the files themselves and that the manifest
+    leaves out no file (a regular file of a listed suffix in a directory that
+    holds a listed file), and the hash of the whole manifest. A manifest that
+    names no workload is refused: the key is what ties a set to its workload."""
     manifest = read_json_file(manifest_path)
     if not isinstance(manifest, dict):
         raise ReportError("the manifest is not a JSON object")
+    # The model leaves the key optional (old reports), so absence, and a null
+    # that would pass for it, are caught here.
+    if manifest.get("workload") is None:
+        raise ReportError("workload: missing")
     try:
         digest = canonical_sha256(manifest)
     except UnicodeEncodeError:  # a lone surrogate, which JSON escapes allow

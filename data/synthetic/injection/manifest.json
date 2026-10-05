@@ -1,8 +1,9 @@
 {
   "synthetic": true,
+  "workload": "claims-triage",
   "generator_version": "1",
   "seed": 20260929,
-  "golden_set": "109c63880f2287d888c604097768be4ea14671c9906e5470cdeb9e7211a95aa5",
+  "golden_set": "8c74cc940edfe8d51b5dafc44826f7fd3f07cc31381b215ee6e1b1823366b4e0",
   "counts": {
     "cases": 90,
     "attack": 66,

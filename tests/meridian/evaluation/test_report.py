@@ -45,6 +45,7 @@ def report_data(**overrides: Any) -> dict[str, Any]:
             "prompt": DIGEST,
             "tools": DIGEST,
             "golden_set": {
+                "workload": "demo-workload",
                 "generator_version": "1",
                 "seed": 7,
                 "files": {"a.json": DIGEST},
@@ -195,6 +196,12 @@ def a_bad_digest() -> dict[str, Any]:
 def no_golden_files() -> dict[str, Any]:
     data = report_data()
     data["fingerprints"]["golden_set"]["files"] = {}
+    return data
+
+
+def a_golden_set_workload_that_is_not_an_id() -> dict[str, Any]:
+    data = report_data()
+    data["fingerprints"]["golden_set"]["workload"] = "Not An Id"
     return data
 
 
@@ -359,6 +366,9 @@ INVALID = [
     pytest.param(a_grade_that_is_not_a_boolean, id="grade-not-boolean"),
     pytest.param(a_bad_digest, id="bad-digest"),
     pytest.param(no_golden_files, id="no-golden-files"),
+    pytest.param(
+        a_golden_set_workload_that_is_not_an_id, id="golden-set-workload-not-an-id"
+    ),
     pytest.param(no_cases, id="no-cases"),
     pytest.param(format_one, id="format-one"),
     pytest.param(another_format, id="another-format"),
@@ -496,6 +506,26 @@ def test_a_report_may_carry_tools_measures_a_judge_and_a_recording(
     assert json.loads(dump_report(report)) == json.loads(json.dumps(data))
     write_report(report, tmp_path / "again.json")
     assert (tmp_path / "again.json").read_text("utf-8") == dump_report(report)
+
+
+def test_a_golden_set_fingerprint_may_name_a_workload_or_leave_it_out() -> None:
+    old = report_data()
+    del old["fingerprints"]["golden_set"]["workload"]
+
+    with_one = Report.model_validate(report_data())
+    without = Report.model_validate(old)
+
+    assert with_one.fingerprints.golden_set.workload == "demo-workload"
+    assert without.fingerprints.golden_set.workload is None
+
+
+def test_the_committed_live_reports_load_though_their_golden_set_names_no_workload(
+    repo_root: Path,
+) -> None:
+    for name in ("claims-triage-live.json", "claims-triage-live-variant.json"):
+        report = load_report(repo_root / "data" / "evaluation" / name)
+
+        assert report.fingerprints.golden_set.workload is None, name
 
 
 def test_the_dump_writes_a_missing_optional_as_null() -> None:

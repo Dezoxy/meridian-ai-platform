@@ -6562,8 +6562,9 @@
         "cases.json": "4622bbcaa05bdf74dd12ab386d4a99a0b2630a8efbeb66e7b4c8e6083b87c2c9"
       },
       "generator_version": "1",
-      "manifest": "72b6086ff33021022646602be2f1eaff5bc9e494d259e1b17f9051f73b2e45d8",
-      "seed": 20260929
+      "manifest": "3290ee52010858d668b10f1a57b2b304ccb04f5de94b248a793b3035fc894c5e",
+      "seed": 20260929,
+      "workload": "claims-triage"
     },
     "judge": null,
     "prompt": "cc8e3c33cbde8e76040e80e51f64420aed4b8fc9fb05bf493fbd2a9d78ff3925",

@@ -1,6 +1,5 @@
 """``meridian eval compare`` through Typer's test runner."""
 
-import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -10,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from golden_setsupport import plant_golden_set
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
@@ -395,17 +395,6 @@ class Stack:
         case = request.url.path.split("/")[-2]  # a base URL may have a path
         status = self.get.get(case, 200)
         return httpx.Response(status, json={"id": case, "d": HOSTILE_BODY})
-
-
-def plant_golden_set(directory: Path, claims: str = "[]") -> None:
-    """A golden set the command accepts: one file and the manifest that lists it."""
-    (directory / "claims.json").write_text(claims, encoding="utf-8")
-    manifest = {
-        "generator_version": "1",
-        "seed": 7,
-        "files": {"claims.json": hashlib.sha256(claims.encode("utf-8")).hexdigest()},
-    }
-    (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 @pytest.fixture

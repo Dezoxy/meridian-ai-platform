@@ -300,6 +300,7 @@ def _created_files(name: str, module: str) -> dict[str, str]:
     digest = hashlib.sha256(CASES.encode("utf-8")).hexdigest()
     # An empty set has no generator, so the manifest claims none.
     manifest = {
+        "workload": name,
         "generator_version": "none",
         "seed": 0,
         "files": {"cases.json": digest},

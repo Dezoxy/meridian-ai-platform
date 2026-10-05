@@ -72,6 +72,10 @@ class AnsweredBy(WireModel):
 
 
 class GoldenSet(WireModel):
+    # The workload the set's manifest names. ``golden_set_of`` requires the key
+    # of a manifest; the model leaves it optional so that a report written
+    # before manifests named a workload (the two committed live reports) loads.
+    workload: WorkloadName | None = None
     generator_version: Annotated[str, StringConstraints(min_length=1, max_length=32)]
     seed: StrictInt
     files: Annotated[dict[str, HexDigest], Field(min_length=1)]

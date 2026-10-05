@@ -168,6 +168,7 @@ def test_the_command_sends_nothing_and_prints_nothing_of_a_crafted_claim_id(
 ) -> None:
     claims_file(tmp_path, "CLM-0001", claim_id)
     manifest = {
+        "workload": "claims-triage",
         "generator_version": "1",
         "seed": 7,
         "files": {"claims.json": sha256_of(tmp_path / "claims.json")},

@@ -1,5 +1,6 @@
 {
   "synthetic": true,
+  "workload": "claims-triage",
   "generator_version": "1",
   "seed": 20260929,
   "reference_date": "2026-09-01",

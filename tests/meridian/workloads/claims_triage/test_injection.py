@@ -568,7 +568,12 @@ def manifests(tmp_path: Path) -> tuple[Path, Path]:
     manifest = injection / "manifest.json"
     manifest.write_text(
         json.dumps(
-            {"generator_version": "1", "seed": 7, "files": {"cases.json": digest}}
+            {
+                "workload": "claims-triage",
+                "generator_version": "1",
+                "seed": 7,
+                "files": {"cases.json": digest},
+            }
         ),
         encoding="utf-8",
     )

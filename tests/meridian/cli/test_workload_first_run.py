@@ -173,6 +173,25 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     assert refused.stderr == f"ERROR {EMPTY_GOLDEN_SET}\n", refused.stderr
     assert not (tree / "report.json").exists()
 
+    # The claims workload's own set, which the new workload must not run on.
+    claims_set = tree / "claims-set"
+    shutil.copytree(
+        REPO / "data" / "synthetic",
+        claims_set,
+        ignore=shutil.ignore_patterns("__pycache__", "generator", "injection"),
+    )
+    own_set = f"data/evaluation/{NAME}/golden"
+    elsewhere = tuple(str(claims_set) if arg == own_set else arg for arg in eval_run)
+    assert elsewhere != eval_run
+    for flags in ((), ("--allow-empty",)):
+        other = run("7c eval run on the claims set", *elsewhere, *flags, expect=2)
+        assert other.stdout == "", other.stdout
+        assert other.stderr.splitlines()[-1:] == [
+            "ERROR the golden set: its manifest names the workload "
+            f"claims-triage, not {NAME}"
+        ], other.stderr
+        assert not (tree / "report.json").exists()
+
     tested = run("8 pytest", "pytest", WORKLOAD_TESTS, "-q", "-p", "no:cacheprovider")
     # Four generated tests; the pattern cannot match "14 passed".
     assert TESTS_PASSED.search(tested.stdout), tested.stdout

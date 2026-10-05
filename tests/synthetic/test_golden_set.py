@@ -109,6 +109,12 @@ def walk(value):
         yield value
 
 
+def test_the_manifest_names_the_workload_the_set_belongs_to(manifest):
+    # `meridian eval run` refuses a set whose manifest names another workload.
+    assert list(manifest)[:3] == ["synthetic", "workload", "generator_version"]
+    assert manifest["workload"] == "claims-triage"
+
+
 # -- label invariants ---------------------------------------------------------
 def test_the_reason_counts_match_the_scenario_mix(outcomes, manifest):
     assert Counter(o["reason"] for o in outcomes) == SCENARIO_MIX

@@ -16,7 +16,7 @@ import json
 from collections.abc import Callable
 from typing import NamedTuple
 
-from . import GENERATOR_VERSION
+from . import GENERATOR_VERSION, WORKLOAD
 from .injection_text import (
     APPEND,
     ATTACKS_AFTER_OBFUSCATED,
@@ -241,6 +241,7 @@ def build_manifest(
         families[key] = families.get(key, 0) + 1
     return {
         "synthetic": True,
+        "workload": WORKLOAD,
         "generator_version": GENERATOR_VERSION,
         "seed": seed,
         "golden_set": hashlib.sha256(golden_manifest).hexdigest(),

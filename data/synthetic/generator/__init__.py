@@ -10,3 +10,6 @@ Run it from the repository root:
 """
 
 GENERATOR_VERSION = "1"
+# The workload the golden set and the injection set belong to; both manifests
+# name it, and ``meridian eval run`` refuses a set that names another.
+WORKLOAD = "claims-triage"

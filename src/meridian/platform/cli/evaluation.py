@@ -179,7 +179,8 @@ def _prepare(
     golden set, or exit 2: nothing is sent before all three can be read. The
     golden set is checked against its manifest first (every file's hash, and no
     file the manifest leaves out), so only the golden set's own claims are ever
-    posted (T-80)."""
+    posted (T-80); then the manifest must name the workload's own ID, before
+    any case is read, empty set or not."""
     try:
         evaluation = load_evaluation(workload)
     except ReportError as exc:
@@ -191,7 +192,15 @@ def _prepare(
             typer.echo(f"ERROR the registry: {message}", err=True)
         raise typer.Exit(code=EXIT_UNREADABLE) from None
     try:
-        golden_set_of(golden_set / MANIFEST_FILE)
+        named = golden_set_of(golden_set / MANIFEST_FILE).workload
+        # The set's own workload, not the ``--workload`` text: the report the
+        # run writes names ``evaluation.workload``, and the two can differ.
+        if named != evaluation.workload:
+            _stop(
+                EXIT_UNREADABLE,
+                f"the golden set: its manifest names the workload {named}, "
+                f"not {evaluation.workload}",
+            )
         total = len(evaluation.submissions(golden_set))
     except ReportError as exc:
         _stop(EXIT_UNREADABLE, f"the golden set: {exc}")

@@ -133,6 +133,7 @@ def test_the_manifest_counts_each_family_by_label(
 def test_the_manifest_keys_come_in_the_contracted_order(injection_manifest: dict):
     assert list(injection_manifest) == [
         "synthetic",
+        "workload",
         "generator_version",
         "seed",
         "golden_set",
@@ -141,6 +142,7 @@ def test_the_manifest_keys_come_in_the_contracted_order(injection_manifest: dict
         "files",
     ]
     assert injection_manifest["synthetic"] is True
+    assert injection_manifest["workload"] == "claims-triage"
     assert injection_manifest["seed"] == catalogue.DEFAULT_SEED
 
 

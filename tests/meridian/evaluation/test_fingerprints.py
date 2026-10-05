@@ -19,6 +19,7 @@ from meridian.platform.registry import load_registry
 AGENT = "claims-triage"
 DIFFER = "the golden set's files differ from its manifest"
 GOOD_MANIFEST = {
+    "workload": "demo",
     "generator_version": "1",
     "seed": 5,
     "files": {"a.json": "ab" * 32},
@@ -43,6 +44,7 @@ def make_golden_set(directory: Path, **extra: Any) -> Path:
     for name, data in FILES.items():
         (directory / name).write_bytes(data)
     manifest: dict[str, Any] = {
+        "workload": "demo",
         "generator_version": "1",
         "seed": 5,
         "auto_approval_limit": 2500,
@@ -95,7 +97,7 @@ def test_golden_set_of_the_real_manifest(repo_root: Path) -> None:
     assert golden_set.manifest == canonical_sha256(manifest_of(path))
 
 
-def test_golden_set_of_keeps_the_three_keys_and_hashes_the_whole_manifest(
+def test_golden_set_of_keeps_the_four_keys_and_hashes_the_whole_manifest(
     tmp_path: Path,
 ) -> None:
     path = make_golden_set(tmp_path / "golden", reference_date="2026-09-01")
@@ -104,6 +106,7 @@ def test_golden_set_of_keeps_the_three_keys_and_hashes_the_whole_manifest(
     golden_set = golden_set_of(path)
 
     assert golden_set.model_dump(mode="json") == {
+        "workload": "demo",
         "generator_version": "1",
         "seed": 5,
         "files": manifest["files"],
@@ -158,11 +161,21 @@ def test_golden_set_of_refuses_invalid_json(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "broken",
     [
-        pytest.param({"seed": 5, "files": GOOD_MANIFEST["files"]}, id="no-version"),
         pytest.param(
-            {"generator_version": "1", "files": GOOD_MANIFEST["files"]}, id="no-seed"
+            {"workload": "demo", "seed": 5, "files": GOOD_MANIFEST["files"]},
+            id="no-version",
         ),
-        pytest.param({"generator_version": "1", "seed": 5}, id="no-files"),
+        pytest.param(
+            {
+                "workload": "demo",
+                "generator_version": "1",
+                "files": GOOD_MANIFEST["files"],
+            },
+            id="no-seed",
+        ),
+        pytest.param(
+            {"workload": "demo", "generator_version": "1", "seed": 5}, id="no-files"
+        ),
         pytest.param({**GOOD_MANIFEST, "seed": "5"}, id="seed-is-a-string"),
         pytest.param({**GOOD_MANIFEST, "seed": True}, id="seed-is-a-boolean"),
         pytest.param({**GOOD_MANIFEST, "generator_version": 1}, id="version-is-int"),
@@ -179,6 +192,59 @@ def test_golden_set_of_refuses_a_missing_key_or_a_wrong_type(
 
     with pytest.raises(ReportError):
         golden_set_of(path)
+
+
+def test_golden_set_of_returns_the_workload_the_manifest_names(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden", workload="claims-triage")
+
+    assert golden_set_of(path).workload == "claims-triage"
+
+
+@pytest.mark.parametrize(
+    ("workload", "reason"),
+    [
+        pytest.param("", "string_pattern_mismatch", id="empty"),
+        pytest.param(5, "string_type", id="an-integer"),
+        pytest.param(None, "missing", id="null"),
+        pytest.param(["demo"], "string_type", id="a-list"),
+        pytest.param("Demo Two", "string_pattern_mismatch", id="not-an-id"),
+        pytest.param("a" * 65, "string_too_long", id="too-long"),
+    ],
+)
+def test_golden_set_of_refuses_a_workload_that_is_not_an_id(
+    workload: object, reason: str, tmp_path: Path
+) -> None:
+    path = make_golden_set(tmp_path / "golden", workload=workload)
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == f"workload: {reason}"
+
+
+def test_golden_set_of_refuses_a_manifest_without_a_workload(tmp_path: Path) -> None:
+    path = make_golden_set(tmp_path / "golden")
+    manifest = manifest_of(path)
+    del manifest["workload"]
+    write_manifest(path.parent, manifest)
+
+    with pytest.raises(ReportError) as raised:
+        golden_set_of(path)
+
+    assert str(raised.value) == "workload: missing"
+
+
+def test_the_manifest_digest_changes_with_the_workload_it_names(
+    tmp_path: Path,
+) -> None:
+    path = make_golden_set(tmp_path / "golden", workload="one")
+    before = golden_set_of(path)
+
+    write_manifest(path.parent, manifest_of(path) | {"workload": "two"})
+
+    assert golden_set_of(path).manifest != before.manifest
 
 
 @pytest.mark.parametrize(
