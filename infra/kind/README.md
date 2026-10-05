@@ -669,9 +669,12 @@ documents are overdue to an adjuster, fails a claim stranded in `submitted`
 or `triaging`, ends a run no resume takes over and deletes the checkpoints a
 finished run left; it logs one line with what it moved. It needs PostgreSQL
 only: no call to any service and no model. The deadline for documents is
-`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days from the
-claim's latest request for documents. `make smoke`'s seventh line checks
-that the job ran and finished on your cluster.
+`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 days of 24 hours from the
+claim's latest request for documents. The Claims API reads the same
+variable for the day its status page tells a claimant; the chart sets it
+on this CronJob alone, so set it on the Claims API too if you change it
+(the plan's backlog has the chart's part). `make smoke`'s seventh line
+checks that the job ran and finished on your cluster.
 
 `concurrencyPolicy: Forbid` governs only what the schedule starts: a scheduled
 pass is skipped while another is running. A Job made by hand (below) runs

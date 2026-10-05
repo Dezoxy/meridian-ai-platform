@@ -51,7 +51,6 @@ from meridian.platform.common.db import connect
 from meridian.platform.common.http import (
     SMALL_BODY_LIMIT_BYTES,
     create_service_app,
-    database_failure,
     error_responses,
 )
 from meridian.platform.common.logredaction import install_log_redaction
@@ -102,10 +101,11 @@ from meridian.workloads.claims_triage.moves import (
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 from meridian.workloads.claims_triage.triaging import (
     HTTP_GATEWAY_TIMEOUT,
-    RUNTIME_TIMEOUT_SECONDS,
     RuntimeCallError,
     answer,
+    claim_database_failure,
     resume_run,
+    runtime_timeout,
     store_claim,
     triage_claim,
 )
@@ -241,7 +241,7 @@ def _decide(
             state, run_id = _record_decision(dsn, tenant, claim_id, decision, page_run)
         except psycopg.Error as exc:
             mark_error(span, exc)
-            return DecisionFailure(*database_failure(exc))
+            return DecisionFailure(*claim_database_failure(exc, claim_id))
         if run_id is None:
             # Recorded with no run: there is nothing to resume.
             return DecisionResponse(claim_id=claim_id, state=state)
@@ -293,7 +293,7 @@ def make_runtime_client(
     # trust_env=False: a proxy variable must not reroute claimant data.
     return httpx.Client(
         base_url=settings.runtime_url,
-        timeout=RUNTIME_TIMEOUT_SECONDS,
+        timeout=runtime_timeout(),
         trust_env=False,
         verify=verify,
     )
@@ -343,7 +343,7 @@ def create_app(
                 store_claim(dsn, tenant, claim)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                return answer(*database_failure(exc), claim_id)
+                return answer(*claim_database_failure(exc, claim_id), claim_id)
             return triage_claim(dsn, tenant, http, span, claim_id, submission)
 
     @app.post(
@@ -416,7 +416,13 @@ def create_app(
         ),
     )
     add_claimant_pages(
-        app, dsn=dsn, tenant=tenant, http=http, tracer=tracer, today=today
+        app,
+        dsn=dsn,
+        tenant=tenant,
+        http=http,
+        tracer=tracer,
+        today=today,
+        deadline_days=settings.documents_deadline_days,
     )
     return app
 
