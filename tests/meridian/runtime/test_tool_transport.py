@@ -42,7 +42,11 @@ from meridian.platform.toolserver.wire import (
 )
 from meridian.runtime import tool_client
 from meridian.runtime.tool_client import ToolClient, ToolUnavailable
-from meridian.runtime.tool_transport import THREAD_NAME, ToolTransport
+from meridian.runtime.tool_transport import (
+    KEEPALIVE_SECONDS,
+    THREAD_NAME,
+    ToolTransport,
+)
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
@@ -51,6 +55,7 @@ from meridian.workloads.claims_triage.mcp_server.app import (
 ARGUMENT_CANARY = "ARGUMENT-CANARY-31b8"
 QUERY_CANARY = "QUERY-CANARY-90c2"
 NOTE = {"claim_id": CLAIM, "note": "a synthetic note"}
+COOKIE = "session=COOKIE-CANARY-5e1d; Path=/"
 THREADS = 8
 JOIN_SECONDS = 10
 # The bound of the call that must time out: short, and long enough for a
@@ -61,22 +66,29 @@ SHORT_BOUND_SECONDS = 1.0
 class Recorder:
     """ASGI middleware that remembers, for each request, the peer's address
     (one per TCP connection) and, for each POST, the JSON-RPC method and
-    ``_meta``. With ``hold`` set it answers nothing: it waits for the caller
-    to give up, so a timeout test needs no clock."""
+    ``_meta``, and the ``Cookie`` header of each request. With ``hold`` set it
+    answers nothing: it waits for the caller to give up, so a timeout test
+    needs no clock. With ``set_cookie`` set every answer carries a
+    ``Set-Cookie``."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
         self.peers: list[tuple[str, int]] = []
         self.methods: list[str] = []
         self.metas: list[dict[str, Any]] = []
+        self.cookie_headers: list[bytes | None] = []
         self.hold = False
         self.held = 0
+        self.set_cookie = False
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         self.peers.append(tuple(scope["client"]))
+        self.cookie_headers.append(dict(scope["headers"]).get(b"cookie"))
+        if self.set_cookie:
+            send = self._with_cookie(send)
         if scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
@@ -102,6 +114,16 @@ class Recorder:
             return next(replay, {"type": "http.disconnect"})
 
         await self.app(scope, receive_again, send)
+
+    @staticmethod
+    def _with_cookie(send: Any) -> Any:
+        async def send_with_cookie(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                headers = [*message["headers"], (b"set-cookie", COOKIE.encode())]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        return send_with_cookie
 
 
 async def not_json_rpc(scope: Any, receive: Any, send: Any) -> None:
@@ -272,6 +294,32 @@ def test_two_runs_share_a_connection_and_nothing_else(
         for run_id in (first, second)
     ]
     assert keys[0] != keys[1]
+
+
+def test_a_cookie_a_tool_server_sets_is_not_sent_with_the_next_run_call(
+    live: Live, transport: ToolTransport
+) -> None:
+    live.recorder.set_cookie = True
+    second = add_run(live.world.db)
+
+    lookup(live, transport)
+    tools = tools_for("policy-mcp", live.base, second, transport)
+    tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert len(live.recorder.cookie_headers) == 2
+    assert live.recorder.cookie_headers == [None, None]
+
+
+def test_the_kept_client_bounds_its_connections_and_its_idle_ones_explicitly(
+    live: Live, transport: ToolTransport
+) -> None:
+    lookup(live, transport)
+
+    (client,) = transport._clients.values()
+    pool = client._transport._pool
+    assert pool._max_connections == 100
+    assert pool._max_keepalive_connections == 20
+    assert pool._keepalive_expiry == KEEPALIVE_SECONDS
 
 
 # ── a failure ────────────────────────────────────────────────────────────────

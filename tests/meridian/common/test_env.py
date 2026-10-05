@@ -31,6 +31,21 @@ REFUSED_ADDRESSES = {
     "trailing newline": "http://svc.invalid\n",
     "a port that is not a number": "http://svc.invalid:abc",
     "a port out of range": "http://svc.invalid:99999",
+    # ``urlsplit`` drops a tab, a carriage return and a line feed anywhere in the
+    # text and reads the rest as a host, so these must be refused before it.
+    "a line feed inside": "http://ho\nst",
+    "a carriage return inside": "https://ho\rst",
+    "a tab inside": "http://ho\tst",
+    "a null character": "http://host\x00",
+    "a space inside": "http://ho st",
+    "a space in the path": "http://host/a b",
+    "an ideographic space": "http://　host",
+    "port 0": "http://host:0",
+    "port 0 with leading zeros": "http://host:00",
+    # ``urlsplit`` reads an empty port as no port at all.
+    "an empty port": "http://host:",
+    "an empty port and a path": "http://host:/v1",
+    "an empty port after an IPv6 literal": "http://[::1]:",
     "an unclosed bracket": "http://[svc.invalid",
     "no scheme": "svc.invalid:8080",
     "a scheme that is not http": "ftp://svc.invalid",

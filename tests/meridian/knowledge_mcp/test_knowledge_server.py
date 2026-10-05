@@ -1007,6 +1007,60 @@ def test_a_search_with_plenty_of_time_left_waits_the_configured_read_timeout(
     assert timeout["connect"] == 2.0
 
 
+def failed_search_of(world: World, script: Script, clock: FakeClock) -> None:
+    """A search with 250 ms of budget, over a gateway that answers as ``script``
+    says and a server on ``clock``; the call must fail as unavailable."""
+    server = create_app(
+        knowledge_settings_for(world.db),
+        http=ScriptedGateway(script=script).http(),
+        tracer_provider=make_tracer_provider(APPLICATION, InMemorySpanExporter()),
+        clock=clock,
+    ).server
+    with pytest.raises(MCPError) as raised:
+        run_call(
+            server,
+            "wording_search",
+            {"query": QUERY, "product": PRODUCT},
+            run_id=world.run_id,
+            meta={META_TIMEOUT_MS: 250},
+        )
+    assert raised.value.error.message == UNAVAILABLE
+
+
+def test_a_gateway_wait_cut_by_the_calls_own_deadline_is_a_timed_out_failure(
+    world: World,
+) -> None:
+    clock = FakeClock()
+
+    def times_out_when_the_call_has_no_time_left(
+        index: int, inputs: list[str]
+    ) -> httpx.Response:
+        clock.advance(LATE_SECONDS)  # the 250 ms read timeout ran out
+        raise httpx.ReadTimeout("too slow")
+
+    failed_search_of(world, times_out_when_the_call_has_no_time_left, clock)
+
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "timed-out",
+        "wording_search",
+    )
+
+
+def test_a_gateway_that_fails_at_once_with_time_left_is_still_unavailable(
+    world: World,
+) -> None:
+    failed_search_of(world, answering(httpx.Response(502, text="down")), FakeClock())
+
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "gateway-unavailable",
+        "wording_search",
+    )
+
+
 # ── 11. nothing of a query or a chunk is kept ───────────────────────────────
 def plant_body_canary(db: DatabaseHandle) -> None:
     with connect(db.dsn(OWNER), "test-plant") as conn:

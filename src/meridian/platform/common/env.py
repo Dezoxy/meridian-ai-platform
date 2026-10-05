@@ -31,15 +31,20 @@ def registry_dir_from(environ: Mapping[str, str]) -> Path:
 
 def service_url_problem(value: str) -> str | None:
     """The rule ``value`` breaks as a text that never holds the value, or ``None``
-    when the address is one a client can use: no space around it, it parses (a
-    bad port is refused), its scheme is http or https with a host name, and it
-    names no user, password, query or fragment. A path is allowed."""
-    if value != value.strip():
+    when the address is one a client can use: no whitespace or control character
+    in it (``urlsplit`` drops a tab, a carriage return and a line feed without a
+    word), it parses (a bad port, port 0 and an empty port are refused), its
+    scheme is http or https with a host name, and it names no user, password,
+    query or fragment. A path is allowed."""
+    if any(ch.isspace() or not ch.isprintable() for ch in value):
         return "is not a usable URL"
     try:
         parts = urlsplit(value)
-        parts.port  # noqa: B018 (reading it raises ValueError for a bad port)
+        port = parts.port  # raises ValueError for a bad port
     except ValueError:
+        return "is not a usable URL"
+    # ``urlsplit`` reads ``host:`` as no port, and a client may not.
+    if port == 0 or parts.netloc.endswith(":"):
         return "is not a usable URL"
     if parts.scheme not in HTTP_SCHEMES or not parts.hostname:
         return "must be an http or https URL"

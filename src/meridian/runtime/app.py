@@ -193,12 +193,19 @@ def _finish(
 
 def _pause_again(
     dsn: str, identity: RunIdentity, reason: str, tool: str | None
-) -> psycopg.Error | None:
+) -> tuple[bool, psycopg.Error | None]:
     """Record a failed resumed leg and the run's return to its pause; try
-    twice, return the last error if both fail."""
-    return _record(
-        lambda: runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
-    )
+    twice. Returns whether the run moved (the last write's answer: ``False``
+    when the run was no longer ``Running``) and the last error if both writes
+    fail."""
+    moved = False
+
+    def write() -> None:
+        nonlocal moved
+        moved = runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
+
+    error = _record(write)
+    return moved, error
 
 
 def _record_end(
@@ -215,10 +222,10 @@ def _record_end(
         moved, unsaved = _finish(dsn, identity, outcome.status)
         return outcome, moved, unsaved
     if leg == "resumed" and failure_reason(failure) not in runs.NOTHING_TO_RESUME:
-        unsaved = _pause_again(
+        moved, unsaved = _pause_again(
             dsn, identity, failure_reason(failure), _tool_of(failure)
         )
-        return RunOutcome("AwaitingApproval", None), True, unsaved
+        return RunOutcome("AwaitingApproval", None), moved, unsaved
     moved, unsaved = _finish(
         dsn,
         identity,
@@ -244,7 +251,7 @@ def _settle(
         return outcome, failure, unsaved
     # Written, but over nothing: the leg's own earlier write had committed, or
     # the run was ended by someone else while it worked.
-    outcome, ended, unsaved = _stored_outcome(dsn, identity, outcome)
+    outcome, ended, unsaved = _stored_outcome(dsn, identity, outcome, failure)
     return outcome, None if ended else failure, unsaved
 
 
@@ -264,7 +271,7 @@ def _unsaved_answer(
 
 
 def _stored_outcome(
-    dsn: str, identity: RunIdentity, own: RunOutcome
+    dsn: str, identity: RunIdentity, own: RunOutcome, failure: Exception | None
 ) -> tuple[RunOutcome, bool, psycopg.Error | None]:
     """What a leg answers when its write moved nothing. Returns the outcome,
     whether someone else (the sweep) ended the run, and the error if the stored
@@ -274,12 +281,24 @@ def _stored_outcome(
     committed and the connection dropped before the answer, so the retry found
     the run no longer ``Running``): the leg answers as if it had moved the run.
     Any other status is the answer, with no output. The warning has the run ID
-    and the status, nothing of the claim."""
+    and the status, nothing of the claim.
+
+    A leg that failed on a run already stored as ``Failed`` answers its own
+    failure, but the trail may say only the sweep's reason (``abandoned``): one
+    warning keeps the leg's reason word and tool, the run ID with them."""
     try:
         stored = runs.fetch_run(dsn, identity.run_id)
     except psycopg.Error as exc:
         return own, False, exc
     if stored is not None and stored.status == own.status:
+        if failure is not None and own.status == "Failed":
+            logger.warning(
+                "run %s: its leg failed (%s; tool %s) on a run already Failed, "
+                "so the trail may not hold this reason",
+                identity.run_id,
+                failure_reason(failure),
+                _tool_of(failure),
+            )
         return own, False, None
     logger.warning(
         "run %s was ended before its leg could mark it %s",

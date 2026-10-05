@@ -9,8 +9,12 @@ No transaction is open while the server waits for the gateway: the handler has
 only read so far, and ends that transaction before the call. Nothing of a query,
 a vector or a hit is logged, and no exception text holds one (T-03, TB-7).
 
-A call whose caller has stopped waiting fails as ``timed-out`` before the gateway
-is called, and the gateway is waited for no longer than the call has left.
+A call whose deadline has passed fails as ``timed-out`` before the gateway is
+called, and the gateway is waited for no longer than the call has left; a gateway
+that fails after the deadline is ``timed-out`` too, not unavailable. The
+deadline is the server's: its clock starts when the call arrives, a little after
+the runtime's, so a search that commits in the moment after the kit's last check
+is ``completed`` although the runtime may have just stopped waiting.
 
 The run's status is read once, before the gateway call; a run that ends while
 the server waits still gets its answer (a read; T-22's residual).
@@ -24,6 +28,7 @@ about the call's scope and is refused, with a warning that names the scope.
 
 import logging
 import math
+from collections.abc import Sequence
 from functools import partial
 from typing import Literal
 
@@ -31,10 +36,12 @@ import httpx
 import psycopg
 
 from meridian.platform.knowledge_mcp.embedding_client import (
+    EmbeddingBatch,
     EmbeddingCallError,
     EmbeddingClient,
 )
 from meridian.platform.knowledge_mcp.search import (
+    Hit,
     QueryEmbedding,
     SearchRefused,
     corpus_exists,
@@ -59,17 +66,19 @@ HTTP_TOO_MANY_REQUESTS = 429
 HTTP_FORBIDDEN = 403
 
 
-def _gateway_answer(error: EmbeddingCallError) -> Refused:
+def _gateway_answer(error: EmbeddingCallError, call: ToolCall) -> Refused:
     """The refusal for a gateway that is busy or says no; any other gateway that
-    gave no vector fails the call. No retry: a busy gateway is the caller's to
-    wait for, and the runtime's time for the call is short. The status is logged
-    (0 is no usable answer), never the body or the query."""
+    gave no vector fails the call, as ``timed-out`` when the call's own deadline
+    has passed (the wait was cut by the time the call had left, not by a gateway
+    that is down). No retry: a busy gateway is the caller's to wait for, and the
+    runtime's time for the call is short. The status is logged (0 is no usable
+    answer), never the body or the query."""
     logger.warning("embedding call failed: status %d", error.status_code)
     if error.status_code == HTTP_TOO_MANY_REQUESTS:
         return Refused("gateway-busy")
     if error.status_code == HTTP_FORBIDDEN:
         return Refused("gateway-refused")
-    raise ToolFailed("gateway-unavailable") from None
+    raise ToolFailed(TIMED_OUT if call.deadline.expired() else "gateway-unavailable")
 
 
 def _scope_refusal(
@@ -102,6 +111,41 @@ def _request_timeout(http: httpx.Client, call: ToolCall) -> httpx.Timeout | None
     )
 
 
+def _embed_query(
+    http: httpx.Client, call: ToolCall, query: str
+) -> EmbeddingBatch | Refused:
+    """The query's vector from the gateway, under the run's own identity, waited
+    for no longer than the call has left; a refusal when the gateway has
+    answered about the call."""
+    binding = call.binding
+    client = EmbeddingClient(
+        http, tenant=binding.tenant, agent=binding.agent, run_id=binding.run_id
+    )
+    try:
+        return client.embed([query], timeout=_request_timeout(http, call))
+    except EmbeddingCallError as error:
+        return _gateway_answer(error, call)
+
+
+def _completed(product: str, wording_version: str, hits: Sequence[Hit]) -> Completed:
+    return Completed(
+        {
+            "product": product,
+            "wording_version": wording_version,
+            "chunks": [
+                {
+                    "clause": hit.clause,
+                    "section": hit.section,
+                    "title": hit.title,
+                    "body": hit.body,
+                    "keyword_match": hit.lexical_rank is not None,
+                }
+                for hit in hits
+            ],
+        }
+    )
+
+
 def wording_search(
     http: httpx.Client, conn: psycopg.Connection, call: ToolCall
 ) -> Completed | Refused:
@@ -124,13 +168,9 @@ def wording_search(
         # The caller has stopped waiting: a search that is late costs the
         # tenant nothing. One already at the gateway is charged.
         raise ToolFailed(TIMED_OUT)
-    client = EmbeddingClient(
-        http, tenant=binding.tenant, agent=binding.agent, run_id=binding.run_id
-    )
-    try:
-        batch = client.embed([query], timeout=_request_timeout(http, call))
-    except EmbeddingCallError as error:
-        return _gateway_answer(error)
+    batch = _embed_query(http, call, query)
+    if isinstance(batch, Refused):
+        return batch
     try:
         hits = hybrid_search(
             conn,
@@ -150,22 +190,7 @@ def wording_search(
                 "stale-vectors", binding.product, binding.wording_version
             )
         raise
-    return Completed(
-        {
-            "product": binding.product,
-            "wording_version": binding.wording_version,
-            "chunks": [
-                {
-                    "clause": hit.clause,
-                    "section": hit.section,
-                    "title": hit.title,
-                    "body": hit.body,
-                    "keyword_match": hit.lexical_rank is not None,
-                }
-                for hit in hits
-            ],
-        }
-    )
+    return _completed(binding.product, binding.wording_version, hits)
 
 
 def handlers(http: httpx.Client) -> tuple[ToolHandler, ...]:

@@ -62,6 +62,7 @@ from meridian.platform.registry import Registry
 from meridian.platform.registry.models import Tool
 from meridian.platform.toolserver.validation import build_validator, fits
 from meridian.platform.toolserver.wire import (
+    MAX_CALL_SECONDS,
     MCP_PATH,
     META_CALL_ID,
     META_IDEMPOTENCY_KEY,
@@ -82,8 +83,10 @@ logger = logging.getLogger(__name__)
 # appended) or, in tests, a server or a transport.
 type ToolTarget = str | Server[Any] | MCPServer | Transport | StdioServerParameters
 
-# The whole call: connecting, the request and the answer.
-TOOL_TIMEOUT_SECONDS = 10.0
+# The whole call: connecting, the request and the answer. The most a tool server
+# works on a call (it bounds what the call sends by that), so it is the same
+# number; tests set this name to shorten the wait.
+TOOL_TIMEOUT_SECONDS = MAX_CALL_SECONDS
 SPAN_NAME = "runtime.tool"
 # The graph's own name for a call site: it takes part in the idempotency key.
 STEP_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")

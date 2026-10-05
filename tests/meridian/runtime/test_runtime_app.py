@@ -42,7 +42,7 @@ from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.runtime import app as runtime_app
-from meridian.runtime import graphs, runs
+from meridian.runtime import graphs, runs, tool_client
 from meridian.runtime.app import create_app
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import GraphFailure
@@ -1109,16 +1109,41 @@ def test_a_failing_leg_on_a_run_the_sweep_marked_failed_answers_its_own_failure(
     with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
         response = start(make_client(fresh_database, checkpointer=MemorySaver()))
 
-    # The stored status is the one the leg meant to write: its own failure.
+    # The stored status is the one the leg meant to write: its own failure. The
+    # trail says the sweep's, so the leg's reason is logged: nowhere else holds it.
     assert response.status_code == 502
-    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
     body = response.json()
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert body["run_id"] in warning.getMessage()
+    assert "a-code" in warning.getMessage()
+    assert CLAIM_TEXT not in caplog.text
     assert (body["status"], body["output"]) == ("Failed", None)
     events = audit_events(fresh_database, uuid.UUID(body["run_id"]))
     assert [(e["service"], e["event"]) for e in events] == [
         ("agent-runtime", "run.started"),
         ("claims-sweep", "run.failed"),
     ]
+
+
+def test_the_warning_of_a_failing_leg_on_an_ended_run_names_the_reason_and_the_tool(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail() -> None:
+        raise ToolUnavailable("policy_lookup")
+
+    register(monkeypatch, ended_while_it_works(fresh_database, fail))
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database, checkpointer=MemorySaver()))
+
+    assert response.status_code == 502
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    message = warning.getMessage()
+    assert response.json()["run_id"] in message
+    assert "tool-unavailable" in message
+    assert "policy_lookup" in message
 
 
 def test_when_the_stored_status_of_an_ended_run_cannot_be_read_the_answer_is_503(
@@ -2107,11 +2132,11 @@ def test_the_retry_of_recording_a_failed_resume_keeps_its_reason_and_tool(
     real = runs.pause_after_failed_resume
     calls: list[str] = []
 
-    def flaky(*args: Any, **kwargs: Any) -> None:
+    def flaky(*args: Any, **kwargs: Any) -> bool:
         calls.append("tried")
         if len(calls) == 1:
             raise psycopg.OperationalError("down")
-        real(*args, **kwargs)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(runs, "pause_after_failed_resume", flaky)
 
@@ -2369,6 +2394,21 @@ def test_the_lease_of_a_running_run_is_ten_minutes() -> None:
     assert runs.STALE_RUNNING_REASON == "stale-running"
 
 
+def test_the_longest_a_live_leg_can_last_is_under_the_lease() -> None:
+    # Four model calls of 30 s and sixteen tool calls of 10 s: 120 + 160 = 280 s.
+    # A lease the longest leg could outlast would let a takeover or the sweep
+    # end a run something is still working on. The 30 s of the gateway client is
+    # its timeout for each phase of a call, so this is the sum of the bounds the
+    # code names, not a hard ceiling.
+    model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * runtime_app.GATEWAY_TIMEOUT_SECONDS
+    tool_seconds = runs.MAX_TOOL_CALLS_PER_RUN * tool_client.TOOL_TIMEOUT_SECONDS
+
+    longest_leg = model_seconds + tool_seconds
+
+    assert (model_seconds, tool_seconds, longest_leg) == (120.0, 160.0, 280.0)
+    assert longest_leg < runs.RUNNING_LEASE_SECONDS
+
+
 def test_a_stale_running_run_with_a_pending_pause_is_resumed_and_completes(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2561,6 +2601,53 @@ def test_a_resumed_leg_that_fails_after_a_takeover_leaves_the_run_paused(
         "run.resumed",
         "run.resume_failed",
     ]
+
+
+def test_a_resumed_leg_that_fails_on_a_run_the_sweep_ended_answers_the_stored_failed(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def ends_the_run_then_fails(answer: Any) -> None:
+        end_as_the_sweep(fresh_database, run_rows(fresh_database)[0][0])
+        raise ToolUnavailable("policy_lookup")  # a reason that would pause it again
+
+    register(monkeypatch, resumable(after=ends_the_run_then_fails))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = resume(client, run_id)
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": run_id, "status": "Failed", "output": None}
+    assert run_rows(fresh_database)[0][5] == "Failed"
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["service"], e["event"]) for e in events] == [
+        ("agent-runtime", "run.started"),
+        ("agent-runtime", "run.awaiting_approval"),
+        ("agent-runtime", "run.resumed"),
+        ("claims-sweep", "run.failed"),
+    ]
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert run_id in warning.getMessage()
+
+
+def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
+    fresh_database: DatabaseHandle,
+) -> None:
+    identity = started_run(fresh_database)
+    dsn = fresh_database.dsn("agent_runtime")
+    make_running(fresh_database, str(identity.run_id), idle_seconds=0)
+
+    first = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
+    second = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
+
+    assert (first, second) == (True, False)
+    assert (
+        event_names(fresh_database, str(identity.run_id)).count("run.resume_failed")
+        == 1
+    )
 
 
 def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(

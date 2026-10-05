@@ -9,6 +9,7 @@ import pytest
 from dbsupport import OWNER, DatabaseHandle
 
 from meridian.platform.common.db import connect
+from meridian.platform.migrations import runner
 from meridian.platform.migrations.runner import migration_files
 
 MAX_LENGTH = 64
@@ -69,6 +70,39 @@ def test_a_text_column_of_a_run_holds_64_characters_and_refuses_65(
         ([at_limit, over_limit],),
     )
     assert stored == [(at_limit,)]
+
+
+def test_a_row_over_the_bound_fails_the_whole_file_and_leaves_the_database_as_it_was(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = migration_files()
+    name = "0016_runs_text_bounds.sql"
+    before = [(n, text) for n, text in files if n < name]
+    assert name in [n for n, _ in files]
+    run_id = uuid.uuid4()
+    monkeypatch.setattr(runner, "migration_files", lambda: before)
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        runner.apply_migrations(conn)
+        # A 65-character agent, written by the owner before the file is applied.
+        conn.execute(
+            INSERT_RUN, (run_id, uuid.uuid4(), "x" * (MAX_LENGTH + 1), "x", "x")
+        )
+        conn.commit()
+        monkeypatch.setattr(runner, "migration_files", lambda: files)
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            runner.apply_migrations(conn)
+        conn.rollback()
+
+        assert conn.execute(
+            "SELECT count(*) FROM public.meridian_migrations WHERE name = %s", (name,)
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT count(*) FROM pg_constraint WHERE conname LIKE 'runs\\_%\\_length'"
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT char_length(agent) FROM runtime.runs WHERE run_id = %s", (run_id,)
+        ).fetchone() == (MAX_LENGTH + 1,)
 
 
 @pytest.mark.parametrize("column", BOUNDED_COLUMNS)

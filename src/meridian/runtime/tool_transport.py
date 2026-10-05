@@ -22,6 +22,7 @@ thread left behind is a daemon, which does not hold the process open.
 import ssl
 import threading
 from contextlib import AbstractContextManager, AsyncExitStack
+from http.cookiejar import DefaultCookiePolicy
 from typing import Any
 
 import anyio
@@ -38,6 +39,10 @@ from meridian.runtime import tool_client
 # keeps one (uvicorn's default ``timeout_keep_alive``, which no tool server's
 # command overrides), so a call rarely meets a connection the server is closing.
 KEEPALIVE_SECONDS = 2.0
+# Passed explicitly: a ``Limits`` that names only the expiry leaves both of
+# these unbounded (the library's 100 and 20 apply only when no ``Limits`` is given).
+MAX_CONNECTIONS = 100
+MAX_KEEPALIVE_CONNECTIONS = 20
 THREAD_NAME = "meridian-tool-transport"
 
 
@@ -99,8 +104,16 @@ class ToolTransport:
                 trust_env=False,
                 timeout=tool_client.TOOL_TIMEOUT_SECONDS,
                 verify=self._verify,
-                limits=httpx2.Limits(keepalive_expiry=KEEPALIVE_SECONDS),
+                limits=httpx2.Limits(
+                    max_connections=MAX_CONNECTIONS,
+                    max_keepalive_connections=MAX_KEEPALIVE_CONNECTIONS,
+                    keepalive_expiry=KEEPALIVE_SECONDS,
+                ),
             )
+            # No cookie is ever stored or sent: this client is shared by every
+            # run and tenant, and a cookie a tool server set for one would reach
+            # the next.
+            client.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
             self._clients[target] = client
         return client
 

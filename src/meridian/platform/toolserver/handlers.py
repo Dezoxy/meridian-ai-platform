@@ -4,8 +4,11 @@ The kit has already checked the call by the time a handler runs: the run is
 running, the tenant and agent may use the tool, the arguments fit the
 registry's schema and the bound argument is this run's own claim or policy.
 A handler does the tool's work in the connection's transaction; the kit
-writes the audit row in the same transaction and commits, unless the caller has
-stopped waiting by then: the work is undone and the call fails as timed-out.
+writes the audit row in the same transaction and commits. A call found late
+before its commit (by the server's clock, which starts when the call arrives, a
+little after the runtime's) is rolled back and audited as failed, ``timed-out``;
+one that commits in the moment after the check is ``completed`` although the
+runtime may have just stopped waiting.
 """
 
 import math

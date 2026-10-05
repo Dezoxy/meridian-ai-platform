@@ -2,10 +2,11 @@
 keys, the idempotency key's shape, the reasons a call is refused and how long a
 call may take.
 
-Constants and one reader, so the runtime's client can import them without
-importing a server.
+Constants and two readers of ``_meta``, so the runtime's client can import them
+without importing a server.
 """
 
+import uuid
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -41,7 +42,25 @@ def call_budget_seconds(meta: Mapping[str, Any]) -> float:
     sent = meta.get(META_TIMEOUT_MS)
     if not isinstance(sent, int) or isinstance(sent, bool) or sent < 1:
         return maximum
-    return min(sent / MILLISECONDS_PER_SECOND, maximum)
+    # Compared as integers first: a whole number too large for a float would
+    # raise when divided.
+    if sent >= maximum * MILLISECONDS_PER_SECOND:
+        return maximum
+    return sent / MILLISECONDS_PER_SECOND
+
+
+def run_id_of(meta: Mapping[str, Any]) -> uuid.UUID | None:
+    """The run ID the caller named in ``_meta``, when it is a UUID; None for
+    anything else. Never raises. The ID is the caller's claim, not a verified
+    run: a log line may name it, a record of the run must come from the run's
+    own row."""
+    value = meta.get(META_RUN)
+    if not isinstance(value, str):
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
 
 
 RefusalReason = Literal[
