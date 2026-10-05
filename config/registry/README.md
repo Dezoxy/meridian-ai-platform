@@ -239,7 +239,9 @@ an in-memory reader; a dashboard for them is designed (S043).
   changes state has effect `write` and requires an idempotency key.
   `uv run meridian workload new NAME` appends a new workload's agent to
   `agents.yaml` with no tool, and adds it to no tenant: both are edits a
-  person makes (T-81).
+  person makes (T-81). It also writes the agent into the `agents` of
+  `agent-runtime` in `services.yaml`, so the runtime may name it; no
+  call is admitted before a tenant lists the agent (S061).
 - **The models themselves:** edit `src/meridian/platform/registry/`, then
   regenerate the schemas with `uv run meridian registry schemas`.
 

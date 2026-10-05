@@ -115,6 +115,7 @@ in the description only. It is not a field of the claim.
 | Field | Meaning |
 |---|---|
 | `synthetic` | Always `true` |
+| `workload` | `claims-triage`, the workload the set belongs to; `meridian eval run` refuses a set whose manifest names another or none, and the injection set's manifest carries the same key |
 | `generator_version` | Version of the generator that wrote the files |
 | `seed` | The seed of the run |
 | `reference_date` | 2026-09-01, the dataset's clock; nothing is reported after it |
