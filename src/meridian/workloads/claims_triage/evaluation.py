@@ -279,7 +279,7 @@ def _judged_case(
     )
 
 
-def _auto_approval_limit(manifest_path: Path) -> int:
+def auto_approval_limit(manifest_path: Path) -> int:
     """The golden set's auto-approval limit, from its manifest; refuse a manifest
     that is not JSON or has no integer limit."""
     manifest = read_json_file(manifest_path)
@@ -333,7 +333,7 @@ def build_report(
     _check_parts(
         (judgements, measured, tools), (judge_fingerprint, recording_fingerprint)
     )
-    limit = _auto_approval_limit(manifest_path)
+    limit = auto_approval_limit(manifest_path)
     live = answered_by.kind == "live"
     cases = []
     for claim_id in sorted(expected):

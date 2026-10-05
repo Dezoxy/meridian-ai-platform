@@ -47,7 +47,7 @@ from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import ModelCallFilteredError, ModelClient
 
 from .models import ClaimFacts, DraftedBy
-from .proposal import MAX_RATIONALE_CHARS, UnavailableBecause
+from .proposal import INJECTION_SUSPECTED, MAX_RATIONALE_CHARS, UnavailableBecause
 from .rules import Assessment
 from .wording import Clause
 
@@ -304,7 +304,7 @@ def assess(
     if holds_special_category(claim.description):
         return _without_an_answer("special-data")
     if addresses_the_model(claim.description):
-        return _without_an_answer("injection-suspected")
+        return _without_an_answer(INJECTION_SUSPECTED)
     if any(
         addresses_the_model(c.title) or addresses_the_model(c.body) for c in candidates
     ):

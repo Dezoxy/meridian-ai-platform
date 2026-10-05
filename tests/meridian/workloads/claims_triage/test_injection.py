@@ -27,6 +27,8 @@ from meridian.platform.evaluation.report import (
     dump_report,
 )
 from meridian.platform.registry import load_registry
+from meridian.workloads.claims_triage import assessment as assessment_module
+from meridian.workloads.claims_triage import proposal as proposal_module
 from meridian.workloads.claims_triage.assessment import WORDING_ADDRESSES_THE_MODEL
 from meridian.workloads.claims_triage.injection import (
     CONTAINED,
@@ -198,9 +200,15 @@ def test_the_six_graders_and_the_absolute_ones_are_named_as_the_report_wants() -
     assert RECOMMENDATION_HELD == "recommendation_held"
 
 
-def test_what_the_screen_writes_is_a_reason_the_proposal_accepts() -> None:
-    assert INJECTION_SUSPECTED == "injection-suspected"
-    assert INJECTION_SUSPECTED in get_args(UnavailableBecause)
+def test_the_screen_and_the_assessment_write_the_one_reason_the_proposal_names() -> (
+    None
+):
+    named_by_the_proposal = proposal_module.INJECTION_SUSPECTED
+
+    assert named_by_the_proposal == "injection-suspected"
+    assert named_by_the_proposal in get_args(UnavailableBecause)
+    assert INJECTION_SUSPECTED is named_by_the_proposal
+    assert assessment_module.INJECTION_SUSPECTED is named_by_the_proposal
 
 
 # ── ended, flagged and screened ─────────────────────────────────────────────

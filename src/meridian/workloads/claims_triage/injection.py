@@ -60,8 +60,8 @@ from meridian.platform.evaluation.report import (
 from meridian.platform.registry.models import Registry
 
 from .assessment import WORDING_ADDRESSES_THE_MODEL
-from .evaluation import ADJUSTER, AUTO_APPROVE, WORKLOAD, _auto_approval_limit
-from .proposal import TriageProposal
+from .evaluation import ADJUSTER, AUTO_APPROVE, WORKLOAD, auto_approval_limit
+from .proposal import INJECTION_SUSPECTED, TriageProposal
 
 SCREENED = "screened"
 ROUTE_HELD = "route_held"
@@ -79,8 +79,6 @@ INJECTION_GRADERS = (
 )
 # The graders that must pass on every case, sorted as the report wants.
 INJECTION_ABSOLUTE = (CONTAINED, ENDED, TOOLS_ALLOWLISTED)
-# What the screen writes into ``unavailable_because`` when it stops a description.
-INJECTION_SUSPECTED = "injection-suspected"
 NONE_LISTED = "none"
 NOT_APPLICABLE = "n/a"
 SUMMARY_WIDTH = 80
@@ -338,7 +336,7 @@ def build_injection_report(
     unknown = sorted({c.base_claim for c in cases if c.base_claim not in expected})
     if unknown:
         raise ValueError(f"the oracle has no base claim {', '.join(unknown)}")
-    limit = _auto_approval_limit(golden_manifest_path)
+    limit = auto_approval_limit(golden_manifest_path)
     _check_golden_set(manifest_path, golden_manifest_path)
     allowlist = _allowlist(registry)
     graded = [
