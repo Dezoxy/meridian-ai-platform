@@ -330,7 +330,7 @@ milestone's exit.
 | S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
 | S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | todo | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI; a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it | todo | S053 |
-| S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | todo | S039, S050 |
+| S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | doing | S039, S050 |
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | todo | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
@@ -7697,6 +7697,37 @@ and for the tool servers' and the runtime's throttles; a tokenizer, so
 that an embedding input is bounded by tokens and not by bytes; the
 output bound as the wire's cap, and what a model that bills reasoning
 tokens would meet.
+
+### S061 — Scaffold, registry and evaluation plumbing
+**Status:** doing · **Started:** 2026-10-05 · **Finished:** —
+**Goal:** close the seven scaffold, registry and evaluation items of the
+follow-up backlog, without a prompt change and without a live recording.
+
+**Decisions:**
+
+- **Run inside the orchestrating session, by the owner's instruction
+  (2026-10-05):** "Start S059 and S060 in this session, and S061 when a
+  slot frees."
+- **Beside S056 and S059.** S056 owns the kind cluster: this step runs
+  no command against it and none against Azure. S059 changed the
+  registry's tool schema rules, `tools.yaml` and the evaluation
+  baselines: the contracts that regenerate a baseline wait until S059 is
+  on `main` and merged into this branch.
+- **The scaffold writes the new agent into the runtime's entry, by the
+  owner's decision (2026-10-05): "option 1, write it".** The question
+  put to the owner: T-81 says the command "declares and never grants",
+  and writing the agent into the `agents` of `agent-runtime` in
+  `services.yaml` lets the runtime's identity name the new agent. The
+  write alone admits no call: a tenant has to list the agent too, and
+  that stays a hand edit, as does the new workload's own API entry.
+  The other option was to print what to add and write nothing. T-81 is
+  reworded with the change.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
