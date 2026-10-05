@@ -124,8 +124,13 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 
 **Working in parallel.** Steps whose dependencies are `done` and whose files
 do not overlap may run in separate sessions, each in its own worktree and on
-its own branch; one step per session still holds. The brief of each session
-says:
+its own branch; one step per session still holds. When the owner follows the
+work from a phone, one session may run two or three such steps itself, each
+in its own worktree and on its own branch, with the subagents it starts: a
+suggested task and a routine's run do not reach the phone, a session with
+Remote Control on does. What follows holds for that session's steps as for
+separate sessions, and it runs one whole test suite at a time. The brief of
+each session says:
 
 - **What is shared, and who owns it.** There is one kind cluster and one
   Azure environment: one session owns them, and the others run no
@@ -328,7 +333,7 @@ milestone's exit.
 | S056 | Certificate lifecycle | On kind: no service goes on serving a certificate past its end with green probes, and an alert fires before one expires (T-89; the owner's choice on 2026-10-04: `/healthz` answers 503 once the loaded certificate is near its end, so the kubelet restarts the container, which loads the renewed one); the `meridian-services` issuer signs only for the `meridian` namespace and its URI prefix, and a request from another namespace is refused on the cluster (T-88; the owner's choice on 2026-10-04: cert-manager's approver-policy, with the built-in approver off); a certificate's key file is readable by the service's own user and group alone; `make deploy` stops before its Jobs on a cluster without the issuer; `make smoke` reads the audit reason of its 403 and tries a certificate from another CA | todo | S055, S024 |
 | S057 | Test and tooling hygiene | Without the cluster: a `make` target runs the secret scan a push needs; the tests that rest on a sleep, a wall-clock limit or a port closed before its use (the two resume races in `test_runtime_app.py`, four limits, `unused_port()`) hold by construction, shown by repeated runs under load; the registry tests find a deployment's entry by its key, not by adjacent lines; `test_scheduled_sweep_migration.py` and `test_sweep.py` are under the 800-line ceiling; `make docs` fails on a blank line that splits a table (not done: the checker is development-base's to change first, and the backlog row stays open); `check-iac.sh` lints the chart with the values `make helm-lint` uses; the CI python job's limit is set from its measured runs, and the time the recorded evaluation, the scaffold's first-run test and the injection stack test add is each measured and either cut or accepted with its number recorded | done | S054 |
 | S058 | Gateway loose ends | In the Model Gateway: a provider's token counts are bounded before they reach the ledger; a refusal row carries the call's purpose; an embedding input that would pass the provider's 8,191 tokens is refused with an answer of its own, not a 502; the count of a refusal flood's last window is written; a request over its rate limit is refused before its text is redacted (T-73); contract tests pass | done | S045 |
-| S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | todo | S046, S052 |
+| S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | doing | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI; a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it | todo | S053 |
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | todo | S039, S050 |
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
@@ -7697,6 +7702,106 @@ and for the tool servers' and the runtime's throttles; a tokenizer, so
 that an embedding input is bounded by tokens and not by bytes; the
 output bound as the wire's cap, and what a model that bills reasoning
 tokens would meet.
+
+### S059 — Runtime and tool server loose ends
+**Status:** doing · **Started:** 2026-10-05 · **Finished:** —
+**Goal:** close the ten runtime and tool server items of the follow-up
+backlog, T-62 among them, without touching a `/healthz` route or the
+identity files S056 is changing.
+
+**Decisions:**
+
+- **Run inside the orchestrating session, by the owner's instruction
+  (2026-10-05):** "Start S059 and S060 in this session, and S061 when a
+  slot frees." A suggested task and a routine's run do not show on the
+  owner's phone; this session does. Part A's "Working in parallel" says
+  so from this pull request on.
+- **In parallel with S056 and S060.** S056 owns the kind cluster: this
+  step runs no command against it and none against Azure.
+- **Before any code.** The threat-model note (`feature-threat-model`).
+  The step crosses TB-4 (the runtime to a tool server) and TB-6 (a tool
+  server to the gateway). What is worth protecting: the audit trail (a
+  row that says `completed` is a call the runtime had an answer to), a
+  tenant's windows and budget (T-62), a run's final status, and what a
+  span may hold (no query string). The threats taken: a search the
+  runtime gave up on is charged and audited as done; calls wait without
+  limit for one of eight threads; a leg that outlives its lease writes
+  over the sweep's `Failed`; a processor or sampler added later reads a
+  URL with its query; an error answer that is not ours is read as a
+  refusal. Nothing here is in tension with a hard rule: no provider SDK,
+  no agent framework in a platform package, no new tool.
+- **An error answer without a reason is `tool-unavailable`.** A tool
+  server of ours puts a reason on every refusal, so an error answer with
+  none, or with one that is not a string, did not come from the kit: the
+  run fails as unavailable. A reason that is a string the client does
+  not know stays the refusal `unknown`, since a newer server may have a
+  reason an older runtime has not heard of. Rejected: `unknown` for
+  both, as before, which reports a broken server as a decision it took.
+- **`finish_run` writes over `Running` only.** Every leg ends from
+  `Running` (a resumed leg claims its run back to `Running` first), so
+  the write names that status, as `pause_after_failed_resume` in the
+  same file already does. When no row moved, the leg writes no audit
+  event (the sweep wrote `run.failed`), and answers with the status the
+  run has. Rejected: a trigger in the database, which would need the
+  runtime's role told apart from a migration's and guards one caller.
+- **The text columns of `runtime.runs` hold 64 characters**, the bound
+  the HTTP edge already puts on an agent, a tenant and a reference.
+  Rejected: 128, the audit table's bound for a tenant, which would let
+  the table hold what no request can send.
+- **One URL check for a service address, the strictest of the three.**
+  `common/env.py` takes the knowledge server's check: no surrounding
+  space, a valid port, `http` or `https`, a host, no user or password,
+  no query and no fragment. The tool servers' addresses add "no path"
+  on top of it. A gateway or runtime address may keep a path. The
+  evaluation CLI's check of a command-line option stays where it is
+  (S061 works in that folder).
+- **`policy` when `found` is true: one conditional form in the
+  registry's schema subset.** The subset has no keyword that can say
+  it, so it admits `if` and `then` in one shape only: `if` names
+  properties by `const` and requires them, `then` holds `required`
+  alone. Both validators are `jsonschema`'s for draft 2020-12 and read
+  it already. Rejected: checking it in the handler and the client, which
+  leaves the published contract saying less than the servers enforce;
+  and `oneOf` of two closed objects, which lets a schema be matched
+  against every branch.
+- **The runtime keeps one HTTP client for each tool server, on a loop
+  of its own.** A client cannot outlive the event loop it was used in,
+  and a call ran its own loop, so every call paid a TLS handshake. The
+  application now owns one loop in one thread and one client per
+  address, and closes both when it stops. What a connection carries is
+  the runtime's own certificate, not a run's or a tenant's, so sharing
+  it between runs shares nothing of theirs; the run's ID still travels
+  with each call. The SDK's session is still one per call (the servers
+  are stateless). The probe (`toolprobe`) has no application and keeps a
+  client per call.
+- **T-62: a call carries how long the runtime will wait, and the server
+  keeps to it.** The client sends the seconds it has left with each
+  call; the server bounds that by its own ten seconds and never trusts
+  more. A call that has not got a thread by then is ended without
+  running (so the queue is bounded in time, not in count: no caller
+  waits past its own deadline); a search asks the store first, then
+  checks the time before it asks the gateway; and a call whose time is
+  up when its work is done is rolled back and audited as failed, not as
+  completed. A call that never got a thread is logged with its run's ID
+  and leaves no audit row of the server's: the audit write needs the
+  thread it could not get, and the runtime records the run's failure
+  with the tool's name. What stays: a search already at the gateway is
+  charged; the deadline is checked before the commit, not during it.
+  Rejected: a count of waiting calls, which refuses a short burst that
+  would have been served in time; and a new refusal reason on the wire
+  for a busy server, since to the runtime it is a server that did not
+  answer.
+- **No span attribute is ever built from the query.** The
+  instrumentation reads the ASGI scope when it starts the span, before
+  any hook, so the service hides the query from it and gives it back to
+  the routes. The hook that removes the attributes stays as a second
+  net.
+
+**Work log:**
+
+**Result / verification:**
+
+**Follow-ups:**
 
 ## Part D — Open questions
 
