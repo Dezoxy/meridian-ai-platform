@@ -52,6 +52,8 @@ tools:
             ]
           additionalProperties: false
       required: [found]
+      if: {properties: {found: {const: true}}, required: [found]}
+      then: {required: [policy]}
       additionalProperties: false
 
   - id: claim_history

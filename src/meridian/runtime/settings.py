@@ -5,36 +5,23 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Self
-from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import (
+    BaseHttpUrl,
     HttpUrl,
     SettingsError,
     registry_dir_from,
     require_env,
+    service_base_url_problem,
 )
 from meridian.platform.common.identity import IdentityPrefix, identity_prefix_from
 from meridian.platform.common.tls import ClientTls
 
 GATEWAY_URL_ENV = "MERIDIAN_GATEWAY_URL"
 TOOL_SERVERS_ENV = "MERIDIAN_TOOL_SERVERS"
-
-
-def _require_base_url(url: str) -> str:
-    """The tool client appends ``/mcp`` to an address, so an address is a base
-    URL: no path beyond ``/``, no query, no fragment. The message shows no
-    part of the value (an address can carry credentials)."""
-    parts = urlsplit(url)
-    if parts.path not in ("", "/") or "?" in url or "#" in url:
-        raise ValueError("a tool server address must be a base URL")
-    return url
-
-
-# For a tool server's address: an http or https URL that is a base URL.
-ToolServerUrl = Annotated[str, HttpUrl, AfterValidator(_require_base_url)]
 
 
 def _tool_servers_from(environ: Mapping[str, str]) -> Mapping[str, str]:
@@ -52,21 +39,15 @@ def _tool_servers_from(environ: Mapping[str, str]) -> Mapping[str, str]:
         isinstance(k, str) and isinstance(v, str) for k, v in servers.items()
     ):
         raise SettingsError(f"{TOOL_SERVERS_ENV} must be a JSON object of strings")
-    try:
-        for url in servers.values():
-            HttpUrl.func(url)
-    except ValueError:
-        raise SettingsError(
-            f"{TOOL_SERVERS_ENV} must map server IDs to http or https URLs"
-        ) from None
-    try:
-        for url in servers.values():
-            _require_base_url(url)
-    except ValueError:
-        raise SettingsError(
-            f"{TOOL_SERVERS_ENV} must map server IDs to base URLs: "
-            "no path, query or fragment"
-        ) from None
+    # The tool client appends ``/mcp`` to an address, so each is a base URL. The
+    # message holds the rule, never the address (it can carry credentials).
+    for url in servers.values():
+        problem = service_base_url_problem(url)
+        if problem is not None:
+            raise SettingsError(
+                f"{TOOL_SERVERS_ENV} must map server IDs to base URLs: "
+                f"an address {problem}"
+            )
     return servers
 
 
@@ -77,7 +58,7 @@ class RuntimeSettings(BaseModel):
     gateway_url: Annotated[str, HttpUrl]
     database_url: str = Field(repr=False)
     # Server ID to base URL; the addresses stay out of the repr.
-    tool_servers: Mapping[str, ToolServerUrl] = Field(default_factory=dict, repr=False)
+    tool_servers: Mapping[str, BaseHttpUrl] = Field(default_factory=dict, repr=False)
     # The prefix of the callers' certificate URIs (S055); none only for an app
     # built in code, which then has no caller check. ``from_env`` requires it.
     identity_prefix: IdentityPrefix | None = None

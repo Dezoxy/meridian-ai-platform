@@ -13,8 +13,13 @@
   [provider outage](operations/runbooks/provider-outage.md),
   [budget exhaustion](operations/runbooks/budget-exhaustion.md),
   [database failure](operations/runbooks/database-failure.md),
-  [rollback](operations/runbooks/rollback.md) and
-  [secret rotation](operations/runbooks/secret-rotation.md).
+  [rollback](operations/runbooks/rollback.md),
+  [secret rotation](operations/runbooks/secret-rotation.md) and
+  [certificate expiry](operations/runbooks/certificate-expiry.md).
+
+- [Development environment](development-environment.md): what the machine
+  the work runs on needs, what git does not carry to a new one, and the
+  first run there. Start there on a new machine.
 
 Developer guide, governance and evaluation documents are added when their
 subject exists, milestone by milestone.

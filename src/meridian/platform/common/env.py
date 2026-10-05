@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlsplit
 
 from pydantic import AfterValidator
@@ -28,13 +29,62 @@ def registry_dir_from(environ: Mapping[str, str]) -> Path:
     return Path(environ.get(REGISTRY_DIR_ENV) or DEFAULT_REGISTRY_DIR)
 
 
+def service_url_problem(value: str) -> str | None:
+    """The rule ``value`` breaks as a text that never holds the value, or ``None``
+    when the address is one a client can use: no whitespace or control character
+    in it (``urlsplit`` drops a tab, a carriage return and a line feed without a
+    word), it parses (a bad port, port 0 and an empty port are refused), its
+    scheme is http or https with a host name, and it names no user, password,
+    query or fragment. A path is allowed."""
+    if any(ch.isspace() or not ch.isprintable() for ch in value):
+        return "is not a usable URL"
+    try:
+        parts = urlsplit(value)
+        port = parts.port  # raises ValueError for a bad port
+    except ValueError:
+        return "is not a usable URL"
+    # ``urlsplit`` reads ``host:`` as no port, and a client may not.
+    if port == 0 or parts.netloc.endswith(":"):
+        return "is not a usable URL"
+    if parts.scheme not in HTTP_SCHEMES or not parts.hostname:
+        return "must be an http or https URL"
+    if parts.username is not None or parts.password is not None:
+        # httpx logs the request URL at INFO, the password with it.
+        return "must not carry a user name or a password"
+    if parts.query or parts.fragment or "?" in value or "#" in value:
+        # The same log line would carry a ``?token=`` too; a bare ``?`` or
+        # ``#`` parses to an empty part and is refused all the same.
+        return "must not carry a query or a fragment"
+    return None
+
+
+def service_base_url_problem(value: str) -> str | None:
+    """As ``service_url_problem``, and the address is a base URL: no path beyond
+    ``/``, because a client appends its own (the tool client adds ``/mcp``)."""
+    problem = service_url_problem(value)
+    if problem is not None:
+        return problem
+    if urlsplit(value).path not in ("", "/"):
+        return "must be a base URL with no path"
+    return None
+
+
 def _require_http_url(value: str) -> str:
-    # The value is left out of the message: a URL can carry credentials.
-    parts = urlsplit(value)
-    if parts.scheme not in HTTP_SCHEMES or not parts.netloc:
-        raise ValueError("must be an http or https URL")
+    # The message holds the rule, never the value: a URL can carry credentials.
+    problem = service_url_problem(value)
+    if problem is not None:
+        raise ValueError(problem)
+    return value
+
+
+def _require_base_http_url(value: str) -> str:
+    problem = service_base_url_problem(value)
+    if problem is not None:
+        raise ValueError(problem)
     return value
 
 
 # For a settings field that holds the address of another service.
 HttpUrl = AfterValidator(_require_http_url)
+# For an address a client appends its own path to: ``HttpUrl`` and no path.
+BaseHttpUrl = Annotated[str, AfterValidator(_require_base_http_url)]

@@ -676,8 +676,45 @@ def test_a_second_post_while_the_claim_is_being_triaged_is_409_and_starts_no_run
     ]
 
 
-def test_the_triage_lease_is_twice_the_longest_runtime_call() -> None:
+def test_the_triage_lease_is_twice_the_runtime_read_timeout() -> None:
     assert triaging.TRIAGE_LEASE_SECONDS == 2 * triaging.RUNTIME_TIMEOUT_SECONDS
+    assert triaging.RUNTIME_TIMEOUT_SECONDS == 60.0
+
+
+def test_the_runtime_client_has_a_timeout_for_each_phase() -> None:
+    settings = ClaimsSettings(
+        runtime_url="http://runtime.invalid",
+        database_url=UNUSED_DSN,
+        tenant="claims-triage",
+    )
+
+    with claims_app.make_runtime_client(settings, True) as client:
+        timeout = client.timeout
+
+    assert timeout == httpx.Timeout(connect=3.0, write=5.0, pool=3.0, read=60.0)
+
+
+def one_piece_wait(timeout: httpx.Timeout) -> float:
+    """The longest a runtime that answers in one piece is waited for: a wait for
+    a pooled connection, the connect twice (httpx gives it to the TCP connect and
+    again to the TLS handshake), the write and one read."""
+    phases = (timeout.pool, timeout.connect, timeout.write, timeout.read)
+    assert None not in phases
+    pool, connect, write, read = phases
+    assert pool is not None and connect is not None
+    assert write is not None and read is not None
+    return pool + 2 * connect + write + read
+
+
+def test_the_longest_a_runtime_call_can_last_is_under_the_triage_lease() -> None:
+    # One lease covers two calls, one after the other: ending the old run
+    # (``add_documents`` and ``triage_again``), then the new triage.
+    end_run = one_piece_wait(triaging.runtime_timeout(triaging.END_RUN_TIMEOUT_SECONDS))
+    triage = one_piece_wait(triaging.runtime_timeout(triaging.RUNTIME_TIMEOUT_SECONDS))
+
+    assert end_run == 29.0
+    assert triage == 74.0
+    assert end_run + triage < triaging.TRIAGE_LEASE_SECONDS
 
 
 def test_a_claim_that_has_been_triaging_for_less_than_the_lease_is_left_alone(
@@ -942,6 +979,24 @@ FAILURES = [
     ),
     pytest.param(
         Runtime(raises=httpx.ReadTimeout("slow hunter2")), 504, False, id="timeout"
+    ),
+    pytest.param(
+        Runtime(raises=httpx.ConnectTimeout("slow hunter2")),
+        504,
+        False,
+        id="connect-timeout",
+    ),
+    pytest.param(
+        Runtime(raises=httpx.WriteTimeout("slow hunter2")),
+        504,
+        False,
+        id="write-timeout",
+    ),
+    pytest.param(
+        Runtime(raises=httpx.PoolTimeout("slow hunter2")),
+        504,
+        False,
+        id="pool-timeout",
     ),
     pytest.param(
         Runtime(
@@ -1227,8 +1282,23 @@ def test_when_the_proposal_cannot_be_stored_the_answer_is_503_with_both_ids(
     ]
 
 
+def logged_with_claim(
+    caplog: pytest.LogCaptureFixture, claim_id: str, error_class: str
+) -> bool:
+    """Whether one error line holds the claim's ID, the error's class and its
+    SQLSTATE: the line a failure of the database leaves (the shared line, which
+    does not name the claim, is another)."""
+    return any(
+        r.levelno == logging.ERROR
+        and claim_id in r.getMessage()
+        and error_class in r.getMessage()
+        and "sqlstate" in r.getMessage()
+        for r in caplog.records
+    )
+
+
 def test_when_the_database_is_down_the_answer_is_503_and_no_run_starts(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def no_database(*_a: object, **_k: object) -> None:
         raise psycopg.OperationalError("password=hunter2")
@@ -1236,28 +1306,55 @@ def test_when_the_database_is_down_the_answer_is_503_and_no_run_starts(
     monkeypatch.setattr(triaging, "connect", no_database)
     runtime = Runtime()
 
-    response = make_client(runtime=runtime).post(
-        "/claims", json=claim_with_id("CLM-9105")
-    )
+    with caplog.at_level(logging.DEBUG):
+        response = make_client(runtime=runtime).post(
+            "/claims", json=claim_with_id("CLM-9105")
+        )
 
     assert response.status_code == 503
     assert response.json()["claim_id"] == "CLM-9105"
-    assert "hunter2" not in response.text
+    assert "hunter2" not in response.text + caplog.text
     assert runtime.requests == []
+    assert logged_with_claim(caplog, "CLM-9105", "OperationalError")
+
+
+def test_when_the_database_fails_taking_the_triage_the_answer_is_503_and_logged(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def no_database(*_a: object, **_k: object) -> None:
+        raise psycopg.OperationalError("password=hunter2")
+
+    monkeypatch.setattr(triaging, "take_triage", no_database)
+    runtime = Runtime()
+    client = make_client(claims_dsn(fresh_database), runtime)
+
+    with caplog.at_level(logging.DEBUG):
+        response = client.post("/claims", json=claim_with_id("CLM-9106"))
+
+    assert response.status_code == 503
+    assert response.json()["claim_id"] == "CLM-9106"
+    assert "hunter2" not in response.text + caplog.text
+    assert runtime.requests == []
+    assert logged_with_claim(caplog, "CLM-9106", "OperationalError")
 
 
 def test_a_database_error_that_is_not_an_outage_is_a_500_not_a_503(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def refuse(*_a: object, **_k: object) -> None:
         raise database_error(CANARY)
 
     monkeypatch.setattr(triaging, "connect", refuse)
 
-    response = make_client().post("/claims", json=claim_with_id("CLM-9105"))
+    with caplog.at_level(logging.DEBUG):
+        response = make_client().post("/claims", json=claim_with_id("CLM-9105"))
 
     assert response.status_code == 500
-    assert CANARY not in response.text
+    assert CANARY not in response.text + caplog.text
+    assert logged_with_claim(caplog, "CLM-9105", "NotNullViolation")
+    assert "sqlstate 23502" in caplog.text
 
 
 def test_a_database_error_inside_the_span_leaves_no_message_in_any_span(
@@ -1907,7 +2004,7 @@ def test_two_decisions_at_once_on_one_claim_leave_one_decision_row(
 
 
 def test_when_the_database_is_down_a_decision_is_503_and_no_run_resumes(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def no_database(*_a: object, **_k: object) -> None:
         raise psycopg.OperationalError("password=hunter2")
@@ -1915,14 +2012,16 @@ def test_when_the_database_is_down_a_decision_is_503_and_no_run_resumes(
     monkeypatch.setattr(claims_app, "connect", no_database)
     resume = Runtime()
 
-    response = make_client(runtime=resume).post(
-        DECISION_URL, json={"decision": "approve"}
-    )
+    with caplog.at_level(logging.DEBUG):
+        response = make_client(runtime=resume).post(
+            DECISION_URL, json={"decision": "approve"}
+        )
 
     assert response.status_code == 503
     assert response.json()["claim_id"] == DECISION_ID
-    assert "hunter2" not in response.text
+    assert "hunter2" not in response.text + caplog.text
     assert resume.requests == []
+    assert logged_with_claim(caplog, DECISION_ID, "OperationalError")
 
 
 def test_a_decision_body_over_64_kib_is_413() -> None:

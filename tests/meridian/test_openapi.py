@@ -5,12 +5,22 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from servicesupport import REGISTRY_DIR
+from starlette.applications import Starlette
+from starlette.routing import Route
+from toolsupport import CONTRACTS_DIR
 
 from meridian.platform.gateway.app import create_app as create_gateway
 from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_mcp
+from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
+from meridian.platform.policy_mcp.app import create_app as create_policy_mcp
+from meridian.platform.toolserver.settings import ToolServerSettings
 from meridian.runtime.app import create_app as create_runtime
 from meridian.runtime.settings import RuntimeSettings
 from meridian.workloads.claims_triage.app import create_app as create_claims
+from meridian.workloads.claims_triage.mcp_server.app import (
+    create_app as create_claims_mcp,
+)
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 DSN = "postgresql://role@db.invalid/meridian"
@@ -172,6 +182,56 @@ def test_reading_a_run_takes_its_tenant_and_reference_as_query_parameters() -> N
 def test_every_service_declares_healthz() -> None:
     for spec in SPECS.values():
         assert "get" in spec["paths"]["/healthz"]
+
+
+def tool_server_apps() -> dict[str, Starlette]:
+    """The three tool servers, built from settings with no database."""
+    tools = ToolServerSettings(
+        registry_dir=REGISTRY_DIR, database_url=DSN, allowed_hosts=("tool-server:8080",)
+    )
+    knowledge = KnowledgeServerSettings(
+        registry_dir=REGISTRY_DIR,
+        database_url=DSN,
+        allowed_hosts=("tool-server:8080",),
+        gateway_url="http://gateway.invalid",
+    )
+    return {
+        "policy-mcp": create_policy_mcp(tools).app,
+        "claims-mcp": create_claims_mcp(tools).app,
+        "knowledge-mcp": create_knowledge_mcp(knowledge).app,
+    }
+
+
+@pytest.mark.parametrize("server", ["policy-mcp", "claims-mcp", "knowledge-mcp"])
+def test_every_tool_server_declares_healthz_and_publishes_its_contract(
+    server: str,
+) -> None:
+    app = tool_server_apps()[server]
+
+    health = [
+        route
+        for route in app.routes
+        if isinstance(route, Route) and route.path == "/healthz"
+    ]
+
+    assert len(health) == 1
+    assert "GET" in (health[0].methods or set())
+    assert (CONTRACTS_DIR / f"{server}.json").is_file()
+
+
+def test_every_service_declares_the_503_of_a_certificate_near_its_end() -> None:
+    """S056: the kubelet's probe restarts the container on this answer, so the
+    contract of every service shows it, with a body of its own."""
+    for spec in SPECS.values():
+        responses = spec["paths"]["/healthz"]["get"]["responses"]
+
+        assert {"200", "503"} <= set(responses)
+        assert responses["503"]["content"]["application/json"]["schema"][
+            "$ref"
+        ].endswith("/CertificateExpiring")
+        assert "certificate" in responses["503"]["description"].lower()
+        expiring = spec["components"]["schemas"]["CertificateExpiring"]
+        assert expiring["properties"]["status"]["const"] == "certificate-expiring"
 
 
 def schema_ref(spec: dict[str, Any], path: str, method: str, status: str) -> str:

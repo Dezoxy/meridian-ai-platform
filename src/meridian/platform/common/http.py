@@ -6,9 +6,11 @@ request body, SQL or exception text (T-03).
 """
 
 import logging
-from collections.abc import AsyncIterator, Callable
+import os
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 import psycopg
@@ -25,6 +27,11 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meridian.platform.common.audit import AuditUnavailable
+from meridian.platform.common.certlife import (
+    expiry_check,
+    load_certificate,
+    utc_now,
+)
 from meridian.platform.common.telemetry import (
     configure_propagation,
     make_tracer_provider,
@@ -54,6 +61,8 @@ HEALTH_PATH = "/healthz"
 # under the old and the new HTTP semantic conventions (T-03).
 URL_ATTRIBUTES = ("http.url", "http.target", "url.full")
 QUERY_ATTRIBUTE = "url.query"
+# Where the scope keeps the real query string while the instrumentation runs.
+HELD_QUERY_KEY = "meridian.held_query_string"
 
 # The answer for a request whose declared body is over the limit, by its scope.
 type ScopeAnswer = Callable[[Scope], Response]
@@ -72,6 +81,19 @@ class ErrorBody(WireModel):
 
 class Health(WireModel):
     status: Literal["ok"]
+
+
+class CertificateExpiring(WireModel):
+    """The 503 of ``/healthz``: the certificate this process loaded is near its
+    end, so the kubelet should restart the container (S056). No date."""
+
+    status: Literal["certificate-expiring"]
+
+
+CERTIFICATE_EXPIRING_DESCRIPTION = (
+    "The certificate this process loaded is near its end; the kubelet restarts "
+    "the container, which loads the renewed one."
+)
 
 
 ERROR_DESCRIPTIONS = {
@@ -240,10 +262,48 @@ class UnexpectedErrorMiddleware:
             await error_answer(500, INTERNAL_ERROR)(scope, receive, send)
 
 
+class QueryHidingFastAPI(FastAPI):
+    """A FastAPI app whose instrumentation never sees a request's query (T-03).
+
+    The ASGI instrumentation builds ``http.url`` and ``http.target`` from the
+    scope's ``query_string`` and starts the span with them, so a sampler's
+    ``should_sample`` and every span processor's ``on_start`` would read the
+    query before ``drop_query_from_span`` runs. The query is what a person
+    typed or a link carried. This class sets it aside before the middleware
+    stack runs, and ``RestoreQueryMiddleware``, which sits inside the
+    instrumentation and outside the routes, puts it back.
+
+    It overrides ``__call__`` rather than wrapping ``build_middleware_stack``:
+    the instrumentation patches that method (and ``uninstrument_app`` puts the
+    original back), whereas ``__call__`` is outside the stack whichever way it
+    is built, lazily or again. Websocket and lifespan scopes pass untouched.
+    """
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            scope[HELD_QUERY_KEY] = scope.get("query_string", b"")
+            scope["query_string"] = b""
+        await super().__call__(scope, receive, send)
+
+
+class RestoreQueryMiddleware:
+    """Gives the routes the query string ``QueryHidingFastAPI`` set aside."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and HELD_QUERY_KEY in scope:
+            scope["query_string"] = scope.pop(HELD_QUERY_KEY)
+        await self.app(scope, receive, send)
+
+
 def drop_query_from_span(span: Span, scope: Scope) -> None:
     """The server span's URL attributes without the query string (T-03).
 
-    The instrumentation sets ``http.url`` with the query (and, under the new
+    A second net: ``QueryHidingFastAPI`` keeps the query from the span's start,
+    this hook still strips it from the attributes of a span that somehow got
+    it. The instrumentation sets ``http.url`` with the query (and, under the new
     conventions, ``url.full`` and ``url.query``) before it calls this hook. The
     query is what a person typed or what a link carried, and a span leaves the
     process; the path stays. An attribute cannot be removed from a started
@@ -278,17 +338,26 @@ def create_service_app(
     tracer_provider: TracerProvider | None = None,
     close: Callable[[], None] | None = None,
     too_large: ScopeAnswer = body_too_large,
+    environ: Mapping[str, str] = os.environ,
+    clock: Callable[[], datetime] = utc_now,
 ) -> ServiceApp:
     """What the three services set up the same way.
 
     Trace-context propagation, a tracer provider (one the app made is shut
     down, flushing its spans, when the lifespan ends; an injected one is the
     caller's), the error handlers, the body limit, the FastAPI instrumentation
-    and ``GET /healthz``, which touches nothing. ``close`` runs at shutdown.
-    ``too_large`` is the answer to a declared body over the limit (see
-    ``BodyLimitMiddleware``). No server span keeps a query string (see
-    ``drop_query_from_span``).
+    and ``GET /healthz``, which reads nothing per request and nothing of the
+    caller's. ``close`` runs at shutdown. ``too_large`` is the answer to a
+    declared body over the limit (see ``BodyLimitMiddleware``). No server span
+    keeps a query string (see ``drop_query_from_span``).
+
+    The certificate ``environ`` names is loaded here (S056, T-89). Inside its
+    margin, ``/healthz`` reads the file again: it answers 503 when the file
+    holds a newer certificate (the container is restarted and loads it) or the
+    loaded one has ended, and 200 while the file is not renewed (see
+    ``certlife``). Raise ``SettingsError`` when that file cannot be read here.
     """
+    near_end = expiry_check(load_certificate(environ), clock)
     configure_propagation()
     provider = tracer_provider or make_tracer_provider(service_name)
     owns_provider = tracer_provider is None
@@ -305,7 +374,7 @@ def create_service_app(
     # global tracer, meter and logger providers with the default resource. The
     # MCP client's spans and the HTTP metrics would then leave under
     # unknown_service:python. The service's own provider does the tracing.
-    app = FastAPI(
+    app = QueryHidingFastAPI(
         title=title,
         description=description,
         lifespan=lifespan,
@@ -323,6 +392,8 @@ def create_service_app(
     app.add_middleware(
         BodyLimitMiddleware, max_bytes=max_body_bytes, too_large=too_large
     )
+    # Outermost of ours, so inside the instrumentation (see QueryHidingFastAPI).
+    app.add_middleware(RestoreQueryMiddleware)
     FastAPIInstrumentor.instrument_app(
         app, tracer_provider=provider, server_request_hook=drop_query_from_span
     )
@@ -331,8 +402,20 @@ def create_service_app(
         HEALTH_PATH,
         tags=["health"],
         summary="Liveness: answers ok without calling the database.",
+        response_model=Health,
+        responses={
+            503: {
+                "model": CertificateExpiring,
+                "description": CERTIFICATE_EXPIRING_DESCRIPTION,
+            }
+        },
     )
-    async def healthz() -> Health:
-        return Health(status="ok")
+    async def healthz() -> Response:
+        if near_end():
+            return JSONResponse(
+                status_code=503,
+                content=CertificateExpiring(status="certificate-expiring").model_dump(),
+            )
+        return JSONResponse(content=Health(status="ok").model_dump())
 
     return ServiceApp(app=app, tracer=provider.get_tracer(tracer_name))

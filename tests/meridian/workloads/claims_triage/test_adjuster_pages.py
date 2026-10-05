@@ -14,6 +14,7 @@ from html.parser import HTMLParser
 from typing import Any
 
 import httpx
+import psycopg
 import pytest
 from dbsupport import DatabaseHandle
 from fastapi.testclient import TestClient
@@ -33,6 +34,7 @@ from workloads.claims_triage.test_claims_app import (
     DECISION_OUTCOMES,
     OTHER_TENANT,
     OUTPUT,
+    REQUEST_DOCUMENTS_OUTPUT,
     Runtime,
     awaiting_claim,
     claim_audit,
@@ -103,6 +105,10 @@ SWEEP_ROLE = "claims_sweep"
 SWEEP_SERVICE = "claims-sweep"
 OVERDUE_REASON = "documents-overdue"
 OVERDUE_LINE = "The documents asked for did not arrive in time"
+LATE_DOCUMENTS_LINE = (
+    "Documents were posted for this claim after the deadline and were not taken; "
+    "you can ask for them again with Request documents."
+)
 ABANDONED_REASON = "abandoned"
 CLEAN_UP_LINE = "The decision is recorded and stands"
 CLEAN_UP_REST = "ended by the scheduled clean-up"
@@ -205,9 +211,11 @@ def put_proposal(
     proposal: dict[str, Any] | None,
     *,
     created_at: datetime = LONG_AGO,
+    proposal_id: uuid.UUID | None = None,
 ) -> None:
     """A stored proposal; ``None`` is a row of the walking skeleton, which has a
-    draft and no document."""
+    draft and no document. ``proposal_id`` is random unless a test needs two
+    proposals in an order."""
     route, reason = (
         (proposal["route"], proposal["reason"]) if proposal else ("adjuster", "old")
     )
@@ -217,7 +225,7 @@ def put_proposal(
         "(proposal_id, claim_id, run_id, route, reason, draft, proposal, created_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING 1",
         (
-            uuid.uuid4(),
+            proposal_id or uuid.uuid4(),
             claim_id,
             uuid.uuid4(),
             route,
@@ -267,6 +275,19 @@ def put_sweep_event(
             "INSERT INTO audit.events (service, event, outcome, tenant, run_id, "
             "reference, reason) VALUES (%s, %s, 'ok', %s, %s, %s, %s)",
             (SWEEP_SERVICE, event, TENANT, run_id, claim_id, reason),
+        )
+        conn.commit()
+
+
+def put_late_documents(db: DatabaseHandle, claim_id: str) -> None:
+    """The event a documents post after the deadline leaves, as the Claims API
+    writes it (a test that wants the route's own row posts to the route)."""
+    with connect(claims_dsn(db), "claims-api") as conn:
+        conn.execute(
+            "INSERT INTO audit.events (service, event, outcome, tenant, reference, "
+            "reason) VALUES ('claims-api', 'claim.documents_refused', 'refused', "
+            "%s, %s, 'after-deadline')",
+            (TENANT, claim_id),
         )
         conn.commit()
 
@@ -375,6 +396,35 @@ def test_a_queue_row_shows_state_since_peril_amount_and_the_latest_reason(
     assert "unverified" not in rows["CLM-9302"]
 
 
+@pytest.mark.parametrize(
+    "larger_first", [True, False], ids=["larger-first", "smaller-first"]
+)
+def test_two_proposals_made_at_one_moment_are_read_by_the_smaller_proposal_id(
+    fresh_database: DatabaseHandle, larger_first: bool
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9301")
+    smaller = (OLDER_ID, REQUEST_DOCUMENTS_OUTPUT | {"rationale": "smaller-id-text"})
+    larger = (NEWER_ID, OUTPUT | {"rationale": "larger-id-text"})
+    for proposal_id, proposal in (
+        (larger, smaller) if larger_first else (smaller, larger)
+    ):
+        put_proposal(db, "CLM-9301", proposal, proposal_id=proposal_id)
+    client = client_for(db)
+
+    queue = client.get(QUEUE_URL)
+    claim = client.get(url_of("CLM-9301"))
+    stored = client.get(f"{url_of('CLM-9301')}/proposal")
+
+    # The same one the decided-claims view reads: ORDER BY created_at DESC,
+    # proposal_id.
+    (row,) = [r for r in Page(queue.text).rows if "CLM-9301" in r]
+    assert "missing_documents" in row
+    assert "smaller-id-text" in claim.text
+    assert "larger-id-text" not in claim.text
+    assert stored.json()["proposal"]["rationale"] == "smaller-id-text"
+
+
 def test_the_queue_shows_at_most_100_claims_the_oldest_ones(
     fresh_database: DatabaseHandle,
 ) -> None:
@@ -395,6 +445,258 @@ def test_the_queue_shows_at_most_100_claims_the_oldest_ones(
     assert url_of("CLM-1000") in links
     assert url_of("CLM-1099") in links
     assert url_of("CLM-1100") not in links
+
+
+# ── the queue's next page ───────────────────────────────────────────────────
+NEXT_PAGE = "Next page"
+OLDER_ID = uuid.UUID(int=1)
+NEWER_ID = uuid.UUID(int=2)
+
+
+def put_waiting_claims(
+    db: DatabaseHandle, count: int, tied_from: int | None = None
+) -> None:
+    """``count`` waiting claims CLM-1000 on, a minute apart, each at a moment
+    with microseconds; from the ``tied_from``-th on they share one moment."""
+    owner_rows(
+        db,
+        "INSERT INTO claims.claims (claim_id, tenant, submission, state, "
+        "state_changed_at) SELECT 'CLM-' || (1000 + i), %s, '{}'::jsonb, "
+        "'awaiting_adjuster', %s + make_interval(mins => LEAST(i, %s)) "
+        "+ interval '123456 microseconds' FROM generate_series(0, %s) AS i "
+        "RETURNING 1",
+        (TENANT, LONG_AGO, count if tied_from is None else tied_from, count - 1),
+    )
+
+
+def queue_ids(page: Page) -> list[str]:
+    prefix = f"{QUEUE_URL}/"
+    return [
+        link.removeprefix(prefix) for link in page.links() if link.startswith(prefix)
+    ]
+
+
+def next_page_links(page: Page) -> list[str]:
+    return [link for link in page.links() if "after_time=" in link]
+
+
+def test_a_queue_of_101_claims_has_a_next_page_that_shows_the_last_one(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_waiting_claims(fresh_database, 101)
+    client = client_for(fresh_database)
+
+    first = Page(client.get(QUEUE_URL).text)
+    (link,) = next_page_links(first)
+    second_response = client.get(link)
+
+    second = Page(second_response.text)
+    assert second_response.status_code == 200
+    assert len(queue_ids(first)) == 100
+    assert queue_ids(first)[-1] == "CLM-1099"
+    assert NEXT_PAGE in first.text
+    # The 101st claim only, and no link beyond it.
+    assert queue_ids(second) == ["CLM-1100"]
+    assert next_page_links(second) == []
+    assert NEXT_PAGE not in second.text
+
+
+def test_the_next_page_link_holds_the_last_rows_full_moment_and_its_claim(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_waiting_claims(fresh_database, 101)
+
+    response = client_for(fresh_database).get(QUEUE_URL)
+
+    (link,) = next_page_links(Page(response.text))
+    # Microseconds and offset, URL-encoded: the page's own time is cut to seconds.
+    assert link == (
+        f"{QUEUE_URL}?after_time=2026-10-01T13%3A39%3A00.123456%2B00%3A00"
+        "&after_claim=CLM-1099"
+    )
+
+
+def test_a_queue_of_exactly_100_claims_has_no_next_page(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_waiting_claims(fresh_database, 100)
+
+    response = client_for(fresh_database).get(QUEUE_URL)
+
+    page = Page(response.text)
+    assert len(queue_ids(page)) == 100
+    assert next_page_links(page) == []
+    assert NEXT_PAGE not in page.text
+
+
+def test_claims_sharing_a_moment_over_the_page_boundary_are_not_skipped_or_repeated(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # Claims 98 to 101 share a moment: the boundary falls between CLM-1099 and
+    # CLM-1100 of the four.
+    put_waiting_claims(fresh_database, 102, tied_from=98)
+    client = client_for(fresh_database)
+
+    first = Page(client.get(QUEUE_URL).text)
+    (link,) = next_page_links(first)
+    second = Page(client.get(link).text)
+
+    assert queue_ids(first)[-2:] == ["CLM-1098", "CLM-1099"]
+    assert queue_ids(second) == ["CLM-1100", "CLM-1101"]
+    assert queue_ids(first) + queue_ids(second) == [
+        f"CLM-{1000 + i}" for i in range(102)
+    ]
+
+
+def test_another_tenants_claims_never_appear_on_a_next_page(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_waiting_claims(db, 101)
+    # After the cursor in time and in claim ID, and inside the page's range.
+    put_claim(
+        db, "CLM-9301", tenant=OTHER_TENANT, changed_at=LONG_AGO + timedelta(days=1)
+    )
+    put_claim(
+        db,
+        "CLM-9302",
+        tenant=OTHER_TENANT,
+        changed_at=LONG_AGO + timedelta(minutes=3, seconds=1),
+    )
+    client = client_for(db)
+
+    first = Page(client.get(QUEUE_URL).text)
+    (link,) = next_page_links(first)
+    second = Page(client.get(link).text)
+
+    assert queue_ids(second) == ["CLM-1100"]
+    assert not {"CLM-9301", "CLM-9302"} & set(queue_ids(first))
+    assert next_page_links(second) == []
+
+
+CURSORS = {
+    "a time without a claim": {"after_time": "2026-10-01T12:00:00+00:00"},
+    "a claim without a time": {"after_claim": "CLM-1099"},
+    "a time that does not parse": {
+        "after_time": "yesterday",
+        "after_claim": "CLM-1099",
+    },
+    "a time with no offset": {
+        "after_time": "2026-10-01T12:00:00",
+        "after_claim": "CLM-1099",
+    },
+    "a claim that is not a claim ID": {
+        "after_time": "2026-10-01T12:00:00+00:00",
+        "after_claim": "not-a-claim",
+    },
+    "an empty claim": {"after_time": "2026-10-01T12:00:00+00:00", "after_claim": ""},
+}
+
+
+@pytest.mark.parametrize("query", CURSORS.values(), ids=CURSORS)
+def test_a_cursor_that_is_not_a_time_and_a_claim_is_422_and_reads_nothing(
+    query: dict[str, str],
+) -> None:
+    # No database: a request that passed validation would be a 503.
+    response = make_client().get(QUEUE_URL, params=query)
+
+    assert response.status_code == 422
+    assert response.headers["cache-control"] == "no-store"
+
+
+FIRST_PAGE = "First page"
+FIRST_PAGE_LINK = f'<a href="{QUEUE_URL}">{FIRST_PAGE}</a>'
+NO_MORE_CLAIMS = "No more claims after this point."
+AFTER_THE_LAST = {"after_time": "2026-10-02T00:00:00+00:00", "after_claim": "CLM-0001"}
+
+
+def test_a_cursor_after_the_last_claim_shows_the_empty_queue(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, "CLM-9301")
+
+    response = client_for(fresh_database).get(QUEUE_URL, params=AFTER_THE_LAST)
+
+    assert response.status_code == 200
+    text = Page(response.text).text
+    # Not "no claim is waiting": the claims before the cursor still are.
+    assert NO_MORE_CLAIMS in text
+    assert EMPTY_QUEUE not in text
+    assert FIRST_PAGE_LINK in response.text
+
+
+def test_the_first_page_with_no_claims_says_so_and_has_no_first_page_link(
+    fresh_database: DatabaseHandle,
+) -> None:
+    response = client_for(fresh_database).get(QUEUE_URL)
+
+    assert response.status_code == 200
+    text = Page(response.text).text
+    assert EMPTY_QUEUE in text
+    assert NO_MORE_CLAIMS not in text
+    assert FIRST_PAGE not in text
+
+
+def test_a_second_page_with_claims_has_a_first_page_link_and_the_first_has_none(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_waiting_claims(fresh_database, 101)
+    client = client_for(fresh_database)
+
+    first = client.get(QUEUE_URL)
+    (link,) = next_page_links(Page(first.text))
+    second = client.get(link)
+
+    assert FIRST_PAGE not in first.text
+    assert FIRST_PAGE_LINK in second.text
+    assert NO_MORE_CLAIMS not in Page(second.text).text
+
+
+def test_the_queue_says_how_many_claims_a_page_holds(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, "CLM-9301")
+
+    response = client_for(fresh_database).get(QUEUE_URL)
+
+    assert "Oldest first, 100 to a page" in Page(response.text).text
+
+
+# ── the queue shows overdue documents ───────────────────────────────────────
+OVERDUE_NOTICE = "Documents overdue"
+
+
+def test_a_claim_referred_for_overdue_documents_shows_so_beside_the_latest_reason(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    for claim_id, state in (
+        ("CLM-9301", "awaiting_adjuster"),
+        ("CLM-9302", "awaiting_adjuster"),
+        ("CLM-9303", "awaiting_adjuster"),
+        ("CLM-9304", "triage_failed"),
+        ("CLM-9305", "awaiting_adjuster"),
+    ):
+        put_claim(db, claim_id, state)
+        put_proposal(db, claim_id, REQUEST_DOCUMENTS_OUTPUT)
+    put_sweep_event(db, "CLM-9301", "claim.awaiting_adjuster", OVERDUE_REASON)
+    put_sweep_event(db, "CLM-9302", "claim.awaiting_adjuster", "rules-referred")
+    # The latest referral counts: overdue once, then referred for another reason.
+    put_sweep_event(db, "CLM-9303", "claim.awaiting_adjuster", OVERDUE_REASON)
+    put_sweep_event(db, "CLM-9303", "claim.awaiting_adjuster", "rules-referred")
+    # A failed triage after an old overdue referral is no overdue claim.
+    put_sweep_event(db, "CLM-9304", "claim.awaiting_adjuster", OVERDUE_REASON)
+    # Another state's move with the same reason is not the referral.
+    put_sweep_event(db, "CLM-9305", "claim.documents_requested", OVERDUE_REASON)
+
+    response = client_for(db).get(QUEUE_URL)
+
+    rows = {row.split()[0]: row for row in Page(response.text).rows if row.split()}
+    assert OVERDUE_NOTICE in rows["CLM-9301"]
+    # Beside the latest proposal's reason, not in place of it.
+    assert "missing_documents" in rows["CLM-9301"]
+    for claim_id in ("CLM-9302", "CLM-9303", "CLM-9304", "CLM-9305"):
+        assert OVERDUE_NOTICE not in rows[claim_id], claim_id
 
 
 def test_an_empty_queue_says_so(fresh_database: DatabaseHandle) -> None:
@@ -550,6 +852,10 @@ def test_a_proposal_that_fails_validation_is_said_so_and_the_page_still_renders(
     messages = [r.getMessage() for r in caplog.records]
     assert any("CLM-9301" in m and "ValidationError" in m for m in messages)
     assert not any("alert(1)" in m for m in messages)
+    # And the fields that did not validate, with the error's type (here the
+    # fields the document lacks), and no value the document holds.
+    assert any("('payable_amount', 'missing')" in m for m in messages)
+    assert not any("unverified" in m for m in messages)
 
 
 def test_a_claim_without_a_proposal_says_none_is_stored(
@@ -1847,6 +2153,8 @@ def test_a_claim_waiting_because_its_documents_are_overdue_says_so_above_the_dec
     page = Page(response.text)
     assert response.status_code == 200
     assert OVERDUE_LINE in page.text
+    # No documents were posted after the deadline, so the page says nothing of it.
+    assert "after the deadline" not in page.text
     assert response.text.index(OVERDUE_LINE) < response.text.index('name="decision"')
     # The claim has no run: the three decisions, and nothing to send back. The
     # cap's explanation of a claim with no run is not this claim's.
@@ -1929,6 +2237,127 @@ def test_a_failed_triage_does_not_say_the_documents_are_overdue_after_an_old_ref
     response = client_for(db).get(url_of(CLAIM))
 
     assert OVERDUE_LINE not in Page(response.text).text
+
+
+def test_documents_posted_after_the_deadline_are_on_the_page_beside_the_overdue_line(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, "awaiting_adjuster")
+    put_sweep_event(db, CLAIM, "claim.awaiting_adjuster", OVERDUE_REASON)
+    refused = moves_client(db, MoveRuntime()).post(
+        f"/claims/{CLAIM}/documents", json={"documents": ["invoice"]}
+    )
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    assert refused.status_code == 409
+    page = Page(response.text)
+    assert OVERDUE_LINE in page.text
+    assert LATE_DOCUMENTS_LINE in page.text
+    # After the overdue sentence and above the decisions it points to.
+    assert response.text.index(OVERDUE_LINE) < response.text.index(LATE_DOCUMENTS_LINE)
+    assert response.text.index(LATE_DOCUMENTS_LINE) < response.text.index(
+        'name="decision"'
+    )
+    assert "request_documents" in page.decision_buttons()
+    # The event is on the trail, and says no more than that documents were sent.
+    assert trail_cells(page, "claim.documents_refused")[-3:] == [
+        "claim.documents_refused",
+        "refused",
+        "after-deadline",
+    ]
+    assert "invoice" not in response.text
+
+
+def test_the_late_documents_event_does_not_displace_the_referral_reason(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, "awaiting_adjuster")
+    put_proposal(db, CLAIM, REQUEST_DOCUMENTS_OUTPUT)
+    put_sweep_event(db, CLAIM, "claim.awaiting_adjuster", OVERDUE_REASON)
+    put_late_documents(db, CLAIM)
+    client = client_for(db)
+
+    queue = client.get(QUEUE_URL)
+    claim_page = client.get(url_of(CLAIM))
+
+    rows = {row.split()[0]: row for row in Page(queue.text).rows if row.split()}
+    assert OVERDUE_NOTICE in rows[CLAIM]
+    assert OVERDUE_LINE in Page(claim_page.text).text
+    assert LATE_DOCUMENTS_LINE in Page(claim_page.text).text
+
+
+def test_late_documents_are_found_however_long_the_trail_is(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, "awaiting_adjuster")
+    # More events before it than the page lists: the listing is oldest first and
+    # cuts the end of the trail, where the referral and the event are.
+    put_trail(db, CLAIM, [])
+    owner_rows(
+        db,
+        "INSERT INTO audit.events (service, event, outcome, run_id) "
+        "SELECT 'agent-runtime', 'run.started', 'ok', run_id "
+        "FROM runtime.runs, generate_series(1, %s) RETURNING 1",
+        (adjuster.TRAIL_LIMIT + 1,),
+    )
+    put_sweep_event(db, CLAIM, "claim.awaiting_adjuster", OVERDUE_REASON)
+    put_late_documents(db, CLAIM)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    assert "run.started" in response.text
+    assert "claim.documents_refused" not in response.text
+    assert LATE_DOCUMENTS_LINE in Page(response.text).text
+
+
+@pytest.mark.parametrize(
+    ("state", "events"),
+    [
+        pytest.param(
+            "awaiting_adjuster",
+            [("sweep", "claim.awaiting_adjuster", "rules-referred"), ("late",)],
+            id="referred-for-another-reason",
+        ),
+        pytest.param(
+            "awaiting_adjuster",
+            [
+                ("sweep", "claim.awaiting_adjuster", OVERDUE_REASON),
+                ("late",),
+                ("sweep", "claim.awaiting_adjuster", OVERDUE_REASON),
+            ],
+            id="before-the-latest-referral",
+        ),
+        pytest.param(
+            "triage_failed",
+            [("sweep", "claim.awaiting_adjuster", OVERDUE_REASON), ("late",)],
+            id="triage-failed",
+        ),
+        pytest.param(
+            "awaiting_adjuster",
+            [("late",)],
+            id="no-referral",
+        ),
+    ],
+)
+def test_the_page_says_nothing_of_late_documents_unless_the_overdue_referral_has_them(
+    fresh_database: DatabaseHandle, state: str, events: list[tuple[str, ...]]
+) -> None:
+    db = fresh_database
+    put_claim(db, CLAIM, state)
+    for event in events:
+        if event[0] == "sweep":
+            put_sweep_event(db, CLAIM, event[1], event[2])
+        else:
+            put_late_documents(db, CLAIM)
+
+    response = client_for(db).get(url_of(CLAIM))
+
+    assert response.status_code == 200
+    assert "after the deadline" not in Page(response.text).text
 
 
 # ── the resend button on a reload ───────────────────────────────────────────
@@ -2587,3 +3016,59 @@ def test_a_database_failure_on_a_page_logs_the_class_and_not_the_message(
     assert response.status_code == 503
     assert DATABASE_DOWN in Page(response.text).text
     assert any("OperationalError" in r.getMessage() for r in caplog.records)
+    # One line names the claim the page was for, with the class and SQLSTATE.
+    assert any(
+        r.levelno == logging.ERROR
+        and "CLM-9301" in r.getMessage()
+        and "OperationalError" in r.getMessage()
+        and "sqlstate none" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_a_database_failure_on_the_proposal_route_logs_the_claim(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG):
+        response = make_client().get(f"{url_of('CLM-9301')}/proposal")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": DATABASE_DOWN}
+    assert any(
+        r.levelno == logging.ERROR
+        and "CLM-9301" in r.getMessage()
+        and "OperationalError" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_a_failed_resume_and_then_the_database_down_logs_the_claim(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_id = awaiting_claim(fresh_database)
+
+    def database_down(*_: object) -> None:
+        raise psycopg.OperationalError("the connection was lost")
+
+    monkeypatch.setattr(adjuster, "load_claim", database_down)
+
+    with caplog.at_level(logging.DEBUG):
+        response = post_form(
+            make_client(claims_dsn(fresh_database), failing_runtime(run_id)),
+            DECISION_ID,
+            "approve",
+            run=str(run_id),
+        )
+
+    # The answer is the failed resume's, as the error page; the read's failure
+    # is in the log, with the claim.
+    assert response.status_code == 502
+    assert RESUME_FAILED_DETAIL in Page(response.text).text
+    assert any(
+        r.levelno == logging.ERROR
+        and DECISION_ID in r.getMessage()
+        and "OperationalError" in r.getMessage()
+        for r in caplog.records
+    )

@@ -21,6 +21,7 @@ adjuster; the rules decide every other claim.
 |---|---|---|---|
 | Envoy Gateway (Gateway API edge) | `oci://docker.io/envoyproxy/gateway-helm` | v1.9.2 | `envoy-gateway-system` |
 | cert-manager (with the CA for the services) | `cert-manager` (`https://charts.jetstack.io`) | v1.21.2 | `cert-manager` |
+| approver-policy (decides which certificate requests are approved) | `cert-manager-approver-policy` (`https://charts.jetstack.io`) | v0.28.0 | `cert-manager` |
 | CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `cnpg-system` |
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
 | Prometheus, Grafana, kube-state-metrics, node-exporter | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
@@ -65,11 +66,46 @@ can read it, and the operators that hold a cluster-wide read of Secrets can
 (cert-manager's controller and cainjector, the CloudNativePG operator). The
 CA keeps its key at its renewal by an explicit `rotationPolicy: Never`, because
 cert-manager's default has been `Always` since v1.18.0 and a new key would
-leave a restarted pod distrusting the pods that had not. The issuer signs a
-Certificate from any namespace with any URI and nothing restricts who may ask
-(cert-manager's built-in approver approves every request); on kind that is the
-cluster's administrator, and a policy on requests is for AKS (S020). `make up`
-waits for the issuer to be Ready before it installs the database.
+leave a restarted pod distrusting the pods that had not.
+
+Who may ask for a certificate (S056, threat T-88) is decided by cert-manager's
+approver-policy, not by cert-manager: its built-in approver, which approves
+every request, is switched off (`disableAutoApproval` in
+[`values/cert-manager.yaml`](values/cert-manager.yaml)). Three
+`CertificateRequestPolicy` objects in
+[`manifests/certificate-policy.yaml`](manifests/certificate-policy.yaml) apply
+to the two issuers, and approver-policy may act for no other signer
+([`values/approver-policy.yaml`](values/approver-policy.yaml)):
+
+- `meridian-services` permits a request for the `meridian-services` issuer
+  only from the `meridian` namespace, with a URI under
+  `spiffe://meridian.kind/ns/meridian/sa/`, a `*.meridian.svc` DNS name, the
+  three usages the services use (digital signature, client auth, server auth)
+  and at most 90 days; a CA, a common name or any other field is not allowed.
+- `meridian-services-ca` permits the CA certificate's own request (issuer
+  `meridian-selfsigned`, namespace `cert-manager`, common name
+  `meridian-services-ca`, `isCA`, at most a year); without it the CA's renewal
+  would wait for ever.
+- `meridian-deny-unlisted` selects a request for either Meridian issuer from
+  any namespace and permits none that names anything, so a request that no
+  other policy permits is denied, not left waiting. A request for any other
+  issuer meets no policy and is never approved.
+
+The namespace limit is held twice: by each policy's selector and by where its
+binding is. cert-manager's account may `use` the two policies that allow
+through a Role and RoleBinding in one namespace each, and the one that denies
+through a ClusterRoleBinding, so a request from another namespace meets only
+the policy that denies. What is left: whoever can create a `Certificate` in
+`meridian` has any service's identity issued (the policy checks the namespace
+and the URI prefix, not which service), and whoever can change a policy or its
+binding undoes the limit; on kind that is the cluster's administrator.
+
+`make up` installs approver-policy and applies the policies before the CA,
+waits for the three to be Ready, and then waits for the issuer to be Ready
+before it installs the database. On a cluster where cert-manager already ran
+with its approver on, `make up` turns the approver off first and brings the
+policies seconds later: the certificates already issued are not touched, and
+a request made in between waits and is then decided.
 
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
 ConfigMap each in `observability`, and applies Meridian's alert rules in
@@ -173,7 +209,7 @@ node image, Kubernetes components and the platform).
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks nine things:
+`make smoke` checks ten things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -236,7 +272,7 @@ node image, Kubernetes components and the platform).
    proof (line 3). It fails when the connection is made, and when the
    NetworkPolicy `default-deny` is missing. Before `make deploy` this line
    prints SKIP.
-9. **Service identity.** Three lines, run with Python in the Agent Runtime's
+9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
    from the gateway altogether, so the runtime's is the pod that reaches it).
@@ -245,11 +281,39 @@ node image, Kubernetes components and the platform).
    401: the gateway knows no caller. The same request with the runtime's own
    certificate, naming the tenant `evaluation`, which is real and may run the
    triage agent but is not one the registry lets the runtime name, answers
-   403 (so only the identity rule refuses it, not the gateway's own tenant
-   check). The probe checks the gateway's certificate against the CA and
-   its DNS name; a traceback (a name that does not resolve, a certificate that
-   does not verify) is a FAIL, never a refusal. Before `make deploy` this
-   check prints SKIP.
+   403. The 403 alone does not say who refused (the gateway answers 403 for
+   its own policy too), so the fourth line reads the audit table in the
+   database's primary pod: a row of the gateway's refusal with the reason the
+   identity rule writes (`caller-name-not-allowed`), the Agent Runtime as the
+   calling service and the tenant `evaluation`, recorded in the last 120
+   seconds by the database's own clock. The gateway writes it in a worker
+   thread and at most once per reason, tenant and minute, so the check asks
+   for a row that exists and is recent, never for a count that went up, and
+   tries for about ten seconds; the line says the row's age. The fifth line
+   presents a certificate of another CA: the probe makes a throwaway key and a
+   self-signed certificate that carries the runtime's own URI (the right name,
+   the wrong CA) in a directory under `/tmp` that is removed when the probe
+   ends, and the gateway must end the connection with a TLS alert, or close
+   it, before it answers: a status is a FAIL. The key is never printed, passed
+   as an argument or kept. The probe checks the gateway's certificate against
+   the CA and its DNS name; a traceback (a name that does not resolve, a
+   certificate that does not verify, a refused connection) is a FAIL, never a
+   refusal. Before `make deploy` this check prints SKIP.
+10. **Certificate policy.** Three lines, read-only, and never SKIP: the
+    objects exist after `make up`, so a missing one is a FAIL. The three
+    `CertificateRequestPolicy` objects are Ready. The Deployment
+    `cert-manager-approver-policy` in `cert-manager` has an available replica.
+    And cert-manager's own approver is off, read two ways that must agree: the
+    ClusterRole `cert-manager-controller-approve:cert-manager-io`, which the
+    chart renders only with its approver on, does not exist (kubectl's
+    NotFound is the pass; any other error is a FAIL), and the controller's
+    arguments hold `--controllers=-certificaterequests-approver`. A FAIL on the
+    third line says the issuer may be signing for every request again. The
+    check is there because nothing else in `make up` or `make smoke` makes a
+    certificate request once the cluster has its certificates, so an update of
+    cert-manager or approver-policy that turned the built-in approver back on,
+    or left the policies or the add-on gone, would pass the pull request that
+    brings it.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -298,6 +362,20 @@ In order, `make deploy`:
    applied, a role is not reconciled, a role Secret is missing or the
    database's NetworkPolicy `platform-db` is absent (the chart's
    `default-deny` would otherwise cut the database off from its operator).
+   It refuses the same way, before it builds anything or runs a Job, when the
+   ClusterIssuer `meridian-services` (the issuer in
+   [`values/meridian.yaml`](values/meridian.yaml)) is missing or not Ready,
+   or when the cluster does not know the kind at all (a cluster made before
+   S055): the chart's Certificates would never be issued, and the
+   Jobs would already have run when the upgrade found out. `make up` installs
+   the issuer. It refuses the same way when one of the three
+   `CertificateRequestPolicy` objects is missing or not Ready (a cluster made
+   before S056 does not know the kind) or when the Deployment
+   `cert-manager-approver-policy` in `cert-manager` has no available replica:
+   the issuer is Ready without them, but with cert-manager's own approver off
+   nothing would approve the chart's Certificates, and the deploy would die at
+   its wait for them, right after the release, with the Jobs already run. It
+   names every one that is wrong, and `make up` installs them.
 2. Builds and loads the image.
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
@@ -505,21 +583,29 @@ stays plain HTTP.
 every other request without one is refused with 401, and a certificate from
 another CA fails the handshake. `config/registry/services.yaml` is the list of
 who may call whom, and a test holds it equal to what the chart's environments
-call. `make smoke`'s ninth check proves 200, 401 and 403 against the gateway.
+call. `make smoke`'s ninth check proves the gateway's 200, 401 and 403, the
+audit row of the 403 and the refusal of a certificate from another CA (five
+lines).
 
 What this does not cover, on purpose: the edge to the Claims API is plain HTTP
 and the Claims API's own certificate is for its calls out only (TLS at the edge
-is a backlog row); a service reads its certificate when it starts, so a
-renewed one reaches it with the next restart (a Deployment's pods are not
-restarted by cert-manager), and so does a renewed CA; no certificate is
-revoked; nothing limits who may request a certificate for a service's name
-(the `meridian-services` issuer signs a `Certificate` from any namespace with
-any URI, and cert-manager's built-in approver approves every request, so on
-kind whoever can create a `Certificate` anywhere, the cluster's administrator,
-can mint any service's identity; a policy on requests is for AKS, S020); the
-CA's private key is readable by the operators that hold a cluster-wide read of
-Secrets (cert-manager, cainjector, CloudNativePG), though by no Meridian pod;
-and the telemetry to the collector is still plain OTLP.
+is a backlog row); a service loads its certificate once, and cert-manager does
+not restart a Deployment's pods, so the service asks for the restart itself:
+inside the last 24 hours of the certificate it loaded it answers 503 on
+`/healthz` as soon as the mounted file holds a renewed one, and the kubelet
+restarts the container, about a minute in which a one-replica service does not
+answer; if cert-manager has not renewed it, the service stays healthy until the
+certificate ends and is unhealthy from then on, but two alerts fire long before
+(21 days left; not Ready); a renewed CA still reaches a service only when it
+restarts; no certificate is revoked; nothing limits which service's name a
+request in `meridian` asks for (approver-policy lets the `meridian-services`
+issuer sign only a request from `meridian` with a URI under the Meridian
+prefix, so a request from another namespace is denied, but whoever can create
+a `Certificate` in `meridian`, or change a policy or its binding, can still
+mint any service's identity); the CA's private key is readable by the
+operators that hold a cluster-wide read of Secrets (cert-manager, cainjector,
+CloudNativePG), though by no Meridian pod; and the telemetry to the collector
+is still plain OTLP.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no
@@ -583,9 +669,12 @@ documents are overdue to an adjuster, fails a claim stranded in `submitted`
 or `triaging`, ends a run no resume takes over and deletes the checkpoints a
 finished run left; it logs one line with what it moved. It needs PostgreSQL
 only: no call to any service and no model. The deadline for documents is
-`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 whole calendar days from the
-claim's latest request for documents. `make smoke`'s seventh line checks
-that the job ran and finished on your cluster.
+`MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 days of 24 hours from the
+claim's latest request for documents. The Claims API reads the same
+variable for the day its status page tells a claimant; the chart sets it
+on this CronJob alone, so set it on the Claims API too if you change it
+(the plan's backlog has the chart's part). `make smoke`'s seventh line
+checks that the job ran and finished on your cluster.
 
 `concurrencyPolicy: Forbid` governs only what the schedule starts: a scheduled
 pass is skipped while another is running. A Job made by hand (below) runs

@@ -3,6 +3,8 @@ as the database role ``claims_sweep``, whose rights are the ones migration 0014
 gives it and no more. Failures are in ``test_sweep_failures.py``, the settings
 and ``main`` in ``test_sweep_main.py``, the shared rows in ``sweepsupport.py``."""
 
+import subprocess
+import sys
 import uuid
 from datetime import datetime
 from typing import Any
@@ -33,7 +35,7 @@ from sweepsupport import (
 
 from meridian.platform.common.db import connect
 from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
-from meridian.workloads.claims_triage import sweep, triaging
+from meridian.workloads.claims_triage import lifecycle, sweep, triaging
 from meridian.workloads.claims_triage.sweep import (
     DATABASE_URL_ENV,
     DOCUMENTS_DEADLINE_ENV,
@@ -47,11 +49,42 @@ NOTHING = PassResult(0, 0, 0, 0, 0, 0)
 
 
 # ── the constants the sweep shares with the Claims API ──────────────────────
-def test_the_constants_the_sweep_does_not_import_equal_the_triagings() -> None:
-    # triaging.py imports FastAPI, httpx and OpenTelemetry: a job that needs only
-    # PostgreSQL does not load them for two constants, so it has copies.
-    assert sweep.AGENT == triaging.AGENT
-    assert TRIAGE_LEASE_SECONDS == triaging.TRIAGE_LEASE_SECONDS
+def test_the_sweep_and_the_triaging_share_one_definition_of_both_constants() -> None:
+    # Both come from lifecycle.py, which loads neither FastAPI nor httpx.
+    assert sweep.AGENT is lifecycle.AGENT
+    assert triaging.AGENT is lifecycle.AGENT
+    assert sweep.TRIAGE_LEASE_SECONDS is lifecycle.TRIAGE_LEASE_SECONDS
+    assert triaging.TRIAGE_LEASE_SECONDS is lifecycle.TRIAGE_LEASE_SECONDS
+    assert TRIAGE_LEASE_SECONDS == 2 * lifecycle.RUNTIME_TIMEOUT_SECONDS
+
+
+CLAIMS_API_MODULES = ("app", "triaging", "claimant", "adjuster", "moves")
+
+
+def test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api() -> (
+    None
+):
+    # A job that needs only PostgreSQL (the sweep's docstring): a fresh
+    # interpreter, as sys.modules here holds whatever the other tests imported.
+    # A prefix, not a name: ``langgraph`` is a package of many modules.
+    prefixes = ["fastapi", "httpx", "starlette", "langgraph", "langchain"]
+    prefixes += [f"meridian.workloads.claims_triage.{m}" for m in CLAIMS_API_MODULES]
+    code = (
+        "import sys; import meridian.workloads.claims_triage.sweep; "
+        f"prefixes = tuple({prefixes!r}); "
+        "print(sorted(m for m in sys.modules "
+        "if any(m == p or m.startswith(p + '.') for p in prefixes)))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+
+    assert result.stdout.strip() == "[]"
 
 
 def test_the_sweeps_names_are_the_ones_the_manifest_and_the_audit_trail_use() -> None:

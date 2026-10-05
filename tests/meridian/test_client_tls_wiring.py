@@ -24,6 +24,7 @@ from meridian.platform.knowledge_mcp import app as knowledge_module
 from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.runtime import app as runtime_module
 from meridian.runtime.settings import RuntimeSettings
+from meridian.runtime.tool_transport import ToolTransport
 from meridian.workloads.claims_triage import app as claims_module
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
@@ -132,6 +133,105 @@ def test_the_runtime_gives_the_tool_client_of_a_run_the_same_context(
     (tool_kwargs,) = tools
     assert tool_kwargs["verify"] is args[1]
     assert isinstance(args[1], ssl.SSLContext) is with_tls
+
+
+def recording_transports(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Replace the runtime's ``ToolTransport`` with one that remembers the
+    context it was given and how often it was closed; the list holds each one
+    the app made."""
+    made: list[Any] = []
+
+    class Recording(ToolTransport):
+        def __init__(self, verify: ssl.SSLContext | bool) -> None:
+            super().__init__(verify)
+            self.given = verify
+            self.closes = 0
+            made.append(self)
+
+        def close(self) -> None:
+            self.closes += 1
+            super().close()
+
+    monkeypatch.setattr(runtime_module, "ToolTransport", Recording)
+    return made
+
+
+def test_the_runtime_gives_every_run_its_one_transport_and_closes_it_at_shutdown(
+    monkeypatch: pytest.MonkeyPatch, pki: Pki, fresh_database: DatabaseHandle
+) -> None:
+    gateway = Capture(runtime_module.make_gateway_client)
+    tools: list[Any] = []
+
+    def refuse_to_go_on(*args: Any, **kwargs: Any) -> Any:
+        tools.append(kwargs)
+        raise RuntimeError("the capture ends the run")
+
+    monkeypatch.setattr(runtime_module, "make_gateway_client", gateway)
+    monkeypatch.setattr(runtime_module, "tool_client_for", refuse_to_go_on)
+    made = recording_transports(monkeypatch)
+    app = runtime_module.create_app(
+        runtime_settings(fresh_database.dsn("agent_runtime"), pki),
+        tracer_provider=make_tracer_provider("agent-runtime"),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        for _ in range(2):
+            client.post("/runs", json={**RUN, "reference": str(uuid.uuid4())[:8]})
+        closed_while_running = made[0].closes
+
+    (transport,) = made
+    ((args, _),) = gateway.calls
+    assert [kwargs["transport"] for kwargs in tools] == [transport, transport]
+    assert transport.given is args[1]
+    assert closed_while_running == 0
+    assert transport.closes == 1
+
+
+def test_the_runtime_closes_its_transport_but_not_a_gateway_client_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, fresh_database: DatabaseHandle
+) -> None:
+    made = recording_transports(monkeypatch)
+    given = httpx.Client(base_url=GATEWAY_URL)
+    app = runtime_module.create_app(
+        runtime_settings(fresh_database.dsn("agent_runtime"), None),
+        tracer_provider=make_tracer_provider("agent-runtime"),
+        http_client=given,
+    )
+
+    with TestClient(app):
+        pass
+
+    (transport,) = made
+    assert transport.closes == 1
+    assert not given.is_closed
+    given.close()
+
+
+def test_the_runtime_closes_the_gateway_client_it_made_and_its_transport(
+    monkeypatch: pytest.MonkeyPatch, fresh_database: DatabaseHandle
+) -> None:
+    clients: list[httpx.Client] = []
+    make = runtime_module.make_gateway_client
+
+    def remember(*args: Any, **kwargs: Any) -> httpx.Client:
+        clients.append(make(*args, **kwargs))
+        return clients[-1]
+
+    monkeypatch.setattr(runtime_module, "make_gateway_client", remember)
+    made = recording_transports(monkeypatch)
+    app = runtime_module.create_app(
+        runtime_settings(fresh_database.dsn("agent_runtime"), None),
+        tracer_provider=make_tracer_provider("agent-runtime"),
+    )
+
+    with TestClient(app):
+        closed_while_running = clients[0].is_closed
+
+    (transport,) = made
+    (gateway,) = clients
+    assert not closed_while_running
+    assert gateway.is_closed
+    assert transport.closes == 1
 
 
 def test_the_claims_api_gives_its_runtime_client_the_context_of_its_settings(

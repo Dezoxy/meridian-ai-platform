@@ -207,8 +207,11 @@ def test_an_injected_client_is_not_closed_by_the_app() -> None:
 
 
 def test_an_address_the_client_cannot_take_stops_the_start_without_the_value() -> None:
-    value = f"http://{SECRET}\x01way:8080"
-    assert gateway_url_problem(value) is None  # urlsplit takes it, httpx does not
+    # A printable character no host name may hold: the shared check takes it
+    # (it refuses a control character itself, which this test used to use), and
+    # httpx does not.
+    value = f"http://{SECRET}\U0001f600.invalid:8080"
+    assert gateway_url_problem(value) is None
 
     with pytest.raises(SettingsError, match=GATEWAY_URL_ENV) as raised:
         knowledge_app.create_app(settings(value))

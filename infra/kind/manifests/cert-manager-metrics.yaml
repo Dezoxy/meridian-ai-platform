@@ -1,0 +1,53 @@
+# Prometheus scrapes cert-manager's controller (S056): the alerts in
+# alerts/meridian.yaml (group meridian.certificates) read when each certificate
+# ends and whether it is Ready. Applied by up.sh after kube-prometheus-stack,
+# which brings the ServiceMonitor CRD; cert-manager's own chart option for a
+# ServiceMonitor cannot be used, because cert-manager is installed first.
+#
+# The Prometheus the chart renders selects ServiceMonitors in every namespace
+# with no label (values/kube-prometheus-stack.yaml), so this one lives beside the
+# rules and reaches the controller's Service in cert-manager through
+# namespaceSelector. The metrics carry the names of certificates and of issuers
+# and their expiry times; no key and no Secret is in them.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: meridian
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    # The labels of the controller's Service in cert-manager v1.21.2; the
+    # webhook and the cainjector have Services too, with another component.
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+  endpoints:
+    # The series carry the certificate's own `namespace` and `name`. Without
+    # honorLabels Prometheus writes the scrape target's namespace (cert-manager)
+    # over the certificate's and keeps the metric's own as `exported_namespace`,
+    # so the rules' namespace matcher would hold for every certificate in the
+    # cluster and their annotations would say cert-manager for all. The target
+    # is cert-manager's controller, a component of the platform, so what it says
+    # about a certificate's namespace is trusted.
+    #
+    # The controller serves a series for every Certificate in the cluster, and
+    # without a filter any namespace's would be stored in Prometheus (a
+    # namespace of someone else's, a series per name and issuer). The rules read
+    # two namespaces, and only those are kept: a series whose `namespace` is
+    # `meridian` (the chart's certificates) or `cert-manager` (the CA's, and,
+    # with honorLabels, the controller's own series, which carry the target's
+    # namespace). A relabel regex is anchored at both ends.
+    - port: http-metrics
+      interval: 60s
+      honorLabels: true
+      metricRelabelings:
+        - action: keep
+          sourceLabels:
+            - namespace
+          regex: meridian|cert-manager

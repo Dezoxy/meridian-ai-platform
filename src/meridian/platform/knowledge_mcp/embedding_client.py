@@ -124,12 +124,23 @@ class EmbeddingClient:
     def agent(self) -> str:
         return self._agent
 
-    def embed(self, texts: Sequence[str]) -> EmbeddingBatch:
+    def embed(
+        self, texts: Sequence[str], *, timeout: httpx.Timeout | None = None
+    ) -> EmbeddingBatch:
+        """``timeout`` bounds this request alone; None keeps the injected
+        client's own."""
         headers = dict(self._headers)
         propagate.inject(headers)
+        # Left out when there is none: ``None`` would mean "no limit" to httpx,
+        # and a client that is not httpx's own (Starlette's test client) warns
+        # about any ``timeout`` it is given.
+        options = {} if timeout is None else {"timeout": timeout}
         try:
             response = self._http.post(
-                EMBEDDINGS_PATH, json={"inputs": list(texts)}, headers=headers
+                EMBEDDINGS_PATH,
+                json={"inputs": list(texts)},
+                headers=headers,
+                **options,
             )
         except httpx.HTTPError:
             # Neither the transport's message nor its cause is kept.

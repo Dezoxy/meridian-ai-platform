@@ -35,20 +35,22 @@ anyone who reaches the pages reads any claim's status by its ID (T-01, S021).
 
 What under ``/claimant/`` is not a route of its own is a page too: a claim ID in
 the path that is not one (422), a path with no route (404), a route with another
-method (405), a body over the limit (413, declared or streamed) and a body that
-cannot be parsed (400) are answered with the claimant's error page, with the same
-status and the pages' headers, not the JSON of the Claims API. The text is fixed
-for each status, never the exception's detail or anything of the request (T-03).
-The handlers here take the path and give any other path the shared JSON answer;
-the 413 for a declared length is the one the body limit asks ``claimant_too_large``
-for (``create_app`` passes it).
+method (405), a body over the limit (413, declared or streamed), a body that
+cannot be parsed (400) and a failure nobody handled (500, or 503 for a database
+or the audit log that is unavailable) are answered with the claimant's error
+page, with the same status and the pages' headers, not the JSON of the Claims
+API. The text is fixed for each status, never the exception's detail or anything
+of the request (T-03). The handlers here take the path and give any other path
+the shared JSON answer; the 413 for a declared length is the one the body limit
+asks ``claimant_too_large`` for (``create_app`` passes it). The status page of a
+claim waiting for documents says by when they are due (``documents_due``).
 """
 
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, get_args
 from zoneinfo import ZoneInfo
 
@@ -64,6 +66,7 @@ from pydantic_core import ErrorDetails
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware import Middleware
 from starlette.types import Scope
 
 from meridian.platform.common.audit import AuditUnavailable
@@ -94,7 +97,17 @@ from meridian.workloads.claims_triage.adjuster import (
     render_error,
     require_same_origin,
 )
-from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME, LifecycleState
+from meridian.workloads.claims_triage.claimant_errors import (
+    ClaimantErrorMiddleware,
+    claim_id_of,
+    is_claimant_path,
+)
+from meridian.workloads.claims_triage.lifecycle import (
+    DOCUMENTS_DEADLINE_DAYS,
+    SERVICE_NAME,
+    LifecycleState,
+    documents_due,
+)
 from meridian.workloads.claims_triage.models import (
     ClaimMoveResponse,
     ClaimResponse,
@@ -105,11 +118,14 @@ from meridian.workloads.claims_triage.models import (
 )
 from meridian.workloads.claims_triage.moves import (
     RefusedAfterStoring,
+    StoredSubmissionInvalid,
     add_documents,
     withdraw,
 )
 from meridian.workloads.claims_triage.triaging import (
     arrived_documents,
+    claim_database_failure,
+    invalid_fields,
     store_claim,
     triage_claim,
 )
@@ -124,6 +140,7 @@ REPORT_TIME_ZONE = ZoneInfo("Europe/Vienna")
 HTTP_BAD_REQUEST = 400
 HTTP_METHOD_NOT_ALLOWED = 405
 HTTP_UNPROCESSABLE = 422
+HTTP_SERVER_ERROR = 500
 ONCE_TEXT = "send this field exactly once, as text"
 LOOKUP_MESSAGE = "A claim ID is CLM- and four digits, for example CLM-0001."
 # What an error page says for the shared answers, by status: fixed text, never
@@ -132,11 +149,15 @@ NOT_FOUND_TEXT = "There is no such page."
 METHOD_TEXT = "This page does not take that kind of request."
 TOO_LARGE_TEXT = "What you sent is too large."
 UNREADABLE_TEXT = "We could not read what you sent."
+SERVER_ERROR_TEXT = "It did not work. Please try again later."
+UNAVAILABLE_TEXT = "This is not available just now. Please try again later."
 SHARED_ANSWER_TEXTS: Mapping[int, str] = {
     HTTP_BAD_REQUEST: UNREADABLE_TEXT,
     HTTP_NOT_FOUND: NOT_FOUND_TEXT,
     HTTP_METHOD_NOT_ALLOWED: METHOD_TEXT,
     HTTP_PAYLOAD_TOO_LARGE: TOO_LARGE_TEXT,
+    HTTP_SERVER_ERROR: SERVER_ERROR_TEXT,
+    HTTP_UNAVAILABLE: UNAVAILABLE_TEXT,
 }
 UNASSESSED_DETAIL = (
     "Your claim is stored but could not be assessed now. Send the same form again."
@@ -198,11 +219,12 @@ UNQUEUED_AFTER_FAILURE: tuple[LifecycleState, ...] = ("submitted", "triaging")
 
 # Only the latest proposal's missing documents: never the document itself.
 STATUS_SQL = (
-    "SELECT state, received_at FROM claims.claims WHERE claim_id = %s AND tenant = %s"
+    "SELECT state, received_at, state_changed_at FROM claims.claims "
+    "WHERE claim_id = %s AND tenant = %s"
 )
 MISSING_SQL = (
     "SELECT proposal -> 'missing_documents' FROM claims.triage_proposals "
-    "WHERE claim_id = %s ORDER BY created_at DESC LIMIT 1"
+    "WHERE claim_id = %s ORDER BY created_at DESC, proposal_id LIMIT 1"
 )
 
 type Problems = Sequence[tuple[str, str]]
@@ -217,13 +239,16 @@ def today_in_vienna() -> date:
 @dataclass(frozen=True, slots=True)
 class StatusView:
     """What a claim's status page holds: nothing of the proposal but the names
-    of the documents it asked for, nothing of the submission."""
+    of the documents it asked for, nothing of the submission. ``due`` is when the
+    documents asked for are due (the sweep then refers the claim to a person), and
+    only for a claim in ``documents_requested``."""
 
     claim_id: str
     state: LifecycleState
     received_at: datetime
     missing: tuple[str, ...]
     arrived: tuple[str, ...]
+    due: datetime | None = None
 
 
 def _missing_names(claim_id: str, stored: object) -> tuple[str, ...]:
@@ -237,22 +262,33 @@ def _missing_names(claim_id: str, stored: object) -> tuple[str, ...]:
     return ()
 
 
-def load_status(dsn: str, tenant: str, claim_id: str) -> StatusView | None:
+def load_status(
+    dsn: str,
+    tenant: str,
+    claim_id: str,
+    deadline_days: int = DOCUMENTS_DEADLINE_DAYS,
+) -> StatusView | None:
     """The tenant's claim as its status page shows it; ``None`` when there is no
-    such claim (another tenant's is none)."""
+    such claim (another tenant's is none). ``deadline_days`` is how long a claim
+    waits for the documents it asked for."""
     with connect(dsn, SERVICE_NAME) as conn:
         claim = conn.execute(STATUS_SQL, (claim_id, tenant)).fetchone()
         if claim is None:
             return None
         proposal = conn.execute(MISSING_SQL, (claim_id,)).fetchone()
         arrived = arrived_documents(conn, claim_id)
-    state, received_at = claim
+    state, received_at, changed_at = claim
     return StatusView(
         claim_id=claim_id,
         state=state,
         received_at=received_at,
         missing=_missing_names(claim_id, proposal[0] if proposal else None),
         arrived=arrived,
+        due=(
+            documents_due(changed_at, deadline_days)
+            if state == "documents_requested"
+            else None
+        ),
     )
 
 
@@ -352,6 +388,10 @@ def render_status(
         received_at=_when(view.received_at),
         sentence=STATE_SENTENCES[view.state],
         asking=view.state == "documents_requested",
+        # A day, not the moment: the moment would show, beside the received time,
+        # whether the request for documents came within seconds (the rules) or
+        # later (a person), and the page does not say what produced the state.
+        due=None if view.due is None else view.due.astimezone(UTC).date().isoformat(),
         missing=view.missing,
         arrived=view.arrived,
         can_withdraw=view.state in WITHDRAWABLE,
@@ -363,10 +403,6 @@ def render_status(
 
 def claimant_error(status: int, detail: str) -> HTMLResponse:
     return render_error(status, detail, for_claimant=True)
-
-
-def is_claimant_path(path: str) -> bool:
-    return path.startswith(CLAIMANT_PREFIX)
 
 
 def claimant_too_large(scope: Scope) -> Response:
@@ -381,6 +417,11 @@ def audit_unavailable(exc: AuditUnavailable) -> HTMLResponse:
     """What the shared handler of the JSON routes answers, as a claimant's page."""
     logger.error("audit write failed: %s", exc)
     return claimant_error(HTTP_UNAVAILABLE, AUDIT_UNAVAILABLE)
+
+
+def server_error_page() -> HTMLResponse:
+    """The claimant's 500 page, for ``ClaimantErrorMiddleware``."""
+    return claimant_error(HTTP_SERVER_ERROR, SERVER_ERROR_TEXT)
 
 
 def store_stamped(dsn: str, tenant: str, submission: ClaimSubmission) -> dict[str, Any]:
@@ -404,16 +445,45 @@ def add_claimant_pages(
     http: httpx.Client,
     tracer: Tracer,
     today: Callable[[], date] | None = None,
+    deadline_days: int = DOCUMENTS_DEADLINE_DAYS,
 ) -> None:
     """Add the start page, the claim form, the status page and the documents and
     withdrawal forms to the Claims API. Called after ``add_adjuster_pages``,
     whose middleware adds the headers and whose handler refuses a post another
     site made (it picks the claimant's page by the path). It also answers the
-    shared errors of a path under ``/claimant/`` as the claimant's pages and
-    gives every other path the shared JSON answer. ``today`` is the clock of the
-    report date the claim form's submissions are stamped with (the date now in
-    the insurer's time zone by default)."""
+    shared errors of a path under ``/claimant/`` as the claimant's pages (an
+    unhandled one by ``ClaimantErrorMiddleware``) and gives every other path the
+    shared answer. ``today`` is the clock of the report date the claim form's
+    submissions are stamped with (the date now in the insurer's time zone by
+    default); ``deadline_days`` is how long a claim waits for documents."""
     clock = today or today_in_vienna
+    shared_database_error = app.exception_handlers[psycopg.Error]
+    shared_audit_error = app.exception_handlers[AuditUnavailable]
+    # Appended: the innermost, inside the shared middleware (``add_middleware``
+    # puts each outside the last).
+    if app.middleware_stack is not None:
+        raise RuntimeError("the claimant's error middleware needs an app not started")
+    app.user_middleware.append(
+        Middleware(ClaimantErrorMiddleware, server_error_page=server_error_page)
+    )
+
+    @app.exception_handler(psycopg.Error)
+    async def database_error(request: Request, exc: psycopg.Error) -> Response:
+        if not is_claimant_path(request.url.path):
+            return await shared_database_error(request, exc)
+        claim_id = claim_id_of(request.scope)
+        status, _ = (
+            database_failure(exc)
+            if claim_id is None
+            else claim_database_failure(exc, claim_id)
+        )
+        return claimant_error(status, SHARED_ANSWER_TEXTS[status])
+
+    @app.exception_handler(AuditUnavailable)
+    async def audit_error(request: Request, exc: AuditUnavailable) -> Response:
+        if not is_claimant_path(request.url.path):
+            return await shared_audit_error(request, exc)
+        return audit_unavailable(exc)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_path(request: Request, exc: RequestValidationError) -> Response:
@@ -428,6 +498,13 @@ def add_claimant_pages(
         text = SHARED_ANSWER_TEXTS.get(exc.status_code)
         if text is None or not is_claimant_path(request.url.path):
             return await http_exception_handler(request, exc)
+        if exc.status_code >= HTTP_SERVER_ERROR:
+            logger.error(
+                "%s %s answered under %s",
+                type(exc).__name__,
+                exc.status_code,
+                CLAIMANT_PREFIX,
+            )
         page = claimant_error(exc.status_code, text)
         page.headers.update(exc.headers or {})  # a 405 names the methods allowed
         return page
@@ -448,10 +525,10 @@ def add_claimant_pages(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
             )
             try:
-                view = load_status(dsn, tenant, claim_id)
+                view = load_status(dsn, tenant, claim_id, deadline_days)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                failure = database_failure(exc)  # logs the class and SQLSTATE
+                failure = claim_database_failure(exc, claim_id)  # logs both
                 return claimant_error(
                     *(failure if notice is None else (notice.status, notice.detail))
                 )
@@ -475,8 +552,20 @@ def add_claimant_pages(
         never started) or ``triaging`` (it failed and the move to
         ``triage_failed`` did too): no queue lists it, so only the claimant
         sending the form again can, once a lease that lapsed lets it. The triage
-        takes the submission as it is stored, with its first report date."""
-        submission = ClaimSubmission.model_validate(stored)
+        takes the submission as it is stored, with its first report date. A
+        stored submission that does not validate is ``StoredSubmissionInvalid``
+        and nothing is triaged."""
+        try:
+            submission = ClaimSubmission.model_validate(stored)
+        except ValidationError as exc:
+            # Never ``str(exc)``: it quotes the stored values, the claimant's.
+            logger.error(
+                "the stored submission of claim %s is not valid: %s %s",
+                claim_id,
+                type(exc).__name__,
+                invalid_fields(exc),
+            )
+            raise StoredSubmissionInvalid("not valid") from None
         with start_span(tracer, "claims.claimant.submit") as span:
             set_span_attributes(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
@@ -596,7 +685,7 @@ def add_claimant_pages(
                 status=exc.status_code,
             )
         except psycopg.Error as exc:
-            return claimant_error(*database_failure(exc))
+            return claimant_error(*claim_database_failure(exc, claim_id))
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         # From here the claim is stored, and only the identical submission is
@@ -606,8 +695,12 @@ def add_claimant_pages(
         try:
             unseen = await run_in_threadpool(triage_stored, claim_id, stored)
         except psycopg.Error as exc:
-            database_failure(exc)  # logs the class and SQLSTATE, nothing else
+            claim_database_failure(exc, claim_id)  # logs the claim, class, SQLSTATE
             return render_start(values, notice=unassessed, status=HTTP_UNAVAILABLE)
+        except StoredSubmissionInvalid:
+            # What the moves answer for the same row: the claimant's page, with
+            # the fixed text and no field. The line that says which is logged.
+            return claimant_error(HTTP_SERVER_ERROR, SERVER_ERROR_TEXT)
         except AuditUnavailable as exc:
             return audit_unavailable(exc)
         if unseen:

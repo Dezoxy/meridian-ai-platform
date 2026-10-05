@@ -348,9 +348,12 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
         ALLOWED_HOSTS_ENV,
         OTLP_ENDPOINT_ENV,
         IDENTITY_PREFIX_ENV,
+        # Every container that mounts its certificate names its files, so
+        # /healthz watches the one the server serves (S056).
+        *TLS_ENV,
     }
     if name == KNOWLEDGE_SERVER:
-        expected |= {GATEWAY_URL_ENV, *TLS_ENV}
+        expected |= {GATEWAY_URL_ENV}
 
     address = urlsplit(runtime_tool_servers()[name])
     # DNS rebinding protection compares the Host header, byte for byte.
@@ -1266,9 +1269,14 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # table would get a stored proposal "policy not found", which is final. The
     # ingestion calls the gateway, so it follows the gateway's rollout. The
     # certificates come right after the release: the ingestion Job mounts a
-    # Secret that cert-manager makes from one of them (S055).
+    # Secret that cert-manager makes from one of them (S055). The issuer is a
+    # precondition like the database: it is checked before the image is built
+    # and before any Job runs (S056); so is the approval of the Certificates:
+    # approver-policy with its three policies.
     assert main_sequence() == [
         "require_database",
+        "require_issuer",
+        "require_approval",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
@@ -3846,10 +3854,12 @@ def test_the_service_ca_file_says_who_can_read_the_key_and_who_can_ask_for_a_cer
     # The readers of the key: operators with a cluster-wide read of Secrets.
     for reader in ("cainjector", "CloudNativePG"):
         assert reader in flat
-    # The issuer signs any request, from any namespace, with any URI.
-    assert "any namespace" in flat
-    assert "approver" in flat
-    assert "S020" in flat
+    # S056: approver-policy decides, so the issuer no longer signs a request
+    # from any namespace; the file says what is left.
+    assert "approver-policy decides" in flat
+    assert "certificate-policy.yaml" in flat
+    assert "nothing restricts who may ask" not in flat
+    assert "whoever can create a Certificate in `meridian`" in flat
 
 
 def test_the_readme_says_who_reads_the_ca_key_and_who_can_ask_for_a_certificate() -> (
@@ -3860,10 +3870,41 @@ def test_the_readme_says_who_reads_the_ca_key_and_who_can_ask_for_a_certificate(
     assert "no Meridian pod can read it" in readme
     for reader in ("cainjector", "CloudNativePG"):
         assert reader in readme
-    assert "approves every request" in readme
+    # S056: approver-policy decides; the built-in approver no longer does.
+    assert "approver-policy" in readme
+    assert "disableAutoApproval" in readme
+    assert "nothing restricts who may ask" not in readme
+    assert "a policy on requests is for AKS" not in readme
     assert "rotationPolicy: Never" in readme
-    # The old, narrower claim: only the namespace's writers could mint one.
-    assert "whoever can create a `Certificate` in `meridian`" not in readme
+    # What is left is said in the README: whoever can create a `Certificate` in
+    # `meridian` has any service's identity issued.
+    assert "whoever can create a `Certificate` in `meridian`" in readme
+
+
+def test_the_readme_describes_what_s056_added_to_deploy_and_smoke_and_the_restart() -> (
+    None
+):
+    readme = " ".join((KIND_DIR / "README.md").read_text(encoding="utf-8").split())
+
+    # `make smoke` checks ten things; the tenth is the certificate policy.
+    assert "`make smoke` checks ten things" in readme
+    assert "`make smoke` checks nine things" not in readme
+    assert "**Certificate policy.** Three lines" in readme
+    # The ninth check's description no longer counts three statuses.
+    assert "`make smoke`'s ninth check proves 200, 401 and 403" not in readme
+    # `make deploy` refuses without the policies and the add-on, too.
+    assert "CertificateRequestPolicy" in readme
+    assert "cert-manager-approver-policy" in readme
+    assert "nothing would approve the chart's Certificates" in readme
+    # The deny policy selects a request for either issuer, not every request.
+    assert "selects every request and allows nothing" not in readme
+    assert "meets no policy and is never approved" in readme
+    # What is true about a renewed certificate and the restart.
+    assert "a Deployment's pods are not restarted by cert-manager" not in readme
+    assert "/healthz" in readme
+    assert "503" in readme
+    assert "the kubelet restarts the container" in readme
+    assert "21 days" in readme
 
 
 def test_the_cert_manager_values_install_the_crds_and_turn_nothing_optional_on() -> (

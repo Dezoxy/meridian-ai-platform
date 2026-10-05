@@ -43,7 +43,7 @@ from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.runtime import app as runtime_app
-from meridian.runtime import graphs, runs
+from meridian.runtime import graphs, runs, tool_client
 from meridian.runtime.app import create_app
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import GraphFailure
@@ -51,6 +51,7 @@ from meridian.runtime.graphs import GraphLoadError
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.models import RunState
 from meridian.runtime.settings import RuntimeSettings
+from meridian.runtime.sweep import end_abandoned_run
 from meridian.runtime.tool_client import (
     ToolClient,
     ToolNotAllowed,
@@ -888,11 +889,11 @@ class FlakyFinish:
 
     def __call__(
         self, dsn: str, identity: runs.RunIdentity, status: str, **why: str | None
-    ) -> None:
+    ) -> bool:
         self.calls += 1
         if self.calls <= self.failures:
             raise psycopg.OperationalError(f"down {CLAIM_TEXT}")
-        self.real(dsn, identity, status, **why)
+        return self.real(dsn, identity, status, **why)
 
 
 def test_the_retry_of_finish_run_keeps_the_reason_of_a_failed_run(
@@ -967,6 +968,268 @@ def test_when_finish_run_keeps_failing_the_answer_is_503_with_the_run_id(
     assert "Completed" in caplog.text  # the status it should have had
     assert CLAIM_TEXT not in caplog.text
     assert run_rows(fresh_database)[0][5] == "Running"
+
+
+# ── a final status is written over Running only ─────────────────────────────
+def end_as_the_sweep(db: DatabaseHandle, run_id: uuid.UUID) -> None:
+    """End a run as the sweep does, without waiting for its lease: let the run
+    look idle past it, then run the sweep's own statement."""
+    make_running(db, str(run_id), idle_seconds=PAST_THE_LEASE)
+    with connect(db.dsn(OWNER), "test-sweep") as conn:
+        assert end_abandoned_run(conn, run_id, service="claims-sweep")
+        conn.commit()
+
+
+def started_run(db: DatabaseHandle) -> runs.RunIdentity:
+    identity = runs.RunIdentity(
+        run_id=uuid.uuid4(),
+        thread_id=uuid.uuid4(),
+        agent="claims-triage",
+        tenant="claims-triage",
+        reference="CLM-0001",
+    )
+    runs.start_run(db.dsn("agent_runtime"), identity)
+    return identity
+
+
+def stored_row(db: DatabaseHandle, run_id: uuid.UUID) -> tuple:
+    ((status, updated_at),) = owner_rows(
+        db,
+        "SELECT status, updated_at FROM runtime.runs WHERE run_id = %s",
+        (run_id,),
+    )
+    return status, updated_at
+
+
+def test_finish_run_moves_a_running_run_and_writes_one_event(
+    fresh_database: DatabaseHandle,
+) -> None:
+    identity = started_run(fresh_database)
+
+    moved = runs.finish_run(fresh_database.dsn("agent_runtime"), identity, "Completed")
+
+    assert moved is True
+    assert stored_row(fresh_database, identity.run_id)[0] == "Completed"
+    events = audit_events(fresh_database, identity.run_id)
+    assert [e["event"] for e in events] == ["run.started", "run.completed"]
+
+
+def test_finish_run_leaves_a_run_the_sweep_ended_and_writes_no_event(
+    fresh_database: DatabaseHandle,
+) -> None:
+    identity = started_run(fresh_database)
+    end_as_the_sweep(fresh_database, identity.run_id)
+    before = stored_row(fresh_database, identity.run_id)
+
+    moved = runs.finish_run(fresh_database.dsn("agent_runtime"), identity, "Completed")
+
+    assert moved is False
+    assert stored_row(fresh_database, identity.run_id) == before
+    assert before[0] == "Failed"
+    events = audit_events(fresh_database, identity.run_id)
+    assert [(e["service"], e["event"]) for e in events] == [
+        ("agent-runtime", "run.started"),
+        ("claims-sweep", "run.failed"),
+    ]
+
+
+def test_finish_run_leaves_a_paused_run_as_it_is(
+    fresh_database: DatabaseHandle,
+) -> None:
+    identity = started_run(fresh_database)
+    make_running(
+        fresh_database, str(identity.run_id), idle_seconds=0, status="AwaitingApproval"
+    )
+
+    moved = runs.finish_run(fresh_database.dsn("agent_runtime"), identity, "Failed")
+
+    assert moved is False
+    assert stored_row(fresh_database, identity.run_id)[0] == "AwaitingApproval"
+    events = audit_events(fresh_database, identity.run_id)
+    assert [e["event"] for e in events] == ["run.started"]
+
+
+def ended_while_it_works(
+    db: DatabaseHandle, then: Callable[[], None] = lambda: None
+) -> Callable[[ModelClient, ToolClient], StateGraph]:
+    """A graph whose node ends its own run as the sweep does, then runs
+    ``then`` (which may raise) and writes an output."""
+
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            end_as_the_sweep(db, run_rows(db)[0][0])
+            then()
+            return {"output": {"text": CLAIM_TEXT}}
+
+        return graph_of(work)
+
+    return factory
+
+
+def test_a_leg_whose_run_the_sweep_ended_answers_the_stored_status_and_no_output(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    register(monkeypatch, ended_while_it_works(fresh_database))
+    exporter = InMemorySpanExporter()
+    memory = MemorySaver()
+    client = make_client(fresh_database, exporter=exporter, checkpointer=memory)
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = start(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    run_id = uuid.UUID(body["run_id"])
+    assert (body["status"], body["output"]) == ("Failed", None)
+    assert CLAIM_TEXT not in response.text
+    assert stored_row(fresh_database, run_id)[0] == "Failed"
+    events = audit_events(fresh_database, run_id)
+    assert [(e["service"], e["event"]) for e in events] == [
+        ("agent-runtime", "run.started"),
+        ("claims-sweep", "run.failed"),
+    ]
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert str(run_id) in warning.getMessage()
+    assert "Completed" in warning.getMessage()  # the status it could not write
+    assert "CLM-0001" not in caplog.text
+    assert CLAIM_TEXT not in caplog.text
+    (run_span,) = [s for s in exporter.get_finished_spans() if s.name == "runtime.run"]
+    assert run_span.attributes["meridian.run_status"] == "Failed"
+    assert run_rows(fresh_database)[0][1] not in {key[0] for key in memory.storage}
+
+
+def test_a_failing_leg_on_a_run_the_sweep_marked_failed_answers_its_own_failure(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail() -> None:
+        raise GraphFailure("a-code")
+
+    register(monkeypatch, ended_while_it_works(fresh_database, fail))
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database, checkpointer=MemorySaver()))
+
+    # The stored status is the one the leg meant to write: its own failure. The
+    # trail says the sweep's, so the leg's reason is logged: nowhere else holds it.
+    assert response.status_code == 502
+    body = response.json()
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert body["run_id"] in warning.getMessage()
+    assert "a-code" in warning.getMessage()
+    assert CLAIM_TEXT not in caplog.text
+    assert (body["status"], body["output"]) == ("Failed", None)
+    events = audit_events(fresh_database, uuid.UUID(body["run_id"]))
+    assert [(e["service"], e["event"]) for e in events] == [
+        ("agent-runtime", "run.started"),
+        ("claims-sweep", "run.failed"),
+    ]
+
+
+def test_the_warning_of_a_failing_leg_on_an_ended_run_names_the_reason_and_the_tool(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail() -> None:
+        raise ToolUnavailable("policy_lookup")
+
+    register(monkeypatch, ended_while_it_works(fresh_database, fail))
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database, checkpointer=MemorySaver()))
+
+    assert response.status_code == 502
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    message = warning.getMessage()
+    assert response.json()["run_id"] in message
+    assert "tool-unavailable" in message
+    assert "policy_lookup" in message
+
+
+def test_when_the_stored_status_of_an_ended_run_cannot_be_read_the_answer_is_503(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, ended_while_it_works(fresh_database))
+
+    def down(*_a: object, **_k: object) -> None:
+        raise psycopg.OperationalError(f"down {CLAIM_TEXT}")
+
+    monkeypatch.setattr(runs, "fetch_run", down)
+
+    response = start(make_client(fresh_database, checkpointer=MemorySaver()))
+
+    assert response.status_code == 503
+    assert set(response.json()) == {"detail", "run_id"}
+    assert CLAIM_TEXT not in response.text
+
+
+class CommittedThenDown:
+    """Stands in for runs.finish_run: the first write commits and then the
+    connection drops, so the retry finds the run no longer Running."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.real = runs.finish_run
+
+    def __call__(
+        self, dsn: str, identity: runs.RunIdentity, status: str, **why: str | None
+    ) -> bool:
+        self.calls += 1
+        moved = self.real(dsn, identity, status, **why)
+        if self.calls == 1:
+            raise psycopg.OperationalError(f"down {CLAIM_TEXT}")
+        return moved
+
+
+def test_a_write_that_committed_before_the_connection_dropped_keeps_the_output(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    register(monkeypatch, ok_factory)
+    stand_in = CommittedThenDown()
+    monkeypatch.setattr(runs, "finish_run", stand_in)
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = start(make_client(fresh_database))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["status"], body["output"]) == (
+        "Completed",
+        {"text": "drafted", "echo": 7},
+    )
+    assert stand_in.calls == 2
+    events = audit_events(fresh_database, uuid.UUID(body["run_id"]))
+    assert [e["event"] for e in events] == ["run.started", "run.completed"]
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_a_failure_whose_write_committed_before_the_connection_dropped_stays_a_502(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing(model: ModelClient, tools: ToolClient) -> StateGraph:
+        def work(state: State) -> State:
+            raise GraphFailure("a-code")
+
+        return graph_of(work)
+
+    register(monkeypatch, failing)
+    stand_in = CommittedThenDown()
+    monkeypatch.setattr(runs, "finish_run", stand_in)
+
+    response = start(make_client(fresh_database))
+
+    assert response.status_code == 502
+    assert response.json()["status"] == "Failed"
+    assert stand_in.calls == 2
+    events = audit_events(fresh_database, uuid.UUID(response.json()["run_id"]))
+    assert [e["event"] for e in events] == ["run.started", "run.failed"]
+    assert failed_row(fresh_database, response)["reason"] == "a-code"
 
 
 # ── failure status: a timeout is a 504, anything else a 502 ─────────────────
@@ -1873,11 +2136,11 @@ def test_the_retry_of_recording_a_failed_resume_keeps_its_reason_and_tool(
     real = runs.pause_after_failed_resume
     calls: list[str] = []
 
-    def flaky(*args: Any, **kwargs: Any) -> None:
+    def flaky(*args: Any, **kwargs: Any) -> bool:
         calls.append("tried")
         if len(calls) == 1:
             raise psycopg.OperationalError("down")
-        real(*args, **kwargs)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(runs, "pause_after_failed_resume", flaky)
 
@@ -2135,6 +2398,21 @@ def test_the_lease_of_a_running_run_is_ten_minutes() -> None:
     assert runs.STALE_RUNNING_REASON == "stale-running"
 
 
+def test_the_longest_a_live_leg_can_last_is_under_the_lease() -> None:
+    # Four model calls of 30 s and sixteen tool calls of 10 s: 120 + 160 = 280 s.
+    # A lease the longest leg could outlast would let a takeover or the sweep
+    # end a run something is still working on. The 30 s of the gateway client is
+    # its timeout for each phase of a call, so this is the sum of the bounds the
+    # code names, not a hard ceiling.
+    model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * runtime_app.GATEWAY_TIMEOUT_SECONDS
+    tool_seconds = runs.MAX_TOOL_CALLS_PER_RUN * tool_client.TOOL_TIMEOUT_SECONDS
+
+    longest_leg = model_seconds + tool_seconds
+
+    assert (model_seconds, tool_seconds, longest_leg) == (120.0, 160.0, 280.0)
+    assert longest_leg < runs.RUNNING_LEASE_SECONDS
+
+
 def test_a_stale_running_run_with_a_pending_pause_is_resumed_and_completes(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2327,6 +2605,53 @@ def test_a_resumed_leg_that_fails_after_a_takeover_leaves_the_run_paused(
         "run.resumed",
         "run.resume_failed",
     ]
+
+
+def test_a_resumed_leg_that_fails_on_a_run_the_sweep_ended_answers_the_stored_failed(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def ends_the_run_then_fails(answer: Any) -> None:
+        end_as_the_sweep(fresh_database, run_rows(fresh_database)[0][0])
+        raise ToolUnavailable("policy_lookup")  # a reason that would pause it again
+
+    register(monkeypatch, resumable(after=ends_the_run_then_fails))
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    with caplog.at_level(logging.WARNING, logger=runtime_app.__name__):
+        response = resume(client, run_id)
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": run_id, "status": "Failed", "output": None}
+    assert run_rows(fresh_database)[0][5] == "Failed"
+    events = audit_events(fresh_database, uuid.UUID(run_id))
+    assert [(e["service"], e["event"]) for e in events] == [
+        ("agent-runtime", "run.started"),
+        ("agent-runtime", "run.awaiting_approval"),
+        ("agent-runtime", "run.resumed"),
+        ("claims-sweep", "run.failed"),
+    ]
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert run_id in warning.getMessage()
+
+
+def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
+    fresh_database: DatabaseHandle,
+) -> None:
+    identity = started_run(fresh_database)
+    dsn = fresh_database.dsn("agent_runtime")
+    make_running(fresh_database, str(identity.run_id), idle_seconds=0)
+
+    first = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
+    second = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
+
+    assert (first, second) == (True, False)
+    assert (
+        event_names(fresh_database, str(identity.run_id)).count("run.resume_failed")
+        == 1
+    )
 
 
 def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(

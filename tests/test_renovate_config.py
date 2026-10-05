@@ -161,6 +161,25 @@ class Readers(unittest.TestCase):
         self.assertEqual(group["matchFileNames"], [PINS])
         self.assertIn("helm", self.config["packageRules"][0]["matchDatasources"])
 
+    def test_the_approver_policy_chart_is_read_from_the_cert_manager_repository(
+        self,
+    ) -> None:
+        text = (ROOT / PINS).read_text(encoding="utf-8")
+        found = {}
+        for match in self.comment_reader(PINS).finditer(text):
+            found[match.group("depName")] = match.group(
+                "datasource", "registryUrl", "currentValue"
+            )
+        datasource, registry, version = found["cert-manager-approver-policy"]
+        self.assertEqual(datasource, "helm")
+        self.assertRegex(version, r"^v\d+\.\d+\.\d+$")
+        self.assertEqual(
+            registry, re.search(r"^CERT_MANAGER_REPO=(\S+)$", text, re.M).group(1)
+        )
+        self.assertEqual(
+            version, re.search(r"^APPROVER_POLICY_VERSION=(\S+)$", text, re.M).group(1)
+        )
+
     def test_a_split_image_carries_its_digest(self) -> None:
         digest = "sha256:" + "a" * 64
         text = (

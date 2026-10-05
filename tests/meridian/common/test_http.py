@@ -1,31 +1,53 @@
 """The shared app setup: error answers, the body limit, health and lifecycle."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
+import httpx
 import psycopg
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 from opentelemetry import _logs, metrics, trace
 from opentelemetry._logs._internal import ProxyLoggerProvider
 from opentelemetry.metrics._internal import _ProxyMeterProvider
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Sampler, SamplingResult
 from opentelemetry.trace import ProxyTracerProvider
 from psycopg import errors
+from servicesupport import REGISTRY_DIR
+from tlsserver import serve_tls
+from tlssupport import (
+    CertificateAuthority,
+    KeyPair,
+    client_context,
+    loopback_sans,
+    make_ca,
+)
 
-from meridian.platform.common import http
+from meridian.platform.common import certlife, http
 from meridian.platform.common.audit import AuditUnavailable
+from meridian.platform.common.env import SettingsError
 from meridian.platform.common.http import (
     SMALL_BODY_LIMIT_BYTES,
     create_service_app,
     drop_query_from_span,
 )
 from meridian.platform.common.telemetry import make_tracer_provider, start_span
+from meridian.platform.common.tls import CERT_FILE_ENV
+from meridian.platform.gateway.app import create_app as create_gateway
+from meridian.platform.gateway.settings import GatewaySettings
+from meridian.runtime.app import create_app as create_runtime
+from meridian.runtime.settings import RuntimeSettings
+from meridian.workloads.claims_triage.app import create_app as create_claims
+from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 CANARY = "canary-claimant@example.invalid"
 QUERY_CANARY = "query-canary-7731"
@@ -37,7 +59,10 @@ def build(
     closed: list[str] | None = None,
     provider: TracerProvider | None = None,
     limit: int = LIMIT,
+    environ: Mapping[str, str] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> TestClient:
+    # An empty environment unless a test gives one: no certificate to watch.
     service = create_service_app(
         title="Test",
         description="A test service.",
@@ -46,6 +71,8 @@ def build(
         max_body_bytes=limit,
         tracer_provider=provider,
         close=None if closed is None else lambda: closed.append("closed"),
+        environ={} if environ is None else environ,
+        **({} if clock is None else {"clock": clock}),
     )
     app = service.app
 
@@ -60,6 +87,17 @@ def build(
     @app.get("/query")
     def query(canary: str) -> dict[str, str]:
         return {"seen": canary}
+
+    @app.post("/query")
+    def query_posted(canary: str) -> dict[str, str]:
+        return {"seen": canary}
+
+    @app.get("/raw-query")
+    def raw_query(request: Request) -> dict[str, Any]:
+        return {
+            "query": request.url.query,
+            "keys": sorted(k for k in request.scope if "query" in k),
+        }
 
     @app.get("/unexpected")
     def unexpected() -> None:
@@ -175,6 +213,269 @@ def test_healthz_answers_ok_without_touching_anything() -> None:
     response = build().get("/healthz")
 
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+# ── health follows the certificate the process loaded (S056, T-89) ──────────
+EXPIRING = {"status": "certificate-expiring"}
+NINETY_DAYS = timedelta(days=90)
+
+
+class Certificate:
+    """A certificate file and the dates in it."""
+
+    def __init__(self, ca: CertificateAuthority, directory: Path) -> None:
+        self.ca = ca
+        self.not_before = (datetime.now(UTC) - timedelta(days=1)).replace(microsecond=0)
+        self.not_after = self.not_before + NINETY_DAYS
+        self.pair: KeyPair = ca.issue(
+            "service", "service", loopback_sans(), self.not_before, self.not_after
+        )
+        self.environ = {CERT_FILE_ENV: str(self.pair.cert)}
+        self.restart_at = self.not_after - timedelta(hours=24)
+        self.directory = directory
+
+    def reissue(self, not_before: datetime, not_after: datetime) -> None:
+        """A new certificate in the same file, as the kubelet leaves it."""
+        self.ca.issue("service", "service", loopback_sans(), not_before, not_after)
+
+    def renew(self) -> None:
+        """A certificate that ends 60 days after the loaded one is on disk."""
+        later = timedelta(days=60)
+        self.reissue(self.not_before + later, self.not_after + later)
+
+    def change_file(self, how: str) -> None:
+        if how == "renewed":
+            self.renew()
+        elif how == "garbage":
+            self.pair.cert.write_text("not a certificate any more")
+        elif how == "missing":
+            self.pair.cert.unlink()
+        elif how == "older":
+            earlier = timedelta(days=60)
+            self.reissue(self.not_before - earlier, self.not_after - earlier)
+        elif how == "equal":
+            self.reissue(self.not_before, self.not_after)
+        else:
+            assert how == "unchanged", how
+
+
+@pytest.fixture
+def certificate(tmp_path: Path) -> Certificate:
+    return Certificate(make_ca(tmp_path, "health-ca"), tmp_path)
+
+
+def at(moment: datetime) -> Callable[[], datetime]:
+    return lambda: moment
+
+
+def test_healthz_is_200_far_from_the_end_of_the_certificate(
+    certificate: Certificate,
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_before))
+
+    response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_healthz_is_200_a_second_before_the_restart_time_and_503_at_it_when_renewed(
+    certificate: Certificate,
+) -> None:
+    just_before = build(
+        environ=certificate.environ,
+        clock=at(certificate.restart_at - timedelta(seconds=1)),
+    )
+    at_restart = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.renew()  # after both apps loaded the old one
+
+    assert just_before.get("/healthz").status_code == 200
+    response = at_restart.get("/healthz")
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+
+
+@pytest.mark.parametrize("how", ["unchanged", "garbage", "missing", "older", "equal"])
+def test_healthz_is_200_at_the_restart_time_when_the_file_holds_no_newer_one(
+    certificate: Certificate, how: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.change_file(how)
+
+    with caplog.at_level(logging.DEBUG, logger=certlife.__name__):
+        answers = [client.get("/healthz") for _ in range(3)]
+
+    assert [(a.status_code, a.json()) for a in answers] == [(200, {"status": "ok"})] * 3
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    assert certificate.not_after.isoformat() in caplog.records[0].getMessage()
+    assert str(certificate.pair.cert) not in caplog.text
+    assert str(certificate.directory) not in caplog.text
+
+
+@pytest.mark.parametrize("how", ["unchanged", "garbage", "missing", "renewed"])
+@pytest.mark.parametrize("after", [timedelta(0), timedelta(days=1)])
+def test_healthz_is_503_once_the_certificate_ended_whatever_the_file_holds(
+    certificate: Certificate,
+    how: str,
+    after: timedelta,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_after + after))
+    certificate.change_file(how)
+
+    with caplog.at_level(logging.DEBUG, logger=certlife.__name__):
+        response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+    assert str(certificate.pair.cert) not in caplog.text
+    assert str(certificate.directory) not in caplog.text
+
+
+def test_healthz_follows_a_restart_the_old_app_asks_the_new_one_is_ready(
+    certificate: Certificate,
+) -> None:
+    clock = at(certificate.restart_at)
+    old = build(environ=certificate.environ, clock=clock)
+    assert old.get("/healthz").status_code == 200  # nothing renewed yet
+    certificate.renew()
+
+    asks = old.get("/healthz")
+    restarted = build(environ=certificate.environ, clock=clock)  # the new container
+
+    assert (asks.status_code, asks.json()) == (503, EXPIRING)
+    assert restarted.get("/healthz").status_code == 200
+
+
+def test_an_app_with_no_certificate_answers_200_whatever_the_clock_says() -> None:
+    far_future = datetime(2999, 1, 1, tzinfo=UTC)
+
+    for environ in ({}, {CERT_FILE_ENV: ""}):
+        response = build(environ=environ, clock=at(far_future)).get("/healthz")
+
+        assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_a_certificate_replaced_on_disk_after_the_start_does_not_turn_it_healthy(
+    certificate: Certificate,
+) -> None:
+    """The regression T-89 names: the kubelet rewrites the mounted file at
+    renewal, the process keeps the certificate it loaded, so it must still say
+    it is near the end of that one until the container restarts."""
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    renewed_from = certificate.not_after - timedelta(days=60)
+    certificate.ca.issue(
+        "service",  # the same file
+        "service",
+        loopback_sans(),
+        renewed_from,
+        renewed_from + NINETY_DAYS,
+    )
+
+    response = client.get("/healthz")
+
+    assert (response.status_code, response.json()) == (503, EXPIRING)
+
+
+@pytest.mark.parametrize("how", ["garbage", "missing", "renewed"])
+def test_far_from_the_end_the_file_is_not_read_per_request(
+    certificate: Certificate, how: str
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_before))
+    certificate.change_file(how)
+
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/healthz").status_code == 200
+
+
+def test_the_first_503_warns_once_with_the_end_date_and_no_path(
+    certificate: Certificate, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.restart_at))
+    certificate.renew()
+
+    with caplog.at_level(logging.WARNING, logger=certlife.__name__):
+        answers = [client.get("/healthz") for _ in range(3)]
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert [a.status_code for a in answers] == [503, 503, 503]
+    assert len(warnings) == 1
+    assert certificate.not_after.isoformat() in warnings[0].getMessage()
+    assert str(certificate.pair.cert) not in caplog.text
+    assert str(certificate.directory) not in caplog.text
+    # The answer itself carries no date.
+    assert answers[0].text == '{"status":"certificate-expiring"}'
+
+
+def test_no_warning_is_logged_while_the_certificate_is_healthy(
+    certificate: Certificate, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = build(environ=certificate.environ, clock=at(certificate.not_before))
+
+    with caplog.at_level(logging.WARNING, logger=certlife.__name__):
+        client.get("/healthz")
+
+    assert caplog.records == []
+
+
+def test_an_unreadable_certificate_stops_the_app_from_being_built(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SettingsError, match=CERT_FILE_ENV):
+        build(environ={CERT_FILE_ENV: str(tmp_path / "missing.crt")})
+
+
+# ── the same over real TLS, the way the kubelet asks ────────────────────────
+@pytest.mark.parametrize(
+    ("valid_from", "valid_for", "renewed", "status"),
+    [
+        # Past the margin of a sixth of its hour, and the file now holds a
+        # renewed certificate: a restart helps, the service must say so.
+        (timedelta(minutes=55), timedelta(minutes=5), True, 503),
+        # Past the margin, the file unchanged: a restart would not help.
+        (timedelta(minutes=55), timedelta(minutes=5), False, 200),
+        (timedelta(minutes=1), timedelta(minutes=59), True, 200),
+        (timedelta(minutes=1), timedelta(minutes=59), False, 200),
+    ],
+    ids=[
+        "near-its-end-renewed",
+        "near-its-end-not-renewed",
+        "far-from-its-end-renewed",
+        "far-from-its-end-not-renewed",
+    ],
+)
+def test_over_tls_a_client_with_no_certificate_gets_the_health_answer(
+    tmp_path: Path,
+    valid_from: timedelta,
+    valid_for: timedelta,
+    renewed: bool,
+    status: int,
+) -> None:
+    ca = make_ca(tmp_path, "tls-health-ca")
+    now = datetime.now(UTC)
+    server = ca.issue(
+        "server", "server", loopback_sans(), now - valid_from, now + valid_for
+    )
+    app = create_service_app(
+        title="Test",
+        description="A test service.",
+        service_name="test-service",
+        tracer_name="meridian.test",
+        max_body_bytes=LIMIT,
+        environ={CERT_FILE_ENV: str(server.cert)},
+    ).app
+
+    with serve_tls(app, ca, server) as url:
+        if renewed:
+            # What the kubelet does at renewal. The server keeps the TLS
+            # certificate it started with; the app reads the file again.
+            ca.issue(
+                "server",
+                "server",
+                loopback_sans(),
+                now - timedelta(minutes=1),
+                now + timedelta(hours=1),
+            )
+        response = httpx.get(f"{url}/healthz", verify=client_context(ca, None))
+
+    assert response.status_code == status
 
 
 def test_fastapis_own_telemetry_sets_no_global_provider_from_the_environment(
@@ -308,6 +609,135 @@ def test_the_query_string_still_reaches_the_route() -> None:
 
     assert response.json() == {"seen": QUERY_CANARY}
     assert [v for v in span_attribute_values(exporter) if QUERY_CANARY in v] == []
+
+
+# ── a sampler or a span processor sees no query either (T-03) ───────────────
+class RecordingSampler(Sampler):
+    """Keeps the name and the attribute values it is asked about, then samples."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def should_sample(
+        self,
+        parent_context: Any,
+        trace_id: int,
+        name: str,
+        kind: Any = None,
+        attributes: Any = None,
+        links: Any = None,
+        trace_state: Any = None,
+    ) -> SamplingResult:
+        self.seen.append(name)
+        self.seen.extend(str(value) for value in (attributes or {}).values())
+        return ALWAYS_ON.should_sample(
+            parent_context, trace_id, name, kind, attributes, links, trace_state
+        )
+
+    def get_description(self) -> str:
+        return "RecordingSampler"
+
+
+class RecordingProcessor(SpanProcessor):
+    """Keeps a copy of the span's name and attribute values as it starts."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        self.seen.append(span.name)
+        self.seen.extend(str(value) for value in (span.attributes or {}).values())
+
+
+def recording_provider() -> tuple[TracerProvider, list[str], list[str]]:
+    sampler, processor = RecordingSampler(), RecordingProcessor()
+    provider = TracerProvider(sampler=sampler)
+    provider.add_span_processor(processor)
+    return provider, sampler.seen, processor.seen
+
+
+def assert_none_holds_a_query(seen: list[str], path: str) -> None:
+    # Not vacuous: the request was seen, and its path is on what was recorded.
+    assert any(value.endswith(path) for value in seen), seen
+    assert [v for v in seen if QUERY_CANARY in v or "?" in v] == []
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_no_sampler_or_span_processor_sees_the_query_of_a_request(method: str) -> None:
+    provider, sampled, started = recording_provider()
+    path = "/query"
+
+    response = getattr(build(provider=provider), method)(
+        f"{path}?canary={QUERY_CANARY}"
+    )
+
+    assert response.json() == {"seen": QUERY_CANARY}
+    assert_none_holds_a_query(sampled, path)
+    assert_none_holds_a_query(started, path)
+
+
+def test_the_route_gets_the_query_back_and_nothing_else_of_it_stays_in_the_scope() -> (
+    None
+):
+    provider, _, _ = recording_provider()
+
+    response = build(provider=provider).get(f"/raw-query?canary={QUERY_CANARY}")
+
+    assert response.json() == {
+        "query": f"canary={QUERY_CANARY}",
+        "keys": ["query_string"],
+    }
+
+
+def test_a_request_without_a_query_is_recorded_and_answered_as_before() -> None:
+    provider, sampled, started = recording_provider()
+
+    response = build(provider=provider).get("/raw-query")
+
+    assert response.json() == {"query": "", "keys": ["query_string"]}
+    assert_none_holds_a_query(sampled, "/raw-query")
+    assert_none_holds_a_query(started, "/raw-query")
+
+
+def build_the_three_services(provider: TracerProvider) -> dict[str, FastAPI]:
+    dsn = "postgresql://role@db.invalid/meridian"
+    return {
+        "gateway": create_gateway(
+            GatewaySettings(
+                registry_dir=REGISTRY_DIR,
+                mode="replay",
+                environment="test",
+                database_url=dsn,
+            ),
+            tracer_provider=provider,
+        ),
+        "runtime": create_runtime(
+            RuntimeSettings(
+                registry_dir=REGISTRY_DIR,
+                gateway_url="http://gateway.invalid",
+                database_url=dsn,
+            ),
+            tracer_provider=provider,
+        ),
+        "claims": create_claims(
+            ClaimsSettings(runtime_url="http://runtime.invalid", database_url=dsn),
+            tracer_provider=provider,
+        ),
+    }
+
+
+@pytest.mark.parametrize("service", ["gateway", "runtime", "claims"])
+@pytest.mark.parametrize("path", ["/healthz", "/no-such-page"])
+def test_each_of_the_three_services_hides_the_query_from_sampler_and_processor(
+    service: str, path: str
+) -> None:
+    provider, sampled, started = recording_provider()
+    app = build_the_three_services(provider)[service]
+
+    TestClient(app, raise_server_exceptions=False).get(f"{path}?canary={QUERY_CANARY}")
+
+    assert_none_holds_a_query(sampled, path)
+    assert_none_holds_a_query(started, path)
 
 
 @pytest.mark.parametrize("key", ["http.url", "http.target", "url.full", "url.query"])

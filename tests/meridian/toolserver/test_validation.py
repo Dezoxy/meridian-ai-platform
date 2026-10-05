@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 
 from meridian.platform.common.env import SettingsError
-from meridian.platform.toolserver.validation import build_validator, fits, storable
+from meridian.platform.toolserver.validation import (
+    build_validator,
+    fits,
+    size_first,
+    storable,
+)
 
 
 @pytest.mark.parametrize(
@@ -65,6 +70,29 @@ def test_the_error_of_a_bad_schema_names_what_was_asked_for() -> None:
             {"type": "object", "required": ["a", "a"]},
             what="the input schema of tool 'x'",
         )
+
+
+def test_an_if_and_a_then_survive_the_reordering_and_are_applied() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "found": {"type": "boolean"},
+            "policy": {"type": "string", "pattern": "^P$", "maxLength": 1},
+        },
+        "if": {"properties": {"found": {"const": True}}, "required": ["found"]},
+        "then": {"required": ["policy"]},
+        "required": ["found"],
+        "additionalProperties": False,
+    }
+
+    ordered = size_first(schema)
+    validator = build_validator(schema)
+
+    assert ordered["if"] == schema["if"]
+    assert ordered["then"] == schema["then"]
+    assert fits(validator, {"found": True, "policy": "P"}) is True
+    assert fits(validator, {"found": True}) is False
+    assert fits(validator, {"found": False}) is True
 
 
 def test_a_valid_schema_builds_a_validator_that_stops_at_the_first_error() -> None:

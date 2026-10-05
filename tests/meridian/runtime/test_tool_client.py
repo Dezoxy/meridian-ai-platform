@@ -11,15 +11,16 @@ import os
 import re
 import subprocess
 import sys
-import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import anyio
 import mcp_types as types
 import pytest
 from dbsupport import DatabaseHandle
+from mcp.client import Client
 from mcp.shared.exceptions import MCPError
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -50,6 +51,11 @@ from toolsupport import (
 
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
+from meridian.platform.toolserver.wire import (
+    MAX_CALL_SECONDS,
+    META_RUN,
+    META_TIMEOUT_MS,
+)
 from meridian.runtime import tool_client
 from meridian.runtime.app import tool_client_for
 from meridian.runtime.runs import RunIdentity
@@ -500,6 +506,62 @@ def test_a_read_call_sends_the_run_and_no_key(
     assert "traceparent" in seen.meta
 
 
+def test_a_call_sends_the_time_it_has_left_as_whole_milliseconds(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    stand_in = StandIn()
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    tools.call("policy_lookup", {"policy_number": POLICY})
+
+    (seen,) = stand_in.calls
+    sent = seen.meta[META_TIMEOUT_MS]
+    assert isinstance(sent, int)
+    assert not isinstance(sent, bool)
+    assert 1 <= sent <= tool_client.TOOL_TIMEOUT_SECONDS * 1000
+
+
+def test_the_time_a_call_sends_follows_the_bound_the_client_works_under(
+    registry: Registry,
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool_client, "TOOL_TIMEOUT_SECONDS", 2.0)
+    stand_in = StandIn()
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    tools.call("policy_lookup", {"policy_number": POLICY})
+
+    (seen,) = stand_in.calls
+    assert 1 <= seen.meta[META_TIMEOUT_MS] <= 2_000
+
+
+def test_the_clients_bound_is_not_more_than_a_server_works_on_one_call() -> None:
+    assert tool_client.TOOL_TIMEOUT_SECONDS <= MAX_CALL_SECONDS
+
+
+def test_sending_a_call_leaves_the_callers_meta_as_it_was() -> None:
+    stand_in = StandIn()
+    meta: dict[str, Any] = {META_RUN: str(uuid.uuid4())}
+    before = dict(meta)
+
+    async def send() -> None:
+        async with Client(
+            stand_in.server, mode=tool_client.CONNECT_MODE, cache=None
+        ) as client:
+            with anyio.fail_after(tool_client.TOOL_TIMEOUT_SECONDS):
+                await tool_client.send_call(
+                    client, "policy_lookup", {"policy_number": POLICY}, meta
+                )
+
+    anyio.run(send)
+
+    assert meta == before
+    (seen,) = stand_in.calls
+    assert seen.meta[META_RUN] == before[META_RUN]
+    assert META_TIMEOUT_MS in seen.meta
+
+
 @pytest.mark.parametrize(
     ("tool", "step"),
     [
@@ -582,7 +644,7 @@ def test_an_error_answer_with_an_unknown_reason_is_refused_as_unknown(
     assert CANARY not in everything_spans_carry(exporter)
 
 
-def test_an_error_answer_without_a_reason_is_refused_as_unknown(
+def test_an_error_answer_without_a_reason_is_unavailable(
     registry: Registry, exporter: InMemorySpanExporter
 ) -> None:
     bare = types.CallToolResult(
@@ -591,10 +653,30 @@ def test_an_error_answer_without_a_reason_is_refused_as_unknown(
     stand_in = StandIn(answer=lambda name, args: bare)
     tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
 
-    with pytest.raises(ToolRefused) as raised:
+    with pytest.raises(ToolUnavailable) as raised:
         tools.call("policy_lookup", {"policy_number": POLICY})
 
-    assert raised.value.reason == "unknown"
+    assert raised.value.tool == "policy_lookup"
+    assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
+
+
+@pytest.mark.parametrize("reason", [7, ["outside-claim"], {"reason": "x"}, None])
+def test_an_error_answer_with_a_reason_that_is_not_a_string_is_unavailable(
+    registry: Registry, exporter: InMemorySpanExporter, reason: Any
+) -> None:
+    odd = types.CallToolResult(
+        is_error=True,
+        content=[types.TextContent(type="text", text="no")],
+        meta={"meridian/refusal": reason},
+    )
+    stand_in = StandIn(answer=lambda name, args: odd)
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    with pytest.raises(ToolUnavailable) as raised:
+        tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert raised.value.tool == "policy_lookup"
+    assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
 
 
 # Written out here on purpose: a list taken from the kit's own type could not
@@ -652,6 +734,30 @@ def test_a_result_with_a_field_the_output_schema_does_not_allow_is_unavailable(
     assert CANARY not in str(raised.value)
     assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
     assert CANARY not in everything_spans_carry(exporter)
+
+
+def test_a_found_policy_answer_without_the_policy_is_unavailable(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    stand_in = StandIn(answer=lambda name, args: structured({"found": True}))
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    with pytest.raises(ToolUnavailable) as raised:
+        tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert raised.value.tool == "policy_lookup"
+    assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
+
+
+def test_a_not_found_answer_without_a_policy_is_a_result(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    stand_in = StandIn(answer=lambda name, args: structured({"found": False}))
+    tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
+
+    result = tools.call("policy_lookup", {"policy_number": POLICY})
+
+    assert result.data == {"found": False}
 
 
 def written(records: list[logging.LogRecord]) -> str:
@@ -825,14 +931,14 @@ def test_a_server_slower_than_the_timeout_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(tool_client, "TOOL_TIMEOUT_SECONDS", 0.3)
-    stand_in = StandIn(delay=10.0)
+    stand_in = StandIn(hang=True)
     tools = direct({"policy-mcp": stand_in.server}, registry, exporter)
-    started = time.monotonic()
 
     with pytest.raises(ToolUnavailable) as raised:
         tools.call("policy_lookup", {"policy_number": POLICY})
 
-    assert time.monotonic() - started < 5
+    assert stand_in.entered
+    assert stand_in.cancelled
     assert POLICY not in str(raised.value)
     assert runtime_span(exporter).attributes["meridian.tool_outcome"] == "unavailable"
 

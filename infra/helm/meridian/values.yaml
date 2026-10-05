@@ -121,8 +121,9 @@ probes:
 # another workload calls (a serviceUrl or a serviceMap names it) and does not
 # set it. The Claims API has none: the edge
 # calls it over plain HTTP (TLS at the edge is a backlog row), and it is a
-# client only. Every service gets a certificate and a mount; the ones that call
-# another service also get the client's variables (MERIDIAN_TLS_*).
+# client only. Every service gets a certificate, a mount and the variables
+# that name its files (MERIDIAN_TLS_*), the ones that call nobody too: /healthz
+# watches the certificate's end through them.
 services:
   # Takes a claim and has the Agent Runtime triage it. Reached from the edge
   # (the route below) and inside the cluster.
