@@ -12,8 +12,9 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import anyio
 import psycopg
@@ -47,24 +48,41 @@ from toolsupport import (
     revoke_audit_insert,
     run_call,
     seed_world,
+    serve,
     settings_for,
     table_rows,
     text_of,
+    tracer_of,
     with_client,
     without_output_schema,
 )
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
-from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
+from meridian.platform.common.throttle import (
+    REFUSAL_AUDIT_SECONDS,
+    RefusalAuditThrottle,
+)
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
+from meridian.platform.registry import load_registry
+from meridian.platform.toolserver import pipeline as pipeline_module
 from meridian.platform.toolserver import server as server_module
+from meridian.platform.toolserver import wire
+from meridian.platform.toolserver.binding import RunBinding
 from meridian.platform.toolserver.handlers import (
     Completed,
     Refused,
     ToolCall,
     ToolFailed,
+    ToolFailedReason,
     ToolHandler,
+)
+from meridian.platform.toolserver.pipeline import (
+    Call,
+    Deadline,
+    Finished,
+    Pipeline,
+    build_entries,
 )
 from meridian.platform.toolserver.server import (
     MAX_CONCURRENT_CALLS,
@@ -73,10 +91,13 @@ from meridian.platform.toolserver.server import (
 )
 from meridian.platform.toolserver.wire import (
     META_CALL_ID,
+    META_IDEMPOTENCY_KEY,
     META_REFUSAL,
     META_RUN,
+    META_TIMEOUT_MS,
     RefusalReason,
 )
+from meridian.runtime.tool_client import ToolClient, ToolUnavailable
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
@@ -823,6 +844,44 @@ def test_a_result_that_misses_its_schema_fails_the_call_and_writes_nothing(
     )
 
 
+def test_a_found_policy_answer_without_the_policy_fails_the_call_as_invalid_result(
+    world: World,
+) -> None:
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", lambda conn, call: Completed({"found": True}))
+        + other_handler("policy_lookup"),
+    )
+
+    with pytest.raises(MCPError) as raised:
+        run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert raised.value.error.message == UNAVAILABLE
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "invalid-result",
+        "policy_lookup",
+    )
+
+
+def test_a_not_found_policy_answer_without_a_policy_passes(world: World) -> None:
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", lambda conn, call: Completed({"found": False}))
+        + other_handler("policy_lookup"),
+    )
+
+    result = run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert not result.is_error
+    assert result.structured_content == {"found": False}
+    (row,) = audit_rows(world.db)
+    assert row["outcome"] == "completed"
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -1389,6 +1448,917 @@ def test_no_more_than_the_limit_of_handlers_run_at_once(world: World) -> None:
     assert peak[0] == MAX_CONCURRENT_CALLS
     assert len(answers) == CONCURRENT_CALLS
     assert all(answer.is_error is False for answer in answers)
+
+
+# ── a call waits for a slot only as long as its caller does (S059) ──────────
+CALL_WAIT_SECONDS = 30
+# A budget in milliseconds that the call of a test cannot meet while the slots
+# are held: whether it is met is decided by the events, not by this number.
+SMALL_BUDGET_MS = 5
+
+
+class Held:
+    """Handlers that hold their slot until ``gate`` is set, and count
+    themselves. ``full`` is set when as many are inside as the server allows."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.entered = 0
+        self.running = 0
+        self.peak = 0
+        self.gate = threading.Event()
+        self.full = threading.Event()
+
+    def rearm(self) -> None:
+        """Close the gate again, for a second round of held calls."""
+        with self.lock:
+            self.entered = 0
+            self.gate = threading.Event()
+            self.full = threading.Event()
+
+    def run(self, conn: psycopg.Connection, call: ToolCall) -> Completed:
+        with self.lock:
+            gate, full = self.gate, self.full
+            self.entered += 1
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+            if self.entered >= MAX_CONCURRENT_CALLS:
+                full.set()
+        try:
+            assert gate.wait(timeout=CALL_WAIT_SECONDS)
+        finally:
+            with self.lock:
+                self.running -= 1
+        return Completed({"found": False})
+
+
+def held_app(world: World, held: Held, **kwargs: Any) -> ToolApp:
+    return build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", held.run) + other_handler("policy_lookup"),
+        **kwargs,
+    )
+
+
+async def until(event: threading.Event) -> None:
+    with anyio.fail_after(CALL_WAIT_SECONDS):
+        assert await anyio.to_thread.run_sync(event.wait, CALL_WAIT_SECONDS)
+
+
+async def try_call(client: Client, run_id: uuid.UUID, **meta: Any) -> Any:
+    """The answer to one ``policy_lookup``, or the protocol error the server
+    answered instead."""
+    with anyio.fail_after(CALL_WAIT_SECONDS):
+        try:
+            return await client.call_tool(
+                "policy_lookup", LOOKUP, meta={META_RUN: str(run_id), **meta}
+            )
+        except MCPError as error:
+            return error
+
+
+def assert_shed(answer: Any) -> None:
+    assert isinstance(answer, MCPError)
+    assert answer.error.code == INTERNAL_ERROR
+    assert answer.error.message == UNAVAILABLE
+
+
+def test_a_call_with_no_slot_in_its_budget_fails_and_its_handler_never_runs(
+    world: World, exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    held = Held()
+    app = held_app(world, held, exporter=exporter)
+    caplog.set_level(logging.DEBUG)
+    answers: list[Any] = []
+    seen: dict[str, Any] = {}
+
+    async def drive(client: Client) -> None:
+        async def one() -> None:
+            answers.append(await try_call(client, world.run_id))
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            seen["shed"] = await try_call(
+                client,
+                world.run_id,
+                **{META_TIMEOUT_MS: SMALL_BUDGET_MS, "meridian/probe": CANARY},
+            )
+            seen["entered"] = held.entered
+            held.gate.set()
+        seen["tenth"] = await try_call(client, world.run_id)
+
+    with_client(app.server, drive)
+
+    assert_shed(seen["shed"])
+    assert seen["entered"] == MAX_CONCURRENT_CALLS
+    assert len(answers) == MAX_CONCURRENT_CALLS
+    assert all(answer.is_error is False for answer in answers)
+    assert seen["tenth"].structured_content == {"found": False}
+    assert held.entered == MAX_CONCURRENT_CALLS + 1  # the eight and the tenth
+    rows = audit_rows(world.db)
+    (shed,) = [row for row in rows if row["outcome"] == "failed"]
+    completed = [row for row in rows if row["outcome"] != "failed"]
+    assert [row["outcome"] for row in completed] == ["completed"] * (
+        MAX_CONCURRENT_CALLS + 1
+    )
+    # One failed row with the tool and nothing of the run: the run's ID in
+    # ``_meta`` is not verified on this path, and the probe is nowhere in it.
+    assert (shed["outcome"], shed["reason"], shed["tool"], shed["suppressed"]) == (
+        "failed",
+        "timed-out",
+        "policy_lookup",
+        0,
+    )
+    assert (shed["tenant"], shed["agent"], shed["run_id"], shed["reference"]) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert CANARY not in repr(shed)
+
+
+def test_a_shed_call_is_logged_once_with_its_run_and_tool_and_nothing_else(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    caplog.set_level(logging.DEBUG)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            assert_shed(
+                await try_call(
+                    client,
+                    world.run_id,
+                    **{META_TIMEOUT_MS: SMALL_BUDGET_MS, "meridian/probe": CANARY},
+                )
+            )
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if r.name == server_module.__name__ and r.levelno == logging.WARNING
+    ]
+    message = record.getMessage()
+    assert str(world.run_id) in message
+    assert "policy_lookup" in message
+    assert CANARY not in caplog.text
+    assert POLICY not in caplog.text
+
+
+def test_the_span_of_a_shed_call_names_the_reason_and_the_tool_and_not_the_run(
+    world: World, exporter: InMemorySpanExporter
+) -> None:
+    held = Held()
+    app = held_app(world, held, exporter=exporter)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            await try_call(client, world.run_id, **{META_TIMEOUT_MS: SMALL_BUDGET_MS})
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    (span,) = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "tool.call" and s.attributes.get("meridian.reason") == "timed-out"
+    ]
+    assert span.attributes["meridian.tool_outcome"] == "failed"
+    # The run's ID in ``_meta`` is not verified on this path: the log line may
+    # name it, the span and the audit row do not.
+    assert "meridian.run_id" not in span.attributes
+    assert span.attributes["meridian.tool"] == "policy_lookup"
+    assert uuid.UUID(span.attributes["meridian.call_id"])
+
+
+def test_a_shed_call_that_names_no_registry_tool_or_run_logs_neither(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    caplog.set_level(logging.DEBUG)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            with anyio.fail_after(CALL_WAIT_SECONDS):
+                try:
+                    await client.call_tool(
+                        CANARY,
+                        LOOKUP,
+                        meta={META_RUN: CANARY, META_TIMEOUT_MS: SMALL_BUDGET_MS},
+                    )
+                except MCPError as error:
+                    assert_shed(error)
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if r.name == server_module.__name__ and r.levelno == logging.WARNING
+    ]
+    assert CANARY not in caplog.text
+    assert record.getMessage().endswith("(run -, tool -)")
+
+
+def test_a_call_with_budget_to_spare_waits_for_a_slot_and_completes(
+    world: World,
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    answers: list[Any] = []
+
+    async def drive(client: Client) -> None:
+        async def one(**meta: Any) -> None:
+            answers.append(await try_call(client, world.run_id, **meta))
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            group.start_soon(partial(one, **{META_TIMEOUT_MS: 20_000}))
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    assert len(answers) == MAX_CONCURRENT_CALLS + 1
+    assert all(
+        not isinstance(answer, MCPError) and answer.is_error is False
+        for answer in answers
+    )
+    assert held.entered == MAX_CONCURRENT_CALLS + 1
+    assert held.peak == MAX_CONCURRENT_CALLS
+    assert len(audit_rows(world.db)) == MAX_CONCURRENT_CALLS + 1
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        pytest.param({}, id="no-key"),
+        pytest.param({META_TIMEOUT_MS: "soon"}, id="a-string"),
+        pytest.param({META_TIMEOUT_MS: True}, id="a-bool"),
+        pytest.param({META_TIMEOUT_MS: 0}, id="zero"),
+        pytest.param({META_TIMEOUT_MS: -3}, id="negative"),
+        pytest.param({META_TIMEOUT_MS: 10**9}, id="over-the-maximum"),
+    ],
+)
+def test_a_call_without_a_usable_budget_waits_as_long_as_the_servers_maximum(
+    world: World, meta: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The maximum is short here, so a call held to it is shed within a moment.
+    # The clock stands still, so the eight held calls are not late for the
+    # pipeline's own checks when a busy machine starts their threads slowly.
+    monkeypatch.setattr(wire, "MAX_CALL_SECONDS", 0.05)
+    held = Held()
+    app = held_app(world, held, clock=FakeClock())
+    seen: dict[str, Any] = {}
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            seen["shed"] = await try_call(client, world.run_id, **meta)
+            seen["entered"] = held.entered
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    assert_shed(seen["shed"])
+    assert seen["entered"] == MAX_CONCURRENT_CALLS
+
+
+def test_a_call_with_a_free_slot_is_answered_whatever_its_budget(world: World) -> None:
+    # The clock stands still: a budget of a millisecond is not spent by the time
+    # the pipeline checks it, as it would be on a real clock.
+    app = spy_app(world.db, "policy_lookup", Spy(), clock=FakeClock())
+    # The last two are too large for a float: reading them must not raise.
+    budgets: list[Any] = [None, "soon", True, 0, -3, 1, 10**9, 10**309, 10**400]
+
+    results = [
+        run_call(
+            app.server,
+            "policy_lookup",
+            LOOKUP,
+            run_id=world.run_id,
+            meta={} if budget is None else {META_TIMEOUT_MS: budget},
+        )
+        for budget in budgets
+    ]
+
+    assert [r.structured_content for r in results] == [{"found": False}] * len(budgets)
+    assert [row["outcome"] for row in audit_rows(world.db)] == ["completed"] * len(
+        budgets
+    )
+
+
+def test_shed_calls_leave_all_the_slots_usable_and_the_limit_in_force(
+    world: World,
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+    shed: list[Any] = []
+    answers: list[Any] = []
+
+    async def drive(client: Client) -> None:
+        async def one() -> None:
+            answers.append(await try_call(client, world.run_id))
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            for _ in range(3):
+                shed.append(
+                    await try_call(
+                        client, world.run_id, **{META_TIMEOUT_MS: SMALL_BUDGET_MS}
+                    )
+                )
+            held.gate.set()
+        held.rearm()
+        # All eight must be inside together again: a slot lost to a shed call
+        # would leave one of these waiting, and ``full`` would never be set.
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(one)
+            await until(held.full)
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    for answer in shed:
+        assert_shed(answer)
+    assert len(answers) == 2 * MAX_CONCURRENT_CALLS
+    assert all(answer.is_error is False for answer in answers)
+    assert held.peak == MAX_CONCURRENT_CALLS
+    # The three shed calls left one row, as the throttle allows one for a key.
+    outcomes = [row["outcome"] for row in audit_rows(world.db)]
+    assert outcomes.count("completed") == 2 * MAX_CONCURRENT_CALLS
+    assert outcomes.count("failed") == 1
+    assert len(outcomes) == 2 * MAX_CONCURRENT_CALLS + 1
+
+
+def timed_out_rows(world: World) -> list[tuple[str | None, int | None]]:
+    return [
+        (row["tool"], row["suppressed"])
+        for row in audit_rows(world.db)
+        if row["reason"] == "timed-out"
+    ]
+
+
+def test_shed_calls_of_one_tool_write_one_row_a_window_and_the_next_carries_the_count(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The eight held calls have a deadline far past the minute the clock moves.
+    monkeypatch.setattr(wire, "MAX_CALL_SECONDS", 10 * REFUSAL_AUDIT_SECONDS)
+    clock = FakeClock()
+    held = Held()
+    app = held_app(world, held, clock=clock)
+
+    async def drive(client: Client) -> None:
+        async def shed() -> None:
+            assert_shed(
+                await try_call(
+                    client, world.run_id, **{META_TIMEOUT_MS: SMALL_BUDGET_MS}
+                )
+            )
+
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            for _ in range(3):
+                await shed()
+            clock.advance(REFUSAL_AUDIT_SECONDS)
+            await shed()
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    # The first row stands for one call; the second for itself and the two
+    # the window left out.
+    assert timed_out_rows(world) == [("policy_lookup", 0), ("policy_lookup", 2)]
+
+
+def test_a_shed_call_that_names_no_registry_tool_writes_a_row_with_no_tool(
+    world: World,
+) -> None:
+    held = Held()
+    app = held_app(world, held)
+
+    async def drive(client: Client) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            with anyio.fail_after(CALL_WAIT_SECONDS):
+                try:
+                    await client.call_tool(
+                        CANARY,
+                        LOOKUP,
+                        meta={META_RUN: str(world.run_id), META_TIMEOUT_MS: 5},
+                    )
+                except MCPError as error:
+                    assert_shed(error)
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    assert timed_out_rows(world) == [(None, 0)]
+    assert CANARY not in repr(audit_rows(world.db))
+
+
+def test_the_row_of_a_shed_call_is_written_in_a_thread_and_not_on_the_event_loop(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written_in: list[int] = []
+    real_write = pipeline_module.write_audit
+
+    def recording(dsn: str, event: Any) -> None:
+        written_in.append(threading.get_ident())
+        real_write(dsn, event)
+
+    monkeypatch.setattr(pipeline_module, "write_audit", recording)
+    held = Held()
+    app = held_app(world, held)
+    loop_thread: list[int] = []
+
+    async def drive(client: Client) -> None:
+        loop_thread.append(threading.get_ident())
+        async with anyio.create_task_group() as group:
+            for _ in range(MAX_CONCURRENT_CALLS):
+                group.start_soon(try_call, client, world.run_id)
+            await until(held.full)
+            await try_call(client, world.run_id, **{META_TIMEOUT_MS: SMALL_BUDGET_MS})
+            held.gate.set()
+
+    with_client(app.server, drive)
+
+    assert len(written_in) == 1
+    assert written_in != loop_thread
+
+
+def test_a_shed_row_that_cannot_be_written_is_logged_and_the_next_call_is_due_it(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    pipeline = lookup_pipeline(world, lambda conn, call: FOUND_NOTHING)
+    shed = Call(uuid.uuid4(), "policy_lookup")
+    revoke_audit_insert(world.db, "policy_mcp")
+
+    write = pipeline.timed_out_row(shed)
+    assert write is not None
+    with caplog.at_level(logging.ERROR, logger=pipeline_module.__name__):
+        write()  # does not raise: the call has failed already
+
+    assert "was not written" in caplog.text
+    assert CANARY not in caplog.text
+    assert pipeline.timed_out_row(Call(uuid.uuid4(), "policy_lookup")) is not None
+
+
+def test_a_call_the_server_shed_reaches_the_runtimes_tool_client_as_unavailable(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The client sends the whole of its bound; the server bounds it by its own
+    # maximum, short here, so the answer is the server's and not the client's.
+    # The server's clock stands still, so the eight held calls are not late when
+    # they are let go; the ninth waits the real 50 ms for a slot and is shed.
+    monkeypatch.setattr(wire, "MAX_CALL_SECONDS", 0.05)
+    held = Held()
+    app = create_tool_app(
+        settings_for(world.db, "policy_mcp", hosts=("127.0.0.1:*",)),
+        server_id="policy-mcp",
+        service_name="policy-mcp",
+        handlers=custom("policy_lookup", held.run) + other_handler("policy_lookup"),
+        clock=FakeClock(),
+    )
+    answers: list[Any] = []
+
+    def tools_for(base: str) -> ToolClient:
+        return ToolClient(
+            {"policy-mcp": base},
+            registry=load_registry(REGISTRY_DIR),
+            agent=AGENT,
+            run_id=world.run_id,
+            tracer=tracer_of(InMemorySpanExporter()),
+            on_refusal=lambda tool: None,
+            max_calls=2,
+        )
+
+    with serve(app.app) as base:
+        threads = [
+            threading.Thread(
+                target=lambda: answers.append(
+                    tools_for(base).call("policy_lookup", LOOKUP).data
+                )
+            )
+            for _ in range(MAX_CONCURRENT_CALLS)
+        ]
+        for thread in threads:
+            thread.start()
+        assert held.full.wait(timeout=CALL_WAIT_SECONDS)
+
+        with pytest.raises(ToolUnavailable):
+            tools_for(base).call("policy_lookup", LOOKUP)
+
+        held.gate.set()
+        for thread in threads:
+            thread.join(timeout=CALL_WAIT_SECONDS)
+
+    assert answers == [{"found": False}] * MAX_CONCURRENT_CALLS
+    assert held.entered == MAX_CONCURRENT_CALLS
+
+
+def test_a_deadline_counts_down_on_its_clock() -> None:
+    clock = FakeClock()
+    deadline = Deadline(clock() + 2.5, clock)
+
+    assert (deadline.remaining(), deadline.expired()) == (2.5, False)
+    clock.advance(2.0)
+    assert (deadline.remaining(), deadline.expired()) == (0.5, False)
+    clock.advance(0.5)
+    assert (deadline.remaining(), deadline.expired()) == (0.0, True)
+    clock.advance(10.0)
+    assert (deadline.remaining(), deadline.expired()) == (0.0, True)
+
+
+# ── a call whose time is up is never completed (S059) ───────────────────────
+# More than any deadline of these tests: a handler that advances the clock by it
+# has outlived the caller's wait.
+LATE_SECONDS = 100.0
+LAPSED = Deadline(at=0.0, clock=lambda: 1.0)
+FOUND_NOTHING = Completed({"found": False})
+
+
+def pipeline_over(
+    world: World,
+    tool: str,
+    handlers: list[ToolHandler],
+    *,
+    registry_dir: Path = REGISTRY_DIR,
+    throttle_clock: FakeClock | None = None,
+) -> Pipeline:
+    server_id, role, *_ = TOOLS[tool]
+    registry = load_registry(registry_dir)
+    return Pipeline(
+        dsn=settings_for(world.db, role).database_url,
+        registry=registry,
+        service_name=server_id,
+        entries=build_entries(registry, server_id, handlers),
+        throttle=RefusalAuditThrottle(throttle_clock or FakeClock()),
+    )
+
+
+def finish(
+    pipeline: Pipeline,
+    world: World,
+    tool: str,
+    arguments: dict[str, Any],
+    deadline: Deadline | None,
+    *,
+    key: str | None = None,
+) -> Finished:
+    meta = {META_RUN: str(world.run_id)}
+    if key is not None:
+        meta[META_IDEMPOTENCY_KEY] = key
+    return pipeline.run(Call(uuid.uuid4()), tool, arguments, meta, deadline)
+
+
+def deadline_in(clock: FakeClock, seconds: float = 1.0) -> Deadline:
+    return Deadline(clock() + seconds, clock)
+
+
+def outliving(
+    clock: FakeClock, answer: Completed | Refused, ran: list[ToolCall]
+) -> Callable[[psycopg.Connection, ToolCall], Completed | Refused]:
+    """A handler that takes so long that the caller's time is up when it answers."""
+
+    def run(conn: psycopg.Connection, call: ToolCall) -> Completed | Refused:
+        ran.append(call)
+        clock.advance(LATE_SECONDS)
+        return answer
+
+    return run
+
+
+def lookup_pipeline(
+    world: World, run: Callable[[psycopg.Connection, ToolCall], Completed | Refused]
+) -> Pipeline:
+    return pipeline_over(
+        world,
+        "policy_lookup",
+        custom("policy_lookup", run) + other_handler("policy_lookup"),
+    )
+
+
+def test_a_timed_out_call_is_a_failure_reason_the_handlers_and_the_server_share() -> (
+    None
+):
+    assert "timed-out" in get_args(ToolFailedReason)
+    assert server_module.TIMED_OUT == "timed-out"
+
+
+def test_a_tool_call_without_a_deadline_never_runs_out_of_time() -> None:
+    binding = RunBinding(
+        run_id=uuid.uuid4(),
+        tenant=TENANT,
+        agent=AGENT,
+        claim_id=CLAIM,
+        policy_number=POLICY,
+    )
+
+    call = ToolCall(binding, {}, None, "0" * 64)
+
+    assert call.deadline.expired() is False
+    assert call.deadline.remaining() > 10**9
+
+
+def test_a_handler_receives_the_deadline_of_its_call(world: World) -> None:
+    clock = FakeClock()
+    deadline = deadline_in(clock)
+    received: list[ToolCall] = []
+
+    def run(conn: psycopg.Connection, call: ToolCall) -> Completed:
+        received.append(call)
+        return FOUND_NOTHING
+
+    finished = finish(
+        lookup_pipeline(world, run), world, "policy_lookup", LOOKUP, deadline
+    )
+
+    assert finished.outcome == "completed"
+    assert [call.deadline for call in received] == [deadline]
+
+
+def test_a_call_that_arrives_with_its_time_up_fails_and_its_handler_never_runs(
+    world: World,
+) -> None:
+    ran: list[ToolCall] = []
+    pipeline = lookup_pipeline(world, outliving(FakeClock(), FOUND_NOTHING, ran))
+
+    finished = finish(pipeline, world, "policy_lookup", LOOKUP, LAPSED)
+
+    assert (finished.outcome, finished.reason) == ("failed", "timed-out")
+    assert ran == []
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "timed-out",
+        "policy_lookup",
+    )
+    # The deadline is checked after the run's record was read: the row names it.
+    assert (row["tenant"], row["agent"], row["run_id"], row["reference"]) == (
+        TENANT,
+        AGENT,
+        world.run_id,
+        CLAIM,
+    )
+    assert row["suppressed"] == 0
+
+
+def test_a_call_with_its_time_up_for_no_run_that_exists_is_the_unknown_run_refusal(
+    world: World,
+) -> None:
+    pipeline = lookup_pipeline(world, lambda conn, call: FOUND_NOTHING)
+    meta = {META_RUN: str(uuid.uuid4())}
+
+    finished = pipeline.run(Call(uuid.uuid4()), "policy_lookup", LOOKUP, meta, LAPSED)
+
+    assert (finished.outcome, finished.reason) == ("refused", "unknown-run")
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("refused", "unknown-run")
+
+
+def test_a_call_with_its_time_up_that_the_allowlist_refuses_is_still_that_refusal(
+    world: World, plant: Callable[..., Path]
+) -> None:
+    pipeline = pipeline_over(
+        world,
+        "claim_history",
+        custom("claim_history", lambda conn, call: FOUND_NOTHING)
+        + other_handler("claim_history"),
+        registry_dir=plant(PLANT_NO_HISTORY),
+    )
+
+    finished = finish(pipeline, world, "claim_history", LOOKUP, LAPSED)
+
+    assert (finished.outcome, finished.reason) == ("refused", "tool-not-allowed")
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("refused", "tool-not-allowed")
+
+
+def test_ten_late_calls_of_one_tenant_and_tool_write_one_row_a_window(
+    world: World,
+) -> None:
+    clock = FakeClock()
+    ran: list[ToolCall] = []
+    pipeline = pipeline_over(
+        world,
+        "policy_lookup",
+        custom("policy_lookup", outliving(clock, FOUND_NOTHING, ran))
+        + other_handler("policy_lookup"),
+        throttle_clock=clock,
+    )
+
+    for _ in range(10):
+        finish(pipeline, world, "policy_lookup", LOOKUP, LAPSED)
+
+    assert ran == []
+    assert [(r["reason"], r["suppressed"]) for r in audit_rows(world.db)] == [
+        ("timed-out", 0)
+    ]
+
+    clock.advance(REFUSAL_AUDIT_SECONDS)
+    finish(pipeline, world, "policy_lookup", LOOKUP, LAPSED)
+
+    assert [(r["reason"], r["suppressed"]) for r in audit_rows(world.db)] == [
+        ("timed-out", 0),
+        ("timed-out", 9),
+    ]
+
+
+def test_a_call_found_late_after_its_work_is_audited_every_time(world: World) -> None:
+    clock = FakeClock()
+    pipeline = lookup_pipeline(world, outliving(clock, FOUND_NOTHING, []))
+
+    for _ in range(10):
+        finish(pipeline, world, "policy_lookup", LOOKUP, deadline_in(clock))
+
+    rows = audit_rows(world.db)
+    assert [(r["outcome"], r["reason"], r["suppressed"]) for r in rows] == [
+        ("failed", "timed-out", None)
+    ] * 10
+
+
+def test_a_call_with_its_time_up_is_still_refused_for_a_tool_that_is_not_ours(
+    world: World,
+) -> None:
+    pipeline = lookup_pipeline(world, lambda conn, call: FOUND_NOTHING)
+
+    finished = finish(pipeline, world, "no_such_tool", LOOKUP, LAPSED)
+
+    assert (finished.outcome, finished.reason) == ("refused", "unknown-tool")
+
+
+def test_a_handler_that_outlives_the_deadline_fails_the_call_and_is_not_completed(
+    world: World,
+) -> None:
+    clock, ran = FakeClock(), []
+    pipeline = lookup_pipeline(world, outliving(clock, FOUND_NOTHING, ran))
+
+    finished = finish(pipeline, world, "policy_lookup", LOOKUP, deadline_in(clock))
+
+    assert (finished.outcome, finished.reason, finished.done) == (
+        "failed",
+        "timed-out",
+        None,
+    )
+    assert len(ran) == 1
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"], row["tool"]) == (
+        "failed",
+        "timed-out",
+        "policy_lookup",
+    )
+    assert (row["tenant"], row["agent"], row["run_id"], row["reference"]) == (
+        TENANT,
+        AGENT,
+        world.run_id,
+        CLAIM,
+    )
+
+
+def test_a_replay_found_after_the_deadline_is_timed_out_too(world: World) -> None:
+    clock = FakeClock()
+    replay = Completed({"note_id": UNKNOWN_UUID, "replayed": True}, replayed=True)
+    pipeline = pipeline_over(
+        world,
+        "add_claim_note",
+        custom("add_claim_note", outliving(clock, replay, []))
+        + other_handler("add_claim_note"),
+    )
+
+    finished = finish(
+        pipeline, world, "add_claim_note", NOTE, deadline_in(clock), key=KEY
+    )
+
+    assert (finished.outcome, finished.reason) == ("failed", "timed-out")
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("failed", "timed-out")
+
+
+def test_a_refusal_after_the_deadline_is_still_the_refusal_audited_as_before(
+    world: World,
+) -> None:
+    clock = FakeClock()
+    refusal = Refused("idempotency-key-reused")
+    pipeline = pipeline_over(
+        world,
+        "add_claim_note",
+        custom("add_claim_note", outliving(clock, refusal, []))
+        + other_handler("add_claim_note"),
+    )
+
+    finished = finish(
+        pipeline, world, "add_claim_note", NOTE, deadline_in(clock), key=KEY
+    )
+
+    assert (finished.outcome, finished.reason) == ("refused", "idempotency-key-reused")
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("refused", "idempotency-key-reused")
+
+
+def test_a_write_that_outlives_the_deadline_is_rolled_back_and_the_retry_does_it_once(
+    world: World,
+) -> None:
+    clock = FakeClock()
+    attempts: list[ToolCall] = []
+
+    def run(conn: psycopg.Connection, call: ToolCall) -> Completed:
+        attempts.append(call)
+        conn.execute(
+            "INSERT INTO claims.notes "
+            "(claim_id, run_id, agent, note, idempotency_key, payload_hash) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (CLAIM, world.run_id, AGENT, "x", KEY, call.payload_hash),
+        )
+        if len(attempts) == 1:  # the first attempt is the slow one
+            clock.advance(LATE_SECONDS)
+        return Completed({"note_id": UNKNOWN_UUID, "replayed": False})
+
+    pipeline = pipeline_over(
+        world,
+        "add_claim_note",
+        custom("add_claim_note", run) + other_handler("add_claim_note"),
+    )
+
+    first = finish(pipeline, world, "add_claim_note", NOTE, deadline_in(clock), key=KEY)
+
+    assert (first.outcome, first.reason) == ("failed", "timed-out")
+    assert table_rows(world.db, "claims.notes") == []
+
+    retry = finish(pipeline, world, "add_claim_note", NOTE, deadline_in(clock), key=KEY)
+
+    assert retry.outcome == "completed"
+    assert len(table_rows(world.db, "claims.notes")) == 1
+    assert [(row["outcome"], row["reason"]) for row in audit_rows(world.db)] == [
+        ("failed", "timed-out"),
+        ("completed", None),
+    ]
+
+
+def test_a_call_with_no_deadline_completes_whatever_the_clock_says(
+    world: World,
+) -> None:
+    clock, ran = FakeClock(), []
+    pipeline = lookup_pipeline(world, outliving(clock, FOUND_NOTHING, ran))
+
+    finished = finish(pipeline, world, "policy_lookup", LOOKUP, None)
+
+    assert finished.outcome == "completed"
+    assert len(ran) == 1
+    (row,) = audit_rows(world.db)
+    assert row["outcome"] == "completed"
+
+
+def test_a_call_that_runs_out_of_time_in_its_handler_answers_unavailable_by_the_server(
+    world: World, exporter: InMemorySpanExporter
+) -> None:
+    clock = FakeClock()
+    app = build(
+        world.db,
+        "policy_lookup",
+        custom("policy_lookup", outliving(clock, FOUND_NOTHING, []))
+        + other_handler("policy_lookup"),
+        exporter=exporter,
+        clock=clock,
+    )
+
+    with pytest.raises(MCPError) as raised:
+        run_call(app.server, "policy_lookup", LOOKUP, run_id=world.run_id)
+
+    assert raised.value.error.message == UNAVAILABLE
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["reason"]) == ("failed", "timed-out")
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == "tool.call"]
+    assert span.attributes["meridian.reason"] == "timed-out"
 
 
 # ── a failure outside the pipeline is audited too ───────────────────────────

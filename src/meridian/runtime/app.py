@@ -77,6 +77,7 @@ from meridian.runtime.tool_client import (
     ToolTarget,
     prepare_sdk,
 )
+from meridian.runtime.tool_transport import ToolTransport
 
 GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
@@ -176,21 +177,136 @@ def _finish(
     status: RunState,
     reason: str | None = None,
     tool: str | None = None,
-) -> psycopg.Error | None:
-    """Record the final status; try twice, return the last error if both fail."""
-    return _record(
-        lambda: runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
-    )
+) -> tuple[bool, psycopg.Error | None]:
+    """Record the final status; try twice. Returns whether the run moved (the
+    last write's answer: ``False`` when the run was no longer ``Running``) and
+    the last error if both writes fail."""
+    moved = False
+
+    def write() -> None:
+        nonlocal moved
+        moved = runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
+
+    error = _record(write)
+    return moved, error
 
 
 def _pause_again(
     dsn: str, identity: RunIdentity, reason: str, tool: str | None
-) -> psycopg.Error | None:
+) -> tuple[bool, psycopg.Error | None]:
     """Record a failed resumed leg and the run's return to its pause; try
-    twice, return the last error if both fail."""
-    return _record(
-        lambda: runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
+    twice. Returns whether the run moved (the last write's answer: ``False``
+    when the run was no longer ``Running``) and the last error if both writes
+    fail."""
+    moved = False
+
+    def write() -> None:
+        nonlocal moved
+        moved = runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
+
+    error = _record(write)
+    return moved, error
+
+
+def _record_end(
+    dsn: str,
+    identity: RunIdentity,
+    leg: Leg,
+    failure: Exception | None,
+    outcome: RunOutcome,
+) -> tuple[RunOutcome, bool, psycopg.Error | None]:
+    """Write how a leg ended. Returns the outcome to answer with (a resumed leg
+    that failed leaves its run paused again), whether the write moved the run,
+    and the last error if it could not be written."""
+    if failure is None:
+        moved, unsaved = _finish(dsn, identity, outcome.status)
+        return outcome, moved, unsaved
+    if leg == "resumed" and failure_reason(failure) not in runs.NOTHING_TO_RESUME:
+        moved, unsaved = _pause_again(
+            dsn, identity, failure_reason(failure), _tool_of(failure)
+        )
+        return RunOutcome("AwaitingApproval", None), moved, unsaved
+    moved, unsaved = _finish(
+        dsn,
+        identity,
+        outcome.status,
+        reason=failure_reason(failure),
+        tool=_tool_of(failure),
     )
+    return outcome, moved, unsaved
+
+
+def _settle(
+    dsn: str,
+    identity: RunIdentity,
+    leg: Leg,
+    failure: Exception | None,
+    outcome: RunOutcome,
+) -> tuple[RunOutcome, Exception | None, psycopg.Error | None]:
+    """Write how a leg ended and return what it answers: the outcome, the
+    failure it answers (none when someone else ended the run, as the leg itself
+    did not fail), and the last error if nothing could be written."""
+    outcome, moved, unsaved = _record_end(dsn, identity, leg, failure, outcome)
+    if unsaved is not None or moved:
+        return outcome, failure, unsaved
+    # Written, but over nothing: the leg's own earlier write had committed, or
+    # the run was ended by someone else while it worked.
+    outcome, ended, unsaved = _stored_outcome(dsn, identity, outcome, failure)
+    return outcome, None if ended else failure, unsaved
+
+
+def _unsaved_answer(
+    span: Span, identity: RunIdentity, status: RunState, unsaved: psycopg.Error
+) -> JSONResponse:
+    """The 503 of a leg whose final status could not be written, with the run ID."""
+    logger.error(
+        "run %s could not be marked %s: %s (sqlstate %s)",
+        identity.run_id,
+        status,
+        type(unsaved).__name__,
+        unsaved.sqlstate or "none",
+    )
+    mark_error(span, unsaved)
+    return error_answer(503, DATABASE_UNAVAILABLE, run_id=str(identity.run_id))
+
+
+def _stored_outcome(
+    dsn: str, identity: RunIdentity, own: RunOutcome, failure: Exception | None
+) -> tuple[RunOutcome, bool, psycopg.Error | None]:
+    """What a leg answers when its write moved nothing. Returns the outcome,
+    whether someone else (the sweep) ended the run, and the error if the stored
+    status cannot be read.
+
+    A stored status equal to the leg's own means its own write is recorded (it
+    committed and the connection dropped before the answer, so the retry found
+    the run no longer ``Running``): the leg answers as if it had moved the run.
+    Any other status is the answer, with no output. The warning has the run ID
+    and the status, nothing of the claim.
+
+    A leg that failed on a run already stored as ``Failed`` answers its own
+    failure, but the trail may say only the sweep's reason (``abandoned``): one
+    warning keeps the leg's reason word and tool, the run ID with them."""
+    try:
+        stored = runs.fetch_run(dsn, identity.run_id)
+    except psycopg.Error as exc:
+        return own, False, exc
+    if stored is not None and stored.status == own.status:
+        if failure is not None and own.status == "Failed":
+            logger.warning(
+                "run %s: its leg failed (%s; tool %s) on a run already Failed, "
+                "so the trail may not hold this reason",
+                identity.run_id,
+                failure_reason(failure),
+                _tool_of(failure),
+            )
+        return own, False, None
+    logger.warning(
+        "run %s was ended before its leg could mark it %s",
+        identity.run_id,
+        own.status,
+    )
+    status = own.status if stored is None else stored.status
+    return RunOutcome(status, None), True, None
 
 
 def _delete_checkpoints(
@@ -249,8 +365,10 @@ def tool_client_for(
     identity: RunIdentity,
     throttle: RefusalAuditThrottle,
     verify: ssl.SSLContext | bool = True,
+    transport: ToolTransport | None = None,
 ) -> ToolClient:
-    """The run's tool client. A call its allowlist refuses is audited here,
+    """The run's tool client, over the app's ``transport`` when it has one (the
+    runs share its connections). A call its allowlist refuses is audited here,
     with the tool's registry ID or none, at most one row per tenant and tool per
     window (T-49; from S014 a model may choose the tool); a failed audit write
     propagates and fails the run (QA-05). ``ToolNotAllowed`` is raised either
@@ -291,6 +409,7 @@ def tool_client_for(
         on_refusal=audit_refusal,
         max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
         verify=verify,
+        transport=transport,
     )
 
 
@@ -334,12 +453,24 @@ def create_app(
     # certificate or key that cannot be loaded stops the start.
     verify = verify_of(settings.client_tls)
     http = http_client or make_gateway_client(settings, verify)
+    # One kept HTTP client for each tool server, shared by every run; closed
+    # at shutdown, with the gateway client when the app made that itself.
+    tool_transport = ToolTransport(verify)
     dsn = settings.database_url
 
     # An injected checkpointer (tests) serves every request; otherwise each
     # request opens the PostgreSQL saver on a connection of its own (S015).
     def saver_scope() -> AbstractContextManager[BaseCheckpointSaver]:
         return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
+
+    def close() -> None:
+        # The gateway client is closed only when the app made it: an injected
+        # one is its owner's.
+        try:
+            tool_transport.close()
+        finally:
+            if http_client is None:
+                http.close()
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -348,7 +479,7 @@ def create_app(
         tracer_name="meridian.runtime",
         max_body_bytes=SMALL_BODY_LIMIT_BYTES,
         tracer_provider=tracer_provider,
-        close=http.close if http_client is None else None,
+        close=close,
     )
     app, tracer = service.app, service.tracer
 
@@ -445,6 +576,7 @@ def create_app(
                 identity=identity,
                 throttle=refusal_throttle,
                 verify=verify,
+                transport=tool_transport,
             )
             outcome = runs.execute(
                 factory, saver, http, tools, tracer, identity, run_input, resume=resume
@@ -453,36 +585,14 @@ def create_app(
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
-        if failure is None:
-            unsaved = _finish(dsn, identity, outcome.status)
-        elif leg == "resumed" and failure_reason(failure) not in runs.NOTHING_TO_RESUME:
-            outcome = RunOutcome("AwaitingApproval", None)
-            unsaved = _pause_again(
-                dsn, identity, failure_reason(failure), _tool_of(failure)
-            )
-        else:
-            unsaved = _finish(
-                dsn,
-                identity,
-                outcome.status,
-                reason=failure_reason(failure),
-                tool=_tool_of(failure),
-            )
+        outcome, failure, unsaved = _settle(dsn, identity, leg, failure, outcome)
         if outcome.status != "AwaitingApproval":
             # The checkpoint holds the claim; a finished run needs none,
             # whether or not its status could be recorded.
             _delete_checkpoints(saver, identity, saver_scope)
         set_span_attributes(span, {"meridian.run_status": outcome.status})
         if unsaved is not None:
-            logger.error(
-                "run %s could not be marked %s: %s (sqlstate %s)",
-                identity.run_id,
-                outcome.status,
-                type(unsaved).__name__,
-                unsaved.sqlstate or "none",
-            )
-            mark_error(span, unsaved)
-            return error_answer(503, DATABASE_UNAVAILABLE, run_id=str(identity.run_id))
+            return _unsaved_answer(span, identity, outcome.status, unsaved)
         if failure is not None:
             response.status_code = _failure_status(failure)
         return RunResponse(

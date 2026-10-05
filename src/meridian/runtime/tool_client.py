@@ -9,8 +9,9 @@ that belong to the caller, and the server checks the same rules again:
 * the key that makes a write happen once is derived here from the run, the tool
   and a label the graph's code gives the call site, so a model can neither mint
   nor reuse one (T-23);
-* the call carries the run ID and the trace context, never tenant, agent or
-  claim, which the server reads from the runtime's own run row (T-22);
+* the call carries the run ID, the trace context and the time the runtime will
+  still wait, never tenant, agent or claim, which the server reads from the
+  runtime's own run row (T-22);
 * the answer must fit the registry's output schema before the graph sees it:
   a tool result enters a prompt (TB-7).
 
@@ -23,7 +24,11 @@ quote a message or a response body, are routed to a content-free handler by
 this module.
 
 The runtime is synchronous (a graph runs in a worker thread), and the SDK's
-client is asynchronous, so each call drives it with ``anyio.run``.
+client is asynchronous. A call to an address goes through the runtime's
+``ToolTransport`` when the client has one: an event loop and an HTTP client for
+each server that outlive the call, so calls share a connection. Without one
+(a command with no application, and a target that is not an address, such as a
+test's in-process server) each call drives the SDK with ``anyio.run``.
 """
 
 import hashlib
@@ -35,7 +40,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 import anyio
 import httpx2
@@ -57,13 +62,20 @@ from meridian.platform.registry import Registry
 from meridian.platform.registry.models import Tool
 from meridian.platform.toolserver.validation import build_validator, fits
 from meridian.platform.toolserver.wire import (
+    MAX_CALL_SECONDS,
     MCP_PATH,
     META_CALL_ID,
     META_IDEMPOTENCY_KEY,
     META_REFUSAL,
     META_RUN,
+    META_TIMEOUT_MS,
+    MILLISECONDS_PER_SECOND,
     RefusalReason,
 )
+
+if TYPE_CHECKING:
+    # ``tool_transport`` imports this module for the bound and ``send_call``.
+    from meridian.runtime.tool_transport import ToolTransport
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +83,10 @@ logger = logging.getLogger(__name__)
 # appended) or, in tests, a server or a transport.
 type ToolTarget = str | Server[Any] | MCPServer | Transport | StdioServerParameters
 
-# The whole call: connecting, the request and the answer.
-TOOL_TIMEOUT_SECONDS = 10.0
+# The whole call: connecting, the request and the answer. The most a tool server
+# works on a call (it bounds what the call sends by that), so it is the same
+# number; tests set this name to shorten the wait.
+TOOL_TIMEOUT_SECONDS = MAX_CALL_SECONDS
 SPAN_NAME = "runtime.tool"
 # The graph's own name for a call site: it takes part in the idempotency key.
 STEP_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
@@ -199,7 +213,7 @@ async def _open(
             yield client
         return
     # trust_env=False: a proxy variable must not reroute claimant data. A client
-    # passed to the transport is not closed by it, so it is closed here.
+    # passed to the SDK's transport is not closed by it, so it is closed here.
     async with httpx2.AsyncClient(
         trust_env=False, timeout=TOOL_TIMEOUT_SECONDS, verify=verify
     ) as http:
@@ -210,6 +224,36 @@ async def _open(
             yield client
 
 
+async def send_call(
+    client: Client, tool: str, arguments: dict[str, Any], meta: dict[str, Any]
+) -> types.CallToolResult:
+    """The call on an open SDK client; the part of an exchange that a client
+    made for the call and one over a ``ToolTransport``'s kept HTTP client share."""
+    # The time left of the bound the caller put around this call, so the server
+    # does not queue the call for longer than the runtime will wait (T-62). Read
+    # here, as late as the code allows, so connecting has already been counted. A
+    # new dict: ``meta`` is the caller's.
+    left = min(
+        anyio.current_effective_deadline() - anyio.current_time(),
+        TOOL_TIMEOUT_SECONDS,
+    )
+    sent = {**meta, META_TIMEOUT_MS: max(1, int(left * MILLISECONDS_PER_SECOND))}
+    request = types.CallToolRequest(
+        params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=sent)
+    )
+    # One request. ``Client.call_tool`` goes through the session's
+    # ``call_tool``, which ends in ``validate_tool_result``: with no output
+    # schema cached for the tool (and the SDK client lives for one call) that
+    # sends ``tools/list`` after the call, inside the same bound and after a
+    # write has committed. The runtime checks the result against the registry's
+    # own schema, so that request buys nothing. ``send_request`` is the
+    # session's public method for a request without that step (mcp 2.2.0). It
+    # also skips the ``input_required`` loop, which our servers never use: such
+    # an answer does not parse as a ``CallToolResult`` and so is
+    # ``ToolUnavailable``. The HTTP test pins that a call is one request.
+    return await client.session.send_request(request, types.CallToolResult)
+
+
 async def _exchange(
     target: ToolTarget,
     tool: str,
@@ -217,24 +261,10 @@ async def _exchange(
     meta: dict[str, Any],
     verify: ssl.SSLContext | bool,
 ) -> types.CallToolResult:
-    request = types.CallToolRequest(
-        params=types.CallToolRequestParams(name=tool, arguments=arguments, _meta=meta)
-    )
     # Read at call time, so the bound is the constant's current value.
     with anyio.fail_after(TOOL_TIMEOUT_SECONDS):
         async with _open(target, verify) as client:
-            # One request. ``Client.call_tool`` goes through the session's
-            # ``call_tool``, which ends in ``validate_tool_result``: with no
-            # output schema cached for the tool (and a client lives for one
-            # call) that sends ``tools/list`` after the call, inside the same
-            # bound and after a write has committed. The runtime checks the
-            # result against the registry's own schema, so that request buys
-            # nothing. ``send_request`` is the session's public method for a
-            # request without that step (mcp 2.2.0). It also skips the
-            # ``input_required`` loop, which our servers never use: such an
-            # answer does not parse as a ``CallToolResult`` and so is
-            # ``ToolUnavailable``. The HTTP test pins that a call is one request.
-            return await client.session.send_request(request, types.CallToolResult)
+            return await send_call(client, tool, arguments, meta)
 
 
 class ToolClient:
@@ -247,7 +277,9 @@ class ToolClient:
     one too, and the one past it raises ``ToolCallLimit`` before the allowlist.
     ``verify`` is how a call to an address is made over TLS (S055): the context
     of the runtime's own certificate and CA, or the default verification, never
-    off."""
+    off. ``transport`` (S059) is the runtime's kept HTTP client for each
+    address, shared by its runs: a call to an address goes through it, and
+    without one each call opens its own."""
 
     def __init__(
         self,
@@ -260,9 +292,11 @@ class ToolClient:
         on_refusal: Callable[[str | None], None],
         max_calls: int,
         verify: ssl.SSLContext | bool = True,
+        transport: "ToolTransport | None" = None,
     ) -> None:
         prepare_sdk()
         self._verify = verify
+        self._transport = transport
         self._max_calls = max_calls
         self._calls = 0
         self._lock = threading.Lock()
@@ -372,9 +406,14 @@ class ToolClient:
         # The SDK does not carry the trace; the server reads it from ``_meta``.
         propagate.inject(meta)
         try:
-            answer = anyio.run(
-                _exchange, target, spec.id, dict(arguments), meta, self._verify
-            )
+            if self._transport is not None and isinstance(target, str):
+                answer = self._transport.exchange(
+                    target, spec.id, dict(arguments), meta
+                )
+            else:
+                answer = anyio.run(
+                    _exchange, target, spec.id, dict(arguments), meta, self._verify
+                )
         except Exception as error:
             # An exception group of ordinary exceptions is an ``Exception``; a
             # group holding a cancellation or ``SystemExit`` is not, and goes on.
@@ -389,9 +428,16 @@ class ToolClient:
         self, spec: Tool, answer: types.CallToolResult, call_id: str | None
     ) -> ToolResult | ToolRefused:
         if answer.is_error:
+            # A tool server of ours always sets a string reason on a refusal. An
+            # error answer without one is a server not behaving, so the call is
+            # unavailable; a string this client does not list is a newer
+            # server's reason, still a refusal, read as ``unknown``.
             reason = (answer.meta or {}).get(META_REFUSAL)
-            known = isinstance(reason, str) and reason in REFUSAL_REASONS
-            return ToolRefused(spec.id, reason if known else UNKNOWN_REASON)
+            if not isinstance(reason, str):
+                raise ToolUnavailable(spec.id)
+            return ToolRefused(
+                spec.id, reason if reason in REFUSAL_REASONS else UNKNOWN_REASON
+            )
         data = answer.structured_content
         if not isinstance(data, dict) or not fits(self._validator(spec), data):
             raise ToolUnavailable(spec.id)

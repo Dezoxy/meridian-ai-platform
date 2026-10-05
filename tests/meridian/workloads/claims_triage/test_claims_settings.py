@@ -62,6 +62,37 @@ def test_a_runtime_url_that_is_not_http_or_https_is_refused_without_the_value(
     assert "s3cret-value" not in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://operator:s3cret-value@runtime.invalid:8080",
+        "http://s3cret-value@runtime.invalid",
+        "http://runtime.invalid/v1?token=s3cret-value",
+        "http://runtime.invalid/v1#s3cret-value",
+        "http://runtime.invalid:99999",
+        " http://runtime.invalid",
+        "http://runtime.invalid ",
+    ],
+)
+def test_a_runtime_url_with_a_credential_or_a_query_is_refused_without_the_value(
+    url: str,
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        ClaimsSettings.from_env({**ENV, "MERIDIAN_RUNTIME_URL": url})
+
+    assert "runtime_url" in str(raised.value)
+    assert "s3cret-value" not in str(raised.value)
+    assert "operator" not in str(raised.value)
+    assert "runtime.invalid" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "url", ["https://runtime.invalid:8443", "http://runtime.invalid/base"]
+)
+def test_a_runtime_url_with_a_port_or_a_path_is_accepted(url: str) -> None:
+    assert ClaimsSettings.from_env({**ENV, "MERIDIAN_RUNTIME_URL": url}).runtime_url
+
+
 def test_the_documents_deadline_defaults_to_the_lifecycles() -> None:
     built = ClaimsSettings.from_env(ENV)
 

@@ -4,22 +4,25 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import psycopg
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 from opentelemetry import _logs, metrics, trace
 from opentelemetry._logs._internal import ProxyLoggerProvider
 from opentelemetry.metrics._internal import _ProxyMeterProvider
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Sampler, SamplingResult
 from opentelemetry.trace import ProxyTracerProvider
 from psycopg import errors
+from servicesupport import REGISTRY_DIR
 from tlsserver import serve_tls
 from tlssupport import (
     CertificateAuthority,
@@ -39,6 +42,12 @@ from meridian.platform.common.http import (
 )
 from meridian.platform.common.telemetry import make_tracer_provider, start_span
 from meridian.platform.common.tls import CERT_FILE_ENV
+from meridian.platform.gateway.app import create_app as create_gateway
+from meridian.platform.gateway.settings import GatewaySettings
+from meridian.runtime.app import create_app as create_runtime
+from meridian.runtime.settings import RuntimeSettings
+from meridian.workloads.claims_triage.app import create_app as create_claims
+from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 CANARY = "canary-claimant@example.invalid"
 QUERY_CANARY = "query-canary-7731"
@@ -78,6 +87,17 @@ def build(
     @app.get("/query")
     def query(canary: str) -> dict[str, str]:
         return {"seen": canary}
+
+    @app.post("/query")
+    def query_posted(canary: str) -> dict[str, str]:
+        return {"seen": canary}
+
+    @app.get("/raw-query")
+    def raw_query(request: Request) -> dict[str, Any]:
+        return {
+            "query": request.url.query,
+            "keys": sorted(k for k in request.scope if "query" in k),
+        }
 
     @app.get("/unexpected")
     def unexpected() -> None:
@@ -589,6 +609,135 @@ def test_the_query_string_still_reaches_the_route() -> None:
 
     assert response.json() == {"seen": QUERY_CANARY}
     assert [v for v in span_attribute_values(exporter) if QUERY_CANARY in v] == []
+
+
+# ── a sampler or a span processor sees no query either (T-03) ───────────────
+class RecordingSampler(Sampler):
+    """Keeps the name and the attribute values it is asked about, then samples."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def should_sample(
+        self,
+        parent_context: Any,
+        trace_id: int,
+        name: str,
+        kind: Any = None,
+        attributes: Any = None,
+        links: Any = None,
+        trace_state: Any = None,
+    ) -> SamplingResult:
+        self.seen.append(name)
+        self.seen.extend(str(value) for value in (attributes or {}).values())
+        return ALWAYS_ON.should_sample(
+            parent_context, trace_id, name, kind, attributes, links, trace_state
+        )
+
+    def get_description(self) -> str:
+        return "RecordingSampler"
+
+
+class RecordingProcessor(SpanProcessor):
+    """Keeps a copy of the span's name and attribute values as it starts."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        self.seen.append(span.name)
+        self.seen.extend(str(value) for value in (span.attributes or {}).values())
+
+
+def recording_provider() -> tuple[TracerProvider, list[str], list[str]]:
+    sampler, processor = RecordingSampler(), RecordingProcessor()
+    provider = TracerProvider(sampler=sampler)
+    provider.add_span_processor(processor)
+    return provider, sampler.seen, processor.seen
+
+
+def assert_none_holds_a_query(seen: list[str], path: str) -> None:
+    # Not vacuous: the request was seen, and its path is on what was recorded.
+    assert any(value.endswith(path) for value in seen), seen
+    assert [v for v in seen if QUERY_CANARY in v or "?" in v] == []
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_no_sampler_or_span_processor_sees_the_query_of_a_request(method: str) -> None:
+    provider, sampled, started = recording_provider()
+    path = "/query"
+
+    response = getattr(build(provider=provider), method)(
+        f"{path}?canary={QUERY_CANARY}"
+    )
+
+    assert response.json() == {"seen": QUERY_CANARY}
+    assert_none_holds_a_query(sampled, path)
+    assert_none_holds_a_query(started, path)
+
+
+def test_the_route_gets_the_query_back_and_nothing_else_of_it_stays_in_the_scope() -> (
+    None
+):
+    provider, _, _ = recording_provider()
+
+    response = build(provider=provider).get(f"/raw-query?canary={QUERY_CANARY}")
+
+    assert response.json() == {
+        "query": f"canary={QUERY_CANARY}",
+        "keys": ["query_string"],
+    }
+
+
+def test_a_request_without_a_query_is_recorded_and_answered_as_before() -> None:
+    provider, sampled, started = recording_provider()
+
+    response = build(provider=provider).get("/raw-query")
+
+    assert response.json() == {"query": "", "keys": ["query_string"]}
+    assert_none_holds_a_query(sampled, "/raw-query")
+    assert_none_holds_a_query(started, "/raw-query")
+
+
+def build_the_three_services(provider: TracerProvider) -> dict[str, FastAPI]:
+    dsn = "postgresql://role@db.invalid/meridian"
+    return {
+        "gateway": create_gateway(
+            GatewaySettings(
+                registry_dir=REGISTRY_DIR,
+                mode="replay",
+                environment="test",
+                database_url=dsn,
+            ),
+            tracer_provider=provider,
+        ),
+        "runtime": create_runtime(
+            RuntimeSettings(
+                registry_dir=REGISTRY_DIR,
+                gateway_url="http://gateway.invalid",
+                database_url=dsn,
+            ),
+            tracer_provider=provider,
+        ),
+        "claims": create_claims(
+            ClaimsSettings(runtime_url="http://runtime.invalid", database_url=dsn),
+            tracer_provider=provider,
+        ),
+    }
+
+
+@pytest.mark.parametrize("service", ["gateway", "runtime", "claims"])
+@pytest.mark.parametrize("path", ["/healthz", "/no-such-page"])
+def test_each_of_the_three_services_hides_the_query_from_sampler_and_processor(
+    service: str, path: str
+) -> None:
+    provider, sampled, started = recording_provider()
+    app = build_the_three_services(provider)[service]
+
+    TestClient(app, raise_server_exceptions=False).get(f"{path}?canary={QUERY_CANARY}")
+
+    assert_none_holds_a_query(sampled, path)
+    assert_none_holds_a_query(started, path)
 
 
 @pytest.mark.parametrize("key", ["http.url", "http.target", "url.full", "url.query"])

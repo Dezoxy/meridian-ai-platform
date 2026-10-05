@@ -373,9 +373,14 @@ class StandIn:
 
     answer: Callable[[str, Mapping[str, Any]], types.CallToolResult] = a_valid_answer
     delay: float = 0.0
+    # Wait in the handler until the caller cancels it, so a timeout test needs
+    # no clock: ``entered`` and ``cancelled`` say what happened to the handler.
+    hang: bool = False
     # List the registry's output schemas too, so the SDK checks results itself.
     publish_output_schemas: bool = False
     calls: list[Seen] = field(default_factory=list)
+    entered: bool = False
+    cancelled: bool = False
     server: Server = field(init=False)
 
     def __post_init__(self) -> None:
@@ -400,6 +405,13 @@ class StandIn:
         ) -> types.CallToolResult:
             arguments = dict(params.arguments or {})
             self.calls.append(Seen(params.name, arguments, dict(ctx.meta or {})))
+            if self.hang:
+                self.entered = True
+                try:
+                    await anyio.sleep_forever()
+                except anyio.get_cancelled_exc_class():
+                    self.cancelled = True
+                    raise
             if self.delay:
                 await anyio.sleep(self.delay)
             return self.answer(params.name, arguments)

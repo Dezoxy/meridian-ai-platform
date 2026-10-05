@@ -4,17 +4,48 @@ The kit has already checked the call by the time a handler runs: the run is
 running, the tenant and agent may use the tool, the arguments fit the
 registry's schema and the bound argument is this run's own claim or policy.
 A handler does the tool's work in the connection's transaction; the kit
-writes the audit row in the same transaction and commits.
+writes the audit row in the same transaction and commits. A call found late
+before its commit (by the server's clock, which starts when the call arrives, a
+little after the runtime's) is rolled back and audited as failed, ``timed-out``;
+one that commits in the moment after the check is ``completed`` although the
+runtime may have just stopped waiting.
 """
 
+import math
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import psycopg
 
 from meridian.platform.toolserver.binding import RunBinding
 from meridian.platform.toolserver.wire import RefusalReason
+
+# The reason of a call whose caller stopped waiting before it was done (or, in
+# the server, before it had a slot). One word for the handlers, the pipeline and
+# the server.
+TIMED_OUT: Final = "timed-out"
+
+
+@dataclass(frozen=True, slots=True)
+class Deadline:
+    """The moment a call's caller stops waiting for it, on ``clock``'s time (the
+    server's monotonic clock, or a test's)."""
+
+    at: float
+    clock: Callable[[], float] = time.monotonic
+
+    def remaining(self) -> float:
+        """Seconds left, never below zero."""
+        return max(0.0, self.at - self.clock())
+
+    def expired(self) -> bool:
+        return self.clock() >= self.at
+
+
+# What a call carries when nothing bounds it.
+NEVER = Deadline(math.inf)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +56,9 @@ class ToolCall:
     idempotency_key: str | None
     # SHA-256 of the canonical JSON of the arguments.
     payload_hash: str
+    # When the caller stops waiting. A handler that is about to do work the
+    # tenant pays for checks it first.
+    deadline: Deadline = NEVER
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +72,7 @@ class Refused:
     reason: RefusalReason
 
 
-ToolFailedReason = Literal["gateway-unavailable"]
+ToolFailedReason = Literal["gateway-unavailable", "timed-out"]
 
 
 class ToolFailed(Exception):

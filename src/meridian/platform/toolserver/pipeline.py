@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -49,7 +49,10 @@ from meridian.platform.toolserver.binding import (
     with_policy_scope,
 )
 from meridian.platform.toolserver.handlers import (
+    NEVER,
+    TIMED_OUT,
     Completed,
+    Deadline,
     Refused,
     ToolCall,
     ToolFailed,
@@ -60,8 +63,8 @@ from meridian.platform.toolserver.validation import build_validator, fits, stora
 from meridian.platform.toolserver.wire import (
     IDEMPOTENCY_KEY_PATTERN,
     META_IDEMPOTENCY_KEY,
-    META_RUN,
     RefusalReason,
+    run_id_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -138,9 +141,23 @@ class Finished:
 
 
 class _CallFailed(Exception):
-    def __init__(self, reason: FailureReason) -> None:
+    """A call that failed in the kit. ``throttled``: the call did no work, so its
+    ``failed`` row is one per tenant, tool and window, as a refusal's is."""
+
+    def __init__(self, reason: FailureReason, *, throttled: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.throttled = throttled
+
+
+@dataclass(frozen=True, slots=True)
+class _Claim:
+    """The right to write one throttled row: the throttle's key and the count of
+    calls the row stands in for."""
+
+    tenant: str | None
+    key: str
+    carried: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,11 +177,18 @@ class Pipeline:
         name: str,
         arguments: Mapping[str, Any],
         meta: Mapping[str, Any],
+        deadline: Deadline | None = None,
     ) -> Finished:
         """Never raises: a failure is an outcome, already audited when it could
-        be."""
+        be. ``deadline`` is when the caller stops waiting, by this server's
+        clock, which starts when the call arrives (a little after the caller's).
+        A call found late before its handler runs, or before its commit, fails as
+        ``timed-out`` with its work rolled back. One that commits in the moment
+        after the check is ``completed`` although the caller may have just stopped
+        waiting. None bounds nothing."""
+        deadline = NEVER if deadline is None else deadline
         try:
-            answer = self._decide(call, name, arguments, meta)
+            answer = self._decide(call, name, arguments, meta, deadline)
             if isinstance(answer, Refused):
                 self._audit_refusal(call, answer.reason)
                 return Finished(call, "refused", answer.reason)
@@ -172,7 +196,11 @@ class Pipeline:
         except Exception as exc:
             reason = _failure_reason(exc)
             _log_failure(exc)
-            self.audit_failure(call, reason)
+            if isinstance(exc, _CallFailed) and exc.throttled:
+                if (write := self.timed_out_row(call)) is not None:
+                    write()
+            else:
+                self.audit_failure(call, reason)
             return Finished(call, "failed", reason)
 
     def _decide(
@@ -181,12 +209,13 @@ class Pipeline:
         name: str,
         arguments: Mapping[str, Any],
         meta: Mapping[str, Any],
+        deadline: Deadline,
     ) -> _Done | Refused:
         entry = self.entries.get(name)
         if entry is None:
             return Refused("unknown-tool")
         call.tool = name
-        run_id = _run_id(meta)
+        run_id = run_id_of(meta)
         if run_id is None:
             return Refused("unknown-run")
         with connect(self.dsn, self.service_name) as conn:
@@ -209,8 +238,15 @@ class Pipeline:
             key = (
                 _idempotency_key(meta) if entry.tool.idempotency_key_required else None
             )
-            tool_call = ToolCall(binding, arguments, key, _payload_hash(arguments))
-            return self._complete(conn, call, entry, entry.handler.run(conn, tool_call))
+            # Every refusal is behind us, so only a call that would have run is
+            # late: the run's record was read, and the row names it.
+            if deadline.expired():
+                raise _CallFailed(TIMED_OUT, throttled=True)
+            tool_call = ToolCall(
+                binding, arguments, key, _payload_hash(arguments), deadline
+            )
+            answer = entry.handler.run(conn, tool_call)
+            return self._complete(conn, call, entry, answer, deadline)
 
     def _screen(
         self, entry: _Entry, binding: RunBinding, arguments: Mapping[str, Any]
@@ -245,9 +281,19 @@ class Pipeline:
         return None
 
     def _complete(
-        self, conn: psycopg.Connection, call: Call, entry: _Entry, answer: object
+        self,
+        conn: psycopg.Connection,
+        call: Call,
+        entry: _Entry,
+        answer: object,
+        deadline: Deadline,
     ) -> _Done | Refused:
-        """Check the handler's answer, then commit its work with the audit row."""
+        """Check the handler's answer, then commit its work with the audit row,
+        unless the deadline has passed by then: the work is undone and the call
+        is audited as failed (``timed-out``), a replay too. The check is before the
+        commit, not during it: a call that commits in the moment after the check
+        is ``completed``, although the caller may have just stopped waiting (for a
+        write tool the idempotency key makes its retry find the work done)."""
         if isinstance(answer, Refused):
             conn.rollback()
             return answer
@@ -257,6 +303,9 @@ class Pipeline:
             raise _CallFailed("invalid-result")
         text = json.dumps(answer.result, separators=(",", ":"), ensure_ascii=False)
         done = _Done(answer, text)
+        if deadline.expired():
+            conn.rollback()
+            raise _CallFailed(TIMED_OUT)
         record_event(conn, self._event(call, done.outcome))
         conn.commit()
         return done
@@ -282,22 +331,53 @@ class Pipeline:
             tool=call.tool,
         )
 
-    def _audit_refusal(self, call: Call, reason: str) -> None:
-        """One row per tenant, tool and reason per window (T-49). The tenant
-        is a key only when the registry knows it: the run row's value is
-        caller-chosen, and a map keyed by it would not be bounded."""
+    def _claim(self, call: Call, reason: str) -> _Claim | None:
+        """The right to one row per tenant, tool and reason per window (T-49), or
+        None when this window's row is claimed already and the call is counted.
+        The tenant is a key only when the registry knows it: the run row's value
+        is caller-chosen, and a map keyed by it would not be bounded."""
         known = (
             call.tenant if call.tenant and self.registry.tenant(call.tenant) else None
         )
         key = f"{call.tool or '-'}/{reason}"
         carried = self.throttle.due(known, key)
-        if carried is None:
-            return
+        return None if carried is None else _Claim(known, key, carried)
+
+    def _write_claimed(
+        self, call: Call, outcome: str, reason: str, claim: _Claim
+    ) -> None:
+        """Write the row a claim stands for; when that fails, give the claim back
+        so the next call is due the row, and raise."""
         try:
-            write_audit(self.dsn, self._event(call, "refused", reason, carried))
+            write_audit(self.dsn, self._event(call, outcome, reason, claim.carried))
         except BaseException:
-            self.throttle.release(known, key, carried)
+            self.throttle.release(claim.tenant, claim.key, claim.carried)
             raise
+
+    def _audit_refusal(self, call: Call, reason: str) -> None:
+        if (claim := self._claim(call, reason)) is not None:
+            self._write_claimed(call, "refused", reason, claim)
+
+    def timed_out_row(self, call: Call) -> Callable[[], None] | None:
+        """The write of the ``failed`` row of a call that did no work because its
+        caller had stopped waiting (``timed-out``), throttled like a refusal's: at
+        most one row per tenant, tool and window, carrying the count it left out.
+        None when this window's row is claimed already. The claim is made here,
+        and the write is the caller's to run, where it may block (a thread; the
+        server's event loop must not). The write logs a failure and does not
+        raise, as ``audit_failure`` does: the call has failed already."""
+        if (claim := self._claim(call, TIMED_OUT)) is None:
+            return None
+
+        def write() -> None:
+            try:
+                self._write_claimed(call, "failed", TIMED_OUT, claim)
+            except Exception as exc:
+                logger.error(
+                    "the audit row of a failed call was not written: %s", _name(exc)
+                )
+
+        return write
 
     def audit_failure(self, call: Call, reason: str) -> None:
         """Write the row of a failed call; a failure to write it is logged, as
@@ -343,16 +423,6 @@ def _log_failure(exc: Exception) -> None:
     logger.error(
         "tool call failed: %s (sqlstate %s%s)", _name(exc), sqlstate or "none", named
     )
-
-
-def _run_id(meta: Mapping[str, Any]) -> uuid.UUID | None:
-    value = meta.get(META_RUN)
-    if not isinstance(value, str):
-        return None
-    try:
-        return uuid.UUID(value)
-    except ValueError:
-        return None
 
 
 def _idempotency_key(meta: Mapping[str, Any]) -> str | None:

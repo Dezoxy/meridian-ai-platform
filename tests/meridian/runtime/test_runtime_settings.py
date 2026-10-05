@@ -77,6 +77,32 @@ def test_an_http_or_https_gateway_url_is_accepted(url: str) -> None:
     assert RuntimeSettings.from_env({**ENV, "MERIDIAN_GATEWAY_URL": url}).gateway_url
 
 
+# The one check of common/env.py (S059): a client logs the request URL at INFO,
+# so an address carries no credential, query or fragment and no stray space.
+UNUSABLE_SERVICE_URLS = [
+    "http://operator:s3cret-value@g.invalid:8080",
+    "http://s3cret-value@g.invalid",
+    "http://g.invalid/v1?token=s3cret-value",
+    "http://g.invalid/v1#s3cret-value",
+    "http://g.invalid:99999",
+    " http://g.invalid",
+    "http://g.invalid ",
+]
+
+
+@pytest.mark.parametrize("url", UNUSABLE_SERVICE_URLS)
+def test_a_gateway_url_with_a_credential_or_a_query_is_refused_without_the_value(
+    url: str,
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        RuntimeSettings.from_env({**ENV, "MERIDIAN_GATEWAY_URL": url})
+
+    assert "gateway_url" in str(raised.value)
+    assert "s3cret-value" not in str(raised.value)
+    assert "operator" not in str(raised.value)
+    assert "g.invalid" not in str(raised.value)
+
+
 # ── tool servers (S013) ─────────────────────────────────────────────────────
 TOOL_SERVERS_ENV = "MERIDIAN_TOOL_SERVERS"
 SECRET_URL = "http://user:s3cret-value@policy.invalid:8080"  # noqa: S105
@@ -99,7 +125,8 @@ def test_tool_servers_are_read_from_a_json_object_of_urls() -> None:
 
 
 def test_the_tool_server_addresses_stay_out_of_the_repr() -> None:
-    raw = f'{{"policy-mcp": "{SECRET_URL}"}}'
+    # An address holds no credential now; a host name stands in for the secret.
+    raw = '{"policy-mcp": "http://s3cret-value.invalid:8080"}'
 
     built = RuntimeSettings.from_env({**ENV, TOOL_SERVERS_ENV: raw})
 
@@ -143,12 +170,14 @@ NOT_BASE_URLS = [
     "http://policy.invalid#frag",
     "http://policy.invalid/?",
     "http://policy.invalid/#",
+    "http://user:s3cret-value@policy.invalid:8080/",
+    "http://policy.invalid:99999",
+    " http://policy.invalid",
 ]
 BASE_URLS = [
     "http://policy.invalid",
     "http://policy.invalid/",
     "https://policy.invalid:8443",
-    "http://user:pw@policy.invalid:8080/",
 ]
 
 
@@ -163,6 +192,7 @@ def test_a_tool_server_address_that_is_not_a_base_url_is_refused_without_the_val
 
     assert TOOL_SERVERS_ENV in str(raised.value)
     assert "policy.invalid" not in str(raised.value)
+    assert "s3cret-value" not in str(raised.value)
     assert raised.value.__cause__ is None
 
 
@@ -180,6 +210,7 @@ def test_settings_built_directly_refuse_an_address_that_is_not_a_base_url(
 
     assert "tool_servers" in str(raised.value)
     assert "policy.invalid" not in str(raised.value)
+    assert "s3cret-value" not in str(raised.value)
 
 
 @pytest.mark.parametrize("url", BASE_URLS)
