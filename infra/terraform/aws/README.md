@@ -111,10 +111,12 @@ control-plane metadata is homed outside the Region (see "Global services").
   and the service account `model-gateway`, both variables. Nothing here
   creates the namespace or the service account. No service in the repository
   reads Secrets Manager yet: this is the identity path, not a use of it.
-- **Each Pod Identity role trusts one service account of one cluster.** The
-  EBS CSI role and the workload role each have a trust policy of their own,
-  and each carries three conditions on the session tags Pod Identity adds
-  (see "Who may assume the Pod Identity roles").
+- **Each Pod Identity role is written to trust one service account of one
+  cluster.** The EBS CSI role and the workload role each have a trust policy
+  of their own, and each carries three conditions on the session tags Pod
+  Identity adds (see "Who may assume the Pod Identity roles"). That the
+  conditions let the right pod in is not observed until the apply: `validate`
+  cannot show it.
 - **Budget** (`budget.tf`). A monthly cost budget
   (`aws_budgets_budget.monthly`) of USD 25 by default (a variable, above 0 and
   at most 500; in USD because the provider's page does not settle whether
@@ -139,8 +141,11 @@ control-plane metadata is homed outside the Region (see "Global services").
   typed by hand.
 - **State.** Local, and not in this directory: the `backend "local" {}` block
   has no path, and `aws.sh` gives one at init, a file in a directory under the
-  caller's home (see "State"). A module that is applied once and removed needs
-  no bucket; a longer-lived environment does (see below).
+  caller's home (see "State"). It stays there only in Terraform's default
+  workspace, so `aws.sh` refuses to go on in another one: a workspace made by
+  hand would keep the state in this directory after all. A module that is
+  applied once and removed needs no bucket; a longer-lived environment does
+  (see below).
 
 ### Global services
 
@@ -165,7 +170,7 @@ value costs money, locks the owner out or breaks hard rule 3.
 |---|---|---|
 | `region` | `eu-central-1` | EU Regions only |
 | `expected_account_id` | none | Twelve digits. Sensitive. The provider refuses any other account |
-| `api_access_cidr` | none | One public IPv4 address as a /32: never `0.0.0.0/32`, loopback, private (10/8, 172.16/12, 192.168/16), link-local, shared (100.64/10) or multicast, which would lock the owner out. Sensitive. The only source the public API endpoint admits |
+| `api_access_cidr` | none | One public IPv4 address as a /32, written with no leading zero in an octet (`010.1.1.1` is refused): never `0.0.0.0/32`, loopback, private (10/8, 172.16/12, 192.168/16), link-local, shared (100.64/10) or multicast, which would lock the owner out. Sensitive. The only source the public API endpoint admits |
 | `budget_email` | none | The owner's address; never in the repository. Sensitive |
 | `kubernetes_version` | `1.36` | Only versions in EKS standard support |
 | `node_instance_type` | `t3.large` | `t3.large` or `t3.xlarge`: a closed list, a cost ceiling |
@@ -183,11 +188,14 @@ ceiling and that it is widened in the validation of the variable in
 `variables.tf`, in a committed change.
 
 `expected_account_id`, `api_access_cidr` and `budget_email` have no default and
-are **sensitive**, so a plan prints `(sensitive value)` for each. A refused
-value of one of them prints the sentence of the validation and not the value
-(checked with `terraform console` on a scratch copy of `variables.tf`; see the
-tests). `aws.sh` passes all three from the local file; pass them through
-`TF_VAR_*` by hand only if you run `terraform` yourself.
+are **sensitive**. Terraform's documentation says a plan prints `(sensitive
+value)` for such a variable; `terraform console` on a scratch copy showed the
+marker, but no real plan has been read here, so that part is the
+documentation's word. A refused value of one of them prints the sentence of
+the validation and not the value (checked with `terraform console` on a
+scratch copy of `variables.tf`; see the tests). `aws.sh` passes all three from
+the local file; pass them through `TF_VAR_*` by hand only if you run
+`terraform` yourself.
 
 ### Outputs
 
@@ -223,7 +231,9 @@ and shows the first two conditions as `aws:RequestTag/kubernetes-namespace` and
 anyone who may pass the role could bind it to any service account of any
 cluster of the account. The namespace `kube-system` and the service account
 `ebs-csi-controller-sa` of the first column are from AWS's page for the EBS CSI
-driver.
+driver. The three conditions depend on the session tags: if an association is
+ever changed to disable them (AWS's remedy for a `PackedPolicyTooLarge` error),
+all three conditions fail and the role can no longer be assumed.
 
 The page's own example has no condition for the cluster. This module adds one:
 the session tags are listed on the page "Grant Pods access to AWS resources
@@ -243,7 +253,7 @@ the line to take out first.
 |---|---|---|---|
 | `make aws-validate` | `terraform fmt -check`, `init -backend=false`, `validate`, run with no AWS credential in the environment. Needs no account and no local file; never calls the `aws` CLI. | No | The session or the owner: free, no credentials |
 | `make aws-scan` | Trivy's configuration scan of this directory, from an image pinned by digest, network off, read-only. Fails on a HIGH or CRITICAL finding that `.trivyignore` does not list. Needs Docker. | No | The session or the owner: free |
-| `make aws-plan` | Checks the account, runs `init` against the state under home, then `plan` into `aws.tfplan` (mode 600), and records the commit and the time beside it. Review it. | No | The owner's session: needs credentials the session does not hold |
+| `make aws-plan` | Checks the account, runs `init` against the state under home, then `plan` into `aws.tfplan` (mode 600), and records the commit, the time and the plan file's SHA-256 beside it (none, from a directory with uncommitted changes). Review it. | No | The owner's session: needs credentials the session does not hold |
 | `make aws-apply` | Checks the account, applies exactly the saved plan if it is this tree's and fresh, then removes the plan file. Refuses without a saved plan. | Yes, and it costs money | The owner |
 | `make aws-destroy` | Checks the account, runs `init`, refuses over an empty state, then Terraform asks its own question and waits for the owner's `yes`. Refuses unless standard input is a terminal. | Yes, it removes | The owner, in a terminal |
 
@@ -294,11 +304,35 @@ What the module and the script do, each for a mistake and not for an attack:
 - Terraform and the `aws` CLI get an environment the script chose, so a
   `TF_LOG`, a `TF_WORKSPACE` or an endpoint override left in a shell does not
   reach them;
-- a variable file or an override file in this directory is refused, and a
-  saved plan is applied only at the commit it was made at, from an unchanged
-  directory, within thirty minutes;
+- a variable file or an override file in this directory is refused, a hidden
+  one (`.auto.tfvars`, `.x.auto.tfvars`) and one whose name differs in case
+  included; a saved plan is applied only if the plan file is the one the
+  record names by its SHA-256, at the commit it was made at, from a directory
+  that no change had touched, within thirty minutes;
+- the Region in the local file is checked against the module's six before the
+  `aws` CLI sees it, and each value in the file is at most 253 characters;
+- `git` runs with the caller's global and system configuration off and the two
+  settings that make it run a program (`core.fsmonitor`, `core.hooksPath`)
+  overridden, so a line in `~/.gitconfig` or in the repository's own file does
+  not run a program for the script;
 - two instance types and the endpoint's address come from validated lists and
   ranges, and three variables are sensitive.
+
+What the environment does not close, each a thing the script runs in the
+caller's own surroundings:
+
+- **The programs come from the caller's `PATH`.** `terraform`, `aws`, `git`,
+  `sha256sum` and the rest are found there, and the script checks that they
+  exist, not which ones they are. A `terraform` earlier on the path than the
+  real one runs instead of it, with the credentials.
+- **Terraform's own configuration file under the home** (`~/.terraformrc`, or
+  the file `TF_CLI_CONFIG_FILE` would name, which is dropped) can name a
+  program Terraform runs at `init` (a `credentials_helper`; the second review
+  found this, and it was not run here) or replace a provider with a local build
+  (`dev_overrides`). The script reads none of it and does not stop it.
+- **A shell start-up variable** (`BASH_ENV`) runs code before the first line of
+  the script, so before `set +x` and before anything else in it. Nothing in the
+  script can stop that.
 
 ### The local file
 
@@ -310,9 +344,15 @@ would have escaped that. The file is **read, never run**: `KEY=value` lines
 for the four known keys below, no spaces around the `=`, no quotes, and a value
 of letters, digits and `@ . _ / + -` only; blank lines and lines that start
 with `#` are skipped. Anything else is a refusal that names the line's number
-and nothing of the line. The file must be owned by the user running the script
-and not readable or writable by group or others (`chmod 600`), or the script
-refuses. It holds four values and the script prints none of them:
+and nothing of the line. A value is at most 253 characters (a longer one is
+refused by its line's number), and the Region must be one of the module's six
+(the list in the validation of `region` in `variables.tf`, which a test holds
+equal to the script's own). The file must be a regular file owned by the user
+running the script, readable by that user and not readable or writable by
+group or others (`chmod 600`), or the script refuses with a sentence. A symlink
+is refused too: `stat` reads the link's own mode (777 on Linux), so the sentence
+about group and others is what it gets, and that is not the link's real
+reason. It holds four values and the script prints none of them:
 
 ```sh
 MERIDIAN_AWS_ACCOUNT_ID=<the twelve-digit account number>
@@ -337,15 +377,18 @@ prints an account number:
 |---|---|
 | No local file, or a value missing from it | Create it as above |
 | A line that is not one of the four `KEY=value` lines | Fix the line whose number is named |
-| The file is not yours, or group or others can read it | `chmod 600` it, and own it |
+| The file is not yours, you cannot read it, or group or others can read it | `chmod 600` it, and own it |
 | The account is not twelve digits | Correct `MERIDIAN_AWS_ACCOUNT_ID` |
+| The Region is not one of the module's six | Correct `MERIDIAN_AWS_REGION` |
 | The identity call fails | Sign in, for example `aws sso login`, to the account you mean |
 | The signed-in account is not the pinned one | Sign in to the right account, or correct the pin if it is wrong |
-| A variable file or an override file in this directory | Remove it; give values through the local file |
+| A variable file or an override file in this directory, hidden or in another case included | Remove it; give values through the local file |
+| A Terraform workspace other than the default (`.terraform/environment`), at `plan`, `apply` or `destroy` | `terraform -chdir=infra/terraform/aws workspace select default` |
 | `apply` with no saved plan | `make aws-plan` first |
-| `apply` with a plan that is another commit's, from a changed directory, or older than thirty minutes | `make aws-plan` again (the plan and its record are dropped) |
+| `apply` with a plan that has no record, whose file is not the one the record names, that is another commit's, from a changed directory, or older than thirty minutes | `make aws-plan` again (the plan and its record are dropped) |
 | `destroy` with no terminal | Run it yourself, in a terminal |
 | `destroy` over an empty state | See "If the state is lost" |
+| `destroy` when Terraform's removal fails | Read the state, look in the console, run it again: "Removal" |
 
 ### What Terraform and the `aws` CLI are given
 
@@ -366,9 +409,10 @@ any other `TF_VAR_*`, `AWS_ENDPOINT_URL*`, `AWS_DEFAULT_REGION`,
 metadata-service settings and the proxy variables never reach either (a machine
 behind a proxy adds its variable to the list in `aws.sh`, on purpose). A
 `TF_CLI_ARGS_destroy=-auto-approve` cannot take away Terraform's question. What
-the environment does not close: Terraform still reads `~/.terraformrc` and the
-files in the module's directory that the script does not look for, and `aws`
-reads `~/.aws`.
+the environment does not close: Terraform still reads the files in the module's
+directory that the script does not look for, and `aws` reads `~/.aws`; the rest
+(the `PATH`, Terraform's own configuration file, a shell start-up variable) is
+named in "What stops a session, and what does not".
 
 Shell tracing is off from the first line (`set +x`; `SHELLOPTS` is read-only in
 bash, so it cannot be unset, and `env -i` does not pass it on), `BASH_XTRACEFD`
@@ -395,20 +439,48 @@ in a checkout because the sessions of this repository work in worktrees that
 are deleted, and a state lost with its checkout leaves a cluster and a database
 billing with nothing to remove them. `aws.sh` passes the path at `init`
 (`-backend-config=path=...`); `validate` inits with no backend and makes no
-directory. A `terraform` command typed by hand with no `-backend-config` puts
-the state next to the `.tf` files, in the checkout: do not do that. Keep the
-state until the console is clean (see "Removal").
+directory. The init passes `-reconfigure`: the path is always the script's own,
+so an init made by hand earlier with another path is replaced, where it would
+otherwise stop with "Backend configuration changed". Read on a scratch
+directory with no provider, `-reconfigure` copies no state and asks no question
+(with `-input=false`): a state at the other path stays where it is, untouched,
+and the new path is read as it is, empty if nothing is there.
+
+The state is under home only in Terraform's **default workspace**. A workspace
+made by hand is recorded in `.terraform/environment` and stays selected through
+later inits; Terraform then keeps that workspace's state in
+`terraform.tfstate.d/` in this directory, a checkout, and a removal would find
+the state under home empty. So `plan` and `destroy` refuse, after their init,
+unless the file is absent or says `default`, and `apply` (which runs no init)
+checks it too. The script reads the file instead of asking Terraform: it passes
+no `TF_WORKSPACE` and no `TF_DATA_DIR`, so this is the file Terraform reads, and
+no further call is made. Selecting the default workspace again leaves the file
+in place with the word `default` in it, which is why the content is what is
+read: `terraform -chdir=infra/terraform/aws workspace select default` gets
+back. A `terraform` command typed by hand with no `-backend-config` puts the
+state next to the `.tf` files, in the checkout: do not do that. Keep the state
+until the console is clean (see "Removal").
 
 ### The saved plan
 
-`make aws-plan` writes `aws.tfplan` and, beside it, `aws.tfplan.meta` with the
-commit and the time. `make aws-apply` applies the plan only if that commit is
-the one checked out now, the module's directory has no uncommitted change
-(`git status` of this directory, untracked files included), and the plan is
-less than thirty minutes old: the length of one plan, read and apply sitting.
-Otherwise it drops the plan and says to plan again. A plan made from a
-directory with uncommitted changes can therefore not be applied; `plan` says so
-when it starts.
+`make aws-plan` writes `aws.tfplan` and, beside it, `aws.tfplan.meta`, three
+lines: `commit=` (the commit), `time=` (ten digits, seconds since the epoch)
+and `sha256=` (the SHA-256 of the plan file). `make aws-apply` applies the plan
+only if the plan file's SHA-256 is the recorded one (so a plan written by hand
+over the script's, with a `-target` or another variable, is refused), that
+commit is the one checked out now, the module's directory has no uncommitted
+change (`git status` of this directory, untracked files included), and the
+plan is less than thirty minutes old: the length of one plan, read and apply
+sitting. Otherwise it drops the plan and says to plan again. The time is read
+as a plain decimal and in base ten: a leading zero would be read as octal by
+the shell, so anything but ten digits with no leading zero is refused.
+
+A plan made from a directory with uncommitted changes (or from one that
+changes while the plan runs) is still shown, because reading it is free, but
+**no record is written**, so `apply` refuses it for want of one; `plan` says so
+when it starts and again at its end. Putting the files back by hand afterwards
+does not help, because there is still no record: commit the change and make the
+plan again.
 
 ## The policy scan
 
@@ -538,7 +610,10 @@ passes through the redaction line by line, so its last words ("Enter a value:")
 appear only after the answer is typed; the question above them shows at once.
 Afterwards the script counts again and prints "removed" only when the state
 holds nothing; if resources remain it says so and exits nonzero, and the
-removal is run again.
+removal is run again. If Terraform's removal itself fails, the script ends
+with a sentence and exit code 1 (it names Terraform's own code): the state
+still holds what is left, so read it (`terraform -chdir=infra/terraform/aws
+state list`), look in the console for what is left, and run the removal again.
 
 One command is enough, with no Kubernetes step first, because nothing is
 installed into the cluster: the state holds everything that exists. **That
@@ -655,7 +730,17 @@ caught at plan):
 
 1. **The account's plan and limits.** The Free plan point above; Regional vCPU
    quotas; the instance classes offered in the chosen zones; whether an
-   opt-in Region (`eu-south-*`) is enabled in the account.
+   opt-in Region (`eu-south-*`) is enabled in the account. And the by-name
+   policy lookups, which are read at plan time, free, and each of which can
+   stop the plan: a **customer-managed policy of the same name** in the
+   account makes the lookup fail with "multiple results" (the provider lists
+   every policy and keeps the one whose name matches exactly); the applying
+   principal needs `iam:ListPolicies`, `iam:GetPolicy` and
+   `iam:GetPolicyVersion` to read them, a permission a narrow role may lack;
+   and **a wrong name waits before it fails**, because the provider retries a
+   missing policy for its propagation timeout before it gives up. These come
+   from the second review's reading of the provider's lookup code, not from a
+   run.
 2. **IAM eventual consistency** on the new roles. The association and the
    add-on depend on the role and its attachment, so the `depends_on` chains are
    the only mitigation. Expect an intermittent first-run error, and run the

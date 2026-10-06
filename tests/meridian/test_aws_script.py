@@ -16,6 +16,7 @@ call, so a test that finds neither in the script's output shows ``redact`` at
 work on what Terraform says.
 """
 
+import hashlib
 import os
 import pty
 import re
@@ -75,6 +76,10 @@ case "${args[0]}" in
     for argument in "${args[@]}"; do
       case "${argument}" in -out=*) : >"${chdir}/${argument#-out=}" ;; esac
     done
+    # A change to the module while the plan runs (an editor, a second shell).
+    if [[ "${STUB_PLAN_CHANGES_THE_MODULE:-0}" == 1 ]]; then
+      echo "# changed during the plan" >>"${chdir}/main.tf"
+    fi
     exit "${STUB_PLAN_STATUS:-0}" ;;
   apply) exit "${STUB_APPLY_STATUS:-0}" ;;
   state)
@@ -104,8 +109,10 @@ case "${args[0]}" in
     printf '  Enter a value: '
     read -r answer
     echo "answer=${answer}" >>"${STUB_LOG}"
-    [[ "${STUB_REMOVAL_KEEPS_STATE:-0}" == 1 ]] || : >"${here}/removed"
-    exit 0 ;;
+    keep="${STUB_REMOVAL_KEEPS_STATE:-0}"
+    [[ "${STUB_DESTROY_STATUS:-0}" == 0 ]] || keep=1
+    [[ "${keep}" == 1 ]] || : >"${here}/removed"
+    exit "${STUB_DESTROY_STATUS:-0}" ;;
   *) exit 0 ;;
 esac
 """
@@ -374,14 +381,23 @@ def with_local_file(tree: Tree, text: str = LOCAL_FILE, mode: int = 0o600) -> Tr
 
 
 def with_saved_plan(
-    tree: Tree, *, age_seconds: int = 0, commit: str | None = None
+    tree: Tree,
+    *,
+    age_seconds: int = 0,
+    commit: str | None = None,
+    time_text: str | None = None,
 ) -> Tree:
     """A saved plan with the record ``plan`` leaves beside it: this tree's
-    commit (or the one given) and the time it was made."""
-    (tree.module / PLAN_FILE).write_text("plan")
+    commit (or the one given), the time it was made (or the text given, to
+    write a time the script must refuse) and the SHA-256 of the plan file."""
+    plan = b"plan"
+    (tree.module / PLAN_FILE).write_bytes(plan)
     commit = commit or git(tree.root, "rev-parse", "HEAD")
-    made = int(time.time()) - age_seconds
-    (tree.module / META_FILE).write_text(f"commit={commit}\ntime={made}\n")
+    made = time_text if time_text is not None else str(int(time.time()) - age_seconds)
+    digest = hashlib.sha256(plan).hexdigest()
+    (tree.module / META_FILE).write_text(
+        f"commit={commit}\ntime={made}\nsha256={digest}\n"
+    )
     return tree
 
 
@@ -672,6 +688,128 @@ def test_blank_lines_and_comments_in_the_local_file_are_accepted(tree: Tree) -> 
     assert done.returncode == 0, everything_printed(done)
 
 
+def regions_the_module_allows() -> list[str]:
+    """The list in the module's validation of ``region``, read from the file."""
+    block = variable_block("region")
+    (listed,) = re.findall(r"contains\(\[([^\]]*)\], var\.region\)", block)
+    return re.findall(r'"([^"]+)"', listed)
+
+
+def regions_the_script_allows() -> list[str]:
+    text = (TERRAFORM_DIR / "aws.sh").read_text(encoding="utf-8")
+    (listed,) = re.findall(r"^readonly ALLOWED_REGIONS=\(([^)]*)\)$", text, re.M)
+    return listed.split()
+
+
+def with_value(tree: Tree, key: str, value: str) -> Tree:
+    lines = [
+        f"{key}={value}" if line.startswith(f"{key}=") else line for line in LOCAL_LINES
+    ]
+    return with_local_file(tree, "\n".join([*lines, ""]))
+
+
+def test_the_regions_the_script_accepts_are_the_six_the_module_accepts() -> None:
+    allowed = regions_the_module_allows()
+
+    assert len(allowed) == 6  # the reader found them
+    assert sorted(regions_the_script_allows()) == sorted(allowed)
+
+
+def test_each_region_the_module_allows_goes_to_the_cli_and_terraform(
+    tree: Tree,
+) -> None:
+    allowed = regions_the_module_allows()
+
+    for region in allowed:
+        with_value(tree, "MERIDIAN_AWS_REGION", region)
+        done = tree.run("plan")
+        assert done.returncode == 0, (region, everything_printed(done))
+
+    for region in allowed:
+        assert f"AWS_REGION={region}\n" in tree.aws_env()
+        assert f"TF_VAR_region={region}\n" in tree.terraform_env()
+
+
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize(
+    "region",
+    [
+        "us-east-1",
+        "eu-west-2",  # London: not an EU member state's Region
+        "eu-central-2",  # Zurich
+        "EU-CENTRAL-1",
+        "eu-central-1a",
+        "eu-central",
+        "../../etc",
+        "eu-central-1/../../x",
+        "eu-central-1+eu-west-1",
+    ],
+)
+def test_a_region_the_module_does_not_allow_is_refused_before_the_cli_is_called(
+    tree: Tree, subcommand: str, region: str
+) -> None:
+    with_value(tree, "MERIDIAN_AWS_REGION", region)
+
+    done = run_refusing(tree, subcommand)
+
+    assert_refused(tree, done, "MERIDIAN_AWS_REGION", subcommand)
+    assert "variables.tf" in everything_printed(done)  # says where the list is
+    assert region not in everything_printed(done)
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize("key", [line.split("=")[0] for line in LOCAL_LINES])
+def test_a_value_of_two_hundred_kilobytes_is_refused_by_its_line_number(
+    tree: Tree, subcommand: str, key: str
+) -> None:
+    with_value(tree, key, "a" * 200_000)
+    number = [line.split("=")[0] for line in LOCAL_LINES].index(key) + 1
+
+    done = run_refusing(tree, subcommand)
+
+    printed = everything_printed(done)
+    assert done.returncode == 1, printed[:300]
+    assert f"line {number}" in printed
+    assert "aaaa" not in printed
+    assert "Argument list too long" not in printed
+    assert tree.calls() == []
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize(("length", "accepted"), [(253, True), (254, False)])
+def test_a_value_is_bounded_at_two_hundred_and_fifty_three_characters(
+    tree: Tree, length: int, accepted: bool
+) -> None:
+    address = "a" * (length - len("@example.com")) + "@example.com"
+    with_value(tree, "MERIDIAN_AWS_BUDGET_EMAIL", address)
+
+    done = tree.run("plan")
+
+    if accepted:
+        assert done.returncode == 0, everything_printed(done)
+    else:
+        assert done.returncode == 1
+        assert "line 4" in done.stderr
+        assert tree.calls() == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize("mode", [0o000, 0o200])
+def test_a_local_file_its_owner_cannot_read_is_a_sentence_not_a_shell_error(
+    tree: Tree, subcommand: str, mode: int
+) -> None:
+    with_local_file(tree, mode=mode)
+
+    done = run_refusing(tree, subcommand)
+
+    assert_refused(tree, done, "cannot read", subcommand)
+    assert "chmod 600" in everything_printed(done)
+    assert "Permission denied" not in everything_printed(done)
+    assert tree.aws_calls() == []
+
+
 @pytest.mark.parametrize("subcommand", REFUSING)
 @pytest.mark.parametrize("mode", [0o640, 0o644, 0o666, 0o604, 0o660, 0o606])
 def test_a_local_file_that_group_or_others_can_read_or_write_is_refused(
@@ -947,6 +1085,53 @@ def test_the_removal_runs_terraform_under_a_private_umask_too(tree: Tree) -> Non
     assert set(umasks) == {"umask=0077"}
 
 
+# ── git runs no code from a configuration file ──────────────────────────────
+
+
+def with_fsmonitor(tree: Tree, where: str) -> Path:
+    """A git setting that runs a program on every `git status`, in the caller's
+    own configuration ("global": the stand-in home's .gitconfig) or in the
+    repository's ("local"). The program makes a file; the file is the proof."""
+    marker = tree.root / "fsmonitor-ran"
+    hook = tree.root / "fsmonitor-hook.sh"
+    hook.write_text(f'#!/bin/sh\ntouch "{marker}"\n')
+    hook.chmod(0o755)
+    if where == "global":
+        (tree.root / ".gitconfig").write_text(f"[core]\n\tfsmonitor = {hook}\n")
+    else:
+        git(tree.root, "config", "core.fsmonitor", str(hook))
+    return marker
+
+
+@pytest.mark.parametrize("where", ["global", "local"])
+@pytest.mark.parametrize("subcommand", ["plan", "apply"])
+def test_a_git_setting_that_runs_a_program_does_not_run_it_for_the_script(
+    tree: Tree, subcommand: str, where: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    marker = with_fsmonitor(tree, where)
+
+    done = tree.run(subcommand)
+
+    assert done.returncode == 0, everything_printed(done)
+    assert not marker.exists()
+    assert tree.terraform_calls(subcommand) != []
+
+
+def test_the_scripts_git_still_sees_a_changed_file_with_those_settings_off(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    with_fsmonitor(tree, "global")
+    (tree.module / "main.tf").write_text("# changed, not committed\n")
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "uncommitted")
+
+
 # ── nothing in the module's directory may change the plan unseen ─────────────
 
 VARIABLE_FILES = [
@@ -979,6 +1164,55 @@ def test_a_variable_file_or_an_override_file_in_the_module_is_refused_by_its_kin
 
     assert_refused(tree, done, kind, subcommand)
     assert tree.aws_calls() == []
+
+
+# The shell skips a name that begins with a dot, and git ignores these files, so
+# a loop over `*` never saw them; Terraform loads each of the first four. The
+# rest are names a file system that ignores case would hand to Terraform as the
+# real ones. "zzmark" is text of the file's own name: no refusal may repeat it.
+HIDDEN_AND_CASED_FILES = [
+    (".auto.tfvars", "variable file"),
+    (".auto.tfvars.json", "variable file"),
+    (".zzmark.auto.tfvars", "variable file"),
+    (".zzmark.auto.tfvars.json", "variable file"),
+    ("Terraform.tfvars", "variable file"),
+    ("TERRAFORM.TFVARS.JSON", "variable file"),
+    ("ZZMark.Auto.Tfvars", "variable file"),
+    (".ZZMARK.AUTO.TFVARS.JSON", "variable file"),
+    ("Override.tf", "override file"),
+    ("ZZMARK_OVERRIDE.TF.JSON", "override file"),
+    (".zzmark_override.tf", "override file"),
+]
+
+
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize(("name", "kind"), HIDDEN_AND_CASED_FILES)
+def test_a_hidden_or_differently_cased_file_of_those_kinds_is_refused_by_its_kind(
+    tree: Tree, subcommand: str, name: str, kind: str
+) -> None:
+    with_local_file(tree)
+    (tree.module / name).write_text("# changes the plan\n")
+
+    done = run_refusing(tree, subcommand)
+
+    assert_refused(tree, done, kind, subcommand)
+    assert "zzmark" not in everything_printed(done).lower()
+    assert tree.aws_calls() == []
+
+
+def test_the_files_the_module_directory_holds_by_design_are_not_refused(
+    tree: Tree,
+) -> None:
+    """The scan sees every name, dot names included, so the real directory's
+    own hidden files must not be mistaken for variable files."""
+    with_local_file(tree)
+    for name in (".terraform.lock.hcl", ".trivyignore", "README.md", "aws.tfplan"):
+        (tree.module / name).write_text("x\n")
+    (tree.module / ".terraform").mkdir()
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
 
 
 @pytest.mark.parametrize("name", ["other.tfvars", "notes.txt", "my_override_tf.txt"])
@@ -1104,7 +1338,7 @@ def test_a_failed_plan_leaves_no_saved_plan_to_be_applied(tree: Tree) -> None:
     assert not (tree.module / META_FILE).exists()
 
 
-def test_plan_records_this_trees_commit_and_the_time_beside_the_plan(
+def test_plan_records_the_commit_the_time_and_the_plan_files_hash_beside_the_plan(
     tree: Tree,
 ) -> None:
     with_local_file(tree)
@@ -1115,9 +1349,11 @@ def test_plan_records_this_trees_commit_and_the_time_beside_the_plan(
     assert done.returncode == 0, everything_printed(done)
     lines = (tree.module / META_FILE).read_text().splitlines()
     assert lines[0] == f"commit={git(tree.root, 'rev-parse', 'HEAD')}"
-    assert re.fullmatch(r"time=\d+", lines[1])
+    assert re.fullmatch(r"time=[1-9][0-9]{9}", lines[1])
     assert before <= int(lines[1].removeprefix("time=")) <= int(time.time())
-    assert len(lines) == 2
+    digest = hashlib.sha256((tree.module / PLAN_FILE).read_bytes()).hexdigest()
+    assert lines[2] == f"sha256={digest}"
+    assert len(lines) == 3
 
 
 # ── the state ────────────────────────────────────────────────────────────────
@@ -1191,6 +1427,97 @@ def test_without_a_home_the_state_has_no_place_and_the_script_refuses(
     assert done.returncode == 1
     assert "HOME" in done.stderr
     assert tree.terraform_calls("plan") == []
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "destroy"])
+def test_init_is_told_to_use_the_scripts_own_state_path_whatever_an_older_init_left(
+    tree: Tree, subcommand: str
+) -> None:
+    """Terraform stops with "Backend configuration changed" when a hand-made init
+    named another path, and -reconfigure takes the script's path with no copy of
+    a state and no question (read on a scratch directory, with no provider)."""
+    with_local_file(tree)
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    assert done.returncode == 0, everything_printed(done)
+    (init,) = tree.terraform_calls("init")
+    assert "-reconfigure" in init
+    assert "-input=false" in init
+    assert "-migrate-state" not in init
+    assert f"-backend-config=path={tree.state_dir / 'aws.tfstate'}" in init
+
+
+def test_the_init_of_validate_has_no_backend_and_needs_no_reconfigure(
+    tree: Tree,
+) -> None:
+    tree.run("validate")
+
+    (init,) = tree.terraform_calls("init")
+    assert "-backend=false" in init
+    assert "-reconfigure" not in init
+
+
+# What a hand-made workspace leaves: `.terraform/environment` names it, and
+# Terraform then keeps the state in terraform.tfstate.d/<name>/ in the module's
+# directory (a checkout), not at the path the script gave. Selecting the default
+# workspace again leaves the file in place with the word `default` in it.
+def with_workspace(tree: Tree, name: str | None) -> Tree:
+    (tree.module / ".terraform").mkdir(exist_ok=True)
+    if name is not None:
+        (tree.module / ".terraform" / "environment").write_text(name)
+    return tree
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "destroy"])
+@pytest.mark.parametrize("name", ["w1", "staging", "default-2", " default", ""])
+def test_another_workspace_is_refused_after_init_and_before_anything_else(
+    tree: Tree, subcommand: str, name: str
+) -> None:
+    with_local_file(tree)
+    with_workspace(tree, name)
+
+    done = run_refusing(tree, subcommand)
+
+    printed = everything_printed(done)
+    assert done.returncode == 1, printed
+    assert "workspace" in printed
+    assert "workspace select default" in printed  # how to get back
+    assert "terraform.tfstate.d" in printed
+    assert tree.subcommands() == ["init"]
+    assert tree.terraform_calls(subcommand) == []
+    assert_no_identifier_printed(done)
+
+
+def test_apply_refuses_a_workspace_other_than_the_default_and_keeps_the_plan(
+    tree: Tree,
+) -> None:
+    """apply does no init, so a file left between the plan and the apply would
+    send the applied state into the checkout unseen: .terraform/ is ignored."""
+    with_local_file(tree)
+    with_saved_plan(tree)
+    with_workspace(tree, "w1")
+
+    done = tree.run("apply")
+
+    assert done.returncode == 1, everything_printed(done)
+    assert "workspace select default" in done.stderr
+    assert tree.terraform_calls("apply") == []
+    assert (tree.module / PLAN_FILE).exists()  # the plan is still good
+
+
+@pytest.mark.parametrize("name", [None, "default", "default\n"])
+@pytest.mark.parametrize("subcommand", ["plan", "apply", "destroy"])
+def test_no_workspace_file_or_one_that_says_default_is_not_refused(
+    tree: Tree, subcommand: str, name: str | None
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    with_workspace(tree, name)
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    assert done.returncode == 0, everything_printed(done)
 
 
 # ── apply ────────────────────────────────────────────────────────────────────
@@ -1271,18 +1598,30 @@ def test_a_plan_with_no_record_beside_it_is_not_applied(tree: Tree) -> None:
     assert_plan_refused_and_dropped(tree, done, "record")
 
 
+COMMIT_LINE = "commit=0123456789abcdef0123456789abcdef01234567"
+TIME_LINE = "time=1791305195"
+HASH_LINE = "sha256=" + "0" * 64
+
+
 @pytest.mark.parametrize(
     "text",
     [
         "",
-        "commit=not-a-commit\ntime=1\n",
-        "time=1\n",
-        "commit=0123456789abcdef0123456789abcdef01234567\n",
-        "commit=0123456789abcdef0123456789abcdef01234567\ntime=soon\n",
-        "commit=0123456789abcdef0123456789abcdef01234567\ntime=1\nextra\n",
+        f"commit=not-a-commit\n{TIME_LINE}\n{HASH_LINE}\n",
+        f"{TIME_LINE}\n{HASH_LINE}\n",
+        f"{COMMIT_LINE}\n",
+        f"{COMMIT_LINE}\ntime=soon\n{HASH_LINE}\n",
+        f"{COMMIT_LINE}\ntime=1\n{HASH_LINE}\n",
+        f"{COMMIT_LINE}\n{TIME_LINE}\n",  # the two-line record of an older script
+        f"{COMMIT_LINE}\n{TIME_LINE}\nsha256=not-a-hash\n",
+        f"{COMMIT_LINE}\n{TIME_LINE}\nsha256={'0' * 63}\n",
+        f"{COMMIT_LINE}\n{TIME_LINE}\nsha256={'0' * 65}\n",
+        f"{COMMIT_LINE}\n{TIME_LINE}\nsha256={'A' * 64}\n",
+        f"{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\nextra\n",
+        f"{COMMIT_LINE}\n{HASH_LINE}\n{TIME_LINE}\n",  # the lines in another order
     ],
 )
-def test_a_record_that_is_not_a_commit_and_a_time_is_not_trusted(
+def test_a_record_that_is_not_a_commit_a_time_and_a_hash_is_not_trusted(
     tree: Tree, text: str
 ) -> None:
     with_local_file(tree)
@@ -1292,6 +1631,59 @@ def test_a_record_that_is_not_a_commit_and_a_time_is_not_trusted(
     done = tree.run("apply")
 
     assert_plan_refused_and_dropped(tree, done, "record")
+
+
+def test_a_plan_file_written_over_the_one_the_script_made_is_not_applied(
+    tree: Tree,
+) -> None:
+    """A `terraform plan -out=aws.tfplan` run by hand, with a -target or a
+    variable, after `make aws-plan`: the record is the script's, the bytes are
+    not."""
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / PLAN_FILE).write_bytes(b"a plan made by hand, over the script's")
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "SHA-256")
+
+
+def test_a_plan_file_that_is_the_one_the_record_names_is_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    plan = tree.run("plan")
+    assert plan.returncode == 0, everything_printed(plan)
+
+    done = tree.run("apply")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.terraform_calls("apply") != []
+
+
+@pytest.mark.parametrize(
+    "time_text",
+    [
+        "08",  # not an octal digit: bash stops with "value too great for base"
+        "01791305195",  # the same, with a leading zero
+        "0",
+        "015261222753",  # the octal spelling of the clock: bash read it as fresh
+        f"0{oct(int(time.time()))[2:]}",  # and of this very second
+        "+1791305195",
+        " 1791305195",
+        "1791305195 ",
+        "0x1000",
+        "17913051950000000000000",
+    ],
+)
+def test_a_time_that_is_not_a_plain_decimal_is_not_read_in_any_other_base(
+    tree: Tree, time_text: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree, time_text=time_text)
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "record")
+    assert "value too great" not in done.stderr
 
 
 def test_a_plan_made_at_another_commit_is_not_applied(tree: Tree) -> None:
@@ -1365,7 +1757,7 @@ def test_a_plan_dated_in_the_future_is_not_applied(tree: Tree) -> None:
     assert_plan_refused_and_dropped(tree, done, "old")
 
 
-def test_planning_in_a_module_with_uncommitted_changes_warns_that_it_cannot_be_applied(
+def test_planning_in_a_changed_module_shows_the_plan_but_writes_no_record(
     tree: Tree,
 ) -> None:
     with_local_file(tree)
@@ -1375,6 +1767,53 @@ def test_planning_in_a_module_with_uncommitted_changes_warns_that_it_cannot_be_a
 
     assert done.returncode == 0, everything_printed(done)
     assert "uncommitted" in done.stdout
+    assert "stub terraform plan" in done.stdout  # reading the plan is free
+    assert (tree.module / PLAN_FILE).exists()
+    assert not (tree.module / META_FILE).exists()
+
+
+def test_a_plan_made_from_a_changed_module_is_not_applied_even_after_a_hand_revert(
+    tree: Tree,
+) -> None:
+    """What the warning says becomes true: the plan was made from a tree no
+    commit describes, and putting the files back by hand afterwards does not
+    make the commit describe it."""
+    with_local_file(tree)
+    original = (tree.module / "main.tf").read_text()
+    (tree.module / "main.tf").write_text("# an edit the plan was made from\n")
+    tree.run("plan")
+    (tree.module / "main.tf").write_text(original)
+    assert git(tree.root, "status", "--porcelain", "--", "infra/terraform/aws") == ""
+
+    done = tree.run("apply")
+
+    assert done.returncode == 1, everything_printed(done)
+    assert "record" in done.stderr
+    assert "make aws-plan" in done.stderr
+    assert tree.terraform_calls("apply") == []
+    assert len(tree.aws_calls()) == 1  # the plan's own, none for the apply
+    assert not (tree.module / PLAN_FILE).exists()
+
+
+def test_an_untracked_file_in_the_module_at_plan_time_also_writes_no_record(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    (tree.module / "extra.tf").write_text("# a new resource\n")
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert not (tree.module / META_FILE).exists()
+
+
+def test_a_module_that_changes_while_the_plan_runs_gets_no_record(tree: Tree) -> None:
+    with_local_file(tree)
+
+    done = tree.run("plan", STUB_PLAN_CHANGES_THE_MODULE="1")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert not (tree.module / META_FILE).exists()
 
 
 # ── removal ──────────────────────────────────────────────────────────────────
@@ -1511,6 +1950,26 @@ def test_removal_does_not_say_removed_while_the_state_still_holds_resources(
     assert done.returncode == 1, done.stdout
     assert "removed." not in done.stdout
     assert "still holds" in done.stdout
+
+
+def test_a_failed_removal_says_what_is_left_and_what_to_do_and_never_says_removed(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, STUB_DESTROY_STATUS="3")
+
+    assert done.returncode == 1, done.stdout
+    assert "removed." not in done.stdout
+    assert "failed" in done.stdout
+    assert "exit 3" in done.stdout
+    assert "still holds what is left" in done.stdout
+    assert "state list" in done.stdout  # how to read it
+    assert "console" in done.stdout
+    assert "make aws-destroy" in done.stdout  # run it again
+    assert "Removal" in done.stdout  # the README's section
+    assert tree.subcommands() == ["init", "state", "destroy"]  # no second count
+    assert_no_identifier_printed(done)
 
 
 # ── the script and the module agree on the variables' names ─────────────────
@@ -1762,6 +2221,10 @@ REFUSED = "Invalid value for variable"
         "192.167.1.1/32",
         "223.255.255.255/32",
         "11.0.0.1/32",
+        "8.8.8.8/32",
+        "203.0.113.0/32",  # a bare zero is an octet; a leading zero is not
+        "1.0.0.1/32",
+        "203.0.113.100/32",
     ],
 )
 def test_a_public_ipv4_address_as_a_slash_32_is_accepted(
@@ -1790,6 +2253,16 @@ def test_a_public_ipv4_address_as_a_slash_32_is_accepted(
         "203.0.113.0/24",
         "203.0.113.7",
         "999.1.1.1/32",
+        # An octet has no leading zero: "010" slipped past the private-range
+        # pattern, which expects "10", and some programs read it as octal.
+        "010.1.1.1/32",
+        "010.0.0.1/32",
+        "10.01.1.1/32",
+        "203.0.113.07/32",
+        "203.00.113.7/32",
+        "00.1.1.1/32",
+        "1.1.1.001/32",
+        "0127.0.0.1/32",
         "2001:db8::1/32",
         "not-an-address",
         "",

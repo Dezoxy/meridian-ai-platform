@@ -5,10 +5,13 @@
 #             credential (it is run with none) and no local file, and never
 #             calls the aws CLI.
 #   plan      init, then plan into aws.tfplan; changes nothing in AWS. Records
-#             the commit and the time beside the plan.
+#             the commit, the time and the plan file's SHA-256 beside the plan,
+#             unless the module's directory has uncommitted changes: the plan is
+#             shown then, and no record is written, so apply refuses it.
 #   apply     apply exactly that saved plan, then remove it (creates AWS
 #             resources, which cost money). Refuses a plan that is not this
-#             tree's or is older than thirty minutes.
+#             tree's, is not the file the record names, or is older than thirty
+#             minutes.
 #   destroy   remove everything the module created. Terraform asks its own
 #             question, and this refuses unless standard input is a terminal.
 #             That stops an accident and a plain shell. It does NOT stop a
@@ -63,6 +66,14 @@ readonly PLAN_MAX_AGE_SECONDS=1800
 readonly STATE_DIR_UNDER_HOME=.local/state/meridian-aws
 readonly STATE_FILE_NAME=aws.tfstate
 readonly LOCAL_KEYS=(MERIDIAN_AWS_ACCOUNT_ID MERIDIAN_AWS_REGION MERIDIAN_AWS_ENDPOINT_CIDR MERIDIAN_AWS_BUDGET_EMAIL)
+# The Regions of EU member states the module accepts (hard rule 3), the list in
+# the validation of "region" in aws/variables.tf; a test holds the two equal. The
+# local file's Region goes to the aws CLI as given, so it is checked here first.
+readonly ALLOWED_REGIONS=(eu-central-1 eu-west-1 eu-west-3 eu-north-1 eu-south-1 eu-south-2)
+# The longest a value in the local file may be: the length of a host name, far
+# above anything the four values need, and short enough that no value ends in a
+# raw shell error (a 200 KB one did).
+readonly VALUE_MAX_LENGTH=253
 
 # What each program is given. Both lists are the whole of it; the names
 # TF_VAR_* are the ones load_aws_env exports and no other, because every other
@@ -140,8 +151,24 @@ tf_signed() {
 tf_state_list() { run_clean plain terraform -chdir="${AWS_MODULE_DIR}" state list -no-color; }
 
 # git with the environment of this script's choosing: a GIT_DIR or a
-# GIT_WORK_TREE of the caller must not point it at another repository.
-git_here() { run_clean plain git -C "${AWS_MODULE_DIR}" "$@"; }
+# GIT_WORK_TREE of the caller must not point it at another repository. And with
+# no configuration that can run a program: the caller's global and the system
+# configuration are switched off (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM; the
+# first needs git 2.32, from 2021), and the two settings that make `git status`
+# run a program are set by hand, which outranks the repository's own file too:
+# core.fsmonitor (a program asked what changed; a line in ~/.gitconfig made it
+# run in review) and core.hooksPath (hooks). The two commands used here,
+# `status --porcelain` and `rev-parse`, reach nothing else that runs a program:
+# neither talks to a remote, so no credential helper is asked, and neither pages
+# when its output is not a terminal, so no core.pager or GIT_PAGER runs. A clean
+# filter would run on `status` only for a path with a filter attribute and a
+# command in a configuration file: the global and system ones are off, and the
+# repository's own file is the checkout's (whoever can write it can already run
+# code as this user, through a hook).
+git_here() {
+  run_clean plain env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "${AWS_MODULE_DIR}" "$@"
+}
 
 # What the local file may hold and what a value may be made of: digits, letters
 # and the few characters of an account number, a Region, an address with a prefix
@@ -150,6 +177,8 @@ git_here() { run_clean plain git -C "${AWS_MODULE_DIR}" "$@"; }
 local_file_access() {
   [[ -O "${AWS_LOCAL_ENV}" ]] ||
     die "${AWS_LOCAL_ENV} is not owned by the user running this; it must be yours and mode 600"
+  [[ -r "${AWS_LOCAL_ENV}" ]] ||
+    die "cannot read ${AWS_LOCAL_ENV}: its owner has no read permission; run: chmod 600 ${AWS_LOCAL_ENV}"
   local mode
   mode="$(stat -c '%a' "${AWS_LOCAL_ENV}" 2>/dev/null || stat -f '%Lp' "${AWS_LOCAL_ENV}")"
   mode="000${mode}"
@@ -174,7 +203,7 @@ load_aws_env() {
     IFS='|'
     printf '%s' "${LOCAL_KEYS[*]}"
   )"
-  local pattern="^(${keys})=([A-Za-z0-9@._/+-]*)\$"
+  local pattern="^(${keys})=([A-Za-z0-9@._/+-]{0,${VALUE_MAX_LENGTH}})\$"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     number=$((number + 1))
     if [[ -z "${line}" || "${line}" == \#* ]]; then continue; fi
@@ -193,6 +222,12 @@ load_aws_env() {
   done
   [[ "${MERIDIAN_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] ||
     die "MERIDIAN_AWS_ACCOUNT_ID in ${AWS_LOCAL_ENV} is not a twelve-digit account number"
+  local region allowed=no
+  for region in "${ALLOWED_REGIONS[@]}"; do
+    if [[ "${region}" == "${MERIDIAN_AWS_REGION}" ]]; then allowed=yes; fi
+  done
+  [[ "${allowed}" == yes ]] ||
+    die "MERIDIAN_AWS_REGION in ${AWS_LOCAL_ENV} is not one of the six Regions of EU member states the module allows (hard rule 3: EU residency); the list is the validation of region in infra/terraform/aws/variables.tf, and nothing of the value is printed"
   # One Region for the CLI, the provider and the variable; the default of the
   # caller's profile is not consulted (and is not passed on).
   unset AWS_DEFAULT_REGION
@@ -219,11 +254,20 @@ require_pinned_account() {
 # Nothing in the module's directory may change what a plan does without the
 # plan showing why: Terraform loads these files by itself, and git ignores the
 # variable files, so a reviewer would not see one. Only the KIND is named.
+#
+# dotglob makes the loop see names that begin with a dot, which the shell's own
+# * skips: Terraform loads .auto.tfvars and .x.auto.tfvars, and git ignores them
+# (*.tfvars), so a hidden one would change the plan with nothing to show it.
+# nullglob leaves no literal * to look at in an empty directory. The names are
+# compared in lower case: on a file system that ignores case (macOS, Windows)
+# Terraform finds Terraform.tfvars as terraform.tfvars. On Linux it would not,
+# and such a file is refused all the same: a refusal there costs a rename, and
+# telling the two file systems apart costs more than that.
 refuse_files_that_change_the_plan() {
   local path name
+  shopt -s dotglob nullglob
   for path in "${AWS_MODULE_DIR}"/*; do
-    if [[ ! -e "${path}" && ! -L "${path}" ]]; then continue; fi
-    name="$(basename "${path}")"
+    name="$(printf '%s' "${path##*/}" | tr '[:upper:]' '[:lower:]')"
     case "${name}" in
       terraform.tfvars | terraform.tfvars.json | *.auto.tfvars | *.auto.tfvars.json)
         die "the module directory holds a variable file, which Terraform loads by itself and which would change the plan unseen (terraform.tfvars, terraform.tfvars.json, *.auto.tfvars and *.auto.tfvars.json are the ones it loads); remove it and give values through the local file"
@@ -233,6 +277,7 @@ refuse_files_that_change_the_plan() {
         ;;
     esac
   done
+  shopt -u dotglob nullglob
 }
 
 # The state's directory under home, made private, and the path Terraform is
@@ -246,12 +291,37 @@ prepare_state() {
   STATE_PATH="${STATE_DIR}/${STATE_FILE_NAME}"
 }
 
+# The state is under home only in the default workspace. A workspace made by hand
+# is named in .terraform/environment and stays selected across inits; Terraform
+# then keeps its state in terraform.tfstate.d/<name>/ in the module's directory (a
+# checkout), not at the path given at init, and a removal would find the state
+# empty. TF_WORKSPACE and TF_DATA_DIR are not passed on (run_clean), so this file
+# is the one Terraform reads. Selecting the default workspace again leaves the
+# file in place, with the word default in it: the content is read, not the
+# file's existence. This reads the file rather than asking `terraform workspace
+# show`: no further call, and nothing for a stand-in to imitate. A file that is
+# empty or unreadable is refused too.
+require_default_workspace() {
+  local file="${AWS_MODULE_DIR}/.terraform/environment" name=default
+  if [[ -e "${file}" || -L "${file}" ]]; then
+    name=""
+    IFS= read -r name <"${file}" || true
+  fi
+  [[ "${name}" == default ]] ||
+    die "the module's directory is on a Terraform workspace other than the default one (.terraform/environment names it): Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home, and a removal would find it empty. Get back with: terraform -chdir=infra/terraform/aws workspace select default (infra/terraform/aws/README.md, State)"
+}
+
 # init with the local state's path, and with the committed lock file as the
-# only authority on the provider.
+# only authority on the provider. -reconfigure: the path is always this script's
+# own, so an init made earlier with another path (by hand) is replaced instead of
+# stopping with "Backend configuration changed". It copies no state and asks no
+# question (with -input=false): a state at the other path is left where it is
+# and this one's is read from the new path. Then the workspace must be the default.
 init_with_state() {
   log "terraform init"
-  tf_plain init -input=false -lockfile=readonly -backend-config="path=${STATE_PATH}" 2>&1 | redact ||
+  tf_plain init -input=false -reconfigure -lockfile=readonly -backend-config="path=${STATE_PATH}" 2>&1 | redact ||
     die "terraform init failed"
+  require_default_workspace
 }
 
 # The names of what the state holds, without data sources, one a line.
@@ -284,6 +354,14 @@ module_changes() {
 
 drop_plan() { rm -f "${AWS_MODULE_DIR}/${PLAN_FILE}" "${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}"; }
 
+# The SHA-256 of a file, as sixty-four lower-case hex digits and nothing else.
+file_sha256() {
+  local out
+  out="$(sha256sum "$1" 2>/dev/null || shasum -a 256 "$1" 2>/dev/null)" ||
+    die "cannot compute a SHA-256 (neither sha256sum nor shasum is available)"
+  printf '%s\n' "${out%% *}"
+}
+
 cmd_validate() {
   log "terraform fmt -check"
   tf_plain fmt -check -diff 2>&1 | redact ||
@@ -309,7 +387,7 @@ cmd_plan() {
   commit="$(current_commit)"
   changes="$(module_changes)"
   if [[ -n "${changes}" ]]; then
-    log "warning: the module directory has uncommitted changes; this plan cannot be applied until they are committed and the plan is made again"
+    log "warning: the module directory has uncommitted changes; the plan is shown (reading it is free) but no record is written for it, so 'make aws-apply' will refuse it until they are committed and the plan is made again"
   fi
   drop_plan # a plan that fails must not leave an older one to be applied
   init_with_state
@@ -320,7 +398,19 @@ cmd_plan() {
     drop_plan
     die "terraform plan failed; nothing was changed in AWS"
   }
-  printf 'commit=%s\ntime=%s\n' "${commit}" "$(date +%s)" >"${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}"
+  # The record says "made from this commit, from a directory no change had
+  # touched". The directory is read again now: a file edited while the plan ran
+  # is a change the commit does not describe either.
+  local commit_after changes_after
+  commit_after="$(current_commit)"
+  changes_after="$(module_changes)"
+  if [[ -n "${changes}" || -n "${changes_after}" || "${commit}" != "${commit_after}" ]]; then
+    log "no record was written: the plan above was made from a module directory that no commit describes, so 'make aws-apply' will refuse it; commit the change, then make the plan again"
+    return 0
+  fi
+  local digest
+  digest="$(file_sha256 "${AWS_MODULE_DIR}/${PLAN_FILE}")"
+  printf 'commit=%s\ntime=%s\nsha256=%s\n' "${commit}" "$(date +%s)" "${digest}" >"${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}"
   log "review the plan above (network, cluster, registry, database, secret, budget), then: make aws-apply"
 }
 
@@ -329,21 +419,31 @@ cmd_plan() {
 # Otherwise it is dropped (it is of no use any more) and the sentence says to
 # plan again.
 require_a_plan_that_is_this_trees_and_fresh() {
-  local record="${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}" line_commit line_time
-  local planned_commit planned_time now age commit changes
+  local record="${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}" line_commit line_time line_hash
+  local planned_commit planned_time planned_hash now age commit changes
   stale() {
     drop_plan
     die "$1; run 'make aws-plan' again"
   }
-  [[ -f "${record}" ]] || stale "the saved plan has no record beside it of the commit and the time it was made at"
-  { IFS= read -r line_commit && IFS= read -r line_time && ! IFS= read -r _; } <"${record}" ||
-    stale "the record beside the saved plan is not a commit and a time"
+  [[ -f "${record}" ]] || stale "the saved plan has no record beside it of the commit, the time and the file it was made as (a plan made from a module directory with uncommitted changes gets none)"
+  { IFS= read -r line_commit && IFS= read -r line_time && IFS= read -r line_hash && ! IFS= read -r _; } <"${record}" ||
+    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
   [[ "${line_commit}" =~ ^commit=([0-9a-f]{40})$ ]] ||
-    stale "the record beside the saved plan is not a commit and a time"
+    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
   planned_commit="${BASH_REMATCH[1]}"
-  [[ "${line_time}" =~ ^time=([0-9]{1,12})$ ]] ||
-    stale "the record beside the saved plan is not a commit and a time"
+  # Ten digits, no sign, no leading zero: a plain decimal. The shell reads a
+  # number with a leading zero as octal (08 is an error, and the octal spelling of
+  # the clock is read as the clock), so nothing else gets as far as arithmetic.
+  [[ "${line_time}" =~ ^time=([1-9][0-9]{9})$ ]] ||
+    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
   planned_time="${BASH_REMATCH[1]}"
+  [[ "${line_hash}" =~ ^sha256=([0-9a-f]{64})$ ]] ||
+    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
+  planned_hash="${BASH_REMATCH[1]}"
+  # The record is the script's and the plan file may not be: a plan written by
+  # hand over it (a -target, another variable) would carry this record's commit.
+  [[ "$(file_sha256 "${AWS_MODULE_DIR}/${PLAN_FILE}")" == "${planned_hash}" ]] ||
+    stale "the saved plan file is not the one the record beside it was made for (its SHA-256 differs): something wrote it after 'make aws-plan'"
   commit="$(current_commit)"
   [[ "${planned_commit}" == "${commit}" ]] ||
     stale "the saved plan was made at another commit than the one checked out now"
@@ -351,7 +451,7 @@ require_a_plan_that_is_this_trees_and_fresh() {
   [[ -z "${changes}" ]] ||
     stale "the module directory has uncommitted changes that the saved plan was not made from"
   now="$(date +%s)"
-  age=$((now - planned_time))
+  age=$((now - 10#${planned_time}))
   ((age >= 0 && age <= PLAN_MAX_AGE_SECONDS)) ||
     stale "the saved plan is too old (more than $((PLAN_MAX_AGE_SECONDS / 60)) minutes) or dated in the future"
 }
@@ -362,6 +462,9 @@ require_a_plan_that_is_this_trees_and_fresh() {
 cmd_apply() {
   [[ -f "${AWS_MODULE_DIR}/${PLAN_FILE}" ]] || die "no ${PLAN_FILE}; run 'make aws-plan' first"
   refuse_files_that_change_the_plan
+  # apply runs no init, so a workspace file left since the plan is checked here.
+  # The plan is not dropped for it: it is still good once the workspace is back.
+  require_default_workspace
   require_a_plan_that_is_this_trees_and_fresh
   load_aws_env
   require_pinned_account
@@ -396,7 +499,10 @@ cmd_destroy() {
     die "the state holds nothing, so Terraform would remove nothing: the file is ${STATE_PATH}. If the state was lost (a deleted checkout, another machine, another user), what it described may still exist and bill: look in the console, in the Region of the local file (infra/terraform/aws/README.md, Removal, 'If the state is lost')"
   log "the state holds ${before} resources"
   log "terraform destroy: Terraform asks for the confirmation"
-  tf_signed destroy 2>&1 | redact
+  local status=0
+  tf_signed destroy 2>&1 | redact || status=$?
+  ((status == 0)) ||
+    die "terraform's removal failed (exit ${status}); the state still holds what is left. Read it with 'terraform -chdir=infra/terraform/aws state list', look in the console (in the Region of the local file) for what is left, then run 'make aws-destroy' again: Terraform removes what is still in the state (infra/terraform/aws/README.md, Removal)"
   after="$(count_state)" ||
     die "cannot read the state after the removal; look in the console for what is left"
   ((after == 0)) ||

@@ -35,14 +35,16 @@ variable "api_access_cidr" {
 
   validation {
     # cidrhost alone accepts an IPv6 prefix that ends in /32, which EKS refuses at
-    # apply; the first pattern keeps to a dotted-quad IPv4 address, cidrhost
+    # apply; the first pattern keeps to a dotted-quad IPv4 address with no leading
+    # zero in an octet ("010.1.1.1" is not "10.1.1.1" to every program, and it
+    # slipped past the private-range pattern below, which expects "10"); cidrhost
     # rejects an octet above 255. The second refuses the ranges that are never a
     # machine's public address (0/8, 10/8, 100.64/10, 127/8, 169.254/16,
     # 172.16/12, 192.168/16, and 224/4 and above): such a value would lock the
     # owner out of kubectl. try() makes a value that is not an address fail this
     # clause, not stop the plan with an error of Terraform's own.
     condition = (
-      can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$", var.api_access_cidr)) &&
+      can(regex("^(0|[1-9][0-9]{0,2})(\\.(0|[1-9][0-9]{0,2})){3}/32$", var.api_access_cidr)) &&
       can(cidrhost(var.api_access_cidr, 0)) &&
       var.api_access_cidr != "0.0.0.0/32" &&
       !try(can(regex("^(0|10|127)\\.|^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|^169\\.254\\.|^172\\.(1[6-9]|2[0-9]|3[01])\\.|^192\\.168\\.|^(22[4-9]|2[3-5][0-9])\\.", var.api_access_cidr)), true)

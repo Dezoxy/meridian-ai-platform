@@ -84,10 +84,30 @@ def malformed_entries(text: str) -> list[str]:
     return [entry for entry in entries(text) if not ENTRY.fullmatch(entry)]
 
 
+INLINE_IGNORE = re.compile(r"(trivy|tfsec)\s*:\s*ignore", re.IGNORECASE)
+
+
 def inline_ignores(text: str) -> list[str]:
-    """Lines of a Terraform file that carry a Trivy ignore comment, which
-    silences a check for one resource where no reason is asked for."""
-    return [line for line in text.splitlines() if "trivy:ignore" in line.lower()]
+    """Lines of a Terraform file that carry an inline ignore comment, which
+    silences a check for one resource where no reason is asked for. The pinned
+    scanner honours the older tool's word (``tfsec:ignore:``) as it does its own
+    (``trivy:ignore:``), in a line comment of either style and in a block
+    comment, with a check ID or a star: all of them are found, in any case and
+    with spaces round the colon."""
+    return [line for line in text.splitlines() if INLINE_IGNORE.search(line)]
+
+
+def module_blocks(text: str) -> list[str]:
+    """Lines that open a ``module`` block: the counts of clusters and subnets
+    cannot see inside one."""
+    return [line for line in text.splitlines() if re.match(r'\s*module\s+"', line)]
+
+
+def count_resources(text: str, resource_type: str) -> int:
+    """Blocks of a resource type, whatever the indentation and spacing."""
+    return len(
+        re.findall(rf'^\s*resource\s+"{resource_type}"\s+', text, flags=re.MULTILINE)
+    )
 
 
 def scanner_files(directory) -> list[str]:
@@ -302,14 +322,32 @@ def test_no_terraform_file_of_the_module_carries_an_inline_ignore_comment() -> N
         "# trivy:ignore:AWS-0107:exp:2099-12-31",
         "  //trivy:ignore:aws-0107",
         "#TRIVY:IGNORE:AWS-0107",
+        # The three the second review ran on the pinned image: the scan passed
+        # with each of them in place, and it is the scanner's own spelling of an
+        # ignore as much as trivy:ignore is.
+        "#tfsec:ignore:AWS-0107",
+        "#tfsec:ignore:*",
+        "/* tfsec:ignore:AWS-0107 */",
+        "# TFSEC:IGNORE:AWS-0107",
+        "// tfsec : ignore : AWS-0107",
+        "#trivy : ignore:*",
+        "/* trivy:ignore:AWS-0107 */",
     ],
 )
 def test_an_inline_ignore_comment_is_found(line: str) -> None:
     assert inline_ignores(f'resource "x" "y" {{\n{line}\n}}\n') == [line]
 
 
-def test_an_ordinary_comment_is_not_an_inline_ignore() -> None:
-    assert inline_ignores("# Trivy accepts this, see .trivyignore\n") == []
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# Trivy accepts this, see .trivyignore",
+        "# tfsec was the older tool's name for this scanner",
+        "# ignore the next line: nothing here silences a check",
+    ],
+)
+def test_an_ordinary_comment_is_not_an_inline_ignore(line: str) -> None:
+    assert inline_ignores(f"{line}\n") == []
 
 
 def test_the_module_directory_holds_no_scanner_configuration_or_yaml_ignore_file() -> (
@@ -339,8 +377,8 @@ def test_the_clusters_and_subnets_are_held_to_what_the_ignore_reasons_describe()
         path.read_text(encoding="utf-8") for path in sorted(MODULE.glob("*.tf"))
     )
 
-    clusters = len(re.findall(r'^resource "aws_eks_cluster" ', text, re.MULTILINE))
-    subnets = len(re.findall(r'^resource "aws_subnet" ', text, re.MULTILINE))
+    clusters = count_resources(text, "aws_eks_cluster")
+    subnets = count_resources(text, "aws_subnet")
 
     reasons = (
         "infra/terraform/aws/.trivyignore accepts AWS-0039 and AWS-0040 for the one "
@@ -351,6 +389,48 @@ def test_the_clusters_and_subnets_are_held_to_what_the_ignore_reasons_describe()
     )
     assert clusters == 1, reasons
     assert subnets == 1, reasons
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('resource "aws_subnet" "a" {}\n', 1),
+        ('resource  "aws_subnet"   "a" {}\n', 1),
+        ('  resource\t"aws_subnet" "a" {}\n', 1),
+        ('resource "aws_subnet" "a" {}\nresource "aws_subnet" "b" {}\n', 2),
+        ('resource "aws_subnet_other" "a" {}\n', 0),
+        ('# resource "aws_subnet" "a" {}\n', 0),
+    ],
+)
+def test_the_resource_count_tolerates_any_spacing(text: str, expected: int) -> None:
+    assert count_resources(text, "aws_subnet") == expected
+
+
+@pytest.mark.parametrize(
+    "line", ['module "network" {', '  module   "network" {', 'module\t"network" {']
+)
+def test_a_module_block_is_found(line: str) -> None:
+    assert module_blocks(f'{line}\n  source = "./x"\n}}\n') == [line]
+
+
+def test_the_module_calls_no_module_that_could_hide_a_cluster_or_a_subnet() -> None:
+    found = {
+        path.name: module_blocks(path.read_text(encoding="utf-8"))
+        for path in sorted(MODULE.glob("*.tf"))
+    }
+
+    assert {name: lines for name, lines in found.items() if lines} == {}
+    # A file the glob above does not read would hide a resource just as well.
+    assert sorted(path.name for path in MODULE.glob("*.tf.json")) == []
+
+
+def test_the_accepted_findings_are_the_three_the_reasons_are_written_for() -> None:
+    """A fourth entry needs a change of this list, with its reason, in the same
+    diff as the entry: a new ID with a reason of five words would otherwise pass
+    the shape and the reason tests."""
+    text = TRIVYIGNORE.read_text(encoding="utf-8")
+
+    assert sorted(entries(text)) == ["AWS-0039", "AWS-0040", "AWS-0164"]
 
 
 def test_the_cluster_reasons_say_what_eks_encrypts_and_who_needs_the_endpoint() -> None:
@@ -405,3 +485,49 @@ def test_the_readme_says_what_stops_a_session_and_what_does_not() -> None:
     assert "## What stops a session, and what does not" in readme
     assert "a session cannot run it" not in readme
     assert "which a session's shell does not have" not in readme
+
+
+def readme_prose() -> str:
+    """The module's README with every run of whitespace made one space, so that
+    a sentence is found whatever its line breaks."""
+    return " ".join((MODULE / "README.md").read_text(encoding="utf-8").split())
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # What the environment does not close, named once each.
+        "The programs come from the caller's `PATH`",
+        "`credentials_helper`",
+        "`dev_overrides`",
+        "A shell start-up variable** (`BASH_ENV`)",
+        # What the second review found the README overstating, now true or said.
+        "a hidden one (`.auto.tfvars`, `.x.auto.tfvars`)",
+        "the SHA-256 of the plan file",
+        "**no record is written**",
+        "`.terraform/environment`",
+        "workspace select default",
+        "`-reconfigure` copies no state and asks no question",
+        "is written to trust one service account of one cluster",
+        "is the documentation's word",
+        "the sentence about group and others is what it gets",
+        # What the by-name policy lookups cost at plan time.
+        "customer-managed policy of the same name",
+        "`iam:ListPolicies`, `iam:GetPolicy` and `iam:GetPolicyVersion`",
+        "a wrong name waits before it fails",
+        # Pod Identity: session tags switched off.
+        "`PackedPolicyTooLarge`",
+    ],
+)
+def test_the_readme_says_what_the_second_review_found_it_left_out(
+    sentence: str,
+) -> None:
+    assert sentence in readme_prose()
+
+
+def test_the_readme_no_longer_says_what_the_second_review_found_untrue() -> None:
+    readme = readme_prose()
+
+    assert "so a plan prints `(sensitive value)` for each" not in readme
+    # The record was written for such a plan, and a revert made it applicable.
+    assert "can therefore not be applied" not in readme
