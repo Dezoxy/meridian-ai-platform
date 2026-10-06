@@ -26,8 +26,9 @@ tenant's budget refuses ends it too (429, or the earlier attempt's answer).
 Every candidate touched leaves one audit row, except that a refusal, whether
 policy's 403 or a tenant limit's 429 or 413, leaves at most one row per tenant
 and reason per minute, and that row says how many refusals it stands in for, so
-a flood cannot fill the log, and the count of a flood's last window is written
-once the flood has been quiet for two minutes, or at shutdown (T-49). The audit
+a flood cannot fill the log, and the count of a flood's last window, of these
+refusals and of the caller check's, is written once the flood has been quiet
+for two minutes, or at shutdown (T-49). The audit
 write is part of the answer, so a call that cannot be recorded returns no
 output (QA-05). There is no retry of one deployment: the next candidate is the
 retry. The limits apply in replay mode as in live mode: replay simulates the
@@ -81,6 +82,7 @@ from meridian.platform.common.identity import (
 from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.telemetry import set_span_attributes, start_span
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.gateway.budget import (
@@ -113,6 +115,7 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.refusals import (
     LIMIT_ANSWERS,
+    MODEL_CALL_EVENT,
     RATE_STORE_RETRY_SECONDS,
     LimitRefusalReason,
     RefusalAudit,
@@ -293,13 +296,24 @@ def create_app(
         )
 
     refusals = RefusalAudit(RefusalAuditThrottle(clock=clock), audit)
+    # The caller check's own throttle: its keys are a service and a word, not a
+    # tenant and a reason. Its floods are summarised by the same writer.
+    caller_throttle = RefusalAuditThrottle(clock=clock)
+
+    def write_ended(*, everything: bool = False) -> None:
+        """The counts of the floods that ended, of model-call refusals and of
+        the caller check's; neither writer raises an ``Exception``."""
+        refusals.write_ended(everything=everything)
+        write_ended_summaries(
+            caller_throttle, audit, MODEL_CALL_EVENT, everything=everything
+        )
 
     def close_all() -> None:
         """Only what this function built: an injected provider is its caller's.
         The counts of refusal floods are written first; with the database
         unreachable they are lost with the process, and the shutdown goes on."""
         try:
-            refusals.write_ended(everything=True)
+            write_ended(everything=True)
             if close is not None:
                 close()
         finally:
@@ -337,7 +351,7 @@ def create_app(
         app,
         policy,
         audited_refusals(
-            RefusalAuditThrottle(clock=clock),  # its own: not summarised
+            caller_throttle,
             lambda reason, who, carried: audit(
                 "model.call",
                 "refused",
@@ -565,7 +579,7 @@ def create_app(
         the app has no check (and then a policy refuses every name). The count
         of a flood that ended is written first, with this request of any
         tenant."""
-        refusals.write_ended()
+        write_ended()
         record = meters.call_record()
         try:
             with start_span(tracer, span_name) as span:

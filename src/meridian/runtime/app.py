@@ -49,6 +49,7 @@ from meridian.platform.common.identity import (
 from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -295,7 +296,11 @@ def create_app(
     servers: Mapping[str, ToolTarget] = (
         settings.tool_servers if tool_servers is None else tool_servers
     )
+    # Two throttles, as the rows are of two events: ``run.refused`` for a caller
+    # the registry does not map and a name it may not use, ``tool.call`` for a
+    # tool a graph may not call. Each is summarised under its own event.
     refusal_throttle = RefusalAuditThrottle(clock)
+    tool_throttle = RefusalAuditThrottle(clock)
     for server_id in servers:
         if not registry.has_server(server_id):
             raise SettingsError(f"tool server {server_id!r} is not in the registry")
@@ -326,18 +331,38 @@ def create_app(
     def saver_scope() -> AbstractContextManager[BaseCheckpointSaver]:
         return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
 
+    def audit(event: str, outcome: str, **fields: Any) -> None:
+        write_audit(
+            dsn,
+            AuditEvent(service=SERVICE_NAME, event=event, outcome=outcome, **fields),
+        )
+
+    def write_ended(*, everything: bool = False) -> None:
+        """The counts of the floods that ended, which no row carries, by the
+        writer every service shares. It never raises an ``Exception``; the
+        route handlers call it, in the thread of their own request."""
+        write_ended_summaries(
+            refusal_throttle, audit, "run.refused", everything=everything
+        )
+        write_ended_summaries(tool_throttle, audit, "tool.call", everything=everything)
+
     def close() -> None:
+        # The counts of refusal floods are written first; with the database
+        # unreachable they are lost with the process, and the shutdown goes on.
         # The gateway client and the meter provider are closed only when the
         # app made them: an injected one is its owner's.
         try:
-            tool_transport.close()
+            write_ended(everything=True)
         finally:
             try:
-                if http_client is None:
-                    http.close()
+                tool_transport.close()
             finally:
-                if owns_meter_provider:
-                    shut_down(app_meter_provider)  # a failure is a WARNING
+                try:
+                    if http_client is None:
+                        http.close()
+                finally:
+                    if owns_meter_provider:
+                        shut_down(app_meter_provider)  # a failure is a WARNING
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -461,7 +486,7 @@ def create_app(
                 dsn=dsn,
                 tracer=tracer,
                 identity=identity,
-                throttle=refusal_throttle,
+                throttle=tool_throttle,
                 verify=verify,
                 transport=tool_transport,
             )
@@ -513,6 +538,7 @@ def create_app(
     def create_run(
         body: RunRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
+        write_ended()
         calling = caller_service(request)
         if not caller_may_name(policy, calling, body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference, NAME_REFUSAL_REASON)
@@ -558,6 +584,7 @@ def create_app(
     def resume_run(
         run_id: uuid.UUID, body: ResumeRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
+        write_ended()
         # A resume names a tenant and a reference; the agent is the run's own.
         # The tenant is checked before the run is read, so a caller that may
         # not name it learns nothing of a run under it (T-10).
@@ -636,6 +663,7 @@ def create_app(
         reference: Reference,
         request: Request,
     ) -> RunStatus:
+        write_ended()
         # As for a resume: the tenant is checked before the run is read, so a
         # caller that may not name it learns nothing of a run under it (T-10).
         calling = caller_service(request)

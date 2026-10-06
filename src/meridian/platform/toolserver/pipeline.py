@@ -43,10 +43,12 @@ from meridian.platform.common.audit import (
 )
 from meridian.platform.common.db import connect
 from meridian.platform.common.env import SettingsError
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry
 from meridian.platform.registry.models import Tool
 from meridian.platform.toolserver.binding import (
+    SELECT_RUN,
     BindingRefused,
     RunBinding,
     read_binding,
@@ -86,6 +88,8 @@ FailureReason = (
 # word of the kit's or a handler's own, never content.
 REASON_WORD = re.compile(r"[a-z]+(-[a-z]+)*")
 Outcome = Literal["completed", "replayed", "refused", "failed"]
+# The event of every row of a tool server: a call's, a refusal's, a summary's.
+TOOL_CALL_EVENT = "tool.call"
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +199,9 @@ class Pipeline:
         after the check is ``completed`` although the caller may have just stopped
         waiting. None bounds nothing."""
         deadline = NEVER if deadline is None else deadline
+        # A quiet moment, in a worker thread that holds a slot: the counts of
+        # floods that ended are written here, never on the event loop.
+        self.write_ended()
         try:
             answer = self._decide(call, name, arguments, meta, deadline)
             if isinstance(answer, Refused):
@@ -376,7 +383,7 @@ class Pipeline:
     ) -> AuditEvent:
         return AuditEvent(
             service=self.service_name,
-            event="tool.call",
+            event=TOOL_CALL_EVENT,
             outcome=outcome,
             tenant=call.tenant,
             agent=call.agent,
@@ -419,18 +426,61 @@ class Pipeline:
         if (claim := self._claim(call, reason)) is not None:
             self._write_claimed(call, "refused", reason, claim)
 
-    def timed_out_row(self, call: Call) -> Callable[[], None] | None:
+    def write_ended(self, *, everything: bool = False) -> None:
+        """Write the summary rows of the floods whose last window no row carries
+        (T-49): quiet for two windows, or ``everything`` at shutdown. It blocks
+        on the database, so its callers are a worker thread and the thread the
+        server closes in. It never raises an ``Exception``."""
+
+        def audit(event: str, outcome: str, **fields: Any) -> None:
+            write_audit(
+                self.dsn,
+                AuditEvent(
+                    service=self.service_name, event=event, outcome=outcome, **fields
+                ),
+            )
+
+        write_ended_summaries(
+            self.throttle, audit, TOOL_CALL_EVENT, everything=everything
+        )
+
+    def _name_run(self, call: Call, run_id: uuid.UUID) -> None:
+        """Name the run of a shed call, from the run's own row: its tenant, agent
+        and reference, never what the caller sent. A run that is not there, or a
+        read that fails (logged by class), leaves the call as it was."""
+        try:
+            with connect(self.dsn, self.service_name) as conn:
+                run = conn.execute(SELECT_RUN, (run_id,)).fetchone()
+        except Exception as exc:
+            logger.warning("the run of a shed call could not be read: %s", _name(exc))
+            return
+        if run is not None:
+            agent, tenant, reference, _ = run
+            call.read(run_id, tenant, agent, reference)
+
+    def timed_out_row(
+        self, call: Call, run_id: uuid.UUID | None = None
+    ) -> Callable[[], None] | None:
         """The write of the ``failed`` row of a call that did no work because its
         caller had stopped waiting (``timed-out``), throttled like a refusal's: at
         most one row per tenant, tool and window, carrying the count it left out.
         None when this window's row is claimed already. The claim is made here,
         and the write is the caller's to run, where it may block (a thread; the
         server's event loop must not). The write logs a failure and does not
-        raise, as ``audit_failure`` does: the call has failed already."""
+        raise, as ``audit_failure`` does: the call has failed already.
+
+        ``run_id`` is the one the caller named, when it is well-formed. The write
+        checks it in its own thread, on a connection of its own: when the run
+        exists and the row stands for no other calls, the row (and the call, so
+        its span) names the run and the tenant and agent the run's row holds. A
+        row that stands for others may stand for other runs and tenants, so it
+        names none."""
         if (claim := self._claim(call, TIMED_OUT)) is None:
             return None
 
         def write() -> None:
+            if run_id is not None and claim.carried == 0:
+                self._name_run(call, run_id)
             try:
                 self._write_claimed(call, "failed", TIMED_OUT, claim)
             except Exception as exc:
