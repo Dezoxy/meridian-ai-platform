@@ -10,12 +10,12 @@ Amends [3. Build a thin model gateway](0003-build-a-thin-model-gateway.md):
 its rate windows are no longer kept in the process.
 
 What this record describes, in the repository's three words: **implemented**
-and tested without a cluster (the limiter, the gateway's refusal, the chart,
-`make up` and `make deploy`, a smoke line); **run on kind** twice on
-2026-10-06, before the reviews' fixes below (what was seen and what was not
+and tested (the limiter, the gateway's refusal, the chart, `make up` and
+`make deploy`, a smoke line); **run on kind** three times on 2026-10-06, the
+third a cold cycle on the step's final commit, with the reviews' fixes below
+and a real renewal of the store's certificate (what was seen and what was not
 is in Consequences); **designed** only for Azure, where a managed Redis is
-S020's and is not decided here. The run on the step's last commit is still to
-come, and its line is added when it has happened.
+S020's and is not decided here.
 
 ## Context
 
@@ -172,8 +172,9 @@ Negative / accepted trade-offs:
   alerts are `MeridianRateStoreRefusing` (the gateway counted refusals with
   the reason `rate-store-unavailable`) and `MeridianServiceUnavailable` (the
   store's pod unavailable); the runbook is
-  [rate store](../../operations/runbooks/rate-store.md). Neither alert has
-  been seen firing, and kind notifies no one (S028).
+  [rate store](../../operations/runbooks/rate-store.md). The first was loaded
+  in Prometheus and healthy on kind (2026-10-06); neither has been seen firing,
+  and kind notifies no one (S028).
 - **A restart, an OOM kill or a renewal of the store hands every tenant its
   windows again.** Rate, never the ledger, can then burst the provider's own
   limit, which is T-45's mechanism once more. The budgets are not windows and
@@ -193,8 +194,8 @@ Negative / accepted trade-offs:
   only in how they treat an entry nobody wrote.
 
 What the reviews changed (two cluster reviews of 2026-10-06, security and
-infrastructure; the fixes are in the step's branch and none has run on a
-cluster):
+infrastructure; the fixes are in the step's branch, and the third run on kind
+ran the store with them: below says what it showed):
 
 - **A member nobody but the gateway wrote cannot lock a tenant out.** The
   gateway's user may `ZADD` to any key under the prefix without the script,
@@ -226,22 +227,45 @@ cluster):
 
 Seen and not seen:
 
-- On 2026-10-06 the store was run on kind twice, on the branch as it stood
-  before the fixes above. The first run (11:47 to 11:52 UTC): `make up` made
-  the Secret, `make deploy` waited for the store before the gateway, `make
-  smoke` printed 41 PASS, 0 FAIL, 0 SKIP, and `make demo` completed a claim,
-  so model calls went through the store. The store's pod was 1/1 Running with
-  no restart, ended its output with `Ready to accept connections tls`, and
-  held no TLS or ACL error. The second run (12:18 to 12:22 UTC) found the
-  same pod with no restart after 29 to 32 minutes, so the kubelet's periodic
-  sync of an unchanged certificate did not trip the liveness probe in that
-  time, and `make smoke` again printed 41 PASS.
-- Not seen on a cluster: the store with the fixes above, in particular the
-  probe user's restart of a frozen store and the smoke line's proof of the
-  ingress rule; the store over hours; a renewal of its certificate; a store
-  that is down or refusing, as a 503; a second gateway replica; a rotation of
-  the password; whether the cluster's network plugin enforces the store's
-  ingress rule; memory under a real load.
+- On 2026-10-06 the store was run on kind three times, all local only. The
+  first two ran on the branch as it stood before the fixes above. The first
+  run (11:47 to 11:52 UTC): `make up` made the Secret, `make deploy` waited
+  for the store before the gateway, `make smoke` printed 41 PASS, 0 FAIL, 0
+  SKIP, and `make demo` completed a claim, so model calls went through the
+  store. The store's pod was 1/1 Running with no restart, ended its output
+  with `Ready to accept connections tls`, and held no TLS or ACL error. The
+  second run (12:18 to 12:22 UTC) found the same pod with no restart after 29
+  to 32 minutes, so the kubelet's periodic sync of an unchanged certificate
+  did not trip the liveness probe in that time, `make smoke` again printed 41
+  PASS, and the upkeep Job read the open reservations, refused an `expire`
+  with nothing to remove (a failed Job, as designed) and credited one token.
+- The third run (14:23 to 14:41 UTC) was a cold cycle on the step's final
+  commit, with the fixes above and `main` merged in: the cluster was deleted
+  and made again, with one retry, because the first `make up` failed at the
+  Tempo chart (a timeout fetching it from GitHub; nothing of this step was
+  involved) and the second completed in 125 seconds. Then `make deploy` and
+  `make demo` passed, `make smoke` printed 43 PASS and 2 SKIP (the sweep's,
+  within its allowance), and five minutes later 45 PASS, 0 FAIL, 0 SKIP. The
+  smoke line for the store's ingress rule passed, so the cluster enforced that
+  rule on a pod without the gateway's label, and the same pod with it reached
+  the port. The store's pod with the probe user was 1/1 Running with no restart
+  ten minutes after its start, and the probe user's `PING` from inside the
+  pod, over TLS, returned `PONG`. A real renewal (14:37:32 UTC, issued by
+  cert-manager within ten seconds) was followed about 100 seconds later by one
+  restart of the container, on the liveness probe's failure (`the certificate
+  on disk is newer than the server`); the Deployment rolled out, `make demo`
+  completed, the gateway's pod did not restart and `make smoke` printed 45
+  PASS. The 20 alert rules in 5 groups were loaded and healthy, including
+  `MeridianRateStoreRefusing`, and none was firing.
+- Not seen on a cluster, so tested without one: a 503 from the gateway when
+  the store is down or refusing (the demo did not run in the seconds the store
+  was down); the alert `MeridianRateStoreRefusing` firing; a second gateway
+  replica; a rotation of the password; the probe user's restart of a frozen
+  store (freezing it takes the gateway's credential, which no session prints);
+  `make deploy`'s refusal of a Secret older than the ACL; the store over hours
+  (29 to 32 minutes and ten minutes were seen); the audit row of the upkeep
+  credit, read on the cluster; a TLS 1.2 client or an oversized bulk refused
+  on the cluster; memory under a real load.
 
 Not decided here:
 
@@ -263,7 +287,8 @@ Residual risk (the register's row for the store holds the full text):
   connections and try passwords, and enough idle connections from a pod the
   policy lets reach the port make the probe fail and the store restart in a
   loop. What stops it before authentication is the NetworkPolicy alone, and
-  the cluster's enforcement of its ingress half has not been seen.
+  the cluster's enforcement of its ingress half was seen once, by the smoke
+  line of 2026-10-06 (third run), and on one pod.
 - The certificate policy admits any `*.meridian.svc` name in the namespace,
   so someone who can create a certificate and a pod there can answer as the
   store and capture the gateway's password. That is as it was since S056 and

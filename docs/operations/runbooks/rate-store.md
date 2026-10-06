@@ -5,36 +5,92 @@ seconds, tokens in a minute) is down, refuses the gateway, or has to be
 restarted. The gateway refuses every model call it cannot count.
 
 Status (S066): written from the code, the chart and `infra/kind/`, and from
-one first run of the store on kind (below). Implemented and tested without a
-cluster: the gateway's refusal, the chart's store and its ACL, `make up`'s
-Secret and `make deploy`'s check of it. Run outside a cluster, against the
-pinned Redis image: the ACL file that `make up` makes (the gateway's connection
-and script ran under that user, every other command was refused), the store's
-probes over TLS (healthy, frozen by a looping script, restarted), TLS 1.3 alone
-and the 1 MB bounds, and the class of each failure in the table below, except
-where the table says it was not measured. The game day (S028) exercises this
-runbook. The store is Redis 8 on kind only; on Azure it is designed, a managed
-Redis in the same EU region (S020), and its procedure is written with it.
+three runs of the store on kind on 2026-10-06 (below). Implemented and tested:
+the gateway's refusal, the chart's store and its ACL, `make up`'s Secret and
+`make deploy`'s check of it. Seen on kind: the store running under that ACL and
+those probes, a real renewal of its certificate and the restart that followed
+it, the smoke line for its ingress rule and the gateway's calls counted by it
+(what each run showed, and what none did, is below). Tested without a cluster
+and not seen on one: the gateway's refusal as a 503, a frozen store restarted
+by its probe, `make deploy`'s refusal of an old Secret and a rotation. Run
+outside a cluster, against the pinned Redis image: the ACL file that `make up`
+makes (the gateway's connection and script ran under that user, every other
+command was refused), the store's probes over TLS (healthy, frozen by a looping
+script, restarted), TLS 1.3 alone and the 1 MB bounds, and the class of each
+failure in the table below, except where the table says it was not measured.
+The game day (S028) exercises this runbook. The store is Redis 8 on kind only;
+on Azure it is designed, a managed Redis in the same EU region (S020), and its
+procedure is written with it.
 
 ### What has run on a cluster, and what has not
 
-Run on kind on 2026-10-06, once, before the changes this page now describes (the
-probe user, TLS 1.3 alone, the 1 MB bounds and the check of the Secret's
-annotation): `make up` made the Secret, `make deploy` waited for the store
-before the gateway, `make smoke` printed 41 PASS lines with the store's line
-among them (the old form of it, which could not tell the store's ingress from
-the sender's egress), and `make demo` completed a claim, so model calls went
-through the store. The store's pod was 1/1 Running with no restart three
-minutes after its start, its output ended `Ready to accept connections tls`
-with no TLS or ACL error, and the gateway's pod read its address from the
-Secret.
+Run on kind three times on 2026-10-06, all local only.
 
-Not seen on a cluster: the store with the changes above; the store over a longer
-time (whether the kubelet leaves the unchanged certificate files alone, which
-the liveness probe's rule relies on); a renewal of its certificate; a store that
-is down or refuses, as a 503; a second gateway replica; a rotation; the probe
-user's restart of a frozen store; enforcement of the store's NetworkPolicy by
-the cluster's network plugin; the gateway's upkeep Job.
+**The first run** (11:47 to 11:52 UTC), before the changes this page now
+describes (the probe user, TLS 1.3 alone, the 1 MB bounds and the check of the
+Secret's annotation): `make up` made the Secret, `make deploy` waited for the
+store before the gateway, `make smoke` printed 41 PASS lines with the store's
+line among them (the old form of it, which could not tell the store's ingress
+from the sender's egress), and `make demo` completed a claim, so model calls
+went through the store. The store's pod was 1/1 Running with no restart three
+minutes after its start, its output ended `Ready to accept connections tls`
+with no TLS or ACL error (one start-up warning: memory overcommit is off on the
+node, which matters for a background save, and nothing is saved), and the
+gateway's pod read its address from the Secret.
+
+**The second run** (12:18 to 12:22 UTC), with the upkeep Job added: the first
+run's pod had no restart after 29 minutes (and none after 32), so the kubelet's
+periodic sync of the unchanged certificate files did not trip the liveness
+probe in that time, and `make smoke` again printed 41 PASS. The upkeep Job ran
+three times (see [budget exhaustion](budget-exhaustion.md)): it read the open
+reservations, it refused an `expire` with nothing to remove as a failed Job, and
+it credited one token to a tenant's counter.
+
+**The third run** (14:23 to 14:41 UTC), a cold cycle on the step's final tip,
+after the reviews' fixes and the merge with `main`: the kind cluster was deleted
+and made again, because the old cluster's Secret predated the `probe` user. It
+took one retry: the first `make up` failed after 296 seconds at the Tempo chart
+(a timeout fetching it from GitHub, `context deadline exceeded`, with the
+machine under load from other work; nothing of this step was involved) and `make
+up` run again completed in 125 seconds, so a cold start depends on the chart
+hosts being reachable. Then `make deploy` passed, `make smoke` printed 43 PASS
+and 2 SKIP (both the sweep's, which had not yet been scheduled and was within
+the 900 seconds it is allowed), `make demo` completed, and five minutes later
+`make smoke` printed 45 PASS, 0 FAIL, 0 SKIP, and 45 PASS again after the
+renewal below. The store's line passed, as printed: `network policy: a pod that
+is not the Model Gateway's cannot reach the rate store
+(rate-store.meridian.svc:6379) though its egress is open to it, which only the
+store's ingress rule can cause, and with the Model Gateway's name label the same
+pod can`; so the cluster enforced the store's ingress rule on that pod. The
+store's pod with the new probes was 1/1 Running with no restart ten minutes
+after its start, and the probe user's `PING` from inside the pod, over TLS with
+the pod's own certificate, returned `PONG`. In the smoke after the renewal, the
+20 rules in 5 groups of `infra/kind/alerts/meridian.yaml` were loaded in
+Prometheus and healthy, among them `MeridianRateStoreRefusing`, and no Meridian
+alert was firing or pending.
+
+**A real renewal** was made in that run at 14:37:32 UTC: the Certificate
+`rate-store` was given the Issuing condition, as `cmctl renew` does, and
+cert-manager issued revision 2 within ten seconds. About 100 seconds later the
+store's container had restarted once. The Warning event read `Liveness probe
+failed: rate-store: the certificate on disk is newer than the server ...`, and
+the previous container's output ended `User requested shutdown... Redis is now
+ready to exit`. Afterwards the Deployment had rolled out, `make demo` completed
+(its model calls counted by the restarted store), the Model Gateway's pod had no
+restart and `make smoke` printed 45 PASS.
+
+Not seen on a cluster, so tested without one: a 503 from the gateway when the
+store is down or refuses (the demo did not run in the seconds the store was down
+for the renewal); the alert `MeridianRateStoreRefusing` firing (it was loaded
+and healthy, and never fired); a second gateway replica; a rotation of the
+store's password; the probe user's restart of a frozen store (freezing the store
+takes the gateway's credential, which no session prints); `make deploy`'s
+refusal of a Secret older than the ACL (the third run deleted the cluster
+instead of testing it); the store over hours (29 to 32 minutes and ten minutes
+without a restart were seen, outside a renewal); the audit row of an upkeep
+credit, read on the cluster; a TLS 1.2 client or a bulk over 1 MB refused by the
+store on the cluster (it ran with both settings and counted the gateway's calls,
+and neither refusal was tried there); memory and CPU under a real load.
 
 The refusal is the design working: with no window known, no call is made
 (the owner's decision of 2026-10-06; the gateway never falls back to windows of
@@ -60,8 +116,9 @@ its own). The price is that this one pod stands in front of every model call.
   first refusal, and it ends 15 minutes after the last, which means a store
   that restarted once (a renewed certificate does that, a frozen store's
   restart does) raises it late and briefly. Both are rules checked by
-  `make alerts`; neither was seen firing on a cluster, and kind notifies no
-  one (S028).
+  `make alerts`, and `MeridianRateStoreRefusing` was loaded in Prometheus and
+  healthy on kind (2026-10-06); neither was seen firing there, and kind
+  notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
   restarts.
 
@@ -211,7 +268,8 @@ the probe was answered: `the probe user's PING was answered 'BUSY Redis is busy
 running a script...', not PONG` (`k describe pod -l
 app.kubernetes.io/name=rate-store`). Every window starts again, as above. (The
 probe was run on the pinned image against a looping script and the restart
-that ended it; the kubelet's own restart of it has not been seen on a cluster.)
+that ended it; the kubelet's restart of a frozen store has not been seen on a
+cluster, though its restart on a renewed certificate has: see below.)
 To end it sooner, delete the store's pod:
 
 ```sh
@@ -370,9 +428,15 @@ cert-manager renews the store's certificate at two thirds of its 90 days. Redis
 does not reload a certificate: it keeps serving the one it loaded at start.
 The chart's liveness probe is meant to make the store restart itself within
 about a minute of a renewed certificate reaching its volume, and every window
-starts again then, as for any restart. (Implemented and tested without a
-cluster; not seen on one. This is the chart's, and the template says what the
-probe does today.) If that did not happen, the store would go on serving the old
+starts again then, as for any restart. (Implemented, tested, and seen on kind
+on 2026-10-06: a renewal made at 14:37:32 UTC was followed about 100 seconds
+later by one restart of the container, with the event `Liveness probe failed:
+rate-store: the certificate on disk is newer than the server ...`, and the model
+calls of the next `make demo` were counted by the restarted store. That the
+server then serves the new certificate was not read from the store itself; its
+completed calls show the gateway verified one. This is the chart's, and the
+template says what the probe does today.) If that did not happen, the store
+would go on serving the old
 certificate to its end, and from then on every call would be a 503 with a
 `ConnectionError`: look at the Certificate's dates and at the pod's restarts, and
 restart the store by hand (`k rollout restart deploy/rate-store`).

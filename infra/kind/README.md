@@ -77,14 +77,18 @@ log, and `GET`, `KEYS`, `DEL`, `FLUSHALL`, `CLIENT LIST`, `SCRIPT FLUSH`,
 `EVAL` and a key outside the pattern were refused. The `probe` user and the
 probes were run on the pinned image over TLS, read-only, as the image's user,
 with the chart's rendered configuration and probe scripts (a healthy store, a
-store frozen by a looping script, and the restart that ended it). None of it
-has run on a cluster. `ACL LIST` needs a credential that a session does not
-have, so the file on a cluster cannot be listed whole. What can be read
-without one: a ping as `probe` in the store's container returns `PONG` (the
-chart's probe does that, with the container's own certificate); a login as the
-gateway with a wrong password is refused (`WRONGPASS`); the annotation is the
-hash `make deploy` checks; and the gateway's calls completing (`make demo`)
-show its user works.
+store frozen by a looping script, and the restart that ended it). Those
+proofs, and the refusals above, were made outside a cluster: no session has
+frozen the store on kind or tried a refused command there. Seen on kind on
+2026-10-06 (third run, on a cluster made from nothing; local only): `make up`
+made the Secret, the store started under its file and its probes, and its pod
+was 1/1 Running with no restart ten minutes later; a ping as `probe` in the
+store's container, over TLS with the container's own certificate, returned
+`PONG`; and the gateway's calls completed (`make demo`), so its user works.
+`ACL LIST` needs a credential that a session does not have, so the file on a
+cluster cannot be listed whole. What can be read without one: that ping (the
+chart's probe does that); a login as the gateway with a wrong password is
+refused (`WRONGPASS`); and the annotation is the hash `make deploy` checks.
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
 to change one. `.github/renovate.json` reads them, so Renovate, once the
@@ -361,10 +365,12 @@ says how): a Job of its own that `infra/kind/upkeep.sh` renders from the chart
 and applies outside the release, so no workload of the release holds its Secret
 `gateway-upkeep-db` (the Deployments, the sweep's CronJob and the three Jobs
 `make deploy` runs), and a test keeps it so. The Job exists only for the one
-run, and is kept for a day for its output. Implemented and tested without a
-cluster, with stub commands and the real chart; it has not run on kind. The
-three tool-server roles may each hold at most 20
-connections: a tool server runs at most eight calls at once, one connection
+run, and is kept for a day for its output. Implemented and tested with stub
+commands and the real chart, and seen on kind on 2026-10-06 (second and third
+runs): the read of the open reservations, a refusal that failed the Job (`ERROR
+GU304`) and a credit of one token, each as a Job of its own. The audit row of
+that credit was not read on the cluster. The three tool-server roles may each
+hold at most 20 connections: a tool server runs at most eight calls at once, one connection
 each and one more for a failure's audit row, and during a rollout two of its
 pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
 other roles have no such bound until they get a connection pool (S027). The `app`
@@ -450,7 +456,7 @@ node image, Kubernetes components and the platform).
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
-| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it; what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested without a cluster (stub `kubectl`, the real chart); not run on kind. |
+| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it; what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
@@ -779,7 +785,11 @@ node image, Kubernetes components and the platform).
    was left in `meridian` afterwards. The fifth line passed on the cluster on
    2026-10-06 (a probe in `default` cannot push to the collector on 4318); its
    dependence on check 4's push is tested without a cluster until the next
-   `make smoke`, and so is the sixth line, which has not run on a cluster. What it
+   `make smoke`. The sixth line passed on the cluster on 2026-10-06 (third
+   run, among its 45 PASS lines): the pod without the gateway's label could not
+   reach the store and, given the label, reached it. Its FAIL branches (the kind
+   policy missing, a pod that reached the store, a control that did not reach)
+   are tested against stub commands and were not seen on a cluster. What it
    does not prove, and stays by hand (S019): that a pod of another namespace
    cannot reach the database, and that an address outside the machine is
    unreachable (smoke sends nothing there); and it does not read the
@@ -1043,7 +1053,10 @@ In order, `make deploy`:
    because `make up` keeps a Secret that exists; the message gives the order:
    delete it, `make up`, restart the store, then the gateway (above, and the
    [rate store runbook](../../docs/operations/runbooks/rate-store.md)).
-   (Tested against stub commands; not yet seen on a cluster.)
+   (Tested against stub commands. Seen on kind on 2026-10-06: the third run's
+   `make deploy` passed these checks on the Secret `make up` had just made. The
+   refusals were not seen on a cluster: that run made the cluster again instead
+   of meeting an old Secret.)
 2. Builds and loads the image, tagged `meridian:<first 12 hex of its ID>`. A
    deploy of a changed tree leaves the previous image in the Docker engine
    and in the node, and images stay there until a person removes them.
@@ -1223,8 +1236,13 @@ service named `MERIDIAN_GATEWAY_RATE_STORE_URL`, so the address comes from the
 Secret and from nowhere else. A test of each
 (`tests/meridian/test_kind_rate_store.py`, `test_helm_rate_store_hardening.py`)
 renders kind's values; the checks of the six services leave the store out by
-name, so no check on them was loosened. Implemented and tested without a
-cluster.
+name, so no check on them was loosened. Implemented and tested, and seen on
+kind on 2026-10-06 (third run): the store running under this configuration
+with the gateway's calls counted by it, its probes passing, its certificate's
+renewal followed by one restart, and the policy's ingress rule enforced on a
+pod without the gateway's label. Not seen on a cluster: a store frozen by a
+script and restarted by its probe, a TLS 1.2 client or an oversized bulk
+refused, and the 503 of a store that is down.
 
 The namespace denies all traffic by default: the NetworkPolicy
 `default-deny` selects every pod in `meridian`, whatever its labels, and
@@ -1367,8 +1385,8 @@ labels (threat model T-68, T-84). `make up` now applies three policy files
 before the releases they guard, beside the database's (a fourth, for the log
 agent's namespace, came with S064, below, and was applied on kind on
 2026-10-06, where the agent sent through it; a fifth, in `meridian`, for the
-probe pod of smoke's rate store line, came with S066 and has not run on a
-cluster); all of it is **tested
+probe pod of smoke's rate store line, came with S066 and was applied on kind
+on 2026-10-06, in the third run, where that line passed); all of it is **tested
 without a cluster** (the manifests and the script's lines are checked against
 stub commands, and the pods' specs were read with `helm template`), until the
 first `make up` and `make smoke` after it have run on one.
@@ -1522,9 +1540,11 @@ JSON log format and the redaction of personal data. The three Jobs (`migrate`,
 `seed`, `ingest`) run the CLI, which prints and does not log, so its tracebacks
 and database messages are not redacted; smoke's own pods print what they like;
 the database's output is PostgreSQL's, and the rate store's (S066, a
-Deployment of the chart) is Redis's, in neither format. **None of those is
-shipped**: a Job's output stays in `kubectl -n meridian logs job/<name>`, and
-`make deploy` prints each Job's output as it ends. The list is positive, so a
+Deployment of the chart) is Redis's, in neither format and not redacted by the
+platform's. **None of those is shipped**: the store's output stays in its pod's
+output on the node (`kubectl -n meridian logs deploy/rate-store`), a Job's
+output stays in `kubectl -n meridian logs job/<name>`, and `make deploy` prints
+each Job's output as it ends. The list is positive, so a
 workload the chart gains later is not shipped until someone lists it, and
 `tests/meridian/test_log_agent.py` fails first (it holds the list equal to the
 Deployments and CronJobs the chart renders, less the rate store). The
@@ -2005,7 +2025,8 @@ three alerts that notice a series that is not there, and a fourth that
 notices the log agent not being ready). It holds 17 alert
 rules and three recording rules: six on the gateway, three on the workloads
 and four on the certificates (the gateway's sixth, `MeridianRateStoreRefusing`,
-fires when it refused a call because the rate store gave no answer), and, from
+fires when it refused a call because the rate store gave no answer; loaded and
+healthy on kind on 2026-10-06, and never seen firing), and, from
 S064, four on missing telemetry
 (loaded and healthy on kind on 2026-10-06, in the third run, and none seen
 firing; tested without a cluster, not seen firing on one): the Model Gateway's,
@@ -2039,7 +2060,9 @@ lose.
 `make up` applies both: the rules with `kubectl apply`, the dashboard as a
 ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
 (check 11, passed on the cluster on 2026-10-06 with four groups and, in the
-third of S064's runs, with five groups and all 19 rules): Prometheus has loaded the
+third of S064's runs, with five groups and all 19 rules, and in the third of
+S066's runs the same day with all 20, `MeridianRateStoreRefusing` among them):
+Prometheus has loaded the
 five groups with every rule healthy, the loaded rule names are the file's,
 no Meridian alert is firing, and Grafana serves the health dashboard with
 the file's queries, every one of which runs in Prometheus. What stays by
@@ -2054,7 +2077,11 @@ point to.
 
 Rerunning `make up` is the first thing to try. If a release is stuck in a
 `pending-*` state, or the node was only half created, run `make down` and then
-`make up` again.
+`make up` again. A chart that could not be downloaded in time is such a case:
+on 2026-10-06 `make up` on a cluster made from nothing stopped after 296
+seconds at the Tempo chart (`context deadline exceeded`, fetching it from
+GitHub, with the machine under load), and running `make up` again completed in
+125 seconds, so a cold start depends on the chart hosts being reachable.
 
 If `make up` times out waiting for the Gateway to be programmed while the
 edge's proxy pod is ready, the condition is stale. The script stops with

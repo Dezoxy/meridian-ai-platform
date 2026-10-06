@@ -103,7 +103,7 @@ k rollout status deploy/claims-api
   |---|---|---|
   | `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`, `claims-mcp-db`, `knowledge-mcp-db` | The Deployment of the same name without `-db` | `rollout restart` of that Deployment |
   | `claims-sweep-db` | The sweep's CronJob | Nothing: every run reads it afresh |
-  | `gateway-upkeep-db` | The upkeep Job alone, which `make gateway-upkeep` applies for one run, outside the release (implemented and tested without a cluster; not run on kind): no Deployment, no CronJob and no other Job holds it | Nothing restarts: each run is a new Job and reads the Secret afresh; a Job already running keeps what it read |
+  | `gateway-upkeep-db` | The upkeep Job alone, which `make gateway-upkeep` applies for one run, outside the release (implemented and tested, and run on kind on 2026-10-06): no Deployment, no CronJob and no other Job holds it | Nothing restarts: each run is a new Job and reads the Secret afresh; a Job already running keeps what it read |
   | `meridian-owner-db` | The migration Job alone | Nothing: every `make deploy` reads it afresh |
   | `policy-seed-db` | The seed Job alone | Nothing: every `make deploy` reads it afresh |
   | `knowledge-ingest-db` | The ingestion Job alone | Nothing: `make deploy` reads it afresh, and an ingestion runs once per image, so a rotation shows at the next new image |

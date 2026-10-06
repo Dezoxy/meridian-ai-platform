@@ -7,7 +7,8 @@ Status (S024): written from the code of S011, not exercised. The budgets
 apply in replay mode too, so the token budget can run out on kind; the
 cost quota cannot, because the simulated deployments are priced at zero.
 The game day (S028) exercises it. The upkeep command below (S066) is
-implemented and tested against PostgreSQL; it has not run on a cluster.
+implemented and tested against PostgreSQL, and run on kind on 2026-10-06
+through `make gateway-upkeep` (below).
 
 The refusal is the control working (QA-12, C-04). The question this
 runbook answers is whether the budget is right, and what spent it.
@@ -39,7 +40,9 @@ The two rate limits come back by themselves within their window, and no
 alert watches them: wait. This runbook is about the last two.
 
 A gateway given the address of the shared store keeps the two windows there
-(implemented and tested; not run on a cluster). When it cannot reach the store
+(implemented, tested, and seen working on kind on 2026-10-06: its calls were
+counted there; a failure to reach it, as a 503, was not seen on a cluster).
+When it cannot reach the store
 it refuses the call: 503 `the rate store is unavailable` with `Retry-After: 5`,
 audit reason `rate-store-unavailable`. That is not a tenant's limit: the store
 is down or unreachable, so look at the store, not at the tenant: the
@@ -47,10 +50,11 @@ is down or unreachable, so look at the store, not at the tenant: the
 one that refuses the gateway, and what a restart of it does (every window
 starts again, and the budgets above are not touched). On kind the store is
 the Meridian chart's, `make deploy` runs it, and the gateway uses it there:
-run on kind on 2026-10-06 for the store's first run (`make up`, `make deploy`,
-`make smoke` and `make demo` passed), before the probe user and the other
-changes of the rate store runbook; the upkeep Job (`make gateway-upkeep`) has
-not run on a cluster yet.
+run on kind three times on 2026-10-06 (`make up`, `make deploy`, `make smoke`
+and `make demo` passed, the third time on a cluster made from nothing; the
+[rate store runbook](rate-store.md#what-has-run-on-a-cluster-and-what-has-not)
+says what each run showed and what none did). The upkeep Job
+(`make gateway-upkeep`) ran on kind in the second and third runs (below).
 
 ## Confirm
 
@@ -192,12 +196,18 @@ Read the second query's `state` column:
 
 ## The upkeep command
 
-Status: implemented (S066) and tested against PostgreSQL; it has not run
-on a cluster. On kind: the role and its Secret `gateway-upkeep-db` are
-declared (`make up` creates both), no workload of the release holds that
-Secret, and `make gateway-upkeep` runs the command as a Job of its own
-(below, "On kind, as a Job"): implemented and tested without a cluster (stub
-commands and the real chart), not yet run on kind.
+Status: implemented (S066) and tested against PostgreSQL. On kind: the role
+and its Secret `gateway-upkeep-db` are declared (`make up` creates both), no
+workload of the release holds that Secret, and `make gateway-upkeep` runs the
+command as a Job of its own (below, "On kind, as a Job"): implemented and
+tested with stub commands and the real chart, and seen on kind on 2026-10-06
+(second and third runs of S066, local only). What was seen: the read of the
+open reservations (`reservations: 0`, in both runs), an `expire` that refused
+with `ERROR GU304` as a failed Job and changed nothing, and a credit of one
+token to `claims-triage`, which printed the counter's new value. The audit row
+of that credit was not read on the cluster (reading `audit.events` there takes
+the database's pod, which asks the owner first). `close`, the euro credit and
+an `expire` that removes rows were not run there.
 
 `meridian gateway` is the supported way to close a reservation, credit a
 tenant or remove old ledger rows. It connects as the database role

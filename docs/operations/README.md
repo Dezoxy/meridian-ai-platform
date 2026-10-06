@@ -13,9 +13,9 @@ thresholds and S028 runs the game day.
 | What | Where | Status |
 |---|---|---|
 | Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, two designed, one (`triage-completion`) with counters since S064 that nothing reads; every target unmeasured |
-| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (five groups and 19 rules loaded since S064, every rule healthy, no Meridian alert firing: seen on kind on 2026-10-06; the tree now holds 20, the newest being S066's `MeridianRateStoreRefusing`, not yet loaded on a cluster); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; none of S064's four alerts seen firing; notification designed |
+| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (five groups and 19 rules loaded since S064, and all 20 in S066's third run, `MeridianRateStoreRefusing` among them; every rule healthy, no Meridian alert firing: seen on kind on 2026-10-06); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; none of S064's four alerts and not `MeridianRateStoreRefusing` seen firing; notification designed |
 | Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code and served by Grafana on kind, its queries run in Prometheus by check 11 of `make smoke`; whether each panel shows data stays a hand check |
-| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other seven (the newest, telemetry missing, S064, and rate store, S066) and that runbook's other steps were not exercised |
+| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other seven (the newest, telemetry missing, S064, and rate store, S066) and that runbook's other steps were not exercised, but for two commands S066's runs ran on kind on 2026-10-06: the budget-exhaustion runbook's `make gateway-upkeep` and the rate store runbook's ping as the `probe` user |
 
 ## Alerts
 
@@ -214,7 +214,12 @@ after a run Loki held the six services and `sweep` and nothing of `migrate`,
 prints and does not log, so their
 tracebacks and database messages never went through the redaction. A Job's
 output stays in `kubectl -n meridian logs job/<name>`, and `make deploy` prints
-it as the Job ends (through its filter for connection strings). The list is
+it as the Job ends (through its filter for connection strings). The rate
+store's output (S066) is Redis's, in neither format and not redacted by the
+platform's; it stays in its pod's output on the node (`kubectl -n meridian logs
+deploy/rate-store`) and is not shipped: the include list does not name it, and
+a test holds the list equal to the chart's pods less the store (no line of
+smoke asks Loki for it, so that is tested without a cluster). The list is
 positive, so a workload added to the chart is not shipped until someone adds
 it. In Grafana, Explore, the Loki datasource:
 
@@ -282,7 +287,8 @@ applied to one. The session that owns the cluster checks, on `main`:
    `meridian.telemetry`, and every rule's `health` is `ok`. `make smoke`
    reads this (the eleventh check): the groups and rule names are the
    file's and every rule is `ok` (seen on kind on 2026-10-06, third run: the
-   five groups and all 19 rules).
+   five groups and all 19 rules; and in S066's third run the five groups and
+   all 20 rules).
 4. Every series a rule or the new dashboard names exists. `make smoke`
    does not read this: a rule over a missing series is healthy and quiet.
    Each of these returns a number in Grafana's Explore:
@@ -317,8 +323,9 @@ applied to one. The session that owns the cluster checks, on `main`:
 5. No Meridian alert fires on a healthy cluster:
    `ALERTS{platform="meridian"}` is empty. `make smoke` fails on a firing
    alert and names it; a pending one passes, and the line names it. Seen on
-   kind on 2026-10-06, third run: none firing or pending. None of S064's four
-   alerts was seen firing.
+   kind on 2026-10-06, third run: none firing or pending (and none in S066's
+   third run). None of S064's four alerts, and not `MeridianRateStoreRefusing`,
+   was seen firing.
 6. Grafana serves **Meridian: platform health** (uid
    `meridian-platform-health`) and every panel shows data or, for the
    alert table, nothing. `make smoke` reads that Grafana serves it under
@@ -340,8 +347,8 @@ applied to one. The session that owns the cluster checks, on `main`:
    Prometheus; and the infra review's two for the log agent, its live pod's
    shape read on every run and the streams Loki must not hold, which passed
    in the third run (the first two runs had 41 lines); S066 one for the rate
-   store, which only the Model Gateway's pods may reach, tested without a
-   cluster until it has run on one (S064's third run had 44 lines, before it):
+   store, which only the Model Gateway's pods may reach, which passed on kind
+   on 2026-10-06 in S066's third run (S064's third run had 44 lines, before it):
    the 35 below are S062's count); 32 after `make up` alone, with
    SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
@@ -350,9 +357,11 @@ applied to one. The session that owns the cluster checks, on `main`:
    pages 1, sweep 2, network policy 1, service identity 1, certificate policy 4
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster
-   has seen it pass (35 PASS on 2026-10-06, 44 PASS in S064's third run, see
-   below); item 4, the series, stays by hand, except the sweep's, which a line
-   of smoke now reads.
+   has seen it pass (35 PASS on 2026-10-06, 44 PASS in S064's third run, and 45
+   PASS in S066's third run, five minutes after a cold `make deploy` that had
+   printed 43 PASS and the sweep's 2 SKIP, within the 900 seconds the sweep is
+   allowed; see below); item 4, the series, stays by hand, except the
+   sweep's, which a line of smoke now reads.
 
 A series that is missing in step 4 is a wrong name in the rule file, and
 the fix is there and in the pinned set of the file's test.

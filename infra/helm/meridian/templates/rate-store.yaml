@@ -64,8 +64,10 @@ new files, as the six services do through /healthz (certlife.py). It comes withi
 probe, six failures in a row), about one to three minutes after cert-manager
 renews, with 30 days of the old certificate left. A restart hands every tenant
 its windows again, once per renewal: accepted and stated (the budgets are in the
-ledger, in PostgreSQL, and are not windows). Implemented and tested; it has not
-run on a cluster, where a real renewal is the one thing left to prove.
+ledger, in PostgreSQL, and are not windows). Implemented and tested, and seen on
+kind on 2026-10-06: a renewal issued by cert-manager was followed about 100
+seconds later by one restart of the container, on this probe's failure (the
+event reads "rate-store: the certificate on disk is newer than the server").
 
 Two limits of the probes, accepted. A probe's own connection counts against
 maxclients before any handshake, so enough idle connections from a pod the policy
