@@ -86,9 +86,9 @@ A change that violates one is wrong even if it works.
 4. **Every model call goes through the Model Gateway.** Provider SDKs are
    imported only under `src/meridian/platform/gateway/`; import-linter
    enforces it in CI (ADR 3).
-5. **Platform packages never import the agent framework.** Nothing under
-   `src/meridian/platform/` imports `langgraph` or `langchain*`; import-linter
-   enforces it in CI (ADR 2).
+5. **Platform packages never import an agent framework.** Nothing under
+   `src/meridian/platform/` imports `langgraph`, `langchain*` or
+   `agent_framework*`; import-linter enforces it in CI (ADR 2, ADR 9).
 6. **Every tool is declared, allowlisted and audited.** A tool exists in the
    registry with a schema and a scope; an agent calls only allowlisted tools;
    a mutating tool needs an idempotency key and, where a human must decide,
@@ -114,7 +114,8 @@ A change that violates one is wrong even if it works.
 - **Python** 3.13, one `uv` workspace, `ruff` for lint and format, `pytest`,
   FastAPI with Pydantic v2, one PostgreSQL instance with separate schemas.
 - **Layout**: `src/meridian/platform/` (shared services),
-  `src/meridian/runtime/` (the Agent Runtime, which may import LangGraph),
+  `src/meridian/runtime/` (the Agent Runtime, which may import LangGraph and
+  Microsoft Agent Framework),
   `src/meridian/workloads/` (use cases), `config/registry/` (declarative
   registry with JSON Schemas), `infra/` (Terraform, Helm, kind), `api/`
   (OpenAPI and MCP tool contracts), `data/synthetic/`, `docs/`. Code, charts
