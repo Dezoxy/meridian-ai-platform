@@ -2,7 +2,9 @@
 
 import importlib
 import importlib.metadata
+import logging
 import sys
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,11 @@ from typing import Any
 import pytest
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
+from meridian.platform.common.entry_points import (
+    EntryPointRefused,
+    Refusal,
+    fixed_text,
+)
 from meridian.platform.registry import load_registry
 from meridian.runtime import graphs
 from meridian.runtime.graphs import GraphLoadError, load_graph_factory
@@ -63,6 +70,10 @@ def entry(
 
 
 REGISTRY = load_registry(REGISTRY_DIR)
+# The shared loader's sentence for every reason that says "not ours", in the
+# graphs' word for what it loads.
+NOT_OURS = "the workload's graph does not come from the meridian package"
+CANNOT_LOAD = "the workload's graph cannot be loaded"
 
 
 def test_the_factory_of_the_meridian_distribution_is_returned(
@@ -95,7 +106,7 @@ def test_an_entry_point_of_another_distribution_is_refused(
 ) -> None:
     published(monkeypatch, entry(dist=dist))
 
-    with pytest.raises(GraphLoadError, match="distribution"):
+    with pytest.raises(GraphLoadError, match=NOT_OURS):
         load_graph_factory("claims-triage", REGISTRY)
 
 
@@ -224,7 +235,7 @@ def test_an_entry_point_value_outside_the_workloads_package_is_refused(
         FakeEntryPoint("claims-triage", FakeDist("meridian"), must_not_load, value),
     )
 
-    with pytest.raises(GraphLoadError, match=r"meridian\.workloads"):
+    with pytest.raises(GraphLoadError, match=NOT_OURS):
         load_graph_factory("claims-triage", REGISTRY)
 
 
@@ -234,7 +245,7 @@ def test_a_factory_whose_module_lies_outside_the_package_directory_is_refused(
     published(monkeypatch, entry())
     monkeypatch.setattr(graphs, "TRUSTED_ROOT", tmp_path)  # not where build lives
 
-    with pytest.raises(GraphLoadError, match="outside"):
+    with pytest.raises(GraphLoadError, match=NOT_OURS):
         load_graph_factory("claims-triage", REGISTRY)
 
 
@@ -250,10 +261,21 @@ def test_a_graph_whose_module_lies_outside_the_package_directory_never_runs(
     published(monkeypatch, entry(loads=loads))
     monkeypatch.setattr(graphs, "TRUSTED_ROOT", tmp_path)  # not where the module is
 
-    with pytest.raises(GraphLoadError, match=r"'claims-triage'.*outside"):
+    with pytest.raises(GraphLoadError, match=f"claims-triage.*{NOT_OURS}"):
         load_graph_factory("claims-triage", REGISTRY)
 
     assert calls == []
+
+
+def test_a_trusted_root_that_is_a_link_admits_the_factory_inside_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    published(monkeypatch, entry())
+    link = tmp_path / "root-link"
+    link.symlink_to(REPO_ROOT, target_is_directory=True)
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", link)
+
+    assert load_graph_factory("claims-triage", REGISTRY) is build
 
 
 def test_a_factory_defined_outside_the_package_is_refused_whatever_its_entry_says(
@@ -265,22 +287,22 @@ def test_a_factory_defined_outside_the_package_is_refused_whatever_its_entry_say
     reexported.__module__ = "json"  # the standard library: outside the repository
     published(monkeypatch, entry(loads=lambda: reexported))
 
-    with pytest.raises(GraphLoadError, match=r"'claims-triage'.*comes from a file"):
+    with pytest.raises(GraphLoadError, match=f"claims-triage.*{NOT_OURS}"):
         load_graph_factory("claims-triage", REGISTRY)
 
 
 @pytest.mark.parametrize(
-    "value",
+    ("value", "sentence"),
     [
-        "meridian.workloads.no_such_module:build",
-        "meridian.workloads.claims_triage.no_such_module:build",
+        ("meridian.workloads.no_such_module:build", NOT_OURS),
+        ("meridian.workloads.claims_triage.no_such_module:build", NOT_OURS),
         # The parent of this module cannot even be imported.
-        "meridian.workloads.no_such_package.module:build",
-        "meridian.workloads..module:build",
+        ("meridian.workloads.no_such_package.module:build", CANNOT_LOAD),
+        ("meridian.workloads..module:build", CANNOT_LOAD),
     ],
 )
 def test_a_graph_whose_module_cannot_be_found_never_runs(
-    monkeypatch: pytest.MonkeyPatch, value: str
+    monkeypatch: pytest.MonkeyPatch, value: str, sentence: str
 ) -> None:
     calls: list[str] = []
 
@@ -292,7 +314,7 @@ def test_a_graph_whose_module_cannot_be_found_never_runs(
         monkeypatch, FakeEntryPoint("claims-triage", FakeDist("meridian"), loads, value)
     )
 
-    with pytest.raises(GraphLoadError, match=r"'claims-triage'.*outside"):
+    with pytest.raises(GraphLoadError, match=f"claims-triage.*{sentence}"):
         load_graph_factory("claims-triage", REGISTRY)
 
     assert calls == []
@@ -330,7 +352,104 @@ def test_a_fake_meridian_distribution_first_on_the_path_cannot_substitute_a_grap
         if ep.name == "claims-triage"
     ] == ["shadow_graph_module:build"]  # the premise: the real entry is hidden
 
-    with pytest.raises(GraphLoadError, match=r"meridian\.workloads"):
+    with pytest.raises(GraphLoadError, match=NOT_OURS):
         load_graph_factory("claims-triage", REGISTRY)
 
     assert "shadow_graph_module" not in sys.modules
+
+
+# ── the words of a refusal (T-40, T-80) ─────────────────────────────────────
+PLANTED_DISTRIBUTION = "planted-distribution-name"
+PLANTED_ERROR = "planted-error-text /opt/planted/module.py"
+# Each reason's sentence, pinned once. The evaluations' loader says the same
+# words with "evaluation" for "graph" (the next test holds that).
+SENTENCES = {
+    Refusal.PUBLISHED_TWICE: "the workload's graph is published more than once",
+    Refusal.NOT_PUBLISHED: "no graph is published for this workload; known: none",
+    Refusal.OTHER_DISTRIBUTION: NOT_OURS,
+    Refusal.OUTSIDE_WORKLOADS: NOT_OURS,
+    Refusal.UNLOCATABLE: CANNOT_LOAD,
+    Refusal.OUTSIDE_ROOT: NOT_OURS,
+    Refusal.FAILED_TO_IMPORT: CANNOT_LOAD,
+    Refusal.MOVED_OUTSIDE_ROOT: NOT_OURS,
+}
+
+
+def test_every_reason_has_its_sentence_pinned_here() -> None:
+    assert set(SENTENCES) == set(Refusal)
+
+
+@pytest.mark.parametrize("reason", list(Refusal), ids=lambda reason: reason.name)
+def test_a_refusal_is_the_agent_and_the_shared_fixed_sentence(
+    reason: Refusal,
+) -> None:
+    refused = EntryPointRefused(reason, distribution=PLANTED_DISTRIBUTION)
+
+    message = graphs._refusal_message("claims-triage", refused)
+
+    assert message == f"agent 'claims-triage': {SENTENCES[reason]}"
+    assert PLANTED_DISTRIBUTION not in message
+
+
+@pytest.mark.parametrize("reason", list(Refusal), ids=lambda reason: reason.name)
+def test_the_graphs_words_are_the_evaluations_with_the_subject_changed(
+    reason: Refusal,
+) -> None:
+    refused = EntryPointRefused(reason)
+
+    graph = fixed_text(refused, "graph")
+    evaluation = fixed_text(refused, "evaluation")
+
+    assert graph.replace("graph", "evaluation") == evaluation
+    assert graphs._refusal_message("claims-triage", refused).endswith(graph)
+
+
+def test_the_message_of_a_graph_published_by_another_distribution_quotes_no_name(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    published(monkeypatch, entry(dist=PLANTED_DISTRIBUTION))
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(GraphLoadError) as refused:
+        load_graph_factory("claims-triage", REGISTRY)
+
+    shown = "".join(traceback.format_exception(refused.value))
+    assert str(refused.value) == f"agent 'claims-triage': {NOT_OURS}"
+    assert PLANTED_DISTRIBUTION not in shown
+    assert PLANTED_DISTRIBUTION not in caplog.text
+    assert all(PLANTED_DISTRIBUTION not in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("agent", ["claims-triage", "claim-brief"])
+def test_an_import_error_leaves_its_text_in_no_message_chain_or_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, agent: str
+) -> None:
+    def broken() -> None:
+        raise ImportError(PLANTED_ERROR)
+
+    published(monkeypatch, entry(name=agent, loads=broken))
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(GraphLoadError) as refused:
+        load_graph_factory(agent, REGISTRY)
+
+    shown = "".join(traceback.format_exception(refused.value))
+    assert str(refused.value) == f"agent {agent!r}: {CANNOT_LOAD}"
+    assert "planted-error-text" not in shown
+    assert "/opt/planted" not in shown
+    assert "planted-error-text" not in caplog.text
+    assert all("planted-error-text" not in r.getMessage() for r in caplog.records)
+    # The class of the error is what the chain keeps, as the evaluations' does.
+    assert str(refused.value.__cause__) == "ImportError"
+    assert refused.value.__suppress_context__
+
+
+def test_a_name_nobody_published_lists_only_names_the_registry_would_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published(monkeypatch, entry(name="Planted Name With Spaces"), entry(name="other"))
+
+    with pytest.raises(GraphLoadError) as refused:
+        load_graph_factory("claims-triage", REGISTRY)
+
+    assert str(refused.value) == (
+        "agent 'claims-triage': no graph is published for this workload; known: other"
+    )

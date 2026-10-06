@@ -17,13 +17,16 @@ EXIT_REFUSED = 2  # a name, a tree or a registry the scaffold will not write int
 DEFAULT_ROOT = Path(".")
 GENERATED = (
     "generated: a graph with one node that calls no model and no tool, an "
-    "evaluation with no grader, a golden set with no case and an agent with no tool"
+    "evaluation with no grader, a golden set with no case and an agent with no "
+    "tool and no worker"
 )
 BY_HAND = (
     "still by hand: the agent in the `agents` of a tenant in tenants.yaml (no "
-    "call for it is admitted before), its tools, a prompt, synthetic cases "
-    "from a seeded generator and their graders; for an API of the workload's "
-    "own, an entry in services.yaml (`id`, `description`, `calls: "
+    "call for it is admitted before, and `meridian registry validate` will "
+    "print a note until it is done), its tools and any workers (an edit of "
+    "agents.yaml that config/registry/README.md describes), a prompt, "
+    "synthetic cases from a seeded generator and their graders; for an API of "
+    "the workload's own, an entry in services.yaml (`id`, `description`, `calls: "
     "[agent-runtime]`, `tenants: []` until a tenant lists the agent, and "
     "`agents` with the new agent) and a chart entry with a certificate"
 )

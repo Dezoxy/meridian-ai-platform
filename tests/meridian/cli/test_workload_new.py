@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from meridian.platform.cli import app, scaffold
+from meridian.platform.cli import app, scaffold, scaffold_writes
 from meridian.platform.registry.loader import load_registry
 
 runner = CliRunner()
@@ -57,10 +57,13 @@ def expected_stdout(name: str, module: str) -> str:
         "workload new: done",
         "generated: a graph with one node that calls no model and no tool, an "
         "evaluation with no grader, a golden set with no case and an agent with "
-        "no tool",
+        "no tool and no worker",
         "still by hand: the agent in the `agents` of a tenant in tenants.yaml (no "
-        "call for it is admitted before), its tools, a prompt, synthetic cases "
-        "from a seeded generator and their graders; for an API of the workload's "
+        "call for it is admitted before, and `meridian registry validate` will "
+        "print a note until it is done), its tools and any workers (an edit of "
+        "agents.yaml that config/registry/README.md describes), a prompt, "
+        "synthetic cases from a seeded generator and their graders; for an API "
+        "of the workload's "
         "own, an entry in services.yaml (`id`, `description`, `calls: "
         "[agent-runtime]`, `tenants: []` until a tenant lists the agent, and "
         "`agents` with the new agent) and a chart entry with a certificate",
@@ -206,7 +209,7 @@ def test_a_failed_write_exits_1_not_2_and_says_what_is_left_behind(
     assert result.stderr == (
         "ERROR "
         + scaffold.ROLLBACK_FAILED.format(
-            f"PermissionError: {os.strerror(errno.EACCES)}"
+            "replacing pyproject.toml", f"PermissionError: {os.strerror(errno.EACCES)}"
         )
         + "\nERROR left behind: config/registry/agents.yaml\n"
     )
@@ -231,10 +234,51 @@ def test_a_write_that_was_undone_exits_1_with_one_line(
     assert result.stdout == ""
     assert result.stderr == (
         "ERROR "
-        + scaffold.WRITE_FAILED.format(f"PermissionError: {os.strerror(errno.EACCES)}")
+        + scaffold.WRITE_FAILED.format(
+            "replacing pyproject.toml", f"PermissionError: {os.strerror(errno.EACCES)}"
+        )
         + "\n"
     )
     assert snapshot(root) == before
+
+
+def test_an_error_inside_the_undo_prints_only_fixed_words_and_paths(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: the write fails, and then the undo itself meets an error whose text
+    # must not be printed (it is kept as the cause, which only a traceback shows).
+    before = snapshot(root)
+    real = os.replace
+    leaked = "a-text-the-output-must-not-repeat"
+
+    def replace(source: object, destination: object, *args: object) -> None:
+        if Path(str(destination)).name == "pyproject.toml":
+            raise PermissionError(errno.EACCES, leaked)
+        real(source, destination, *args)  # type: ignore[arg-type]
+
+    def put_back(*args: object) -> bool:
+        raise RuntimeError(leaked)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(scaffold_writes, "_put_back", put_back)
+
+    # Act
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    # Assert: exit 1, nothing on stdout, and every path that differs is named.
+    after = snapshot(root)
+    differing = {
+        p for p in before.keys() | after.keys() if before.get(p) != after.get(p)
+    }
+    lines = result.stderr.splitlines()
+    assert result.exit_code == EXIT_FAILED
+    assert result.stdout == ""
+    assert lines[0] == "ERROR " + scaffold_writes.UNDO_UNFINISHED.format("RuntimeError")
+    start = "ERROR " + scaffold_writes.CHECK_BY_HAND.format("")
+    assert all(line.startswith(start) for line in lines[1:])
+    assert {line.removeprefix(start) for line in lines[1:]} >= differing
+    assert leaked not in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_a_refusal_with_details_prints_each_on_its_own_line(
