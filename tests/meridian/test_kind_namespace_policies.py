@@ -27,7 +27,13 @@ from chartsupport import (
     rendered_chart,
     rules,
 )
-from test_kind_manifests import KIND_DIR, SMOKE_SH, UP_SH, load_documents
+from test_kind_manifests import (
+    KIND_DIR,
+    SMOKE_SH,
+    UP_SH,
+    function_body,
+    load_documents,
+)
 
 MANIFESTS = KIND_DIR / "manifests"
 CERT_MANAGER_FILE = MANIFESTS / "cert-manager-networkpolicy.yaml"
@@ -541,6 +547,21 @@ def test_smokes_telemetry_job_runs_in_meridian_and_pushes_otlp_over_http_to_4318
     assert not endpoint.endswith(":4317")
     # The signal flags keep the default URL paths of the HTTP exporter.
     assert "--otlp-http-url-path" not in args
+
+
+def test_the_three_jobs_one_manifest_ends_at_a_deadline_so_the_ttl_can_remove_it() -> (
+    None
+):
+    manifest = start_job_manifest()
+    starts = re.findall(
+        r"^\s+start_job (\w+) --\1$", function_body(SMOKE_SH, "check_telemetry"), re.M
+    )
+
+    # One heredoc makes all three Jobs. A Job whose pod never starts never
+    # finishes, and ttlSecondsAfterFinished counts from a finished Job only.
+    assert starts == ["traces", "logs", "metrics"]
+    assert manifest["spec"]["activeDeadlineSeconds"] > 0
+    assert manifest["spec"]["ttlSecondsAfterFinished"] > 0
 
 
 def test_the_job_meets_restricted_so_meridians_warn_and_audit_say_nothing() -> None:

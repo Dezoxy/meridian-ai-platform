@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Prove the local platform works end to end: `make smoke`. Changes nothing apart
-# from four short-lived Jobs in meridian (unique names, removed by
-# ttlSecondsAfterFinished), two short-lived Pods of the network policy check (one
+# from four short-lived Jobs in meridian (unique names; each ends at an
+# activeDeadlineSeconds even when its pod never starts, and is removed by
+# ttlSecondsAfterFinished once it has finished or failed), two short-lived Pods
+# of the network policy check (one
 # in meridian, one in default; unique names, each deleted when its line ends and
 # again by the EXIT trap), one CertificateRequest in default of
 # the certificate policy check (unique name, a request the issuer must refuse,
@@ -69,15 +71,22 @@
 #                 fingerprint of its ca.crt equals that of tls.crt of the Secret
 #                 `telemetry-ca` in `observability`; SKIP while the Secret is
 #                 not there, FAIL "run make up" when the ConfigMap is missing or
-#                 stale; only the first twelve hex digits of a fingerprint are
+#                 stale: the services read the mounted file at each new
+#                 connection and the kubelet refreshes it, so `make up` is the
+#                 whole remedy and no restart follows; only the first twelve hex
+#                 digits of a fingerprint are
 #                 printed, and only that one field of the Secret is read); and a
 #                 push in clear text to the collector's port is not accepted: a
 #                 Job pod in `meridian` (so one the policies admit, and the
 #                 refusal is the TLS listener's, not a NetworkPolicy's) sends
 #                 plain HTTP with the database image's bash and the line says
-#                 what came back (a 400 from a Go TLS listener, or a connection
-#                 closed with no answer, is a PASS; a 2xx is a FAIL; a timeout,
-#                 a refused connection or silence is a FAIL that proves nothing,
+#                 what came back (a 400 from a Go TLS listener, which is what
+#                 the collector answered on 2026-10-06, or a connection closed
+#                 with no answer, is a PASS; any other status is a FAIL, a 2xx
+#                 because the receiver took the push and the rest because
+#                 something answered HTTP in clear text, which does not show TLS
+#                 (a plain receiver answers 404 or 503 too); a timeout, a
+#                 refused connection or silence is a FAIL that proves nothing,
 #                 told apart from a refusal by the listener). Then telemetrygen
 #                 sends one trace, one log and one metric over OTLP to the
 #                 collector, over TLS with the authority's certificate
@@ -220,14 +229,25 @@
 #                   does not resolve and a failed exec are failures too, never
 #                   "blocked". It is skipped, one line, when the collector's
 #                   Deployment is not there. The control above is this line's
-#                   control: the same probe, the same image, the name resolution
-#                   and the cluster's enforcement work, and it is not printed
-#                   when the control failed. What the fifth line does not prove:
+#                   control for the probe: the same probe, the same image, the
+#                   name resolution and the cluster's enforcement work, and it is
+#                   not printed when the control failed. A timeout alone could
+#                   also be a collector that is up but hangs, so the line has a
+#                   second control, check 4's push: a pod the policies admit (a
+#                   telemetrygen Job in `meridian`, over TLS) reached the
+#                   collector in this run (check 4 runs first and leaves the
+#                   word in ${telemetry_pushed}). When it did not, a timeout
+#                   from `default` is a FAIL that proves nothing ("the collector
+#                   was not reached from meridian either, so a timeout from
+#                   default shows nothing"), not a PASS; an answer from the
+#                   collector is the same FAIL as ever, whatever check 4 did.
+#                   What the fifth line does not prove:
 #                   that a pod of `meridian` can push (check 4 does, with the
-#                   telemetrygen Jobs it runs there); that 4317, the collector's
-#                   gRPC port, is closed to every pod (the collector still
-#                   listens on it; the policy admits no one, and this line
-#                   probes 4318 only, the port a Meridian pod is let in on); or
+#                   telemetrygen Jobs it runs there, and this line depends on
+#                   it); that 4317, the collector's gRPC port, is closed to every
+#                   pod (the collector's values leave the receiver off, and the
+#                   policy admits no one; this line probes 4318 only, the port a
+#                   Meridian pod is let in on); or
 #                   that a pod of another namespace than `default` is refused
 #                   (the rule is "the namespace meridian only", and `default`
 #                   stands for all the others). It adds about 10 s: one timeout of 4 s and
@@ -803,6 +823,7 @@ rules_body=""      # set by fetch_rules
 network_answer=""  # set by network_probe
 network_pod=""     # the probe Pod of check 8 while it may exist
 network_outsider="" # the probe Pod of check 8's collector line, in NETWORK_OUTSIDER_NAMESPACE
+telemetry_pushed="" # set to yes by check 4 when telemetrygen's push from meridian passed: check 8's control
 refused_request="" # the CertificateRequest of check 10 while it may exist
 refused_err_file="" # the messages of check 10's commands, while it runs
 refused_state=""   # set by refused_read: "<verdict>|<issued>|<reason>|<message>"
@@ -1068,7 +1089,12 @@ check_tools() {
 # (--otlp-http, which sends each signal to its default path, /v1/traces and so
 # on) and TLS: there is no --otlp-insecure, and --ca-cert names the authority's
 # certificate, which the pod reads from the ConfigMap ${TELEMETRY_CA_CONFIGMAP}
-# of its own namespace (a Job that cannot find it never starts). The
+# of its own namespace (a Job that cannot find it never starts: its pod stays in
+# ContainerCreating, and ttlSecondsAfterFinished counts only from a Job that has
+# finished or failed). So the Job carries an activeDeadlineSeconds of 150, 30
+# more than the 120 s JOB_TIMEOUT that smoke waits for it (a test keeps the two
+# apart): a Job that never started fails at its deadline, and the TTL then
+# removes it and its pod. The
 # collector's ingress admits the pods of that namespace on 4318. The
 # Job's pods carry no part-of label, so the database's ingress does not admit
 # them, and manifests/smoke-networkpolicy.yaml selects them by the name label.
@@ -1084,6 +1110,7 @@ metadata:
     app.kubernetes.io/name: meridian-smoke
 spec:
   ttlSecondsAfterFinished: 900
+  activeDeadlineSeconds: 150
   backoffLimit: 2
   template:
     metadata:
@@ -1285,8 +1312,12 @@ pem_fingerprint() {
 # tls.key. Prints nothing but the first TELEMETRY_FINGERPRINT_SHOWN hex digits of
 # either fingerprint. SKIP while the Secret is not there (nothing of the
 # authority exists, `make up`); FAIL when the ConfigMap is missing or differs,
-# with the remedy: `make up` publishes the current certificate, and the services
-# read the file when they start, so they are restarted after it.
+# with the remedy: `make up` publishes the current certificate, and nothing
+# follows it. The services mount the ConfigMap as a directory, the kubelet
+# refreshes the mounted file, and their exporters read it at each new connection
+# (the security review of S063 swapped the file under a live exporter and its
+# next new connection used the new one), so they use it within about a minute
+# and need no restart.
 check_telemetry_ca() {
   local found encoded authority published authority_print published_print
   if ! found="$(kctl -n observability get secret "${TELEMETRY_CA_SECRET}" -o name --ignore-not-found)"; then
@@ -1321,7 +1352,7 @@ check_telemetry_ca() {
   if [[ "${published_print}" == "${authority_print}" ]]; then
     pass "telemetry: the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} holds the certificate of the collector's authority (fingerprints equal, sha256 ${authority_print:0:TELEMETRY_FINGERPRINT_SHOWN}...)"
   else
-    fail "telemetry: the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} holds another certificate (sha256 ${published_print:0:TELEMETRY_FINGERPRINT_SHOWN}...) than the collector's authority has now (sha256 ${authority_print:0:TELEMETRY_FINGERPRINT_SHOWN}...): run make up, which publishes the current one, then restart the services (kubectl -n ${TELEMETRY_CA_NAMESPACE} rollout restart deployment), which read it when they start"
+    fail "telemetry: the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} holds another certificate (sha256 ${published_print:0:TELEMETRY_FINGERPRINT_SHOWN}...) than the collector's authority has now (sha256 ${authority_print:0:TELEMETRY_FINGERPRINT_SHOWN}...): run make up, which publishes the current one (the kubelet refreshes the mounted file and the services use it for their next connection, within about a minute and without a restart)"
   fi
 }
 
@@ -1366,9 +1397,11 @@ clear_text_job_spec() {
 # CLEAR_TEXT_PROBE) runs in a pod the policies admit, so what refuses it is the
 # TLS listener and not a NetworkPolicy; it sends plain HTTP to ${COLLECTOR_ENDPOINT}
 # and the line reports what came back, told apart from a connection that never
-# opened. PASS: a status that is not 2xx (a Go TLS listener answers 400, "Client
-# sent an HTTP request to an HTTPS server") or a connection closed with no
-# answer. FAIL: a 2xx (the receiver takes clear text), and every answer that
+# opened. PASS: a 400 (a Go TLS listener answers 400, "Client sent an HTTP
+# request to an HTTPS server": seen on kind on 2026-10-06 as `HTTP/1.0 400 Bad
+# Request`) or a connection closed with no answer. FAIL: a 2xx (the receiver
+# takes clear text); any other status (a plain HTTP receiver answers 404, 503
+# and 301 as well, so such an answer does not show TLS); and every answer that
 # says nothing about the listener (a timeout, a refused connection, no answer, a
 # Job that did not finish), each naming that the line then proves nothing. SKIP
 # while the collector is not deployed (`make up`); the Meridian services are not
@@ -1402,8 +1435,10 @@ check_telemetry_clear_text() {
   read -r _ _ code _ <<<"${answer}"
   if [[ "${answer}" == "answered HTTP/"* && "${code}" =~ ^2[0-9][0-9]$ ]]; then
     fail "telemetry: the collector accepted a push in clear text on ${COLLECTOR_ENDPOINT} (${answer}): its receiver does not serve TLS (make up applies values/otel-collector.yaml)"
-  elif [[ "${answer}" == "answered HTTP/"* && "${code}" =~ ^[1-5][0-9][0-9]$ ]] || [[ "${answer}" == closed ]]; then
+  elif [[ "${answer}" == "answered HTTP/"* && "${code}" == 400 ]] || [[ "${answer}" == closed ]]; then
     pass "telemetry: a push in clear text to the collector (${COLLECTOR_ENDPOINT}) is not accepted: a pod the policies admit got \"${answer}\""
+  elif [[ "${answer}" == "answered HTTP/"* && "${code}" =~ ^[1-5][0-9][0-9]$ ]]; then
+    fail "telemetry: the clear-text push to the collector (${COLLECTOR_ENDPOINT}) was answered with a status other than 400 (${answer}), which does not show TLS: a status other than 400 means something answered HTTP in clear text (make up applies values/otel-collector.yaml)"
   else
     fail "telemetry: the clear-text probe to ${COLLECTOR_ENDPOINT} gave no answer that shows what the listener does (${answer:-nothing}), so the line proves nothing"
   fi
@@ -1428,6 +1463,10 @@ check_telemetry() {
     fi
   done
   pass "telemetry: telemetrygen sent trace, log and metric to ${COLLECTOR_ENDPOINT}"
+  # The control of check 8's collector line: a pod the policies admit reached the
+  # collector over TLS in this run. Set before the read-backs, which prove
+  # something else (that the stores answered) and can fail on their own.
+  telemetry_pushed=yes
 
   open_grafana || return 0 # it printed the FAIL line
   local proxy="${grafana_url}/api/datasources/proxy/uid"
@@ -2028,15 +2067,19 @@ network_probe() {
   rm -f "${err_file}"
 }
 
-# network_expect EXPECTED WHERE TARGET PASS_TEXT WRONG_TEXT [NAMESPACE]: a PASS
-# line with PASS_TEXT when the probe's answer is EXPECTED (reached or blocked); a
-# FAIL with WRONG_TEXT when it is the other word; a FAIL with what it said when it
-# is neither. WHERE is in NAMESPACE (meridian unless given). Returns 1 unless it
-# passed.
+# network_expect EXPECTED WHERE TARGET PASS_TEXT WRONG_TEXT [NAMESPACE
+# [UNPROVEN_TEXT]]: a PASS line with PASS_TEXT when the probe's answer is
+# EXPECTED (reached or blocked); a FAIL with WRONG_TEXT when it is the other
+# word; a FAIL with what it said when it is neither. WHERE is in NAMESPACE
+# (meridian unless given). A non-empty UNPROVEN_TEXT turns the PASS into a FAIL
+# with that text: the answer is the expected one, but a control the caller
+# needs for it to mean anything did not hold. Returns 1 unless it passed.
 network_expect() {
-  local expected=$1 where=$2 target=$3 pass_text=$4 wrong_text=$5 namespace=${6:-meridian}
+  local expected=$1 where=$2 target=$3 pass_text=$4 wrong_text=$5 namespace=${6:-meridian} unproven_text=${7:-}
   network_probe "${where}" "${target}" "${namespace}"
-  if [[ "${network_answer}" == "${expected}" ]]; then
+  if [[ "${network_answer}" == "${expected}" && -n "${unproven_text}" ]]; then
+    fail "network policy: ${unproven_text}"
+  elif [[ "${network_answer}" == "${expected}" ]]; then
     pass "network policy: ${pass_text}"
     return 0
   elif [[ "${network_answer}" == reached || "${network_answer}" == blocked ]]; then
@@ -2179,10 +2222,15 @@ network_outsider_start() {
 # `meridian` and `observability` cannot push to the collector: the probe Pod in
 # NETWORK_OUTSIDER_NAMESPACE must time out on the collector's HTTP port, which
 # only the pods of `meridian` are admitted to. SKIP when the collector's
-# Deployment is not there. The control is check 8's own (the caller returns
-# before this when it failed).
+# Deployment is not there. The control of the probe is check 8's own (the caller
+# returns before this when it failed). A timeout alone cannot tell a policy that
+# blocks from a collector that is up but hangs, so the line also needs check 4's
+# push from `meridian` (${telemetry_pushed}, set by check_telemetry): when that
+# did not pass in this run, a timeout from `default` is a FAIL that proves
+# nothing, not a PASS. The probe still runs then, so an answer from the
+# collector is told as ever.
 check_network_collector() {
-  local found
+  local found unproven=""
   network_sweep_leftovers "${NETWORK_OUTSIDER_NAMESPACE}"
   if ! found="$(kctl -n observability get deployment otel-collector -o name --ignore-not-found)"; then
     fail "network policy: could not look for deployment/otel-collector in observability (kubectl's error is above)"
@@ -2192,11 +2240,14 @@ check_network_collector() {
     skip "network policy: the collector is not deployed (make up), so no push to it was tried from outside meridian"
     return
   fi
+  if [[ "${telemetry_pushed}" != yes ]]; then
+    unproven="a probe in ${NETWORK_OUTSIDER_NAMESPACE} timed out on the collector (${COLLECTOR_ENDPOINT}), but check 4's push from meridian did not pass in this run: the collector was not reached from meridian either, so a timeout from ${NETWORK_OUTSIDER_NAMESPACE} shows nothing, and the line proves nothing (a collector that is up but hangs times out for every pod; fix check 4's lines first)"
+  fi
   if network_outsider_start; then
     network_expect blocked "${network_outsider}" "${COLLECTOR_ENDPOINT}" \
-      "a pod outside meridian and observability (a probe in ${NETWORK_OUTSIDER_NAMESPACE}) cannot push to the collector (${COLLECTOR_ENDPOINT}), which only the pods of meridian may reach" \
+      "a pod outside meridian and observability (a probe in ${NETWORK_OUTSIDER_NAMESPACE}) cannot push to the collector (${COLLECTOR_ENDPOINT}), which only the pods of meridian may reach, and a pod of meridian did reach it in this run (check 4's push)" \
       "a pod in ${NETWORK_OUTSIDER_NAMESPACE} reached the collector (${COLLECTOR_ENDPOINT}): its ingress admits more than the pods of meridian, or is missing (make up applies manifests/observability-networkpolicy.yaml), or the cluster does not enforce it" \
-      "${NETWORK_OUTSIDER_NAMESPACE}" ||
+      "${NETWORK_OUTSIDER_NAMESPACE}" "${unproven}" ||
       true
   fi
   network_outsider_delete || true # the Pod stays named: the EXIT trap tries again

@@ -50,7 +50,7 @@ GROUPS = [
 # The file holds 12 alert rules and 1 recording rule.
 RULE_COUNT = 13
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
-# check prints when all is well, so a 40th ``pass`` there fails that test. S063
+# check prints when all is well, so a ``pass`` beyond this count fails that test. S063
 # added the fifth line of the network policy check (the collector), the two
 # TLS lines that open the telemetry check (the authority's ConfigMap, a push in
 # clear text), the fourth line of the cost panel check (kube-state-metrics'
@@ -742,8 +742,8 @@ def test_the_documents_count_the_lines_and_the_checks_after_this_step() -> None:
     kind = " ".join((KIND_DIR / "README.md").read_text("utf-8").split())
     root = " ".join((ROOT / "README.md").read_text("utf-8").split())
 
-    # Twenty-seven lines after `make deploy` (25 after `make up` alone), four
-    # more with the rules and the health dashboard.
+    # Both counts are the constants above: SMOKE_LINES_AFTER_DEPLOY after `make
+    # deploy` and SMOKE_LINES_AFTER_UP after `make up` alone.
     assert (
         f"`make smoke` passes, {SMOKE_LINES_AFTER_DEPLOY} of "
         f"{SMOKE_LINES_AFTER_DEPLOY} lines" in operations
@@ -753,7 +753,14 @@ def test_the_documents_count_the_lines_and_the_checks_after_this_step() -> None:
         operations.split()
     )
     assert f"nine of its {SMOKE_LINES_AFTER_DEPLOY} PASS lines" in root
-    assert "27 of 27" not in operations and "# 27 lines" not in demo
+    # No other count stands beside the current one: every "N of N lines" of the
+    # operations page and every "# N lines" of the demo's command is it.
+    assert re.findall(r"(\d+) of \1 lines", operations) == [
+        str(SMOKE_LINES_AFTER_DEPLOY)
+    ]
+    assert re.findall(r"make smoke +# (\d+) lines", demo) == [
+        str(SMOKE_LINES_AFTER_DEPLOY)
+    ]
     assert "`make smoke` checks eleven things:" in kind
     assert "**Alert rules and health dashboard.** Four lines" in kind
     assert "checks ten things" not in kind

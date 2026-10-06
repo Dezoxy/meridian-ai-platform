@@ -240,7 +240,13 @@ def test_a_configmap_with_another_certificate_fails_and_says_to_run_make_up(
 
     assert line.startswith("FAIL  telemetry: ")
     assert NEXT_RUN in line
-    assert "restart" in line
+    # The services read the mounted file at each new connection, which the
+    # kubelet refreshes: `make up` is the whole remedy, with no restart (S063,
+    # the security review's M1).
+    assert "then restart" not in line
+    assert "rollout" not in line
+    assert "kubelet refreshes the mounted file" in line
+    assert "without a restart" in line
     assert fingerprint(current)[:FINGERPRINT_PREFIX] in line
     assert fingerprint(stale)[:FINGERPRINT_PREFIX] in line
     assert fingerprint(current)[: FINGERPRINT_PREFIX + 1] not in line
@@ -373,12 +379,10 @@ def healthy_clear_text_lines(tmp_path: Path) -> list[str]:
     ("answer", "shown"),
     [
         ("answered HTTP/1.0 400 Bad Request", "HTTP/1.0 400 Bad Request"),
-        ("answered HTTP/1.1 404 Not Found", "404"),
-        ("answered HTTP/1.1 301 Moved Permanently", "301"),
         ("closed", "closed"),
     ],
 )
-def test_a_clear_text_push_that_gets_no_2xx_passes_and_says_what_it_got(
+def test_a_clear_text_push_that_gets_a_400_or_no_answer_passes_and_says_which(
     tmp_path: Path, answer: str, shown: str
 ) -> None:
     (line,) = run_clear_text(tmp_path, answer)[0]
@@ -386,6 +390,30 @@ def test_a_clear_text_push_that_gets_no_2xx_passes_and_says_what_it_got(
     assert line.startswith("PASS  telemetry: ")
     assert shown in line
     assert COLLECTOR in line
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "100 Continue",
+        "301 Moved Permanently",
+        "404 Not Found",
+        "503 Service Unavailable",
+    ],
+)
+def test_a_clear_text_push_answered_with_any_other_status_fails_as_not_showing_tls(
+    tmp_path: Path, status: str
+) -> None:
+    (line,) = run_clear_text(tmp_path, f"answered HTTP/1.1 {status}")[0]
+
+    # A plain HTTP receiver answers 404 or 503 as well as a TLS listener answers
+    # 400: only the 400 (the evidence of 2026-10-06) is the listener's own.
+    assert line.startswith("FAIL  telemetry: ")
+    assert f"HTTP/1.1 {status}" in line
+    assert COLLECTOR in line
+    assert "does not show TLS" in line
+    assert "a status other than 400 means something answered HTTP in clear text" in line
+    assert "proves nothing" not in line
 
 
 @pytest.mark.parametrize("status", ["200", "202", "204"])
@@ -610,9 +638,9 @@ def test_the_probe_says_no_answer_when_a_server_listens_and_says_nothing() -> No
 # ── telemetrygen's Job ──────────────────────────────────────────────────────
 
 
-def telemetrygen_job(tmp_path: Path) -> dict:
-    """The manifest ``start_job`` feeds ``kctl create``, read from a run of the
-    function with a stub ``kctl`` that keeps its input."""
+def telemetrygen_job(tmp_path: Path, signal: str = "traces") -> dict:
+    """The manifest ``start_job`` feeds ``kctl create`` for ``signal``, read from
+    a run of the function with a stub ``kctl`` that keeps its input."""
     created = tmp_path / "created.yaml"
     script = "\n".join(
         [
@@ -622,7 +650,7 @@ def telemetrygen_job(tmp_path: Path) -> dict:
             *re.findall(CONSTANTS, SMOKE_SH, re.M),
             f'kctl() {{ cat >"{created}"; }}',
             function_definition(SMOKE_SH, "start_job"),
-            "start_job traces --traces",
+            f"start_job {signal} --{signal}",
         ]
     )
     done = subprocess.run(
@@ -667,3 +695,19 @@ def test_telemetrygens_pod_reads_the_authority_from_the_configmap_in_meridian(
         {"name": "telemetry-ca", "mountPath": "/etc/telemetry-ca", "readOnly": True}
     ]
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
+
+
+@pytest.mark.parametrize("signal", ["traces", "logs", "metrics"])
+def test_each_telemetrygen_job_fails_at_a_deadline_a_little_over_smokes_own_wait(
+    tmp_path: Path, signal: str
+) -> None:
+    (wait,) = re.findall(r"^readonly JOB_TIMEOUT=(\d+)s$", SMOKE_SH, re.M)
+
+    spec = telemetrygen_job(tmp_path, signal)["spec"]
+
+    # A pod that never starts (the ConfigMap `telemetry-ca` is missing, so it
+    # stays in ContainerCreating) leaves a Job that never finishes, and
+    # ttlSecondsAfterFinished only counts from a finished Job: the deadline makes
+    # that Job Failed, and the TTL then removes it.
+    assert spec["ttlSecondsAfterFinished"] > 0
+    assert int(wait) < spec["activeDeadlineSeconds"] <= int(wait) + 60

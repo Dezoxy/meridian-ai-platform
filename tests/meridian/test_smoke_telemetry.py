@@ -37,15 +37,18 @@ def run_telemetry_check(
     log: str = "a log line",
     series: str = SERIES_COUNT,
     jobs_complete: bool = True,
+    call: str = "check_telemetry",
 ) -> list[str]:
     """``check_telemetry`` of smoke.sh in bash against stubs. ``poll`` answers
     with ``trace``, ``log`` or ``series`` by the datasource its URL names (an
     empty answer is a poll that timed out); ``jobs_complete`` False makes
-    ``kctl wait`` fail. Returns the output lines."""
+    ``kctl wait`` fail; ``call`` is the command that runs after the function is
+    defined. Returns the output lines."""
     script = "\n".join(
         [
             "set -euo pipefail",
             "failures=0; skips=0",
+            'telemetry_pushed=""',  # the script's own global, read by check 8
             "pass() { printf 'PASS  %s\\n' \"$*\"; }",
             "fail() { printf 'FAIL  %s\\n' \"$*\"; }",
             "skip() { printf 'SKIP  %s\\n' \"$*\"; }",
@@ -77,7 +80,7 @@ def run_telemetry_check(
             one_line_function(SMOKE_SH, "clean_lines"),
             function_definition(SMOKE_SH, "telemetry_answer"),
             function_definition(SMOKE_SH, "check_telemetry"),
-            "check_telemetry",
+            call,
         ]
     )
     done = subprocess.run(
@@ -194,3 +197,44 @@ def test_a_telemetrygen_job_that_does_not_complete_fails_once(tmp_path: Path) ->
 
     (line,) = lines
     assert line.startswith("FAIL  telemetry: telemetrygen traces job did not complete")
+
+
+def test_the_push_counts_as_passed_for_check_eight_when_the_three_jobs_complete(
+    tmp_path: Path,
+) -> None:
+    lines = run_telemetry_check(
+        tmp_path, call='check_telemetry; echo "pushed=${telemetry_pushed}"'
+    )
+
+    assert lines[-1] == "pushed=yes"
+
+
+def test_the_push_does_not_count_when_a_job_does_not_complete(tmp_path: Path) -> None:
+    lines = run_telemetry_check(
+        tmp_path,
+        jobs_complete=False,
+        call='check_telemetry; echo "pushed=${telemetry_pushed}"',
+    )
+
+    assert lines[-1] == "pushed="
+
+
+def test_the_push_counts_before_the_read_backs_so_a_slow_backend_does_not_hide_it(
+    tmp_path: Path,
+) -> None:
+    # Check 8's control is that a pod the policies admit reached the collector:
+    # that is the Jobs' push, not whether Tempo, Loki or Prometheus answered.
+    lines = run_telemetry_check(
+        tmp_path,
+        trace="",
+        log="",
+        series="",
+        call='check_telemetry; echo "pushed=${telemetry_pushed}"',
+    )
+
+    assert lines[-1] == "pushed=yes"
+    assert [line.split(":")[0] for line in lines[1:4]] == [
+        "FAIL  trace",
+        "FAIL  log",
+        "FAIL  metric",
+    ]

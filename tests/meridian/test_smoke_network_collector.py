@@ -49,7 +49,12 @@ FUNCTIONS = (
 PASS = (
     "PASS  network policy: a pod outside meridian and observability (a probe in "
     f"{OUTSIDER_NAMESPACE}) cannot push to the collector ({COLLECTOR}), which only "
-    "the pods of meridian may reach"
+    "the pods of meridian may reach, and a pod of meridian did reach it in this run "
+    "(check 4's push)"
+)
+NOT_REACHED_FROM_MERIDIAN = (
+    "the collector was not reached from meridian either, so a timeout from "
+    f"{OUTSIDER_NAMESPACE} shows nothing"
 )
 STUB = r"""
 kctl() {
@@ -88,12 +93,15 @@ def run_collector_check(
     wait_status: int = 0,
     leftover_pods: list[dict[str, object]] | None = None,
     call: str = "check_network_collector",
+    pushed: bool = True,
 ) -> tuple[list[str], str]:
     """``check_network_collector`` of smoke.sh in bash against a stub ``kctl``.
     ``answer``, ``status`` and ``error`` are what the probe's exec prints, exits
     with and writes to stderr; ``deployed`` is what the lookup of the collector's
-    Deployment prints (empty: absent; ``FAIL``: the lookup fails). Returns the
-    output lines and what ``kctl`` was asked, one call per line."""
+    Deployment prints (empty: absent; ``FAIL``: the lookup fails); ``pushed`` is
+    whether check 4's push from `meridian` passed earlier in the run (the
+    control). Returns the output lines and what ``kctl`` was asked, one call per
+    line."""
     state = tmp_path / "state"
     state.mkdir()
     (state / "deployment.json").write_text(json.dumps(network.DEPLOYMENT))
@@ -107,6 +115,8 @@ def run_collector_check(
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
             "sleep() { :; }",
+            # What check 4 leaves for check 8 (a global of the script).
+            f'telemetry_pushed="{"yes" if pushed else ""}"',
             *network.PROBE_DEFINITIONS,
             *re.findall(r"^readonly COLLECTOR_ENDPOINT=\S+$", SMOKE_SH, re.M),
             one_line_function(SMOKE_SH, "clean_lines"),
@@ -189,6 +199,80 @@ def test_a_pod_in_default_that_reaches_the_collector_fails_and_says_what_may_be_
     assert "observability-networkpolicy.yaml" in line
     assert "make up" in line
     assert "does not enforce" in line
+
+
+def test_a_timeout_from_default_proves_nothing_when_check_four_did_not_push(
+    tmp_path: Path,
+) -> None:
+    lines, asked = run_collector_check(tmp_path, answer="blocked\n", pushed=False)
+
+    # A collector that is up but hangs times out for every pod: the control is a
+    # pod the policies admit that DOES reach it, which is check 4's push.
+    (line,) = lines
+    assert line.startswith("FAIL  network policy: ")
+    assert NOT_REACHED_FROM_MERIDIAN in line
+    assert "proves nothing" in line
+    assert "check 4" in line
+    assert COLLECTOR in line
+    assert not line.startswith("PASS")
+    assert "exec" in verbs(asked)  # the probe ran: a "reached" is still told
+
+
+def test_a_pod_in_default_that_reaches_the_collector_fails_with_or_without_the_push(
+    tmp_path: Path,
+) -> None:
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    with_push, _ = run_collector_check(tmp_path / "a", answer="reached\n")
+    without_push, _ = run_collector_check(
+        tmp_path / "b", answer="reached\n", pushed=False
+    )
+
+    # Reaching the collector from `default` is a hole whatever check 4 did: the
+    # same FAIL, not the "proves nothing" one.
+    assert with_push == without_push
+    (line,) = without_push
+    assert "admits more than the pods of meridian" in line
+    assert NOT_REACHED_FROM_MERIDIAN not in line
+
+
+def test_an_answer_that_is_neither_word_gets_the_probes_failure_without_the_push_too(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_collector_check(
+        tmp_path, answer="", status=1, error="Traceback", pushed=False
+    )
+
+    (line,) = lines
+    assert "gave no answer of reached or blocked" in line
+    assert NOT_REACHED_FROM_MERIDIAN not in line
+
+
+def test_the_push_does_not_change_the_skip_of_a_collector_that_is_not_deployed(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_collector_check(tmp_path, deployed="", pushed=False)
+
+    (line,) = lines
+    assert line.startswith("SKIP  network policy: the collector is not deployed")
+
+
+def test_a_pass_says_that_a_pod_of_meridian_reached_the_collector_in_this_run(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_collector_check(tmp_path)[0]
+
+    assert line.startswith("PASS  ")
+    assert "a pod of meridian did reach it in this run (check 4's push)" in line
+
+
+def test_the_probe_pod_is_still_deleted_when_the_push_did_not_pass(
+    tmp_path: Path,
+) -> None:
+    _, asked = run_collector_check(tmp_path, pushed=False)
+
+    (delete,) = [c for c in asked.splitlines() if " delete " in c]
+    assert asked.splitlines()[-1] == delete
 
 
 @pytest.mark.parametrize(
@@ -380,6 +464,19 @@ def test_the_check_changes_nothing_but_its_own_pod(tmp_path: Path) -> None:
     assert set(verbs(asked)) == {"get", "create", "wait", "exec", "delete"}
 
 
+def test_check_four_sets_what_check_eight_reads_and_runs_before_it() -> None:
+    lines = SMOKE_SH.splitlines()
+    calls = lines[lines.index("check_edge") :]
+
+    # Declared empty with the script's other globals, so `set -u` never trips and
+    # a run that skips or fails check 4 reads "not passed".
+    assert re.search(r'^telemetry_pushed=""', SMOKE_SH, re.M)
+    assert "telemetry_pushed=yes" in function_body(SMOKE_SH, "check_telemetry")
+    assert "telemetry_pushed" not in function_body(SMOKE_SH, "check_telemetry_ca")
+    assert calls.index("check_telemetry") < calls.index("check_network_policy")
+    assert "telemetry_pushed" in function_body(SMOKE_SH, "check_network_collector")
+
+
 def test_the_probe_targets_the_port_the_services_push_to_and_the_policy_admits() -> (
     None
 ):
@@ -408,6 +505,12 @@ def test_check_eight_ends_with_the_collector_line_and_its_header_says_so() -> No
     # The fifth line is named for what it leaves out: that a pod of meridian can
     # push (check 4 proves it) and that 4317 is closed to every pod.
     assert "check 4" in flat and "4317" in flat
+    # ... and says that a timeout needs check 4's push as its control.
+    assert "second control, check 4's push" in flat
+    assert (
+        "the collector was not reached from meridian either, so a timeout from "
+        "default shows nothing" in flat
+    )
 
 
 # ── check 4: telemetrygen now runs in meridian ──────────────────────────────

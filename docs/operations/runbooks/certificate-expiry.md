@@ -136,8 +136,11 @@ k get certificaterequestpolicy
 ## The collector's certificate and its authority (S063)
 
 Two Certificates in `observability` (`infra/kind/manifests/telemetry-ca.yaml`)
-encrypt the telemetry the services send to the collector. Status: written from
-the manifest, the values and the tests; not run on a cluster.
+encrypt the telemetry the services send to the collector. Status: issuance and
+serving were seen on the kind cluster on 2026-10-06 (both Certificates Ready,
+the collector serving TLS, `make smoke` and `make demo` passing with the
+services' spans arriving over it). Not seen: a renewal of the collector's
+certificate or of its authority, and a cold start.
 
 | Certificate | Secret | Lasts | Renewed | What reads it |
 |---|---|---|---|---|
@@ -159,10 +162,17 @@ When the authority `telemetry-ca` is renewed, its certificate changes and its
 key does not, so the ConfigMap `telemetry-ca` holds the old certificate until
 `make up` runs again, which publishes the new one (it applies the ConfigMap on
 every run and changes nothing when it is the same). Run `make up` after the
-authority's `notBefore` moves, and then restart the six services
-(`k -n meridian rollout restart deployment`, the owner's to run), which load
-the file when they start. Until then: the old certificate still verifies what
-the same key signs, up to its own end (reasoned from the kept key, not tried),
+authority's `notBefore` moves, and nothing more: the six services mount the
+ConfigMap as a directory, the kubelet refreshes the mounted file within about a
+minute, and their exporters read the file at each new connection, not once at
+start, so the next new connection uses the new certificate and no restart is
+needed. That was measured outside a cluster: the security review of S063
+swapped the file under a live exporter (the repository's own, on its urllib3
+transport) and the next new connection failed with the wrong file and
+succeeded with the right one; it was not seen on the cluster, where a renewal
+has not happened. If `make up` is not run: the old certificate still verifies
+what the same key signs, up to its own end (reasoned from the kept key, not
+tried),
 and after that a service's exporter cannot verify the collector. Its exports
 fail and are dropped (the exporters run on their own threads and log the
 failure: `telemetry.py` uses a batch span processor and `metrics.py` a
@@ -171,10 +181,10 @@ the service keeps serving requests; what is lost is its traces and metrics, and
 the dashboards and `make smoke`'s telemetry checks show it. The first of those
 lines compares the ConfigMap with the authority's current certificate (the
 fingerprints of `ca.crt` and of `tls.crt` of the Secret) and says to run
-`make up` when they differ; it cannot say whether the services were restarted
-since, so restart them after `make up` whatever it printed. The services read
-the file through the SDK's variable `OTEL_EXPORTER_OTLP_CERTIFICATE` (the
-chart's `telemetry.caConfigMap`, mounted at `/etc/meridian/telemetry-ca`). A
+`make up` when they differ, and once `make up` has run it passes within about a
+minute, with no restart. The services read the file through the SDK's variable
+`OTEL_EXPORTER_OTLP_CERTIFICATE` (the chart's `telemetry.caConfigMap`, mounted
+at `/etc/meridian/telemetry-ca`). A
 service whose endpoint is `https` and whose variable is unset, or names a file
 that cannot be loaded as a CA certificate, does not start: the factory raises a
 `SettingsError` that names the variable and never the path (the last line of
@@ -182,6 +192,15 @@ the traceback in the pod's log), and the container restarts, as it does for a
 certificate it cannot read, so an empty or unreadable file shows as a restarting
 Deployment and not as missing traces (not seen on a cluster). Status: tested
 without a cluster.
+
+What follows from the refresh: whoever may write the ConfigMap `telemetry-ca`
+in `meridian` changes what the six services trust, live and with no restart,
+and so who may receive their telemetry (a certificate chain that ends in a CA
+of their own, served by a pod that carries the collector Service's labels).
+On kind those who may write it are the cluster administrator and, by the
+rendered charts' RBAC (read, not exercised), the Prometheus operator and the
+CloudNativePG operator, which hold ConfigMap write rights cluster-wide. Treat
+the ConfigMap's write rights as part of the telemetry's trust boundary.
 
 A request for either certificate that a policy refuses is Denied, with the
 policy's reason, and the Certificate stays not Ready (a first issuance) or
@@ -198,8 +217,9 @@ keeps the certificate it has (a renewal): `MeridianCertificateNotReady` and
 - **Do not delete the CA's Secret or the CA Certificate** to force a new
   one. Every service's certificate hangs on it, and a new CA means every
   service must be reissued and restarted together. The same holds for the
-  Secret `telemetry-ca` in `observability`: a new key means a new ConfigMap
-  and a restart of every service that sends telemetry.
+  Secret `telemetry-ca` in `observability`: a new key means a new ConfigMap,
+  which `make up` publishes and the services pick up for their next new
+  connection; until then none of them can verify the collector.
 - **Do not approve a request by hand** (`cmctl approve`, or an edit of
   its conditions) to get past a denial. The policies say who may ask for
   what; an approval that skips them defeats the control (T-88).

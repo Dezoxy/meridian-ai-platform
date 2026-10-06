@@ -432,26 +432,35 @@ node image, Kubernetes components and the platform).
    not prove a completed call: no single role can make up a claim and a run,
    so that is `make demo`'s proof. The calls run over TLS with the runtime's
    certificate (line 9). Before `make deploy` this check prints SKIP.
-4. **Telemetry.** Six lines (S063; tested without a cluster until the main
-   session has run them). The first two are about TLS and do not need the
+4. **Telemetry.** Six lines (S063; seen on kind on 2026-10-06: the ConfigMap
+   line, the clear-text line answering `400` and telemetrygen's three lines
+   passed. Not seen: a renewal of the collector's certificate or of its
+   authority, and a cold start. The rule that only a 400 passes, the Jobs'
+   deadline and check 8's dependence on the push are tested without a cluster
+   until the next run). The first two are about TLS and do not need the
    Meridian services. The ConfigMap `telemetry-ca` in `meridian`, which the six
    services and telemetrygen mount to trust the collector, holds the
    certificate its authority has now: the SHA-256 fingerprint of its `ca.crt`
    equals that of `tls.crt` of the Secret `telemetry-ca` in `observability`
    (only that one field of the Secret is read, the line prints the first twelve
    hex digits of a fingerprint and nothing else, SKIP while the Secret is not
-   there, and a FAIL that says to run `make up` and then restart the services
-   when the ConfigMap is missing or stale). Then a push in clear text is not
+   there, and a FAIL that says to run `make up` when the ConfigMap is missing
+   or stale: the services read the mounted file at each new connection and the
+   kubelet refreshes it, so `make up` is the whole remedy, within about a
+   minute and with no restart). Then a push in clear text is not
    accepted: a Job pod in `meridian`, which the policies admit to the
    collector's port, so that what refuses it is the TLS listener and not a
    NetworkPolicy, runs the database image's `bash` (on the node after `make
-   up`: no image is pulled) and sends plain HTTP to port 4318. A status that is
-   not 2xx (a Go TLS listener answers `400 Bad Request`: "Client sent an HTTP
-   request to an HTTPS server", read from its source and not yet seen on the
-   cluster) or a connection closed with no answer passes, and the line says
-   which; a 2xx fails; a connection that times out, is refused or gets no
-   answer fails with "proves nothing", so a policy that cuts the probe off is
-   not read as a refusal by the listener. Then three short Jobs run
+   up`: no image is pulled) and sends plain HTTP to port 4318. A `400` (a Go
+   TLS listener answers `400 Bad Request`: "Client sent an HTTP request to an
+   HTTPS server"; seen on kind on 2026-10-06 as `HTTP/1.0 400 Bad Request`) or
+   a connection closed with no answer passes, and the line says which. Any
+   other status fails, and the line says what came back and that it does not
+   show TLS: a plain HTTP receiver answers 404, 503 or 301 too, so a status
+   other than 400 means something answered HTTP in clear text; a 2xx fails as
+   the receiver taking the push. A connection that times out, is refused or
+   gets no answer fails with "proves nothing", so a policy that cuts the probe
+   off is not read as a refusal by the listener. Then three short Jobs run
    `telemetrygen` and send one trace, one log and one metric for a fresh
    service name (`meridian-smoke-<epoch>`) through the collector, over OTLP/HTTP
    with TLS to port 4318 (`--otlp-http` and `--ca-cert`, the authority's file
@@ -466,7 +475,11 @@ node image, Kubernetes components and the platform).
    [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml)
    gives them the egress the chart's `default-deny` would otherwise take (DNS
    and the collector's 4318). On a cluster that `make up` has not brought up
-   to date the Jobs time out, and the FAIL line says so. The script then
+   to date the Jobs time out, and the FAIL line says so. Each Job also ends at
+   a deadline of 150 seconds, 30 more than smoke waits for it, so a Job whose
+   pod never starts (no ConfigMap `telemetry-ca`) fails and its TTL of 900
+   seconds removes it, where a Job that never finishes would stay (tested
+   without a cluster). The script then
    reads each back through Grafana's datasource proxy from Tempo, Loki and
    Prometheus, waiting up to 120 seconds each. It prints the trace ID and how
    to find the data in Grafana Explore.
@@ -556,8 +569,15 @@ node image, Kubernetes components and the platform).
    too wide policy, or a cluster that does not enforce it, makes the collector
    answer and fails the line, and so do a refusal, a name that does not
    resolve and a failed exec. It prints SKIP when the collector's Deployment
-   is absent. It does not prove that a pod of `meridian` can push (line 4
-   does, from the Jobs it runs there), that 4317 is closed to every pod (it
+   is absent. A timeout alone cannot tell a policy that blocks from a
+   collector that is up but hangs, so the line depends on check 4's push from
+   `meridian` (the control: a pod the policies admit does reach the
+   collector): when that push did not pass in the same run, a timeout from
+   `default` is a FAIL that says "the collector was not reached from meridian
+   either, so a timeout from default shows nothing", not a PASS; an answer
+   from the collector fails as before, whatever check 4 did. It does not prove
+   that a pod of `meridian` can push (line 4 does, from the Jobs it runs
+   there, and this line depends on it), that 4317 is closed to every pod (it
    probes 4318), or that a namespace other than `default` is refused. The pods
    also carry `meridian-smoke=network-probe`, which no policy, Service or
    Deployment selects. A run that is killed hard (SIGKILL, a power cut) leaves the pod as
@@ -573,8 +593,10 @@ node image, Kubernetes components and the platform).
    seconds. On 2026-10-06 the first four lines passed on the cluster (the
    control, the two denied paths out of the Claims API, and the database
    refusing a pod without the label and taking one with it), and no probe pod
-   was left in `meridian` afterwards. The fifth line is tested without a
-   cluster only, until the first `make smoke` after S063's `make up`. What it
+   was left in `meridian` afterwards. The fifth line passed on the cluster on
+   2026-10-06 (a probe in `default` cannot push to the collector on 4318); its
+   dependence on check 4's push is tested without a cluster until the next
+   `make smoke`. What it
    does not prove, and stays by hand (S019): that a pod of another namespace
    cannot reach the database, and that an address outside the machine is
    unreachable (smoke sends nothing there); and it does not read the
@@ -1112,8 +1134,10 @@ label, and the chart's own policies are what narrow that to the six services
 (its `default-deny` leaves every pod of `meridian` without egress, and only a
 pod given the collector's address has a rule for it; a test reads both halves
 and fails when one drifts from the other). Smoke's Jobs moved into `meridian`
-for that reason, so the sentence has no footnote. The gRPC receiver on 4317
-still listens; a later change closes it, and a later one moves the push to TLS.
+for that reason, so the sentence has no footnote. The gRPC receiver on 4317 is
+closed in the collector's values (read from them; no probe of 4317 has run on
+a cluster), and the push moved to TLS (below); the policy's refusal of 4317
+stays as a second wall.
 
 What stays open, in one list:
 
@@ -1324,7 +1348,12 @@ renewal, the DNS names `otel-collector.observability.svc` and
   old certificate until the next `make up`; a service that mounts a stale
   ConfigMap fails to verify the collector, its exports are dropped (the
   exporters run in background threads and log the failure) and it keeps
-  serving. The runbook
+  serving. `make up` is the whole remedy: the kubelet refreshes the mounted
+  file and the exporters read it at each new connection, within about a minute
+  and without a restart (measured by a review outside a cluster, not seen on
+  one; the same refresh means that whoever may write the ConfigMap
+  `telemetry-ca` in `meridian` changes what the services trust, live). The
+  runbook
   [certificate-expiry](../../docs/operations/runbooks/certificate-expiry.md)
   says what to do. The alerts on certificates now read `observability` too.
 - **What it does not cover.** The authority's private key is a Secret in
