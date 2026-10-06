@@ -1448,6 +1448,9 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
         "wait_for_other_rollouts",
         "wait_for_route",
         "wait_for_token_window",
+        # S075: the record of who holds the cluster, written last, when it ended well
+        # (`changing` was written before the first of these, right after the check).
+        "record_cluster_holder ok",
     ]
     assert "run_migrations" not in DEPLOY_SH
 

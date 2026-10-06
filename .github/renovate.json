@@ -34,6 +34,12 @@
       "* * 1 * *"
     ]
   },
+  "terraform": {
+    "description": "Renovate's own refresh of the provider lock takes the newest provider inside the constraint with no age, and the 'terraform' group below already moves the lock after a week: no refresh for this manager.",
+    "lockFileMaintenance": {
+      "enabled": false
+    }
+  },
   "customManagers": [
     {
       "customType": "regex",
@@ -97,6 +103,21 @@
       "minimumReleaseAge": "7 days"
     },
     {
+      "description": "The Envoy Gateway chart is an OCI artifact on Docker Hub, which says when a tag was pushed, but it is read with the docker datasource, which the rule above does not name: the same week as the other charts.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "envoyproxy/gateway-helm"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
       "description": "One pull request for the GitHub Actions.",
       "matchManagers": [
         "github-actions"
@@ -112,6 +133,24 @@
         "pep621"
       ],
       "groupName": "python"
+    },
+    {
+      "description": "The second agent framework (S037, threat rows T-97 and T-98) and any adapter a release pulls in (the import contracts forbid them) leave the monthly python group for a pull request of their own, with a note on what a bump can break. This rule comes after the 'python' one so that its group wins; the manager tells the Python package from anything else of the same name. The week's wait above still applies. Renovate merges nothing here, so the note and the label are what mark an update that green checks do not clear.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchPackageNames": [
+        "agent-framework",
+        "agent-framework-*"
+      ],
+      "groupName": "agent framework",
+      "addLabels": [
+        "agent-framework"
+      ],
+      "prBodyNotes": [
+        "This is the second agent framework, and green checks do not clear it. A release can build the workflow graph's signature differently or change a step's types, which ends every claim brief that waits for a decision on its first resume (T-98); `tests/meridian/workloads/claim_brief/test_brief_stored_shapes.py` pins the signature and the state types, so a failure there is the finding, not a pin to update. The framework's telemetry and its `.env` behaviour were checked for 1.19.0 only (T-97); `tests/meridian/test_agent_framework_dependency.py` checks them again for the new release, and `tests/meridian/test_import_contracts.py` fails when a release pulls in an adapter package.",
+        "Not merged on green checks alone, and a major or minor release not before its release notes are read for those two things. Release it when no brief waits: the workload's README (`src/meridian/workloads/claim_brief/README.md`) says how to see that none does."
+      ]
     },
     {
       "description": "One pull request for the Dockerfile's base images.",
@@ -164,7 +203,7 @@
       "groupName": "kind platform",
       "prBodyNotes": [
         "CI does not start the kind platform. Before merging, run `make up` and `make smoke` on this branch, put what they printed in a comment, and bring the versions table in `infra/kind/README.md` up to date.",
-        "The images in `pins.env` that a chart runs (`X_IMAGE_TAG` and `X_IMAGE_DIGEST`) are the tags that chart version installs by default, except the collector's: the chart's appVersion is 0.161.0 and the pin is 0.162.0. A tag Renovate proposes that is not the chart's own belongs with a newer chart: leave it, or move the chart too, and read the chart's defaults again with the command in `infra/kind/README.md`."
+        "The images in `pins.env` that a chart runs (`X_IMAGE_TAG` and `X_IMAGE_DIGEST`) are the tags that chart version installs by default, except the collector's: the chart's appVersion is 0.161.0 and the pin is 0.162.0. For the other images Renovate does not propose a new tag, only a new digest of the same tag; the collector's images, outside that rule, still arrive as tag updates. When this pull request moves a chart, move its images' tags and digests by hand, with the two commands in `infra/kind/README.md` (the chart's default tag, and the tag's index digest)."
       ]
     },
     {
@@ -176,7 +215,7 @@
       ],
       "groupName": "cert-manager",
       "prBodyNotes": [
-        "approver-policy and cert-manager arrive together. Look up which cert-manager version the new approver-policy release is built against (its release notes or go.mod), and move both charts, and the images of cert-manager's components, to versions that agree. CI does not start the platform; run `make up` and `make smoke` on this branch and put what they printed in a comment."
+        "approver-policy and cert-manager arrive together. Look up which cert-manager version the new approver-policy release is built against (its release notes or go.mod), and move both charts to versions that agree. Renovate does not propose a new tag for the images of cert-manager's components or of approver-policy, only a new digest of the same tag: move their tags and digests by hand, with the commands in `infra/kind/README.md`. CI does not start the platform; run `make up` and `make smoke` on this branch and put what they printed in a comment."
       ]
     },
     {
@@ -186,8 +225,31 @@
       ],
       "groupName": "prometheus image",
       "prBodyNotes": [
-        "This image is the rule checker CI runs with `make alerts`. Keep it at the Prometheus version the kube-prometheus-stack chart in `infra/kind/pins.env` installs: a newer checker accepts rules the cluster's Prometheus may not. This pull request moves the Prometheus the cluster runs (`PROMETHEUS_IMAGE_*` in `pins.env`) and the checker (`PROMTOOL_IMAGE` in the Makefile) together, and belongs with a kube-prometheus-stack chart that installs that version: CI does not start the platform, so run `make up` and `make smoke` on this branch and put what they printed in a comment."
+        "This image is the rule checker CI runs with `make alerts`. Keep it at the Prometheus version the kube-prometheus-stack chart in `infra/kind/pins.env` installs: a newer checker accepts rules the cluster's Prometheus may not. This pull request moves the Prometheus the cluster runs (`PROMETHEUS_IMAGE_*` in `pins.env`) and the checker (`PROMTOOL_IMAGE` in the Makefile) together. Renovate proposes only a new digest of the tag in place; the tag moves by hand, in the pull request of a kube-prometheus-stack chart that installs that version, in both files, with the commands in `infra/kind/README.md`. CI does not start the platform, so run `make up` and `make smoke` on that branch and put what they printed in a comment."
       ]
+    },
+    {
+      "description": "An image a chart installs keeps the chart's own tag: the tag moves by hand, in the chart's pull request (infra/kind/README.md says how to read it), so no image is proposed before the chart that installs it. A new digest of the same tag is still proposed. Left out on purpose: kindest/node and the CloudNativePG postgresql image (not a chart's default), the collector and telemetrygen (the pin is 0.162.0 and the chart's appVersion 0.161.0, so those two images are outside this rule until their pin and their chart agree) the log agent's contrib collector image (S064), which is the collector's release and follows the core image's side, and the rate store's Redis (S066), whose tag is this repository's own choice and has a group of its own below; the Envoy Gateway chart is a chart, not an image.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "docker.io/envoyproxy/gateway",
+        "quay.io/jetstack/cert-manager-*",
+        "ghcr.io/cloudnative-pg/cloudnative-pg",
+        "quay.io/prometheus-operator/*",
+        "ghcr.io/jkroepke/kube-webhook-certgen",
+        "quay.io/prometheus/prometheus",
+        "registry.k8s.io/kube-state-metrics/kube-state-metrics",
+        "docker.io/grafana/*",
+        "quay.io/kiwigrid/k8s-sidecar"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "enabled": false
     },
     {
       "description": "The Redis the tests and CI run against (PYTEST_REDIS_IMAGE in the Makefile) and the rate store the kind cluster runs (RATE_STORE_IMAGE in pins.env) are one image, the same tag and the same digest, so one group holds both and they move in one pull request. This rule comes after the 'kind platform' one so that its group wins for the pins.env line.",

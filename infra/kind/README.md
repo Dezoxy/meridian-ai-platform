@@ -116,9 +116,15 @@ its pinned version, except the collector's and the log agent's (S064): the
 chart's appVersion is 0.161.0 and the pins are 0.162.0 (the collector's was
 pinned before this step, and the agent's contrib build is the same release,
 so the two move together). A chart upgrade moves
-the tags with it, and Renovate
-proposes a tag of its own that may not be the chart's, so read the chart's
-defaults again (below) before merging. What a chart's key takes is not
+the tags with it, by hand, in the chart's pull request: Renovate does not
+propose a new tag for an image a chart installs (`.github/renovate.json`
+switches off its major, minor and patch updates for them, so no image arrives
+before the chart that installs it), only a new digest of the tag in place. The
+pull request that moves a chart reads the chart's defaults again (below) and
+writes each new tag, and the index digest of that tag, into `pins.env`. The
+collector's and the log agent's images are outside that rule until their pins
+and their chart agree, and Renovate still proposes their tags. What a chart's
+key takes is not
 uniform: `digest` takes `sha256:<hex>`; `sha` in kube-prometheus-stack and
 Grafana takes the hex alone (their templates write `@sha256:` themselves) and
 `up.sh` strips the prefix; `sha` in kube-state-metrics takes the whole digest;
@@ -177,6 +183,14 @@ helm template cert-manager "${CERT_MANAGER_CHART}" --repo "${CERT_MANAGER_REPO}"
   --values infra/kind/values/cert-manager.yaml |
   grep -oE '(docker\.io|quay\.io|ghcr\.io|registry\.k8s\.io)/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?' |
   sort -u
+```
+
+The digest to write next to a tag is the one of the tag's multi-architecture
+index. This prints it without pulling the image (it reads the registry):
+
+```sh
+docker buildx imagetools inspect quay.io/jetstack/cert-manager-webhook:v1.21.2 \
+  --format '{{.Manifest.Digest}}'
 ```
 
 On the cluster, after `make up` (with `KUBECONFIG` set as `make up` prints),
@@ -452,8 +466,8 @@ node image, Kubernetes components and the platform).
 
 | Command | What it does |
 |---|---|
-| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local, on the laptop; 5 min 04 s and 4 min 28 s on the Linux machine of the table above), under a minute after. |
-| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. On a cluster that exists it first reads who holds it and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; it records itself as the holder with state `changing` before it changes anything and with state `ok` when it ends well, so a run that fails leaves `changing` (S075; see "Who holds the cluster" below). Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local, on the laptop; 5 min 04 s and 4 min 28 s on the Linux machine of the table above), under a minute after. |
+| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. Before it builds or runs anything it reads who holds the cluster and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; it records itself as the holder with state `changing` right after that check and with state `ok` when it ends well, so a run that fails leaves `changing` (S075; see "Who holds the cluster" below). The first deploy of an image waits a minute after the ingestion (below). |
 | `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Run on the cluster on 2026-10-06: after three deploys it listed three `meridian:*` images in the engine and in the node, one `in use` and two `rollback` (an old ReplicaSet names each), kept with no removal command, and removed nothing; on the cluster made again from nothing it listed three in the engine, one in use and two unused (no ReplicaSet of the new cluster names them) with the `docker image rm` line printed for them, and one in the node. The refusal in a checkout without the cluster's credentials was tested against stub commands and not tried on the cluster. |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on (the upkeep Job with one argument and a suffix, which it needs to render). Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
@@ -462,7 +476,8 @@ node image, Kubernetes components and the platform).
 | `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). Only a failure whose output holds the command's own `ERROR GUnnn` line says that nothing was changed; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
-| `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
+| `make cluster-holder` | Print who holds the cluster: the holder, its commit, the time its last `make up` or `make deploy` started or ended and the state, `ok` or `changing` with a sentence that says to look at what failed (S075); or that there is no record, or no cluster. It changes nothing on the cluster and refreshes the gitignored credentials file as `make up` does. A cluster that does not answer is an error. See "Who holds the cluster" below. |
+| `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. Since S075 it reads the record of who holds the cluster first and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; a cluster that does not answer stops it too (who holds it cannot be told, and another step's `make up` may be restarting the node), and `TAKE_CLUSTER=1 make down` deletes a broken cluster all the same. The record goes with the cluster. |
 
 `make smoke` checks eleven things:
 
@@ -2106,6 +2121,92 @@ success. The checklist is in
 [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster),
 which also links the objectives the rules watch and the runbooks they
 point to.
+
+## Who holds the cluster
+
+One plan step uses the cluster at a time (the plan's Part A). Since S075 the
+rule leaves a record that the commands read. Status: **implemented**, tested
+against stub commands, and seen on kind once (the record written
+through a deploy, a deploy refused while another ran, and `make down`
+refused with the record at `ok`). Not seen on a cluster: `TAKE_CLUSTER=1`, a
+record left `changing` by a run that failed, and `make up` on an existing
+cluster; the stub tests hold each.
+
+The record is the ConfigMap `meridian-cluster-holder` in `kube-system`, with
+four values and nothing else (no path, no user or host name, no address of a
+remote):
+
+- `holder`: `CLUSTER_HOLDER` from the environment when it is set (letters,
+  digits, `.`, `_`, `/` and `-`, at most 100 characters; anything else stops the
+  command with a sentence), otherwise the current branch's name, otherwise, in
+  a detached checkout, `detached@<short commit>`. A session that runs from a
+  detached checkout, as the main session does, names itself with
+  `CLUSTER_HOLDER`. A branch name outside those characters, or a checkout git
+  cannot read, stops the command and asks for `CLUSTER_HOLDER`.
+- `commit`: the short hash of the checkout that ran the command.
+- `time`: UTC, to the second: when the holder's last run started to change
+  the cluster, or ended well.
+- `state`: `changing` from the moment a run starts to change the cluster,
+  `ok` when it ends well. A record with no `state` (written by the first
+  version of this rule) reads as `ok`; any other text reads as `changing`.
+
+Which commands read it and which do not:
+
+| Command | Reads the record | Writes it |
+|---|---|---|
+| `make up` | Once the cluster exists, before it changes anything; on a machine with no cluster it creates one and reads nothing | `changing` right after the check passes (on a new cluster, as soon as it answers), `ok` at the end, when it ended well |
+| `make deploy` | Before it builds or runs anything | `changing` right after the check passes, `ok` at the end, when it ended well |
+| `make demo` | Only through `make deploy`, which it runs first; then it posts a claim without asking | Through `make deploy` |
+| `make down` | Before it deletes the cluster; a cluster that does not answer stops it (`TAKE_CLUSTER=1` deletes it all the same) | No: the record goes with the cluster |
+| `make cluster-holder` | Yes, and prints it | No |
+| `make smoke`, `make gateway-upkeep`, `make images`, `make grafana`, `make grafana-password` | No | No |
+
+With no record (a cluster made before S075) a command says so in one line and
+goes on: this is the one case nothing protects, so a cluster that predates the
+record is anybody's until the first `make up` or `make deploy` writes it. With
+the same holder it goes on, whatever commit the record names and whatever the
+state (a retry after a failure is the ordinary case); when the state is
+`changing` it says so in one line, with what that means (a `make up` or
+`make deploy` is running, or the last one did not end well). With
+another holder it stops before it changes anything, whatever the state, with
+one sentence that names the holder, its commit and its time, for example:
+
+```text
+error: the cluster is held by s075-f1 (commit abc1234, since 2026-10-06T12:00:00Z), not by s075-m2; nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 make deploy) takes it
+```
+
+When the state is `changing` the sentence says what that means, a run going
+or one that failed, and to wait for it or to look at what failed before
+anything is deleted (the take and `make cluster-holder` use the same words):
+
+```text
+error: the cluster is held by s075-f1 (commit abc1234, since 2026-10-06T12:00:00Z), whose record says changing (a make up or make deploy is running, or the last one did not end well): wait for it, or look at what failed before anything is deleted; it is not held by s075-m2, nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 make down) takes it
+```
+
+`TAKE_CLUSTER=1` (exactly `1`) in front of the same command takes the cluster:
+the command says whose cluster it takes in one line and goes on, and writes
+itself as the holder when it ends well. A cluster that does not answer stops
+`make up`, `make deploy` and `make down` (who holds it cannot be told), and so
+does a record that cannot be read; an answer that failed is never taken for
+"no record". `make down` of a broken cluster that nobody uses is therefore
+`TAKE_CLUSTER=1 make down`.
+
+The record is written when `make up` or `make deploy` starts to change the
+cluster, and again when it ends well, because a run that failed once left the
+cluster with no record, and the next command deleted it with the evidence of
+the failure. A run that fails or is interrupted leaves `changing`: the cluster
+is still its holder's, and another holder is stopped until it has looked at what
+failed (the run's own output, the pods' logs, the audit rows) and takes the
+cluster. `changing` is also what a run in progress shows. A `make deploy` that
+stops at a prerequisite (`make up` was not run) leaves `changing` too, and the
+same holder runs it again at no cost. `make down` does not write the record: it
+deletes the cluster, and the record goes with it.
+
+It is a notice for an honest mistake, not a lock: two commands started in the
+same second both pass the check, two checkouts that use the same holder name are
+one holder to it, `TAKE_CLUSTER=1` passes it, and anyone who can use `kubectl`
+on the cluster can edit or delete the ConfigMap. It says nothing about what is
+changed by hand or by a command that does not read it.
 
 ## If `make up` was interrupted
 

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by up.sh, deploy.sh, upkeep.sh, demo.sh, smoke.sh, down.sh and grafana.sh. Source it; do not run it.
+# Shared by up.sh, deploy.sh, upkeep.sh, demo.sh, smoke.sh, down.sh, holder.sh and grafana.sh. Source it; do not run it.
 #
 # Safety rules kept in one place:
 #  - The cluster's credentials live in infra/kind/kubeconfig (gitignored). The
@@ -247,4 +247,199 @@ api_server_matches_policy() {
   # shellcheck disable=SC2034  # read by the scripts that source this file
   api_server_problem="the API server's address changed: run make up (the endpoint holds $(api_server_shown "$(paste -sd ',' - <<<"${wanted}")"); the database's policy lists $(api_server_shown "$(paste -sd ',' - <<<"${database_policy_cidrs:-none}")"))"
   return 1
+}
+
+# Who holds the cluster (S075, M2). One plan step uses the kind cluster at a
+# time, by rule; this makes the rule visible. The ConfigMap below, in kube-system,
+# holds four values and nothing else (no path, no user or host name, no address of
+# a remote): `holder` (CLUSTER_HOLDER, else the branch, else detached@<commit>),
+# `commit` (the short hash of the checkout that ran the command), `time` (UTC, to
+# the second) and `state`. `make up`, `make deploy` and `make down` read it before
+# they change anything (check_cluster_holder): another holder is named and the
+# command stops, unless TAKE_CLUSTER=1. `make up` and `make deploy` write it
+# (record_cluster_holder) when they START to change the cluster, with state
+# `changing`, and again when they end well, with state `ok`: a run that fails or
+# is interrupted leaves `changing`, so the cluster never looks like nobody's
+# right after a failure (the evidence of the fault is in its database and pods).
+# A record with no `state` (written before this) reads as `ok`. It is a notice
+# for an honest mistake, not a lock: two commands started in the same second both
+# pass the check.
+readonly HOLDER_CONFIGMAP=meridian-cluster-holder
+readonly HOLDER_NAMESPACE=kube-system
+readonly HOLDER_MAX_LENGTH=100
+readonly HOLDER_PATTERN='^[A-Za-z0-9._/-]{1,100}$'
+
+# What read_cluster_holder leaves, in the shell that called it (call it directly,
+# never inside $(...)): "none", "found" or "unreadable", and the record's three
+# values, cleaned of anything but printable ASCII and cut short.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+holder_state=""
+# shellcheck disable=SC2034  # read by the scripts that source this file
+holder_name=""
+# shellcheck disable=SC2034  # read by the scripts that source this file
+holder_commit=""
+# shellcheck disable=SC2034  # read by the scripts that source this file
+holder_time=""
+# "ok" or "changing": the state of the last run that wrote the record. Anything
+# but "ok" or nothing (a record from before the state) reads as "changing".
+# shellcheck disable=SC2034  # read by the scripts that source this file
+holder_last_run=""
+# What the state "changing" means, in the one wording that the refusal, the take,
+# the line to the same holder and `make cluster-holder` all use: the record is
+# written when a run starts to change the cluster, so while it goes on the record
+# looks as it does after a run that failed.
+# shellcheck disable=SC2034  # read by holder.sh
+readonly HOLDER_CHANGING_MEANS='a make up or make deploy is running, or the last one did not end well'
+
+# own_holder_name: the name this checkout records itself under, on stdout. A
+# failure prints its sentence on stderr and returns 1 (call it as
+# name="$(own_holder_name)" || exit 1: a die inside $(...) would leave only the
+# subshell). A name that CLUSTER_HOLDER sets, or a branch, outside the pattern is
+# refused, never changed into another: two branches must not become one holder.
+own_holder_name() {
+  local LC_ALL=C name
+  if [[ -n "${CLUSTER_HOLDER+set}" ]]; then
+    [[ "${CLUSTER_HOLDER}" =~ ${HOLDER_PATTERN} ]] || {
+      printf 'error: CLUSTER_HOLDER must be 1 to %s characters from letters, digits, ., _, / and -\n' "${HOLDER_MAX_LENGTH}" >&2
+      return 1
+    }
+    printf '%s' "${CLUSTER_HOLDER}"
+    return 0
+  fi
+  name="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null)" || {
+    printf 'error: cannot tell the branch of this checkout (git failed in %s); set CLUSTER_HOLDER to the name this checkout should hold the cluster under\n' "${REPO_ROOT}" >&2
+    return 1
+  }
+  if [[ "${name}" == HEAD ]]; then
+    name="detached@$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null)" || {
+      printf 'error: cannot read the commit of this detached checkout; set CLUSTER_HOLDER to the name this checkout should hold the cluster under\n' >&2
+      return 1
+    }
+  fi
+  [[ "${name}" =~ ${HOLDER_PATTERN} || "${name}" =~ ^detached@[0-9a-f]+$ ]] || {
+    printf 'error: the name of this branch is not usable as a holder (1 to %s characters from letters, digits, ., _, / and -); set CLUSTER_HOLDER to the name this checkout should hold the cluster under\n' "${HOLDER_MAX_LENGTH}" >&2
+    return 1
+  }
+  printf '%s' "${name}"
+}
+
+# holder_clean TEXT: TEXT as printable ASCII on one line, cut to the longest name.
+holder_clean() {
+  printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | cut -c "1-${HOLDER_MAX_LENGTH}"
+}
+
+# read_cluster_holder: the record into holder_state and the three values. 0 when
+# the cluster answered ("none" with no ConfigMap: --ignore-not-found prints
+# nothing for one), 1 when it did not (kubectl's error is above and the state is
+# "unreadable"): an answer that failed is never read as "no record". The values
+# are cleaned: anyone who can edit a ConfigMap in kube-system chooses their text.
+read_cluster_holder() {
+  local out=""
+  holder_state=unreadable
+  holder_name=""
+  holder_commit=""
+  holder_time=""
+  holder_last_run=""
+  out="$(kctl -n "${HOLDER_NAMESPACE}" get configmap "${HOLDER_CONFIGMAP}" --ignore-not-found \
+    -o 'jsonpath={.data.holder}|{.data.commit}|{.data.time}|{.data.state}' \
+    --request-timeout="${API_SERVER_READ_TIMEOUT}")" || return 1
+  if [[ -z "${out}" ]]; then
+    holder_state=none
+    return 0
+  fi
+  IFS='|' read -r holder_name holder_commit holder_time holder_last_run <<<"${out}" || true
+  holder_name="$(holder_clean "${holder_name}")"
+  holder_commit="$(holder_clean "${holder_commit}")"
+  holder_time="$(holder_clean "${holder_time}")"
+  holder_last_run="$(holder_clean "${holder_last_run}")"
+  # Nothing is a record from before the state, and reads as "ok"; any other text
+  # than "ok" is read as "changing", the state that asks for a look.
+  [[ -z "${holder_last_run}" ]] && holder_last_run=ok
+  [[ "${holder_last_run}" == ok ]] || holder_last_run=changing
+  holder_state=found
+}
+
+# decide_cluster_holder COMMAND NAME: after read_cluster_holder answered. COMMAND
+# ("make deploy") is what the refusal tells the person to put TAKE_CLUSTER=1 in
+# front of; NAME is this checkout's. No record and the same holder go on (the
+# commit is not compared: a holder moves on to a newer commit of its own branch;
+# a retry after a run that did not end well is the ordinary case, and is told so in
+# one line); another holder stops the command, with the one sentence, whatever the
+# state, unless TAKE_CLUSTER is exactly 1. No record is the one case nothing
+# protects: a cluster made before the record.
+decide_cluster_holder() {
+  local command=$1 me=$2 whose failed=""
+  case "${holder_state}" in
+    none)
+      log "no record of who holds the cluster (made before the record); going on"
+      return 0
+      ;;
+    found) ;;
+    *) die "decide_cluster_holder was called with no record read" ;;
+  esac
+  if [[ "${holder_name}" == "${me}" ]]; then
+    if [[ "${holder_last_run}" == changing ]]; then
+      log "the cluster is held by ${me}, and the record says changing (${HOLDER_CHANGING_MEANS}); going on"
+    else
+      log "the cluster is held by ${me}"
+    fi
+    return 0
+  fi
+  whose="${holder_name:-unknown} (commit ${holder_commit:-unknown}, since ${holder_time:-unknown})"
+  [[ "${holder_last_run}" != changing ]] || failed=yes
+  if [[ "${TAKE_CLUSTER:-}" == 1 ]]; then
+    if [[ -n "${failed}" ]]; then
+      log "taking the cluster from ${whose}, whose record says changing (${HOLDER_CHANGING_MEANS})"
+    else
+      log "taking the cluster from ${whose}"
+    fi
+    return 0
+  fi
+  if [[ -n "${failed}" ]]; then
+    die "the cluster is held by ${whose}, whose record says changing (${HOLDER_CHANGING_MEANS}): wait for it, or look at what failed before anything is deleted; it is not held by ${me}, nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 ${command}) takes it"
+  fi
+  die "the cluster is held by ${whose}, not by ${me}; nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 ${command}) takes it"
+}
+
+# check_cluster_holder COMMAND: read the record and decide, before anything is
+# changed. A cluster that does not answer stops the command: who holds it cannot
+# be told (`make down` is the exception, it reads the record itself).
+check_cluster_holder() {
+  local me
+  me="$(own_holder_name)" || exit 1
+  read_cluster_holder ||
+    die "could not read who holds the cluster (kubectl's error is above); nothing was changed"
+  decide_cluster_holder "$1" "${me}"
+}
+
+# record_cluster_holder STATE: this checkout becomes the holder, now. STATE is
+# `changing` (a run starts to change the cluster; call it right after the check
+# and before the first change) or `ok` (the run ended well). The ConfigMap is
+# rendered by kubectl on the client and applied server-side, as the other
+# ConfigMaps of `make up` are.
+record_cluster_holder() {
+  local state=${1:-} me commit now reached
+  [[ "${state}" == changing || "${state}" == ok ]] ||
+    die "record_cluster_holder takes the state changing or ok, not '${state}'"
+  me="$(own_holder_name)" || exit 1
+  if [[ "${state}" == changing ]]; then
+    reached="this run went no further"
+  else
+    reached="the cluster was changed"
+  fi
+  commit="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null)" ||
+    die "cannot read the commit of this checkout; who holds the cluster was not recorded (${reached})"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  kctl -n "${HOLDER_NAMESPACE}" create configmap "${HOLDER_CONFIGMAP}" \
+    --from-literal=holder="${me}" --from-literal=commit="${commit}" \
+    --from-literal=time="${now}" --from-literal=state="${state}" \
+    --dry-run=client -o json |
+    jq 'del(.metadata.creationTimestamp)' |
+    kctl -n "${HOLDER_NAMESPACE}" apply --server-side --force-conflicts -f - >/dev/null ||
+    die "could not record who holds the cluster (kubectl's error is above); ${reached}"
+  if [[ "${state}" == changing ]]; then
+    log "the cluster is now marked as being changed by ${me} (commit ${commit}, ${now}, state changing)"
+  else
+    log "the cluster is now held by ${me} (commit ${commit}, ${now}, state ok)"
+  fi
 }

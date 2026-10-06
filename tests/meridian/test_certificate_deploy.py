@@ -93,6 +93,18 @@ def write_stub(directory: Path, name: str, body: str) -> None:
     path.chmod(0o755)
 
 
+def without_the_record(calls: str) -> str:
+    """``calls`` less the calls that write the record of who holds the cluster
+    (S075), which ``deploy.sh`` makes right after its check, before the
+    prerequisites that these tests stop it at."""
+    return "\n".join(
+        line
+        for line in calls.splitlines()
+        if "meridian-cluster-holder" not in line
+        and "-n kube-system apply --server-side" not in line
+    )
+
+
 def run_deploy(
     tmp_path: Path,
     issuer: str,
@@ -143,6 +155,9 @@ def run_deploy(
     write_stub(stubs, "kind", log.format(name="kind"))
     write_stub(stubs, "helm", log.format(name="helm"))
     write_stub(stubs, "sleep", log.format(name="sleep"))
+    # The record of who holds the cluster (S075) names the checkout's commit; this
+    # scratch directory is not a git checkout.
+    write_stub(stubs, "git", 'echo "abc1234"')
     write_stub(
         stubs,
         "docker",
@@ -155,6 +170,11 @@ def run_deploy(
         f"{log.format(name='kubectl')}\n"
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
+        # Who holds the cluster (S075): no record, so deploy.sh goes on.
+        '  *"get configmap meridian-cluster-holder"*) ;;\n'
+        # ... and the record it writes at the start and the end (`create | apply`).
+        '  *"create configmap meridian-cluster-holder"*) echo "{}" ;;\n'
+        '  *"-n kube-system apply --server-side"*) cat >/dev/null ;;\n'
         '  *"get database"*) printf true ;;\n'
         f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
         f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
@@ -187,6 +207,8 @@ def run_deploy(
             "PATH": f"{stubs}:{os.environ['PATH']}",
             "DOCKER_HOST": "unix:///stub.sock",
             "HOME": str(tmp_path),
+            # The holder's name (S075) comes from here, not from a git checkout.
+            "CLUSTER_HOLDER": "test-holder",
         },
         check=False,
         timeout=SECONDS,
@@ -241,7 +263,7 @@ def test_deploy_stops_before_the_image_and_the_jobs_without_a_ready_issuer(
     assert "docker build" not in calls
     assert "kind load" not in calls
     assert "helm" not in calls
-    assert " apply " not in calls
+    assert " apply " not in without_the_record(calls)
     assert "job" not in calls.replace("get clusterissuer", "")
     assert "get clusterissuer" in calls
 
@@ -274,7 +296,7 @@ def assert_stopped_before_the_image(
     assert "docker build" not in calls
     assert "kind load" not in calls
     assert "helm" not in calls
-    assert " apply " not in calls
+    assert " apply " not in without_the_record(calls)
     assert "job" not in calls.replace("get clusterissuer", "")
 
 

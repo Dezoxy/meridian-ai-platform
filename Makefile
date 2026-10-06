@@ -87,7 +87,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -256,11 +256,11 @@ synthetic:
 # infra/kind/README.md says what these create. The cluster's credentials stay in
 # infra/kind/kubeconfig (gitignored); ~/.kube/config is never touched.
 
-## up              create the kind cluster, install the local platform and provision the Grafana dashboards (needs Docker, kind, kubectl, helm; first run pulls images)
+## up              create the kind cluster, install the local platform and provision the Grafana dashboards (needs Docker, kind, kubectl, helm; first run pulls images; stops when another holder has the cluster unless TAKE_CLUSTER=1)
 up:
 	infra/kind/up.sh
 
-## deploy          build the image, run the migrations, seed the policy store, install the Helm release with the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion)
+## deploy          build the image, run the migrations, seed the policy store, install the Helm release with the Claims API, Agent Runtime, Model Gateway and the three tool servers on the kind cluster and ingest the policy wordings (needs make up; the first deploy of an image waits a minute after the ingestion; stops when another holder has the cluster unless TAKE_CLUSTER=1)
 deploy:
 	infra/kind/deploy.sh
 
@@ -292,7 +292,11 @@ grafana-password:
 helm-lint:
 	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
 
-## down            delete the kind cluster "meridian" and its credentials file (destructive; for a test that needs a fresh cluster, never to clear a fault; hard rule 8)
+## cluster-holder  print who holds the kind cluster (the holder, its commit, the time and the state: changing after a make up or make deploy that did not end well), or that there is no record or no cluster; make up, deploy and down stop when another holder has it unless TAKE_CLUSTER=1 is in front of the command (CLUSTER_HOLDER=<name> names a checkout that is not on a branch); a notice, not a lock
+cluster-holder:
+	infra/kind/holder.sh
+
+## down            delete the kind cluster "meridian" and its credentials file (destructive; for a test that needs a fresh cluster, never to clear a fault; hard rule 8; stops when another holder has the cluster unless TAKE_CLUSTER=1)
 down:
 	infra/kind/down.sh
 
