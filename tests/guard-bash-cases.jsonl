@@ -1,6 +1,76 @@
 {"expect":"deny","command":"terraform -chdir=infra/terraform/azure/envs/demo destroy -auto-approve"}
 {"expect":"none","command":"cat > docs/runbook.md <<'EOF'\nNever run terraform destroy without a plan.\nEOF\nmake docs"}
 {"expect":"deny","command":"bash <<'EOF'\nterraform destroy -auto-approve\nEOF"}
+{"expect":"deny","command":"git push --for\\\nce origin main"}
+{"expect":"deny","command":"git push -\\\n-force"}
+{"expect":"deny","command":"terraform dest\\\nroy"}
+{"expect":"deny","command":"kubectl get sec\\\nret db -o yaml"}
+{"expect":"deny","command":"kubectl exec pod -- e\\\nnv"}
+{"expect":"deny","command":"aws secretsmanager get-secret-\\\nvalue --secret-id x"}
+{"expect":"deny","command":"cat .e\\\nnv"}
+{"expect":"deny","command":"git commit --no-ver\\\nify -m x"}
+{"expect":"deny","command":"rm -r\\\nf /"}
+{"expect":"deny","command":"kubectl create tok\\\nen sa"}
+{"expect":"ask","command":"helm get \\\nvalues meridian"}
+{"expect":"ask","command":"kind get kubeconfig \\\n--name meridian"}
+{"expect":"ask","command":"kubectl exec pod -- psql \\\n-c x"}
+{"expect":"ask","command":"kubectl cnpg psql \\\ndb"}
+{"expect":"none","command":"docker build \\\n  -t x \\\n  ."}
+{"expect":"none","command":"git push origin \\\n  main"}
+{"expect":"deny","command":"git push \\\n  --force"}
+{"expect":"none","command":"ec\\\nho hi"}
+{"expect":"deny","command":"echo 'git push --for\\\nce'"}
+{"expect":"deny","command":"bash -c 'git push --for\\\nce'"}
+{"expect":"deny","command":"cat > x <<'EOF'\na\\\nEOF\ngit push --force"}
+{"expect":"deny","command":"cat > x <<E\\\nOF\nbody\nEOF\ngit push --force"}
+{"expect":"deny","command":"cat x '<<EOF'\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat x \"<<EOF\"\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat x # <<EOF\ngit push --force\nEOF"}
+{"expect":"deny","command":"echo $((1<<EOF))\ngit push --force\nEOF"}
+{"expect":"none","command":"git commit -m \"$(cat <<'EOF'\nfeat: x\ngit push --force\nEOF\n)\""}
+{"expect":"deny","command":"cat > n.txt <<EOF\n$(git push --force)\nEOF"}
+{"expect":"deny","command":"cat > n.txt <<EOF\n`git push --force`\nEOF"}
+{"expect":"deny","command":"cat > n.txt <<EOF\n$(\ngit push --force\n)\nEOF"}
+{"expect":"deny","command":"cat > n.txt <<EOF\n$\\\n(git push --force)\nEOF"}
+{"expect":"deny","command":"git commit -m \"$(cat <<EOF\n$(git push --force)\nEOF\n)\""}
+{"expect":"none","command":"cat > n.txt <<'EOF'\n$(git push --force)\nEOF"}
+{"expect":"none","command":"cat > n.txt <<EOF\ngit push --force\nEOF"}
+{"expect":"none","command":"cat > n.txt <<EOF\ngit push --force"}
+{"expect":"deny","command":"cat > n.txt <<EOF\n$(git push --force)"}
+{"expect":"deny","command":"cat <<EOF | /bin/bash\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | ksh\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | ash\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | fish\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | csh\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | php\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | lua\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | awk\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | ssh host\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | /usr/bin/env\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | nsenter\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | python3.12\ngit push --force\nEOF"}
+{"expect":"deny","command":"cat <<EOF | . /dev/stdin\ngit push --force\nEOF"}
+{"expect":"deny","command":". <(cat <<EOF\ngit push --force\nEOF\n)"}
+{"expect":"deny","command":"source /dev/stdin <<EOF\ngit push --force\nEOF"}
+{"expect":"deny","command":"tee >(sh) <<EOF\ngit push --force\nEOF"}
+{"expect":"deny","command":"tee >(/bin/sh) <<EOF\ngit push --force\nEOF"}
+{"expect":"deny","command":"(cat <<EOF | sh)\ngit push --force\nEOF"}
+{"expect":"none","command":"cat > notes.txt <<'EOF'\ngit push --force\nEOF"}
+{"expect":"deny","command":"bash -c \"cat .env\""}
+{"expect":"deny","command":"sh -c 'cat id_rsa'"}
+{"expect":"deny","command":"docker exec meridian-control-plane sh -c 'cat /etc/kubernetes/admin.conf'"}
+{"expect":"deny","command":"(cat .env)"}
+{"expect":"deny","command":"$(cat .env)"}
+{"expect":"deny","command":"`cat .env`"}
+{"expect":"deny","command":"x=$(cat .env)"}
+{"expect":"deny","command":"export K=\"$(cat id_rsa)\""}
+{"expect":"deny","command":"foo --exec=cat .env"}
+{"expect":"none","command":"concat .env"}
+{"expect":"none","command":"mycat .env"}
+{"expect":"ask","command":"echo %41%42%43%44%45%46%47%48%49%4A%4B%4C%4D%4E%4F%50%51%52%53%54; kubectl get --raw /api/v1/namespaces/ns/secre%74s"}
+{"expect":"ask","command":"kubectl get --raw \"/api/v1/namespaces/ns/pods?labelSelector=%41%42%43%44%45%46%47%48%49%4A%4B%4C%4D%4E%4F%50%51%52%53%54%55\""}
+{"expect":"none","command":"kubectl get --raw \"/api/v1/namespaces/ns/pods?labelSelector=%41%42%43%44%45%46%47%48%49%4A%4B%4C%4D%4E%4F%50%51%52%53%54\""}
+{"expect":"deny","command":"kubectl get --raw \"/api/v1/namespaces/ns/secre%74s?a=%41%42%43%44%45%46%47%48%49%4A%4B%4C%4D%4E%4F%50%51%52%53\""}
 {"expect":"deny","command":"cat <<'EOF' | bash\nterraform destroy\nEOF"}
 {"expect":"deny","command":"cat > run.sh <<'EOF'\nterraform destroy\nEOF\nbash run.sh"}
 {"expect":"ask","command":"kubectl apply -f infra/kind/bootstrap.yaml"}

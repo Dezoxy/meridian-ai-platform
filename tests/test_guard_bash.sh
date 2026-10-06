@@ -346,4 +346,57 @@ case "$slow_reason" in
     fail=1
     ;;
 esac
+
+# The hook's Python is not replaced from the working directory (N3). A re.py
+# that exits quietly, lying where the hook runs, would make the heredoc pass
+# return nothing and the rules read an empty command: python3 -I leaves the
+# directory off sys.path. A python3 that does nothing and prints nothing (first
+# on the PATH) is the other way the pass returns nothing, and the hook then
+# keeps the command as typed.
+stand_in="$(mktemp -d)"
+printf 'import sys\nsys.exit(0)\n' > "$stand_in/re.py"
+mkdir "$stand_in/bin"
+printf '#!/bin/sh\nexit 0\n' > "$stand_in/bin/python3"
+chmod +x "$stand_in/bin/python3"
+decision_with() { # $1=name $2=expected $3=a directory to run in $4=a PATH prefix $5=command
+  local got
+  got="$(jq -nc --arg c "$5" '{tool_input:{command:$c}}' | (cd "$3" && PATH="$4:$PATH" bash "$hook") \
+    | jq -r '.hookSpecificOutput.permissionDecision // "none"')"
+  [ -z "$got" ] && got=none
+  if [ "$got" != "$2" ]; then
+    echo "FAIL $1: expected $2, got $got"
+    fail=1
+  else
+    echo "ok   $1: $2"
+  fi
+}
+decision_with "a re.py in the working directory does not disable a force push deny" deny "$stand_in" "$stand_in/nothing" \
+  "git push --force"
+decision_with "a re.py in the working directory does not disable terraform destroy" deny "$stand_in" "$stand_in/nothing" \
+  "terraform destroy"
+decision_with "a re.py in the working directory does not disable the Secret read deny" deny "$stand_in" "$stand_in/nothing" \
+  "kubectl get secret x -o yaml"
+decision_with "a re.py in the working directory leaves an ordinary command alone" none "$stand_in" "$stand_in/nothing" \
+  "ls -la"
+decision_with "a python3 that prints nothing does not disable a force push deny" deny "$here" "$stand_in/bin" \
+  "git push --force"
+decision_with "a python3 that prints nothing does not disable the Secret read deny" deny "$here" "$stand_in/bin" \
+  "kubectl get secret x -o yaml"
+decision_with "a python3 that prints nothing leaves an ordinary command alone" none "$here" "$stand_in/bin" \
+  "ls -la"
+rm -f "$stand_in/re.py" "$stand_in/bin/python3"
+rmdir "$stand_in/bin" "$stand_in"
+
+# The heredoc pass has no quadratic shape (N5): `tee <<EOF .` and a long run of
+# dots, under the typed bound, cost 1.5 s of CPU with a pattern that took a run
+# of non-blanks before the dot of a script name; they take a few hundredths now.
+jq -nc --arg c "tee <<EOF .$(padding 16000 .)" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
+  echo "ok   16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, under 0.5"
+else
+  echo "FAIL 16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, not under 0.5"
+  fail=1
+fi
 exit "$fail"

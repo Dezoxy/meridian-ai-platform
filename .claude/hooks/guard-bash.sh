@@ -4,8 +4,18 @@
 #
 # Heredoc bodies that are merely WRITTEN to a file (cat/tee) are stripped before
 # matching, so documentation that mentions a dangerous command is not blocked
-# for the mention. A heredoc fed to an interpreter (bash, python, ...), piped
-# onward, or written to a script file is kept, because its body executes.
+# for the mention. A heredoc whose body executes is kept: one fed to an
+# interpreter (bash, sh, ksh, python3.12, ssh, env, awk, ... the EXECUTES list
+# below, with or without a path in front), to `. file` or source, to >(sh), or
+# written to a script file. The body of an unquoted delimiter is kept when it
+# holds `$(`, a backtick or a backslash at a line's end, because the shell
+# expands it. A << inside quotes, a comment or $(( opens no body.
+# Backslash-newline is deleted, as the shell deletes it, and the percent-decode
+# of a --raw path asks when it runs out of rounds.
+# Still open, one sentence each: a file written by a heredoc and then run by
+# name (cat > run <<'EOF' ... then bash run) passes, as the Write tool and bash
+# would; and $(cat <<'EOF' ... ) used as a command passes, because its body is
+# dropped as a file write though the substitution runs it.
 # This is a regex guard, not a sandbox: Claude Code's permission rules and the
 # owner's approvals remain the real boundary.
 set -euo pipefail
@@ -107,29 +117,61 @@ guard_typed_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
   decide ask "This command is too long for the guard to read (${guard_typed_bytes} bytes, the limit is ${guard_max_typed_bytes}): it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run the file."
 
 if command -v python3 >/dev/null 2>&1; then
-  cmd="$(printf '%s' "$cmd" | python3 -c '
+  # python3 -I: no working directory on sys.path, no PYTHON* variables, no user
+  # site: a re.py (or any module this imports) lying in the directory the hook
+  # runs from is not read in place of the standard library.
+  # shellcheck disable=SC2016  # the Python source below is meant to stay literal
+  guard_passed="$(printf '%s' "$cmd" | python3 -I -c '
 import re, sys
-# A here-string (<<<word) is not a heredoc: it opens no body.
-MARK = re.compile(r"(?<!<)<<-?\s*[\x27\"]?([A-Za-z_][A-Za-z0-9_]*)[\x27\"]?")
+# A here-string (<<<word) is not a heredoc: it opens no body. Group 1 is the
+# delimiter quote: an unquoted delimiter has a body the shell expands.
+MARK = re.compile(r"(?<!<)<<-?\s*([\x27\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 WRITER = re.compile(r"(^|[;&|(]\s*)(cat|tee)\b")
 # Interpreters count only as command tokens, not as substrings of a path
-# such as guard-bash-cases.jsonl.
-EXECUTES = re.compile(r"(^|[\s;&|(])(sudo\s+)?(bash|sh|zsh|dash|python3?|node|perl|ruby|xargs|eval|source|exec|chmod)(\s|$)")
-SCRIPT_TARGET = re.compile(r"\S+\.(sh|bash|zsh|py|rb|pl|js)\b")
+# such as guard-bash-cases.jsonl: after a space, a separator, a bracket or a
+# slash (/bin/sh), before a space, the end or a closing bracket (>(sh)). The
+# second branch is `. file`, the dot command.
+EXECUTES = re.compile(r"(^|[\s;&|(/])(sudo\s+)?(bash|sh|zsh|dash|ksh|ash|fish|csh|tcsh|python[0-9.]*|node|perl|ruby|php|lua|awk|ssh|env|nsenter|xargs|eval|source|exec|chmod)(\s|$|[)])|(^|[;&|(])\s*\.\s")
+# One character before the dot, not a run (\S+): a run is quadratic on a long
+# line of dots.
+SCRIPT_TARGET = re.compile(r"\S\.(sh|bash|zsh|py|rb|pl|js)\b")
+def expands(body):
+    # What the shell expands in the body of an unquoted delimiter: a command
+    # substitution, a backtick, and a backslash-newline that can join the two
+    # characters of a `$(` across lines.
+    return any("$(" in l or "`" in l or l.endswith("\\") for l in body)
+lines = sys.stdin.read().split("\n")
 term = None
+keep_subst = False
+body = []
+head_at = None
 closed = False
 out = []
-for line in sys.stdin.read().split("\n"):
+i = 0
+while i < len(lines):
+    line = lines[i]
+    i += 1
     if term is not None:
         if line.strip() == term:
             term = None
             closed = True
+            # The body of an unquoted delimiter is expanded: when it holds a
+            # command substitution the shell runs it, so the body is kept.
+            if keep_subst and expands(body):
+                out.extend(body)
+        else:
+            body.append(line)
         continue
+    # Outside a body, the shell joins a line that ends in an odd number of
+    # backslashes with the next one: <<E\<newline>OF is <<EOF.
+    while i < len(lines) and (len(line) - len(line.rstrip("\\"))) % 2:
+        line = line[:-1] + lines[i]
+        i += 1
     # After a stripped body, a line that starts with the closing bracket of
     # the command substitution around the heredoc belongs to the command that
     # opened it: a flag written after the message is a flag of that commit.
-    if closed and line.lstrip().startswith(")") and out:
-        out[-1] += " " + line.lstrip()
+    if closed and line.lstrip().startswith(")") and head_at is not None:
+        out[head_at] += " " + line.lstrip()
         closed = False
         continue
     closed = False
@@ -138,6 +180,13 @@ for line in sys.stdin.read().split("\n"):
     if not m:
         continue
     head, tail = line[:m.start()], line[m.end():]
+    # A << inside quotes, a comment or $(( is not a heredoc. An odd number of
+    # quotes in the head means it is inside a string, unless the head opens a
+    # command substitution (the "$(cat <<EOF idiom, which runs outside the
+    # quote). Such a line opens no body, so the lines after it stay.
+    quoted = (head.count("\x27") % 2 or head.count("\"") % 2) and "$(" not in head and "`" not in head
+    if quoted or "$((" in head or re.search(r"(^|\s)#", head):
+        continue
     plain_write = (
         WRITER.search(head) is not None
         and EXECUTES.search(head) is None
@@ -145,10 +194,36 @@ for line in sys.stdin.read().split("\n"):
         and SCRIPT_TARGET.search(head + tail) is None
     )
     if plain_write:
-        term = m.group(1)
+        term = m.group(2)
+        keep_subst = m.group(1) == ""
+        body = []
+        head_at = len(out) - 1
+# A body that never closes runs to the end of the input, expanded all the same.
+if term is not None and keep_subst and expands(body):
+    out.extend(body)
 print("\n".join(out))
 ' 2>/dev/null || printf '%s' "$cmd")"
+  # A pass that returned nothing for a command that was not empty did not run
+  # (a python3 that is not python): the command is kept as typed, so that the
+  # rules read all of it.
+  if [ -n "$guard_passed" ]; then
+    cmd="$guard_passed"
+  fi
 fi
+
+# A backslash-newline is deleted by the shell outside single quotes (e\<newline>nv
+# is env, --for\<newline>ce is --force), so it is deleted here, once, for every
+# reader below: a deny or ask rule sees the word the shell will run. It comes
+# after the heredoc pass on purpose: the pass reads a quoted body as the shell
+# does (a line `a\` there joins nothing), and it joined the lines outside bodies
+# itself. Inside single quotes the shell keeps the backslash and the newline;
+# the hook deletes them there too, which can only join two words of a quoted
+# text into one the rules know (a false deny on echo 'git push --for\<nl>ce'),
+# and in a bash -c '...' body, where it matters, the inner shell joins them too.
+# kind_scan below reads raw_cmd, the text as typed, and replaces the pair with a
+# space: a word it cannot recognise then asks, the safe side for a rule that
+# lets a call through.
+cmd="${cmd//$'\\\n'/}"
 
 # The second byte bound: what the patterns will read, after the heredoc pass,
 # is at most guard_max_bytes. The rules below cost time in proportion to the
@@ -161,7 +236,7 @@ guard_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
   decide ask "This command is too long for the guard to read (${guard_bytes} bytes after the heredoc bodies written to files are dropped, the limit is ${guard_max_bytes}): it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run the file."
 
 # The rules below read a command one segment at a time (split on newlines, ;,
-# &&, || and |, line continuations joined), and the time they take follows the
+# &&, || and |, line continuations deleted), and the time they take follows the
 # number of segments, not the bytes: 8192 one-word segments filled the former
 # byte bound (16384) and took 3 s of CPU on an idle machine, 4096 (the present
 # bound's worth) took 1 s, against 0.25 s for 1000. So the
@@ -173,9 +248,10 @@ guard_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
 # command lines has 6 segments. Counted after the heredoc pass: a heredoc body
 # that is merely written to a file is not a segment, one fed to an interpreter
 # (or to kubectl apply) is, a line each.
+# bs_nl is a backslash and a newline: kind_scan replaces it in raw_cmd.
 bs_nl=$'\\\n'
 guard_max_segments=1000
-guard_segments=$(( $(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g' | wc -l) ))
+guard_segments=$(( $(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g' | wc -l) ))
 [ "$guard_segments" -le "$guard_max_segments" ] || \
   decide ask "This command has ${guard_segments} parts; the guard reads at most ${guard_max_segments}: it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run that."
 
@@ -205,7 +281,7 @@ if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg
       || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* \
       || "$cmd" == *kind* ]] \
    && command -v python3 >/dev/null 2>&1; then
-  hook_cmd="$(printf '%s' "$cmd" | python3 -c '
+  hook_cmd="$(printf '%s' "$cmd" | python3 -I -c '
 import re, sys
 PROSE = r"((?<![\w-])-[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
 SINGLE = r"\x27[^\x27]*\x27"
@@ -234,6 +310,9 @@ text = read(sys.stdin.read())
 text = re.sub(r"([\x27\"])(-[A-Za-z][A-Za-z-]*)\1", r"\2", text)
 sys.stdout.write(text)
 ' 2>/dev/null || printf '%s' "$cmd")"
+  # Nothing back for a command that was not empty: the pass did not run, the
+  # rules read the command as it is (see the heredoc pass above).
+  [ -n "$hook_cmd" ] || hook_cmd="$cmd"
 fi
 
 shopt -s nocasematch
@@ -247,8 +326,8 @@ shopt -s nocasematch
 # on newlines, ;, &&, || and |), so a flag or path in one segment does not
 # combine with a command in another: `git push -q; rm -f x` is not a force
 # push, and `echo done && jq '.env' settings.json` prints no secret. Line
-# continuations are joined first, so `git push \<newline> --force` stays one
-# segment.
+# continuations are deleted first (above), so `git push \<newline> --force`
+# stays one segment.
 #
 # infra/kind/pins.env holds version pins and no secret, and its name ends in
 # .env: a segment that names that exact path (as is, after ./, or after an
@@ -256,6 +335,10 @@ shopt -s nocasematch
 # a path that only ends in these words (xinfra/kind/pins.env, pins.env/..),
 # still deny. Meridian's rule: the base has no such file.
 sq="'"
+# What may stand before a reader of a secret file: the start, a space, a slash
+# (/bin/cat), a quote, a backtick, a bracket or an equals sign, so that
+# sh -c "cat .env", (cat .env), $(cat .env) and x=`cat .env` are read.
+reader_pre=$'(^|[[:space:]/(`"\'=])'
 pins_env_re="(^|[[:space:]\"${sq}=])((/[^[:space:]\"${sq}]*/)?|\./)infra/kind/pins\.env([[:space:]\"${sq}]|\$)"
 while IFS= read -r seg; do
   seg_env="$seg"
@@ -267,9 +350,9 @@ while IFS= read -r seg; do
   [[ "$seg" =~ (^|[[:space:]])(rm|mv|unlink|truncate)[[:space:]].*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) || \
      "$seg" =~ chmod[[:space:]]+[ugoa]*-[rwx]*x.*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) ]] && \
     decide deny "Removing or disabling a git hook file bypasses it. Run it yourself if intended."
-  [[ "$seg_env" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config|admin\.conf) ]] && \
+  [[ "$seg_env" =~ $reader_pre(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config|admin\.conf) ]] && \
     decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig, a node's admin.conf)."
-done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 # Git hook bypasses. A repository's hooks are its guard rails (a pre-push
 # hook may be the only thing stopping a push to main), so an agent never
 # skips them: every form is denied, and a human runs it if truly needed.
@@ -355,22 +438,22 @@ while IFS= read -r seg; do
       fi
     fi
   fi
-done < <(printf '%s\n' "${hook_cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+done < <(printf '%s\n' "$hook_cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 [[ -n "$k8s_secret_seen" && -n "$k8s_handed_seen" ]] && \
   decide deny "A get of Secrets, and a get that prints whatever a variable or xargs hands it, in one command: that can print Secret values to the transcript. Run it yourself."
 # Other ways to a Secret's value. The get rule above reads `kubectl get secret`;
 # these read what a pod mounts or holds in its environment, what the API prints
 # for a path that names Secrets, a kubeconfig's credentials, a service
 # account's token, and what a cloud's secret store hands back. They read
-# hook_cmd (a commit message that names one passes) with line continuations
-# joined, and the ones that look at a pod's command stop at a separator, a
+# hook_cmd (a commit message that names one passes), whose line continuations
+# are already deleted, and the ones that look at a pod's command stop at a separator, a
 # newline included, so `kubectl exec x -- ls; env FOO=1 make` is not an env
 # print. Inside `sh -c "..."` a separator belongs to the pod's command: the
 # body is read as far as its closing quote and no further, so a command that
 # follows the quoted body (`sh -c 'ls' | grep env`) is not part of it. Neutral
 # rules, none names a Meridian path.
 eol=$'\n'
-joined="${hook_cmd//"$bs_nl"/ }"
+joined="$hook_cmd"
 # What follows `exec ... --` (or `debug`: its --target shares the process
 # namespace and its command is read the same way): the pod's own command,
 # after a wrapper word and its options, a quote and a directory, if there are
@@ -453,6 +536,11 @@ if [[ "$joined" == *--raw* ]]; then
     raw_decoded="${raw_decoded//"${BASH_REMATCH[0]}"/"$raw_char"}"
   done
   [[ "$raw_decoded" =~ $raw_secrets_re ]] && decide deny "$raw_secrets_msg"
+  # An escape left after twenty rounds was not decoded: the text may spell
+  # secrets, and the loop cannot say. A --raw path with more than twenty
+  # distinct escapes is not ordinary work, so the price of asking is small.
+  [[ "$raw_decoded" =~ %[0-9A-Fa-f][0-9A-Fa-f] ]] && \
+    decide ask "This --raw path holds more than twenty distinct percent-escapes: the guard did not decode all of them and so did NOT read what it spells, which may be a Secret read it would deny; confirm that it names none, or write the path out."
 fi
 [[ "$joined" =~ $config_view_re ]] && \
   decide deny "kubectl config view --raw (and --flatten) prints the kubeconfig's keys and tokens to the transcript. Run it yourself."
@@ -543,7 +631,7 @@ if [[ "$cmd" =~ $kind_delete_re ]]; then
       continue
     fi
     decide ask "kind delete outside the local cluster; confirm the cluster, or use make down, or name it: kind delete cluster --name meridian."
-  done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\||&)/\n/g')
+  done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\||&)/\n/g')
 fi
 # `make grafana-password` and the script behind it exist to print a password.
 # A person runs them in a terminal of their own, which never meets this hook;
@@ -803,8 +891,8 @@ fi
   decide ask "Outward-facing GitHub change; confirm."
 # `gh pr merge` on green checks is the session's standing instruction and does
 # not ask. --admin merges past failing required checks, so it does. Read on
-# hook_cmd (a commit message that names the flag passes), with line
-# continuations joined; --admin=value and a quoted "--admin" count, and so does
+# hook_cmd (a commit message that names the flag passes), line
+# continuations deleted; --admin=value and a quoted "--admin" count, and so does
 # a global flag between the words (gh -R owner/repo pr merge). A command that
 # holds both words in one line asks, even across a separator: fail-closed. The
 # pattern costs time in proportion to the square of the length: it runs only
@@ -812,7 +900,7 @@ fi
 # a longer one that holds --admin, merge and gh asks without being read.
 gh_admin_re="(^|[^[:alnum:]_.-])gh[[:space:]]+([^${nl}]*[[:space:]])?pr[[:space:]]+([^${nl}]*[[:space:]])?merge([[:space:]][^${nl}]*)?[[:space:]][\"${sq}]?--admin([^[:alnum:]_-]|\$)"
 if [[ "$hook_cmd" == *--admin* ]]; then
-  gh_text="${hook_cmd//"$bs_nl"/ }"
+  gh_text="$hook_cmd"
   if [ "${#gh_text}" -gt "$kind_scan_max" ]; then
     [[ "$gh_text" == *merge* && "$gh_text" == *gh* ]] && \
       decide ask "A long command that holds gh, merge and --admin; confirm that no gh pr merge --admin is in it, or split the command."
