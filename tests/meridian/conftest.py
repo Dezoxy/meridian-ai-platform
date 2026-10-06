@@ -37,6 +37,7 @@ import meridian.runtime  # noqa: F401  # isort: skip
 
 import psycopg
 import pytest
+import redis
 from dbsupport import (
     OWNER,
     WORKERINPUT_KEY,
@@ -52,6 +53,7 @@ from dbsupport import (
 )
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from redissupport import RateKeys
 
 # (file name, text to find, replacement); the first occurrence is replaced.
 Edit = tuple[str, str, str]
@@ -59,6 +61,11 @@ Edit = tuple[str, str, str]
 TEST_DATABASE_URL_ENV = "MERIDIAN_TEST_DATABASE_URL"
 REQUIRE_DB_ENV = "MERIDIAN_REQUIRE_DB"
 SKIP_REASON = "set MERIDIAN_TEST_DATABASE_URL (make pytest-db)"
+# The rate windows' store (S066): a throwaway Redis that `make pytest-db` starts
+# beside PostgreSQL and CI runs as a service container. It is held to the same
+# rule as the database: a missing one skips, unless MERIDIAN_REQUIRE_DB=1.
+TEST_REDIS_URL_ENV = "MERIDIAN_TEST_REDIS_URL"
+REDIS_SKIP_REASON = "set MERIDIAN_TEST_REDIS_URL (make pytest-db)"
 
 # The xdist controller's passwords for this run; a worker never reads it.
 _PASSWORDS = pytest.StashKey[dict[str, str]]()
@@ -183,6 +190,36 @@ def fresh_database(
         yield handle
     finally:
         drop_database(handle)
+
+
+# ── the rate windows' Redis (S066) ──────────────────────────────────────────
+@pytest.fixture(scope="session")
+def redis_client() -> Iterator[redis.Redis]:
+    """A client of the throwaway Redis, one per xdist worker.
+
+    A missing address skips the test, unless ``MERIDIAN_REQUIRE_DB=1`` (`make
+    pytest-db`, CI), where it is a failure: a Redis test that quietly skipped
+    would prove nothing.
+    """
+    url = os.environ.get(TEST_REDIS_URL_ENV)
+    if not url:
+        if os.environ.get(REQUIRE_DB_ENV) == "1":
+            pytest.fail(f"{TEST_REDIS_URL_ENV} is required: {REDIS_SKIP_REASON}")
+        pytest.skip(REDIS_SKIP_REASON)
+    client = redis.Redis.from_url(url)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def rate_keys(redis_client: redis.Redis) -> Iterator[RateKeys]:
+    keys = RateKeys(redis_client)
+    try:
+        yield keys
+    finally:
+        keys.forget()
 
 
 # ── a scratch copy of the registry to plant a variant in ────────────────────

@@ -36,6 +36,54 @@ def test_the_makefile_pins_the_image_but_lets_a_run_pick_its_own_name_and_port()
     assert re.search(r"^PYTEST_DB_PORT\s*\?=", MAKEFILE, re.MULTILINE)
 
 
+# Redis 8 on Alpine (S066): the gateway's shared rate windows.
+REDIS_IMAGE = re.compile(r"redis:8\.\d+\.\d+-alpine@sha256:[0-9a-f]{64}")
+
+
+def test_the_redis_image_is_the_same_string_in_the_workflow_and_the_makefile() -> None:
+    (makefile_image,) = REDIS_IMAGE.findall(MAKEFILE)
+    workflow_image = JOB["services"]["redis"]["image"]
+
+    assert REDIS_IMAGE.fullmatch(workflow_image)
+    assert workflow_image == makefile_image
+
+
+def test_the_makefile_pins_the_redis_image_but_lets_a_run_pick_its_name_and_port() -> (
+    None
+):
+    assert re.search(r"^PYTEST_REDIS_IMAGE\s*:=\s*redis:", MAKEFILE, re.MULTILINE)
+    assert re.search(r"^PYTEST_REDIS_CONTAINER\s*\?=", MAKEFILE, re.MULTILINE)
+    (port,) = re.findall(r"^PYTEST_REDIS_PORT\s*\?=\s*(\d+)$", MAKEFILE, re.MULTILINE)
+    # Outside Linux's ephemeral range: a port inside it can be taken as the
+    # source port of another connection while a run starts.
+    assert not 32768 <= int(port) <= 60999
+
+
+def test_pytest_db_starts_a_redis_without_persistence_on_loopback_and_removes_it() -> (
+    None
+):
+    recipe = MAKEFILE.split("\npytest-db:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert "redis-server --save '' --appendonly no" in recipe
+    assert "-p 127.0.0.1:$(PYTEST_REDIS_PORT):6379" in recipe
+    assert "redis-cli ping" in recipe
+    assert "MERIDIAN_TEST_REDIS_URL=redis://127.0.0.1:$(PYTEST_REDIS_PORT)/0" in recipe
+    # Both the first removal and the exit trap name the container, so a run that
+    # failed half way leaves nothing behind.
+    assert recipe.count("$(PYTEST_REDIS_CONTAINER)") >= 4
+    assert recipe.index("redis-server") < recipe.index("uv run pytest")
+
+
+def test_the_redis_service_is_checked_by_ping_and_the_job_names_its_address() -> None:
+    redis_service = JOB["services"]["redis"]
+
+    assert '--health-cmd "redis-cli ping"' in redis_service["options"]
+    assert redis_service["ports"] == ["6379:6379"]
+    assert JOB["env"]["MERIDIAN_TEST_REDIS_URL"] == "redis://127.0.0.1:6379/0"
+    # A missing Redis is a failure in CI, as a missing database is.
+    assert JOB["env"]["MERIDIAN_REQUIRE_DB"] == "1"
+
+
 def test_the_service_container_is_checked_on_loopback_and_given_time_to_start() -> None:
     options = JOB["services"]["postgres"]["options"]
 

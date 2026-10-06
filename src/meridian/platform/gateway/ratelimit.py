@@ -9,6 +9,13 @@ right for one replica (C-01); the day and month budgets that must survive a
 restart are in PostgreSQL (``budget.py``).
 
 A refused request records nothing, so a flood cannot extend its own lockout.
+
+Two stores keep the windows behind one method (S066, T-45): ``TenantRateLimiter``
+here, the process's own, and ``RedisRateLimiter`` in ``ratelimit_redis.py``,
+which shares them between processes. Both answer the same refusals with the
+same hints; ``RateLimiter`` is what a caller may rely on. ``RedisRateLimiter``
+is implemented and tested against a real Redis; it is not yet wired into the
+gateway and has not run on a cluster.
 """
 
 import math
@@ -17,7 +24,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from meridian.platform.registry.models import TenantLimits
 
@@ -34,6 +41,16 @@ RateRefusalReason = Literal[
 class RateRefusal:
     reason: RateRefusalReason
     retry_after_seconds: int | None  # None for tenant-request-too-large
+
+
+class RateLimiter(Protocol):
+    """What the gateway asks of a store of rate windows: one method."""
+
+    def admit(
+        self, tenant: str, limits: TenantLimits, tokens: int
+    ) -> RateRefusal | None:
+        """Record the request and return ``None``, or say why it must wait."""
+        ...
 
 
 def _retry_after(seconds: float) -> int:
