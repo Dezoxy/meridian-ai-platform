@@ -56,12 +56,13 @@ from meridian.runtime.tool_client import (
 )
 from meridian.runtime.tracing import NodeSpans
 from meridian.workloads.claims_triage import assessment as assessment_module
+from meridian.workloads.claims_triage import triaging, workers
 from meridian.workloads.claims_triage import wording as wording_module
-from meridian.workloads.claims_triage import workers
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
 from meridian.workloads.claims_triage.graph import build
-from meridian.workloads.claims_triage.models import DECISION_NOTES
+from meridian.workloads.claims_triage.models import DECISION_NOTES, ClaimFacts
 from meridian.workloads.claims_triage.proposal import TriageProposal
+from meridian.workloads.claims_triage.rules import PolicyRecord
 from meridian.workloads.claims_triage.wording import AMOUNTS_PROBE, TIMING_PROBE
 from meridian.workloads.claims_triage.workers import ApprovalOutcome
 
@@ -702,12 +703,16 @@ def test_the_citation_of_an_excluding_clause_carries_the_policys_version(
     ]
 
 
-def test_a_wording_version_that_the_table_does_not_know_is_never_complete() -> None:
-    output, _, _ = triage("CLM-0011", tools=tools_for_version("2031-07"))
+def test_a_wording_version_that_the_table_does_not_know_fails_the_run() -> None:
+    """Was a referral as ``unverified`` with the gap ``exclusion_clauses`` (S014);
+    since S067 the run fails, before the model is asked."""
+    model = StubModel()
 
-    assert output["gaps"] == ["exclusion_clauses"]
-    assert (output["route"], output["reason"]) == ("adjuster", "unverified")
-    assert output["recommendation"] is None
+    with pytest.raises(GraphFailure) as raised:
+        triage("CLM-0011", model, tools_for_version("2031-07"))
+
+    assert raised.value.code == "wording-version-unknown"
+    assert model.calls == []
 
 
 # -- the calls ----------------------------------------------------------------
@@ -939,16 +944,21 @@ def test_a_truncated_history_is_a_gap_and_not_a_failure() -> None:
 
 
 def test_a_claim_that_is_not_valid_facts_fails_the_run() -> None:
-    with pytest.raises(ValueError, match="validation error"):
+    """Was a ``ValidationError`` that quoted the claim and ended the run as
+    ``unexpected``; since S067 a ``GraphFailure`` with a fixed code."""
+    with pytest.raises(GraphFailure) as raised:
         triage("CLM-0011", peril="meteor")
+
+    assert failure_reason(raised.value) == "claim-not-valid"
 
 
 def test_a_claim_that_still_carries_the_claimant_is_refused_by_the_graph() -> None:
     model, tools = StubModel(), StubTools()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(GraphFailure) as raised:
         run_graph(model, tools, CLAIMS["CLM-0011"])
 
+    assert raised.value.code == "claim-not-valid"
     assert model.calls == []
     assert tools.calls == []
 
@@ -1771,3 +1781,275 @@ def test_the_runtime_loads_the_workload_graph_through_the_registry() -> None:
     factory = load_graph_factory("claims-triage", load_registry(REGISTRY_DIR))
 
     assert factory is build
+
+
+# -- a wording version the table does not know (S067) -------------------------
+
+UNKNOWN_VERSION = "2031-07"
+NO_COUNT = "the table of exclusion clauses has no count for the wording"
+WORKERS_LOGGER = f"{LOGGER}.workers"
+
+
+def tools_of_version(
+    claim_id: str,
+    version: str,
+    *,
+    dropping: Callable[[dict[str, Any]], bool] = lambda chunk: False,
+) -> StubTools:
+    """Tools whose policy and search answers carry ``version``; the search
+    leaves out the clauses ``dropping`` picks."""
+    policy = StubTools._policy({"policy_number": CLAIMS[claim_id]["policy_number"]})
+    policy["policy"]["wording_version"] = version
+
+    def versioned(_: int, answer: dict[str, Any]) -> dict[str, Any]:
+        kept = [c for c in answer["chunks"] if not dropping(c)]
+        return {**answer, "wording_version": version, "chunks": kept}
+
+    return StubTools(answers={"policy_lookup": policy}, tamper=versioned)
+
+
+def logged(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records]
+
+
+def test_an_unknown_wording_version_fails_the_run_before_the_model_is_asked() -> None:
+    model = StubModel()
+
+    with pytest.raises(GraphFailure) as raised:
+        triage("CLM-0011", model, tools_of_version("CLM-0011", UNKNOWN_VERSION))
+
+    assert failure_reason(raised.value) == "wording-version-unknown"
+    assert model.calls == []
+
+
+def test_an_unknown_wording_version_fails_a_claim_that_needs_no_model() -> None:
+    # CLM-0005 is a glass claim on a motor policy: no circumstance exclusion is a
+    # candidate, but the rules still read the count in their gaps.
+    model = StubModel()
+
+    with pytest.raises(GraphFailure) as raised:
+        triage("CLM-0005", model, tools_of_version("CLM-0005", UNKNOWN_VERSION))
+
+    assert raised.value.code == "wording-version-unknown"
+    assert model.calls == []
+
+
+def test_the_same_claim_with_a_version_the_table_knows_is_not_failed() -> None:
+    output, _, _ = triage("CLM-0005")
+
+    assert (output["route"], output["reason"]) == ("auto_approve", "within_threshold")
+
+
+@pytest.mark.parametrize(
+    "claim_id",
+    [
+        "CLM-0002",  # a lapsed policy
+        "CLM-0014",  # a loss after the period
+        "CLM-0020",  # a peril the motor product does not cover
+        "CLM-0022",  # a peril the home product does not cover
+    ],
+    ids=["lapsed", "outside-period", "peril-not-covered-motor", "peril-not-covered"],
+)
+def test_a_claim_whose_route_never_reads_the_table_routes_as_it_did(
+    claim_id: str,
+) -> None:
+    keys = ("route", "reason", "recommendation", "gaps")
+    known, _, _ = triage(claim_id)
+
+    unknown, _, _ = triage(claim_id, tools=tools_of_version(claim_id, UNKNOWN_VERSION))
+
+    assert [unknown[k] for k in keys] == [known[k] for k in keys]
+
+
+def test_a_claim_with_no_cover_clause_is_unverified_and_not_failed() -> None:
+    tools = tools_of_version(
+        "CLM-0011", UNKNOWN_VERSION, dropping=lambda c: c["clause"].startswith("2.")
+    )
+
+    output, _, _ = triage("CLM-0011", tools=tools)
+
+    assert (output["reason"], output["gaps"]) == ("unverified", ["cover_clause"])
+
+
+def test_the_log_line_names_the_wording_when_product_and_version_are_the_catalogues(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(GraphFailure):
+        triage("CLM-0011", tools=tools_of_version("CLM-0011", UNKNOWN_VERSION))
+
+    (record,) = [r for r in caplog.records if r.name == WORKERS_LOGGER]
+    assert record.getMessage() == f"{NO_COUNT} MOTOR-TPL {UNKNOWN_VERSION}"
+    assert record.levelno == logging.ERROR
+
+
+def terms_of_wording(product: str, version: str) -> None:
+    """``terms_of`` for a policy in force that has the cover clause of the home
+    wording, whose product and version are the given ones."""
+    claim = ClaimFacts.model_validate(facts("CLM-0016"))
+    record = StubTools._policy({"policy_number": CLAIMS["CLM-0016"]["policy_number"]})
+    policy = PolicyRecord.model_validate(
+        {**record["policy"], "product": product, "wording_version": version}
+    )
+    state = {"chunks": wording("HOME-STD")[1]}
+    workers.terms_of(claim, policy, cast(workers.ClaimState, state))
+
+
+@pytest.mark.parametrize(
+    ("product", "version"),
+    [
+        (f"{CANARY}-P", "2026-01"),
+        ("HOME-STD", f"{CANARY}-v"),
+        ("HOME-STD", "2026-1"),
+        ("HOME-STD", "2026-01\n"),
+        ("HOME-STD", "2026-001"),
+        ("HOME-STD", ""),
+        ("home-std", "2026-02"),
+    ],
+    ids=[
+        "product-canary",
+        "version-canary",
+        "version-short",
+        "version-newline",
+        "version-long",
+        "version-empty",
+        "product-case",
+    ],
+)
+def test_a_product_or_version_outside_the_catalogue_is_not_repeated_in_the_log(
+    product: str, version: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(GraphFailure) as raised:
+        terms_of_wording(product, version)
+
+    assert raised.value.code == "wording-version-unknown"
+    assert logged(caplog) == [
+        f"{NO_COUNT} of a product or version outside the catalogue"
+    ]
+
+
+def test_a_product_of_the_catalogue_with_a_version_of_its_form_is_named(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(GraphFailure):
+        terms_of_wording("HOME-STD", "2026-02")
+
+    assert logged(caplog) == [f"{NO_COUNT} HOME-STD 2026-02"]
+
+
+RECORDED = (1, 3, 7, 8, 9, 11, 15, 23, 26, 31, 34, 35, 37, 38)
+
+
+def test_the_model_is_asked_for_the_claims_the_recording_holds() -> None:
+    # Every golden policy's pair is in the table, so no claim fails and the 14
+    # requests of the recording (the evaluation baseline's triage calls) are
+    # still made, and no other.
+    asked = []
+    for claim_id in CLAIMS:
+        model = StubModel()
+        run_graph(model, StubTools(), facts(claim_id))
+        if model.calls:
+            asked.append(claim_id)
+
+    assert asked == [f"CLM-{number:04d}" for number in RECORDED]
+
+
+# -- a claim that is not valid facts (S067, row L565) --------------------------
+
+
+def test_a_claim_that_is_not_valid_fails_with_a_fixed_code_and_asks_nothing() -> None:
+    model, tools = StubModel(), StubTools()
+
+    with pytest.raises(GraphFailure) as raised:
+        run_graph(model, tools, facts("CLM-0011", peril="meteor"))
+
+    assert failure_reason(raised.value) == "claim-not-valid"
+    assert raised.value.__suppress_context__ is True
+    assert model.calls == [] and tools.calls == []
+
+
+def test_the_log_names_the_fields_that_failed_and_the_kind_of_each(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    claim = facts("CLM-0011", peril="meteor", claimed_amount="a lot")
+
+    with pytest.raises(GraphFailure):
+        run_graph(StubModel(), StubTools(), claim)
+
+    (record,) = [r for r in caplog.records if r.name == WORKERS_LOGGER]
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == (
+        "the claim of the run is not valid: ValidationError "
+        "(('peril', 'literal_error'), ('claimed_amount', 'int_type'))"
+    )
+
+
+def test_no_value_and_no_key_of_the_claim_is_in_a_log_record_or_the_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    claim: dict[str, Any] = {
+        name: f"{CANARY}-{name}" for name in ClaimFacts.model_fields
+    }
+    claim[f"{CANARY}-key"] = f"{CANARY}-extra"
+    claim["loss_location"] = {"city": f"{CANARY}-city", f"{CANARY}-sub": 1}
+    claim["documents"] = [f"{CANARY}-document"]
+
+    with pytest.raises(GraphFailure) as raised:
+        run_graph(StubModel(), StubTools(), claim)
+
+    held = [*logged(caplog), str(raised.value), repr(raised.value)]
+    assert raised.value.code == "claim-not-valid"
+    assert not any(CANARY in text for text in held)
+    assert any(f"('{triaging.DATA_KEY}', 'extra_forbidden')" in text for text in held)
+
+
+def test_the_fields_are_those_the_claims_api_logs_for_the_same_error() -> None:
+    claim = {**facts("CLM-0011"), "peril": "meteor", f"{CANARY}-key": 1}
+    with pytest.raises(ValidationError) as raised:
+        ClaimFacts.model_validate(claim)
+
+    assert workers.invalid_fields(raised.value) == triaging.invalid_fields(raised.value)
+
+
+@pytest.mark.parametrize(
+    "node", ["intake", "terms", "assessor", "propose", "request_approval"]
+)
+def test_every_node_of_the_supervisor_fails_an_invalid_claim_with_the_same_code(
+    node: str,
+) -> None:
+    graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
+    state = {
+        "claim": facts("CLM-0011", peril="meteor"),
+        "policy": None,
+        "history": [],
+        "history_truncated": False,
+        "chunks": [],
+        "assessed": None,
+        "output": {},
+    }
+
+    with pytest.raises(GraphFailure) as raised:
+        graph.nodes[node].runnable.invoke(state)
+
+    assert raised.value.code == "claim-not-valid"
+
+
+@pytest.mark.parametrize("node", ["read_outcome", "write_note"])
+def test_each_node_after_the_pause_fails_an_invalid_claim_with_the_same_code(
+    node: str,
+) -> None:
+    view = cast(ToolClient, StubTools().for_worker(workers.APPROVALS))
+    outcome = workers.build_outcome(view)
+    state = {"claim": facts("CLM-0011", peril="meteor"), "decision": "approve"}
+
+    with pytest.raises(GraphFailure) as raised:
+        outcome.nodes[node].invoke(state)
+
+    assert raised.value.code == "claim-not-valid"

@@ -7,6 +7,7 @@ imports it. The second group pins what a missing or wrong model assessment
 costs. The third and fourth feed hand-made facts to each step and gap.
 """
 
+import itertools
 import json
 from collections import Counter
 from dataclasses import replace
@@ -33,6 +34,7 @@ from meridian.workloads.claims_triage.rules import (
     needs_assessment,
     payable_amount,
     policy_state,
+    reads_exclusion_count,
 )
 from meridian.workloads.claims_triage.wording import Clause, Terms, select_terms
 
@@ -517,6 +519,71 @@ def test_no_assessment_is_needed_otherwise(
     policy: PolicyRecord | None, terms: Terms | None
 ) -> None:
     assert needs_assessment(make_claim(), policy, terms) is False
+
+
+def test_the_count_is_read_exactly_where_decide_lists_the_gap_for_it() -> None:
+    """With a count that is not complete, ``decide`` lists the gap
+    ``exclusion_clauses`` on every path that reads it and on none that does
+    not. ``reads_exclusion_count`` is what the graph checks the table with
+    (S067): it must say the same."""
+    lapsed = {"status": "lapsed", "lapsed_on": date(2026, 6, 1)}
+    expired = {"start_date": date(2026, 6, 6), "end_date": date(2027, 6, 5)}
+    cases = itertools.product(
+        [{}, lapsed, expired],
+        [None, WEAR],
+        [True, False],
+        [(), ("photos",)],
+        [2000, 100],
+        ["not_needed", "unavailable"],
+    )
+    reads: list[bool] = []
+
+    for policy, peril_exclusion, covered, documents, amount, status in cases:
+        terms = make_terms(
+            cover=make_terms().cover if covered else None,
+            peril_exclusion=peril_exclusion,
+            exclusions_complete=False,
+        )
+        facts = make_facts(
+            claim=make_claim(documents=documents, claimed_amount=amount),
+            policy=make_policy(**policy),
+            terms=terms,
+            assessment=Assessment(status),
+        )
+
+        read = "exclusion_clauses" in decide(facts).gaps
+
+        assert read == reads_exclusion_count(facts.claim, facts.policy, terms)
+        reads.append(read)
+
+    assert any(reads)
+    assert not all(reads)
+
+
+@pytest.mark.parametrize(
+    ("policy", "terms"),
+    [
+        (None, None),
+        (make_policy(status="lapsed", lapsed_on=LOSS), make_terms()),
+        (make_policy(end_date=date(2026, 1, 1)), make_terms()),
+        (make_policy(), make_terms(cover=None)),
+        (make_policy(), make_terms(peril_exclusion=clause("3.1"))),
+    ],
+    ids=["no-policy", "lapsed", "outside-period", "no-cover", "peril-excluded"],
+)
+def test_the_count_is_not_read_for_a_claim_that_is_decided_before_it(
+    policy: PolicyRecord | None, terms: Terms | None
+) -> None:
+    assert reads_exclusion_count(make_claim(), policy, terms) is False
+
+
+def test_the_count_is_read_for_a_covered_peril_in_force_whatever_the_candidates() -> (
+    None
+):
+    for candidates in [(), (WEAR,)]:
+        terms = make_terms(candidates=candidates)
+
+        assert reads_exclusion_count(make_claim(), make_policy(), terms) is True
 
 
 # -- decide: one test per step ----------------------------------------------------

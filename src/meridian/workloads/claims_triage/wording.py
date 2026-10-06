@@ -43,8 +43,9 @@ TIMING_PROBE = "Reporting a claim. Period of cover. Lapse for non-payment."
 # The number of section-3 clauses of each wording, by (product, wording
 # version). Clauses 3.1 to 3.k that are all retrieved are not the whole section
 # when the search missed the last one, and nothing in the clauses shows it, so
-# the count is known. A pair that is not here is never complete. A test keeps
-# the table equal to the wordings under data/synthetic/wordings/.
+# the count is known. A pair that is not here is never complete, and where the
+# rules would rely on that the graph fails the run (``exclusions_counted``). A
+# test keeps the table equal to the wordings under data/synthetic/wordings/.
 EXCLUSION_CLAUSES: Mapping[tuple[str, str], int] = MappingProxyType(
     {
         ("HOME-STD", "2026-01"): 4,
@@ -53,6 +54,32 @@ EXCLUSION_CLAUSES: Mapping[tuple[str, str], int] = MappingProxyType(
         ("MOTOR-TPL", "2026-01"): 2,
     }
 )
+
+# The form of a wording version (the generator's ``WORDING_VERSION``, "2026-01"),
+# narrower than the registry's pattern for the field, which admits any word of
+# letters, digits and hyphens: what a log line may repeat must not be able to
+# carry a sentence.
+WORDING_VERSION_FORM = re.compile(r"[0-9]{4}-[0-9]{2}")
+
+
+def exclusions_counted(product: str, wording_version: str) -> bool:
+    """Whether the table holds a count for this wording. ``select_terms`` stays
+    pure and reads a pair that is not here as incomplete; the graph asks this
+    where the rules are about to rely on that, and fails the run instead
+    (``wording-version-unknown``)."""
+    return (product, wording_version) in EXCLUSION_CLAUSES
+
+
+def catalogue_wording(product: str, wording_version: str) -> bool:
+    """Whether ``product`` is one of the catalogue's (the table's products, which
+    a test keeps equal to the generator's) and ``wording_version`` has the form
+    of a version. Both came from a tool: only a pair that passes is closed enough
+    to repeat in a log line."""
+    return (
+        any(product == known for known, _ in EXCLUSION_CLAUSES)
+        and WORDING_VERSION_FORM.fullmatch(wording_version) is not None
+    )
+
 
 COVER_SECTION = "2"
 EXCLUSION_SECTION = "3"
