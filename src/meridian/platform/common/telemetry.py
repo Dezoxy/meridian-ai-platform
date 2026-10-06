@@ -38,6 +38,7 @@ SPAN_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
         "meridian.run_status",
         "meridian.tenant",
         "meridian.agent",
+        "meridian.worker",
         "meridian.node",
         "meridian.deployment",
         "meridian.provider",

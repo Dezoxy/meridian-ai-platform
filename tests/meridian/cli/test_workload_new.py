@@ -93,7 +93,9 @@ def test_a_new_workload_is_created_and_the_command_says_what_is_left(
             assert (root / line.removeprefix("created ")).is_file()
     registry = load_registry(root / "config" / "registry")
     assert len(registry.agents) == agents_before + 1
-    assert registry.agent(NAME) is not None
+    agent = registry.agent(NAME)
+    assert agent is not None
+    assert agent.workers == ()
 
 
 def test_the_root_defaults_to_the_working_directory(

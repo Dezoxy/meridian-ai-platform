@@ -274,6 +274,7 @@ def test_decision_tool_outside_every_allowlist_is_accepted(plant: Plant) -> None
     directory = plant(
         ("tools.yaml", FIRST_TOOL_ROW, DECISION_ROWS),
         ("agents.yaml", "      - policy_lookup\n", ""),
+        ("agents.yaml", "          - policy_lookup\n", ""),
     )
 
     tool = load_registry(directory).tool("policy_lookup")
@@ -614,6 +615,8 @@ def test_decision_tool_without_an_idempotency_key_is_reported(
             [
                 ("tools.yaml", "id: add_claim_note", "id: record_decision"),
                 ("agents.yaml", "- add_claim_note", "- record_decision"),
+                # The tool is also on the worker that holds it (S031).
+                ("agents.yaml", "- add_claim_note", "- record_decision"),
             ],
             "decision",
             id="write-tool-named-record-decision",
@@ -621,6 +624,7 @@ def test_decision_tool_without_an_idempotency_key_is_reported(
         pytest.param(
             [
                 ("tools.yaml", "id: request_approval", "id: approve_claim"),
+                ("agents.yaml", "- request_approval", "- approve_claim"),
                 ("agents.yaml", "- request_approval", "- approve_claim"),
             ],
             "approve",
@@ -660,6 +664,7 @@ def test_decision_word_in_a_tool_no_agent_lists_is_accepted(plant: Plant) -> Non
     directory = plant(
         ("tools.yaml", "id: add_claim_note", "id: record_decision"),
         ("agents.yaml", "      - add_claim_note\n", ""),
+        ("agents.yaml", "          - add_claim_note\n", ""),
     )
 
     assert load_registry(directory).tool("record_decision") is not None
@@ -739,9 +744,11 @@ def test_empty_routes_report_every_purpose(
 
 
 def rename_note_tool(new_id: str) -> list[Edit]:
-    """Rename the add_claim_note tool in the tool list and the allowlist."""
+    """Rename the add_claim_note tool in the tool list, the allowlist and the
+    list of the worker that holds it (each edit changes the first match)."""
     return [
         ("tools.yaml", "id: add_claim_note", f"id: {new_id}"),
+        ("agents.yaml", "- add_claim_note", f"- {new_id}"),
         ("agents.yaml", "- add_claim_note", f"- {new_id}"),
     ]
 
@@ -1026,7 +1033,11 @@ def test_a_job_agent_that_lists_a_tool_is_reported(
     plant: Plant, load_errors: LoadErrors
 ) -> None:
     directory = plant(
-        ("agents.yaml", "    tools: []\n", "    tools:\n      - policy_lookup\n")
+        (
+            "agents.yaml",
+            "    kind: job\n    tools: []\n",
+            "    kind: job\n    tools:\n      - policy_lookup\n",
+        )
     )
 
     errors = load_errors(directory)

@@ -72,6 +72,7 @@ def test_the_allowlist_holds_exactly_the_named_keys() -> None:
                 "meridian.run_status",
                 "meridian.tenant",
                 "meridian.agent",
+                "meridian.worker",
                 "meridian.node",
                 "meridian.deployment",
                 "meridian.provider",

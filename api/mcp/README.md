@@ -26,9 +26,13 @@ uv run meridian registry contracts --check   # fail on a stale, missing or orpha
 
 `make registry` runs the check, and CI runs `make registry`.
 
-A caller sends two things in the request's `_meta`, not as tool arguments: the
-run ID (`meridian/run`) and, for a tool that writes, the idempotency key
-(`meridian/idempotency-key`, 64 lowercase hexadecimal characters). The server
+A caller sends these in the request's `_meta`, not as tool arguments: the
+run ID (`meridian/run`), for a tool that writes, the idempotency key
+(`meridian/idempotency-key`, 64 lowercase hexadecimal characters) and, for an
+agent that declares workers (S031), the worker making the call
+(`meridian/worker`, an ID of at most 64 characters of `a-z0-9-`). The server
+checks that the worker is one of the run's agent and that the tool is on its
+list; the name only narrows and is never read as tenant or agent. The server
 reads tenant, agent and claim from the run's own record and refuses a call
 whose bound argument names another claim or policy, or, for
 `wording_search`, another product than that of the claim's policy; the

@@ -28,6 +28,21 @@ def test_every_schema_forbids_unknown_keys() -> None:
         assert json.loads(text)["additionalProperties"] is False, name
 
 
+def test_the_agents_schema_knows_workers_and_refuses_an_unknown_key_in_one(
+    real_registry: Path,
+) -> None:
+    schema = json.loads(
+        (real_registry / "schemas" / "agents.schema.json").read_text(encoding="utf-8")
+    )
+
+    worker = schema["$defs"]["Worker"]
+
+    assert "workers" in schema["$defs"]["Agent"]["properties"]
+    assert "workers" not in schema["$defs"]["Agent"].get("required", [])
+    assert sorted(worker["required"]) == ["description", "id", "tools"]
+    assert worker["additionalProperties"] is False
+
+
 def test_every_registry_file_points_at_its_schema(real_registry: Path) -> None:
     for stem in FILE_MODELS:
         first_line = (real_registry / f"{stem}.yaml").read_text().splitlines()[0]

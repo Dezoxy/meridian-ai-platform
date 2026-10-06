@@ -181,11 +181,13 @@ def run_cases(
     proposals = stored_proposals(stack.db)
     failures = _failures(stack.db)
     tools = capture.by_claim(stack.db)
+    workers = capture.workers_by_claim(stack.db)
     return {
         case.case: Outcome(
             proposal=proposals.get(case.case),
             failure=failures.get(case.case),
             tools=tools.get(case.case, ()),
+            workers=workers.get(case.case, ()),
         )
         for case in cases
     }

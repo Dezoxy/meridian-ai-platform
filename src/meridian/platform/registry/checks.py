@@ -20,6 +20,7 @@ from meridian.platform.registry.models import (
 )
 from meridian.platform.registry.service_checks import SERVICE_CHECKS
 from meridian.platform.registry.tool_schema import input_schema_errors
+from meridian.platform.registry.worker_checks import WORKER_CHECKS
 
 # Azure regions inside the EU. Switzerland, Norway and the UK are not in the
 # EU, so switzerlandnorth, norwayeast and uksouth are deliberately absent.
@@ -844,6 +845,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_structured_outputs,
     check_tenant_coverage,
     check_tenant_limits,
+    *WORKER_CHECKS,
     *SERVICE_CHECKS,
 )
 

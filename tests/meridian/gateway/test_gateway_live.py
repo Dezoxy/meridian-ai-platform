@@ -217,6 +217,7 @@ def test_a_live_call_reaches_the_routed_deployment_and_is_audited_and_traced(
             "provider_model": PROVIDER_MODEL,
             "suppressed": None,
             "tool": None,
+            "worker": None,  # the gateway's rows name no worker (S031)
         }
     ]
     assert dict(chat_span(exporter).attributes) == {
