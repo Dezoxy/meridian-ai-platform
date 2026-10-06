@@ -16,7 +16,10 @@ variable "api_access_cidr" {
   type        = string
 
   validation {
-    condition     = can(cidrhost(var.api_access_cidr, 0)) && endswith(var.api_access_cidr, "/32") && var.api_access_cidr != "0.0.0.0/32"
+    # cidrhost alone accepts an IPv6 prefix that ends in /32, which EKS refuses at
+    # apply; the pattern keeps to a dotted-quad IPv4 address, cidrhost rejects an
+    # octet above 255.
+    condition     = can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$", var.api_access_cidr)) && can(cidrhost(var.api_access_cidr, 0)) && var.api_access_cidr != "0.0.0.0/32"
     error_message = "api_access_cidr must be one IPv4 address written as a /32, and not 0.0.0.0/32."
   }
 }

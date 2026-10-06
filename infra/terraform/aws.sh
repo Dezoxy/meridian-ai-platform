@@ -48,9 +48,11 @@ usage() {
 tf() { terraform -chdir="${AWS_MODULE_DIR}" "$@"; }
 
 # Read the local file, check it holds the four values, and export what the
-# module and the aws CLI read. The names on the right of TF_VAR_ are the
-# module's variables (aws/variables.tf): the Region, the address that may reach
-# the cluster's endpoint (a /32) and the budget's e-mail address.
+# module and the aws CLI read. The names after TF_VAR_ are the module's
+# variables (aws/variables.tf): region, api_access_cidr (the one address that
+# may reach the cluster's public endpoint, a /32) and budget_email. The last two
+# have no default, so a plan would stop to ask for them without these exports;
+# tests/meridian/test_aws_script.py fails when the script and the module drift.
 load_aws_env() {
   [[ -f "${AWS_LOCAL_ENV}" ]] ||
     die "no ${AWS_LOCAL_ENV}; create it as infra/terraform/aws/README.md describes (four values, mode 600)"
@@ -69,7 +71,7 @@ load_aws_env() {
   unset AWS_DEFAULT_REGION
   export AWS_REGION="${MERIDIAN_AWS_REGION}"
   export TF_VAR_region="${MERIDIAN_AWS_REGION}"
-  export TF_VAR_api_allowed_cidr="${MERIDIAN_AWS_ENDPOINT_CIDR}"
+  export TF_VAR_api_access_cidr="${MERIDIAN_AWS_ENDPOINT_CIDR}"
   export TF_VAR_budget_email="${MERIDIAN_AWS_BUDGET_EMAIL}"
 }
 

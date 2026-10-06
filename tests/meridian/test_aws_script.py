@@ -15,6 +15,7 @@ work on what Terraform says.
 
 import os
 import pty
+import re
 import select
 import shutil
 import stat
@@ -444,7 +445,7 @@ def test_plan_hands_terraform_the_region_the_address_and_the_email_not_the_accou
 
     seen = tree.terraform_env()
     assert "TF_VAR_region=eu-central-1" in seen
-    assert f"TF_VAR_api_allowed_cidr={ENDPOINT_CIDR}" in seen
+    assert f"TF_VAR_api_access_cidr={ENDPOINT_CIDR}" in seen
     assert f"TF_VAR_budget_email={BUDGET_EMAIL}" in seen
     assert "AWS_REGION=eu-central-1" in seen
     assert "AWS_DEFAULT_REGION" not in seen
@@ -605,3 +606,47 @@ def test_removal_with_a_terminal_still_checks_the_account_first(tree: Tree) -> N
     assert done.returncode == 1
     assert "not the one pinned in" in done.stdout
     assert tree.terraform_calls("destroy") == []
+
+
+# ── the script and the module agree on the variables' names ─────────────────
+
+MODULE_VARIABLES = TERRAFORM_DIR / "aws" / "variables.tf"
+
+
+def variables_without_a_default() -> set[str]:
+    """The module's variables that have no ``default`` line of their own: the
+    ones a plan stops to ask for. Each ``variable`` block is read on its own, so
+    a description that says "no default" or a comment about a default minor
+    version is not mistaken for one."""
+    text = MODULE_VARIABLES.read_text(encoding="utf-8")
+    declared = re.split(r'^variable "(\w+)" \{$', text, flags=re.MULTILINE)
+    blocks = dict(zip(declared[1::2], declared[2::2], strict=True))
+    return {
+        name
+        for name, body in blocks.items()
+        if not re.search(r"^  default\s*=", body, re.MULTILINE)
+    }
+
+
+def variables_declared() -> set[str]:
+    text = MODULE_VARIABLES.read_text(encoding="utf-8")
+    return set(re.findall(r'^variable "(\w+)" \{$', text, flags=re.MULTILINE))
+
+
+def variables_the_script_exports() -> set[str]:
+    text = (TERRAFORM_DIR / "aws.sh").read_text(encoding="utf-8")
+    return set(re.findall(r"^\s*export TF_VAR_(\w+)=", text, flags=re.MULTILINE))
+
+
+def test_the_script_exports_every_module_variable_that_has_no_default() -> None:
+    needed = variables_without_a_default()
+
+    assert needed >= {"api_access_cidr", "budget_email"}  # the reader found them
+    assert needed - variables_the_script_exports() == set()
+
+
+def test_the_script_exports_no_name_the_module_does_not_declare() -> None:
+    exported = variables_the_script_exports()
+
+    assert exported - variables_declared() == set()
+    assert exported >= {"region", "budget_email"}  # the reader found them
