@@ -13,6 +13,7 @@ from dbsupport import DatabaseHandle
 from servicesupport import owner_rows
 from sweepsupport import (
     AGENT,
+    CHECKPOINT_TABLES,
     MINUTE,
     add_claim,
     add_run,
@@ -112,7 +113,8 @@ def test_a_paused_briefs_run_older_than_the_lease_is_kept(
 
     assert result == PassResult(0, 0, 0, 0, 0, 0)
     assert status_of(fresh_database, run_id) == "AwaitingApproval"
-    assert checkpoint_rows(fresh_database, thread) == 3
+    # One row in each checkpoint table, the second host's included: all kept.
+    assert checkpoint_rows(fresh_database, thread) == len(CHECKPOINT_TABLES)
 
 
 def test_a_paused_brief_keeps_its_run_however_long_it_has_waited(
