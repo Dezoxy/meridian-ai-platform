@@ -14,10 +14,21 @@ tools"), it pauses for a person ("yeah"), and who may start it is "your
 suggestion", which the session had named in its reply as the Claims API. The
 other decisions below are the session's, and the owner may overturn any.
 
-Implemented and tested off a cluster, not run on one: the second host, its
-checkpoint store, the workload `claim-brief` and the Claims API's three brief
-routes run in the test suite, through the real Agent Runtime, the three tool
-servers, PostgreSQL and a stub model. Nothing here has run on kind or in Azure.
+Implemented and tested: the second host, its checkpoint store, the workload
+`claim-brief` and the Claims API's three brief routes run in the test suite,
+through the real Agent Runtime, the three tool servers, PostgreSQL and a stub
+model.
+
+Seen on kind once on 2026-10-06, under replay (no model was called): a brief
+started, read, approved and filed for one claim and rejected for another, the
+run meter split by agent, and no brief text in the logs Loki holds (three
+needles, with a control that the runtime's lines reach Loki). Nothing here has
+run in Azure. Not seen on a cluster: a brief whose run fails; a resume refused
+for a changed workflow (`workflow-changed`, `checkpoint-refused`); the sweep
+closing a brief left unfiled; a live model writing the brief; a second runtime
+replica; the brief's trace read in Tempo; and any log line naming the agent
+`claim-brief` (there was none, so the absence of brief text rests on the three
+needles and the route's lines alone).
 
 ## Context
 

@@ -15,7 +15,7 @@ item rests on a person reading the document.
 | [Provider onboarding applied to Azure OpenAI](provider-onboarding-azure-openai.md) | The checklist applied to the one real provider: 8 met, 11 partly met, 5 not met | Designed, applied once on paper |
 | [Service acceptance](service-acceptance.md) | The process by which a workload is called accepted, and a checklist of 30 items (`SA-01` to `SA-30`) | Designed |
 | [Service acceptance applied to claims triage](service-acceptance-claims-triage.md) | The checklist applied to the reference workload: 9 met, 15 partly met, 6 not met | Designed, applied once on paper; the workload is not called accepted |
-| [Service acceptance applied to the claim brief](service-acceptance-claim-brief.md) | The checklist applied to the second workload, on the second agent framework ([ADR 9](../architecture/decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)): 6 met, 14 partly met, 10 not met, from tests only: it has not run on a cluster | Designed, the second applied example on paper; the workload is not called accepted |
+| [Service acceptance applied to the claim brief](service-acceptance-claim-brief.md) | The checklist applied to the second workload, on the second agent framework ([ADR 9](../architecture/decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)): 6 met, 15 partly met, 9 not met, from tests and one run on kind under replay (what was not seen is listed in the document) | Designed, the second applied example on paper; the workload is not called accepted |
 
 The applied documents are mostly not green on purpose. The platform runs on a
 local kind cluster and in tests with synthetic data; the Azure compute

@@ -7,14 +7,19 @@ the claim and never moves its state.
 
 **Status.** Implemented and tested through the Agent Runtime's second host
 (`meridian.runtime.agent_framework_host`), against PostgreSQL, the real tool
-servers and a stub gateway. It is **registered** (S037): the agent
+servers and a stub gateway (the workload's own tests use `hostsupport.Gateway`,
+an `httpx.MockTransport`; the stack test uses a stub model, and one of its tests
+goes through the real gateway in replay mode). It is **registered** (S037): the agent
 `claim-brief` is in `config/registry/agents.yaml` with `host: agent-framework`,
 the tenant `claims-triage` lists it, and its entry point is in the
 `meridian.graphs` group of `pyproject.toml`. It is **reachable through the run
 API** (the Claims API's three brief routes start it, record the decision and
 read the brief), and it **has run in tests** through the real runtime, the three
 tool servers and a stub model (`tests/meridian/test_claim_brief_stack.py`). It
-**has not run on a cluster**. Its evaluation is published and empty: the golden
+was **seen on kind once on 2026-10-06 under replay** (no model was called): a
+brief started, read, approved and filed for one claim and rejected for another;
+not seen: a failed run, a changed-workflow refusal, the sweep closing a brief, a
+live model. Its evaluation is published and empty: the golden
 set (`data/evaluation/claim-brief/golden/`) holds no case, because the workload
 has no graders yet (designed, not built).
 
