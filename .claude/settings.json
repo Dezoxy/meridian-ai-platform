@@ -176,6 +176,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-shell-edits.sh\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PreCompact": [

@@ -212,6 +212,19 @@ known.
   once, naming a lane with nothing out and no reason, or saying fewer than
   `Target` run (a lane with a reason does not count as running). It reads
   that file only and cannot tell a true "out now" from a false one.
+- **A hook that names files a shell command rewrote.** The edit gate and
+  the lint, boundary and docs hooks see only what the Edit and Write tools
+  change, and an implementer told to use them sometimes used `sed -i` or a
+  heredoc instead. `check-shell-edits.sh`, an advisory `PostToolUse` hook
+  on Bash, reads the changed-file list that Claude Code delivers when
+  `bashEditDiffEnabled` is on and prints one line naming each tracked file
+  the command rewrote, except `uv.lock` and what `ruff format` or
+  `terraform fmt` formatted. The list is "best effort and in public beta".
+  Claude Code 2.1.289 reads that setting from the user, flag and policy
+  sources only: a trial showed that the repository's `.claude/settings.json`
+  cannot turn it on, so the hook stays silent until `"bashEditDiffEnabled":
+  true` stands in `~/.claude/settings.json` (or `claude --settings` passes
+  it, or `CLAUDE_CODE_BASH_EDIT_DIFF=1` is set where Claude Code starts).
 - **Several implementers inside one step when their files do not
   overlap.** Four contracts of one step ran at once, each on a branch cut
   from the step's branch; each finished contract was rebased onto the

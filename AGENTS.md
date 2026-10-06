@@ -217,7 +217,10 @@ A change that violates one is wrong even if it works.
   `Stop` hook, blocks the stop once when the untracked board
   `.claude/lanes.md` shows a lane idle with no reason or fewer lanes running
   than its `Target`; it checks what the session wrote on the board, not
-  whether an agent is really out.
+  whether an agent is really out. `check-shell-edits.sh`, an advisory
+  `PostToolUse` hook on Bash, names the tracked files a shell command
+  rewrote outside the Edit and Write tools, which the edit hooks never
+  see (it needs `bashEditDiffEnabled` in the user settings, not here).
 - Slash commands in `.claude/commands/`: `/save-session`, `/resume-session`
   and `/test-coverage`.
 - MCP: `.mcp.json` declares `chrome-devtools` (Lighthouse audits,
