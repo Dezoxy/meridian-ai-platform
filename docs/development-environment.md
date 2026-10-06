@@ -131,10 +131,13 @@ For the virtual machine both are recorded below.
   unattended session waited at that question. It now asks only before a
   `kubectl delete` and before a mutating call that names no cluster;
   `--kubeconfig infra/kind/kubeconfig` or `--context kind-<name>` on
-  every `kubectl` of the command answers that second question. On the
-  virtual machine those questions did not stop a session on 2026-10-06;
-  what stands is that the owner is asked, in chat, before the cluster is
-  deleted.
+  every `kubectl` of the command answers that second question. Deleting
+  the kind cluster no longer asks either: on 2026-10-06 the owner allowed
+  the session to delete it and make it again when a test needs it, and
+  the session says so when it does (`CLAUDE.md`, hard rule 8). What still
+  asks is what costs money, leaves the machine or cannot be made again
+  from the repository: Azure, Terraform, a Helm uninstall, an image push,
+  a release.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.

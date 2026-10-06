@@ -91,8 +91,7 @@
       "Bash(helm upgrade*)",
       "Bash(helm install*)",
       "Bash(helm uninstall*)",
-      "Bash(kubectl delete*)",
-      "Bash(kind delete*)"
+      "Bash(kubectl delete*)"
     ],
     "deny": [
       "Bash(terraform destroy*)",

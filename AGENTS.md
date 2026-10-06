@@ -96,9 +96,12 @@ A change that violates one is wrong even if it works.
 7. **Label every capability** implemented, simulated or designed. A roadmap
    must never read as deployed capability.
 8. **Flag destructive operations and wait for confirmation:** destroying the
-   Terraform environment, deleting the kind cluster, uninstalling a Helm
-   release, Azure deletes, force-push, secret rotation. The hooks deny or
-   ask; the confirmation you need is the owner's.
+   Terraform environment, uninstalling a Helm release, Azure deletes,
+   force-push, secret rotation. The hooks deny or ask; the confirmation you
+   need is the owner's. The local kind cluster is not on that list: it is
+   disposable on the development machine, the session may delete it and
+   make it again when a test needs it (the owner, 2026-10-06), and it says
+   so when it does.
 9. **Never claim a check passed without evidence.** Say what ran and what it
    printed.
 10. **Keep diffs tight.** No drive-by refactors, no reformatting unrelated

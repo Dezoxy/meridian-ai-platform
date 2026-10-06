@@ -253,20 +253,18 @@ hookspath_env_re="(^|[^[:alnum:]_])(GIT_CONFIG_KEY_[0-9]+|GIT_CONFIG_PARAMETERS)
 # ---- confirmations ----
 [[ "$cmd" =~ terraform[[:space:]].*apply ]] && \
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
-[[ "$cmd" =~ kind[[:space:]]+delete ]] && \
-  decide ask "Deleting the kind cluster loses local state; confirm."
-# `make down` and infra/kind/down.sh wrap `kind delete`, so the rule above never
-# sees them. `make` is matched as a whole word, any options may precede the
-# target, and the target must end at a space, separator or the end of the line.
+# Deleting the local kind cluster does not ask: `kind delete`, `make down` and
+# infra/kind/down.sh pass. The cluster is disposable on the development machine,
+# `make up` makes it again from the repository, and a test may need it made
+# again (the owner, 2026-10-06; AGENTS.md, hard rule 8). The cases stay in
+# tests/guard-bash-cases.jsonl with the decision "none".
 nl=$'\n'
-[[ "$cmd" =~ (^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?down([[:space:]]|$|[;\&\|\)]) ]] && \
-  decide ask "make down deletes the kind cluster and its local state; confirm."
-[[ "$cmd" =~ (^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)down\.sh ]] && \
-  decide ask "infra/kind/down.sh deletes the kind cluster and its local state; confirm."
 # `make grafana-password` and the script behind it exist to print a password.
 # A person runs them in a terminal of their own, which never meets this hook;
 # in a session the output is the transcript, so the owner is asked first.
-# Same anchoring as the down rules; `make grafana` and `grafana.sh forward`
+# `make` is matched as a whole word, any options may precede the target, and
+# the target must end at a space, separator or the end of the line; a script
+# needs its path or an interpreter. `make grafana` and `grafana.sh forward`
 # pass.
 grafana_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?grafana-password([[:space:]]|\$|[;\&\|\)])"
 grafana_script_re="(^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)grafana\.sh[[:space:]]+password([[:space:]]|\$|[;\&\|\)])"
@@ -275,8 +273,8 @@ if [[ "$cmd" =~ $grafana_make_re ]] || [[ "$cmd" =~ $grafana_script_re ]]; then
 fi
 # `make azure-state`, `make azure-apply` and the scripts behind them create
 # Azure resources without the word terraform or az on the command line, so the
-# rules above never see them. Same anchoring as the down rules, widened for the
-# ways a command can be dressed: leading VAR=value assignments, `env`, `time`,
+# rules above never see them. Same anchoring as the Grafana rules, widened for
+# the ways a command can be dressed: leading VAR=value assignments, `env`, `time`,
 # quoted targets, and a body inside `bash -c "..."` or `sh -c '...'` (a quote
 # may start a command). `azure-plan`, `azure-smoke`, `foundation.sh plan|smoke`
 # and `shellcheck .../state.sh` pass.

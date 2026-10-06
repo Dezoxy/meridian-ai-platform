@@ -33,12 +33,12 @@
 {"expect":"deny","command":"git push \\\n  --force-with-lease origin main"}
 {"expect":"deny","command":"cat \\\n  config/.env"}
 {"expect":"deny","command":"python3 - <<'PY'\nimport os; os.system('git push --force')\nPY"}
-{"expect":"ask","command":"make down"}
-{"expect":"ask","command":"make -C . down"}
-{"expect":"ask","command":"infra/kind/down.sh"}
-{"expect":"ask","command":"bash infra/kind/down.sh"}
-{"expect":"ask","command":"cd infra/kind && ./down.sh"}
-{"expect":"ask","command":"time make down"}
+{"expect":"none","command":"make down"}
+{"expect":"none","command":"make -C . down"}
+{"expect":"none","command":"infra/kind/down.sh"}
+{"expect":"none","command":"bash infra/kind/down.sh"}
+{"expect":"none","command":"cd infra/kind && ./down.sh"}
+{"expect":"none","command":"time make down"}
 {"expect":"none","command":"make up"}
 {"expect":"none","command":"make smoke"}
 {"expect":"none","command":"make docs"}
@@ -470,7 +470,7 @@
 {"expect":"ask","command":"kubectl --context kind-meridian rollout restart deploy/x && helm uninstall meridian"}
 {"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && az group create -n x"}
 {"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && gh release create v1"}
-{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && make down"}
+{"expect":"none","command":"kubectl --context kind-meridian apply -f x.yaml && make down"}
 {"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && kind delete cluster"}
 {"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && make grafana-password"}
 {"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && make azure-apply"}
@@ -499,3 +499,10 @@
 {"expect":"ask","command":"(K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig); kubectl --kubeconfig $K apply -f x.yaml"}
 {"expect":"ask","command":"kubectl --context kind-meridian get po; kubectl-x --context kind-meridian apply -f y.yaml"}
 {"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\necho x | cat\nkubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"kind delete cluster --name meridian"}
+{"expect":"none","command":"kind delete cluster"}
+{"expect":"none","command":"make down && make up"}
+{"expect":"deny","command":"kubectl --context kind-meridian delete namespace meridian && make down"}
+{"expect":"ask","command":"make down && make grafana-password"}
+{"expect":"ask","command":"make down; make azure-apply"}
+{"expect":"ask","command":"kind delete cluster && helm uninstall meridian"}
