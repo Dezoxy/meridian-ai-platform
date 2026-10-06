@@ -105,7 +105,19 @@ plan's Part A rests its rule on a suite beside the cluster on that number.
 ## Rules that came out of the move
 
 - **One whole suite at a time on a machine**, and none beside a deployed
-  cluster unless the machine was measured to carry both.
+  cluster unless the machine was measured to carry both. Measured on the
+  virtual machine on 2026-10-05, alone: the whole suite takes 2 min 42 s
+  with the default 4 workers, 2 min 03 s with 8 and 1 min 55 s with 10
+  (`PYTEST_WORKERS=10`); the default stays 4, which is what CI's runner
+  has.
+- **An unattended session runs in the Remote Control service on the
+  machine, in tmux, not in a desktop session over SSH.** On the night of
+  2026-10-05 a desktop session stood still for six hours while its
+  client was away: a subagent it had called was only started when the
+  owner came back.
+- **A pull request is merged by hand once its checks are green.**
+  GitHub's auto-merge was set on two pull requests that night and fired
+  on neither.
 - **A step that owns the cluster needs a person within reach**: the
   command guard asks before every change to it, and an unattended
   session waits at that question.

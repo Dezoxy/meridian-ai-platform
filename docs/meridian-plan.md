@@ -57,9 +57,11 @@
 
 ## Part A — How a session works
 
-One step per session. Short sessions are cheaper and safer: the advisor
-re-reads the whole transcript on every call, uncached, and a long context
-blurs what the step was for.
+One step per branch and per worktree, and since 2026-10-06 up to three
+steps in one session ("Up to three steps at a time", below). A session
+that grows long compacts between steps: the advisor re-reads the whole
+transcript on every call, uncached, and a long context blurs what a step
+was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -78,16 +80,21 @@ blurs what the step was for.
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
 6. **Close.** Fill in the work log and verification, set `done`, commit, go
-   through "Before pushing" below, open the PR, set it to merge when its
-   required checks pass (`gh pr merge --auto --squash`), and confirm the
-   content landed on `main`. The session merges every pull request this
-   way. It stops and
+   through "Before pushing" below, open the PR, merge it with
+   `gh pr merge --squash` as soon as every required check is green, and
+   confirm the content landed on `main`. The session merges every pull
+   request this way, by hand: `--auto` was set on pull requests 84 and 85
+   and fired on neither, though every check was green and the state was
+   clean, and the second waited six hours for the owner. It stops and
    asks the owner first, in chat, only for a decision that shapes what
    comes later: the design, a security boundary or an accepted risk, the
    cost, or the roadmap and the rules of this repository. The answer goes
    into the step's section, so a pull request carries no decision the owner
-   has not taken; everything else the session decides and records. Start
-   the next step in a new session. A follow-up that no step's "done when"
+   has not taken; everything else the session decides and records. When
+   the owner is away, a question does not stop the session: it is written
+   into the step's section and the session takes what does not depend on
+   it (the owner, 2026-10-05: "dont stop, at a promt or for a question,
+   just put it away, note it and go on"). A follow-up that no step's "done when"
    covers goes into Part B's follow-up backlog, with a proposed home, not
    only into the step's own section.
 
@@ -124,25 +131,18 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**One step at a time.** The owner's decision of 2026-10-05: "Work one step
+**Up to three steps at a time.** The owner's decision of 2026-10-06: "So
+back to multisteps… what steps could you start to proceed more? Can we run 3
+steps at once?" It reverses the decision of the day before ("Work one step
 at a time, nothing in parallel: no parallel steps and no parallel
-implementers." One step is open at a time: it is finished, merged and
-confirmed on `main` before the next branch is cut. Inside a step one
-`implementer` works at a time, contract after contract, and so do the
-reviewers at its end (the session's reading of "nothing", until the owner
-says otherwise). A command of the step's own that runs in the background, a
-test run or a wait for checks, is not a parallel step. The decision replaces
-what stood here: steps without shared files in separate sessions, and, for
-some hours of that day, two or three steps inside one session with the
-subagents it started.
-
-**If steps run in parallel again.** Only on the owner's word. What it needed
-is kept, and two of its rules hold for a single step too, since a version
-update or the owner's own change can move `main` under it: numbers are taken
-late, and `main` is merged in before the pull request. Steps whose
-dependencies are `done` and whose files do not overlap ran in separate
-sessions, each in its own worktree and on its own branch, and the brief of
-each session said:
+implementers"), after a night in which one step at a time, and a session
+that stood still for six hours, gave two steps. One session runs up to three
+steps whose dependencies are `done` and whose files do not overlap, each in
+its own worktree and on its own branch, with the subagents it starts. Inside
+a step one `implementer` works at a time where its contracts share files,
+and a step's reviewers run one after another. What follows holds for the
+steps of one session as for separate sessions; the brief of each step, or of
+each session, says:
 
 - **What is shared, and who owns it.** There is one kind cluster and one
   Azure environment: one session owns them, and the others run no
@@ -150,9 +150,11 @@ each session said:
   `make azure-apply`. There is one set of recorded model answers: only one
   session at a time changes a prompt or the triage graph, since that needs
   `make eval-record`.
-- **What each session has of its own.** `PYTEST_DB_CONTAINER`,
-  `PYTEST_DB_PORT` and `PYTEST_WORKERS=3`, for `make pytest-db` and
-  `make eval`, so two test runs never meet.
+- **What each step has of its own.** `PYTEST_DB_CONTAINER`,
+  `PYTEST_DB_PORT` and `PYTEST_WORKERS` (4 beside other steps; the
+  virtual machine runs the whole suite alone with 10 in under two
+  minutes), for `make pytest-db` and `make eval`, so two test runs never
+  meet.
 - **Numbers are taken late.** Migration numbers, `T-NN`, ADR numbers and
   the changelog's version are taken after merging `main` into the step's
   branch, right before the pull request. A branch whose migration number
@@ -337,8 +339,8 @@ money unless its row says so. They sit beside M2 and M3, not in a
 milestone's exit.
 
 - S056 to S061 change different files and were made to run in parallel,
-  S056 owning the cluster; since 2026-10-05 steps run one at a time
-  (Part A). Two places are shared, so the session that
+  S056 owning the cluster (for one day, 2026-10-05, steps ran one at a
+  time; Part A). Two places are shared, so the session that
   finishes later expects a merge there: S056 changes the `/healthz` route
   in the application files S058 and S059 work in, and nothing else in
   them; S060 and S061 both work under `workloads/claims_triage/`, S061 in
@@ -9019,3 +9021,9 @@ follow-up backlog, without a prompt change and without a live recording.
   gone: both of its steps are closed. Seven backlog rows closed, eight
   new ones, none with a home. The whole suite: 9,513 passed in 1 min
   47 s with ten workers.
+- **v0.45, 2026-10-06:** Part A is "Up to three steps at a time" again, the
+  owner's decision of that day, reversing the day before's. A pull request
+  is merged by hand once its checks are green (`--auto` fired on neither
+  84 nor 85), and a question does not stop a session while the owner is
+  away. `docs/development-environment.md` says where an unattended session
+  runs. S062, S065 and S034 open together.
