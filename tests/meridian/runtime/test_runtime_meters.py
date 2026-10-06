@@ -7,6 +7,7 @@ real runtime app and PostgreSQL, with the stand-ins of ``test_runtime_app``.
 """
 
 import importlib
+import logging
 import uuid
 from collections.abc import Callable
 from typing import Any, TypedDict, get_args
@@ -84,6 +85,8 @@ def test_the_closed_set_of_failure_words_is_pinned() -> None:
         "model-error",
         "unexpected",
         "graph-failure",
+        "not-saved",
+        "not-started",
     } == RUN_FAILURE_REASONS
 
 
@@ -178,6 +181,9 @@ FAILURES: list[tuple[str, Callable[[httpx.Request], httpx.Response], CallReason]
     ("no-answer", failing(httpx.ConnectError("down")), "unreachable"),
     ("a-reset", failing(httpx.ReadError("reset")), "unreachable"),
     ("too-slow", failing(httpx.ReadTimeout("slow")), "timeout"),
+    # An HTTP error that is not the transport's: no answer is not what it says.
+    ("undecodable", failing(httpx.DecodingError("bad body")), "error"),
+    ("redirected", failing(httpx.TooManyRedirects("loop")), "error"),
     ("busy", answer(429), "refused"),
     ("forbidden", answer(403), "refused"),
     ("filtered", answer(400, **{REFUSAL_HEADER: REFUSAL_CONTENT_FILTER}), "filtered"),
@@ -208,6 +214,17 @@ def test_each_way_a_call_fails_is_counted_once_under_its_reason(
         client.chat([{"role": "user", "content": "hi"}])
 
     assert reported == [("failed", reason)]
+
+
+def test_an_error_that_is_not_an_http_one_is_counted_and_raised_as_it_is() -> None:
+    closed = RuntimeError("client closed")
+    client, reported, _ = client_over(failing(closed))
+
+    with pytest.raises(RuntimeError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value is closed
+    assert reported == [("failed", "error")]
 
 
 def test_a_call_the_gateway_answered_is_counted_as_completed() -> None:
@@ -386,7 +403,7 @@ def test_a_meter_provider_the_app_built_is_shut_down_with_the_app(
 
 
 def test_without_the_collectors_address_nothing_is_exported_and_nothing_fails(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", raising=False)
@@ -395,10 +412,19 @@ def test_without_the_collectors_address_nothing_is_exported_and_nothing_fails(
         common_metrics, "OTLPMetricExporter", lambda *a, **k: built.append((a, k))
     )
 
-    with TestClient(runtime_app.create_app(runtime_settings())) as client:
+    with (
+        caplog.at_level(logging.INFO, logger=common_metrics.__name__),
+        TestClient(runtime_app.create_app(runtime_settings())) as client,
+    ):
         assert client.get("/healthz").status_code == 200
 
     assert built == []
+    assert [
+        r.getMessage() for r in caplog.records if r.name == common_metrics.__name__
+    ] == [
+        "agent-runtime: metrics are not exported: "
+        "OTEL_EXPORTER_OTLP_ENDPOINT is not set"
+    ]
 
 
 def test_the_app_sets_no_global_meter_provider(

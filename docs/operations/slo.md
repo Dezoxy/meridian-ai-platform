@@ -196,14 +196,21 @@ namespace; Meridian's file does not repeat them.
   `meridian_runtime_model_calls_total`, by `meridian_outcome` (`completed`
   or `failed`) and, for a failure, `meridian_reason`: `unreachable` (no
   answer at all), `timeout`, `refused` (a 429 or a 403), `filtered` (the
-  provider's content filter), `error` (any other status, or an answer
-  outside the contract) and `limit` (a call the run's own limit stopped
-  before it was sent). The runs have `meridian_runtime_runs_total`, one
-  count for each leg of a run (a start and each resume), by
+  provider's content filter), `error` (any other status, an answer
+  outside the contract, another HTTP error such as a decoding error, or
+  an exception that is not HTTP's) and `limit` (a call the run's own
+  limit stopped before it was sent). The runs have
+  `meridian_runtime_runs_total`, one count for each leg of a run (a start
+  and each resume), made after the leg's status is written, by
   `meridian_outcome` (`completed`, `paused`, `failed`) and, for a failed
   leg, a `meridian_reason` word of the runtime's own closed set; every
-  failure a workload's graph names is the one word `graph-failure`. Both
-  carry `meridian_tenant` and `meridian_agent`. No rule reads either yet.
+  failure a workload's graph names is the one word `graph-failure`. A leg
+  whose status could not be written (the caller got a 503) is counted
+  `failed` with `not-saved`, whatever the leg did. A run the database
+  refused before its first leg, or a resume it refused to claim, is
+  counted `failed` with `not-started`; a refusal of the caller (a 403, a
+  404) is counted nowhere. Both carry `meridian_tenant` and
+  `meridian_agent`. No rule reads either yet.
   The three tool servers count their calls too (S064, implemented in
   tests, not run on a cluster): the OTLP counter
   `meridian.toolserver.calls` reaches Prometheus as

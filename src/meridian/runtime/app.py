@@ -12,7 +12,7 @@ import ssl
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -61,7 +61,7 @@ from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import failure_reason
 from meridian.runtime.graphs import GraphFactory, load_graph_factory
-from meridian.runtime.meters import RuntimeMeters
+from meridian.runtime.meters import RuntimeMeters, shut_down
 from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
 from meridian.runtime.models import (
     Reference,
@@ -496,7 +496,7 @@ def create_app(
                     http.close()
             finally:
                 if owns_meter_provider:
-                    app_meter_provider.shutdown()
+                    shut_down(app_meter_provider)  # a failure is a WARNING
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -619,21 +619,21 @@ def create_app(
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
-        # Counted here, once, from what the leg itself did and before _settle
-        # may answer for another writer (the sweep) or fail to write.
-        meters.leg_ended(identity, outcome, failure)
-        outcome, failure, unsaved = _settle(dsn, identity, leg, failure, outcome)
-        if outcome.status != "AwaitingApproval":
+        settled, answered, unsaved = _settle(dsn, identity, leg, failure, outcome)
+        # Counted once, after the write, by what the leg itself did (not what
+        # _settle answers for the sweep); not-saved when nothing was written.
+        meters.leg_ended(identity, outcome, failure, saved=unsaved is None)
+        if settled.status != "AwaitingApproval":
             # The checkpoint holds the claim; a finished run needs none,
             # whether or not its status could be recorded.
             _delete_checkpoints(saver, identity, saver_scope)
-        set_span_attributes(span, {"meridian.run_status": outcome.status})
+        set_span_attributes(span, {"meridian.run_status": settled.status})
         if unsaved is not None:
-            return _unsaved_answer(span, identity, outcome.status, unsaved)
-        if failure is not None:
-            response.status_code = _failure_status(failure)
+            return _unsaved_answer(span, identity, settled.status, unsaved)
+        if answered is not None:
+            response.status_code = _failure_status(answered)
         return RunResponse(
-            run_id=identity.run_id, status=outcome.status, output=outcome.output
+            run_id=identity.run_id, status=settled.status, output=settled.output
         )
 
     @app.post(
@@ -668,9 +668,12 @@ def create_app(
         )
         # The saver is opened before the run row is written, so a database
         # that refuses its connection starts no run (same answer as start_run).
-        with start_span(tracer, "runtime.run") as span, saver_scope() as saver:
+        with start_span(tracer, "runtime.run") as span, ExitStack() as opened:
             _set_run_attributes(span, identity.run_id, identity.agent, identity.tenant)
-            runs.start_run(dsn, identity)
+            # Both passed tenant_may_run: a refused start counts under them.
+            with meters.start_counted(identity.tenant, identity.agent):
+                saver = opened.enter_context(saver_scope())
+                runs.start_run(dsn, identity)
             return run_leg(factory, saver, span, identity, response, body.input)
 
     @app.post(
@@ -734,9 +737,14 @@ def create_app(
         # to the claim, which decides.
         # The saver is opened before the claim, so a database that refuses its
         # connection leaves the run paused instead of stuck as Running.
-        with start_span(tracer, "runtime.resume") as span, saver_scope() as saver:
+        with start_span(tracer, "runtime.resume") as span, ExitStack() as opened:
             _set_run_attributes(span, run_id, found.agent, found.tenant)
-            identity = runs.claim_paused_run(dsn, run_id, body.tenant, body.reference)
+            # Both passed tenant_may_run; an empty claim is no error, no count.
+            with meters.start_counted(found.tenant, found.agent):
+                saver = opened.enter_context(saver_scope())
+                identity = runs.claim_paused_run(
+                    dsn, run_id, body.tenant, body.reference
+                )
             if identity is None:
                 # Another request claimed the run between the read and the
                 # claim: it runs the leg, and this one reports where the run is.

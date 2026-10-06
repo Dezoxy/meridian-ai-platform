@@ -28,10 +28,11 @@ REFUSAL_CONTENT_FILTER = "content-filter"
 # How a call to the gateway ended, for the runtime's metric: the closed set of
 # words a call's reason comes from. ``unreachable`` is no answer at all (a
 # transport error that is not a timeout), ``refused`` a 429 or a 403,
-# ``filtered`` the provider's content filter, ``error`` any other status or an
-# answer outside the contract, ``limit`` a call the run's own limit stopped
-# before it was sent. The words are the metric's: the run's failure word is
-# still the one ``failure_reason`` gives.
+# ``filtered`` the provider's content filter, ``error`` any other status, an
+# answer outside the contract, another HTTP error (a decoding error) or an
+# exception that is not HTTP's at all, ``limit`` a call the run's own limit
+# stopped before it was sent. The words are the metric's: the run's failure
+# word is still the one ``failure_reason`` gives.
 CallOutcome = Literal["completed", "failed"]
 CallReason = Literal["unreachable", "timeout", "refused", "filtered", "error", "limit"]
 CALL_REASONS: frozenset[str] = frozenset(get_args(CallReason))
@@ -200,9 +201,18 @@ class ModelClient:
             # Neither the transport's message nor its cause is kept.
             self._observe("failed", "timeout")
             raise ModelCallTimeoutError from None
-        except httpx.HTTPError:
+        except httpx.TransportError:
             self._observe("failed", "unreachable")
             raise ModelCallError(0) from None
+        except httpx.HTTPError:
+            # A decoding error, too many redirects: not "no answer at all".
+            self._observe("failed", "error")
+            raise ModelCallError(0) from None
+        except Exception:
+            # Not the transport's (a closed client): counted, and raised as it
+            # is, for the run to fail as it would have.
+            self._observe("failed", "error")
+            raise
         if (
             response.status_code == HTTPStatus.BAD_REQUEST
             and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER

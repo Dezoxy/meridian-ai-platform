@@ -93,6 +93,9 @@ SERVICES = {
 }
 # What wrote when one request went through each service (the measurement).
 IDENTITY = "meridian.platform.common.identity"
+# With no collector address a factory says once, through this logger, that its
+# metrics are not exported (S064): the one record of ours before uvicorn's.
+METRICS = "meridian.platform.common.metrics"
 MEASURED = {
     "model-gateway": {IDENTITY},
     "agent-runtime": {IDENTITY},
@@ -139,8 +142,11 @@ def test_the_factory_takes_over_the_loggers_uvicorn_configured_before_it(
         assert logging.getLogger(name).propagate is True
     assert logging.getLogger("uvicorn.access").hasHandlers() is True
     logging.getLogger("uvicorn.error").info("after the factory")
-    (line,) = _json_lines(capsys.readouterr().out)
-    assert (line["logger"], line["service"]) == ("uvicorn.error", service)
+    lines = _json_lines(capsys.readouterr().out)
+    assert {line["service"] for line in lines} == {service}
+    assert [line["logger"] for line in lines if line["logger"] != METRICS] == [
+        "uvicorn.error"
+    ]
 
 
 # ── uvicorn serving, with the factory loaded by uvicorn itself ──────────────
@@ -351,10 +357,12 @@ def test_the_command_line_writes_json_from_its_first_line_and_no_query() -> None
         process.terminate()
         rest, err = process.communicate(timeout=START_TIMEOUT_SECONDS)
 
-    # uvicorn's own start-up lines came after the factory, so they are JSON too.
-    assert (
-        json.loads(written[0])["message"] == f"Started server process [{process.pid}]"
-    )
+    # uvicorn's own start-up lines came after the factory, so they are JSON too;
+    # the factory's own line (no collector address here) is the only one before.
+    records = [json.loads(line) for line in written]
+    ours = [record for record in records if record["logger"] != METRICS]
+    assert ours[0]["message"] == f"Started server process [{process.pid}]"
+    assert len(records) - len(ours) == 1
     _assert_one_json_object_per_line_and_no_canary("".join(written) + rest, err)
 
 
@@ -440,4 +448,4 @@ def test_the_sweeps_summary_is_a_json_line_with_the_same_text(
         "0 claims failed as abandoned, 0 runs ended, 0 threads cleaned, 0 failures"
     ]
     assert {line["service"] for line in lines} == {"claims-sweep"}
-    assert names.names == {SWEEP_LOGGER}
+    assert names.names == {SWEEP_LOGGER, METRICS}
