@@ -49,7 +49,7 @@ GROUPS = [
 ]
 # The file holds 12 alert rules and 1 recording rule.
 RULE_COUNT = 13
-SMOKE_LINES_AFTER_DEPLOY = 31
+SMOKE_LINES_AFTER_DEPLOY = 34
 SMOKE_LINES_AFTER_UP = 29
 
 

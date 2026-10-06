@@ -287,13 +287,30 @@ node image, Kubernetes components and the platform).
    and while it is suspended (`.spec.suspend`: it makes no runs, so none is
    overdue), this line prints SKIP. A PASS does not say the sweep did its
    work, only that a Job finished.
-8. **Network policy.** One line, read-only. From inside the Claims API's pod
-   a connection to the Model Gateway is tried, a path no rule allows, and it
-   must be blocked: that proves the cluster's network plugin enforces the
-   policies and not only stores them. The allowed paths are the tool check's
-   proof (line 3). It fails when the connection is made, and when the
-   NetworkPolicy `default-deny` is missing. Before `make deploy` this line
-   prints SKIP.
+8. **Network policy.** Four lines. Each opens a TCP connection and sends
+   nothing, from Python in a pod (the image has no curl); a denied path passes
+   only when it times out (a refused connection or a name that does not
+   resolve fails), and a path that answers fails the line. The first line is
+   the control: the Claims API's pod reaches the Agent Runtime, which the
+   Claims API's policy and the Agent Runtime's both name, so a "blocked" below
+   is not a broken probe (if it fails, the other three are not printed). Then
+   the Claims API cannot reach the Model Gateway, which no rule names; the
+   Claims API cannot reach the API server's Service address
+   (`kubernetes.default.svc:443`), which no service's policy lists and which
+   answers when no policy applies, a target inside the cluster so that smoke
+   sends nothing off the machine; and a probe pod, which smoke starts from the
+   Claims API's own image and securityContext and deletes at the end
+   (`smoke-network-<time>`, labelled `app.kubernetes.io/name=meridian-sweep` so
+   that the sweep's policy lets it reach DNS and the database, and not
+   `app.kubernetes.io/part-of=meridian`, which the database's ingress admits by),
+   cannot reach `platform-db-rw.meridian.svc:5432` until the same pod is given
+   that label, and then can. The allowed paths are also the tool check's proof
+   (line 3). It fails when the NetworkPolicy `default-deny` is missing. Before
+   `make deploy` one line prints SKIP in place of the four. It adds about 20
+   seconds. What it does not prove, and stays by hand (S019): that a pod of
+   another namespace cannot reach the database, and that an address outside the
+   machine is unreachable (smoke sends nothing there); and it does not read the
+   policies, which the chart's tests render and compare.
 9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
@@ -590,7 +607,9 @@ database pod itself may reach DNS, the pods of its own Cluster and TCP port
 6443 at any address: its instance manager calls the API server, whose
 address is the node's own and changes with every new cluster, so the rule
 names the port and no address. From the database pod a connection to the
-internet timed out, and 40 of 40 to the API server were made (S019).
+internet timed out, and 40 of 40 to the API server were made (S019). That
+stays by hand; `make smoke` (line 8, tested without a cluster) tries the
+other direction of that policy: a pod without the `part-of` label on 5432.
 
 What the policies do not do:
 

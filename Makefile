@@ -249,7 +249,7 @@ images:
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector, the policy, knowledge and migration stores, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that its schedule has not stopped, that a connection no network policy allows is blocked, that the gateway refuses a caller with no identity or with another CA's certificate, that the certificate policy stands, and that the alert rules are loaded, healthy and quiet and the health dashboard is served
+## smoke           prove the edge, pgvector, the policy, knowledge and migration stores, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that its schedule has not stopped, that three connections no network policy allows are blocked and one it allows is not, that the gateway refuses a caller with no identity or with another CA's certificate, that the certificate policy stands, and that the alert rules are loaded, healthy and quiet and the health dashboard is served
 smoke:
 	infra/kind/smoke.sh
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prove the local platform works end to end: `make smoke`. Changes nothing apart
-# from three short-lived Jobs (unique names, removed by ttlSecondsAfterFinished)
-# and, at most once per throttle window per tool server, the refusal's audit row
-# that the tool check below causes.
+# from three short-lived Jobs (unique names, removed by ttlSecondsAfterFinished),
+# one short-lived Pod of the network policy check (unique name, deleted when the
+# check ends and again by the EXIT trap) and, at most once per throttle window
+# per tool server, the refusal's audit row that the tool check below causes.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
 #   2. database:  pgvector is installed in platform-db, in the `app` database and
 #                 in the `meridian` database; and three lines for the stores of
@@ -76,13 +77,60 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
-#   8. network policy: one line, read-only. From inside the Claims API's pod a
-#                 TCP connection to the Model Gateway, which no rule allows,
-#                 must time out: the namespace's default-deny is enforced. It
-#                 fails when the policy `default-deny` does not exist, and when
-#                 the connection succeeds (the cluster does not enforce
-#                 NetworkPolicy, or a rule is too wide). Skipped while the
-#                 Claims API is not deployed (`make deploy`).
+#   8. network policy: four lines (S019, S062). Each opens a TCP connection and
+#                 nothing more; a path that no rule allows is a PASS only when it
+#                 times out, and a connection refused or a name that does not
+#                 resolve is a FAIL, never "blocked". A policy that is missing,
+#                 or too wide, makes a denied path answer, so each denied line
+#                 can fail. Run in this order, the control first:
+#                 - the control: from the Claims API's pod to the Agent Runtime,
+#                   which the Claims API's policy and the Agent Runtime's both
+#                   name. It must be reached. The probe, the name resolution and
+#                   the pod's egress to a named peer work, so a "blocked" below
+#                   is not a broken probe. If it fails, the three lines below
+#                   would prove nothing and are not printed.
+#                 - the Claims API to the Model Gateway, which no rule of the
+#                   Claims API's policy names: it must time out.
+#                 - the Claims API to the API server's Service address
+#                   (kubernetes.default.svc:443), the check's "egress to what
+#                   the policy does not list": no service's policy has a rule for
+#                   an address or for 443 or 6443, and without a policy the
+#                   connection is reached (the database's policy lists 6443,
+#                   which is how the instance manager reaches it). It is a
+#                   target inside the cluster, so smoke sends nothing off the
+#                   machine; an address in a documentation range (192.0.2.1)
+#                   was not used because it times out with or without a policy.
+#                 - the database's ingress: a probe Pod of the Claims API's own
+#                   image and securityContext (nothing is pulled), labelled
+#                   app.kubernetes.io/name=meridian-sweep and not
+#                   app.kubernetes.io/part-of=meridian. The sweep's policy lets
+#                   such a pod reach DNS and the database, so its egress is not
+#                   what blocks it (a pod no policy names has none, and its
+#                   "blocked" would be default-deny's egress, not the database's
+#                   ingress); the database's ingress admits pods by part-of
+#                   alone, so the connection to platform-db-rw.meridian.svc:5432
+#                   must time out. Then the same pod is given the part-of label
+#                   and the same probe must reach the database (a few tries: the
+#                   network plugin takes a moment): it is the control, one pod
+#                   with and without the label. No Service or Deployment selects
+#                   the name label of the sweep, so the pod takes no traffic.
+#                 The Pod is deleted when the check ends and by the EXIT trap,
+#                 ends on its own after five minutes, and is not created when
+#                 the control failed. The check fails when the policy
+#                 `default-deny` does not exist.
+#                 Skipped, one line instead of four, while the Claims API is not
+#                 deployed (`make deploy`). What it does not prove: that
+#                 every other pair of pods is allowed or denied as the chart
+#                 says (the chart's tests render and compare the rules); that a
+#                 pod of another namespace cannot reach the database, or that an
+#                 address outside the machine is unreachable (S019 proved the
+#                 database pod's 443 and 80 by hand; it stays by hand, because
+#                 smoke sends nothing off the machine); that the API server
+#                 answers without a policy (it does for the database's pod,
+#                 which S019 measured); and nothing about UDP. Adds about 20 s:
+#                 three timeouts of 4 s, the Pod's start and the exec calls
+#                 (when something is wrong, at most 60 s for the Pod to be
+#                 Ready and 16 s for the label's tries).
 #   9. service identity: five lines, from the Agent Runtime's pod to the Model
 #                 Gateway (S055, S056; the Claims API's pod cannot reach the
 #                 gateway, which check 8 proves, so the runtime's does). The
@@ -204,18 +252,34 @@ readonly MIGRATIONS_DIR="${KIND_DIR}/../../src/meridian/platform/migrations"
 readonly STORES_READY_SQL="SELECT to_regclass('public.meridian_migrations') IS NOT NULL AND to_regclass('policy.policies') IS NOT NULL AND to_regclass('knowledge.chunks') IS NOT NULL"
 readonly POLICY_COUNT_SQL='SELECT count(*) FROM policy.policies'
 readonly LEDGER_NEWEST_SQL='SELECT name FROM public.meridian_migrations ORDER BY name COLLATE "C" DESC LIMIT 1'
-# The connection the network-policy check tries from the Claims API's pod: the
-# Model Gateway's Service, which only the Agent Runtime, the knowledge tool server
-# and the ingestion Job may reach. The image has no curl, so Python opens it. The
-# snippet prints "reached" or "blocked" and exits 0 either way; anything else (a
-# name that does not resolve, a refused connection) is a traceback and a non-zero
-# exit, which the check reports as a failure, not as "blocked".
-readonly NETWORK_PROBE_HOST=model-gateway.meridian.svc
-readonly NETWORK_PROBE_PORT=8000
+# The connections the network-policy check (8) tries, as host:port. The Agent
+# Runtime is the control: the Claims API's policy and its own name each other. The
+# Model Gateway is a Service which only the Agent Runtime, the knowledge tool
+# server and the ingestion Job may reach. The API server's Service is one no
+# service's policy lists. The database's read-write Service is the one every
+# workload's policy lists and only the pods labelled part-of=meridian are admitted
+# to (manifests/platform-db-networkpolicy.yaml).
+readonly NETWORK_RUNTIME=agent-runtime.meridian.svc:8000
+readonly NETWORK_GATEWAY=model-gateway.meridian.svc:8000
+readonly NETWORK_API_SERVER=kubernetes.default.svc:443
+readonly NETWORK_DATABASE=platform-db-rw.meridian.svc:5432
+# The probe Pod: the sweep's name label (its policy reaches DNS and the database
+# and no Service or Deployment selects it), a sleep that ends on its own, and how
+# long to wait for it and for the network plugin to see the label added to it.
+readonly NETWORK_POD_NAME_LABEL=meridian-sweep
+readonly NETWORK_POD_LIFETIME=300
+readonly NETWORK_POD_READY_TIMEOUT=60s
+readonly NETWORK_LABEL_ATTEMPTS=4
+readonly NETWORK_LABEL_INTERVAL=1
+# The image has no curl, so Python opens the connection; the host and the port are
+# its two arguments. The snippet prints "reached" or "blocked" and exits 0 either
+# way; anything else (a name that does not resolve, a refused connection) is a
+# traceback and a non-zero exit, which the check reports as a failure, not as
+# "blocked": only a timeout is what a policy that drops packets looks like.
 readonly NETWORK_PROBE_TIMEOUT=4
-readonly NETWORK_PROBE='import socket
+readonly NETWORK_PROBE='import socket, sys
 try:
-    socket.create_connection(("'"${NETWORK_PROBE_HOST}"'", '"${NETWORK_PROBE_PORT}"'), timeout='"${NETWORK_PROBE_TIMEOUT}"').close()
+    socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout='"${NETWORK_PROBE_TIMEOUT}"').close()
     print("reached")
 except TimeoutError:
     print("blocked")'
@@ -362,6 +426,8 @@ grafana_url=""     # set by open_grafana
 grafana_failed=0   # open_grafana failed once: later calls fail quietly
 identity_answer="" # set by identity_status
 rules_body=""      # set by fetch_rules
+network_answer=""  # set by network_probe
+network_pod=""     # the probe Pod of check 8 while it may exist
 poll_error=""      # what the last failed poll attempt saw
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
@@ -644,7 +710,17 @@ poll() {
   return 1
 }
 
+# network_delete_pod: delete the probe Pod of check 8 when one was named, and
+# forget it. Nothing is waited for: the Pod's process is a sleep, and a pod that
+# never existed is not an error.
+network_delete_pod() {
+  [[ -n "${network_pod}" ]] || return 0
+  kctl -n meridian delete pod "${network_pod}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  network_pod=""
+}
+
 cleanup() {
+  network_delete_pod
   if [[ -n "${pf_pid:-}" ]]; then
     kill "${pf_pid}" 2>/dev/null || true
     wait "${pf_pid}" 2>/dev/null || true # kubectl is gone when smoke.sh returns
@@ -1199,10 +1275,130 @@ check_sweep() {
 }
 
 # ── 8. network policy ────────────────────────────────────────────────────────
-# The tool check above proves the paths the policies allow; this one proves a
-# path they do not. Skipped like it, when the Claims API is not deployed.
+# The tool check above proves the paths the policies allow; this one proves
+# that the paths they do not allow are closed, and that its probe can tell. Skipped
+# like it, when the Claims API is not deployed.
+
+# network_probe WHERE TARGET: the probe from WHERE (deploy/claims-api, or the name
+# of the probe Pod) to TARGET (host:port), its answer in ${network_answer}:
+# "reached", "blocked", or "error: ..." with what it wrote on stderr when it failed
+# (a traceback is never read as an answer).
+network_probe() {
+  local where=$1 target=$2 err_file
+  err_file="$(mktemp)"
+  if network_answer="$(kctl -n meridian exec "${where}" -- \
+    python -c "${NETWORK_PROBE}" "${target%:*}" "${target##*:}" 2>"${err_file}")"; then
+    network_answer="$(clean_lines "${network_answer}")"
+  else
+    network_answer="error: $(clean_lines "${network_answer}") $(clean_lines "$(<"${err_file}")")"
+  fi
+  rm -f "${err_file}"
+}
+
+# network_expect EXPECTED WHERE TARGET PASS_TEXT WRONG_TEXT: a PASS line with
+# PASS_TEXT when the probe's answer is EXPECTED (reached or blocked); a FAIL with
+# WRONG_TEXT when it is the other word; a FAIL with what it said when it is neither.
+# Returns 1 unless it passed.
+network_expect() {
+  local expected=$1 where=$2 target=$3 pass_text=$4 wrong_text=$5
+  network_probe "${where}" "${target}"
+  if [[ "${network_answer}" == "${expected}" ]]; then
+    pass "network policy: ${pass_text}"
+    return 0
+  elif [[ "${network_answer}" == reached || "${network_answer}" == blocked ]]; then
+    fail "network policy: ${wrong_text}"
+  else
+    fail "network policy: the probe in ${where} to ${target} gave no answer of reached or blocked: ${network_answer}"
+  fi
+  return 1
+}
+
+# network_pod_spec: the probe Pod as JSON, from the Claims API's Deployment: its
+# image, pull policy and security contexts, so the Pod runs what is on the node
+# under the same restrictions, and a sleep that ends on its own. The one label is
+# the sweep's name label and not part-of (see the header).
+network_pod_spec() {
+  kctl -n meridian get deployment claims-api -o json | jq --arg name "${network_pod}" \
+    --arg label "${NETWORK_POD_NAME_LABEL}" --argjson lifetime "${NETWORK_POD_LIFETIME}" '
+    .spec.template.spec as $pod | $pod.containers[0] as $container | {
+      apiVersion: "v1", kind: "Pod",
+      metadata: {name: $name, namespace: "meridian", labels: {"app.kubernetes.io/name": $label}},
+      spec: {
+        restartPolicy: "Never", automountServiceAccountToken: false,
+        activeDeadlineSeconds: $lifetime, securityContext: $pod.securityContext,
+        containers: [{
+          name: "probe", image: $container.image, imagePullPolicy: $container.imagePullPolicy,
+          command: ["python", "-c", "import time; time.sleep(\($lifetime))"],
+          securityContext: $container.securityContext,
+          resources: {requests: {cpu: "10m", memory: "32Mi"}, limits: {memory: "128Mi"}}
+        }]
+      }
+    }'
+}
+
+# network_start_pod: start the probe Pod and wait until it is Ready. One FAIL
+# line (the database line) and 1 when it cannot. ${network_pod} is set before the
+# Pod exists, so the trap deletes it whichever step fails.
+network_start_pod() {
+  local err_file detail
+  network_pod="smoke-network-$(date +%s)"
+  err_file="$(mktemp)"
+  if ! network_pod_spec 2>"${err_file}" | kctl -n meridian create -f - >/dev/null 2>>"${err_file}"; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "network policy: could not start the probe pod ${network_pod} in meridian (${detail})"
+    return 1
+  fi
+  if ! kctl -n meridian wait --for=condition=Ready "pod/${network_pod}" \
+    --timeout="${NETWORK_POD_READY_TIMEOUT}" >/dev/null 2>"${err_file}"; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "network policy: the probe pod ${network_pod} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} (${detail})"
+    return 1
+  fi
+  rm -f "${err_file}"
+}
+
+# network_database_lines: the database's line, from the probe Pod. Unlabelled it
+# must time out; given the part-of label (the rule the database admits by) the same
+# probe must reach, for up to NETWORK_LABEL_ATTEMPTS tries.
+network_database_lines() {
+  local part_of=app.kubernetes.io/part-of=meridian attempt
+  network_probe "${network_pod}" "${NETWORK_DATABASE}"
+  if [[ "${network_answer}" == reached ]]; then
+    fail "network policy: a pod without the label ${part_of} reached the database (${NETWORK_DATABASE}): the database's ingress is too wide, or the cluster does not enforce it"
+    return
+  elif [[ "${network_answer}" != blocked ]]; then
+    fail "network policy: the probe in ${network_pod} to ${NETWORK_DATABASE} gave no answer of reached or blocked: ${network_answer}"
+    return
+  fi
+  if ! kctl -n meridian label pod "${network_pod}" "${part_of}" >/dev/null 2>&1; then
+    fail "network policy: could not add the label ${part_of} to the probe pod ${network_pod}"
+    return
+  fi
+  for ((attempt = 1; attempt <= NETWORK_LABEL_ATTEMPTS; attempt++)); do
+    network_probe "${network_pod}" "${NETWORK_DATABASE}"
+    [[ "${network_answer}" == blocked ]] || break
+    ((attempt == NETWORK_LABEL_ATTEMPTS)) || sleep "${NETWORK_LABEL_INTERVAL}"
+  done
+  if [[ "${network_answer}" == reached ]]; then
+    pass "network policy: a pod without the label ${part_of} cannot reach the database (${NETWORK_DATABASE}), and with that label added the same pod can"
+  elif [[ "${network_answer}" == blocked ]]; then
+    fail "network policy: the pod still cannot reach the database (${NETWORK_DATABASE}) after the label ${part_of} was added, in ${NETWORK_LABEL_ATTEMPTS} tries: the sweep's egress or the database's ingress is too narrow, and the line above would prove nothing"
+  else
+    fail "network policy: the probe in ${network_pod} to ${NETWORK_DATABASE} gave no answer of reached or blocked: ${network_answer}"
+  fi
+}
+
+check_network_database() {
+  if network_start_pod; then
+    network_database_lines
+  fi
+  network_delete_pod
+}
+
 check_network_policy() {
-  local found policy out err_file
+  local found policy
   if ! found="$(kctl -n meridian get deployment claims-api -o name --ignore-not-found)"; then
     fail "network policy: could not look for deployment/claims-api (kubectl's error is above)"
     return
@@ -1219,15 +1415,21 @@ check_network_policy() {
     fail "network policy: networkpolicy/default-deny does not exist in meridian: the chart was installed with networkPolicy.enabled=false, or not at all (make deploy)"
     return
   fi
-  err_file="$(mktemp)"
-  if out="$(kctl -n meridian exec deploy/claims-api -- python -c "${NETWORK_PROBE}" 2>"${err_file}")" && [[ "${out}" == blocked ]]; then
-    pass "network policy: the Claims API cannot reach the Model Gateway (${NETWORK_PROBE_HOST}:${NETWORK_PROBE_PORT}), which no rule allows"
-  elif [[ "${out}" == reached ]]; then
-    fail "network policy: the Claims API reached the Model Gateway, which no rule allows: the cluster does not enforce NetworkPolicy, or a rule is too wide"
-  else
-    fail "network policy: the probe in deployment/claims-api gave no answer of reached or blocked: stdout: $(clean_lines "${out}"); stderr: $(clean_lines "$(<"${err_file}")")"
-  fi
-  rm -f "${err_file}"
+  # The control first: when the probe cannot reach what a policy allows, a
+  # "blocked" below would mean nothing, so none is printed.
+  network_expect reached deploy/claims-api "${NETWORK_RUNTIME}" \
+    "the probe reaches what a policy allows: the Claims API to the Agent Runtime (${NETWORK_RUNTIME})" \
+    "the Claims API cannot reach the Agent Runtime (${NETWORK_RUNTIME}), which its policy allows: the probe or a policy is broken, so a blocked path would prove nothing" ||
+    return 0
+  network_expect blocked deploy/claims-api "${NETWORK_GATEWAY}" \
+    "the Claims API cannot reach the Model Gateway (${NETWORK_GATEWAY}), which no rule allows" \
+    "the Claims API reached the Model Gateway (${NETWORK_GATEWAY}), which no rule allows: the cluster does not enforce NetworkPolicy, or a rule is too wide" ||
+    true
+  network_expect blocked deploy/claims-api "${NETWORK_API_SERVER}" \
+    "the Claims API cannot reach the API server's Service (${NETWORK_API_SERVER}), which no rule of its policy lists" \
+    "the Claims API reached the API server's Service (${NETWORK_API_SERVER}), which no rule of its policy lists: the cluster does not enforce egress rules, or one is too wide" ||
+    true
+  check_network_database
 }
 
 # ── 9. service identity ──────────────────────────────────────────────────────

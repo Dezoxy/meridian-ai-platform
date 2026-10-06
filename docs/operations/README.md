@@ -162,10 +162,11 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 31 of 31 lines (S055 added three, for service
+7. `make smoke` passes, 34 of 34 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
-   three for the stores of the `meridian` database and four for the rules and
-   the health dashboard); 29 after `make up` alone, with SKIP lines for what
+   three for the stores of the `meridian` database, four for the rules and
+   the health dashboard and three for the network policy); 29 after `make up`
+   alone, with SKIP lines for what
    `make deploy` brings. Items 3, 5 and 6 above are what the eleventh check
    reads, so they need no hand check once the session that owns the cluster
    has seen it pass; item 4, the series, stays by hand.
