@@ -28,7 +28,17 @@ output.
   because naming the pause's own checkpoint answers the pause a second time.
 * The step bound is ten steps a leg (``RECURSION_LIMIT``): the framework counts
   across legs, so a resume's bound is the restored count plus ten.
-* A save the store refused fails the leg: the framework only logs one.
+* A save the store refused fails the leg: the framework only logs one. So does a
+  pause the host cannot find again: after a leg that paused, the latest
+  checkpoint must hold the request (the framework only logs a checkpoint it
+  cannot build, and the store never hears of it).
+* A definition is used for one leg: the host refuses a step object it has handed
+  out before, so a factory that caches its definition cannot run one run's steps
+  with another run's clients. Every step's name is a plain word (``STEP_NAME``)
+  and the workload's state types must be ones the codec can register.
+* A checkpoint is read as what the database holds, not as what the host wrote: a
+  step count that is not an integer in range, and a message or request that names
+  a step the workflow does not have, are ``checkpoint-not-read``.
 * The framework's own telemetry stays off. It reads the global tracer provider,
   and the platform sets none. The step spans are made here from its events.
 
@@ -39,14 +49,18 @@ claim content, so a log line has the run, a class name or a fixed word.
 import asyncio
 import logging
 import re
+import threading
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, cast
 
 from agent_framework import (
+    INTERNAL_SOURCE_ID,
     Executor,
     Workflow,
     WorkflowBuilder,
+    WorkflowCheckpoint,
     WorkflowEvent,
     WorkflowRunResult,
 )
@@ -68,7 +82,10 @@ from meridian.runtime.runs import (
     RunOutcome,
 )
 from meridian.runtime.tool_client import ToolClient
-from meridian.runtime.workflow_checkpoints import PostgresCheckpointStore
+from meridian.runtime.workflow_checkpoints import (
+    CheckpointCodec,
+    PostgresCheckpointStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +99,12 @@ SPAN_PREFIX = "agent_framework.node"
 # put on a span.
 CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 UNKNOWN_CLASS = "unknown"
+# A step's name ends up in a span's name and attributes, so it is a plain word:
+# lower-case words, digits, hyphens and underscores, starting with a letter.
+STEP_NAME = re.compile(r"[a-z][a-z0-9_-]{0,47}")
+# The most steps a checkpoint may say a run has taken. A leg takes ten and a run
+# a handful of legs; a row that says more was not written by this host.
+MAX_RESTORED_STEPS = 1000
 
 
 @dataclass
@@ -129,15 +152,35 @@ class _NoClient:
     call = chat
 
 
+def executors_of(definition: WorkflowDefinition) -> tuple[Executor, ...]:
+    """The distinct executor objects of ``definition``, the first step first."""
+    every = (definition.start, *(step for edge in definition.edges for step in edge))
+    return tuple({id(step): step for step in every}.values())
+
+
 def check_definition(value: object) -> WorkflowDefinition:
     """``value`` when it is a ``WorkflowDefinition``, else a ``TypeError`` that
     names its type: a factory of the other framework returns a graph builder, a
-    mistake returns nothing."""
+    mistake returns nothing. Its state types must be ones the checkpoint codec
+    can register (plain data, see ``CheckpointCodec``), or the codec's
+    ``TypeError`` says why. Every step's ID must be a plain word
+    (``STEP_NAME``): it becomes a span's name and attribute, so no text that
+    came from data can reach one. The ID is not copied into the error."""
     if not isinstance(value, WorkflowDefinition):
         raise TypeError(
             "an agent-framework agent's factory must return a "
             f"WorkflowDefinition, not {type(value).__name__}"
         )
+    for step in executors_of(value):
+        if STEP_NAME.fullmatch(str(step.id)) is None:
+            raise TypeError(
+                "a step name must be lower-case words, digits, hyphens and "
+                "underscores, starting with a letter, at most 48 characters"
+            )
+    # The state types are registered as a leg registers them: one the codec
+    # cannot check, two of one name, or one with a constructor that runs code is
+    # refused here and not when a row is read.
+    CheckpointCodec((*value.state_types, ResumeMarker))
     return value
 
 
@@ -268,6 +311,73 @@ class _Leg:
     plan: _Plan = field(default_factory=lambda: _Plan(RECURSION_LIMIT))
 
 
+async def _latest(leg: _Leg) -> WorkflowCheckpoint | None:
+    """The latest checkpoint of the run's thread, or ``None`` when it has none.
+    A store or a stored document that cannot be read is ``checkpoint-not-read``;
+    only the class name is logged, as the store's text can quote a row."""
+    try:
+        return await leg.store.get_latest(workflow_name=leg.identity.agent)
+    except WorkflowCheckpointException:
+        pass
+    logger.error(
+        "run %s: its checkpoints could not be read: %s",
+        leg.identity.run_id,
+        WorkflowCheckpointException.__name__,
+    )
+    raise GraphFailure(CHECKPOINT_NOT_READ)
+
+
+def _restored_steps(leg: _Leg, latest: WorkflowCheckpoint) -> int:
+    """The step count a checkpoint says the run has taken, when it is a number
+    in range: the framework counts steps across legs, so a resume's bound is
+    this count plus ten. A row says what the database holds, not what the host
+    wrote: anything but an integer from 0 to ``MAX_RESTORED_STEPS`` is
+    ``checkpoint-not-read``."""
+    count = latest.iteration_count
+    if type(count) is int and 0 <= count <= MAX_RESTORED_STEPS:
+        return count
+    logger.error(
+        "run %s: a checkpoint's step count is not in range", leg.identity.run_id
+    )
+    raise GraphFailure(CHECKPOINT_NOT_READ)
+
+
+def _require_known_steps(leg: _Leg, latest: WorkflowCheckpoint) -> None:
+    """Refuse a checkpoint whose messages or requests name a step this workflow
+    does not have. The codec cannot do it (it does not know the workflow), so the
+    host does, once it has the definition: a row that routes a message to another
+    step, or says a step asked something it did not, was not written by this
+    host. A message comes from a step (or from the framework's internal source
+    for it) and goes to a step or, with no target, along the edges."""
+    known = {str(step.id) for step in executors_of(leg.definition)}
+    sources = known | {INTERNAL_SOURCE_ID(step) for step in known}
+    # Every name a checkpoint holds, with the names it may be. The key of a batch
+    # of messages is the source of the messages in it.
+    named: list[tuple[object, set[str]]] = [(key, sources) for key in latest.messages]
+    for batch in latest.messages.values():
+        for message in batch:
+            named.append((getattr(message, "source_id", None), sources))
+            target = getattr(message, "target_id", None)
+            if target is not None:
+                named.append((target, known))
+    for event in latest.pending_request_info_events.values():
+        named.append((_asking_step(event), known))
+    if not all(isinstance(name, str) and name in allowed for name, allowed in named):
+        logger.error(
+            "run %s: a checkpoint names a step it has not", leg.identity.run_id
+        )
+        raise GraphFailure(CHECKPOINT_NOT_READ)
+
+
+def _asking_step(event: WorkflowEvent[Any]) -> object:
+    """The step a pending request says asked, or ``None`` for a request that
+    does not say (the framework raises for one that is malformed)."""
+    try:
+        return event.source_executor_id
+    except Exception:
+        return None
+
+
 async def _plan_resume(leg: _Leg) -> _Plan:
     """Read the latest checkpoint of the run's thread and decide how to resume.
 
@@ -278,22 +388,12 @@ async def _plan_resume(leg: _Leg) -> _Plan:
     * neither, or no checkpoint: ``no-pending-pause``; several pending requests:
       ``several-pending-pauses``. Both raise before anything runs.
     """
-    failed = False
-    try:
-        latest = await leg.store.get_latest(workflow_name=leg.identity.agent)
-    except WorkflowCheckpointException:
-        failed = True
-    if failed:
-        logger.error(
-            "run %s: its checkpoints could not be read: %s",
-            leg.identity.run_id,
-            WorkflowCheckpointException.__name__,
-        )
-        raise GraphFailure(CHECKPOINT_NOT_READ)
+    latest = await _latest(leg)
     if latest is None:
         raise GraphFailure(NO_PENDING_PAUSE)
     pending = latest.pending_request_info_events
-    bound = latest.iteration_count + RECURSION_LIMIT
+    _require_known_steps(leg, latest)
+    bound = _restored_steps(leg, latest) + RECURSION_LIMIT
     if len(pending) > 1:
         raise GraphFailure(SEVERAL_PENDING_PAUSES)
     if len(pending) == 1:
@@ -315,6 +415,22 @@ def _require_saved(leg: _Leg) -> None:
             ", ".join(sorted(set(failures))),
         )
         raise GraphFailure(CHECKPOINT_NOT_SAVED)
+
+
+async def _require_pause_saved(leg: _Leg, result: WorkflowRunResult) -> None:
+    """Fail the leg when it paused and the latest checkpoint does not hold the
+    request it paused on. The framework only logs a checkpoint it cannot BUILD (a
+    step's checkpoint hook that raises) and the store is never called, so
+    ``_require_saved`` cannot see it: a pause nobody can answer would look like a
+    pause, and the run could never be resumed."""
+    asked = {event.request_id for event in result.get_request_info_events()}
+    if not asked:
+        return
+    latest = await _latest(leg)
+    if latest is not None and asked <= set(latest.pending_request_info_events):
+        return
+    logger.error("run %s: its pause was not checkpointed", leg.identity.run_id)
+    raise GraphFailure(CHECKPOINT_NOT_SAVED)
 
 
 async def _run(leg: _Leg, run_input: dict[str, Any] | None) -> RunOutcome:
@@ -345,6 +461,7 @@ async def _run(leg: _Leg, run_input: dict[str, Any] | None) -> RunOutcome:
     finally:
         leg.spans.close()
     _require_saved(leg)
+    await _require_pause_saved(leg, result)
     return _outcome(result)
 
 
@@ -365,6 +482,10 @@ class AgentFrameworkHost:
     def __init__(self, factory: WorkflowFactory, *, dsn: str) -> None:
         self._factory = factory
         self._dsn = dsn
+        # Every executor this host has been handed, weakly, so a definition is
+        # used for one leg. Legs run in threads of their own at the same time.
+        self._handed_out: weakref.WeakSet[Executor] = weakref.WeakSet()
+        self._handed_out_lock = threading.Lock()
 
     def start(
         self,
@@ -388,8 +509,32 @@ class AgentFrameworkHost:
         return self._leg(identity, model, tools, tracer, None)
 
     def forget(self, identity: RunIdentity) -> None:
+        """Delete the run's checkpoints, once the run is recorded as ended: the
+        delete skips a thread whose run is still ``Running`` or
+        ``AwaitingApproval`` (see ``PostgresCheckpointStore.forget``), and the
+        sweep removes what was skipped."""
         store = PostgresCheckpointStore(self._dsn, identity.thread_id, ())
         asyncio.run(store.forget())
+
+    def _take(self, definition: WorkflowDefinition) -> WorkflowDefinition:
+        """``definition``, once none of its steps was handed out before.
+
+        A step holds the two clients it was built with, which are one run's: a
+        factory that caches its definition would run the next run's steps with
+        the first run's clients, under the first run's identity, claim and
+        idempotency keys. The host cannot tell a stale definition from a fresh
+        one by looking at it, so it remembers every step object it has been
+        given, and refuses a repeat before anything runs."""
+        steps = executors_of(definition)
+        with self._handed_out_lock:
+            if any(step in self._handed_out for step in steps):
+                raise TypeError(
+                    "an agent-framework agent's factory must return new "
+                    "executors on every call: a step it returned was returned "
+                    "for an earlier leg and holds that leg's clients"
+                )
+            self._handed_out.update(steps)
+        return definition
 
     def _leg(
         self,
@@ -400,8 +545,10 @@ class AgentFrameworkHost:
         run_input: dict[str, Any] | None,
     ) -> RunOutcome:
         """One leg: ``run_input`` is None for a resume."""
-        definition = check_definition(
-            self._factory(AsyncModelClient(model), AsyncToolClient(tools))
+        definition = self._take(
+            check_definition(
+                self._factory(AsyncModelClient(model), AsyncToolClient(tools))
+            )
         )
         store = PostgresCheckpointStore(
             self._dsn, identity.thread_id, (*definition.state_types, ResumeMarker)

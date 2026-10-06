@@ -172,16 +172,22 @@ def test_a_value_the_codec_cannot_restore_refuses_the_save_with_a_fixed_reason(
     assert str(refused.value) == reason
 
 
-def test_a_value_that_does_not_come_back_the_same_refuses_the_save() -> None:
+def test_a_value_that_does_not_come_back_the_same_refuses_the_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     @dataclasses.dataclass
     class Lossy:
         value: str
 
-        def __post_init__(self) -> None:
-            # Every construction changes the value: a restore is not the same.
-            self.value = self.value + "!"
-
     codec = CheckpointCodec([*CHECKPOINT_TYPES, Lossy])
+
+    def lossy_init(self: Lossy, value: str) -> None:
+        # Every construction changes the value: a restore is not the same. (A
+        # type that does this is refused at registration; it is put in place
+        # after, so that the save's own comparison is what is shown.)
+        self.value = value + "!"
+
+    monkeypatch.setattr(Lossy, "__init__", lossy_init)
     store = MemoryStore()
     start(Dials(), store)
     template = store.saved[-1]

@@ -31,7 +31,7 @@ tool argument.
 """
 
 from dataclasses import dataclass
-from typing import Any, Literal, Never
+from typing import Literal, Never
 
 from agent_framework import Executor, WorkflowContext, handler, response_handler
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -77,10 +77,12 @@ DECISION_NOT_RECORDED = "decision-not-recorded"
 @dataclass
 class Gathered:
     """What gather passes on: the claim's ID, to address the tools, and the
-    document the model is sent (numbers, dates, booleans and closed words)."""
+    document the model is sent (numbers, dates, booleans and closed words).
+    ``facts`` is a bare ``dict``: the checkpoint codec checks a field's declared
+    type when it rebuilds the state, and refuses an ``Any`` it cannot check."""
 
     claim_id: str
-    facts: dict[str, Any]
+    facts: dict
 
 
 @dataclass

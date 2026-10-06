@@ -11,8 +11,10 @@ from dbsupport import (
     UPKEEP_ROLE,
     DatabaseHandle,
 )
+from psycopg.conninfo import make_conninfo
 
 from meridian.platform.common.db import connect
+from meridian.platform.migrations import runner
 from meridian.platform.migrations.runner import migration_files
 
 TABLE = "workflow_checkpoints"
@@ -131,20 +133,13 @@ def test_the_table_name_is_outside_the_pattern_the_langgraph_comparison_selects(
 
 
 # ── who may touch it ────────────────────────────────────────────────────────
-def test_the_runtime_inserts_reads_updates_and_deletes_and_needs_no_sequence_right(
+def test_the_runtime_inserts_reads_and_deletes_and_needs_no_sequence_right(
     migrated_database: DatabaseHandle,
 ) -> None:
     thread = thread_of("runtime")
 
     inserted = run(
         migrated_database, "agent_runtime", INSERT, (thread, "c1", AN_INSTANT)
-    )
-    updated = run(
-        migrated_database,
-        "agent_runtime",
-        "UPDATE runtime.workflow_checkpoints SET workflow_name = 'other' "
-        "WHERE thread_id = %s RETURNING 1",
-        (thread,),
     )
     selected = run(
         migrated_database,
@@ -159,12 +154,79 @@ def test_the_runtime_inserts_reads_updates_and_deletes_and_needs_no_sequence_rig
         (thread,),
     )
 
-    assert (inserted, updated, selected, deleted) == (
-        [],
-        [(1,)],
-        [(thread, {})],
-        [(1,)],
+    assert (inserted, selected, deleted) == ([], [(thread, {})], [(1,)])
+
+
+def test_the_runtime_cannot_update_a_row_because_the_store_never_does(
+    migrated_database: DatabaseHandle,
+) -> None:
+    thread = thread_of("no-update")
+    run(migrated_database, "agent_runtime", INSERT, (thread, "c1", AN_INSTANT))
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege) as refused:
+        run(
+            migrated_database,
+            "agent_runtime",
+            "UPDATE runtime.workflow_checkpoints SET workflow_name = 'other' "
+            "WHERE thread_id = %s",
+            (thread,),
+        )
+
+    assert refused.value.sqlstate == INSUFFICIENT_PRIVILEGE
+
+
+def test_the_runtime_holds_exactly_select_insert_and_delete_on_the_table(
+    migrated_database: DatabaseHandle,
+) -> None:
+    held = run(
+        migrated_database,
+        OWNER,
+        "SELECT p, has_table_privilege('agent_runtime', "
+        "'runtime.workflow_checkpoints', p) "
+        "FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', "
+        "'REFERENCES', 'TRIGGER']) AS p",
     )
+    column_updates = run(
+        migrated_database,
+        OWNER,
+        "SELECT a.attname FROM pg_attribute a "
+        "WHERE a.attrelid = 'runtime.workflow_checkpoints'::regclass "
+        "AND a.attnum > 0 AND NOT a.attisdropped "
+        "AND has_column_privilege('agent_runtime', a.attrelid, a.attnum, 'UPDATE')",
+    )
+
+    assert {verb for verb, allowed in held if allowed} == {
+        "SELECT",
+        "INSERT",
+        "DELETE",
+    }
+    assert column_updates == []
+
+
+def test_the_sweeps_delete_is_table_wide_and_the_header_says_what_that_lets_it_do(
+    fresh_database: DatabaseHandle,
+) -> None:
+    thread = thread_of("table-wide")
+    run(fresh_database, OWNER, INSERT, (thread, "c1", AN_INSTANT))
+
+    deleted = run(
+        fresh_database,
+        "claims_sweep",
+        "DELETE FROM runtime.workflow_checkpoints WHERE thread_id = %s RETURNING 1",
+        (thread,),
+    )
+    # A DELETE with no condition on a column the role cannot read is accepted
+    # too: the grant cannot say "only a finished run's rows".
+    run(fresh_database, OWNER, INSERT, (thread, "c2", AN_INSTANT))
+    unconditional = run(
+        fresh_database,
+        "claims_sweep",
+        "DELETE FROM runtime.workflow_checkpoints RETURNING thread_id",
+    )
+
+    assert deleted == [(1,)]
+    assert (thread,) in unconditional
+    assert "table-wide" in dict(migration_files())[NAME]
 
 
 def test_two_checkpoints_of_one_instant_are_told_apart_by_the_sequence(
@@ -264,3 +326,60 @@ def test_only_the_runtime_the_sweep_and_the_owner_hold_a_privilege_on_the_table(
     assert holders == [("agent_runtime",), ("claims_sweep",), (OWNER,)]
     # The sweep's SELECT is the one column it finds a thread by.
     assert sweep_columns == [("thread_id",)]
+
+
+# ── who may apply it ────────────────────────────────────────────────────────
+def apply_everything_before(db: DatabaseHandle, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Apply the files before this one as the owner; return this file's text."""
+    files = migration_files()
+    index = [name for name, _ in files].index(NAME)
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:index])
+    with connect(db.dsn(OWNER), "test") as conn:
+        runner.apply_migrations(conn)
+    return files[index][1]
+
+
+@pytest.mark.parametrize("role", ["model_gateway", "superuser"])
+def test_a_migration_run_by_a_role_that_does_not_own_the_schema_is_refused(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    text = apply_everything_before(empty_database, monkeypatch)
+    # A superuser is the case the guard is for: it would create the table and
+    # own it, and the owner could then neither alter it nor grant on it.
+    dsn = (
+        make_conninfo(empty_database.admin_dsn, dbname=empty_database.name)
+        if role == "superuser"
+        else empty_database.dsn(role)
+    )
+
+    with connect(dsn, "test") as conn:
+        with pytest.raises(
+            psycopg.Error, match="must be run by the owner of the schema runtime"
+        ):
+            conn.execute(text)
+        conn.rollback()
+
+    ((exists,),) = run(
+        empty_database,
+        OWNER,
+        "SELECT to_regclass('runtime.workflow_checkpoints') IS NOT NULL",
+    )
+    assert exists is False
+
+
+def test_the_owner_applies_it_and_owns_the_table(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = apply_everything_before(empty_database, monkeypatch)
+
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        conn.execute(text)
+        conn.commit()
+
+    ((owner,),) = run(
+        empty_database,
+        OWNER,
+        "SELECT pg_get_userbyid(relowner) FROM pg_class "
+        "WHERE oid = 'runtime.workflow_checkpoints'::regclass",
+    )
+    assert owner == OWNER

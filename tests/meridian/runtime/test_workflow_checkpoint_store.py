@@ -145,19 +145,26 @@ def test_a_saved_checkpoint_is_loaded_listed_and_found_as_the_latest(
     assert store.failures == ()
 
 
-def test_the_latest_is_the_newest_by_its_time_whatever_the_order_it_was_saved_in(
+def test_the_latest_is_the_last_saved_whatever_time_the_checkpoint_carries(
     fresh_database: DatabaseHandle,
 ) -> None:
+    # Two legs of one run on pods whose clocks differ: the second leg's
+    # checkpoint is stamped earlier than the first's. The table's sequence is
+    # the order the rows were written in, and the one a clock cannot move.
     store = store_for(fresh_database, uuid.uuid4())
     template = a_checkpoint()
-    newer = variant(template, when=datetime(2026, 10, 6, 12, tzinfo=UTC))
-    older = variant(template, when=datetime(2026, 10, 6, 9, tzinfo=UTC))
+    first = variant(template, when=datetime(2026, 10, 6, 12, tzinfo=UTC))
+    second = variant(template, when=datetime(2026, 10, 6, 9, tzinfo=UTC))
 
-    save_all(store, newer, older)
+    save_all(store, first, second)
 
     latest = leg(lambda: store.get_latest(workflow_name=WORKFLOW_NAME))
+    listed = leg(lambda: store.list_checkpoints(workflow_name=WORKFLOW_NAME))
+    ids = leg(lambda: store.list_checkpoint_ids(workflow_name=WORKFLOW_NAME))
     assert latest is not None
-    assert latest.checkpoint_id == newer.checkpoint_id
+    assert latest.checkpoint_id == second.checkpoint_id
+    assert ids == [first.checkpoint_id, second.checkpoint_id]
+    assert [c.checkpoint_id for c in listed] == ids
 
 
 def test_two_checkpoints_of_one_instant_are_ordered_by_the_order_they_were_saved(

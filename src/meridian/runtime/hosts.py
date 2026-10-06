@@ -76,7 +76,9 @@ class Host(Protocol):
         ...
 
     def forget(self, identity: "RunIdentity") -> None:
-        """Delete every checkpoint of the run's thread."""
+        """Delete every checkpoint of the run's thread. The caller records the
+        run as ended first: the second host's delete skips a thread whose run is
+        still ``Running`` or ``AwaitingApproval`` (the sweep removes the rest)."""
         ...
 
 
