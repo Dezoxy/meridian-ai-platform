@@ -2869,7 +2869,10 @@ case "${url}" in
     if [[ "${decided}" == "${id}" ]]; then services="${STUB_DECISION_SERVICES}"; fi
     # The reading's number for this trace: STUB_GROW_UNTIL makes every service
     # report 2 + min(reading, STUB_GROW_UNTIL) spans, and STUB_LATE_AFTER holds
-    # model-gateway back until that reading. Both unset: two spans, always.
+    # model-gateway back until that reading. STUB_ALTERNATE_UNTIL answers the
+    # odd readings up to that number with every service, and the even ones and
+    # every one after it without the first (claims-api for the triage). All
+    # unset: two spans, always.
     echo >>"${STUB_DIR}/reads-${id}"
     reading="$(wc -l <"${STUB_DIR}/reads-${id}" | tr -d ' ')"
     spans=2
@@ -2878,6 +2881,10 @@ case "${url}" in
     fi
     if [[ -n "${STUB_LATE_AFTER}" ]] && ((reading < STUB_LATE_AFTER)); then
       services="${services/model-gateway/}"
+    fi
+    if [[ -n "${STUB_ALTERNATE_UNTIL}" ]] &&
+      { ((reading > STUB_ALTERNATE_UNTIL)) || ((reading % 2 == 0)); }; then
+      services="${services#* }"
     fi
     jq -cn --arg services "${services}" --argjson spans "${spans}" '{batches: [
       ($services | split(" ")[] | select(. != "")) as $name
@@ -2939,6 +2946,7 @@ def run_demo(
     poll_interval: int = 0,
     grow_until: int | None = None,
     late_after: int | None = None,
+    alternate_until: int | None = None,
     first_claim_conflict: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
     """demo.sh run in a scratch copy of ``infra/kind`` against the stubs, with
@@ -2948,9 +2956,10 @@ def run_demo(
     trace needs three readings, and a one-second deadline does not always
     hold three when the suite's workers share the CPU (S018). ``decision``
     sets the DECISION variable (unset when None).
-    ``grow_until`` and ``late_after`` shape what the stub Tempo answers (see
-    the stub); ``first_claim_conflict`` is the detail of a 409 the stub answers
-    to the first claim (the second is accepted). Returns the process and the
+    ``grow_until``, ``late_after`` and ``alternate_until`` shape what the stub
+    Tempo answers (see the stub); ``first_claim_conflict`` is the detail of a
+    409 the stub answers to the first claim (the second is accepted). Returns
+    the process and the
     stub curl's calls, each as its words: ``POST``/``GET``, the URL, and for a
     POST the trace ID the traceparent carried and the body."""
     kind, bin_dir = tmp_path / "infra" / "kind", tmp_path / "bin"
@@ -2988,6 +2997,9 @@ def run_demo(
         "STUB_DECISION_SERVICES": decision_services,
         "STUB_GROW_UNTIL": "" if grow_until is None else str(grow_until),
         "STUB_LATE_AFTER": "" if late_after is None else str(late_after),
+        "STUB_ALTERNATE_UNTIL": (
+            "" if alternate_until is None else str(alternate_until)
+        ),
         "STUB_CONFLICT_DETAIL": first_claim_conflict or "",
     }
     if decision is not None:
@@ -3291,6 +3303,41 @@ def test_a_trace_that_keeps_growing_until_the_deadline_fails_as_still_growing(
     ]
     assert triage_counts == [str(2 + reads[triage_id])] * 6
     assert reads[triage_id] > SETTLE_POLLS  # it did not stop at three
+
+
+@requires_demo_tools
+def test_a_trace_whose_readings_alternate_fails_saying_they_alternated(
+    tmp_path: Path,
+) -> None:
+    # Readings 1 and 3 have every service, 2 and 4 lack one, and so does every
+    # later reading: two complete in a row never happens, and the last reading
+    # is partial although the trace was complete twice.
+    done, calls = run_demo(tmp_path, alternate_until=4, poll_timeout=3)
+
+    lines = done.stdout.splitlines()
+    assert done.returncode != 0
+    assert "PASS" not in done.stdout
+    triage, decision = [line for line in lines if line.startswith("FAIL")]
+    reads = trace_reads(calls)
+    triage_id, decision_id = reads
+    assert triage == (
+        f"FAIL  trace {triage_id}: readings alternated between complete and "
+        f"partial (2 complete, {reads[triage_id] - 2} partial or missing) "
+        "over 3s, Tempo was still settling"
+    )
+    assert decision.startswith(f"FAIL  decision trace {decision_id}: readings alt")
+    # It says what to do: look the trace up by its ID in a moment.
+    remedy = (
+        "      Look it up in a moment: make grafana, then Explore, Tempo, "
+        'TraceQL { trace:id = "%s" }'
+    )
+    assert remedy % triage_id in lines
+    assert remedy % decision_id in lines
+    assert reads[triage_id] > 4  # the last readings were partial
+    # Neither of the two other wordings: every service was there at times, and
+    # the trace did not keep growing.
+    assert "no trace" not in done.stdout
+    assert "still growing" not in done.stdout
 
 
 @requires_demo_tools
