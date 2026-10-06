@@ -42,7 +42,11 @@ A gateway given the address of the shared store keeps the two windows there
 (implemented and tested; not run on a cluster). When it cannot reach the store
 it refuses the call: 503 `the rate store is unavailable` with `Retry-After: 5`,
 audit reason `rate-store-unavailable`. That is not a tenant's limit: the store
-is down or unreachable, so look at the store, not at the tenant.
+is down or unreachable, so look at the store, not at the tenant: the
+[rate store runbook](rate-store.md) says how to tell a store that is down from
+one that refuses the gateway, and what a restart of it does (every window
+starts again, and the budgets above are not touched). On kind the store is
+the Meridian chart's, `make deploy` runs it, and the gateway uses it there.
 
 ## Confirm
 

@@ -19,12 +19,14 @@ import yaml
 from chartsupport import (
     CHART_DIR,
     JOBS,
+    RATE_STORE,
     SERVICES,
     VALUES_FILE,
     helm_arguments,
     render,
     rendered_chart,
     run_helm,
+    without_rate_store,
 )
 
 from meridian.platform.common.telemetry import OTLP_CERTIFICATE_ENV, OTLP_ENDPOINT_ENV
@@ -147,7 +149,7 @@ def test_the_authority_is_not_under_the_services_own_certificate_directory(
 
 
 def test_no_job_and_no_cronjob_gets_the_authority_or_the_variable() -> None:
-    pods = pods_of(rendered_chart())
+    pods = pods_of(without_rate_store(rendered_chart()))
     others = {n: p for n, p in pods.items() if n not in SERVICES}
 
     assert len(others) == len(JOBS) + 1  # the three Jobs and the sweep
@@ -158,11 +160,27 @@ def test_no_job_and_no_cronjob_gets_the_authority_or_the_variable() -> None:
         assert not [v for v in pod["volumes"] if v.get("configMap")], name
 
 
+def test_the_rate_store_sends_no_telemetry_and_mounts_no_authority() -> None:
+    # Kind's values turn the store on (S066). It is Redis: no exporter, no
+    # address of the collector, no authority to trust; its one ConfigMap is its
+    # own configuration, and the NetworkPolicy gives it no egress at all.
+    pod = pods_of(rendered_chart())[RATE_STORE]
+    container = only_container(pod)
+
+    assert mount_of_ca(container) == []
+    assert OTLP_CERTIFICATE_ENV not in env_of(container)
+    assert OTLP_ENDPOINT_ENV not in env_of(container)
+    assert [v["configMap"]["name"] for v in pod["volumes"] if v.get("configMap")] == [
+        RATE_STORE
+    ]
+
+
 # ── nothing when the name is empty ───────────────────────────────────────────
 
 
 def test_without_an_endpoint_and_a_name_nothing_of_it_is_rendered() -> None:
-    pods = pods_of(render([*helm_arguments(), *NO_TELEMETRY]))
+    # The store's ConfigMap is its own configuration, not the authority.
+    pods = pods_of(without_rate_store(render([*helm_arguments(), *NO_TELEMETRY])))
 
     for name, pod in pods.items():
         container = only_container(pod)

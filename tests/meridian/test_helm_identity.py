@@ -24,12 +24,15 @@ from chartsupport import (
     CHART_DIR,
     NAME_LABEL,
     NAMESPACE,
+    RATE_STORE,
     VALUES_FILE,
     helm_arguments,
     network_policies,
     render,
     rendered_chart,
+    rendered_services,
     run_helm,
+    without_rate_store,
 )
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
@@ -74,6 +77,8 @@ CLIENT_USAGES = ["digital signature", "client auth"]
 TRUST_DOMAIN = "meridian.kind"
 ISSUER = {"name": "meridian-services", "kind": "ClusterIssuer"}
 PORT = 8000
+GATEWAY = "model-gateway"
+STORE_PORT = 6379
 
 
 def of_kind(documents: list[dict] | tuple[dict, ...], kind: str) -> list[dict]:
@@ -279,10 +284,14 @@ def test_the_claims_api_renders_without_tls() -> None:
 
 
 def test_the_chart_renders_one_certificate_per_workload_that_has_an_identity() -> None:
+    # Kind's values turn the rate store on (S066): its Certificate is the eighth,
+    # and is not a registry service's (the next checks and test_kind_rate_store.py
+    # read it).
     certificates = by_name(rendered_chart(), "Certificate")
 
-    assert sorted(certificates) == sorted(ALL_WORKLOADS)
-    assert len(certificates) == 7
+    assert sorted(certificates) == sorted([*ALL_WORKLOADS, RATE_STORE])
+    assert len(certificates) == 8
+    assert sorted(by_name(rendered_services(), "Certificate")) == sorted(ALL_WORKLOADS)
 
 
 @pytest.mark.parametrize("name", ALL_WORKLOADS)
@@ -314,7 +323,8 @@ def test_every_certificate_gets_a_new_key_at_renewal_by_an_explicit_setting() ->
     # (the CA's Never is pinned in test_kind_manifests.py).
     certificates = of_kind(rendered_chart(), "Certificate")
 
-    assert len(certificates) == len(ALL_WORKLOADS)
+    # The store's too (the eighth): no Certificate escapes the setting.
+    assert len(certificates) == len(ALL_WORKLOADS) + 1
     for certificate in certificates:
         policy = certificate["spec"]["privateKey"].get("rotationPolicy")
         assert policy == "Always", certificate["metadata"]["name"]
@@ -355,7 +365,9 @@ def test_the_certificates_follow_the_release_namespace_and_the_trust_domain() ->
     )
     certificates = by_name(documents, "Certificate")
 
-    assert sorted(certificates) == sorted(ALL_WORKLOADS)
+    # The store's Certificate follows the namespace, the trust domain and the
+    # issuer as the others do (its DNS name is the host of the gateway's address).
+    assert sorted(certificates) == sorted([*ALL_WORKLOADS, RATE_STORE])
     for name, certificate in certificates.items():
         spec = certificate["spec"]
         assert certificate["metadata"]["namespace"] == "elsewhere"
@@ -407,7 +419,9 @@ def test_a_pod_mounts_only_its_own_tls_secret_read_only(name: str) -> None:
 
 
 def test_a_workload_without_an_identity_mounts_no_tls_secret() -> None:
-    documents = list(rendered_chart())
+    # The six services' chart: the store has an identity of its own (its `redis-
+    # cli --tls` probe names the same files).
+    documents = list(rendered_services())
     others = [
         d
         for d in documents
@@ -560,7 +574,9 @@ def mounts_tls(container: dict) -> bool:
 
 
 def test_the_tls_files_go_to_every_container_that_mounts_the_certificate() -> None:
-    pods = every_pod(rendered_chart())
+    # The store mounts the certificate too, but takes no MERIDIAN_TLS_* variable
+    # (its directives name the files); test_kind_rate_store.py reads it.
+    pods = every_pod(rendered_services())
     mounting = 0
 
     # Ten pods: six Deployments, three Jobs and the sweep's CronJob.
@@ -599,7 +615,8 @@ def test_the_health_check_watches_the_certificate_the_server_serves(
 
 
 def test_every_pod_has_fs_group_equal_to_its_user_and_group() -> None:
-    pods = every_pod(rendered_chart())
+    # The store's fsGroup is its image's group, 1000 (test_kind_rate_store.py).
+    pods = every_pod(rendered_services())
 
     assert len(pods) == 10
     for name, pod in pods.items():
@@ -610,7 +627,9 @@ def test_every_pod_has_fs_group_equal_to_its_user_and_group() -> None:
 
 
 def test_fs_group_follows_the_one_user_value() -> None:
-    pods = every_pod(render([*helm_arguments(), "--set", "runAsId=20000"]))
+    pods = every_pod(
+        without_rate_store(render([*helm_arguments(), "--set", "runAsId=20000"]))
+    )
 
     for name, pod in pods.items():
         assert pod["securityContext"]["fsGroup"] == 20000, name
@@ -628,8 +647,9 @@ def tls_volumes(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
 def test_every_certificate_volume_is_mode_0440_and_no_value_changes_it() -> None:
     volumes = tls_volumes(rendered_chart())
 
-    # The six services and the ingestion Job.
-    assert len(volumes) == 7
+    # The six services, the ingestion Job and the store.
+    assert RATE_STORE in volumes
+    assert len(volumes) == 8
     for name, volume in volumes.items():
         assert volume["secret"]["defaultMode"] == 0o440 == 288, name
     # Not a value: a --set of any plausible name leaves the rendering as it is.
@@ -699,7 +719,8 @@ def test_turning_tls_on_for_the_claims_api_changes_no_network_policy() -> None:
     )
 
     assert sorted(plain) == sorted(served)
-    assert len(plain) == 11  # default-deny, six services, three Jobs, the sweep
+    # default-deny, six services, three Jobs, the sweep and the rate store's.
+    assert len(plain) == 12
     for name, policy in plain.items():
         assert yaml.safe_dump(policy) == yaml.safe_dump(served[name]), name
     # And the TLS was off in the first rendering and on in the second.
@@ -722,7 +743,10 @@ def test_every_policy_allows_the_port_the_services_listen_on_and_no_other() -> N
             for port in rule["ports"]
             if port["port"] not in (53, 5432, 4318)
         }
-        assert service_ports <= {PORT}, name
+        # The one other port is the rate store's, in the gateway's egress and in
+        # the store's own ingress: no other policy names it.
+        allowed = {PORT, STORE_PORT} if name in (GATEWAY, RATE_STORE) else {PORT}
+        assert service_ports <= allowed, name
 
 
 # ── the registry and the chart agree ─────────────────────────────────────────
@@ -744,9 +768,13 @@ def chart_callers() -> dict[str, set[str]]:
 def test_every_registry_service_has_a_certificate_of_its_name_and_no_other() -> None:
     registry = load_registry(REGISTRY_DIR)
 
+    # The store is not a registry service: it has a certificate and no entry.
     assert {s.id for s in registry.services} == set(
-        by_name(rendered_chart(), "Certificate")
+        by_name(rendered_services(), "Certificate")
     )
+    assert set(by_name(rendered_chart(), "Certificate")) - {
+        s.id for s in registry.services
+    } == {RATE_STORE}
     assert {s.id for s in registry.services} == set(ALL_WORKLOADS)
 
 

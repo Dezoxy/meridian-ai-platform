@@ -17,7 +17,10 @@
 #      the database "meridian" and its eleven roles (the owner, six services, the
 #      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
 #      the knowledge ingestion's); their password Secrets are created first,
-#      only if absent
+#      only if absent, and so is the Secret of the rate store (S066, T-45):
+#      the gateway's address in Redis and the ACL file of the store, made once
+#      and never overwritten (the store itself runs in the Meridian release,
+#      `make deploy`)
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
@@ -39,6 +42,22 @@ readonly POLICY_INTERVAL=3
 # certificate, so verify-full checks it. The CA reaches each pod at this path.
 readonly DATABASE_HOST=platform-db-rw.meridian.svc
 readonly DATABASE_CA_PATH=/etc/meridian/db-ca/ca.crt
+# The rate store (S066): the Secret that holds the gateway's address and the
+# store's ACL file. The host is the DNS name of the store's Certificate, which the
+# gateway verifies (the chart's, rate-store.<namespace>.svc); the port is the
+# store's. The user is the gateway's; its key pattern is the limiter's own prefix
+# (meridian.platform.gateway.ratelimit_redis.DEFAULT_PREFIX); its commands are
+# exactly those the gateway's connection and script send (HELLO with the
+# credentials, EVALSHA, SCRIPT LOAD when the server lost the script, and the five
+# the script runs), read from Redis 8.10.2 under that user: no CLIENT command, no
+# standalone AUTH, no EVAL. `+script|load` allows the one subcommand alone. A
+# test holds this list equal to what the code sends.
+readonly RATE_STORE_SECRET=rate-store-credentials
+readonly RATE_STORE_HOST=rate-store.meridian.svc
+readonly RATE_STORE_PORT=6379
+readonly RATE_STORE_USER=gateway
+readonly RATE_STORE_KEY_PATTERN='~meridian:rate:*'
+readonly RATE_STORE_COMMANDS='+evalsha +script|load +time +zremrangebyscore +zrange +zadd +pexpire +hello'
 # The database's NetworkPolicy and the text in it that stands for the API
 # server's addresses (S063). The placeholder is not a CIDR, so the API server
 # refuses the file as it stands; a test keeps this string equal to the file's.
@@ -202,6 +221,34 @@ ensure_database_secrets() {
   done
 }
 
+# Create the rate store's Secret once (S066). Two keys, `uri` (the gateway's
+# address: rediss://<user>:<password>@<host>:<port>/0) and `users.acl` (Redis's
+# ACL file: the `default` user off, and one user for the gateway that is on, with
+# the SHA-256 of the password and not the password, the key pattern of the
+# limiter, no channel, and exactly the commands the gateway sends). The password
+# is 32 random bytes as 64 lower-case hex digits, an alphabet that needs no
+# percent-encoding, so the address is exact. It goes to kubectl on stdin and is
+# never a command-line argument and never printed. A Secret that exists is kept:
+# a changed command list reaches a running cluster only by deleting the Secret
+# and running `make up` again, then restarting the store and the gateway
+# (docs/operations/runbooks/rate-store.md).
+ensure_rate_store_secret() {
+  { set +x; } 2>/dev/null # a `bash -x` run must not trace a password
+  local password digest
+  if kctl -n meridian get secret "${RATE_STORE_SECRET}" >/dev/null 2>&1; then
+    log "secret ${RATE_STORE_SECRET} exists"
+    return
+  fi
+  log "creating secret ${RATE_STORE_SECRET}"
+  password="$(openssl rand -hex 32)"
+  digest="$(printf '%s' "${password}" | openssl dgst -sha256 -r | awk '{print $1}')"
+  [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die "could not hash the rate store's password"
+  printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: meridian\ntype: Opaque\nstringData:\n  uri: "rediss://%s:%s@%s:%s/0"\n  users.acl: |\n    user default off\n    user %s on #%s %s resetchannels -@all %s\n' \
+    "${RATE_STORE_SECRET}" "${RATE_STORE_USER}" "${password}" "${RATE_STORE_HOST}" "${RATE_STORE_PORT}" \
+    "${RATE_STORE_USER}" "${digest}" "${RATE_STORE_KEY_PATTERN}" "${RATE_STORE_COMMANDS}" |
+    kctl create -f - >/dev/null
+}
+
 # Wait until CloudNativePG reports every role reconciled (common.sh).
 wait_for_database_roles() {
   local deadline=$((SECONDS + ROLES_TIMEOUT))
@@ -329,6 +376,7 @@ install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSI
   "${CNPG_REPO}" cnpg.yaml \
   --set "image.tag=${CNPG_OPERATOR_IMAGE_TAG}@${CNPG_OPERATOR_IMAGE_DIGEST}"
 ensure_database_secrets
+ensure_rate_store_secret
 log "database: platform-db (PostgreSQL 17, pgvector)"
 install_release platform-db meridian "${CNPG_CLUSTER_CHART}" "${CNPG_CLUSTER_VERSION}" \
   "${CNPG_REPO}" platform-db.yaml --set "cluster.imageName=${POSTGRES_IMAGE}"

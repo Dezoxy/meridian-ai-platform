@@ -391,7 +391,8 @@ def test_the_rate_stores_helpers_are_in_their_own_template_file() -> None:
 
 
 def test_the_moved_helpers_are_still_found_with_the_store_on_and_off() -> None:
-    off = render(helm_arguments())
+    # kind turns the store on (K3b), so "off" is kind's values less that switch.
+    off = render([*helm_arguments(), "--set", "rateStore.enabled=false"])
     on = enabled_chart()
 
     assert not [d for d in off if d["metadata"]["name"] == "rate-store"]

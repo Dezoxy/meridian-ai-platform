@@ -23,6 +23,10 @@ from test_helm_identity import DEPLOY_SH, script_function
 
 VALUES_FILE = KIND_DIR / "values" / "meridian.yaml"
 
+# What the stub answers `kubectl get secret rate-store-credentials -o json` with:
+# both keys, non-empty, holding no real value (deploy.sh reads only the names).
+RATE_STORE_SECRET_JSON = json.dumps({"data": {"uri": "eA==", "users.acl": "eA=="}})
+
 ISSUER_STATES = {
     "missing": 'echo "Error from server (NotFound): clusterissuers.cert-manager.io '
     '\\"meridian-services\\" not found" >&2; exit 1',
@@ -127,6 +131,9 @@ def run_deploy(
         '  *"get database"*) printf true ;;\n'
         f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
         f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
+        # The rate store's Secret (S066), with its two keys and no real value.
+        '  *"get secret rate-store-credentials -o json"*) '
+        f"printf '%s' '{RATE_STORE_SECRET_JSON}' ;;\n"
         '  *"get secret"*) ;;\n'
         + (
             '  *"get configmap telemetry-ca"*) ;;\n'
@@ -468,10 +475,12 @@ def test_deploy_checks_the_issuer_and_the_approval_after_the_database_only() -> 
     assert calls.index("require_approval") < calls.index("build_image")
     assert calls.index("require_approval") < first_job
     # `require_database` is the line the split above cut at; the issuer is the
-    # first call after it, the approval the second.
-    assert [line for line in calls if line][:3] == [
+    # first call after it, the approval the second, and the rate store's Secret
+    # (S066) the third, in front of the build.
+    assert [line for line in calls if line][:4] == [
         "require_issuer",
         "require_approval",
+        "require_rate_store_secret",
         "build_image",
     ]
 

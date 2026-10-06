@@ -232,6 +232,49 @@ class Readers(unittest.TestCase):
         # A later rule wins, so the group must come after the platform's.
         self.assertGreater(rules.index(group), rules.index(platform))
 
+    def test_the_rate_store_and_the_test_redis_arrive_in_one_group(self) -> None:
+        # The rate store's image in the pins file (RATE_STORE_IMAGE, S066) is the
+        # Makefile's PYTEST_REDIS_IMAGE: one group, so the tests and the cluster
+        # never run different Redis releases.
+        name = "redis"
+        pins = (ROOT / PINS).read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        image_reader = self.image_reader(PINS)
+        in_pins = {m.group("depName"): m for m in image_reader.finditer(pins)}
+        in_makefile = {
+            m.group("depName"): m
+            for m in self.image_reader("Makefile").finditer(makefile)
+        }
+        rules = self.config["packageRules"]
+        (group,) = [r for r in rules if name in r.get("matchPackageNames", [])]
+        (platform,) = [r for r in rules if r.get("groupName") == "kind platform"]
+
+        # Each file's reader takes the pin, tag and digest.
+        self.assertIn(name, in_pins)
+        self.assertIn(name, in_makefile)
+        pinned = in_pins[name].group("currentValue", "currentDigest")
+        tested = in_makefile[name].group("currentValue", "currentDigest")
+        self.assertEqual(pinned, tested)
+        self.assertTrue(group["groupName"])
+        self.assertNotEqual(group["groupName"], platform["groupName"])
+        # No file restriction: the rule reaches the pins file and the Makefile.
+        self.assertNotIn("matchFileNames", group)
+        self.assertNotIn("matchManagers", group)
+        # A later rule wins, so the group must come after the platform's.
+        self.assertGreater(rules.index(group), rules.index(platform))
+        note = " ".join(group["prBodyNotes"])
+        for words in ("RATE_STORE_IMAGE", "PYTEST_REDIS_IMAGE", "`make smoke`"):
+            self.assertIn(words, note)
+
+    def image_reader(self, path: str) -> re.Pattern[str]:
+        """The reader of ``path`` for an image pinned as name:tag@digest."""
+        (reader,) = [
+            r
+            for r in readers_for(path, self.config)
+            if r.pattern.startswith("=") and "currentDigest" in r.pattern
+        ]
+        return reader
+
     def test_the_platform_note_names_the_collector_as_the_tag_that_is_not_the_charts(
         self,
     ) -> None:

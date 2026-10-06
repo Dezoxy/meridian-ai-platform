@@ -56,11 +56,28 @@ networkPolicy:
 services:
   # Replay mode only: no provider is wired on kind yet.
   model-gateway:
+    # One replica, the chart's default, and no `replicas` here: the laptop's
+    # memory is the reason. The chart allows a second one now (it refuses it
+    # only while the rate store below is off, T-45), because the store holds the
+    # rate windows for every gateway pod; kind does not use that, and no load
+    # test has run two.
     env:
       - name: MERIDIAN_GATEWAY_MODE
         value: replay
       - name: MERIDIAN_ENVIRONMENT
         value: kind
+
+# The rate store (S066, T-45): one Redis, in this namespace, that holds the Model
+# Gateway's two rate windows. `make up` makes the Secret below (the gateway's
+# address, and Redis's ACL file with one user for the gateway, named by hash:
+# never a value here, and the file is mounted by the store alone). `make deploy`
+# passes the image from infra/kind/pins.env (RATE_STORE_IMAGE, with --set-string,
+# so the pin has one place and one Renovate reader), not a literal here. With the
+# store on the gateway refuses every call it cannot count (a 503), so the store
+# must be running for any model call.
+rateStore:
+  enabled: true
+  secret: rate-store-credentials
 
 # The Claims API on a *.localhost name, through the edge Gateway `make up`
 # installs.

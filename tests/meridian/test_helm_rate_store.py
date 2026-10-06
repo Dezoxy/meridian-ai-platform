@@ -33,7 +33,6 @@ from chartsupport import (
     pod_spec,
     pod_workloads,
     render,
-    rendered_chart,
     run_helm,
 )
 
@@ -61,6 +60,13 @@ NEW_KINDS = [
     "Service",
     "ServiceAccount",
 ]
+
+
+@functools.cache
+def rendered_chart() -> tuple[dict, ...]:
+    """The chart as deploy.sh renders it with the store OFF: kind turns it on
+    (S066, K3b), so the default is kind's values less that one switch."""
+    return tuple(render([*helm_arguments(), "--set", "rateStore.enabled=false"]))
 
 
 @functools.cache
@@ -170,6 +176,8 @@ def test_enabled_without_an_image_fails_and_names_the_value() -> None:
         *helm_arguments(),
         "--set",
         "rateStore.enabled=true",
+        "--set-string",
+        "rateStore.image=",
     )
 
     assert "rateStore.image" in stderr
@@ -721,7 +729,13 @@ def test_the_gateways_environment_names_no_variable_that_widens_what_it_trusts()
 
 
 def test_a_second_gateway_replica_is_refused_while_the_store_is_off() -> None:
-    stderr = failure_of(*helm_arguments(), "--set", "services.model-gateway.replicas=2")
+    stderr = failure_of(
+        *helm_arguments(),
+        "--set",
+        "rateStore.enabled=false",
+        "--set",
+        "services.model-gateway.replicas=2",
+    )
 
     assert "rateStore.enabled" in stderr
     assert "T-45" in stderr

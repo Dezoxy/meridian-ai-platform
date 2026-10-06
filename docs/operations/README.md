@@ -15,7 +15,7 @@ thresholds and S028 runs the game day.
 | Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, three designed; every target unmeasured |
 | Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (four groups loaded, every rule healthy, no Meridian alert firing); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; notification designed |
 | Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code and served by Grafana on kind, its queries run in Prometheus by check 11 of `make smoke`; whether each panel shows data stays a hand check |
-| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other five and that runbook's other steps were not exercised |
+| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other six and that runbook's other steps were not exercised |
 
 ## Alerts
 
@@ -79,6 +79,10 @@ needs it, never to clear a fault nobody has looked at.
   a provider refuses the gateway's.
 - [Certificate expiry](runbooks/certificate-expiry.md): a certificate is
   close to its end and was not renewed, or is not Ready.
+- [Rate store](runbooks/rate-store.md): the store of the Model Gateway's rate
+  windows is down or refuses the gateway, so every model call is answered 503
+  `rate-store-unavailable`; also a script that hangs there and a rotated
+  password.
 
 ## Looking into the database on kind
 
@@ -148,7 +152,7 @@ applied to one. The session that owns the cluster checks, on `main`:
    does not read this: a rule over a missing series is healthy and quiet.
    Each of these returns a number in Grafana's Explore:
    - `count(kube_deployment_status_replicas_available{namespace="meridian"})`,
-     expected 6;
+     expected 7 (the six services and, since S066, the rate store);
    - `count(kube_pod_status_ready{namespace="meridian", pod=~"platform-db-[0-9]+", condition="true"})`,
      expected 1;
    - `count(kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"})`,
@@ -171,7 +175,7 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 40 of 40 lines (S055 added three, for service
+7. `make smoke` passes, 41 of 41 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
@@ -180,7 +184,8 @@ applied to one. The session that owns the cluster checks, on `main`:
    ConfigMap and a push in clear text that must not be accepted, and one for
    kube-state-metrics' rights, which may not read Secrets, and one for the
    database's policy, which must name the API server's address (a FAIL says
-   "run make up"), tested
+   "run make up"); S066 one for the rate store, which only the Model Gateway's
+   pods may reach, tested
    without a cluster until they have run on one: the 35 below are S062's
    count); 28 after `make up` alone, with SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and

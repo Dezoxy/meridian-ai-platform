@@ -55,8 +55,9 @@ RULE_COUNT = 13
 # TLS lines that open the telemetry check (the authority's ConfigMap, a push in
 # clear text), the fourth line of the cost panel check (kube-state-metrics'
 # rights) and the first line of the database check (its policy names the API
-# server's address): 35 before.
-SMOKE_LINES_AFTER_DEPLOY = 40
+# server's address): 35 before. S066 added the sixth line of the network policy
+# check (the Claims API cannot reach the rate store): 40 before.
+SMOKE_LINES_AFTER_DEPLOY = 41
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 6, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP

@@ -20,6 +20,7 @@ from chartsupport import (
     NAME_LABEL,
     NAMESPACE,
     NAMESPACE_LABEL,
+    RATE_STORE,
     RELEASE,
     SERVICES,
     TEST_TAG,
@@ -53,6 +54,10 @@ SWEEP = "meridian-sweep"
 JOB_PODS = tuple(f"meridian-{name}" for name in JOBS)
 SERVICE_ENTRY_KEYS = {"podSelector"}
 KIND_PEERS = ("database", "collector", "edge")
+# Kind's values turn the rate store on (S066): a workload and a policy of its own
+# beside the six services' and the Jobs', and a rule in the gateway's egress.
+GATEWAY = "model-gateway"
+STORE_PORT = 6379
 
 
 def policies_of(documents: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
@@ -102,7 +107,8 @@ def test_default_deny_selects_every_pod_and_allows_nothing() -> None:
 def test_the_policies_follow_the_release_namespace() -> None:
     documents = render(helm_arguments(namespace="elsewhere"))
 
-    assert len(network_policies(documents)) == 1 + len(SERVICES) + len(JOBS) + 1
+    # default-deny, the six services, the three Jobs, the sweep and the store.
+    assert len(network_policies(documents)) == 1 + len(SERVICES) + len(JOBS) + 1 + 1
     for policy in network_policies(documents).values():
         assert policy["metadata"]["namespace"] == "elsewhere"
 
@@ -141,7 +147,8 @@ def test_every_pod_workload_is_selected_by_exactly_one_policy_but_default_deny()
     policies = policies_of(documents)
     workloads = pod_workloads(documents)
 
-    assert len(workloads) == len(SERVICES) + len(JOBS) + 1
+    # The six services, the three Jobs, the sweep and the store.
+    assert len(workloads) == len(SERVICES) + len(JOBS) + 1 + 1
     for workload in workloads:
         assert len(selecting(policies, workload)) == 1, workload["metadata"]["name"]
     # And each policy selects some workload: none is dead.
@@ -156,9 +163,13 @@ def test_a_services_egress_targets_are_the_services_its_environment_calls() -> N
     containers = workload_containers(documents)
 
     for name, container in containers.items():
-        assert allowed_services(policies[name], "egress") == called_services(
-            container
-        ), name
+        # What a pod calls by an address in its environment, and the gateway's
+        # one rule more: the rate store, whose address comes from a Secret (a
+        # secretKeyRef, not a URL), so no environment value names it.
+        expected = called_services(container) | (
+            {RATE_STORE} if name == GATEWAY else set()
+        )
+        assert allowed_services(policies[name], "egress") == expected, name
     # The set is not empty for the ones that call: a derivation that found
     # nothing would pass the loop above.
     assert called_services(containers["agent-runtime"]) == {
@@ -270,7 +281,7 @@ def test_only_pods_that_set_the_collectors_address_may_reach_the_collector() -> 
 
     for name, container in containers.items():
         sets_address = "OTEL_EXPORTER_OTLP_ENDPOINT" in {
-            item["name"] for item in container["env"]
+            item["name"] for item in container.get("env", [])
         }
         assert reaches(policies[name], "egress", collector) == sets_address, name
     assert {n for n, p in policies.items() if reaches(p, "egress", collector)} == set(
@@ -294,7 +305,7 @@ def test_without_a_collector_address_no_policy_reaches_a_collector_or_needs_one(
     )
     collector = peers()["collector"]
 
-    assert len(policies_of(documents)) == len(SERVICES) + len(JOBS) + 1
+    assert len(policies_of(documents)) == len(SERVICES) + len(JOBS) + 1 + 1
     assert not [
         name
         for name, policy in policies_of(documents).items()
@@ -325,8 +336,21 @@ def test_every_egress_rule_is_dns_the_database_the_collector_or_a_called_service
             ) == {NAME_LABEL}
             assert any(by_peer) or by_service, (name, entry)
     # No provider egress for the gateway: on kind it runs in replay mode and
-    # calls nothing outside. The rule belongs with the provider (S020).
-    assert len(rules(policies["model-gateway"], "egress")) == 3
+    # calls nothing outside. The rule belongs with the provider (S020). It has
+    # DNS, the database, the collector and, with the store on, the store (the
+    # one pod it may reach on the store's port).
+    gateway = rules(policies[GATEWAY], "egress")
+    assert len(gateway) == 4
+    assert gateway[-1] == {
+        "to": [{"podSelector": {"matchLabels": {NAME_LABEL: RATE_STORE}}}],
+        "ports": [{"port": STORE_PORT, "protocol": "TCP"}],
+    }
+    # And no other policy's egress names the store.
+    assert [
+        name
+        for name, policy in policies.items()
+        if RATE_STORE in allowed_services(policy, "egress")
+    ] == [GATEWAY]
 
 
 def test_the_sweep_and_the_migration_and_the_seed_reach_dns_and_the_database_only() -> (
@@ -374,7 +398,7 @@ def test_with_the_policy_off_no_network_policy_renders_not_even_a_jobs() -> None
     documents = render([*helm_arguments(), "--set", "networkPolicy.enabled=false"])
 
     assert "NetworkPolicy" not in {d["kind"] for d in documents}
-    assert len(pod_workloads(documents)) == len(SERVICES) + len(JOBS) + 1
+    assert len(pod_workloads(documents)) == len(SERVICES) + len(JOBS) + 1 + 1
     for name in JOBS:
         shown = render(
             [

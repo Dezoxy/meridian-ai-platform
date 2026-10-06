@@ -126,7 +126,16 @@
 #                 so), Prometheus holds its tokens, cost and calls series (the
 #                 series line is skipped while the services are not deployed,
 #                 `make deploy`, or the gateway has settled nothing yet, `make
-#                 demo`, and fails when the gateway is not available); and
+#                 demo`, and fails when the gateway is not available). Since
+#                 S066 that series line also means the rate store answered: the
+#                 gateway refuses every call it cannot count (a 503, with the
+#                 store unreachable), so a call settled since the gateway
+#                 started, which is what the series needs, went through the
+#                 store's windows. No line reads the store itself: no check
+#                 may hold its credential (the Secret `rate-store-
+#                 credentials` is the gateway's and the store's alone), and
+#                 check 8's last line shows only that nothing else reaches it;
+#                 and
 #                 Grafana's service account may not read Secrets in meridian or
 #                 observability; and (S063) kube-state-metrics' service account
 #                 may not get, list or watch Secrets in meridian or cert-manager
@@ -177,7 +186,7 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
-#   8. network policy: five lines (S019, S062, S063). Each opens a TCP connection and
+#   8. network policy: six lines (S019, S062, S063, S066). Each opens a TCP connection and
 #                 nothing more; a path that no rule allows is a PASS only when it
 #                 times out, and a connection refused or a name that does not
 #                 resolve is a FAIL, never "blocked". A policy that is missing,
@@ -253,6 +262,29 @@
 #                   stands for all the others). It adds about 10 s: one timeout of 4 s and
 #                   the second Pod's start, and at most 60 s more for its start
 #                   when something is wrong.
+#                 - the rate store (S066), last, from the Claims API's pod
+#                   again, with no Pod of its own: the connection to
+#                   rate-store.meridian.svc:6379, the store that holds the Model
+#                   Gateway's rate windows, must time out. Only the gateway's
+#                   pods are admitted to the store (its ingress) and only the
+#                   gateway's policy has an egress rule to it, so a pod that
+#                   could connect would read or reset every tenant's window; a
+#                   refusal and a name that does not resolve (a store that is
+#                   not deployed) are FAIL lines, never "blocked". The control
+#                   is the one above, and the line is not printed when it
+#                   failed. What the sixth line does not prove: the store's
+#                   ingress alone. The Claims API's policy has no rule to the
+#                   store either, so its egress drops the packets as much as the
+#                   store's ingress does, and no pod of the chart but the
+#                   gateway's has an egress rule that would let a probe get as
+#                   far as the store's ingress; the chart's tests pin that
+#                   ingress (it admits the gateway's pods on 6379 alone). Nor
+#                   that the store is up and serving: a timeout is also what a
+#                   store that hangs gives. That is read elsewhere: `make
+#                   deploy` waits for the store's Deployment and its
+#                   Certificate, and a completed model call (check 5's series)
+#                   shows the gateway reached the store and was answered. It
+#                   adds one timeout of 4 s.
 #                 The Pod carries one label of smoke's own as well,
 #                 meridian-smoke=network-probe, which no policy, Service or
 #                 Deployment selects, so it changes nothing they see. A Pod
@@ -272,7 +304,7 @@
 #                 fails too. The Pod ends on its own after five minutes, and is
 #                 not created when the control failed. The check fails when the
 #                 policy `default-deny` does not exist.
-#                 Skipped, one line instead of five, while the Claims API is not
+#                 Skipped, one line instead of six, while the Claims API is not
 #                 deployed (`make deploy`). What it does not prove: that
 #                 every other pair of pods is allowed or denied as the chart
 #                 says (the chart's tests render and compare the rules); that a
@@ -519,6 +551,9 @@ readonly NETWORK_RUNTIME=agent-runtime.meridian.svc:8000
 readonly NETWORK_GATEWAY=model-gateway.meridian.svc:8000
 readonly NETWORK_API_SERVER=kubernetes.default.svc:443
 readonly NETWORK_DATABASE=platform-db-rw.meridian.svc:5432
+# The rate store's Service (S066): the host is the DNS name of its Certificate
+# and the port its Service's; only the Model Gateway's pods are admitted to it.
+readonly NETWORK_RATE_STORE=rate-store.meridian.svc:6379
 # The probe Pod: the sweep's name label (its policy reaches DNS and the database
 # and no Service or Deployment selects it), a sleep that ends on its own, and how
 # long to wait for it and for the network plugin to see the label added to it.
@@ -2253,6 +2288,19 @@ check_network_collector() {
   network_outsider_delete || true # the Pod stays named: the EXIT trap tries again
 }
 
+# check_network_rate_store: the sixth line of check 8 (S066). The Claims API's pod
+# cannot reach the rate store, which only the Model Gateway's pods may: the
+# connection must time out. The probe is check 8's own and its control, the
+# caller's, has passed before this runs. A refusal and a name that does not
+# resolve (a store that is not deployed) are FAIL lines, as for every denied
+# path. The header says what the line does not prove.
+check_network_rate_store() {
+  network_expect blocked deploy/claims-api "${NETWORK_RATE_STORE}" \
+    "the Claims API cannot reach the rate store (${NETWORK_RATE_STORE}), which only the Model Gateway's pods may" \
+    "the Claims API reached the rate store (${NETWORK_RATE_STORE}): its ingress admits more than the Model Gateway's pods, or is missing (the chart's rate-store policy), or the cluster does not enforce it, and a pod that can connect can read or reset every tenant's window" ||
+    true
+}
+
 check_network_policy() {
   local found policy
   network_sweep_leftovers
@@ -2288,6 +2336,7 @@ check_network_policy() {
     true
   check_network_database
   check_network_collector
+  check_network_rate_store
 }
 
 # ── 9. service identity ──────────────────────────────────────────────────────

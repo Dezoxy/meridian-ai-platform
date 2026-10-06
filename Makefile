@@ -283,9 +283,9 @@ grafana:
 grafana-password:
 	@infra/kind/grafana.sh password
 
-## helm-lint       lint the Meridian chart strictly, with kind's values and every Job on (needs helm)
+## helm-lint       lint the Meridian chart strictly, with kind's values (the rate store on, with the image of PYTEST_REDIS_IMAGE: the pin in infra/kind/pins.env is the same one) and every Job on (needs helm)
 helm-lint:
-	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
+	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
 
 ## down            delete the kind cluster "meridian" and its credentials file (destructive; for a test that needs a fresh cluster, never to clear a fault; hard rule 8)
 down:
