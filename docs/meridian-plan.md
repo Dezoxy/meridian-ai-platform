@@ -12,7 +12,8 @@
   restart once a renewed certificate is mounted (S056), the gateway
   routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
-  the same region and holds each tenant to its rate limits and budgets
+  the same region and holds each tenant to its rate limits (the windows
+  shared by its pods through a Redis on kind, S066) and budgets
   (a Grafana dashboard on kind shows what each tenant, agent, model and
   provider used), it answers embedding requests under the same controls (in replay mode
   and against Azure from a laptop), three MCP tool
@@ -411,8 +412,8 @@ and Pydantic, at the cost of one dependency.
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
-| S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | todo | S007, S019 |
-| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | todo | S007, S019 |
+| S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | done | S007, S019 |
+| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | done | S007, S019 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
 ### Backlog steps
@@ -475,7 +476,7 @@ when their step opens and do not stop the others.
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | done | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | done | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
-| S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | doing: the command, its role and the runbook are done (2026-10-06); the shared rate windows wait for the cluster lane | S058, S065 |
+| S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | done | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need | todo | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens) | todo | S064, S037 |
@@ -633,7 +634,7 @@ that day; the rest stand as their step recorded them.
 | The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 42 s and 16 s of one worker in CI (pull request 79; four workers, the Tests step 5 min 34 s); the job prints its slowest tests from S057 on | S057 |
 | On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | S071 |
 | A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | closed by S063: `policy_seed` and `knowledge_ingest` (migration 0022), each from a Secret only its Job mounts, no fallback to the owner's; tested against PostgreSQL and run on kind | S063 |
-| The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open; S019: the chart refuses a second gateway replica, and leaves the rolling update alone (its decisions say why); windows shared between processes are the fix | S066 |
+| The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | closed by S066 (2026-10-06): the two windows are in one Redis shared by every gateway pod (ADR 8), and the chart allows a second replica only with the store on. Two gateway processes sharing a window is tested against one Redis, not seen on a cluster with two pods | S066 |
 | A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | closed by S059 as far as a tool server can (a call carries the time the runtime will wait; no slot in that time, or late before its work or its commit, is `failed`, `timed-out`); a search already at the gateway is still charged | S059 |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace (T-68) | threat model, S018 | partly closed by S063: kube-state-metrics' `secrets` collector is off and its rule is gone, asked by smoke on kind. Still open: the Prometheus operator's ClusterRole reads and writes Secrets and ConfigMaps in every namespace, and the chart at this version has no value that narrows it (the one switch drops every role the chart creates) | S072 |
 | Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | closed by S058 (the limiter admits the estimate of the text as sent, and redaction runs after it) | S058 |
@@ -749,9 +750,24 @@ that day; the rest stand as their step recorded them.
 | The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | open | S075 |
 | A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | open | S068 |
 | Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open; S064 did not take it: the upkeep is a command a person runs and exports no series, so a rule has nothing to read; its audit rows are the record | S068 |
-| `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | open; the step's second half | S066 |
+| `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | closed by the step's second half (2026-10-06): `make gateway-upkeep` renders a Job of its own outside the release, under the role's Secret; on kind it read the open reservations, refused an expiry with nothing to remove and credited one token | S066 |
 | `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | open | S068 |
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | S074 |
+| The certificate policy admits any `*.meridian.svc` name and any service account's URI for a request in the namespace, so whoever can create a Certificate and a pod there can answer as another service, the rate store included, and capture the gateway's password for it (T-92) | S066 (security review; as it was since S056) | open | S072 |
+| No image is scanned for known vulnerabilities in CI: the Redis image, like the others, is pinned by digest and read by Renovate, and nothing reports what is in it | S066 (infra review) | open | S022 |
+| A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | open | S069 |
+| A rotation of the rate store's password has no overlap: the store and the gateway restart one after the other, and model calls are refused with a 503 for the seconds between (the runbook says so) | S066 | open | S073 |
+| The rate store's own metrics are scraped by nothing (memory, connections, a slow script), and its own output is not in the platform's JSON format, is not redacted by it and is not shipped to Loki: it stays in the pod's output on the node | S066 | open | S072 |
+| The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open | S073 |
+| A cold `make up` depends on the chart hosts answering in time: on 2026-10-06 the Tempo chart's download from GitHub timed out after 296 s and `make up` had to be run again; no chart is cached or mirrored | S066 (third cluster run) | open | S073 |
+| Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open | S073 |
+| The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | open | S069 |
+| The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
+| No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | open | S072 |
+| `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | open | S073 |
+| `make deploy` checks the rate store's ACL rules and not that the password in the gateway's address is the one the ACL holds: a mismatch shows as refused calls, not at deploy | S066 (fourth security pass) | open | S073 |
+| The command guard does not ask before `make gateway-upkeep` with an argument that changes the ledger (`credit`, `close`, `expire --confirm`), and the audit row of such a change names the database role, not the person or session | S066 (third security pass) | open | S075 |
+| Under an overloaded machine (a load average over 100 on 2026-10-06, the session's own doing) Tempo, the collector and the database's pod on kind were each restarted by their probes, and `make demo` then failed at reading its trace back; nothing bounds what else runs on the machine the cluster runs on | S066 (fifth cluster run) | open | S073 |
 | The triage as a supervisor and workers, the worker's name on the wire and migration 0021 have run in tests and in the replayed evaluation, not on a cluster | S031 | closed by S063's cluster runs (2026-10-06): migration 0021 applied, `make demo` passed for a claim approved automatically and one through the adjuster, and Tempo holds each worker's name on the runtime's and the tool servers' spans. The `worker` column was not read on the cluster | S063 |
 | `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | open | S074 |
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
@@ -771,6 +787,10 @@ that day; the rest stand as their step recorded them.
 | `platform/common/telemetry.py` loads the web framework, so the sweep imports its meters late to stay a job with no web stack; `runtime/app.py` and `claims_triage/triaging.py` stand at 799 lines and `test_toolserver_meters.py` at 832 | S064 | open | S074 |
 | A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | open; the first is the owner's to overturn | S069 |
 | Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | open | S069 |
+| The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
+| The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
+| The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
+| The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; they are corrected when a module is applied, not from documentation | S078 |
 
 ## Part C — Step details
 
@@ -9504,7 +9524,7 @@ rule of that day answers.
   alert fires.
 
 ### S066 — Gateway ledger upkeep
-**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
 **Goal:** a command of the gateway's own, under a role of its own and
 with an audit row, credits a tenant, closes a reservation a dead
 process left open and expires old ledger rows; and the rate windows
@@ -9653,6 +9673,215 @@ the first contract was written, and before the pull request.
 - For the owner: the retention month for the ledger (the command takes
   it and has no default); and whether the second half's Redis should
   wait for S063 to release the cluster or run beside it.
+
+**Second half (2026-10-06): the rate windows shared in Redis.**
+
+**Decisions:**
+
+- **A store behind the limiter's one method.** `admit` keeps its signature and
+  its answers. The in-process store stays for a single process and for the
+  tests that move a clock by hand; the gateway builds the Redis one when it is
+  given the store's address. Rejected: replacing the in-process class, which
+  about sixty app-level tests and the evaluation's stack run without a store.
+- **The same sliding log, in one script Redis runs atomically, on Redis's
+  clock.** A sorted set per tenant; a refusal records nothing, as before.
+  Rejected: a fixed-window counter, which admits up to twice the limit across
+  a window's edge, where the registry's check of the tenants' sum assumes a
+  sliding window; and each pod's own clock, which moves a tenant's window by
+  the skew between pods.
+- **A call the gateway cannot count is refused** (the owner, 2026-10-06, asked
+  both questions with the session's recommendations: "1. Your suggestion 2.
+  Same"): a 503 with a retry hint and an audit row (`rate-store-unavailable`),
+  as a ledger it cannot reach already fails every call, and never a fallback
+  to windows of its own, which would bring T-45 back exactly when something is
+  wrong. The price: Redis is a second store every model call depends on. And
+  the chart allows a second gateway replica only with the store on; kind stays
+  at one.
+- **Redis on kind without a third-party chart.** The official image by digest,
+  one Deployment with no volume and nothing persisted, in the Meridian chart
+  and off by default. Rejected: the Bitnami chart (its images left the free
+  catalogue in 2025, and 3,000 lines for one process) and an operator.
+- **TLS 1.3 both ways, and an ACL, because a certificate of the services' CA
+  does not say "the gateway".** The `default` user is off; the gateway's user
+  has a random password in a Secret `make up` makes and only the gateway
+  mounts, and may run exactly the script's commands on `meridian:rate:*`; a
+  `probe` user may only `PING` and has no password (the session's decision,
+  which the owner may overturn: a password for a user that can only ping would
+  sit in the pod's specification). Its price, which the reviews found: any
+  holder of a services certificate with a path to the port opens an
+  authenticated session, so what bounds it is the NetworkPolicy and a limit on
+  every client's buffers together (`maxmemory-clients`).
+- **The store restarts when its certificate was renewed**, through its
+  liveness probe, as the six services ask for their own restart. A restart
+  hands every tenant its windows again, once per renewal: accepted and stated,
+  since the budgets are in the ledger and are not windows.
+- **`meridian gateway` runs on a cluster as a Job of its own**, rendered
+  outside the release by `make gateway-upkeep` with the subcommand's
+  arguments, under the upkeep role's Secret and a policy of the sweep's shape.
+  This closes the first half's open row.
+- **What somebody else wrote into a window can cost its tenant a 429 and
+  nothing more.** The script reads the whole kept window or refuses (at most
+  twelve request limits and one more, a margin of two over the six it can ever
+  have written), reads a planted count as one more than the limit, and answers
+  a refusal where it cannot account for a window; a tenant's two limits are
+  capped at a billion in the registry. Rejected: trusting the key's contents
+  because only the gateway's user can write them (the reviews showed what a
+  holder of that credential, or a bug, can plant).
+- **The alert on the store's refusals is a share and a count, in two
+  branches**: more than 5 percent of the calls the store could have counted
+  and at least 5, or more than half and at least 2, for two minutes, critical.
+  One refused call no longer pages (a renewal's restart refuses a handful), a
+  store that is down on a quiet platform does, and calls refused before the
+  store is asked cannot dilute it. The numbers are proposals nobody measured.
+- **The decision is ADR 8, and ADR 3 keeps its text** with a dated note that
+  its rate windows are no longer kept in the process.
+- **The register gains a row and no boundary.** The security review proposed a
+  tenth boundary for the gateway and its store. A boundary here is tied to
+  relationships of the architecture model, and the model holds the store
+  inside the Model Gateway, not as a container of its own; so T-92 stands on
+  TB-4 and TB-9, and the paragraph under the boundaries names the store among
+  what a single threat covers, as it does the database's writes, the telemetry
+  and the registry's reads (the advisor's reading of 15:20 UTC gave the reason
+  its sharper form).
+
+**Advisor:** consulted three times. At 08:35 UTC on the design, before the
+first contract went out: what it changed was not written down at the time (the
+rule to record each consultation's effect at once came later the same day),
+and a consultation cannot be read again afterwards. At 15:20 UTC on the
+register: the store's row stands on TB-4 and TB-9 with no tenth boundary, and
+it gave the reason its form (a boundary is tied to a relationship of the
+model, and the model holds the store inside the gateway). At 16:52 UTC before
+the pull request, on the last fix contract, which no reviewer had read.
+
+**Work log:**
+
+- **Mapping, then a design with its threat note**, before any code; the two
+  questions that shape what comes later went to the owner with a
+  recommendation each.
+- **Fifteen contracts to the `implementer`**, each in a worktree of its own:
+  the store and its script (24 of the limiter's 25 unit tests run against both
+  stores with their expectations unchanged; one is in-process by
+  construction); the gateway's settings, its 503, the audit row and the
+  metric; the first reviews' findings; the chart; the kind side (the Secret,
+  the ACL, a smoke line); the restart on a renewal; the upkeep Job; the
+  cluster reviews' findings in the chart and in the limiter; the merge with
+  `main` after S064 (45 smoke lines, 20 rules in 5 groups, 8 runbooks); the
+  decision record; the documents brought to what the cluster showed; and three
+  more for the last two review passes (the script's bounds, the chart and the
+  kind scripts, the alert).
+- **What the measurements corrected in the design.** `maxmemory` with
+  `noeviction` does not make this store refuse: the script's first write is
+  not one Redis checks memory for, and it wrote with `maxmemory 1`; the real
+  bound is the number of admissions per tenant and the key's expiry. The
+  client trusted the machine's CAs beside the one it was given, and now uses
+  the services' CA alone. A slow store could hold a cold call for several
+  timeouts; the worst case is now 2.5 seconds. The client sent a command on
+  every connection that Redis answered with an error no monitor shows, so the
+  gateway's command list was shorter than first measured.
+- **Reviews.** `security-reviewer` and `python-reviewer` on the store and the
+  gateway: four medium findings, all fixed. `infra-reviewer` and
+  `security-reviewer` on the chart and the kind side, with the first cluster
+  run: one high finding (a script that loops as the gateway's user froze the
+  store, and no probe or alert saw it) and six must-fix ones (Renovate's
+  `redis` group also took the Python client; nothing in CI held the ACL to the
+  real client; a hung store was never restarted; the threat model was stale;
+  the smoke line passed with the store wide open, because the sending pod had
+  no egress rule anyway; `make deploy` could not see a stale ACL), all fixed
+  in two contracts. Because three commits (the upkeep Job and the two fix
+  contracts) had reached the branch after those reviews, two more passes
+  followed before the pull request: `infra-reviewer` and `security-reviewer`
+  on those commits (no critical or high finding; two medium ones in the
+  script, a count that made it raise and a planted window that slowed every
+  tenant, and five improvements to the chart and the scripts), then
+  `security-reviewer` alone on their fixes (both closed; one medium, the
+  alert's blind spots, and four low). The last contract's fixes had no
+  reviewer: the advisor read the commit and the fifth run's evidence before
+  the pull request and found nothing that needs one (each change is held by a
+  test seen failing first or by a mutation; the alert's branches by promtool
+  cases on both sides); it corrected three things in this section's draft: a
+  backlog row the same commit had made false, the follow-ups' list, and this
+  record of the consultations.
+
+**Result / verification:**
+
+- **The rate windows are shared between gateway processes.** Tested against a
+  Redis that `make pytest-db` and CI start beside PostgreSQL: two limiters on
+  one store share a window, the script holds under racing threads, both stores
+  give the same answers, and a store that is down, slow, refusing or answering
+  nonsense is one 503 with its audit row and its count, never a wait and never
+  a call let through. The chart refuses a second gateway replica unless the
+  store is on.
+- **On the kind cluster, five runs on 2026-10-06, local only.** The first two
+  before the cluster reviews' fixes: `make up` made the Secret, `make deploy`
+  waited for the store before the gateway, `make smoke` printed 41 PASS and
+  `make demo` completed a claim, so model calls were counted through the
+  store; the upkeep Job read the open reservations, refused an expiry with
+  nothing to remove (a failed Job, as designed) and credited one token. The
+  third on the final commit, a cold cycle: the cluster was deleted and made
+  again, **with one retry** (the first `make up` failed after 296 s on a
+  timeout fetching the Tempo chart from GitHub; nothing of this step was
+  involved, and the second completed in 125 s); then `make deploy` and `make
+  demo` passed, and `make smoke` printed 43 PASS with 2 SKIP (the sweep's
+  lines, inside their allowance) and five minutes later 45 PASS, 0 FAIL, 0
+  SKIP, twice. The store's ingress rule was enforced on a pod without the
+  gateway's label; the probe user's ping answered `PONG`; and after a real
+  renewal of the store's certificate (issued by cert-manager within ten
+  seconds) the container restarted once, about 100 seconds later, on the
+  probe's failure, while the gateway's pod did not restart and the demo passed
+  again (that demo's claim was decided by the rules with no model call, so it
+  does not show a call counted after a renewal's restart). The 20 rules in 5
+  groups were loaded and healthy, none firing.
+- **The fourth and fifth runs, on the review passes' fixes, on the same
+  cluster.** `make deploy` replaced the store's pod once for its new
+  configuration (the buffer bound, the probes' time limit) and passed its new
+  check of the Secret's ACL; `make smoke` printed 45 PASS each time; the
+  upkeep Job's refusal ended in the script's new sentence and `make` returned
+  2. Two things these runs found: `make deploy` does not apply alert rules and
+  smoke compares them by name, so the changed rule was loaded only after `make
+  up` (a backlog row); and the fifth run was made while the session ran two
+  whole suites and a deploy at once: at a load average over 100 Tempo, the
+  collector and the database's pod were each restarted by their probes and
+  `make demo` failed at reading its trace back (the claim itself completed).
+  On the quiet machine minutes later `make demo` passed four times, the fourth
+  with a chat call through the gateway's last script and its trace read back.
+  Seven of the forty golden claims are used on this cluster.
+- **Not seen on a cluster, so tested without one:** a 503 from the gateway
+  while the store is down (the demo did not run in those seconds), the alert
+  `MeridianRateStoreRefusing` firing, a second gateway replica, a rotation of
+  the store's password, a store frozen by a script and restarted by its probe,
+  `make deploy`'s refusal of a Secret older than the ACL, the audit row of the
+  cluster's credit (it is read through SQL in the database's pod), and the
+  store over hours.
+- **Gates, run by the main session on the final tree:** the whole suite alone
+  on a quiet machine, 12,602 passed, 8 skipped, exit 0 (4 min 14 s); a first
+  run of it, while the session had two suites, a deploy and four agents going
+  at once and the load average passed 100, had 2 failures in
+  `test_kind_manifests.py` (10 min 19 s) that did not repeat; `make lint` (5
+  contracts kept), `make registry`, `make helm-lint`, `make alerts` (20 rules,
+  the unit tests passing) and the evaluation's free replay (both compares
+  passed), each exit 0; then `make docs`, `make test`, `make check` (no ERROR
+  line) and `make secret-scan` on the closed tree, each exit 0.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the certificate policy admits any
+  service's name, the store's included (S072); no image is scanned in CI
+  (S022); the cap on a tenant's limits is nominal and no ceiling is tied to
+  the store's memory (S069); a rotation of the store's password has no overlap
+  (S073); the store's metrics are scraped by nothing and its output is not
+  shipped (S072); the liveness script and a clock step (S073); a cold start
+  depends on the chart hosts (S073); what was not seen on a cluster (S073);
+  the circuit breaker and the throttles per process (S069); the store in
+  Azure, and Valkey against Redis 8 under its AGPLv3 option (S020); no rule
+  reads the store's restarts (S072); smoke compares alert rules by name and
+  `make deploy` does not apply them (S073); `make deploy` checks the ACL's
+  rules, not the password (S073); the guard does not ask before an upkeep that
+  changes the ledger (S075); and what an overloaded machine did to the cluster
+  (S073). The two tests that failed once under that load join S074's row on
+  load-sensitive tests.
+- For the owner: the probe user without a password (above); and Redis in Azure
+  is a managed service with a monthly price, which S020 states before anything
+  is created.
 
 ### S031 — Supervisor and workers
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
@@ -10185,6 +10414,234 @@ had been read by a reviewer or put to a consultation (Part A, step 4).
   decision to overturn; so is shipping the services and the sweep alone
   and leaving the Jobs' output on the node.
 
+### S025 — AWS mapping
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** an AWS deployment view and a decision record that maps every
+Azure service Meridian uses or designs to its AWS equivalent, written
+against the designed Azure platform and before Azure's environment
+exists (the owner, 2026-10-06). Documents and the architecture model
+only: nothing is built, applied or paid for.
+
+**Decisions** (the main session's unless marked; the owner may
+overturn any):
+
+- **The Azure side is written down once, as a document, and both clouds
+  map from it**: `docs/architecture/deployment/azure-platform.md` holds
+  the table of every Azure service the platform uses or designs (29
+  rows, each with its status and where the repository says so) and the
+  residency rule in words no cloud owns. It is a description S020 keeps
+  true, not a choice, so it is not an ADR. The mapping is ADR 6, one
+  record per cloud (S077 writes Google Cloud's), because each cloud's
+  mapping changes on its own schedule and S036 and S078 each amend their
+  own.
+- **Every equivalent has a source and the date it was read**, from the
+  vendor's own pages; a cell without one says "not verified", and the
+  ADR lists the open questions that matter to S036.
+- **The deployment view places only what the cloud changes**: the edge,
+  the Model Gateway, the Platform Database, the secret store and the
+  model provider. A probe showed that six services cannot be one box,
+  that an instance left out of every view fails `make check`, and that
+  the full placement cannot be read. The chart's other services would
+  run in the same cluster unchanged; the cluster's description says so
+  and the register lists them as omitted. The container registry is not
+  drawn: an arrow from a deployment node validates and cannot be laid
+  out, and a registry with no arrow fails an inspection.
+- **The edge stays Envoy Gateway behind a Network Load Balancer**, so
+  the chart is the same on every cluster and cert-manager keeps issuing
+  the certificate the edge serves (ADR 4). The cost, stated in the ADR
+  and the register: AWS WAF protects Application Load Balancers, not
+  Network Load Balancers, so T-02's firewall has no counterpart in this
+  form. The Application Load Balancer through the AWS Load Balancer
+  Controller is the managed alternative, not taken. S036 may correct it.
+- **The Region for the test is `eu-central-1` (Frankfurt)**, the Region
+  the repository already names; the test of S036 is of infrastructure,
+  not of a model call. The research preferred `eu-west-1` (5 to 8 %
+  cheaper on the large lines, and the only one of the two with a call
+  that can be labelled `eu-region` for Claude, on an endpoint without
+  structured outputs); the ADR weighs it. The owner may overturn it.
+- **EKS Pod Identity over IAM roles for service accounts**, and Amazon
+  Bedrock AgentCore Gateway named as the managed alternative ADR 3 said
+  the mapping would name, not taken: nothing read says it refuses a call
+  by data class and residency label.
+- **No Azure deployment view in this step**: it is S020's, when there is
+  something to place.
+
+**Advisor:** consulted once, before the first contracts of this step, of
+S077 and of S075 together (about 12:55 UTC). The record shows a probe
+contract written right after it, which built the model's first
+deployment environment as a skeleton before anything was filled; what
+else it changed was not written down. Not consulted before the pull
+request: documents and the model alone (Part A, step 4).
+
+**Work log:**
+
+- **A read-only map of the repository** (no deployment environment, node
+  or view existed in the model, for kind or for Azure; the Azure
+  platform was designed in a plan row and in technology strings), **and
+  a research report** of the AWS equivalents with sources, a region
+  comparison and a cost sketch.
+- **Four contracts to the `implementer`**: the probe; the Azure document
+  and the mapping ADR; the filled view; and one that brought the view's
+  texts in line with what the ADR had decided meanwhile.
+- No reviewer agent: no code, chart, Terraform or registry entry
+  changed. The main session read each diff and the exported picture.
+
+**Result / verification:**
+
+- **What the mapping found that changes what the repository said:** no
+  current Claude model has in-Region inference in Frankfurt, so Claude
+  on Bedrock from Frankfurt is `eu-zone` through the `eu.` geographic
+  profile, not `eu-region` (ADR 3 has a dated note); that profile is
+  `eu-zone` only when called from a Region of an EU member state;
+  Mistral Large 3 has no European Region on its Bedrock model card, so
+  S023's second provider has no like-for-like counterpart there; on
+  Bedrock the label is a function of the model ID's prefix and the
+  Region called, not of a SKU, so the registry's derivation is
+  Azure-shaped.
+- **What the test would cost, as a sketch from list prices read on
+  2026-10-06:** about USD 0.44 an hour and 3.53 for eight hours in
+  `eu-central-1`, without model tokens, tax or conversion; a NAT gateway
+  left behind is about USD 42 a month. The amount is stated again from
+  fresh prices before any apply, and nothing is applied without the
+  owner's yes (S036).
+- **The view**: `DeploymentAws`, 10 boxes and 4 arrows inside the budget
+  of 12 and 8, every node and instance tagged `Designed`. Exported and
+  read at full size on 2026-10-06: every label legible; two recorded
+  flaws (the gateway's arrow to the secret store clips a corner of the
+  database's box, and two arrows cross). The Ingress keeps the red
+  border of `Internet-exposed`, which wins over the faded look of
+  `Designed`; it stays dotted.
+- **Gates:** `make check` (no ERROR line), `make docs` and `make test`,
+  each exit 0, on the branch with `main` merged in.
+- **Not done, by design:** no Terraform, no account, no call to AWS; the
+  equivalents are read from documentation and may be wrong on the day
+  they are applied.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the registry's residency
+  derivation and provider kind are Azure-shaped (S023); the threat
+  model's rows on the edge's firewall, residency, egress and retention
+  speak of Azure alone (S036); the Ingress container's technology string
+  names Azure's Application Gateway while both mappings keep Envoy
+  Gateway (S020).
+- For the owner: the Region (`eu-central-1` or `eu-west-1`), and the
+  edge without a managed firewall in front, are the session's decisions
+  to overturn.
+
+### S077 — GCP mapping
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** a Google Cloud deployment view and a decision record that maps
+every Azure service Meridian uses or designs to its Google Cloud
+equivalent, as S025 does for AWS and from the same Azure document (the
+owner, 2026-10-06: "add another step for gcp like aws too and start it
+too"). Documents and the architecture model only: nothing is built,
+applied or paid for.
+
+**Decisions** (the main session's unless marked; the owner may
+overturn any):
+
+- **One record per cloud**: ADR 7 maps the Azure platform to Google
+  Cloud and says nothing twice that S025's Azure document says once (the
+  table of what Azure is used for, the residency rule in words no cloud
+  owns). The owner asked for the step and did not name its form; the
+  form is the session's.
+- **Every equivalent has a source and the date it was read**, from
+  Google's own pages; a cell without one says "not verified", and the
+  ADR lists the open questions that matter to S078.
+- **GKE in Standard mode, one zonal cluster, Dataplane V2**, so the
+  chart's NetworkPolicies are enforced and the node log agent runs as on
+  kind. Autopilot is the alternative the ADR weighs: cheaper for a demo
+  by its sketch, and it changes cert-manager's values and what a
+  DaemonSet may mount.
+- **The edge stays Envoy Gateway behind a passthrough load balancer**,
+  as in the AWS mapping, so the chart is the same on every cluster. The
+  cost, stated in the ADR: Cloud Armor's HTTP rules do not sit in front
+  of a passthrough load balancer, so T-02's firewall has no counterpart
+  in this form; whether Envoy Gateway runs with the Standard-channel
+  Gateway API alone is not verified. The GKE Gateway controller is the
+  managed alternative, not taken.
+- **Cloud SQL for PostgreSQL, Enterprise edition, over AlloyDB**, with
+  the three traps a Terraform module meets written down (the default
+  edition for PostgreSQL 16 and later, backups off through Terraform,
+  who may create the `vector` extension).
+- **The Region for the test is `europe-west3` (Frankfurt)**, the same
+  city as the AWS test; the model's location is a second variable that
+  does not depend on it. The research preferred `europe-west4` (8 to 15
+  % cheaper on the regional lines, and the only EU region with the
+  regional endpoints of Mistral and of a 1,024-dimension embedding
+  model); the ADR weighs it. Put to the owner with the AWS Region
+  (`eu-central-1`) as the session's suggestions, the owner answered on
+  2026-10-06: "Go with your suggestion".
+- **The view places what the cloud changes**, in the shape the AWS step
+  found: the edge, the Model Gateway, the Platform Database, the secret
+  store and the model provider; the registry is not drawn.
+
+**Advisor:** consulted once, before the first contracts of this step, of
+S025 and of S075 together (about 12:55 UTC); what it changed for this
+step was not written down beyond the order (the research first, the view
+only after the AWS step had found the shape). The contract for the ADR
+reported that its own consultation was refused by a rate limit. Not
+consulted before the pull request: documents and the model alone (Part
+A, step 4).
+
+**Work log:**
+
+- **A research report** of the Google Cloud equivalents with sources,
+  the models and their residency, a region comparison and a cost sketch;
+  **two contracts to the `implementer`**: the ADR, and the deployment
+  environment with its view, written from the AWS step's reports.
+- No reviewer agent: no code, chart, Terraform or registry entry
+  changed. The main session read each diff and the exported picture, and
+  corrected one sentence of the ADR that said the owner had adopted the
+  form.
+
+**Result / verification:**
+
+- **What the mapping found:** pay-as-you-go Gemini in the EU is
+  `eu-zone` through the `eu` multi-region endpoint, and the one
+  in-country option (Gemini 3.5 Flash in `europe-west3`) is a fixed-term
+  purchase, about USD 1,300 for one unit for a week; the Gemini 2.5
+  family, which had regional endpoints across the EU, retires on
+  2026-10-20; Google Cloud hosts no OpenAI model, so a deployment there
+  is a change of model (new recordings, new baselines, a re-embedded
+  corpus: an inference from those facts); no embedding model has an
+  in-country commitment in an EU member state; the label is a function
+  of model and location together; `europe-west2` and `europe-west6` are
+  in Google's "Europe" and not in the EU.
+- **What differs from the other clouds and matters to the register:** a
+  budget can pause model spend at most, never infrastructure (T-15);
+  prompts that abuse monitoring flags may be logged for up to 90 days
+  for an account on the online terms, and a 24-hour in-memory cache is
+  on by default (T-20); whether a project with no organization can carry
+  the policy that denies the global endpoint is not verified, so
+  refusing `global` stays the gateway's job.
+- **What the test would cost, as a sketch from list prices read on
+  2026-10-06:** about USD 0.37 an hour and 2.93 for eight hours in
+  `europe-west3`, less the cluster-fee credit, without model calls, tax
+  or conversion. The free trial's credit cannot pay for a partner model.
+  The amount is stated again from fresh prices before any apply, and
+  nothing is applied without the owner's yes (S078).
+- **The view**: `DeploymentGcp`, 10 boxes and 4 arrows inside the budget
+  of 12 and 8, every node and instance tagged `Designed`. Exported and
+  read at full size on 2026-10-06: every label legible; the same two
+  flaws as the AWS view, recorded in the register.
+- **Gates:** `make check` (no ERROR line), `make docs` and `make test`,
+  each exit 0, on the branch with `main` merged in.
+- **Not done, by design:** no Terraform, no project, no call to Google
+  Cloud.
+
+**Follow-ups:**
+
+- In the backlog, with its step: the threat model's rows on the edge's
+  firewall, the budget, egress and provider-side retention speak of
+  Azure alone (S078). The registry's Azure-shaped label derivation has
+  S025's row.
+- For the owner: Standard mode over Autopilot and the edge without a
+  managed firewall in front are the session's decisions to overturn. The
+  two test Regions are confirmed (above), which also settles the Region
+  S025's section left open.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -10630,3 +11087,20 @@ had been read by a reviewer or put to a consultation (Part A, step 4).
   dashboard survives a gap. Proved by four runs on the cluster. Seven
   backlog rows closed, three in part and re-homed, one re-homed, six
   new.
+- **v0.59, 2026-10-06:** S025: the Azure platform is written down as a
+  table with the residency rule in words no cloud owns, ADR 6 maps it to
+  AWS with a source for every equivalent, and the model has its first
+  deployment view, of AWS and designed. Claude on Bedrock from Frankfurt
+  is `eu-zone`, not `eu-region`. Nothing is built or applied. Three
+  backlog rows new.
+- **v0.60, 2026-10-06:** S077: ADR 7 maps the Azure platform to Google
+  Cloud with a source for every equivalent, and the model has a second
+  designed deployment view. Pay-as-you-go Gemini in the EU is `eu-zone`;
+  Google Cloud hosts no OpenAI model. Nothing is built or applied. One
+  backlog row new.
+- **v0.61, 2026-10-06:** S066 done: the gateway's two rate windows are shared
+  between its pods through a Redis on kind (ADR 8), a call it cannot count is
+  refused, and the ledger's upkeep command runs on a cluster as a Job. Three
+  runs on kind, the third a cold cycle with one retry and a real certificate
+  renewal. T-45 rewritten and T-92 new; fifteen backlog rows new and two
+  closed.

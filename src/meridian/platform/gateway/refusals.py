@@ -15,6 +15,10 @@ row. The key of a request whose tenant the registry does not hold is the reason
 alone, so its summary row has no tenant, while its ``refused`` rows carry the
 name the caller sent: the sum holds per key, and for that key by reason, not by
 the ``tenant`` column.
+
+A rate store that cannot be reached (S066) refuses the call with a 503 and is
+one more reason in the same rows, ``rate-store-unavailable``, throttled like the
+others: no limit is known, so no call is made.
 """
 
 import logging
@@ -22,7 +26,10 @@ import logging
 from meridian.platform.common.http import HTTP_PAYLOAD_TOO_LARGE
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.gateway.budget import BudgetRefusalReason, Caller
-from meridian.platform.gateway.ratelimit import RateRefusalReason
+from meridian.platform.gateway.ratelimit import (
+    RateRefusalReason,
+    RateStoreRefusalReason,
+)
 from meridian.platform.gateway.walk import AuditWriter, caller_fields
 
 logger = logging.getLogger(__name__)
@@ -31,17 +38,26 @@ MODEL_CALL_EVENT = "model.call"
 SUPPRESSED_OUTCOME = "suppressed"
 
 HTTP_TOO_MANY_REQUESTS = 429
+HTTP_SERVICE_UNAVAILABLE = 503
 # One fixed text per refusal for a tenant limit; the reason is in the audit row.
 TENANT_RATE_LIMIT_REACHED = "the tenant's rate limit is reached"
 TENANT_BUDGET_USED_UP = "the tenant's budget is used up"
 TENANT_REQUEST_TOO_LARGE = "the request is larger than the tenant's token limit"
-LimitRefusalReason = RateRefusalReason | BudgetRefusalReason
+# The shared store of the rate windows gave no answer (S066): no limit is known,
+# so no call is made. The text names neither the store's address nor its error.
+RATE_STORE_UNAVAILABLE = "the rate store is unavailable"
+# What the 503 tells a caller to wait. A restarting store is back within seconds,
+# so a few seconds keeps a caller from asking in a tight loop without holding it
+# longer than the 10 s request window it would otherwise have waited out.
+RATE_STORE_RETRY_SECONDS = 5
+LimitRefusalReason = RateRefusalReason | BudgetRefusalReason | RateStoreRefusalReason
 LIMIT_ANSWERS: dict[LimitRefusalReason, tuple[int, str]] = {
     "tenant-request-rate": (HTTP_TOO_MANY_REQUESTS, TENANT_RATE_LIMIT_REACHED),
     "tenant-token-rate": (HTTP_TOO_MANY_REQUESTS, TENANT_RATE_LIMIT_REACHED),
     "tenant-token-budget": (HTTP_TOO_MANY_REQUESTS, TENANT_BUDGET_USED_UP),
     "tenant-cost-budget": (HTTP_TOO_MANY_REQUESTS, TENANT_BUDGET_USED_UP),
     "tenant-request-too-large": (HTTP_PAYLOAD_TOO_LARGE, TENANT_REQUEST_TOO_LARGE),
+    "rate-store-unavailable": (HTTP_SERVICE_UNAVAILABLE, RATE_STORE_UNAVAILABLE),
 }
 
 
@@ -59,17 +75,19 @@ class RefusalAudit:
         throttle_tenant: str | None,
         reason: str,
         facts: dict[str, str | None],
-    ) -> None:
+    ) -> bool:
         """Write the row of a refusal when the throttle says it is due, with
-        the count of the refusals it stands in for (T-49). The window starts
-        when the refusal is due, so overlapping refusals leave one row, and a
-        write that fails releases it and loses nothing: the next refusal is due
-        and counts this one. The key is the tenant and the reason, not the
-        purpose: the row's ``purpose`` is that of the call that wrote it, and
-        its ``suppressed`` counts the refusals of both purposes."""
+        the count of the refusals it stands in for (T-49), and say whether it
+        did: a caller that logs a refusal logs it once per window, with the row,
+        and not once per request. The window starts when the refusal is due, so
+        overlapping refusals leave one row, and a write that fails releases it
+        and loses nothing: the next refusal is due and counts this one. The key
+        is the tenant and the reason, not the purpose: the row's ``purpose`` is
+        that of the call that wrote it, and its ``suppressed`` counts the
+        refusals of both purposes."""
         carried = self._throttle.due(throttle_tenant, reason)
         if carried is None:
-            return
+            return False
         try:
             self._audit(
                 MODEL_CALL_EVENT,
@@ -82,6 +100,7 @@ class RefusalAudit:
         except BaseException:
             self._throttle.release(throttle_tenant, reason, carried)
             raise
+        return True
 
     def write_ended(self, *, everything: bool = False) -> None:
         """Write one summary row for each count the throttle hands out: the

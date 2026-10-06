@@ -58,6 +58,14 @@ Candidates = Annotated[tuple[EntityId, ...], Field(min_length=1)]
 # so a deployment that returns more could not be searched through an index on
 # that type.
 MAX_EMBEDDING_DIMENSIONS = 2000
+# The ceiling of a tenant's two rate limits (requests per 10 seconds, tokens per
+# minute). Far above any real limit (the seeded tenants have 4 to 10 requests and
+# 4,000 to 10,000 tokens), and far below where the rate store's arithmetic fails:
+# its script sums the tokens of the entries a window holds as Lua numbers, which
+# are doubles, so past 2^53 (about 9 * 10^15) the sums lose whole numbers. The
+# window holds at most about half a million entries (what the store's 32 MiB
+# holds), so a sum is at most about 5 * 10^14: some eighteen times inside 2^53.
+MAX_RATE_LIMIT = 10**9
 
 
 class RegistryModel(BaseModel):
@@ -246,8 +254,8 @@ class PoliciesFile(RegistryModel):
 class TenantLimits(RegistryModel):
     """What a tenant may use. The two rate windows are Azure OpenAI's own."""
 
-    requests_per_10_seconds: Annotated[int, Field(ge=1)]
-    tokens_per_minute: Annotated[int, Field(ge=1)]
+    requests_per_10_seconds: Annotated[int, Field(ge=1, le=MAX_RATE_LIMIT)]
+    tokens_per_minute: Annotated[int, Field(ge=1, le=MAX_RATE_LIMIT)]
     tokens_per_day: Annotated[int, Field(ge=1)]
     # Six decimals: the ledger counts micro-EUR, so the limit converts exactly.
     cost_per_month_eur: Annotated[Decimal, Field(gt=0, decimal_places=6)]

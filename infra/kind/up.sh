@@ -5,8 +5,9 @@
 #      the edge Gateway: the database's and cert-manager's (each applied with
 #      the API server's address, read from the `kubernetes` EndpointSlice in
 #      `default` on every run, so a cluster whose node got another address is
-#      repaired by running this again), the one of observability
-#      and the one for smoke's telemetrygen Jobs, and the one of the log agent's
+#      repaired by running this again), the one of observability,
+#      the one for smoke's telemetrygen Jobs, the one that gives smoke's probe
+#      pod its egress to the rate store (S066) and the one of the log agent's
 #      namespace `logging`, all before the releases they guard,
 #      cert-manager (its own approver off), approver-policy with the policies
 #      that say who may ask for a certificate, the CA that signs the
@@ -17,7 +18,10 @@
 #      the database "meridian" and its eleven roles (the owner, six services, the
 #      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
 #      the knowledge ingestion's); their password Secrets are created first,
-#      only if absent
+#      only if absent, and so is the Secret of the rate store (S066, T-45):
+#      the gateway's address in Redis and the ACL file of the store, made once
+#      and never overwritten (the store itself runs in the Meridian release,
+#      `make deploy`)
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
@@ -41,6 +45,29 @@ readonly POLICY_INTERVAL=3
 # certificate, so verify-full checks it. The CA reaches each pod at this path.
 readonly DATABASE_HOST=platform-db-rw.meridian.svc
 readonly DATABASE_CA_PATH=/etc/meridian/db-ca/ca.crt
+# The rate store (S066): the Secret that holds the gateway's address and the
+# store's ACL file. The host is the DNS name of the store's Certificate, which the
+# gateway verifies (the chart's, rate-store.<namespace>.svc); the port is the
+# store's. The user is the gateway's; its key pattern is the limiter's own prefix
+# (meridian.platform.gateway.ratelimit_redis.DEFAULT_PREFIX); its commands are
+# exactly those the gateway's connection and script send (HELLO with the
+# credentials, EVALSHA, SCRIPT LOAD when the server lost the script, and the five
+# the script runs), read from Redis 8.10.2 under that user: no CLIENT command, no
+# standalone AUTH, no EVAL. `+script|load` allows the one subcommand alone. A
+# test holds this list equal to what the code sends.
+readonly RATE_STORE_SECRET=rate-store-credentials
+readonly RATE_STORE_HOST=rate-store.meridian.svc
+readonly RATE_STORE_PORT=6379
+readonly RATE_STORE_USER=gateway
+readonly RATE_STORE_KEY_PATTERN='~meridian:rate:*'
+readonly RATE_STORE_COMMANDS='+evalsha +script|load +time +zremrangebyscore +zrange +zadd +pexpire +hello'
+# The probes' user (the chart's two probes ping as it and pass only on PONG): no
+# password (`nopass`), no key, no channel and exactly PING, so it can do nothing
+# but ask, and only a client that holds a certificate of the services' CA and has
+# a network path reaches it. It lets the kubelet see a store that is frozen by a
+# script that never ends (BUSY), which an unauthenticated PING cannot tell.
+readonly RATE_STORE_PROBE_USER=probe
+readonly RATE_STORE_PROBE_COMMANDS='+ping'
 # The database's NetworkPolicy and the text in it that stands for the API
 # server's addresses (S063). The placeholder is not a CIDR, so the API server
 # refuses the file as it stands; a test keeps this string equal to the file's.
@@ -210,6 +237,47 @@ ensure_database_secrets() {
   done
 }
 
+# Create the rate store's Secret once (S066). Two keys, `uri` (the gateway's
+# address: rediss://<user>:<password>@<host>:<port>/0) and `users.acl` (Redis's
+# ACL file: the `default` user off; one user for the gateway that is on, with
+# the SHA-256 of the password and not the password, the key pattern of the
+# limiter, no channel, and exactly the commands the gateway sends; and the
+# probes' user, with no password, no key, no channel and exactly PING). The
+# Secret carries the annotation RATE_STORE_ACL_ANNOTATION (common.sh): the
+# SHA-256 of the ACL file with the password's hash masked, which `make deploy`
+# compares with what this would write now. The password is 32 random bytes as 64
+# lower-case hex digits, an alphabet that needs no percent-encoding, so the
+# address is exact. It goes to kubectl on stdin and is never a command-line
+# argument and never printed. A Secret that exists is kept: a changed ACL
+# reaches a running cluster only by deleting the Secret and running `make up`
+# again, then restarting the store and the gateway
+# (docs/operations/runbooks/rate-store.md).
+ensure_rate_store_secret() {
+  # Tracing is off inside, and on again at each return when it was on: a `bash -x`
+  # run must not trace a password, and the rest of `make up` should stay traced.
+  local traced=0 password digest acl
+  if [[ "$-" == *x* ]]; then traced=1; fi
+  { set +x; } 2>/dev/null # a `bash -x` run must not trace a password
+  if kctl -n meridian get secret "${RATE_STORE_SECRET}" >/dev/null 2>&1; then
+    log "secret ${RATE_STORE_SECRET} exists"
+    ((traced == 0)) || set -x
+    return
+  fi
+  log "creating secret ${RATE_STORE_SECRET}"
+  password="$(openssl rand -hex 32)"
+  digest="$(printf '%s' "${password}" | openssl dgst -sha256 -r | awk '{print $1}')"
+  [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die "could not hash the rate store's password"
+  acl="$(printf 'user default off\nuser %s on #%s %s resetchannels -@all %s\nuser %s on nopass resetkeys resetchannels -@all %s\n' \
+    "${RATE_STORE_USER}" "${digest}" "${RATE_STORE_KEY_PATTERN}" "${RATE_STORE_COMMANDS}" \
+    "${RATE_STORE_PROBE_USER}" "${RATE_STORE_PROBE_COMMANDS}")"
+  printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: meridian\n  annotations:\n    %s: "%s"\ntype: Opaque\nstringData:\n  uri: "rediss://%s:%s@%s:%s/0"\n  users.acl: |\n%s\n' \
+    "${RATE_STORE_SECRET}" "${RATE_STORE_ACL_ANNOTATION}" "$(printf '%s\n' "${acl}" | rate_store_acl_rules_hash)" \
+    "${RATE_STORE_USER}" "${password}" "${RATE_STORE_HOST}" "${RATE_STORE_PORT}" \
+    "    ${acl//$'\n'/$'\n'    }" |
+    kctl create -f - >/dev/null
+  ((traced == 0)) || set -x
+}
+
 # Wait until CloudNativePG reports every role reconciled (common.sh).
 wait_for_database_roles() {
   local deadline=$((SECONDS + ROLES_TIMEOUT))
@@ -277,6 +345,9 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observabili
 log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null
 
+log "network: the NetworkPolicy of smoke's probe pod for the rate store in meridian"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-rate-store-networkpolicy.yaml" >/dev/null
+
 log "network: the log agent's NetworkPolicies in logging (before the agent)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/logging-networkpolicy.yaml" >/dev/null
 
@@ -340,6 +411,7 @@ install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSI
   "${CNPG_REPO}" cnpg.yaml \
   --set "image.tag=${CNPG_OPERATOR_IMAGE_TAG}@${CNPG_OPERATOR_IMAGE_DIGEST}"
 ensure_database_secrets
+ensure_rate_store_secret
 log "database: platform-db (PostgreSQL 17, pgvector)"
 install_release platform-db meridian "${CNPG_CLUSTER_CHART}" "${CNPG_CLUSTER_VERSION}" \
   "${CNPG_REPO}" platform-db.yaml --set "cluster.imageName=${POSTGRES_IMAGE}"

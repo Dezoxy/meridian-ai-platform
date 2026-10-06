@@ -11,7 +11,7 @@ meridian = softwareSystem "Meridian AI Platform" "Builds, runs and governs LLM a
     }
 
     group "Control plane" {
-        gateway = container "Model Gateway" "Routes model calls by policy: a deployment by data class and residency label, fallback behind a circuit breaker, per-tenant quotas and budgets, cost metering, PII redaction, audit." "Python, FastAPI" "Layer Services"
+        gateway = container "Model Gateway" "Routes model calls by policy: a deployment by data class and residency label, fallback behind a circuit breaker, per-tenant quotas and budgets, cost metering, PII redaction, audit." "Python, FastAPI; rate windows in Redis on kind" "Layer Services"
         runtime = container "Agent Runtime" "Hosts workload graphs and workflows behind the agent contract: start, pause for approval, resume; checkpoints; call limits per run; MCP client with tool allowlists." "Python, LangGraph and Microsoft Agent Framework hosts" "Layer Services"
         policyMcp = container "Policy MCP Server" "Policy lookup and claim history as MCP tools." "Python, MCP SDK, Streamable HTTP" "Layer Services"
         knowledgeMcp = container "Knowledge MCP Server" "Hybrid search over policy wording with citations; its ingestion pipeline runs as a job." "Python, MCP SDK, Streamable HTTP, pgvector" "Layer Services"

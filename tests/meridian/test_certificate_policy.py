@@ -285,7 +285,11 @@ def test_every_certificate_the_chart_renders_is_permitted_by_the_services_policy
 
 def test_the_chart_renders_certificates_for_the_policy_to_judge() -> None:
     # A policy that judges no certificate passes the test above for nothing.
-    assert len(chart_certificates()) == 7
+    # The six services, the ingestion Job and, since kind's values turn the rate
+    # store on (S066), the store: the parametrised tests above and below judge
+    # its certificate by the same policy as the others.
+    assert len(chart_certificates()) == 8
+    assert "rate-store" in chart_certificates()
     usages = {tuple(c["spec"]["usages"]) for c in chart_certificates().values()}
     assert {u for group in usages for u in group} == SERVER_USAGES
 

@@ -38,7 +38,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 44 lines; PASS, or SKIP (below)
+make smoke     # 45 lines; PASS, or SKIP (below)
 ```
 
 `make smoke` prints a SKIP, and still exits 0, where a line cannot be
@@ -217,7 +217,7 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 91 threats,
+- [The threat model](architecture/security/threat-model.md): 92 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
 - Not built: sign-in and roles, TLS at the edge and between the edge and

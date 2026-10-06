@@ -22,6 +22,8 @@ from chartsupport import (
     JOBS,
     NAME_LABEL,
     NAMESPACE,
+    RATE_STORE,
+    RATE_STORE_IMAGE,
     RELEASE,
     SERVICES,
     TEST_DIGEST,
@@ -34,7 +36,9 @@ from chartsupport import (
     pod_workloads,
     render,
     rendered_chart,
+    rendered_services,
     run_helm,
+    without_rate_store,
 )
 from servicesupport import REPO_ROOT
 
@@ -51,7 +55,9 @@ WORKFLOW = yaml.safe_load(
 # Keys that would hold a credential if one were put in a value. What they may
 # hold is the name of a Secret or the name of a key inside one, never a secret.
 CREDENTIAL_KEYS = {"password", "passwd", "uri", "token", "key", "apikey", "secret"}
-SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-db(-ca)?")
+# The database roles' Secrets and the rate store's (S066: `rate-store-credentials`,
+# the gateway's address and Redis's ACL file).
+SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-(db(-ca)?|credentials)")
 SECRET_KEY_NAMES = {"uri", "ca.crt"}
 CONNECTION_STRING = re.compile(r"postgres(ql)?://", re.IGNORECASE)
 
@@ -75,9 +81,11 @@ def test_a_tag_of_digits_only_is_a_string_in_every_name_and_image() -> None:
     # letter happens. deploy.sh passes the tag with --set-string; a tag given
     # with --set reaches the chart as a number, and the chart converts it.
     tag = "123456789012"
-    as_string = render(helm_arguments(tag=tag))
-    as_number = render(
-        [*helm_arguments(tag=None), "--set", f"image.tag={tag}"],
+    as_string = without_rate_store(render(helm_arguments(tag=tag)))
+    as_number = without_rate_store(
+        render(
+            [*helm_arguments(tag=None), "--set", f"image.tag={tag}"],
+        )
     )
 
     for documents in (as_string, as_number):
@@ -91,12 +99,14 @@ def test_a_tag_of_digits_only_is_a_string_in_every_name_and_image() -> None:
 
 
 def test_a_selector_is_the_name_label_alone_so_helm_can_adopt_the_object() -> None:
+    # The store (kind turns it on) has the same selector and labels: the check
+    # reads it with the six, and says so by name.
     documents = list(rendered_chart())
     deployments = [d for d in documents if d["kind"] == "Deployment"]
     services = [d for d in documents if d["kind"] == "Service"]
 
-    assert {d["metadata"]["name"] for d in deployments} == set(SERVICES)
-    assert {d["metadata"]["name"] for d in services} == set(SERVICES)
+    assert {d["metadata"]["name"] for d in deployments} == {*SERVICES, RATE_STORE}
+    assert {d["metadata"]["name"] for d in services} == {*SERVICES, RATE_STORE}
     for deployment in deployments:
         name = deployment["metadata"]["name"]
         assert deployment["spec"]["selector"] == {
@@ -152,7 +162,7 @@ def test_the_in_cluster_addresses_follow_the_release_namespace() -> None:
 
 
 def test_a_service_listens_where_its_command_its_port_and_its_service_agree() -> None:
-    for document in rendered_chart():
+    for document in rendered_services():
         if document["kind"] != "Deployment":
             continue
         (container,) = document["spec"]["template"]["spec"]["containers"]
@@ -307,10 +317,11 @@ def test_helm_lint_strict_fails_without_the_image_so_the_check_can_fail() -> Non
 
 
 def chart_flags(text: str) -> list[str]:
-    """The words of the ``helmc`` call in deploy.sh's ``helm_chart`` function
-    for ``helm template``, with the script's variables (read from the script
-    and from common.sh, where the image's repository is shared with images.sh)
-    replaced by their values."""
+    """The words of the ``helmc`` call in ``helm_chart`` (in common.sh since
+    S066, which deploy.sh and upkeep.sh share) for ``helm template``, with the
+    script's variables (read from the script and from common.sh, where the
+    chart, the values file and the image's repository are shared) replaced by
+    their values."""
     common = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
     constants = {
         name: value.strip('"')
@@ -324,10 +335,12 @@ def chart_flags(text: str) -> list[str]:
     constants |= {
         "REPO_ROOT": str(REPO_ROOT),
         "KIND_DIR": str(KIND_DIR),
+        # From the pins file, which common.sh sources (S066).
+        "RATE_STORE_IMAGE": RATE_STORE_IMAGE,
         "tag": TEST_TAG,
         "verb": "template",
     }
-    (call,) = re.findall(r"^  helmc .*$", function_body(text, "helm_chart"), re.M)
+    (call,) = re.findall(r"^  helmc .*$", function_body(common, "helm_chart"), re.M)
     words = shlex.split(call.removeprefix("  helmc ").replace('"$@"', ""))
     expanded: list[str] = []
     for word in words:
@@ -353,10 +366,15 @@ def test_deploy_passes_helm_the_arguments_the_chart_tests_render_with() -> None:
     assert '--set "jobs.${name}.enabled=true"' in body
     assert '--show-only "templates/job-${name}.yaml"' in body
     # Every Job flag the tests set is one deploy.sh can set, and the three
-    # templates are the three files the chart has.
+    # templates are the files the chart has, beside the upkeep Job's (S066),
+    # which infra/kind/upkeep.sh applies outside the release and deploy.sh never
+    # does (test_kind_upkeep_script.py).
     assert {p.name for p in (CHART_DIR / "templates").glob("job-*.yaml")} == {
-        f"job-{name}.yaml" for name in JOBS
+        *(f"job-{name}.yaml" for name in JOBS),
+        "job-upkeep.yaml",
     }
+    assert "jobs.upkeep" not in DEPLOY_SH
+    assert 'run_job "meridian-upkeep' not in DEPLOY_SH
 
 
 def workflow_steps() -> list[dict]:
@@ -407,6 +425,11 @@ def test_make_helm_lint_lints_the_chart_strictly_with_kinds_values_and_every_job
     assert "image.tag=" in recipe
     for name in JOBS:
         assert f"jobs.{name}.enabled=true" in recipe
+    # The upkeep Job (S066) needs an argument and a run suffix to render at all:
+    # lint it with one of each, the way upkeep.sh passes them.
+    assert "jobs.upkeep.enabled=true" in recipe
+    assert "--set-string jobs.upkeep.runSuffix=" in recipe
+    assert "--set-json 'jobs.upkeep.args=[\"reservations\"]'" in recipe
 
 
 # ---------------------------------------------------------------------------
@@ -440,12 +463,19 @@ def images_of(documents: list[dict]) -> set[str]:
 
 def test_the_chart_renders_the_six_deployments_the_three_jobs_and_the_sweep() -> None:
     # Pins what the hardening tests below range over: a test that ranged over
-    # nothing would pass.
-    workloads = pod_workloads(list(rendered_chart()))
+    # nothing would pass. Kind's values turn the rate store on (S066), which is
+    # a seventh Deployment of its own kind: the six services' checks read
+    # `rendered_services()`, and the store's are in test_helm_rate_store.py and
+    # test_kind_rate_store.py.
+    workloads = pod_workloads(list(rendered_services()))
+    everything = pod_workloads(list(rendered_chart()))
 
     assert sorted(w["kind"] for w in workloads) == (
         ["CronJob"] + ["Deployment"] * len(SERVICES) + ["Job"] * len(JOBS)
     )
+    assert [w["metadata"]["name"] for w in everything if w not in workloads] == [
+        RATE_STORE
+    ]
 
 
 def test_every_container_has_a_read_only_root_filesystem() -> None:
@@ -457,7 +487,9 @@ def test_every_container_has_a_read_only_root_filesystem() -> None:
 
 
 def test_every_pod_has_a_writable_tmp_of_16mi_and_no_other_writable_path() -> None:
-    for workload in pod_workloads(list(rendered_chart())):
+    # The six services, the Jobs and the sweep; the store has no `tmp` at all
+    # (Redis writes nothing), which test_kind_rate_store.py says.
+    for workload in pod_workloads(list(rendered_services())):
         name = workload["metadata"]["name"]
         pod = pod_spec(workload)
         volumes = {v["name"]: v for v in pod["volumes"]}
@@ -489,7 +521,9 @@ def test_every_pod_has_a_writable_tmp_of_16mi_and_no_other_writable_path() -> No
 
 
 def test_every_pod_has_the_pod_level_security_context() -> None:
-    for workload in pod_workloads(list(rendered_chart())):
+    # The store's is the same but for its image's user, 999 and 1000
+    # (test_kind_rate_store.py).
+    for workload in pod_workloads(list(rendered_services())):
         pod = pod_spec(workload)
 
         assert pod["securityContext"] == {
@@ -503,8 +537,9 @@ def test_every_pod_has_the_pod_level_security_context() -> None:
 
 def test_the_user_and_group_of_both_levels_come_from_one_value() -> None:
     # The pod and its containers must not disagree: one value sets all three.
+    # The store runs its image's user whatever the value (test_kind_rate_store.py).
     for workload in pod_workloads(
-        render([*helm_arguments(), "--set", "runAsId=20000"])
+        without_rate_store(render([*helm_arguments(), "--set", "runAsId=20000"]))
     ):
         pod = pod_spec(workload)
 
@@ -519,10 +554,15 @@ def test_a_pod_disruption_budget_per_service_and_none_for_a_job_or_the_cronjob()
 ):
     documents = list(rendered_chart())
     deployments = {
-        d["metadata"]["name"]: d for d in documents if d["kind"] == "Deployment"
+        d["metadata"]["name"]: d
+        for d in rendered_services()
+        if d["kind"] == "Deployment"
     }
     budgets = [d for d in documents if d["kind"] == "PodDisruptionBudget"]
 
+    # One per service, and none for the store: one replica of it gains nothing
+    # from a budget (the chart says so), and a budget with maxUnavailable 1 on a
+    # single replica would allow its eviction anyway.
     assert sorted(b["metadata"]["name"] for b in budgets) == sorted(deployments)
     for budget in budgets:
         name = budget["metadata"]["name"]
@@ -555,21 +595,51 @@ def test_every_service_runs_one_replica_by_default_and_a_value_sets_one_service(
         if d["kind"] == "Deployment"
     }
 
-    assert default == dict.fromkeys(SERVICES, 1)
+    # The six services and, since kind's values turn the store on (S066), the
+    # store: one replica, which no `replicas` value of the services reaches.
+    assert default == dict.fromkeys((*SERVICES, RATE_STORE), 1)
     assert scaled == default | {"claims-api": 2}
 
 
-def test_the_gateway_renders_with_one_replica_and_fails_with_two() -> None:
+def test_without_the_store_the_gateway_renders_with_one_replica_not_two() -> None:
+    off = ["--set", "rateStore.enabled=false"]
     one = run_helm(
-        [*helm_arguments(), "--set", "services.model-gateway.replicas=1"],
+        [*helm_arguments(), *off, "--set", "services.model-gateway.replicas=1"],
     )
-    two = run_helm([*helm_arguments(), "--set", "services.model-gateway.replicas=2"])
+    two = run_helm(
+        [*helm_arguments(), *off, "--set", "services.model-gateway.replicas=2"]
+    )
 
     assert one.returncode == 0, one.stderr
     assert two.returncode != 0
     assert "model-gateway" in two.stderr
     assert "T-45" in two.stderr
     assert "rate" in two.stderr and "each replica" in two.stderr
+
+
+def test_kind_keeps_one_gateway_replica_and_the_store_allows_two() -> None:
+    # Kind's values turn the store on and leave the gateway at the chart's one
+    # replica (the laptop's memory). The chart allows a second one only because
+    # the store holds the windows; nothing on kind uses that.
+    kind = yaml.safe_load(VALUES_FILE.read_text(encoding="utf-8"))
+    two = render(
+        [*helm_arguments(), "--set", "services.model-gateway.replicas=2"],
+    )
+
+    assert kind["rateStore"]["enabled"] is True
+    assert "replicas" not in kind["services"]["model-gateway"]
+    (gateway,) = [
+        d
+        for d in rendered_chart()
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == "model-gateway"
+    ]
+    assert gateway["spec"]["replicas"] == 1
+    (gateway_of_two,) = [
+        d
+        for d in two
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == "model-gateway"
+    ]
+    assert gateway_of_two["spec"]["replicas"] == 2
 
 
 def test_every_container_runs_the_digest_when_one_is_given() -> None:
@@ -585,8 +655,17 @@ def test_every_container_runs_the_digest_when_one_is_given() -> None:
             ]
         )
 
-        assert images_of(documents) == {f"{IMAGE_REPOSITORY}@{TEST_DIGEST}"}
-        assert len(pod_workloads(documents)) == len(SERVICES) + len(JOBS) + 1
+        assert images_of(without_rate_store(documents)) == {
+            f"{IMAGE_REPOSITORY}@{TEST_DIGEST}"
+        }
+        assert len(pod_workloads(without_rate_store(documents))) == (
+            len(SERVICES) + len(JOBS) + 1
+        )
+        # The store runs the pinned official image, whatever Meridian's is and
+        # however Meridian's is pulled (a literal IfNotPresent).
+        assert images_of(documents) - images_of(without_rate_store(documents)) == {
+            RATE_STORE_IMAGE
+        }
 
 
 def test_a_digest_wins_over_a_tag_in_the_reference_and_the_tag_names_the_jobs() -> None:
@@ -594,7 +673,9 @@ def test_a_digest_wins_over_a_tag_in_the_reference_and_the_tag_names_the_jobs() 
         [*helm_arguments(), "--set-string", f"image.digest={TEST_DIGEST}"]
     )
 
-    assert images_of(documents) == {f"{IMAGE_REPOSITORY}@{TEST_DIGEST}"}
+    assert images_of(without_rate_store(documents)) == {
+        f"{IMAGE_REPOSITORY}@{TEST_DIGEST}"
+    }
     assert {d["metadata"]["name"] for d in documents if d["kind"] == "Job"} == {
         f"meridian-{name}-{TEST_TAG}" for name in JOBS
     }
@@ -648,7 +729,7 @@ def test_a_tag_that_is_latest_or_not_a_tag_fails_and_says_the_rule(tag: str) -> 
 
 @pytest.mark.parametrize("tag", ["0123456789ab", "lint", "v1.2_3-rc", "x" * 128])
 def test_a_tag_of_twelve_hex_digits_or_lint_or_a_plain_tag_renders(tag: str) -> None:
-    documents = render(helm_arguments(tag=tag))
+    documents = without_rate_store(render(helm_arguments(tag=tag)))
 
     assert images_of(documents) == {f"{IMAGE_REPOSITORY}:{tag}"}
 
@@ -680,7 +761,9 @@ def test_a_repository_with_its_own_tag_or_digest_fails(repository: str) -> None:
 
 
 def test_a_repository_with_a_registry_port_is_valid() -> None:
-    documents = render(helm_arguments(repository="registry:5000/meridian"))
+    documents = without_rate_store(
+        render(helm_arguments(repository="registry:5000/meridian"))
+    )
 
     assert images_of(documents) == {f"registry:5000/meridian:{TEST_TAG}"}
 
@@ -726,7 +809,15 @@ def test_the_chart_default_pulls_if_not_present_and_kind_never_pulls() -> None:
     assert chart["image"]["digest"] == ""
     assert kind["image"]["pullPolicy"] == "Never"
     # kind's values render the loaded image by its tag, and never pull it.
-    for workload in pod_workloads(list(rendered_chart())):
+    for workload in pod_workloads(list(rendered_services())):
         for container in pod_spec(workload)["containers"]:
             assert container["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
             assert container["imagePullPolicy"] == "Never"
+    # The store's image is not the loaded one: it is pulled by its digest, so
+    # kind's `Never` is not its policy.
+    (store,) = [
+        w for w in pod_workloads(list(rendered_chart())) if w not in rendered_services()
+    ]
+    (container,) = pod_spec(store)["containers"]
+    assert container["image"] == RATE_STORE_IMAGE
+    assert container["imagePullPolicy"] == "IfNotPresent"

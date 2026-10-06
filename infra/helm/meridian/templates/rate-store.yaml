@@ -1,0 +1,490 @@
+{{- /*
+The rate store (S066, T-45): one Redis that holds the Model Gateway's two rate
+windows for every gateway pod. Rendered only when `rateStore.enabled` is true
+(values.yaml says what the values mean); nothing here is rendered otherwise.
+
+  ServiceAccount  rate-store, no token mounted
+  ConfigMap       rate-store: redis.conf, below. No secret in it
+  Deployment      rate-store: one replica, strategy Recreate (two stores side by
+                  side would each hold half of a window, and a rolling update
+                  would run two for a while). The official image, run as its own
+                  user (uid 999, gid 1000: docker-library/redis, v8.10.2,
+                  alpine/Dockerfile, `adduser -S -G redis -u 999 redis`; the
+                  image sets no USER and drops to it in its entrypoint) with the
+                  services' hardening: read-only root filesystem, no capability,
+                  no privilege escalation, the default seccomp profile, no
+                  service-account token. The command is `redis-server` itself,
+                  not the image's entrypoint: the entrypoint would load the
+                  image's four modules (search, JSON, time series, Bloom) beside
+                  the server, which the gateway's script does not use. No volume
+                  but the certificate, the ACL file and the configuration, all
+                  read-only: Redis writes nothing, so there is no /tmp either.
+  Service         rate-store, on the TLS port
+  Certificate     rate-store: from the services' issuer, under the policy that
+                  already admits the services' (namespace, a SPIFFE URI of the
+                  form spiffe://<trustDomain>/ns/<namespace>/sa/rate-store, the
+                  DNS name rate-store.<namespace>.svc, the same usages). The DNS
+                  name is the host of the address in the Secret's key `uri`,
+                  which the gateway checks the certificate against
+  NetworkPolicy   rate-store, when networkPolicy.enabled: ingress from the Model
+                  Gateway's pods on the port and from nobody else, no egress (it
+                  calls nothing, not even DNS). The gateway's own policy gains
+                  the matching egress rule (meridian.egress); no other workload's
+                  does
+
+The pod reads two Secrets: its Certificate's (rate-store-tls) and, for the one key
+users.acl, the credentials' (rateStore.secret). The gateway reads the other key of
+the latter, uri, as an environment variable (services.yaml).
+
+The probes. Both run PING as the ACL user `probe` over TLS, with the store's own
+certificate, and pass only when the OUTPUT is PONG (meridian.rateStorePing). The
+user is in the credentials' users.acl (`make up` writes it): no password, no key,
+no channel and exactly +ping, so it may only run PING. That is not nothing: it has
+no password, so any client that passes the TLS client-certificate check (a
+certificate of the services' CA, which all six services hold) and has a network
+path to the port is an authenticated session of this user, and an authenticated
+session may fill its query buffer. What bounds that is the NetworkPolicy and
+maxmemory-clients (below), not the user. The
+output is read and not the exit status, because redis-cli exits 0 for NOAUTH and
+for BUSY alike. This is what notices a frozen store. A script that never ends
+makes the store answer BUSY to every client but the one that could stop it (the
+gateway's user may not SCRIPT KILL); a probe that only proved the handshake
+(an unauthenticated PING answers NOAUTH, even then) left the pod Ready for ever
+and every model call a 503 (no fallback: the owner's decision) until a person
+deleted the pod. Now the probe's PING is answered BUSY, readiness fails at once
+and liveness fails six times in a row (ten seconds apart), so the kubelet
+restarts the container within about a minute, which hands every tenant its
+windows again (the ledger is not a window). No credential is in the pod's spec:
+a user with `nopass` accepts any password, so redis-cli sends an empty one.
+Liveness then also fails when the certificate on the volume was written after
+the server process started (meridian.rateStoreLiveness, which says how). Redis
+reads its certificate once, at start; cert-manager renews it at
+60 of its 90 days and the kubelet rewrites the files, but the server would go on
+serving the old one, and when that ended every gateway call would be a 503 (no
+fallback: the owner's decision) until someone restarted the store. So a renewal
+fails the liveness probe and the kubelet restarts the container, which loads the
+new files, as the six services do through /healthz (certlife.py). It comes within
+60 seconds of the kubelet writing the new files into the pod (ten seconds a
+probe, six failures in a row), about one to three minutes after cert-manager
+renews, with 30 days of the old certificate left. A restart hands every tenant
+its windows again, once per renewal: accepted and stated (the budgets are in the
+ledger, in PostgreSQL, and are not windows). Implemented and tested, and seen on
+kind on 2026-10-06: a renewal issued by cert-manager was followed about 100
+seconds later by one restart of the container, on this probe's failure (the
+event reads "rate-store: the certificate on disk is newer than the server").
+
+Two limits of the probes, accepted. A probe's own connection counts against
+maxclients before any handshake, so enough idle connections from a pod the policy
+lets reach the port fail the probes and restart the store for as long as they
+last (the policy is the control; a smaller maxclients would not help), and so
+does a certificate that expired unrenewed (redis-cli then fails to verify it).
+And the server's start is the boot time plus the process's start, read when the
+probe runs: a wall clock that stepped back by more than the gap between the
+files' write and the process's start (a virtual machine resumed, then set by NTP)
+makes a certificate look newer than the server and restarts it until the clock
+catches up, at most every five minutes (the kubelet's back-off); a step forward
+hides a renewal. No small fix exists without writable state.
+
+The directives of redis.conf, each from the documentation of Redis 8.10 (the
+redis.conf of the 8.10.2 source, which the pinned image is built from):
+
+  bind * -::*             The default is loopback only (bind 127.0.0.1 -::1), so
+                          the gateway's connections would never arrive. The
+                          NetworkPolicy and the TLS settings say who may connect
+  protected-mode yes      The default, said so. It refuses a non-local client
+                          only while the default user has no password; the ACL
+                          file turns that user off, so here it is a second layer
+                          that would apply if the file were ever lost, not the
+                          one that protects
+  port 0                  No plain port: Redis opens no TCP socket for it
+  tls-port 6379           The one port, TLS only (meridian.rateStorePort)
+  tls-cert-file,          The server's certificate and key, and the services' CA,
+  tls-key-file,           all from the Certificate's Secret. The CA is also what
+  tls-ca-cert-file        a client's certificate is checked against
+  tls-auth-clients yes    A client must present a certificate of that CA (the
+                          default, said so). The certificate alone does not say
+                          "the gateway": all six services hold one. The ACL
+                          user and its password do
+  tls-protocols           TLS 1.3 alone. Both ends negotiate it (OpenSSL picks
+  "TLSv1.3"               1.3 for the gateway's client, whose floor is 1.2), and
+                          1.2 would admit CBC and SHA-1 suites at OpenSSL's
+                          defaults, which nothing here needs. A 1.2 client is
+                          refused
+  aclfile               The users come from the Secret's users.acl, mounted
+                          read-only. `user` lines in this file cannot be mixed
+                          with it (the server would not start), so the
+                          `default` user is turned off in that file, not here
+  save ""                 No snapshot: nothing is persisted. A restart hands
+  appendonly no           every tenant its windows again, as a gateway restart
+                          did; the budget (the ledger, in PostgreSQL) is not a
+                          window and is not reset by it
+  maxmemory               Redis's own ceiling (rateStore.maxmemory, checked to be
+                          below the memory limit)
+  maxmemory-policy        An evicting policy would drop a tenant's window without
+  noeviction              a word, which lifts that tenant's limit. Note that
+                          this does not make the store refuse the gateway's
+                          script: the script's first write is not a command Redis
+                          checks memory for, so the pod's memory limit is the
+                          real bound (values.yaml)
+  maxclients 256          The gateway's pool is as large as its thread pool (40
+                          connections a pod); this leaves room for six pods and a
+                          rolling update's overlap, and a stray client cannot
+                          take every slot of the 10000 the default allows
+  timeout 300             An idle connection is closed after five minutes. The
+                          gateway's client checks a pooled connection before it
+                          reuses it, so a close by the server costs it nothing
+                          (K1's measurement)
+  tcp-keepalive 60        A peer that vanished (a gateway pod that was killed) is
+                          found and its connection freed within about a minute
+                          (the default is 300 seconds)
+  busy-reply-threshold    A script that runs 100 ms is far past what the
+  100                     gateway's (microseconds) needs; past it Redis answers
+                          other clients with BUSY instead of leaving them to time
+                          out, which is what the probe user's PING reads. The
+                          gateway's user cannot SCRIPT KILL: a looping script is
+                          ended by the probe's restart of the store (see the
+                          probes above), or by deleting the pod (the runbook).
+                          `lua-time-limit` is this directive's old name
+  proto-max-bulk-len 1mb  The largest bulk, one argument of a command (the
+                          script of a SCRIPT LOAD is one), a client may send. The
+                          default is 512 MB, and one authenticated SCRIPT LOAD of
+                          100 MB filled the pod's memory in a review. The
+                          gateway's script is a little over 1 KB (a 2 MB one is refused,
+                          measured). A bulk from a client that has not
+                          authenticated is refused already
+  client-query-buffer-limit  The largest request buffer of one client, the
+  1mb                     default is 1 GB; the same bound for what arrives
+                          in pieces, so a client cannot hold a gigabyte of
+                          half a command
+  maxmemory-clients 8mb   What every client's buffers (query and output) hold
+                          together: past it Redis disconnects the client with the
+                          most memory, the largest first, until the total is under
+                          it. client-query-buffer-limit and proto-max-bulk-len
+                          cannot go below 1 MB and bound one client; 256 clients
+                          (maxclients) at 1 MB each are 256 MB, four times the pod's
+                          limit, and a review killed the store (OOMKilled, exit
+                          137) with 240 authenticated connections that each held
+                          the head of a 1 MB SCRIPT LOAD, which the probe user
+                          allows any holder of a services certificate to open
+                          (above). With this line the same flood held the store
+                          between 13 and 27 MiB of the 64 (docker stats, two runs)
+                          and nothing died; Redis evicted 233 of the 240 flood
+                          connections (each held about 1 MB) and no client with a
+                          small buffer, and twenty calls of the gateway's own
+                          limiter during the flood were all answered. The
+                          gateway's pooled connections hold a few hundred bytes
+                          each, so they are far from the largest and are not the
+                          ones evicted. 8 MB is under maxmemory and far under the
+                          pod's limit, and far above what the gateway's 40
+                          connections a pod hold
+  No directive bounds     a script that writes without end. The gateway's user
+                          may load and run any script on the keys it may touch (the
+                          ACL is checked per command and per key inside a script,
+                          and maxmemory is not checked for a script's writes once
+                          one has run), so such a script fills memory until the
+                          pod's memory limit ends it: the kubelet restarts the
+                          store, which hands every tenant its windows again (the
+                          ledger is not a window). The credential is the one
+                          boundary of that path (the runbook says what its holder
+                          can do), and the memory limit is where it ends
+  enable-protected-       The default for the three, said so: CONFIG SET of the
+  configs no,             directives that name files, DEBUG and MODULE are
+  enable-debug-command    blocked for every connection
+  no, enable-module-
+  command no
+  loglevel notice,        The log goes to the container's output, where the
+  logfile ""              kubelet collects it
+*/ -}}
+{{- define "meridian.rateStoreConfig" -}}
+{{- $store := include "meridian.rateStore" . | fromJson -}}
+{{- $tls := include "meridian.tlsDirectory" . -}}
+bind * -::*
+protected-mode yes
+port 0
+tls-port {{ include "meridian.rateStorePort" . }}
+tls-cert-file {{ $tls }}/tls.crt
+tls-key-file {{ $tls }}/tls.key
+tls-ca-cert-file {{ $tls }}/ca.crt
+tls-auth-clients yes
+tls-protocols "TLSv1.3"
+aclfile /etc/redis-acl/users.acl
+save ""
+appendonly no
+maxmemory {{ $store.maxmemory }}
+maxmemory-policy noeviction
+maxclients 256
+timeout 300
+tcp-keepalive 60
+busy-reply-threshold 100
+proto-max-bulk-len 1mb
+client-query-buffer-limit 1mb
+maxmemory-clients 8mb
+enable-protected-configs no
+enable-debug-command no
+enable-module-command no
+loglevel notice
+logfile ""
+{{- end -}}
+
+{{- /*
+rateStorePing: the first lines of both probes' scripts: PING over TLS, with the
+store's own certificate as the client's, as the ACL user `probe` (users.acl, made
+by `make up`: `on nopass resetkeys resetchannels -@all +ping`), and a refusal
+unless the OUTPUT is exactly PONG. The directory of the certificate files and the
+port are the script's arguments ($1 and $2), always in double quotes. The exit
+status of redis-cli is not read: it is 0 for an answer of NOAUTH (the user is
+missing or the ACL file is not the one `make up` writes) and of BUSY (a script
+that never ends) alike, and neither is a healthy store. A refused connection or a
+failed handshake prints nothing, which is not PONG either. `timeout 2` (busybox's,
+in the image) ends redis-cli after two seconds, inside the kubelet's three: a server
+that is paused or frozen below the protocol never answers, the kubelet fails the
+probe at its own timeout without ending what the probe started, and a client would
+be left behind for every probe (measured on the pinned image against a paused
+container: without it the script was still waiting when it was ended from outside
+after eight seconds, and a redis-cli stayed behind; with it the script printed its
+refusal after two seconds and left none). `--pass ''` is there
+because redis-cli sends no AUTH without one, and `nopass` accepts any password,
+so the pod's spec holds no credential; `--no-auth-warning` keeps the warning about
+a password on the command line out of the answer. The message names the answer,
+which the kubelet records in the pod's events. Takes the root (it names no value
+of the chart: the script has no template expression).
+*/ -}}
+{{- define "meridian.rateStorePing" -}}
+answer=$(timeout 2 redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping)
+[ "$answer" = PONG ] || { echo "rate-store: the probe user's PING was answered '$answer', not PONG" >&2; exit 1; }
+{{- end -}}
+
+{{- /*
+probe: the readiness probe: rateStorePing alone, as a shell with the script fixed
+and the certificate directory and the port as its arguments (the name after the
+script stands for $0). The liveness probe (meridian.rateStoreLiveness) runs the
+same lines first. A TCP check would pass the same for a frozen store, and make the
+server log a warning for every probe: a connection that closes before its
+handshake. Takes the root.
+*/ -}}
+{{- define "meridian.rateStoreProbe" -}}
+exec:
+  command:
+    - sh
+    - -c
+    - |
+      {{- include "meridian.rateStorePing" . | nindent 6 }}
+    - rate-store-readiness
+    - {{ include "meridian.tlsDirectory" . }}
+    - {{ include "meridian.rateStorePort" . | quote }}
+timeoutSeconds: 3
+{{- end -}}
+
+{{- /*
+rateStoreLiveness: the liveness probe: the readiness probe's lines
+(meridian.rateStorePing: the probe user's PING, which must be answered PONG, so a
+frozen store fails it), and then a check that the certificate on the volume is not
+newer than the server.
+The script is one literal. The directory and the port are its two arguments
+($1 and $2, after the name `rate-store-liveness` that stands for $0), always
+inside double quotes, so no value of the chart is ever text of a shell string.
+Takes the root.
+
+  server's start   the boot time (btime in /proc/stat) plus the start of PID 1,
+                   which is the server (the container runs `redis-server`
+                   itself), in clock ticks since boot (field 22 of
+                   /proc/1/stat, a hundred a second: the kernel's fixed USER_HZ),
+                   cut to the second. Not the time of the /proc/1 directory: the
+                   kernel sets that when the inode is first looked up, not when
+                   the process started. sed and cut cut the fields out after the
+                   `)` that ends the command's name, so a name with a space
+                   cannot move them
+  file's time      stat -L -c %Y on tls.crt: -L follows the link tls.crt ->
+                   ..data/tls.crt to the file itself. The kubelet writes a
+                   Secret's files into a new directory ..<timestamp>, then
+                   replaces the link ..data with one rename; the new file's own
+                   time is the moment it was written
+  the rule         unhealthy when the file's second is later than the server's.
+                   Equal is healthy: the kubelet writes the volume before the
+                   container starts, so every start has a file no newer than the
+                   process, and a container restart (not a new pod) leaves the
+                   process newer than the files, so a restart that loaded the
+                   renewed certificate is not followed by another. A time that
+                   cannot be read or is not a number is unhealthy and says so on
+                   standard error (the kubelet records it in the pod's events):
+                   a probe that cannot tell must not pass for ever and leave a
+                   certificate to expire in thirty days without a word
+  how long         the kubelet shows a Secret's update in the volume within about
+                   a minute or two of cert-manager writing it (its sync period
+                   and cache); then ten seconds a probe and six failures in a
+                   row (failureThreshold) is 60 seconds. The restart comes about
+                   one to three minutes after cert-manager renews, at 60 of the
+                   certificate's 90 days, with 30 days of the old one left
+  what it costs    the restart hands every tenant its windows again, once per
+                   renewal (the budgets in the ledger, in PostgreSQL, are not
+                   windows and are not touched), and for the few seconds the
+                   server takes to start every model call is a 503 (the
+                   gateway has no fallback: the owner's decision). The services
+                   restart themselves on a renewed certificate the same way
+                   (meridian.platform.common.certlife)
+  what it cannot   say that the server SERVES the new certificate (the image has
+                   no tool that prints a peer's certificate): it says the files
+                   are newer than the process, and the restart is what loads
+                   them
+*/ -}}
+{{- define "meridian.rateStoreLiveness" -}}
+exec:
+  command:
+    - sh
+    - -c
+    - |
+      {{- include "meridian.rateStorePing" . | nindent 6 }}
+      boot=$(sed -n 's/^btime //p' /proc/stat)
+      ticks=$(sed 's/^.*) //' /proc/1/stat | cut -d ' ' -f 20)
+      written=$(stat -L -c %Y "$1/tls.crt")
+      for n in "$boot" "$ticks" "$written"; do
+        case "$n" in
+          '' | *[!0-9]*)
+            echo "rate-store: cannot read a time (boot '$boot', start '$ticks', file '$written')" >&2
+            exit 1
+            ;;
+        esac
+      done
+      started=$((boot + ticks / 100))
+      if [ "$written" -gt "$started" ]; then
+        echo "rate-store: the certificate on disk is newer than the server (written $written, server started $started): restarting to serve it" >&2
+        exit 1
+      fi
+    - rate-store-liveness
+    - {{ include "meridian.tlsDirectory" . }}
+    - {{ include "meridian.rateStorePort" . | quote }}
+timeoutSeconds: 3
+{{- end -}}
+
+{{- if .Values.rateStore.enabled }}
+{{- $store := include "meridian.rateStore" . | fromJson }}
+{{- $identity := include "meridian.identity" . | fromJson }}
+{{- /* The image's own user and group; the rest of the hardening is the services'. */}}
+{{- $podContext := include "meridian.podSecurityContext" . | fromYaml }}
+{{- $_ := set $podContext "runAsUser" 999 }}
+{{- $_ := set $podContext "runAsGroup" 1000 }}
+{{- $_ := set $podContext "fsGroup" 1000 }}
+{{- $containerContext := include "meridian.containerSecurityContext" . | fromYaml }}
+{{- $_ := set $containerContext "runAsUser" 999 }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+data:
+  redis.conf: |-
+    {{- include "meridian.rateStoreConfig" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rate-store
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.labels" "rate-store" | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "meridian.rateStoreConfig" . | sha256sum }}
+    spec:
+      serviceAccountName: rate-store
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $podContext | nindent 8 }}
+      containers:
+        - name: rate-store
+          image: {{ $store.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+          ports:
+            - name: tls
+              containerPort: {{ include "meridian.rateStorePort" . }}
+          readinessProbe:
+            {{- include "meridian.rateStoreProbe" . | nindent 12 }}
+            periodSeconds: 5
+          livenessProbe:
+            {{- include "meridian.rateStoreLiveness" . | nindent 12 }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.rateStore.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $containerContext | nindent 12 }}
+          volumeMounts:
+            {{- include "meridian.tlsMount" . | nindent 12 }}
+            - name: acl
+              mountPath: /etc/redis-acl
+              readOnly: true
+            - name: config
+              mountPath: /etc/redis
+              readOnly: true
+      volumes:
+        {{- include "meridian.tlsVolume" "rate-store" | nindent 8 }}
+        - name: acl
+          secret:
+            secretName: {{ $store.secret }}
+            defaultMode: {{ 0440 }}
+            items:
+              - key: users.acl
+                path: users.acl
+        - name: config
+          configMap:
+            name: rate-store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rate-store
+  ports:
+    - name: tls
+      port: {{ include "meridian.rateStorePort" . }}
+      targetPort: tls
+{{ include "meridian.certificate" (dict "root" . "identity" $identity "name" "rate-store" "server" true) }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rate-store
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "meridian.rateStoreRule" (dict "direction" "from" "name" "model-gateway") | nindent 4 }}
+{{- end }}
+{{- end }}
