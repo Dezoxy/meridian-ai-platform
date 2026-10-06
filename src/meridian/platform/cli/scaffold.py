@@ -214,6 +214,9 @@ AGENT_DESCRIPTION = (
 # Lines that split a text into lines without dropping or changing a byte; unlike
 # str.splitlines, only a line feed ends a line.
 LINES = re.compile(r"[^\n]*\n|[^\n]+")
+# A line that can be a table header: "[", anything, "]", then at most a comment.
+# A superset of the headers: whether it is one is the parser's to say.
+HEADER_SHAPE = re.compile(r"\[.*\](?:\s*#.*)?")
 
 
 def _module_of(name: str) -> str:
@@ -462,16 +465,27 @@ def _parsed(text: str) -> dict[str, Any] | None:
         return None
 
 
+def _could_be_a_header(line: str) -> bool:
+    """Whether ``line`` can be a table header: with a trailing comment and the space
+    around it removed, it starts with ``[`` and ends with ``]``. A line of an array
+    (``  [1],``) or of a key is no candidate, so it costs no parse. A ``#`` inside a
+    quoted key (``["a#b"]``) does not hide a header: the pattern asks for a ``]``
+    followed by a comment or by nothing, wherever the ``]`` is."""
+    return HEADER_SHAPE.fullmatch(line.strip()) is not None
+
+
 def _table_end(lines: list[str], start: int) -> int:
     """The index of the line where the table whose header is at ``start`` ends: the
-    first later line that starts with ``[``, indented or not (TOML ignores
+    first later line that can be a header (``_could_be_a_header``; TOML ignores
     indentation), with a complete document before it; the end of the file when
-    there is none. A line that starts with ``[`` inside an array or a multi-line
-    string is no header: the text before it ends inside a value and does not
-    parse. The parser gives no positions, so it is asked, on each candidate."""
+    there is none. A candidate inside an array or a multi-line string is no header:
+    the text before it ends inside a value and does not parse. The parser gives no
+    positions, so it is asked, and only on a candidate: the text before it is
+    joined and parsed for no other line."""
     for index in range(start + 1, len(lines)):
-        before = "".join(lines[:index])
-        if lines[index].lstrip().startswith("[") and _parsed(before) is not None:
+        if not _could_be_a_header(lines[index]):
+            continue
+        if _parsed("".join(lines[:index])) is not None:
             return index
     return len(lines)
 
@@ -510,12 +524,18 @@ def _pyproject_edit(
     # number found in the edited text would be off by one for a later table.
     headers = {group: _header_line(LINES.findall(old), group) + 1 for group in values}
     new = old
-    expected = copy.deepcopy(document)
-    for group, value in values.items():
-        new = _with_entry_point(new, group, f'{name} = "{value}"')
-        expected["project"]["entry-points"][group][name] = value
-        if _parsed(new) != expected:
-            raise ScaffoldError(PYPROJECT_TABLE_UNVERIFIED.format(headers[group]))
+    try:
+        expected = copy.deepcopy(document)
+        for group, value in values.items():
+            new = _with_entry_point(new, group, f'{name} = "{value}"')
+            expected["project"]["entry-points"][group][name] = value
+            if _parsed(new) != expected:
+                raise ScaffoldError(PYPROJECT_TABLE_UNVERIFIED.format(headers[group]))
+    except RecursionError:
+        # A file nested deeper than a copy or a comparison of it can follow, though
+        # the parser took it (it has a limit of its own, caught in ``_read_pyproject``):
+        # refused as that is, with no line, never a traceback.
+        raise ScaffoldError(PYPROJECT_NOT_TOML) from None
     return new
 
 

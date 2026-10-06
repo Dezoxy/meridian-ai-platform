@@ -6,13 +6,14 @@ TOML is refused with the line the parser gave, as a number alone. Every test
 builds a small tree in ``tmp_path`` (the ``root`` fixture).
 """
 
+import copy
 import tomllib
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from meridian.platform.cli import app
+from meridian.platform.cli import app, scaffold
 from meridian.platform.cli.scaffold import (
     PYPROJECT_NOT_TOML,
     PYPROJECT_NOT_TOML_AT,
@@ -135,6 +136,56 @@ def test_a_pyproject_nested_too_deeply_is_refused_as_not_toml_with_no_traceback(
     assert result.exit_code == EXIT_REFUSED
     assert result.stderr == f"ERROR {PYPROJECT_NOT_TOML}\n"
     assert not isinstance(result.exception, RecursionError)
+
+
+def nested(depth: int) -> str:
+    return "a = " + "[" * depth + "]" * depth + "\n"
+
+
+def first_depth_a_copy_cannot_take(old: str) -> int:
+    """The first depth at which the parser takes the file and ``copy.deepcopy`` of
+    what it parsed to raises ``RecursionError``, found on this interpreter and at
+    this depth of the call stack."""
+    for depth in range(100, 2000):
+        try:
+            document = tomllib.loads(old + nested(depth))
+        except RecursionError:
+            break  # the parser's own limit: no depth above it is taken
+        try:
+            copy.deepcopy(document)
+        except RecursionError:
+            return depth
+    raise AssertionError("no depth between the parser's limit and a copy's")
+
+
+def test_a_pyproject_nested_between_what_the_parser_takes_and_a_copy_takes_is_refused(
+    root: Path,
+) -> None:
+    # Arrange: the depths around the first one a copy of the parsed file cannot
+    # take. They used to end in a RecursionError traceback (exit 1) where the
+    # edit copied the document; the parser itself takes them, so only the edit
+    # can refuse them.
+    old = (root / PYPROJECT).read_text(encoding="utf-8")
+    first = first_depth_a_copy_cannot_take(old)
+    refused_by_the_edit = []
+
+    for depth in range(first - 3, first + 6):
+        (root / PYPROJECT).write_text(old + nested(depth), encoding="utf-8")
+        try:
+            scaffold._read_pyproject(root)
+        except ScaffoldError:
+            continue  # beyond the parser's limit here: refused before the edit
+
+        # Act
+        try:
+            plan_workload(root, NAME)
+        except ScaffoldError as refused:
+            # Assert: the fixed text, with no line (the parser gave none).
+            assert str(refused) == PYPROJECT_NOT_TOML
+            refused_by_the_edit.append(depth)
+
+    # Assert: the window did cross into depths only the edit refuses.
+    assert refused_by_the_edit
 
 
 NESTED_ARRAY = 'nested = [\n  ["a", "b"],\n  ["c"],\n]\n'

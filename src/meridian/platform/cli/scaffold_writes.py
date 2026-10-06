@@ -5,12 +5,22 @@ the edited ones. T-81's promise is the measure: after it fails, the tree is as i
 was, or every difference is named to the person. Every write is noted before it
 is made, so an interrupt between the note and the write is undone too; the undo
 puts back every file that still holds the bytes this command wrote, leaves a file
-the person saved since and says so, and names each path it could not restore.
+the person saved since and says so, and names each path it could not restore. When
+something ends the undo itself (a second interrupt, an exit, an error), what it had
+done is known to the caller, which says so and names every path of the plan that is
+not known to be settled, to be checked by hand.
 
 The errors and the plan are here and not in ``scaffold``, which imports this
 module: the write needs them and must not import its importer. ``scaffold``
 re-exports them, so callers keep importing from there. Fixed texts: a kind of
-write, never a path the command created, and for an error nothing but its class.
+write, never a path the command created, except the paths of files left behind or
+to be checked by hand (they hold the workload's name, which is the person's own
+argument and the only way to find them), and for an error nothing but its class.
+
+The block moved here whole from ``scaffold`` with two changes in what it does:
+``_StepFailed`` holds the failure's text (``failure``, a string) where it held the
+``OSError`` (``cause``), and ``_writing`` computes that text when it raises, not
+when the failure is reported.
 """
 
 import hashlib
@@ -22,6 +32,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
 from meridian.platform.cli.scaffold_services import SERVICES_PATH
 
@@ -44,6 +55,12 @@ ROLLBACK_FAILED = (
 # wrote, so it is the person's and was not touched.
 LEFT_BEHIND = "left behind: {}"
 LEFT_AS_SAVED = "changed since this command wrote it, left as it is: {}"
+# The undo itself was ended, by an interrupt, an exit or an error: the field is the
+# class of what ended it, never its text. The lines after it are the paths it left
+# (the two above) and, for each other path of the plan the undo had not finished
+# with, the second text: whether it was put back is not known.
+UNDO_UNFINISHED = "the undo did not finish ({}): check the working tree"
+CHECK_BY_HAND = "not known to be undone, check by hand: {}"
 # What stopped a write that no ``OSError`` stopped: the two fields of the texts
 # above, a kind and a failure. The class's name is all that is said of an error.
 CHECKING_THE_PLAN = "checking a file against the plan"
@@ -51,7 +68,8 @@ PLAN_CHANGED = "a file changed since the plan was made or cannot be read again"
 AN_UNEXPECTED_ERROR = "an unexpected error"
 AN_INTERRUPT = "an interrupt"
 # The kinds of write a failure is named by: a closed set of fixed words. A created
-# path would hold the workload's name, which no text of the scaffold quotes.
+# path would hold the workload's name, which no message of the scaffold quotes; only
+# the lines about a path left behind or to be checked by hand carry one.
 MAKING_A_DIRECTORY = "making a directory"
 CREATING_A_FILE = "creating a new file"
 REPLACING = {
@@ -68,7 +86,8 @@ WRITE_ORDER = (AGENTS_PATH, SERVICES_PATH, PYPROJECT_PATH)
 class ScaffoldError(Exception):
     """Refused; the message is a fixed text and never quotes the name. ``details``
     are further lines the caller prints after it: the registry's own messages, or
-    the paths a rollback could not put back."""
+    the paths a rollback could not put back or that are to be checked by hand (these
+    quote the name, as a created path holds it)."""
 
     def __init__(self, message: str, *, details: tuple[str, ...] = ()) -> None:
         super().__init__(message)
@@ -197,9 +216,12 @@ def _undo(
     files: list[Path],
     directories: list[Path],
     replaced: list[tuple[Path, bytes, bytes]],
-) -> tuple[str, ...]:
-    """Put back what a failed write changed; one line for each path that did not
-    go back, in the order tried, saying which of two it is. Everything is noted
+    outcome: dict[str, str | None],
+) -> None:
+    """Put back what a failed write changed. ``outcome`` is the caller's, filled as
+    the undo goes, so that it holds what was done if something ends the undo midway:
+    each path (relative to the checkout) in the order tried, ``None`` when it is
+    back as it was, else the line that says which of two it is. Everything is noted
     before it is done, so an entry may be one whose change never happened:
     ``replaced`` holds each edited file with its old bytes and the new bytes this
     command writes to it, in the order they were replaced, and goes back in the
@@ -211,29 +233,33 @@ def _undo(
     file in ``files`` or a directory in ``directories`` that would not go, is
     ``LEFT_BEHIND``. A file or directory that was never created is skipped."""
 
-    def relative(path: Path) -> str:
-        return path.relative_to(root).as_posix()
+    def settle(path: Path, template: str | None = None) -> None:
+        relative = path.relative_to(root).as_posix()
+        outcome[relative] = None if template is None else template.format(relative)
 
-    left: list[str] = []
     for path, old, new in reversed(replaced):
         try:
-            if not _put_back(path, old, new):
-                left.append(LEFT_AS_SAVED.format(relative(path)))
+            put_back = _put_back(path, old, new)
         except OSError:
-            left.append(LEFT_BEHIND.format(relative(path)))
+            settle(path, LEFT_BEHIND)
+        else:
+            settle(path, None if put_back else LEFT_AS_SAVED)
     for file in files:
         try:
             file.unlink(missing_ok=True)
         except OSError:
-            left.append(LEFT_BEHIND.format(relative(file)))
+            settle(file, LEFT_BEHIND)
+        else:
+            settle(file)
     for directory in reversed(directories):
         try:
             directory.rmdir()
         except FileNotFoundError:
-            pass
+            settle(directory)
         except OSError:
-            left.append(LEFT_BEHIND.format(relative(directory)))
-    return tuple(left)
+            settle(directory, LEFT_BEHIND)
+        else:
+            settle(directory)
 
 
 def _create_files(
@@ -296,6 +322,42 @@ def _what_stopped(exc: BaseException) -> tuple[str, str]:
     return kind, type(exc).__name__
 
 
+def _say(message: str, lines: tuple[str, ...]) -> None:
+    """Write ``message`` and ``lines`` to standard error, as the command prints an
+    error. A stream that cannot be written (a pipe the reader closed) says nothing
+    and must not replace what ended the command, so its error is dropped."""
+    try:
+        for line in (message, *lines):
+            sys.stderr.write(f"ERROR {line}\n")
+    except (OSError, ValueError):
+        pass
+
+
+def _end_unfinished(
+    root: Path,
+    plan: Plan,
+    directories: list[Path],
+    outcome: dict[str, str | None],
+    ended: BaseException,
+) -> NoReturn:
+    """End ``write_plan`` after ``ended`` (an interrupt, an exit or an error) ended
+    the undo itself. What it left is in ``outcome``; the plan knows every path it
+    creates or replaces, so each one the undo had not settled is named to be checked
+    by hand. An error becomes a ``ScaffoldWriteError`` with the lines as details, an
+    interrupt or an exit is said on standard error and goes on."""
+    here = (path.relative_to(root).as_posix() for path in directories)
+    unsettled = (*plan.created, *here, *WRITE_ORDER)
+    lines = (
+        *(line for line in outcome.values() if line),
+        *(CHECK_BY_HAND.format(path) for path in unsettled if path not in outcome),
+    )
+    message = UNDO_UNFINISHED.format(type(ended).__name__)
+    if isinstance(ended, Exception):
+        raise ScaffoldWriteError(message, details=lines) from ended
+    _say(message, lines)
+    raise ended
+
+
 def write_plan(root: Path, plan: Plan) -> None:
     """Write ``plan`` under ``root``: the new files, then ``agents.yaml``, then
     ``services.yaml`` (``WRITE_ORDER``), then ``pyproject.toml``, whose entry
@@ -310,7 +372,9 @@ def write_plan(root: Path, plan: Plan) -> None:
     unchanged. When something is left, whatever ended the write says so: a
     ``ScaffoldWriteError`` with the paths as ``details`` (the stale plan's refusal
     included, for it no longer holds that nothing was written), and for an
-    interrupt the same lines on standard error before it propagates."""
+    interrupt the same lines on standard error before it propagates. When
+    something ends the undo itself, ``_end_unfinished`` says so in the same two
+    ways, with every path not known to be settled, and the cause is the error."""
     targets = [(root / relative, text) for relative, text in plan.created.items()]
     if any(os.path.lexists(path) for path, _ in targets):
         raise ScaffoldError(PATH_EXISTS)
@@ -322,18 +386,22 @@ def write_plan(root: Path, plan: Plan) -> None:
         _create_files(targets, files, directories)
         _replace_files(root, plan, replaced)
     except BaseException as exc:
-        left = _undo(root, files, directories, replaced)
+        outcome: dict[str, str | None] = {}
+        try:
+            _undo(root, files, directories, replaced, outcome)
+        except BaseException as ended:
+            _end_unfinished(root, plan, directories, outcome, ended)
+        left = tuple(line for line in outcome.values() if line)
         if not left:
             if isinstance(exc, _StepFailed):
                 raise ScaffoldWriteError(
                     WRITE_FAILED.format(exc.kind, exc.failure)
-                ) from None
+                ) from exc
             raise
         message = ROLLBACK_FAILED.format(*_what_stopped(exc))
         if isinstance(exc, Exception):
-            raise ScaffoldWriteError(message, details=left) from None
+            raise ScaffoldWriteError(message, details=left) from exc
         # An interrupt must still end the command as one does: what is left is said
         # on standard error first, as the command prints an error, and it goes on.
-        for line in (message, *left):
-            sys.stderr.write(f"ERROR {line}\n")
+        _say(message, left)
         raise

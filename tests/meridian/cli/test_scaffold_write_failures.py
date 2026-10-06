@@ -2,13 +2,15 @@
 
 ``WRITE_FAILED`` and ``ROLLBACK_FAILED`` name the kind of write from a closed set
 of fixed words, never a path the command created (those hold the workload's name)
-and never the error's own text. ``_put_back`` writes the old bytes back only over
-the bytes this command wrote. Every test builds a small tree in ``tmp_path`` (the
-``root`` fixture).
+and never the error's own text; only the lines about a path left behind or to be
+checked by hand name a path. ``_put_back`` writes the old bytes back only over the
+bytes this command wrote. Something that ends the undo itself is said, never
+silent. Every test builds a small tree in ``tmp_path`` (the ``root`` fixture).
 """
 
 import errno
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -451,3 +453,249 @@ def test_any_other_exception_with_nothing_left_propagates_unchanged(
         write_plan(root, plan)
 
     assert snapshot(root) == before
+
+
+def raise_an_interrupt() -> None:
+    raise KeyboardInterrupt
+
+
+def raise_an_exit() -> None:
+    raise SystemExit(1)
+
+
+def raise_an_error() -> None:
+    raise RuntimeError(LEAKED)
+
+
+def on_call(number: int, action: Callable[[], None]) -> Callable[[], None]:
+    """A hook that runs ``action`` on its ``number``-th call and no other."""
+    calls: list[None] = []
+
+    def hook() -> None:
+        calls.append(None)
+        if len(calls) == number:
+            action()
+
+    return hook
+
+
+def end_the_undo_at(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    place: str,
+    ending: Callable[[], None],
+) -> None:
+    """An interrupt just after ``pyproject.toml`` was replaced (every edited file
+    holds this command's bytes, every new file exists), then ``ending`` inside the
+    undo at ``place``: the put-back of an edited file, or the removal of the first
+    new file. The put-back of a file is the second replacement of it."""
+    after = {PYPROJECT: on_call(1, raise_an_interrupt)}
+    if place == "a created file":
+        real_unlink = Path.unlink
+
+        def unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            if self.name == "graph.py":
+                ending()
+            real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", unlink)
+        hook_replacements(monkeypatch, root, after=after)
+    else:
+        hook_replacements(
+            monkeypatch, root, before={place: on_call(2, ending)}, after=after
+        )
+
+
+def differing(before: dict[str, object], after: dict[str, object]) -> set[str]:
+    """The paths that are not as they were: changed, new or gone."""
+    missing = object()
+    return {
+        path
+        for path in before.keys() | after.keys()
+        if before.get(path, missing) != after.get(path, missing)
+    }
+
+
+def named_to_check(lines: tuple[str, ...] | list[str], prefix: str = "") -> list[str]:
+    """The paths of the lines that say to check a path by hand."""
+    start = prefix + scaffold_writes.CHECK_BY_HAND.format("")
+    return [line.removeprefix(start) for line in lines if line.startswith(start)]
+
+
+UNDO_PLACES = [PYPROJECT, SERVICES, AGENTS, "a created file"]
+
+
+@pytest.mark.parametrize("place", UNDO_PLACES)
+@pytest.mark.parametrize(
+    ("ending", "kind"),
+    [(raise_an_interrupt, "KeyboardInterrupt"), (raise_an_exit, "SystemExit")],
+    ids=["a second interrupt", "an exit"],
+)
+def test_an_interrupt_inside_the_undo_names_every_path_that_may_differ_and_goes_on(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    place: str,
+    ending: Callable[[], None],
+    kind: str,
+) -> None:
+    # Arrange
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    end_the_undo_at(monkeypatch, root, place, ending)
+
+    # Act
+    with pytest.raises((KeyboardInterrupt, SystemExit)) as ended:
+        write_plan(root, plan)
+
+    # Assert: the interrupt is the one that goes on; what the undo did not finish
+    # is said on standard error, and the paths named are exactly those that still
+    # differ from the start (the ones it put back are not named).
+    assert type(ended.value).__name__ == kind
+    captured = capsys.readouterr()
+    lines = captured.err.splitlines()
+    assert lines[0] == "ERROR " + scaffold_writes.UNDO_UNFINISHED.format(kind)
+    named = named_to_check(lines[1:], prefix="ERROR ")
+    assert len(named) == len(lines) - 1
+    assert len(named) == len(set(named))
+    assert set(named) == differing(before, snapshot(root))
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("place", UNDO_PLACES)
+def test_an_error_inside_the_undo_is_a_write_failure_that_names_its_class_only(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    place: str,
+) -> None:
+    # Arrange
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    end_the_undo_at(monkeypatch, root, place, raise_an_error)
+
+    # Act
+    with pytest.raises(ScaffoldWriteError) as refused:
+        write_plan(root, plan)
+
+    # Assert: no text of the error anywhere, and it is kept as the cause.
+    error = refused.value
+    assert str(error) == scaffold_writes.UNDO_UNFINISHED.format("RuntimeError")
+    named = named_to_check(error.details)
+    assert len(named) == len(error.details) == len(set(named))
+    assert set(named) == differing(before, snapshot(root))
+    captured = capsys.readouterr()
+    assert LEAKED not in captured.out + captured.err + str(error) + "".join(
+        error.details
+    )
+    assert isinstance(error.__cause__, RuntimeError)
+
+
+def test_what_the_undo_left_before_it_was_ended_is_named_once_and_in_its_own_words(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Arrange: the first new file cannot be removed, the second is where the undo
+    # is interrupted again.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    first, second = list(plan.created)[:2]
+    real_unlink = Path.unlink
+
+    def unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        if self == root / first:
+            raise PermissionError(errno.EACCES, LEAKED)
+        if self == root / second:
+            raise_an_interrupt()
+        real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    hook_replacements(
+        monkeypatch, root, after={PYPROJECT: on_call(1, raise_an_interrupt)}
+    )
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    # Assert
+    lines = [
+        line.removeprefix("ERROR ") for line in capsys.readouterr().err.splitlines()
+    ]
+    assert lines[0] == scaffold_writes.UNDO_UNFINISHED.format("KeyboardInterrupt")
+    assert lines[1] == LEFT_BEHIND.format(first)
+    named = named_to_check(lines[2:])
+    assert len(named) == len(lines) - 2
+    assert first not in named
+    assert {first, *named} == differing(before, snapshot(root))
+
+
+class ClosedPipe:
+    """A standard error whose write fails, as a pipe closed by the reader does."""
+
+    def write(self, text: str) -> int:
+        raise BrokenPipeError(errno.EPIPE, LEAKED)
+
+    def flush(self) -> None:
+        raise BrokenPipeError(errno.EPIPE, LEAKED)
+
+
+@pytest.mark.parametrize("in_the_undo", [False, True], ids=["after", "inside the undo"])
+def test_a_closed_standard_error_does_not_replace_the_interrupt(
+    root: Path, monkeypatch: pytest.MonkeyPatch, in_the_undo: bool
+) -> None:
+    # Arrange: something is left, so the lines are written, and the write fails.
+    plan = plan_workload(root, NAME)
+    if in_the_undo:
+        end_the_undo_at(monkeypatch, root, SERVICES, raise_an_interrupt)
+    else:
+        hook_replacements(
+            monkeypatch,
+            root,
+            before={PYPROJECT: raise_an_interrupt},
+            after={SERVICES: lambda: save_services(root)},
+        )
+    monkeypatch.setattr(sys, "stderr", ClosedPipe())
+
+    # Act, Assert: the interrupt that started it, not the pipe's error.
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+
+def test_the_original_error_is_kept_as_the_cause_of_a_write_failure(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: an unexpected error with a save (the failure is a ScaffoldWriteError),
+    # and an OSError with nothing left.
+    plan = plan_workload(root, NAME)
+    hook_replacements(
+        monkeypatch,
+        root,
+        before={PYPROJECT: raise_an_error},
+        after={SERVICES: lambda: save_services(root)},
+    )
+
+    # Act
+    with pytest.raises(ScaffoldWriteError) as refused:
+        write_plan(root, plan)
+
+    # Assert
+    assert isinstance(refused.value.__cause__, RuntimeError)
+    assert LEAKED not in str(refused.value)
+
+
+def test_an_os_error_is_the_cause_of_a_write_failure_and_never_printed(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    plan = plan_workload(root, NAME)
+    fail_replace_on(monkeypatch, "pyproject.toml")
+
+    # Act
+    with pytest.raises(ScaffoldWriteError) as refused:
+        write_plan(root, plan)
+
+    # Assert: the chain holds the step's failure and, under it, the OSError.
+    cause = refused.value.__cause__
+    assert cause is not None
+    assert isinstance(cause.__cause__, PermissionError)
+    assert LEAKED not in str(refused.value)
