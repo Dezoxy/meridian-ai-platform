@@ -74,17 +74,46 @@ uncached, and a long context blurs what a step was for.
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
    with paths, names and what not to touch (the form is below), delegates
    implementation to the `implementer` subagent (Sonnet at high effort), and
-   consults the advisor at three fixed points: before the step's first
-   contract goes out (the design), before the pull request, and whenever a
-   result contradicts what was expected. The step's section says when
-   (the template's Advisor line), so a step that skipped it shows it. On
-   2026-10-06 the session went eighty minutes without the advisor while
-   five to seven agents returned results, designed two steps and closed
-   a third in that time, and the call it then made found three things
-   one of the designs had not settled (the owner, that day: "Why
-   skipped?"). Nothing enforces the call but this record. It runs every
-   gate itself and reads every changed file; a subagent's report is a
-   claim, not evidence.
+   consults the advisor where it has the best chance to change something (the
+   owner, 2026-10-06: "when it has the bigest chance to make any sense"). The
+   reasoning, with that day's count: the session had seventeen answered
+   consultations and a record of what five of them changed; all five changed
+   something, and the four at a design or at a surprise changed it before code
+   was written, where a change is cheapest. Before a pull request the
+   reviewers and the gates have already read the diff, so a consultation there
+   is kept for what they did not see. Twelve of the seventeen left no record
+   of their effect, which is why each one is recorded from now on.
+   - **Always:** before the step's first contract goes out (the design); when
+     a result contradicts the design or what was expected (a probe, a review
+     that says the design is wrong, a gate that fails for a reason nobody
+     predicted); before the session changes a step's scope or the order of its
+     contracts on its own; and before it asks the owner for a yes to something
+     that costs money or cannot be undone, so that the question put to the
+     owner is the right one.
+   - **Before a pull request, only when** something reached the branch that
+     neither the advisor nor a reviewer has seen: a decision the session took
+     alone after the last consultation, a part of the diff no reviewer read,
+     or a security boundary (the list that calls for `feature-threat-model`)
+     that changed after its review. Otherwise the reviewers and the gates are
+     the check before the pull request.
+   - **Not:** for a pull request of the plan or of documents alone, while
+     contracts land that returned what was expected, or twice for one
+     question.
+   - **How:** the advisor reads the transcript and takes no question, and
+     every call reads all of it again. So the session first writes the open
+     decision and its alternatives into the step's design and says them in its
+     message, and puts several open decisions into one call.
+   - **Record:** the step's section says for each consultation when, at which
+     of these points, and what it changed, or that it changed nothing (the
+     template's Advisor line), so a step that skipped one shows it and the
+     share of useful ones can be counted. On 2026-10-06 the session went
+     eighty minutes without the advisor while five to seven agents returned
+     results, designed two steps and closed a third in that time, and the call
+     it then made found three things one of the designs had not settled (the
+     owner, that day: "Why skipped?"). Nothing enforces the call but this
+     record.
+   It runs every gate itself and reads every changed file; a subagent's report
+   is a claim, not evidence.
 5. **Gates.** Always `make docs` and `make test`. `make check` when the model
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
@@ -736,8 +765,10 @@ Each step gets a section here when it starts. Template:
 **Status:** doing · **Started:** YYYY-MM-DD · **Finished:** —
 **Goal:** one sentence.
 **Decisions:** bullets, with the alternative rejected and why.
-**Advisor:** when it was consulted (before the first contract, before
-the pull request, at a surprise), or that it was not.
+**Advisor:** each consultation: when, at which point (the design, a
+surprise, a change of scope or order, before a paid or irreversible
+action, before the pull request and why), and what it changed, or that
+it changed nothing; or that it was not consulted.
 **Work log:** what was actually done, commands, links to PRs.
 **Result / verification:** how we proved it is done.
 **Follow-ups:** new steps or issues this created; those no step covers
@@ -10348,3 +10379,8 @@ documentation before it went in).
   is spent; S025 no longer waits for S020; S036 is no longer
   validate-only: its module is applied once in the owner's AWS account
   after its checks pass; the M4 limit is lifted for S036 and S037.
+  And the advisor's points changed (Part A, step 4): always before a
+  design, at a surprise, before a change of scope and before a paid or
+  irreversible action; before a pull request only when something reached
+  the branch that no reviewer and no consultation has seen; each
+  consultation's effect is recorded.

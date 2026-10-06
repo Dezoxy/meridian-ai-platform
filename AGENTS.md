@@ -232,14 +232,19 @@ carry the same effort.
   frontmatter, so it is not used for coding. Broad searches go to Explore.
   The Agent tool's `model` parameter may override per call when a task
   needs more.
-- **Advisor: Fable** (`advisorModel: fable`). The session consults it
-  through Claude Code's advisor tool at three fixed points: before a step's
-  first contract goes out, before every pull request, and whenever a result
-  contradicts what was expected (the plan's Part A, step 4; each step's
-  section records when). Each consultation re-reads the whole transcript at
-  Fable rates and is not cached; that cost is not a reason to skip one, and
-  the session does not ask the owner to compact by hand to lower it (Part
-  A, step 7). Subagents inherit the advisor.
+- **Advisor: Fable** (`advisorModel: fable`). The session consults it through
+  Claude Code's advisor tool where it has the best chance to change something
+  (the plan's Part A, step 4, has the list): always before a step's first
+  contract goes out, when a result contradicts what was expected, before the
+  session changes a step's scope or order on its own, and before it asks the
+  owner for a yes to something paid or irreversible; before a pull request
+  only when something reached the branch that neither a reviewer nor a
+  consultation has seen; never for a pull request of documents alone. It
+  writes the open decision down before the call, and each step's section
+  records what a consultation changed. Each consultation re-reads the whole
+  transcript at Fable rates and is not cached; that cost is not a reason to
+  skip one of the listed points, and the session does not ask the owner to
+  compact by hand to lower it (Part A, step 7). Subagents inherit the advisor.
 - Never suggest `ultracode`, a Fable main session or a `[1m]` context model
   unless the owner asks; they burn the usage window.
 
