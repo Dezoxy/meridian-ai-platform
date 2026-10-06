@@ -8,7 +8,13 @@ import psycopg
 import typer
 
 from meridian.platform.common.db import connect
-from meridian.platform.migrations.runner import MigrationError, apply_migrations
+from meridian.platform.migrations.runner import (
+    SWEEP_ROLE,
+    MigrationError,
+    SweepMemberships,
+    apply_migrations,
+    sweep_memberships,
+)
 from meridian.platform.policy_mcp.seed import SeedError, seed_policies
 
 # The owner role's DSN, read by `db migrate` alone. Services read
@@ -31,15 +37,38 @@ def _fail(message: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
+def _sweep_finding(found: SweepMemberships) -> str:
+    """The one sentence for a role that is a member of the sweep's role or the
+    reverse (T-77). It counts and names no role: the catalog is the operator's
+    to read, with the query in the migrations' README."""
+    parts = []
+    if found.members:
+        parts.append(f"{found.members} role(s) are members of {SWEEP_ROLE}")
+    if found.memberships:
+        parts.append(f"{SWEEP_ROLE} is a member of {found.memberships} role(s)")
+    return (
+        "the migrations were applied and stay applied, but "
+        + " and ".join(parts)
+        + ", and the sweep's triggers confine a session by its name, not by its "
+        "membership; list and remove the membership as the migrations' README "
+        'says under "The sweep\'s role has no members"'
+    )
+
+
 @app.command()
 def migrate() -> None:
-    """Apply the SQL migrations that are not yet applied."""
+    """Apply the SQL migrations that are not yet applied.
+
+    Last, it reads the catalog and fails if a role is a member of
+    ``claims_sweep`` or the reverse; the files stay applied.
+    """
     dsn = os.environ.get(MIGRATIONS_DATABASE_URL_ENV)
     if not dsn:
         _fail(f"{MIGRATIONS_DATABASE_URL_ENV} is not set")
     try:
         with connect(dsn, APPLICATION_NAME) as conn:
             applied = apply_migrations(conn)
+            found = sweep_memberships(conn)
     except MigrationError as exc:
         _fail(str(exc))
     except psycopg.Error as exc:
@@ -50,6 +79,8 @@ def migrate() -> None:
         typer.echo(name)
     if not applied:
         typer.echo("migrations: up to date")
+    if found.members or found.memberships:
+        _fail(_sweep_finding(found))
 
 
 @app.command("seed-policies")

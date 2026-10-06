@@ -225,3 +225,39 @@ an error and not in a hang, and learns that a connection is waiting from
 `pg_locks`, not from a pause: see
 [`test_audit_order_migration_locks.py`](../../../../tests/meridian/db/test_audit_order_migration_locks.py).
 Run these with `make pytest-db`; without a database they skip.
+
+## The sweep's role has no members
+
+Implemented (S068, T-77). The sweep's two triggers (0014, 0018) let a session
+through unless its session user or its current user is named `claims_sweep`. A
+login that is made a member of `claims_sweep` holds the sweep's grants and has
+neither name, so it is not confined. No migration can refuse that: a grant made
+after a file ran is seen by no file. So `meridian db migrate` reads the catalog
+last, at every run, after the files are applied. It counts the roles that are
+members of `claims_sweep`, directly or through a chain of grants, and the roles
+that `claims_sweep` is a member of; on a count above zero it exits 1 with one
+sentence that gives the direction and the count and names no role. The files
+were applied and stay applied: the deploy's migrate Job stops, and a role has to
+be revoked before the next deploy goes on. A database where `claims_sweep` does
+not exist is no finding.
+
+List the memberships, one level (run the query again with each name it prints
+to follow a chain), as the owner role or a superuser:
+
+```sql
+SELECT g.rolname AS granted_role, m.rolname AS member
+FROM pg_auth_members a
+JOIN pg_roles g ON g.oid = a.roleid
+JOIN pg_roles m ON m.oid = a.member
+WHERE g.rolname = 'claims_sweep' OR m.rolname = 'claims_sweep';
+```
+
+Remove one, with the names the query printed:
+
+```sql
+REVOKE claims_sweep FROM the_member;   -- a role that is a member of the sweep
+REVOKE the_parent FROM claims_sweep;   -- a role the sweep is a member of
+```
+
+The check sees a membership only when the command runs: one granted afterwards
+is seen at the next deploy, and until then the login is not confined.

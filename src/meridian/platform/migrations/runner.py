@@ -8,6 +8,7 @@ so a change goes in a new file.
 import hashlib
 import re
 from importlib import resources
+from typing import NamedTuple
 
 import psycopg
 from psycopg.pq import TransactionStatus
@@ -27,9 +28,59 @@ CREATE TABLE IF NOT EXISTS public.meridian_migrations (
 """
 
 
+SWEEP_ROLE = "claims_sweep"
+# The roles that reach ``claims_sweep`` through any chain of grants (``members``)
+# and the roles it reaches (``memberships``). UNION, not UNION ALL, so a role
+# reached twice is counted once. A role that does not exist has no rows.
+SWEEP_MEMBERSHIP_QUERY = """
+WITH RECURSIVE
+members(oid) AS (
+    SELECT m.member FROM pg_auth_members m
+    JOIN pg_roles r ON r.oid = m.roleid WHERE r.rolname = %(role)s
+    UNION
+    SELECT m.member FROM pg_auth_members m JOIN members ON m.roleid = members.oid
+),
+memberships(oid) AS (
+    SELECT m.roleid FROM pg_auth_members m
+    JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = %(role)s
+    UNION
+    SELECT m.roleid FROM pg_auth_members m
+    JOIN memberships ON m.member = memberships.oid
+)
+SELECT (SELECT count(*) FROM members), (SELECT count(*) FROM memberships)
+"""
+
+
+class SweepMemberships(NamedTuple):
+    """How many roles are members of the sweep's role, and how many roles the
+    sweep's role is a member of (T-77)."""
+
+    members: int
+    memberships: int
+
+
 class MigrationError(Exception):
     """An applied migration no longer matches the file in the package, or the
     connection was not in a state the runner can rely on."""
+
+
+def sweep_memberships(
+    conn: psycopg.Connection, role: str = SWEEP_ROLE
+) -> SweepMemberships:
+    """Count the roles that are members of ``role``, directly or through a
+    chain, and the roles ``role`` is a member of.
+
+    The sweep's triggers confine a session by the session user's and the current
+    user's NAME, so a login made a member of ``claims_sweep`` holds its grants
+    and is not confined; ``meridian db migrate`` calls this last and fails on a
+    finding. A role that does not exist is no finding. It reads the catalog
+    only and leaves the transaction to the caller.
+    """
+    # An aggregate query returns exactly one row.
+    [(members, memberships)] = conn.execute(
+        SWEEP_MEMBERSHIP_QUERY, {"role": role}
+    ).fetchall()
+    return SweepMemberships(members=members, memberships=memberships)
 
 
 def _packaged_files() -> list[tuple[str, str]]:
