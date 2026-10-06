@@ -97,7 +97,7 @@ graph LR
 
 | Capability | Label | Where |
 |---|---|---|
-| Architecture model: context, container, governance and two runtime views | Implemented as a model and compared with the code at the end of M1 (S018); what is not built yet is tagged `Designed` and drawn dotted | `docs/architecture/` |
+| Architecture model: context, container, governance and two runtime views, and deployment views of AWS and Google Cloud | Implemented as a model and compared with the code at the end of M1 (S018); what is not built yet is tagged `Designed` and drawn dotted. The AWS and the Google Cloud deployment views are designed only: no account or project exists on either cloud and nothing of them is built (S025, S077) | `docs/architecture/` |
 | Decisions: Azure and kind with AWS designed; LangGraph behind a framework-agnostic contract; a thin model gateway; mutual TLS and cert-manager for a service's identity | Accepted | `docs/architecture/decisions/` |
 | Engineering harness: reviewers, skills, hooks, slash commands, an MCP server, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `.mcp.json`, `scripts/` |
 | Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
@@ -134,7 +134,7 @@ graph LR
 | M1 Claims triage on kind | Gateway, three MCP servers, retrieval, triage graph with approval, adjuster UI, evaluation harness | The fifteen-minute demo runs from a clean checkout with `make` |
 | M2 Azure, identity, delivery | Terraform, AKS, Entra ID, hardened charts, CI/CD with SBOM, scanning, signing and a manual approval gate | Environment created, demo on AKS, environment removed, all recorded |
 | M3 Reliability and operations | Load test, game day and incident record, restore drill, provider swap, read-only console; the triage as a supervisor and workers is built (S031, ADR 5; in tests, not run on a cluster since) | SLO thresholds measured; the incident record comes from a real timeline |
-| M4 Optional | AWS mapping with a Terraform module that is checked and then applied once in a real account (designed: S025 and S036, the owner's decision of 2026-10-06; nothing of it is written yet; the same for Google Cloud, S077 and S078), or a second-framework workload, or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item was the limit; the owner lifted it for each of the four on 2026-10-06 and added Google Cloud beside AWS |
+| M4 Optional | AWS mapping with a Terraform module that is checked and then applied once in a real account (designed: S025 and S036, the owner's decision of 2026-10-06; the mapping, the Azure platform document it maps from and a deployment view of AWS in the model are written, all designed; the module is not; the same for Google Cloud, S077 and S078: its mapping and its deployment view are written, designed, and its module is not), or a second-framework workload, or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item was the limit; the owner lifted it for each of the four on 2026-10-06 and added Google Cloud beside AWS |
 
 The step-by-step version, with dependencies, demo checkpoints and status, is
 the [plan](docs/meridian-plan.md).

@@ -1,4 +1,4 @@
-# 6. Share the gateway's rate windows in Redis
+# 8. Share the gateway's rate windows in Redis
 
 Date: 2026-10-06
 

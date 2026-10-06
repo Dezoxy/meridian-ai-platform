@@ -111,6 +111,15 @@ an estimate from the registry's list prices at a dated planning rate; the
 invoice is the provider's. The tenant is still the caller's word until
 sign-in exists (T-08, T-48).
 
+Amended on 2026-10-06 (S025): the mapping ADR of S025 records, from AWS's
+model cards read that day, that Claude on AWS Bedrock in Frankfurt is
+`eu-zone` and not `eu-region`: no current Claude model has in-Region
+inference in Frankfurt, so Claude is called there through the `eu.`
+geographic profile, whose destinations are all in EU member states when the
+call is made from Frankfurt. It stays EU-resident; the sentences above that
+name Claude on Bedrock in an EU region or in Frankfurt are read with that
+label.
+
 Amended on 2026-10-06 (S066): the rate windows are no longer kept in the
 process. They are kept in Redis, so two gateway processes count into one
 window, and a call the gateway cannot count is refused. The decision record
