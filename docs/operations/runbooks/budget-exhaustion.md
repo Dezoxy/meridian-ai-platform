@@ -75,12 +75,14 @@ ORDER BY reserved_at;
 ```
 
 The reconciliation: each counter must equal the sum of what its tenant's
-ledger rows charge in that period. `drift` is 0 on a sound ledger:
+ledger rows charge in that period, less the credits of that period
+(`gateway.credits`, written only by the upkeep functions of migration 0020).
+`ledger` is that difference and `drift` is 0 on a sound ledger:
 
 ```sql
 SELECT c.tenant, c.kind, c.period_start, c.amount,
-       COALESCE(u.charged, 0) AS ledger,
-       c.amount - COALESCE(u.charged, 0) AS drift
+       COALESCE(u.charged, 0) - COALESCE(r.credited, 0) AS ledger,
+       c.amount - (COALESCE(u.charged, 0) - COALESCE(r.credited, 0)) AS drift
 FROM gateway.budget_counters c
 LEFT JOIN (
   SELECT tenant, 'tokens-day' AS kind, day AS period_start,
@@ -90,6 +92,10 @@ LEFT JOIN (
   SELECT tenant, 'cost-month', month, sum(charged_micro_eur)
   FROM gateway.usage GROUP BY tenant, month
 ) u USING (tenant, kind, period_start)
+LEFT JOIN (
+  SELECT tenant, kind, period_start, sum(amount) AS credited
+  FROM gateway.credits GROUP BY tenant, kind, period_start
+) r USING (tenant, kind, period_start)
 ORDER BY c.tenant, c.kind, c.period_start;
 ```
 

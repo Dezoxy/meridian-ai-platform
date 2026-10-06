@@ -16,8 +16,19 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from dbsupport import OWNER, DatabaseHandle
+from dbsupport import OWNER, UPKEEP_ROLE, DatabaseHandle
 from servicesupport import REGISTRY_DIR
+from upkeepsupport import (
+    CLOSE,
+    CREDIT,
+    EXPIRE,
+    plant_ledger_of_a_month,
+    plant_usage,
+    previous_month,
+    run,
+    usage_row,
+    utc_month,
+)
 
 from meridian.platform.common.db import connect
 from meridian.platform.gateway.budget import (
@@ -270,9 +281,71 @@ def test_the_reconciliation_reports_no_drift_after_every_way_to_close(
     assert all(row["ledger"] > 0 for row in rows)
 
 
+def ledger_by_kind(db: DatabaseHandle) -> dict[str, int]:
+    """What the query says each counter's ledger is (charges less credits), for
+    the tenant's current periods."""
+    this_month = utc_month(db)
+    return {
+        row["kind"]: row["ledger"]
+        for row in drift_rows(db)
+        if row["tenant"] == TENANT and row["period_start"] >= this_month
+    }
+
+
+def test_the_reconciliation_reports_no_drift_after_a_credit(
+    ledger_run: LedgerRun,
+) -> None:
+    before = ledger_by_kind(ledger_run.db)
+
+    run(ledger_run.db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    run(ledger_run.db, UPKEEP_ROLE, CREDIT, (TENANT, COST_KIND, 3, "goodwill"))
+
+    rows = drift_rows(ledger_run.db)
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    # The credit is in the query's ledger column: charges less credits.
+    after = ledger_by_kind(ledger_run.db)
+    assert after == {
+        TOKENS_KIND: before[TOKENS_KIND] - 10,
+        COST_KIND: before[COST_KIND] - 3,
+    }
+
+
+def test_the_reconciliation_reports_no_drift_after_upkeep_releases_a_reservation(
+    ledger_run: LedgerRun,
+) -> None:
+    # A reservation a dead process left: written by the owner, thirty minutes ago.
+    stale = plant_usage(ledger_run.db, tenant=TENANT, tokens=7, micro_eur=3)
+
+    run(ledger_run.db, UPKEEP_ROLE, CLOSE, (stale, True, "dead-process"))
+
+    rows = drift_rows(ledger_run.db)
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    assert usage_row(ledger_run.db, stale) == ("released", 0, 0, True)
+
+
+def test_the_reconciliation_reports_no_drift_after_upkeep_expires_a_month(
+    ledger_run: LedgerRun,
+) -> None:
+    current = utc_month(ledger_run.db)
+    old = previous_month(current)
+    plant_ledger_of_a_month(ledger_run.db, old)
+    before = drift_rows(ledger_run.db)
+    assert {row["period_start"] for row in before} >= {old, old.replace(day=28)}
+    assert [row["drift"] for row in before] == [0] * len(before)
+
+    run(ledger_run.db, UPKEEP_ROLE, EXPIRE, (current, "retention-test"))
+
+    rows = drift_rows(ledger_run.db)
+    assert {row["period_start"] for row in rows}.isdisjoint({old, old.replace(day=28)})
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    assert rows
+
+
 def test_the_reconciliation_reports_a_counter_changed_by_hand(
     ledger_run: LedgerRun,
 ) -> None:
+    # After a credit, so that the hand change is found against charges less credits.
+    run(ledger_run.db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
     with connect(ledger_run.db.dsn(OWNER), "runbook-query-test-edit") as conn:
         conn.execute(
             "UPDATE gateway.budget_counters SET amount = amount + %s "

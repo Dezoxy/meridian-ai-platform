@@ -13,6 +13,9 @@ import pytest
 from dbsupport import OWNER, DatabaseHandle
 from psycopg.conninfo import make_conninfo
 from servicesupport import REGISTRY_DIR, owner_rows
+from upkeepsupport import CLOSE, CREDIT, plant_usage
+from upkeepsupport import ROLE as UPKEEP_ROLE
+from upkeepsupport import run as run_as
 
 from meridian.platform.common.db import connect
 from meridian.platform.gateway.budget import (
@@ -173,12 +176,16 @@ def usage_rows(db: DatabaseHandle, tenant: str = TENANT) -> list[tuple]:
 
 
 def assert_counters_equal_charges(db: DatabaseHandle) -> None:
-    """The invariant: each counter is the sum of its period's charged amounts."""
+    """The invariant: each counter is the sum of its period's charged amounts,
+    less the credits of that period (S066, ``gateway.credits``)."""
     tokens = owner_rows(
         db,
         "SELECT c.tenant, c.period_start, c.amount, "
         "COALESCE((SELECT sum(u.charged_tokens) FROM gateway.usage u "
         "WHERE u.tenant = c.tenant AND u.day = c.period_start), 0) "
+        "- COALESCE((SELECT sum(r.amount) FROM gateway.credits r "
+        "WHERE r.tenant = c.tenant AND r.kind = c.kind "
+        "AND r.period_start = c.period_start), 0) "
         "FROM gateway.budget_counters c WHERE c.kind = 'tokens-day'",
     )
     cost = owner_rows(
@@ -186,6 +193,9 @@ def assert_counters_equal_charges(db: DatabaseHandle) -> None:
         "SELECT c.tenant, c.period_start, c.amount, "
         "COALESCE((SELECT sum(u.charged_micro_eur) FROM gateway.usage u "
         "WHERE u.tenant = c.tenant AND u.month = c.period_start), 0) "
+        "- COALESCE((SELECT sum(r.amount) FROM gateway.credits r "
+        "WHERE r.tenant = c.tenant AND r.kind = c.kind "
+        "AND r.period_start = c.period_start), 0) "
         "FROM gateway.budget_counters c WHERE c.kind = 'cost-month'",
     )
     for tenant, period, amount, charged in (*tokens, *cost):
@@ -1029,6 +1039,41 @@ def test_keep_touches_no_counter_so_a_missing_row_does_not_stop_it(
     ledger.keep(reservation)
 
     assert usage_rows(fresh_database)[0][1] == "kept"
+
+
+def test_the_counters_equal_charges_less_credits_after_gateway_calls_and_upkeep(
+    ledger: Ledger,
+    fresh_database: DatabaseHandle,
+    deployment: Deployment,
+    today: Today,
+) -> None:
+    # The upkeep credits by the database's clock, so the gateway's day is that.
+    ((today.day,),) = owner_rows(
+        fresh_database, "SELECT (now() AT TIME ZONE 'UTC')::date"
+    )
+    settled, kept, released = (reserved(ledger, deployment) for _ in range(3))
+    ledger.settle(settled, deployment, 10, 5)
+    ledger.keep(kept)
+    ledger.release(released)
+    # A reservation a dead process left, found thirty minutes later: released.
+    stale = plant_usage(fresh_database, tenant=TENANT, tokens=40, micro_eur=9)
+    run_as(fresh_database, UPKEEP_ROLE, CLOSE, (stale, True, "dead-process"))
+    still_open = reserved(ledger, deployment)
+    run_as(fresh_database, UPKEEP_ROLE, CREDIT, (TENANT, "tokens-day", 3, "goodwill"))
+    run_as(fresh_database, UPKEEP_ROLE, CREDIT, (TENANT, "cost-month", 2, "goodwill"))
+    ledger.settle(still_open, deployment, 20, 10)
+    # Another one, kept: the charge stays and no counter moves.
+    stale_kept = plant_usage(fresh_database, tenant=TENANT, tokens=11, micro_eur=4)
+    run_as(fresh_database, UPKEEP_ROLE, CLOSE, (stale_kept, False, "dead-process"))
+
+    assert_counters_equal_charges(fresh_database)
+
+    assert owner_rows(
+        fresh_database, "SELECT kind, amount FROM gateway.credits ORDER BY kind"
+    ) == [("cost-month", 2), ("tokens-day", 3)]
+    states = {row[0]: row[1] for row in usage_rows(fresh_database)}
+    assert states[stale] == "released"
+    assert states[stale_kept] == "kept"
 
 
 def test_a_settle_equal_to_the_reservation_adjusts_nothing(
