@@ -27,8 +27,10 @@ SERVICES_POLICY = "meridian-services"
 MINIMUM_MINUTES = 60
 # The shortest renewBefore cert-manager's webhook accepts, in minutes.
 MINIMUM_RENEW_BEFORE_MINUTES = 5
-# One Certificate per service (six) and one for the ingestion Job.
-CERTIFICATES = 7
+# One Certificate per service (six), one for the ingestion Job and, since kind's
+# values turn the rate store on (S066), the store's: its Certificate takes the
+# same lifetime and renewal as the others, so every check below reads it too.
+CERTIFICATES = 8
 
 
 def minutes_of(duration: str) -> int:

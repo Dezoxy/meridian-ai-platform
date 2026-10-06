@@ -37,8 +37,8 @@ CALLS = {
     "meridian-ingest": ("model-gateway",),
 }
 NAMES = {
-    "claims-api": (("claims-triage",), ("claims-triage",)),
-    "agent-runtime": (("claims-triage",), ("claims-triage",)),
+    "claims-api": (("claims-triage",), ("claims-triage", "claim-brief")),
+    "agent-runtime": (("claims-triage",), ("claims-triage", "claim-brief")),
     "model-gateway": ((), ()),
     "policy-mcp": ((), ()),
     "claims-mcp": ((), ()),
@@ -229,7 +229,7 @@ def test_an_unknown_tenant_and_an_unknown_agent_are_reported(
 
     assert errors == (
         "services.yaml: services[0].tenants[1]: unknown tenant 'ghost-tenant'",
-        "services.yaml: services[0].agents[1]: unknown agent 'ghost-agent'",
+        "services.yaml: services[0].agents[2]: unknown agent 'ghost-agent'",
     )
 
 

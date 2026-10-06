@@ -20,6 +20,13 @@ helper meridian.job), because deploy.sh applies the Job outside the release.
   the sweep     DNS and the database, and the collector when it is given the
                 address (S064: it sends its last pass's findings), no ingress.
                 The three Jobs send nothing and keep DNS and the database
+  the rate      (S066, rate-store.yaml, with the store and only when
+  store         rateStore.enabled) its policy is in its own template: ingress
+                from the Model Gateway's pods on its port, no egress. The
+                gateway's policy gains the egress rule to it, as the collector's
+                address gives a pod the rule to the collector: the pod that is
+                given the address (meridian.usesRateStore) is the one that may
+                reach the store
 
 TLS (S055) changes none of this. A service that serves TLS listens on the same
 port, so every rule names the same peers and the same port as before: the
@@ -79,7 +86,7 @@ spec:
     {{- end }}
   {{- end }}
   egress:
-    {{- include "meridian.egress" (dict "root" $ "env" $service.env "collector" $collector) | nindent 4 }}
+    {{- include "meridian.egress" (dict "root" $ "env" $service.env "collector" $collector "rateStore" (include "meridian.usesRateStore" (dict "root" $ "name" $name))) | nindent 4 }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

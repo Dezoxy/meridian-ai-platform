@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import replace
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 import psycopg
@@ -60,9 +60,15 @@ from meridian.platform.registry import Registry, load_registry
 from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import failure_reason
-from meridian.runtime.graphs import GraphFactory, load_graph_factory
+from meridian.runtime.graphs import load_graph_factory
+from meridian.runtime.host_wiring import build_host_scopes
+from meridian.runtime.hosts import Host, HostScope, log_forget_failure
 from meridian.runtime.meters import RuntimeMeters, shut_down
-from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
+from meridian.runtime.model_client import (
+    ModelCallError,
+    ModelCallTimeoutError,
+    ModelClient,
+)
 from meridian.runtime.models import (
     Reference,
     ResumeRequest,
@@ -74,10 +80,10 @@ from meridian.runtime.models import (
 )
 from meridian.runtime.runs import RunIdentity, RunOutcome
 from meridian.runtime.settings import RuntimeSettings
+from meridian.runtime.settling import Leg, settle, tool_of
 from meridian.runtime.tool_client import (
     ClientRefusal,
     ToolClient,
-    ToolError,
     ToolRefused,
     ToolTarget,
     prepare_sdk,
@@ -85,7 +91,6 @@ from meridian.runtime.tool_client import (
 from meridian.runtime.tool_transport import ToolTransport
 
 GATEWAY_TIMEOUT_SECONDS = 30.0
-FINISH_ATTEMPTS = 2
 # The audit reason of a call the runtime's own allowlist refuses.
 REFUSAL_REASON: ClientRefusal = "tool-not-allowed"
 # The audit reason of a run request for a job agent, which has no graph.
@@ -95,8 +100,6 @@ JOB_REFUSAL_REASON = "not-a-graph-agent"
 NO_SUCH_RUN = "no such run"
 HTTP_BAD_GATEWAY = 502
 HTTP_GATEWAY_TIMEOUT = 504
-# The leg of a run a failure belongs to: its first, or one resumed after a pause.
-Leg = Literal["first", "resumed"]
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +132,6 @@ def _failure_status(error: Exception) -> int:
     )
 
 
-def _tool_of(error: Exception) -> str | None:
-    """The registry ID of the tool a tool error is about, else none."""
-    return error.tool if isinstance(error, ToolError) else None
-
-
 def _set_run_attributes(span: Span, run_id: uuid.UUID, agent: str, tenant: str) -> None:
     set_span_attributes(
         span,
@@ -158,106 +156,9 @@ def _log_failure(run_id: uuid.UUID, error: Exception, leg: Leg) -> None:
         failure_reason(error),
         type(error).__name__,
         status,
-        _tool_of(error),
+        tool_of(error),
         refusal,
     )
-
-
-def _record(write: Callable[[], None]) -> psycopg.Error | None:
-    """Run a status write; try twice, return the last error if both fail."""
-    last: psycopg.Error | None = None
-    for _ in range(FINISH_ATTEMPTS):
-        try:
-            write()
-        except psycopg.Error as exc:
-            last = exc
-        else:
-            return None
-    return last
-
-
-def _finish(
-    dsn: str,
-    identity: RunIdentity,
-    status: RunState,
-    reason: str | None = None,
-    tool: str | None = None,
-) -> tuple[bool, psycopg.Error | None]:
-    """Record the final status; try twice. Returns whether the run moved (the
-    last write's answer: ``False`` when the run was no longer ``Running``) and
-    the last error if both writes fail."""
-    moved = False
-
-    def write() -> None:
-        nonlocal moved
-        moved = runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
-
-    error = _record(write)
-    return moved, error
-
-
-def _pause_again(
-    dsn: str, identity: RunIdentity, reason: str, tool: str | None
-) -> tuple[bool, psycopg.Error | None]:
-    """Record a failed resumed leg and the run's return to its pause; try
-    twice. Returns whether the run moved (the last write's answer: ``False``
-    when the run was no longer ``Running``) and the last error if both writes
-    fail."""
-    moved = False
-
-    def write() -> None:
-        nonlocal moved
-        moved = runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
-
-    error = _record(write)
-    return moved, error
-
-
-def _record_end(
-    dsn: str,
-    identity: RunIdentity,
-    leg: Leg,
-    failure: Exception | None,
-    outcome: RunOutcome,
-) -> tuple[RunOutcome, bool, psycopg.Error | None]:
-    """Write how a leg ended. Returns the outcome to answer with (a resumed leg
-    that failed leaves its run paused again), whether the write moved the run,
-    and the last error if it could not be written."""
-    if failure is None:
-        moved, unsaved = _finish(dsn, identity, outcome.status)
-        return outcome, moved, unsaved
-    if leg == "resumed" and failure_reason(failure) not in runs.NOTHING_TO_RESUME:
-        moved, unsaved = _pause_again(
-            dsn, identity, failure_reason(failure), _tool_of(failure)
-        )
-        return RunOutcome("AwaitingApproval", None), moved, unsaved
-    moved, unsaved = _finish(
-        dsn,
-        identity,
-        outcome.status,
-        reason=failure_reason(failure),
-        tool=_tool_of(failure),
-    )
-    return outcome, moved, unsaved
-
-
-def _settle(
-    dsn: str,
-    identity: RunIdentity,
-    leg: Leg,
-    failure: Exception | None,
-    outcome: RunOutcome,
-) -> tuple[RunOutcome, Exception | None, psycopg.Error | None]:
-    """Write how a leg ended and return what it answers: the outcome, the
-    failure it answers (none when someone else ended the run, as the leg itself
-    did not fail), and the last error if nothing could be written."""
-    outcome, moved, unsaved = _record_end(dsn, identity, leg, failure, outcome)
-    if unsaved is not None or moved:
-        return outcome, failure, unsaved
-    # Written, but over nothing: the leg's own earlier write had committed, or
-    # the run was ended by someone else while it worked.
-    outcome, ended, unsaved = _stored_outcome(dsn, identity, outcome, failure)
-    return outcome, None if ended else failure, unsaved
 
 
 def _unsaved_answer(
@@ -275,75 +176,14 @@ def _unsaved_answer(
     return error_answer(503, DATABASE_UNAVAILABLE, run_id=str(identity.run_id))
 
 
-def _stored_outcome(
-    dsn: str, identity: RunIdentity, own: RunOutcome, failure: Exception | None
-) -> tuple[RunOutcome, bool, psycopg.Error | None]:
-    """What a leg answers when its write moved nothing. Returns the outcome,
-    whether someone else (the sweep) ended the run, and the error if the stored
-    status cannot be read.
-
-    A stored status equal to the leg's own means its own write is recorded (it
-    committed and the connection dropped before the answer, so the retry found
-    the run no longer ``Running``): the leg answers as if it had moved the run.
-    Any other status is the answer, with no output. The warning has the run ID
-    and the status, nothing of the claim.
-
-    A leg that failed on a run already stored as ``Failed`` answers its own
-    failure, but the trail may say only the sweep's reason (``abandoned``): one
-    warning keeps the leg's reason word and tool, the run ID with them."""
+def _forget(host: Host, identity: RunIdentity) -> None:
+    """Have the run's host drop its checkpoints; a failure is logged and changes
+    no answer (the sweep is the backstop). LangGraph's host retries and logs on
+    its own and raises nothing; the second host raises, and one line says so."""
     try:
-        stored = runs.fetch_run(dsn, identity.run_id)
-    except psycopg.Error as exc:
-        return own, False, exc
-    if stored is not None and stored.status == own.status:
-        if failure is not None and own.status == "Failed":
-            logger.warning(
-                "run %s: its leg failed (%s; tool %s) on a run already Failed, "
-                "so the trail may not hold this reason",
-                identity.run_id,
-                failure_reason(failure),
-                _tool_of(failure),
-            )
-        return own, False, None
-    logger.warning(
-        "run %s was ended before its leg could mark it %s",
-        identity.run_id,
-        own.status,
-    )
-    status = own.status if stored is None else stored.status
-    return RunOutcome(status, None), True, None
-
-
-def _delete_checkpoints(
-    saver: BaseCheckpointSaver,
-    identity: RunIdentity,
-    fresh: Callable[[], AbstractContextManager[BaseCheckpointSaver]],
-) -> None:
-    """Drop the run's thread; a failure is logged and changes no answer. A
-    failed delete is tried once more on ``fresh()``, a saver of its own (the
-    injected one, when there is one). The run is already recorded, and a message
-    could hold claim text, so each log line has the run ID, the exception class
-    and the sqlstate only."""
-    thread = str(identity.thread_id)
-    try:
-        saver.delete_thread(thread)
-        return
-    except Exception as exc:  # whatever the saver raises changes no answer
-        _log_delete_failure(identity, exc)
-    try:
-        with fresh() as retry:
-            retry.delete_thread(thread)
-    except Exception as exc:
-        _log_delete_failure(identity, exc)
-
-
-def _log_delete_failure(identity: RunIdentity, error: Exception) -> None:
-    logger.error(
-        "run %s: its checkpoints were not deleted: %s (sqlstate %s)",
-        identity.run_id,
-        type(error).__name__,
-        (error.sqlstate if isinstance(error, psycopg.Error) else None) or "none",
-    )
+        host.forget(identity)
+    except Exception as exc:  # whatever a host raises changes no answer
+        log_forget_failure(identity, exc)
 
 
 def make_gateway_client(
@@ -438,8 +278,9 @@ def create_app(
     clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     """Build the app; raise when it must not start: a registry that fails to
-    load, a graph that cannot be loaded, a tool server the registry does not
-    have, LangSmith requested or LangGraph not in strict msgpack mode.
+    load, a graph that cannot be loaded or is not what its agent's host runs, a
+    tool server the registry does not have, LangSmith requested or LangGraph not
+    in strict msgpack mode.
 
     ``tool_servers`` (tests) replaces the settings' addresses with targets the
     SDK's client accepts, such as an in-process server. ``clock`` times the
@@ -459,7 +300,7 @@ def create_app(
         if not registry.has_server(server_id):
             raise SettingsError(f"tool server {server_id!r} is not in the registry")
     # Every graph agent's graph is resolved now, so a bad entry point stops the
-    # start instead of failing a request; the handler uses this cache. A job
+    # start instead of failing a request; the hosts are built from this. A job
     # agent has no graph and so no entry here.
     factories = {
         agent.id: load_graph_factory(agent.id, registry)
@@ -508,6 +349,23 @@ def create_app(
         close=close,
     )
     app, tracer = service.app, service.tracer
+    # The host each agent's registry entry names, built once and kept; an entry
+    # point that is not what its host runs stops the start (S037).
+    try:
+        scopes: dict[str, HostScope] = build_host_scopes(
+            registry,
+            factories,
+            dsn=dsn,
+            saver_scope=saver_scope,
+            http=http,
+            servers=servers,
+            tracer=tracer,
+            verify=verify,
+            transport=tool_transport,
+        )
+    except Exception:
+        close()
+        raise
 
     # Outside the app's other middleware: a call that comes from no known
     # service is refused before its body is read (S055). The row says who in
@@ -577,8 +435,7 @@ def create_app(
         return HTTPException(status_code=403, detail=REFUSED)
 
     def run_leg(
-        factory: GraphFactory,
-        saver: BaseCheckpointSaver,
+        host: Host,
         span: Span,
         identity: RunIdentity,
         response: Response,
@@ -586,11 +443,15 @@ def create_app(
         resume: dict[str, Any] | None = None,
     ) -> RunResponse | JSONResponse:
         """Run one leg of a run that is ``Running`` (its first, or one resumed
-        after a pause) and record how it ended: the failure logged, the status
-        and its audit event written, the checkpoints dropped unless the run
-        is paused, the answer built. A resumed leg that fails leaves the run
-        paused, its pause still pending in the checkpoints, so a later resume
-        can finish it; only a resume with nothing to resume ends it ``Failed``."""
+        after a pause) on the agent's ``host``, and record how it ended: the
+        failure logged, the status and its audit event written, the checkpoints
+        forgotten unless the run is paused, the answer built. A resumed leg that
+        fails leaves the run paused, its pause still pending in the checkpoints,
+        so a later resume can finish it; only a resume that can never succeed
+        ends it ``Failed`` (``runs.RESUME_CANNOT_SUCCEED``: nothing to resume, a
+        checkpoint the host refuses, a graph that changed). The leg's two
+        clients, with their limits, are the neutral code's and the host's
+        workload gets nothing else."""
         failure: Exception | None = None
         leg: Leg = "first" if resume is None else "resumed"
         try:
@@ -604,29 +465,31 @@ def create_app(
                 verify=verify,
                 transport=tool_transport,
             )
-            outcome = runs.execute(
-                factory,
-                saver,
+            model = ModelClient(
                 http,
-                tools,
-                tracer,
-                identity,
-                run_input,
-                resume=resume,
-                on_model_call=meters.model_call_observer(identity),
+                tenant=identity.tenant,
+                agent=identity.agent,
+                run_id=identity.run_id,
+                max_calls=runs.MAX_MODEL_CALLS_PER_RUN,
+                on_call=meters.model_call_observer(identity),
             )
+            if resume is None:
+                outcome = host.start(identity, model, tools, tracer, run_input)
+            else:
+                outcome = host.resume(identity, model, tools, tracer, resume)
         except Exception as exc:
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
-        settled, answered, unsaved = _settle(dsn, identity, leg, failure, outcome)
+        settled, answered, unsaved = settle(dsn, identity, leg, failure, outcome)
         # Counted once, after the write, by what the leg itself did (not what
-        # _settle answers for the sweep); not-saved when nothing was written.
+        # settle answers for the sweep); not-saved when nothing was written.
         meters.leg_ended(identity, outcome, failure, saved=unsaved is None)
         if settled.status != "AwaitingApproval":
             # The checkpoint holds the claim; a finished run needs none,
-            # whether or not its status could be recorded.
-            _delete_checkpoints(saver, identity, saver_scope)
+            # whether or not its status could be recorded. After settle: the
+            # second host's delete skips a run its row does not say has ended.
+            _forget(host, identity)
         set_span_attributes(span, {"meridian.run_status": settled.status})
         if unsaved is not None:
             return _unsaved_answer(span, identity, settled.status, unsaved)
@@ -655,8 +518,8 @@ def create_app(
             raise refuse(body.tenant, body.agent, body.reference, NAME_REFUSAL_REASON)
         if not registry.tenant_may_run(body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference)
-        factory = factories.get(body.agent)
-        if factory is None:
+        scope = scopes.get(body.agent)
+        if scope is None:
             # A job agent: a tenant may list it, but it has no graph to run.
             raise refuse(body.tenant, body.agent, body.reference, JOB_REFUSAL_REASON)
         identity = RunIdentity(
@@ -666,15 +529,16 @@ def create_app(
             tenant=body.tenant,
             reference=body.reference,
         )
-        # The saver is opened before the run row is written, so a database
-        # that refuses its connection starts no run (same answer as start_run).
+        # The host's scope is entered before the run row is written: LangGraph's
+        # opens its saver there, so a database that refuses its connection
+        # starts no run (same answer as start_run).
         with start_span(tracer, "runtime.run") as span, ExitStack() as opened:
             _set_run_attributes(span, identity.run_id, identity.agent, identity.tenant)
             # Both passed tenant_may_run: a refused start counts under them.
             with meters.start_counted(identity.tenant, identity.agent):
-                saver = opened.enter_context(saver_scope())
+                host = opened.enter_context(scope())
                 runs.start_run(dsn, identity)
-            return run_leg(factory, saver, span, identity, response, body.input)
+            return run_leg(host, span, identity, response, body.input)
 
     @app.post(
         "/runs/{run_id}/resume",
@@ -721,8 +585,8 @@ def create_app(
             raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
         if not registry.tenant_may_run(found.tenant, found.agent):
             raise refuse(found.tenant, found.agent, found.reference, run_id=run_id)
-        factory = factories.get(found.agent)
-        if factory is None:
+        scope = scopes.get(found.agent)
+        if scope is None:
             raise refuse(
                 found.tenant,
                 found.agent,
@@ -735,13 +599,14 @@ def create_app(
         # A run that is paused, or Running (a leg in progress, or one that died:
         # the claim takes over only a run idle for longer than its lease), goes
         # to the claim, which decides.
-        # The saver is opened before the claim, so a database that refuses its
-        # connection leaves the run paused instead of stuck as Running.
+        # The host's scope is entered before the claim, so a database that
+        # refuses the saver's connection leaves the run paused instead of stuck
+        # as Running.
         with start_span(tracer, "runtime.resume") as span, ExitStack() as opened:
             _set_run_attributes(span, run_id, found.agent, found.tenant)
             # Both passed tenant_may_run; an empty claim is no error, no count.
             with meters.start_counted(found.tenant, found.agent):
-                saver = opened.enter_context(saver_scope())
+                host = opened.enter_context(scope())
                 identity = runs.claim_paused_run(
                     dsn, run_id, body.tenant, body.reference
                 )
@@ -752,7 +617,12 @@ def create_app(
                 if current is None:
                     raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
                 return RunResponse(run_id=run_id, status=current.status, output=None)
-            return run_leg(factory, saver, span, identity, response, {}, body.input)
+            # The host was taken from the read, which had to come before the
+            # claim (the scope opens the saver first). The claimed row is the
+            # authority: a leg never runs on another agent's host.
+            if identity.agent != found.agent:
+                raise RuntimeError("the claimed run is not the run that was read")
+            return run_leg(host, span, identity, response, {}, body.input)
 
     @app.get(
         "/runs/{run_id}",

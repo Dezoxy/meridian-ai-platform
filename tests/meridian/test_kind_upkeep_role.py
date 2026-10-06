@@ -4,9 +4,12 @@ Migration 0020 refuses to run unless the role ``gateway_upkeep`` exists and is
 a plain login role that is a member of no role. On kind CloudNativePG creates
 it from ``infra/kind/values/platform-db.yaml``, and ``make up`` makes its
 Secret from ``DATABASE_ROLES`` in ``infra/kind/common.sh``. These tests pin
-that declaration, that ``make up`` makes the Secret, and that no workload of
-the chart is given it: the command that uses the role is run by an operator,
-not by the cluster. What the role may do is tested with the migration.
+that declaration, that ``make up`` makes the Secret, and that no workload OF
+THE RELEASE is given it. The command that uses the role is run by an operator,
+on the cluster as a Job that ``make gateway-upkeep`` applies for one run,
+outside the release (the chart renders it only when asked:
+``test_helm_upkeep.py``, ``test_kind_upkeep_script.py``). What the role may do
+is tested with the migration.
 """
 
 import re
@@ -153,7 +156,9 @@ def test_make_up_leaves_an_existing_upkeep_secret_alone(tmp_path: Path) -> None:
     assert created == ""
 
 
-def test_no_workload_of_the_chart_is_given_the_upkeep_secret() -> None:
+def test_no_workload_of_the_release_is_given_the_upkeep_secret() -> None:
+    # The release as `make deploy` installs it: the upkeep Job is off by default
+    # and not part of it (its own tests render it on).
     documents = rendered_chart()
 
     rendered = yaml.dump(list(documents))

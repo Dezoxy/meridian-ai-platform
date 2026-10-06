@@ -28,8 +28,18 @@ DAY = 24 * 60 * 60
 DEADLINE_SECONDS = DOCUMENTS_DEADLINE_DAYS * DAY
 MINUTE = 60
 TRIAGES_SO_FAR = 2
-CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+CHECKPOINT_TABLES = (
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "workflow_checkpoints",
+)
 INSERT_CHECKPOINT = {
+    "workflow_checkpoints": (
+        "INSERT INTO runtime.workflow_checkpoints "
+        "(thread_id, checkpoint_id, workflow_name, checkpointed_at, body) "
+        "VALUES (%s, 'c1', 'claim-brief', now(), '{}')"
+    ),
     "checkpoints": (
         "INSERT INTO runtime.checkpoints (thread_id, checkpoint_id, checkpoint) "
         "VALUES (%s, 'c1', '{}')"

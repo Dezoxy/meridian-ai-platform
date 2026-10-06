@@ -29,6 +29,7 @@ Sku = Literal["Standard", "DataZoneStandard", "GlobalStandard"]
 ProviderKind = Literal["azure-openai", "replay", "recorded"]
 ToolEffect = Literal["read", "write", "decision"]
 AgentKind = Literal["graph", "job"]
+AgentHost = Literal["langgraph", "agent-framework"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 # Also what a caller's service ID must match when it is read from a certificate
@@ -57,6 +58,14 @@ Candidates = Annotated[tuple[EntityId, ...], Field(min_length=1)]
 # so a deployment that returns more could not be searched through an index on
 # that type.
 MAX_EMBEDDING_DIMENSIONS = 2000
+# The ceiling of a tenant's two rate limits (requests per 10 seconds, tokens per
+# minute). Far above any real limit (the seeded tenants have 4 to 10 requests and
+# 4,000 to 10,000 tokens), and far below where the rate store's arithmetic fails:
+# its script sums the tokens of the entries a window holds as Lua numbers, which
+# are doubles, so past 2^53 (about 9 * 10^15) the sums lose whole numbers. The
+# window holds at most about half a million entries (what the store's 32 MiB
+# holds), so a sum is at most about 5 * 10^14: some eighteen times inside 2^53.
+MAX_RATE_LIMIT = 10**9
 
 
 class RegistryModel(BaseModel):
@@ -187,16 +196,25 @@ class Agent(RegistryModel):
     # The parts the agent's graph is split into, each with its own tools; empty
     # for an agent that is not split. worker_checks.py refuses a job's workers.
     workers: tuple[Worker, ...] = ()
+    # The framework that runs the agent's entry point: the Agent Runtime picks
+    # its host by this field and refuses to start when the entry point's product
+    # is not what the host runs. "agent-framework" is Microsoft Agent Framework.
+    # checks.py refuses a job that declares it (no host runs a job) and workers
+    # on "agent-framework" (only the langgraph host carries them).
+    host: AgentHost = "langgraph"
 
     @model_serializer(mode="wrap")
-    def _omit_empty_workers(
+    def _omit_what_was_not_there_before(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, Any]:
-        """An agent without workers dumps as it did before the key existed, so
-        the evaluation's ``tools`` fingerprint of such an agent does not move."""
+        """An agent without workers, and an agent on the default host, dump as
+        they did before those keys existed, so the evaluation's ``tools``
+        fingerprint of such an agent does not move."""
         data: dict[str, Any] = handler(self)
         if not self.workers:
             data.pop("workers", None)
+        if self.host == "langgraph":
+            data.pop("host", None)
         return data
 
     def worker(self, worker_id: str) -> Worker | None:
@@ -236,8 +254,8 @@ class PoliciesFile(RegistryModel):
 class TenantLimits(RegistryModel):
     """What a tenant may use. The two rate windows are Azure OpenAI's own."""
 
-    requests_per_10_seconds: Annotated[int, Field(ge=1)]
-    tokens_per_minute: Annotated[int, Field(ge=1)]
+    requests_per_10_seconds: Annotated[int, Field(ge=1, le=MAX_RATE_LIMIT)]
+    tokens_per_minute: Annotated[int, Field(ge=1, le=MAX_RATE_LIMIT)]
     tokens_per_day: Annotated[int, Field(ge=1)]
     # Six decimals: the ledger counts micro-EUR, so the limit converts exactly.
     cost_per_month_eur: Annotated[Decimal, Field(gt=0, decimal_places=6)]

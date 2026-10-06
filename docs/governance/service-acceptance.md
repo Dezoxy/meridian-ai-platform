@@ -1,18 +1,20 @@
 # Service acceptance
 
-Status on 2026-10-06 (S034): **designed**. This is a written process and a
+Status on 2026-10-06 (S034, S037): **designed**. This is a written process and a
 checklist of 30 items for a workload that wants to be called accepted on the
-platform. It was applied once, on paper, to the reference workload in
-[the claims-triage document](service-acceptance-claims-triage.md). No tool or
-gate runs it. Some items are enforced by a check that already runs; the last
+platform. It was applied on paper to the reference workload in
+[the claims-triage document](service-acceptance-claims-triage.md) and to the
+second workload in [the claim-brief document](service-acceptance-claim-brief.md).
+No tool or gate runs it. Some items are enforced by a check that already runs; the last
 column of the checklist names it. The others rest on a person reading this
 document and writing the answer down.
 
 ## What is accepted
 
 A **workload** is a use case built on the platform: its agent, its graph, its
-tools, its tenant, its golden set and its pages or API. Today there is one,
-claims triage. "Accepted" means that the checklist was applied to the workload
+tools, its tenant, its golden set and its pages or API. Today there are two:
+claims triage, and the claim brief, which runs on a second agent framework.
+"Accepted" means that the checklist was applied to the workload
 in an applied document of this folder, that every item has a status and an
 evidence link, and that the owner decided on each item that is not met.
 
@@ -95,7 +97,7 @@ skips it.
 | SA-05 | Mutating tools and decisions | A tool that writes needs an idempotency key; no tool decides; where a person must decide, the workload pauses for them and the decision is recorded by the application, never by a tool (hard rule 6, T-23, T-31) | `meridian registry validate` refuses a write tool without a key, a decision tool in an allowlist and a tool whose name or scope carries a decision word; that the design leaves the decision to a person is a person's check |
 | SA-06 | Tool calls audited | Every tool call leaves an audit record, written with the tool's own write (T-14, QA-05) | Tests of the tool servers against PostgreSQL |
 | SA-07 | Model calls through the gateway | The workload reaches a model only through the Model Gateway (hard rule 4, ADR 3) | import-linter, in `make lint` in CI |
-| SA-08 | No framework in platform packages | Nothing under `src/meridian/platform/` imports `langgraph` or `langchain*`, and the workload's graph code stays above the platform (hard rule 5, ADR 2) | import-linter, in `make lint` in CI |
+| SA-08 | No framework in platform packages | Nothing under `src/meridian/platform/` imports `langgraph`, `langchain*` or `agent_framework` (the second framework, ADR 9), and the workload's graph code stays above the platform (hard rule 5, ADR 2) | import-linter, in `make lint` in CI |
 | SA-09 | Callers | The workload's services have entries in `services.yaml`: who may call whom, and which tenants and agents each may name | `meridian registry validate`; the services refuse a caller the file does not map (tests) |
 | SA-10 | What is sent to a model | The data classes and the residency labels of what the workload sends are known; every call goes only to a deployment its class may reach; special-category text makes no call (hard rule 3, T-11, T-13, QA-03) | Gateway tests (the filter, the refusal, the audit); the screens and the redaction are heuristics with their own tests (T-73) |
 | SA-11 | Synthetic data only | Every policy, claim, document and evaluation case comes from the seeded generator (hard rule 2, C-03) | Reproducibility tests of the generator; the secret scan; nothing stops a person typing real data into a form (T-04) |

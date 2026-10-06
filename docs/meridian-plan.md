@@ -12,7 +12,8 @@
   restart once a renewed certificate is mounted (S056), the gateway
   routes a call to Azure OpenAI by data
   class and residency from a laptop, falls back to a second deployment in
-  the same region and holds each tenant to its rate limits and budgets
+  the same region and holds each tenant to its rate limits (the windows
+  shared by its pods through a Redis on kind, S066) and budgets
   (a Grafana dashboard on kind shows what each tenant, agent, model and
   provider used), it answers embedding requests under the same controls (in replay mode
   and against Azure from a laptop), three MCP tool
@@ -21,7 +22,10 @@
   servers (with a simulated embedding), a triage graph calls the tools in
   a fixed order and lets rules decide each claim's route (a real model
   answered its one question, asked for by schema, for the golden set from
-  a laptop; on kind the model is simulated;
+  a laptop; on kind the model is simulated; the runtime hosts a second
+  agent framework behind the same protocol for a small second workload,
+  a claim brief that an adjuster decides (S037, seen on kind once under
+  replay);
   claimant text that holds special-category
   data or addresses the model is not sent, and identifiers are redacted
   before any model call and in logs), a claim it refers to an adjuster waits
@@ -412,7 +416,7 @@ and Pydantic, at the cost of one dependency.
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | done | S007, S019 |
-| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | todo | S007, S019 |
+| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | done | S007, S019 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
 ### Backlog steps
@@ -453,15 +457,35 @@ enviroment and you should go until azure step where we have to spend some
 money on it". So the session goes on, without waiting for a go-ahead between
 steps, through every step that needs no Azure resource and no payment: S064,
 S066 and S037 (running that day), S067, S068 to S076, S025 and S077, and the
-first halves of S036 and S078. It stops, and says what the next thing costs,
+first halves of S036 and S078 (since the next paragraph: S078 whole, and the
+first half of S079). It stops, and says what the next thing costs,
 at each point where money is spent: a paid model call (S071 whole, and any
 recording a changed prompt needs in S067), the apply of S036 in the owner's
-AWS account and of S078 in the owner's Google Cloud project, and S020.
+AWS account ~~and of S078 in the owner's Google Cloud project~~ (dropped by
+the next paragraph), the apply of S079 in that AWS account, and S020.
 The parts of a step that need no payment are done and the paid part is parked
 in its section, as the owner said of a blocked step on 2026-10-05. Decisions
 inside those steps that are the owner's (retention periods, uploads,
 node-exporter, a coverage gate, the Renovate hold, two guard rules) are asked
 when their step opens and do not stop the others.
+
+**Managed and self-managed Kubernetes (the owner, 2026-10-06).** After asking
+why the kind cluster has one node, which is its control plane: "okay but when
+we are at gcp, aws and azure we should prezent manages k8s and not managed
+too", then "we should build managed so i guess aks on azure and not managed on
+aws and gcp just scafold", and, to the session's first reading of that,
+"Self-managed Kubernetes is a scaffold only, on AWS - no we will build it on
+aws, gcp just scafold". So: on Azure the managed cluster (AKS) is the one that
+is built and run (S020 and what follows). On AWS a cluster whose control plane
+the owner's account runs itself, on the cloud's virtual machines, is built and
+applied once (S079), after its cost is stated and the owner says yes. On Google
+Cloud both kinds are a scaffold only: Terraform that is validated and scanned
+and never applied, which drops the applied half of S078. The managed cluster of
+S036 stays validated code; whether it is also applied is asked at S079's paid
+stop (the session's suggestion, which the owner heard: one cluster at a time on
+AWS, the self-managed one first). The comparison of the two kinds is written
+for all three clouds, in their mapping documents (S079). The owner confirmed
+both readings the same hour ("yes both are right, go on").
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
@@ -475,7 +499,7 @@ when their step opens and do not stop the others.
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | done | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | done | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
-| S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | doing: the command, its role and the runbook are done (2026-10-06); the shared rate windows wait for the cluster lane | S058, S065 |
+| S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | done | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need | todo | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens) | todo | S064, S037 |
@@ -507,13 +531,16 @@ S039 took the one. The owner lifted the limit for S038 on 2026-10-06
 (its section says how), for S037 the same day ("We can do s037 if we
 can now") and for S036 with it ("add the aws template too and we will
 test it in a real aws enviroment"): all four are built or to be built.
-S078 was added the same day, with S077 in M2, for Google Cloud.
+S078 was added the same day, with S077 in M2, for Google Cloud, and S079
+after it for a cluster that is not managed ("Managed and self-managed
+Kubernetes" above).
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so | todo | S025 |
-| S078 | GCP Terraform, applied once | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). Two halves. Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
-| S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
+| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged | todo | S025 |
+| S078 | GCP Terraform, ~~applied once~~ a scaffold only | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). ~~Two halves.~~ Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. ~~With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged.~~ Changed by the owner on 2026-10-06 ("gcp just scafold"): the module is never applied; whether a scaffold carries commands that create and remove it at all, or a README that says how the owner would, is its design's to say. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
+| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied | todo | S036, S078 |
+| S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract. Built as: a second host behind the Agent Runtime's `Host` protocol, picked for each agent by the registry's `host` field, with a PostgreSQL checkpoint store of its own, and a second workload, `claim-brief`, that calls tools, pauses for an adjuster and is started by the Claims API; implemented, tested, and seen on kind once under replay (ADR 9, the second applied service acceptance) | done | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
 
@@ -633,7 +660,7 @@ that day; the rest stand as their step recorded them.
 | The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 42 s and 16 s of one worker in CI (pull request 79; four workers, the Tests step 5 min 34 s); the job prints its slowest tests from S057 on | S057 |
 | On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | S071 |
 | A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | closed by S063: `policy_seed` and `knowledge_ingest` (migration 0022), each from a Secret only its Job mounts, no fallback to the owner's; tested against PostgreSQL and run on kind | S063 |
-| The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | open; S019: the chart refuses a second gateway replica, and leaves the rolling update alone (its decisions say why); windows shared between processes are the fix | S066 |
+| The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | closed by S066 (2026-10-06): the two windows are in one Redis shared by every gateway pod (ADR 8), and the chart allows a second replica only with the store on. Two gateway processes sharing a window is tested against one Redis, not seen on a cluster with two pods | S066 |
 | A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | closed by S059 as far as a tool server can (a call carries the time the runtime will wait; no slot in that time, or late before its work or its commit, is `failed`, `timed-out`); a search already at the gateway is still charged | S059 |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace (T-68) | threat model, S018 | partly closed by S063: kube-state-metrics' `secrets` collector is off and its rule is gone, asked by smoke on kind. Still open: the Prometheus operator's ClusterRole reads and writes Secrets and ConfigMaps in every namespace, and the chart at this version has no value that narrows it (the one switch drops every role the chart creates) | S072 |
 | Redaction runs before the rate limiter and costs up to a few seconds of CPU for a maximum request (T-73) | threat model, S018 | closed by S058 (the limiter admits the estimate of the text as sent, and redaction runs after it) | S058 |
@@ -645,8 +672,8 @@ that day; the rest stand as their step recorded them.
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open; not built by S057: the checker and its test are copies of development-base's, where the fix goes first and is then re-copied. S057's section says what the check is; tried from a scratch folder, it finds no split table in the tree today | S075 |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | closed by S062 (a wording of its own; and a service with no span no longer counts as present) | S062 |
-| 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | open | S037 |
-| No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open | S037 |
+| 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | closed by S037 (T0: the runtime's tests publish a stand-in for the agent under test alone and load every other agent through its real entry point, and the registry's and scaffold's pins are derived; in a tree with a scaffolded workload only the pin `NAMES` fails, on purpose) | S037 |
+| No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open; narrowed by S037: a workload written by hand, `claim-brief`, ran through the run API in tests and on kind once under replay, and no generated one has | S076 |
 | The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | closed by S057, accepted with its number: 11 s of one worker in CI (pull request 79), 30 to 39 s on a laptop | S057 |
 | The scaffold's comparison "the old agents plus exactly one" has no test that reaches it alone (the YAML parse and the registry validation refuse first) | S039 | closed by S061 (a test calls the comparison with a list the earlier checks would let through) | S061 |
 | The scaffold refuses valid but unusual files without saying which line (a table header with a trailing comment, a flow-style list), and `the name is taken` does not say by what | S039 | closed by S061 (a refusal names the line of the person's own file, and the kinds of thing that hold a taken name; never the name) | S061 |
@@ -749,9 +776,24 @@ that day; the rest stand as their step recorded them.
 | The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | open | S075 |
 | A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | open | S068 |
 | Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open; S064 did not take it: the upkeep is a command a person runs and exports no series, so a rule has nothing to read; its audit rows are the record | S068 |
-| `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | open; the step's second half | S066 |
+| `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | closed by the step's second half (2026-10-06): `make gateway-upkeep` renders a Job of its own outside the release, under the role's Secret; on kind it read the open reservations, refused an expiry with nothing to remove and credited one token | S066 |
 | `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | open | S068 |
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | S074 |
+| The certificate policy admits any `*.meridian.svc` name and any service account's URI for a request in the namespace, so whoever can create a Certificate and a pod there can answer as another service, the rate store included, and capture the gateway's password for it (T-92) | S066 (security review; as it was since S056) | open | S072 |
+| No image is scanned for known vulnerabilities in CI: the Redis image, like the others, is pinned by digest and read by Renovate, and nothing reports what is in it | S066 (infra review) | open | S022 |
+| A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | open | S069 |
+| A rotation of the rate store's password has no overlap: the store and the gateway restart one after the other, and model calls are refused with a 503 for the seconds between (the runbook says so) | S066 | open | S073 |
+| The rate store's own metrics are scraped by nothing (memory, connections, a slow script), and its own output is not in the platform's JSON format, is not redacted by it and is not shipped to Loki: it stays in the pod's output on the node | S066 | open | S072 |
+| The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open | S073 |
+| A cold `make up` depends on the chart hosts answering in time: on 2026-10-06 the Tempo chart's download from GitHub timed out after 296 s and `make up` had to be run again; no chart is cached or mirrored | S066 (third cluster run) | open | S073 |
+| Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open | S073 |
+| The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | open | S069 |
+| The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
+| No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | open | S072 |
+| `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | open | S073 |
+| `make deploy` checks the rate store's ACL rules and not that the password in the gateway's address is the one the ACL holds: a mismatch shows as refused calls, not at deploy | S066 (fourth security pass) | open | S073 |
+| The command guard does not ask before `make gateway-upkeep` with an argument that changes the ledger (`credit`, `close`, `expire --confirm`), and the audit row of such a change names the database role, not the person or session | S066 (third security pass) | open | S075 |
+| Under an overloaded machine (a load average over 100 on 2026-10-06, the session's own doing) Tempo, the collector and the database's pod on kind were each restarted by their probes, and `make demo` then failed at reading its trace back; nothing bounds what else runs on the machine the cluster runs on | S066 (fifth cluster run) | open | S073 |
 | The triage as a supervisor and workers, the worker's name on the wire and migration 0021 have run in tests and in the replayed evaluation, not on a cluster | S031 | closed by S063's cluster runs (2026-10-06): migration 0021 applied, `make demo` passed for a claim approved automatically and one through the adjuster, and Tempo holds each worker's name on the runtime's and the tool servers' spans. The `worker` column was not read on the cluster | S063 |
 | `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | open | S074 |
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
@@ -774,6 +816,20 @@ that day; the rest stand as their step recorded them.
 | The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
 | The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
 | The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
+| The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; ~~they are corrected when a module is applied, not from documentation~~ no module is applied on Google Cloud (the owner, 2026-10-06), so S078 closes this row by saying in each threat row that its Google Cloud reading is from documentation alone | S078 |
+| The second host's checkpoint rows carry no release stamp: a release that changes the claim brief's steps, edges or state fields ends every brief that waits (`workflow-changed`, `checkpoint-refused`), and in a rolling update an old pod reads rows a new pod wrote and ends the run for good; two tests pin the shapes (T-98); neither case was seen on a cluster | S037 (security review, third pass) | open | S069 (the nearest: it holds the runtime's edges) |
+| The tool server does not check that `add_claim_note` follows a recorded approval for the run: a direct call files a note, and the gate is the workflow's code and the Claims API's record, as for the triage since S015; `approval_required` cannot stand in for it, since the server refuses every call of such a tool | S037 (boundary review) | open | S069 (the nearest: it holds the tool server's edges) |
+| `claims.briefs.brief` has no retention rule, and a brief that nobody decides keeps its run, its checkpoint rows (which hold the unredacted brief) and its claim's one open slot with no age bound; `claims_api` can set a brief's `run_id` and `tenant` as it can a claim's (no key ties them to the claim's tenant) | S037 (reviews) | open; the periods are the owner's to choose | S068 |
+| Renovate has no rule for `agent-framework-core`: a bump arrives in the monthly `python` group and can change the graph's signature and strand paused briefs; `python-dotenv` 1.2.4 was locked five days after its release, under the seven-day rule; the guard today is `test_brief_stored_shapes.py` | S037 (security review) | open | S075 |
+| No runbook names a failure of the claim brief that an operator can act on: a brief that waits for ever, a release that strands paused briefs, a migration (0023, 0024) not applied | S037 (service acceptance, SA-20) | open; no step writes a runbook, so the nearest is the game day that exercises them | S028 |
+| The claim brief has no grader, no baseline and no cases (its golden set is empty and its evaluation raises `NO_GRADERS`), so nothing in CI grades a brief or fingerprints its prompt; the tenant `evaluation` does not list the agent | S037 (service acceptance, SA-15) | open; no step grades a workload, so the nearest is the one that measures with a model | S071 |
+| The scaffold writes a LangGraph workload only; the claim brief's host line, state types, workflow, store and routes were written by hand, and the Agent Runtime's docstring (`runtime/__init__.py`) still says it hosts LangGraph graphs | S037 (service acceptance, SA-30) | open | S076 |
+| `ToolClient.call` sets no step attribute on its span, so the design's "the tool span carries the step's name" is not true; the second host's step limit is `step-limit` and LangGraph's is `unexpected`, two words for one limit | S037 (reports of R4a, W1a, R1) | open | S069 |
+| The three brief routes have no sign-in (T-69, T-94): whoever reaches the Claims API starts, decides and reads a brief | S037 | open | S021 |
+| A migration that is not applied fails one statement of the sweep (0023: the leftover walk; 0024: the abandoned-run list), so the LangGraph cleanup or the triage's run end goes down with it; how the chart orders the migrate Job against the sweep and the pods was not read | S037 (database review) | open | S073 |
+| `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | open | S074 |
+| `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | open; seen once, under load | S074 |
+| Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
 
 ## Part C — Step details
 
@@ -9507,7 +9563,7 @@ rule of that day answers.
   alert fires.
 
 ### S066 — Gateway ledger upkeep
-**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
 **Goal:** a command of the gateway's own, under a role of its own and
 with an audit row, credits a tenant, closes a reservation a dead
 process left open and expires old ledger rows; and the rate windows
@@ -9656,6 +9712,215 @@ the first contract was written, and before the pull request.
 - For the owner: the retention month for the ledger (the command takes
   it and has no default); and whether the second half's Redis should
   wait for S063 to release the cluster or run beside it.
+
+**Second half (2026-10-06): the rate windows shared in Redis.**
+
+**Decisions:**
+
+- **A store behind the limiter's one method.** `admit` keeps its signature and
+  its answers. The in-process store stays for a single process and for the
+  tests that move a clock by hand; the gateway builds the Redis one when it is
+  given the store's address. Rejected: replacing the in-process class, which
+  about sixty app-level tests and the evaluation's stack run without a store.
+- **The same sliding log, in one script Redis runs atomically, on Redis's
+  clock.** A sorted set per tenant; a refusal records nothing, as before.
+  Rejected: a fixed-window counter, which admits up to twice the limit across
+  a window's edge, where the registry's check of the tenants' sum assumes a
+  sliding window; and each pod's own clock, which moves a tenant's window by
+  the skew between pods.
+- **A call the gateway cannot count is refused** (the owner, 2026-10-06, asked
+  both questions with the session's recommendations: "1. Your suggestion 2.
+  Same"): a 503 with a retry hint and an audit row (`rate-store-unavailable`),
+  as a ledger it cannot reach already fails every call, and never a fallback
+  to windows of its own, which would bring T-45 back exactly when something is
+  wrong. The price: Redis is a second store every model call depends on. And
+  the chart allows a second gateway replica only with the store on; kind stays
+  at one.
+- **Redis on kind without a third-party chart.** The official image by digest,
+  one Deployment with no volume and nothing persisted, in the Meridian chart
+  and off by default. Rejected: the Bitnami chart (its images left the free
+  catalogue in 2025, and 3,000 lines for one process) and an operator.
+- **TLS 1.3 both ways, and an ACL, because a certificate of the services' CA
+  does not say "the gateway".** The `default` user is off; the gateway's user
+  has a random password in a Secret `make up` makes and only the gateway
+  mounts, and may run exactly the script's commands on `meridian:rate:*`; a
+  `probe` user may only `PING` and has no password (the session's decision,
+  which the owner may overturn: a password for a user that can only ping would
+  sit in the pod's specification). Its price, which the reviews found: any
+  holder of a services certificate with a path to the port opens an
+  authenticated session, so what bounds it is the NetworkPolicy and a limit on
+  every client's buffers together (`maxmemory-clients`).
+- **The store restarts when its certificate was renewed**, through its
+  liveness probe, as the six services ask for their own restart. A restart
+  hands every tenant its windows again, once per renewal: accepted and stated,
+  since the budgets are in the ledger and are not windows.
+- **`meridian gateway` runs on a cluster as a Job of its own**, rendered
+  outside the release by `make gateway-upkeep` with the subcommand's
+  arguments, under the upkeep role's Secret and a policy of the sweep's shape.
+  This closes the first half's open row.
+- **What somebody else wrote into a window can cost its tenant a 429 and
+  nothing more.** The script reads the whole kept window or refuses (at most
+  twelve request limits and one more, a margin of two over the six it can ever
+  have written), reads a planted count as one more than the limit, and answers
+  a refusal where it cannot account for a window; a tenant's two limits are
+  capped at a billion in the registry. Rejected: trusting the key's contents
+  because only the gateway's user can write them (the reviews showed what a
+  holder of that credential, or a bug, can plant).
+- **The alert on the store's refusals is a share and a count, in two
+  branches**: more than 5 percent of the calls the store could have counted
+  and at least 5, or more than half and at least 2, for two minutes, critical.
+  One refused call no longer pages (a renewal's restart refuses a handful), a
+  store that is down on a quiet platform does, and calls refused before the
+  store is asked cannot dilute it. The numbers are proposals nobody measured.
+- **The decision is ADR 8, and ADR 3 keeps its text** with a dated note that
+  its rate windows are no longer kept in the process.
+- **The register gains a row and no boundary.** The security review proposed a
+  tenth boundary for the gateway and its store. A boundary here is tied to
+  relationships of the architecture model, and the model holds the store
+  inside the Model Gateway, not as a container of its own; so T-92 stands on
+  TB-4 and TB-9, and the paragraph under the boundaries names the store among
+  what a single threat covers, as it does the database's writes, the telemetry
+  and the registry's reads (the advisor's reading of 15:20 UTC gave the reason
+  its sharper form).
+
+**Advisor:** consulted three times. At 08:35 UTC on the design, before the
+first contract went out: what it changed was not written down at the time (the
+rule to record each consultation's effect at once came later the same day),
+and a consultation cannot be read again afterwards. At 15:20 UTC on the
+register: the store's row stands on TB-4 and TB-9 with no tenth boundary, and
+it gave the reason its form (a boundary is tied to a relationship of the
+model, and the model holds the store inside the gateway). At 16:52 UTC before
+the pull request, on the last fix contract, which no reviewer had read.
+
+**Work log:**
+
+- **Mapping, then a design with its threat note**, before any code; the two
+  questions that shape what comes later went to the owner with a
+  recommendation each.
+- **Fifteen contracts to the `implementer`**, each in a worktree of its own:
+  the store and its script (24 of the limiter's 25 unit tests run against both
+  stores with their expectations unchanged; one is in-process by
+  construction); the gateway's settings, its 503, the audit row and the
+  metric; the first reviews' findings; the chart; the kind side (the Secret,
+  the ACL, a smoke line); the restart on a renewal; the upkeep Job; the
+  cluster reviews' findings in the chart and in the limiter; the merge with
+  `main` after S064 (45 smoke lines, 20 rules in 5 groups, 8 runbooks); the
+  decision record; the documents brought to what the cluster showed; and three
+  more for the last two review passes (the script's bounds, the chart and the
+  kind scripts, the alert).
+- **What the measurements corrected in the design.** `maxmemory` with
+  `noeviction` does not make this store refuse: the script's first write is
+  not one Redis checks memory for, and it wrote with `maxmemory 1`; the real
+  bound is the number of admissions per tenant and the key's expiry. The
+  client trusted the machine's CAs beside the one it was given, and now uses
+  the services' CA alone. A slow store could hold a cold call for several
+  timeouts; the worst case is now 2.5 seconds. The client sent a command on
+  every connection that Redis answered with an error no monitor shows, so the
+  gateway's command list was shorter than first measured.
+- **Reviews.** `security-reviewer` and `python-reviewer` on the store and the
+  gateway: four medium findings, all fixed. `infra-reviewer` and
+  `security-reviewer` on the chart and the kind side, with the first cluster
+  run: one high finding (a script that loops as the gateway's user froze the
+  store, and no probe or alert saw it) and six must-fix ones (Renovate's
+  `redis` group also took the Python client; nothing in CI held the ACL to the
+  real client; a hung store was never restarted; the threat model was stale;
+  the smoke line passed with the store wide open, because the sending pod had
+  no egress rule anyway; `make deploy` could not see a stale ACL), all fixed
+  in two contracts. Because three commits (the upkeep Job and the two fix
+  contracts) had reached the branch after those reviews, two more passes
+  followed before the pull request: `infra-reviewer` and `security-reviewer`
+  on those commits (no critical or high finding; two medium ones in the
+  script, a count that made it raise and a planted window that slowed every
+  tenant, and five improvements to the chart and the scripts), then
+  `security-reviewer` alone on their fixes (both closed; one medium, the
+  alert's blind spots, and four low). The last contract's fixes had no
+  reviewer: the advisor read the commit and the fifth run's evidence before
+  the pull request and found nothing that needs one (each change is held by a
+  test seen failing first or by a mutation; the alert's branches by promtool
+  cases on both sides); it corrected three things in this section's draft: a
+  backlog row the same commit had made false, the follow-ups' list, and this
+  record of the consultations.
+
+**Result / verification:**
+
+- **The rate windows are shared between gateway processes.** Tested against a
+  Redis that `make pytest-db` and CI start beside PostgreSQL: two limiters on
+  one store share a window, the script holds under racing threads, both stores
+  give the same answers, and a store that is down, slow, refusing or answering
+  nonsense is one 503 with its audit row and its count, never a wait and never
+  a call let through. The chart refuses a second gateway replica unless the
+  store is on.
+- **On the kind cluster, five runs on 2026-10-06, local only.** The first two
+  before the cluster reviews' fixes: `make up` made the Secret, `make deploy`
+  waited for the store before the gateway, `make smoke` printed 41 PASS and
+  `make demo` completed a claim, so model calls were counted through the
+  store; the upkeep Job read the open reservations, refused an expiry with
+  nothing to remove (a failed Job, as designed) and credited one token. The
+  third on the final commit, a cold cycle: the cluster was deleted and made
+  again, **with one retry** (the first `make up` failed after 296 s on a
+  timeout fetching the Tempo chart from GitHub; nothing of this step was
+  involved, and the second completed in 125 s); then `make deploy` and `make
+  demo` passed, and `make smoke` printed 43 PASS with 2 SKIP (the sweep's
+  lines, inside their allowance) and five minutes later 45 PASS, 0 FAIL, 0
+  SKIP, twice. The store's ingress rule was enforced on a pod without the
+  gateway's label; the probe user's ping answered `PONG`; and after a real
+  renewal of the store's certificate (issued by cert-manager within ten
+  seconds) the container restarted once, about 100 seconds later, on the
+  probe's failure, while the gateway's pod did not restart and the demo passed
+  again (that demo's claim was decided by the rules with no model call, so it
+  does not show a call counted after a renewal's restart). The 20 rules in 5
+  groups were loaded and healthy, none firing.
+- **The fourth and fifth runs, on the review passes' fixes, on the same
+  cluster.** `make deploy` replaced the store's pod once for its new
+  configuration (the buffer bound, the probes' time limit) and passed its new
+  check of the Secret's ACL; `make smoke` printed 45 PASS each time; the
+  upkeep Job's refusal ended in the script's new sentence and `make` returned
+  2. Two things these runs found: `make deploy` does not apply alert rules and
+  smoke compares them by name, so the changed rule was loaded only after `make
+  up` (a backlog row); and the fifth run was made while the session ran two
+  whole suites and a deploy at once: at a load average over 100 Tempo, the
+  collector and the database's pod were each restarted by their probes and
+  `make demo` failed at reading its trace back (the claim itself completed).
+  On the quiet machine minutes later `make demo` passed four times, the fourth
+  with a chat call through the gateway's last script and its trace read back.
+  Seven of the forty golden claims are used on this cluster.
+- **Not seen on a cluster, so tested without one:** a 503 from the gateway
+  while the store is down (the demo did not run in those seconds), the alert
+  `MeridianRateStoreRefusing` firing, a second gateway replica, a rotation of
+  the store's password, a store frozen by a script and restarted by its probe,
+  `make deploy`'s refusal of a Secret older than the ACL, the audit row of the
+  cluster's credit (it is read through SQL in the database's pod), and the
+  store over hours.
+- **Gates, run by the main session on the final tree:** the whole suite alone
+  on a quiet machine, 12,602 passed, 8 skipped, exit 0 (4 min 14 s); a first
+  run of it, while the session had two suites, a deploy and four agents going
+  at once and the load average passed 100, had 2 failures in
+  `test_kind_manifests.py` (10 min 19 s) that did not repeat; `make lint` (5
+  contracts kept), `make registry`, `make helm-lint`, `make alerts` (20 rules,
+  the unit tests passing) and the evaluation's free replay (both compares
+  passed), each exit 0; then `make docs`, `make test`, `make check` (no ERROR
+  line) and `make secret-scan` on the closed tree, each exit 0.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the certificate policy admits any
+  service's name, the store's included (S072); no image is scanned in CI
+  (S022); the cap on a tenant's limits is nominal and no ceiling is tied to
+  the store's memory (S069); a rotation of the store's password has no overlap
+  (S073); the store's metrics are scraped by nothing and its output is not
+  shipped (S072); the liveness script and a clock step (S073); a cold start
+  depends on the chart hosts (S073); what was not seen on a cluster (S073);
+  the circuit breaker and the throttles per process (S069); the store in
+  Azure, and Valkey against Redis 8 under its AGPLv3 option (S020); no rule
+  reads the store's restarts (S072); smoke compares alert rules by name and
+  `make deploy` does not apply them (S073); `make deploy` checks the ACL's
+  rules, not the password (S073); the guard does not ask before an upkeep that
+  changes the ledger (S075); and what an overloaded machine did to the cluster
+  (S073). The two tests that failed once under that load join S074's row on
+  load-sensitive tests.
+- For the owner: the probe user without a password (above); and Redis in Azure
+  is a managed service with a monthly price, which S020 states before anything
+  is created.
 
 ### S031 — Supervisor and workers
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
@@ -10303,6 +10568,446 @@ request: documents and the model alone (Part A, step 4).
   edge without a managed firewall in front, are the session's decisions
   to overturn.
 
+### S077 — GCP mapping
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** a Google Cloud deployment view and a decision record that maps
+every Azure service Meridian uses or designs to its Google Cloud
+equivalent, as S025 does for AWS and from the same Azure document (the
+owner, 2026-10-06: "add another step for gcp like aws too and start it
+too"). Documents and the architecture model only: nothing is built,
+applied or paid for.
+
+**Decisions** (the main session's unless marked; the owner may
+overturn any):
+
+- **One record per cloud**: ADR 7 maps the Azure platform to Google
+  Cloud and says nothing twice that S025's Azure document says once (the
+  table of what Azure is used for, the residency rule in words no cloud
+  owns). The owner asked for the step and did not name its form; the
+  form is the session's.
+- **Every equivalent has a source and the date it was read**, from
+  Google's own pages; a cell without one says "not verified", and the
+  ADR lists the open questions that matter to S078.
+- **GKE in Standard mode, one zonal cluster, Dataplane V2**, so the
+  chart's NetworkPolicies are enforced and the node log agent runs as on
+  kind. Autopilot is the alternative the ADR weighs: cheaper for a demo
+  by its sketch, and it changes cert-manager's values and what a
+  DaemonSet may mount.
+- **The edge stays Envoy Gateway behind a passthrough load balancer**,
+  as in the AWS mapping, so the chart is the same on every cluster. The
+  cost, stated in the ADR: Cloud Armor's HTTP rules do not sit in front
+  of a passthrough load balancer, so T-02's firewall has no counterpart
+  in this form; whether Envoy Gateway runs with the Standard-channel
+  Gateway API alone is not verified. The GKE Gateway controller is the
+  managed alternative, not taken.
+- **Cloud SQL for PostgreSQL, Enterprise edition, over AlloyDB**, with
+  the three traps a Terraform module meets written down (the default
+  edition for PostgreSQL 16 and later, backups off through Terraform,
+  who may create the `vector` extension).
+- **The Region for the test is `europe-west3` (Frankfurt)**, the same
+  city as the AWS test; the model's location is a second variable that
+  does not depend on it. The research preferred `europe-west4` (8 to 15
+  % cheaper on the regional lines, and the only EU region with the
+  regional endpoints of Mistral and of a 1,024-dimension embedding
+  model); the ADR weighs it. Put to the owner with the AWS Region
+  (`eu-central-1`) as the session's suggestions, the owner answered on
+  2026-10-06: "Go with your suggestion".
+- **The view places what the cloud changes**, in the shape the AWS step
+  found: the edge, the Model Gateway, the Platform Database, the secret
+  store and the model provider; the registry is not drawn.
+
+**Advisor:** consulted once, before the first contracts of this step, of
+S025 and of S075 together (about 12:55 UTC); what it changed for this
+step was not written down beyond the order (the research first, the view
+only after the AWS step had found the shape). The contract for the ADR
+reported that its own consultation was refused by a rate limit. Not
+consulted before the pull request: documents and the model alone (Part
+A, step 4).
+
+**Work log:**
+
+- **A research report** of the Google Cloud equivalents with sources,
+  the models and their residency, a region comparison and a cost sketch;
+  **two contracts to the `implementer`**: the ADR, and the deployment
+  environment with its view, written from the AWS step's reports.
+- No reviewer agent: no code, chart, Terraform or registry entry
+  changed. The main session read each diff and the exported picture, and
+  corrected one sentence of the ADR that said the owner had adopted the
+  form.
+
+**Result / verification:**
+
+- **What the mapping found:** pay-as-you-go Gemini in the EU is
+  `eu-zone` through the `eu` multi-region endpoint, and the one
+  in-country option (Gemini 3.5 Flash in `europe-west3`) is a fixed-term
+  purchase, about USD 1,300 for one unit for a week; the Gemini 2.5
+  family, which had regional endpoints across the EU, retires on
+  2026-10-20; Google Cloud hosts no OpenAI model, so a deployment there
+  is a change of model (new recordings, new baselines, a re-embedded
+  corpus: an inference from those facts); no embedding model has an
+  in-country commitment in an EU member state; the label is a function
+  of model and location together; `europe-west2` and `europe-west6` are
+  in Google's "Europe" and not in the EU.
+- **What differs from the other clouds and matters to the register:** a
+  budget can pause model spend at most, never infrastructure (T-15);
+  prompts that abuse monitoring flags may be logged for up to 90 days
+  for an account on the online terms, and a 24-hour in-memory cache is
+  on by default (T-20); whether a project with no organization can carry
+  the policy that denies the global endpoint is not verified, so
+  refusing `global` stays the gateway's job.
+- **What the test would cost, as a sketch from list prices read on
+  2026-10-06:** about USD 0.37 an hour and 2.93 for eight hours in
+  `europe-west3`, less the cluster-fee credit, without model calls, tax
+  or conversion. The free trial's credit cannot pay for a partner model.
+  The amount is stated again from fresh prices before any apply, and
+  nothing is applied without the owner's yes (S078).
+- **The view**: `DeploymentGcp`, 10 boxes and 4 arrows inside the budget
+  of 12 and 8, every node and instance tagged `Designed`. Exported and
+  read at full size on 2026-10-06: every label legible; the same two
+  flaws as the AWS view, recorded in the register.
+- **Gates:** `make check` (no ERROR line), `make docs` and `make test`,
+  each exit 0, on the branch with `main` merged in.
+- **Not done, by design:** no Terraform, no project, no call to Google
+  Cloud.
+
+**Follow-ups:**
+
+- In the backlog, with its step: the threat model's rows on the edge's
+  firewall, the budget, egress and provider-side retention speak of
+  Azure alone (S078). The registry's Azure-shaped label derivation has
+  S025's row.
+- For the owner: Standard mode over Autopilot and the edge without a
+  managed firewall in front are the session's decisions to overturn. The
+  two test Regions are confirmed (above), which also settles the Region
+  S025's section left open.
+
+### S037 — Second-framework workload
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** a second agent framework, Microsoft Agent Framework, runs behind
+the same `Host` protocol as LangGraph in the Agent Runtime, on a second
+workload that calls tools, pauses for a person and is started by the
+Claims API, so that ADR 2's claim (a later switch rewrites the workload
+and the runtime's host, not the platform) is a fact for a second
+framework and not a claim.
+
+**Decisions:**
+
+- **The owner's words (2026-10-06).** First queued ("Okay put s037 to the
+  queue"), after S064 and S067, then started the same day: "We can do
+  s037 if we can now". The session asked three questions, and the owner
+  answered each: does the workload call tools or only the model? "yeah it
+  should call tools". Does it pause for a person? "yeah". Who is allowed
+  to start it? "your suggestion".
+- **The third answer needs saying as it was.** The session had asked
+  the question without naming a suggestion; it named one in its reply
+  straight after, and the owner has not objected: **the Claims API starts
+  it**, as the one service that may already call the runtime and holds
+  the claim and the adjuster's decision. So the owner accepted a
+  suggestion before it was spelled out. The design lists it among the
+  session's decisions, each of which the owner may overturn.
+- **The workload is a claim brief, not a second triage** (the session's;
+  ADR 2 rejected a second copy of the triage, and all six tools are
+  bound to a claim). `claim-brief` has four steps: `gather` (the policy
+  and the claim's history, two reads), `draft` (one model call through
+  the gateway for a short brief in plain text), `ask` (an approval
+  request, then the pause) and `file` (the recorded decision read through
+  `approval_outcome`, never the resume's value; on approve one claim note
+  of fixed text, on reject nothing). It decides nothing about the claim
+  and never moves its state. Rejected: a workload that changes the
+  claim's state, which would share the triage's state machine.
+- **One runtime process hosts both frameworks, behind a `Host` protocol
+  of three operations** (start a leg, resume a leg, forget a run's
+  checkpoints). Rejected: a second runtime service (a chart entry, a
+  certificate, policies and an identity for a second copy of the neutral
+  code).
+- **The registry names the host**, per agent, in a field that defaults to
+  `langgraph` and is not written into an agent's serialised entry, so the
+  evaluation's `tools` fingerprint of `claims-triage` and both baselines
+  did not move. Rejected: guessing the host from what the entry point
+  returns, and a second entry-point group (two places to say one thing).
+- **A checkpoint store of our own in PostgreSQL** for the second host
+  (`runtime.workflow_checkpoints`, JSON only through a codec that refuses
+  what it could not restore). Rejected: the framework's file store (state
+  on a pod's disk, and every first-party store pickles), its Cosmos DB
+  store (a second database, Azure only) and no pause at all (the owner
+  asked for one). This is the cost ADR 2 named when it rejected the
+  framework as the primary runtime.
+- **API only, and the brief's decision reuses `claims.decisions`**, keyed
+  by the brief's own run, with the outcomes the table already allows.
+  Rejected: a page now (S016's size again) and a second decisions table.
+- **Probes before the host is written**, as S031 did for subgraphs (P0).
+- **The dependency**: `agent-framework-core`, pinned at 1.19.0, the
+  version the spike measured, importable only in `meridian.runtime` and
+  `meridian.workloads`; the platform's import contract gained its name.
+- **What P0 measured and corrected in the design.** A resume that failed
+  after the answer is not re-opened as a pause: the latest checkpoint
+  holds the answer in flight, so the host's resume takes one of three
+  ways (one pending request: answer it; an answer in flight: restore it
+  and only the failed step runs again; neither: `no-pending-pause`), and
+  a step after the pause may run twice. The host addresses the latest
+  checkpoint of the run's thread and never an ID a caller names, because
+  naming the pause's checkpoint answers it a second time. Spans made from
+  the framework's events are siblings of the clients' spans, not their
+  parents. The step bound is cumulative in the framework (the restored
+  count plus ten). The framework logs the text of what a store raises,
+  which a database error fills with the row, so the store raises class
+  names only. The two clients are called through `asyncio.to_thread`: the
+  tool client without a kept transport fails inside a running loop.
+- **What the advisor's second and third readings corrected** (Advisor,
+  below): forgetting a run's checkpoints is the protocol's third
+  operation and is each host's own, by thread; a step that may run twice
+  writes through a fixed `step` word; the contract order became the
+  dependency alone (R3a), the store (R3b) and the Claims API's routes
+  (A1) beside them, the second host as a module nothing imports (R4a)
+  while S064 was open, then one contract (R1) to put LangGraph behind the
+  protocol; and threat f of the design was wrong as written (below).
+- **What the first two reviews changed.** The person's decision
+  (`brief.decided`) is in the claim's trail, and so was the sweep's event
+  for an abandoned brief run, which could be read as the triage run's end:
+  the sweep's event for a brief run now carries no claim as its
+  reference. A brief must not wait for ever (the one high finding): a
+  decision posted again for a run that has ended closes the brief by the
+  recorded decision (`Completed`) or as `failed`. The two migrations were
+  edited before anything had applied them (0023 gained the owner guard and
+  lost an unused `UPDATE` grant; 0024 ties a state that needs a run and a
+  text to having them). The host refuses a definition it has handed out
+  before, does not trust a pause it cannot find again, and orders "latest"
+  by the table's own sequence. A start is refused for a closed claim and
+  briefs per claim are bounded at five, because the routes have no
+  sign-in (T-69).
+- **What the second pass changed** (the Agent Runtime, the workload and
+  the Claims API, in three fix contracts). A resume that can never
+  succeed ends the run (`workflow-changed`, `checkpoint-refused`) and
+  only a refusal does: any other error pauses it again. A step the
+  framework defines is refused at start and at each leg. The framework's
+  29 adapter modules are named in the import contracts. Its loggers are
+  held at WARNING and its telemetry is off whatever is imported first.
+  The brief's input is a whitelist of six scalars and a count of
+  documents, after a review found the claim's free text in the checkpoint
+  rows. A decision on a claim that has closed is recorded as a
+  rejection. The brief's package may import four names of the framework
+  and no HTTP client. The stored shapes and the graph's signature are
+  pinned by tests, so a release that strands paused briefs changes a test
+  on purpose.
+- **Not what the design said, found while building**: the brief calls
+  five tools, not four (`request_approval`, `approval_outcome` and
+  `add_claim_note` besides the two reads); the tool client refuses a
+  `step` word for a tool with no idempotency key, so only the two writes
+  carry fixed words; `ToolClient.call` sets no step attribute on its
+  span, so the design's "the tool span carries the step's name" is not
+  true.
+
+**Advisor:** four consultations by the main session, and one by an
+implementer. Before the first contract, on the design and its threat note;
+the design's decisions 1 to 6 are what stands from it. At about 11:25 UTC
+because P0 contradicted the design (the point "a result contradicts what
+was expected"): it corrected the loose "deleted by the neutral code as
+today" (forgetting is the protocol's third operation, each host's own, by
+thread), made the idempotency key of a step that may run twice a fixed
+word, and put the dependency, the store and the Claims API's routes ahead
+of the host. At about 12:55 UTC with the first two reviews in hand (the
+"third reading"): threat f was wrong as written, the one high finding
+needed an exit for a brief whose run had ended, and the two migrations were
+to be edited while nothing had applied them. At 17:21 UTC before the pull
+request, because F4 and the merge of `main` had been read by no reviewer:
+it asked for two cheap reads on the cluster before the pull request, a
+positive control that the runtime's own lines reach Loki and a reject
+path, both done, and one sentence of the evidence ("the limit of 200
+reached") was false (193 lines came back under it) and was corrected. The
+F3w implementer, which inherits the advisor, was told of one gap: after a
+decision recorded on a closed claim whose resume failed, a second approve
+got a 409 "decided otherwise"; the repost now returns the recorded word
+(red first, then fixed). A consultation before the pull request was made
+because something had reached the branch that neither a reviewer nor an
+earlier consultation had seen (Part A, step 4).
+
+**Work log:**
+
+- **Two read-only maps of the repository, a design with a threat note,
+  then seventeen contracts** (P0, T0, R1 to R4a, W1a, W1b, A1, X1, X2, F3r,
+  F3w, F4, D1, D2) to the `implementer`, each in a worktree of its own and
+  carried to the step's branch by the session.
+- **P0, the probes.** A spike under `spikes/s037-agent-framework-host/`
+  (79 tests against 1.19.0, the runtime's real clients and a PostgreSQL
+  store): eleven questions, four answers that contradicted the design
+  (Decisions).
+- **T0.** The runtime's, the registry's and the scaffold's tests stop
+  assuming one graph agent (`tests/meridian/runtimesupport.py`): with a
+  scaffolded workload in the tree 137 tests failed before, and one, the
+  pin `NAMES`, which fails on purpose, after.
+- **R2.** `Agent.host`, its two registry checks (a job names no host; no
+  workers on the second host) and the regenerated schema; the dump and
+  the `tools` fingerprint of each real agent pinned unchanged.
+- **R3a.** The dependency alone: `agent-framework-core` 1.19.0 in the
+  root lock with `msgspec` and `python-dotenv` and nothing else moved, the
+  import contract's new name, and a fresh-interpreter test that it loads no
+  provider SDK, reads no `.env`, sets no provider and opens no socket.
+- **R3b.** Migration 0023 (`runtime.workflow_checkpoints`), the codec and
+  the store, and the sweep's coverage of the new table.
+- **A1.** The Claims API's three brief routes, migration 0024
+  (`claims.briefs`) and the sweep's keep rule and agent filter, against a
+  stubbed runtime.
+- **R4a.** `runtime/hosts.py` (the protocol and the two asynchronous faces
+  of the clients) and `agent_framework_host.py`, a module nothing imported
+  while S064 was open.
+- **W1a.** The workload package: four steps, the facts the model may see,
+  the prompt with a version.
+- **R1.** After S064 merged: `LangGraphHost`, a `HostScope` per agent,
+  `settling.py` and `runtime_calls.py` (moves forced by the 800-line
+  ceiling), the host picked by the registry's field, and a start that
+  refuses an entry point its host does not run.
+- **W1b.** `claim-brief` registered (agent, tenant, services, entry
+  points), its evaluation published with an empty golden set, the brief
+  redacted before it is stored, and the stack test through the real
+  Claims API, runtime and tool servers.
+- **Two review rounds, a third security pass.** First,
+  `security-reviewer` and `database-reviewer` on what had landed: no
+  critical finding, one high (a brief that waits for ever) and six medium.
+  Second, `security-reviewer`, `platform-boundary-reviewer` and
+  `python-reviewer` on R1 and W1b: no critical finding, two high (a resume
+  that fails on every attempt strands the brief; a step of the framework's
+  own gets past the host's check and could call a model outside the
+  gateway) and the rest medium or low. Third, `security-reviewer` on the
+  fixes: no critical and no high finding, two medium (release skew,
+  composition) and low ones.
+- **X1 and X2** fixed the first round (the migrations, the host's
+  checks, the codec's rules, the brief's closing by the recorded decision,
+  the bound per claim); **F3r, F3w and F4** fixed the second and the
+  third (the runtime's two words and the framework's adapters and
+  telemetry; the brief's input and the claim that closed; the pinned shapes,
+  the import allowlist, the closed claim's brief never filed, the
+  `Failed` in a 502 closing the brief, only a refusal ending a run).
+- **`main` merged in three times**, with S064's merge before R1, with
+  S066's rate store (and ADRs 6, 7 and 8) before the cluster run, and with
+  the plan's v0.62 before the close; the second merge's hand-resolved
+  import list is pinned by `tests/meridian/test_import_contracts.py`
+  (Redis forbidden outside the gateway, the adapters' names) and the whole
+  suite passed on the merged tree.
+- **The cluster run** (Result), then the documents: **D1** (ADR 9, the
+  service acceptance of `claim-brief`, and a sweep of the documents the
+  branch made false), **D2** (the cluster run said as far as it went, the
+  threat model's rows T-93 to T-99) and this section. The session changed
+  hard rule 5, the layout line of `CLAUDE.md` and `AGENTS.md` and the
+  boundary reviewer to name the second framework.
+
+**Result / verification:**
+
+- **The whole suite, alone on a quiet machine:** 12,856 passed before
+  `main` was merged in, and 13,535 passed, 8 skipped, on the merged tree
+  (the one the cluster run used). Run once more on the final tree, where
+  only documents had changed since, while other steps' tests held the
+  machine at a load of about 24: 13,534 passed and one failed, a tool
+  call that timed out in the triage's stack test; that file passed alone
+  right after (10 passed). The row is in the backlog (S074).
+- **The evaluation's free replay** passed twice on the step's tip before
+  that merge and twice on the final tree (`eval compare: passed`):
+  no baseline, recording or golden
+  file of the triage moved, and the `tools` fingerprint of `claims-triage`
+  is pinned unchanged (`tests/meridian/registry/test_hosts.py`). The
+  claim brief's evaluation is published and empty (its golden set holds no
+  case, it has no grader, and the replay gate compares the triage's
+  baselines only), so nothing in CI grades the brief.
+- **The import contracts:** six kept (the sixth keeps an HTTP client out of
+  the brief's package), with the 29 adapter modules named in the platform's
+  contract.
+- **The reviews:** security (three passes), platform-boundary, Python and
+  database, with no critical or high finding left; what they left is under
+  "Not done".
+- **On the local kind cluster, once, on 2026-10-06 (17:15 to 17:25 UTC),
+  under replay: no model was called, so the brief is the replay's fixed
+  sentence.** Local only; nothing ran in Azure. From the checkout of the
+  merged tree:
+  - `make deploy`: exit 0 in 103 s; the migrate Job applied 0023 and 0024;
+    every pod ready with no restart (the database's pod keeps the one
+    restart it had from the afternoon's overload). `make smoke`: exit 0,
+    45 PASS, no FAIL, no SKIP. `make demo`: exit 0 (a triage through
+    LangGraph on the runtime that now hosts both frameworks, its trace
+    found in Tempo).
+  - A claim (CLM-0011) posted: 201, `awaiting_adjuster`. `POST
+    /claims/CLM-0011/brief` with `{}`: 201, `awaiting_decision`, a run ID
+    and the replay's sentence. `GET` of it: 200, the same. A decision that
+    names another run: 409. A brief for CLM-9999: 404. The approve with
+    the run: 200, `filed`. A second `GET`: `filed`. The same decision
+    again: 409. The adjuster's page of the claim: 200 with one
+    `brief.decided`.
+  - A second claim (CLM-0012): a brief started, rejected with the run:
+    200, `rejected`; a second brief for it started (201): a rejected brief
+    does not close the claim to another. That second brief is still
+    `awaiting_decision` on the cluster.
+  - `meridian_runtime_runs_total{meridian_agent="claim-brief"}`: `paused`
+    3 and `completed` 2 after the next export and scrape (a read 55 s after
+    the reject still showed 1 and 1).
+  - Loki over 40 and 45 minutes: no line of any container held "Replay
+    response", "simulated; no model was called" or "Request fingerprint".
+    The controls: the namespace had lines (193 under a limit of 200 in the
+    first read), 7 lines of `claims-api` named `/brief`, and the runtime's
+    own lines reach Loki (26 lines, one of them for the rejected brief's
+    run). The first script asked with labels that do not exist
+    (`agent`, `outcome`, `namespace`) and its zeros proved nothing; the
+    second asked with `meridian_agent`, `meridian_outcome` and
+    `k8s_namespace_name`.
+- **Not seen on a cluster:** a brief whose run fails; a resume refused for
+  a changed workflow (`workflow-changed`, `checkpoint-refused`); the sweep
+  closing a brief left unfiled; a live model writing the brief (replay
+  only: no model was called); a second runtime replica; the brief's trace
+  read in Tempo (the triage's was). No log line names the agent
+  `claim-brief` (there were none), so "Loki holds no brief text" rests on
+  the three needles and the route's lines alone. Tests hold each.
+- **Gates of the documents:** `make docs` (13 checks passed), `make check`
+  (no ERROR line, two IGNORE lines) and `make test` (`codex agents: 11
+  twins current`) as run in D2; the contracts' own gates are in their
+  reports.
+
+**Not done, by decision or left open:**
+
+- **No release stamp on the checkpoint rows.** A release that changes the
+  workflow's steps or edges, or a state type's fields, ends every brief
+  that waits (`workflow-changed`, `checkpoint-refused`), and a rolling
+  update in which an old pod reads rows a new pod wrote ends a run for
+  good. Two tests pin the shapes (T-98). Neither was seen on a cluster.
+- **The tool server does not check that `add_claim_note` follows a
+  recorded approval.** The gate is the workflow's code and the Claims API's
+  record, as for the triage since S015; `approval_required` cannot stand
+  in for it (the server refuses every call of such a tool).
+- **No retention for `claims.briefs.brief`, and a brief nobody decides
+  keeps its run, its checkpoint rows and its claim's one open slot with no
+  age bound** (seen on kind: the second brief of CLM-0012).
+- **No Renovate rule for `agent-framework-core`**: a bump arrives in the
+  monthly `python` group, and `python-dotenv` 1.2.4 was five days old when
+  locked.
+- **No runbook for a brief** (one that waits for ever, a release that
+  strands paused briefs, a migration not applied), no SLO or panel, and the
+  acceptance of `claim-brief` is 6 met, 15 partly met, 9 not met.
+- **The brief has no grader and no baseline**; the golden set is empty.
+- **The scaffold writes a LangGraph workload only**; the brief was written
+  by hand on the scaffold's evaluation template.
+- **The host's check of a step is about inheritance.** Composition (a step
+  of the workload's own class that holds the framework's agent) is held for
+  `claim-brief` by the import allowlist, the sixth contract and review.
+- **Hard rule 5 and the layout line** name the second framework now; the
+  docstring of `src/meridian/runtime/__init__.py` still says "hosts
+  LangGraph graphs", which the session could not change and S076's next
+  contract will.
+- **The routes have no sign-in** (T-69, S021), and the brief's text names
+  and addresses are not masked (T-73).
+
+**Follow-ups:**
+
+- In the backlog, each with its step: a release stamp on the checkpoint
+  rows and the tool server's approval check (S069); retention of briefs and
+  checkpoint rows, and the grant that lets `claims_api` set a brief's
+  `run_id` (S068); the Renovate rule (S075); the runbooks for a brief
+  (S028, the nearest: no step writes a runbook); the brief's graders (S071,
+  the nearest); a scaffold for the second host and the docstring (S076);
+  the three brief routes in S021's sign-in scope (S021); the span's missing
+  step attribute and the two failure words of one limit (S069); the two
+  test files near the ceiling (S074); the sweep statements that fail when a
+  migration is missing (S073).
+- Rows closed: the 104 tests that assumed one graph agent (T0).
+- For the owner: the third answer's reading (the Claims API starts the
+  brief) and each decision above that the owner may overturn. The brief in
+  Azure waits for S020.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -10754,3 +11459,31 @@ request: documents and the model alone (Part A, step 4).
   deployment view, of AWS and designed. Claude on Bedrock from Frankfurt
   is `eu-zone`, not `eu-region`. Nothing is built or applied. Three
   backlog rows new.
+- **v0.60, 2026-10-06:** S077: ADR 7 maps the Azure platform to Google
+  Cloud with a source for every equivalent, and the model has a second
+  designed deployment view. Pay-as-you-go Gemini in the EU is `eu-zone`;
+  Google Cloud hosts no OpenAI model. Nothing is built or applied. One
+  backlog row new.
+- **v0.61, 2026-10-06:** S066 done: the gateway's two rate windows are shared
+  between its pods through a Redis on kind (ADR 8), a call it cannot count is
+  refused, and the ledger's upkeep command runs on a cluster as a Job. Three
+  runs on kind, the third a cold cycle with one retry and a real certificate
+  renewal. T-45 rewritten and T-92 new; fifteen backlog rows new and two
+  closed.
+- **v0.62, 2026-10-06:** the owner's decision on managed and self-managed
+  Kubernetes: AKS is the managed cluster that is built; S079 added, a
+  self-managed cluster applied once on AWS and a scaffold on Google Cloud, with
+  the comparison of the two kinds for all three clouds; S078 is a scaffold only
+  (its applied half dropped); the apply of S036's managed cluster is asked at
+  S079's paid stop.
+- **v0.63, 2026-10-06:** S037 done: the Agent Runtime hosts a second agent
+  framework, Microsoft Agent Framework, behind the same `Host` protocol as
+  LangGraph, picked by the registry's `host` field, with a PostgreSQL
+  checkpoint store of its own (ADR 9; migrations 0023 and 0024), and a
+  second workload, `claim-brief`, that calls tools, pauses for an adjuster
+  and is started by the Claims API. Seen on kind once under replay (a brief
+  approved and filed, another rejected); a failed run, a changed-workflow
+  refusal and a live model were not seen. The second applied service
+  acceptance (6 met, 15 partly met, 9 not met); T-93 to T-99 new (99
+  threats) and four checkpoint tables in T-25, T-63 and T-77. Twelve
+  backlog rows new, one closed and one narrowed and re-homed.

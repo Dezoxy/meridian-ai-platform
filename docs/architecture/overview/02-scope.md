@@ -6,7 +6,9 @@
   retrieval, evaluation, registry, identity integration, observability,
   delivery and infrastructure as code.
 - One reference workload: claims triage for motor and property claims with a
-  human approval step, on synthetic data.
+  human approval step, on synthetic data. Beside it a small second workload,
+  the claim brief (S037), which runs on a second agent framework to test the
+  platform contract and decides nothing about a claim.
 - A local Kubernetes environment (kind) that runs the whole demo, a small
   persistent Azure foundation (budget, Key Vault, Azure OpenAI) and an
   ephemeral Azure environment created and destroyed by Terraform.

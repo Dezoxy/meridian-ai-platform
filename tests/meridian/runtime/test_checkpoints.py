@@ -16,8 +16,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from meridian.platform.common.db import CONNECT_TIMEOUT_SECONDS, STATEMENT_TIMEOUT_MS
-from meridian.runtime import SERVICE_NAME, runs
+from meridian.runtime import SERVICE_NAME
 from meridian.runtime.checkpoints import open_saver
+from meridian.runtime.langgraph_host import resume_command
 
 
 @dataclass
@@ -166,14 +167,14 @@ def test_a_node_that_fails_after_its_pause_leaves_that_pause_pending_and_resumab
 
             with pytest.raises(RuntimeError, match="the tool is down"):
                 graph.invoke(
-                    runs._resume_command(graph, config, {"ok": 1}),
+                    resume_command(graph, config, {"ok": 1}),
                     config,
                     durability="sync",
                 )
             (still_pending,) = graph.get_state(config).interrupts
             tool_works = True
             graph.invoke(
-                runs._resume_command(graph, config, {"ok": 2}),
+                resume_command(graph, config, {"ok": 2}),
                 config,
                 durability="sync",
             )

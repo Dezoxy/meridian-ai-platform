@@ -38,7 +38,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 44 lines; PASS, or SKIP (below)
+make smoke     # 45 lines; PASS, or SKIP (below)
 ```
 
 `make smoke` prints a SKIP, and still exits 0, where a line cannot be
@@ -141,6 +141,35 @@ the line `make demo` printed, `{ trace:id = "<id>" }`. One trace crosses
 five services. `make demo` prints PASS only when every service has spans in
 it and the span counts have stopped changing.
 
+#### Optional: the claim brief, the second workload (S037)
+
+The Agent Runtime hosts a second agent framework, and a second small workload,
+a brief of a claim, runs on it. It is API only: no page shows it. It needs a
+claim that waits for an adjuster, which `make demo` does not leave (it decides
+the claim it posts): open the adjuster's queue, or post a golden claim from
+`data/synthetic/claims.json` that the triage refers to a person (under replay
+the claims that need the model do), and put its ID in `CLAIM`. Three commands:
+
+```bash
+CLAIM=CLM-0011   # a claim in the adjuster's queue on your cluster
+URL=http://claims.meridian.localhost:8088/claims/$CLAIM/brief
+curl -s -X POST -H 'Content-Type: application/json' -d '{}' $URL
+curl -s $URL
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"decision":"approve","run":"<run_id of the first answer>"}' $URL/decision
+```
+
+The first answer is `awaiting_decision` with a run ID and, under replay, the
+replay's fixed sentence ("Replay response (simulated; no model was called)"
+and a request fingerprint): no model was called. After the decision the brief
+is `filed` (approve; one fixed claim note is written) or `rejected` (reject;
+nothing is written), and the claim's own state does not move. A decision that
+names another run is a 409, and so is the same decision posted again. The
+adjuster's page of the claim shows one `brief.decided` in its trail. The brief
+was run this way once on kind on 2026-10-06; the cases it was not run through
+are listed in
+[the acceptance document](governance/service-acceptance-claim-brief.md).
+
 ### 5 to 9: the people
 
 Submit a claim as the claimant would. In the claimant's form, type:
@@ -199,7 +228,7 @@ make registry   # the registry against its schemas and the tool contracts
 ### 11 to 13: what stops a bad change
 
 ```bash
-make lint       # ends with "Contracts: 5 kept, 0 broken."
+make lint       # ends with "Contracts: 6 kept, 0 broken."
 ```
 
 The import contracts are the architecture's rules as a failing build: no
@@ -217,7 +246,7 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 91 threats,
+- [The threat model](architecture/security/threat-model.md): 99 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
 - Not built: sign-in and roles, TLS at the edge and between the edge and

@@ -36,6 +36,16 @@ SECRET_SCAN_BASE ?= origin/main
 PYTEST_DB_IMAGE     := pgvector/pgvector:0.8.7-pg17-trixie@sha256:7a7e9f22015b67edb4bef5c59daeebcd7e74bfa570df6ce60ae01237c8648a84
 PYTEST_DB_CONTAINER ?= meridian-pytest-db
 PYTEST_DB_PORT      ?= 55432
+# The throwaway Redis beside it, for the gateway's shared rate windows (S066):
+# Redis 8.10.2, the 8.10 line's second patch (8.10.0 was the General Availability
+# release, 2026-07-29; 8.10.2 carries security fixes), on Alpine 3.23. The digest
+# is the multi-arch index's. Same string as the python workflow's service
+# container, which a test compares; := so a command line does not override it. A
+# run that overlaps another needs its own name and port too, outside Linux's
+# ephemeral range (32768 to 60999).
+PYTEST_REDIS_IMAGE     := redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+PYTEST_REDIS_CONTAINER ?= meridian-pytest-redis
+PYTEST_REDIS_PORT      ?= 26379
 # Extra pytest arguments for `make pytest` and `make pytest-db`, e.g. one test
 # file, or --durations=25 as CI passes.
 PYTEST_ARGS         ?=
@@ -77,7 +87,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -170,22 +180,31 @@ alerts:
 	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
 	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
 
-## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping
 pytest-db:
 	@set -e; \
-	docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true; \
-	trap 'docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
+	docker rm -f $(PYTEST_DB_CONTAINER) $(PYTEST_REDIS_CONTAINER) >/dev/null 2>&1 || true; \
+	trap 'docker rm -f $(PYTEST_DB_CONTAINER) $(PYTEST_REDIS_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
 	docker run -d --name $(PYTEST_DB_CONTAINER) \
 		--tmpfs /var/lib/postgresql/data -p 127.0.0.1:$(PYTEST_DB_PORT):5432 \
 		-e POSTGRES_HOST_AUTH_METHOD=trust $(PYTEST_DB_IMAGE); \
+	docker run -d --name $(PYTEST_REDIS_CONTAINER) \
+		-p 127.0.0.1:$(PYTEST_REDIS_PORT):6379 $(PYTEST_REDIS_IMAGE) \
+		redis-server --save '' --appendonly no; \
 	for i in $$(seq 1 60); do \
 		docker exec $(PYTEST_DB_CONTAINER) pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break; \
 		[ $$i -eq 60 ] && { echo "pytest-db: PostgreSQL did not become ready" >&2; exit 1; }; \
 		sleep 1; \
 	done; \
+	for i in $$(seq 1 60); do \
+		[ "$$(docker exec $(PYTEST_REDIS_CONTAINER) redis-cli ping 2>/dev/null)" = PONG ] && break; \
+		[ $$i -eq 60 ] && { echo "pytest-db: Redis did not become ready" >&2; exit 1; }; \
+		sleep 1; \
+	done; \
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
+	MERIDIAN_TEST_REDIS_URL=redis://127.0.0.1:$(PYTEST_REDIS_PORT)/0 \
 	MERIDIAN_REQUIRE_DB=1 uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
 ## eval            replay the golden set through the stack with the recorded model's answers and the judge, and run the injection cases through it with a model that obeys (needs Docker); write both reports and compare them with their baselines
@@ -257,6 +276,10 @@ demo: deploy
 smoke:
 	infra/kind/smoke.sh
 
+## gateway-upkeep  run the Model Gateway's upkeep command on kind as a Job of its own, under its own database role, and print its output; ARGS is the subcommand and its arguments, letters, digits and . _ = - only (make expands $(...) in ARGS before the script sees it: your own input): make gateway-upkeep ARGS="reservations --older-than 15" (also close ATTEMPT_ID --reason SLUG, credit TENANT --tokens N --reason SLUG, expire --before YYYY-MM --reason SLUG); reservations, and expire without --confirm, only read, every other subcommand changes the ledger (needs make up and make deploy)
+gateway-upkeep:
+	infra/kind/upkeep.sh
+
 ## grafana         port-forward Grafana to http://127.0.0.1:3000 (Ctrl-C stops it)
 grafana:
 	infra/kind/grafana.sh forward
@@ -265,9 +288,9 @@ grafana:
 grafana-password:
 	@infra/kind/grafana.sh password
 
-## helm-lint       lint the Meridian chart strictly, with kind's values and every Job on (needs helm)
+## helm-lint       lint the Meridian chart strictly, with kind's values (the rate store on, with the image of PYTEST_REDIS_IMAGE: the pin in infra/kind/pins.env is the same one) and every Job on, the upkeep Job with one argument (needs helm)
 helm-lint:
-	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
+	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
 
 ## down            delete the kind cluster "meridian" and its credentials file (destructive; for a test that needs a fresh cluster, never to clear a fault; hard rule 8)
 down:

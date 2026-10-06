@@ -6,7 +6,6 @@ stub gateway, the meter provider's lifecycle); the second runs legs through the
 real runtime app and PostgreSQL, with the stand-ins of ``test_runtime_app``.
 """
 
-import importlib
 import logging
 import uuid
 from collections.abc import Callable
@@ -21,10 +20,10 @@ from langgraph.types import interrupt
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from runtimesupport import register
 from servicesupport import (
     GATEWAY_REPLY,
     REGISTRY_DIR,
-    REPO_ROOT,
     metric_points,
     owner_rows,
 )
@@ -32,7 +31,7 @@ from servicesupport import (
 from meridian.platform.common import metrics as common_metrics
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS
 from meridian.runtime import app as runtime_app
-from meridian.runtime import graphs, runs
+from meridian.runtime import runs
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.meters import (
     GRAPH_FAILURE,
@@ -452,27 +451,6 @@ def test_the_app_sets_no_global_meter_provider(
 class State(TypedDict, total=False):
     claim: dict
     output: Any
-
-
-class Entry:
-    name = "claims-triage"
-    value = "meridian.workloads.claims_triage.graph:build"
-
-    class dist:
-        name = "meridian"
-
-    def __init__(self, factory: Callable[[ModelClient, ToolClient], StateGraph]):
-        self.factory = factory
-
-    def load(self) -> Callable[[ModelClient, ToolClient], StateGraph]:
-        return self.factory
-
-
-def register(monkeypatch: pytest.MonkeyPatch, factory: Callable) -> None:
-    """Publish ``factory`` as the claims-triage graph (see test_runtime_app)."""
-    monkeypatch.setattr(graphs, "entry_points", lambda *, group: [Entry(factory)])
-    importlib.import_module("meridian.workloads.claims_triage.graph")
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 def graph_of(node: Callable[[State], State]) -> StateGraph:

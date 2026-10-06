@@ -287,10 +287,13 @@ from it (the sums are the carrier table's rows).
 
 `meridian workload new NAME` writes `NAME/golden/` here: `cases.json`, an
 empty list, and the `manifest.json` that names the workload and lists the
-file's hash. No such directory is
-committed; the claims workload's golden set is `data/synthetic/`. A golden
-set with no case is an empty evaluation: `meridian eval run --allow-empty`
-says that nothing was evaluated, sends nothing and writes no report, and
-without the flag the run fails (T-82). Cases added later are synthetic and
-come from a seeded generator (hard rule 2), and the manifest's hash changes
-with them.
+file's hash. One such directory is committed, `claim-brief/golden/`, the second
+workload's (S037, a brief of a claim on the second agent framework): no case,
+and the workload has no grader, so its evaluation raises `NO_GRADERS` and
+evaluates nothing. The gate above compares the claims workload's baselines
+only, so nothing in CI grades or fingerprints the brief or its prompt. The
+claims workload's golden set is `data/synthetic/`. A golden set with no case is
+an empty evaluation: `meridian eval run --allow-empty` says that nothing was
+evaluated, sends nothing and writes no report, and without the flag the run
+fails (T-82). Cases added later are synthetic and come from a seeded generator
+(hard rule 2), and the manifest's hash changes with them.

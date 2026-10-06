@@ -311,9 +311,9 @@ def run_graph(
 
 
 def resume(graph: CompiledStateGraph, value: Any) -> dict[str, Any]:
-    """Resume the one pending pause as the runtime does (``runs._resume_command``):
-    keyed by the interrupt's ID, so ``value`` reaches the node verbatim, ``{}``
-    and a non-dict included."""
+    """Resume the one pending pause as the runtime does (``resume_command`` of
+    ``langgraph_host``): keyed by the interrupt's ID, so ``value`` reaches the
+    node verbatim, ``{}`` and a non-dict included."""
     (pending,) = graph.get_state(THREAD).interrupts
     return graph.invoke(Command(resume={pending.id: value}), THREAD)
 
