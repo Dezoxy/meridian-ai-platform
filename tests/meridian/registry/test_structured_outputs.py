@@ -87,11 +87,14 @@ def test_the_real_registry_declares_it_for_the_chat_deployments_and_two_agents(
         "replay-embedding": False,
         "recorded-chat": True,
     }
-    assert {a.id: a.structured_outputs for a in registry.agents} == {
-        "claims-triage": True,
-        "knowledge-ingestion": False,
-        "evaluation-judge": True,
+    # An agent added with it off needs no edit here; one added with it on does,
+    # on purpose: an agent that asks for a schema is a decision to review.
+    agents = {a.id: a.structured_outputs for a in registry.agents}
+    assert {agent for agent, on in agents.items() if on} == {
+        "claims-triage",
+        "evaluation-judge",
     }
+    assert agents["knowledge-ingestion"] is False
 
 
 # ── a deployment of purpose embedding cannot honour a schema ────────────────

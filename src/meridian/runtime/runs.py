@@ -1,6 +1,8 @@
-"""Run bookkeeping in ``runtime.runs`` and the graph execution itself.
+"""Run bookkeeping in ``runtime.runs``. The graph's execution is its host's
+(``meridian.runtime.langgraph_host``, ``agent_framework_host``, S037), and this
+module names no agent framework: either host imports it.
 
-The runtime issues random run IDs and keeps them apart from LangGraph's thread
+The runtime issues random run IDs and keeps them apart from a host's thread
 IDs, which callers never see. Rows and audit events hold identifiers and
 statuses only, and for a failed run a reason word and a tool's registry ID,
 never the run's input or output (T-03, T-25). Statements use psycopg
@@ -11,22 +13,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command
-from opentelemetry.trace import Tracer
-
 from meridian.platform.common.audit import AuditEvent, record_event
 from meridian.platform.common.db import connect
 from meridian.runtime import SERVICE_NAME
-from meridian.runtime.failures import GraphFailure
-from meridian.runtime.graphs import GraphFactory
-from meridian.runtime.model_client import CallObserver, ModelClient
 from meridian.runtime.models import RunState, RunStatus
 from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
-from meridian.runtime.tool_client import ToolClient
-from meridian.runtime.tracing import NodeSpans
 
 RECURSION_LIMIT = 10
 # What one run may spend (T-15, T-62). The recursion limit bounds the graph's
@@ -50,10 +41,23 @@ RESUMED_EVENT = ("run.resumed", "resumed")
 # The event of a resumed leg that failed and left its run paused again.
 # pause_after_failed_resume writes it, so it stays out of AUDIT_FOR_STATE too.
 RESUME_FAILED_EVENT = ("run.resume_failed", "paused")
-# The reasons of a resume that found nothing to resume (see _resume_command).
+# The reasons of a resume that found nothing to resume (a host raises them as
+# ``GraphFailure`` words before anything runs).
 NO_PENDING_PAUSE = "no-pending-pause"
 SEVERAL_PENDING_PAUSES = "several-pending-pauses"
 NOTHING_TO_RESUME = frozenset({NO_PENDING_PAUSE, SEVERAL_PENDING_PAUSES})
+# The reasons of a resume that can never succeed, however often it is tried: a
+# stored checkpoint the second host read and refuses (its state types are not
+# the code's any more), and a workflow whose graph is not the one the checkpoint
+# was made by. A release that changes either while a run waits is the realistic
+# cause. A resume that fails for another reason (a tool, the gateway, a store
+# that cannot be reached) may succeed the next time, and pauses the run again.
+CHECKPOINT_REFUSED = "checkpoint-refused"
+WORKFLOW_CHANGED = "workflow-changed"
+# The words that end a resumed run as ``Failed`` where any other leaves it
+# paused: with nothing to resume, or with no way to resume it, a run left
+# paused could never end, and whatever waits on it would wait for ever.
+RESUME_CANNOT_SUCCEED = NOTHING_TO_RESUME | {CHECKPOINT_REFUSED, WORKFLOW_CHANGED}
 # The ``reason`` of the ``run.resumed`` event of such a takeover.
 STALE_RUNNING_REASON = "stale-running"
 
@@ -71,73 +75,6 @@ class RunIdentity:
     agent: str
     tenant: str
     reference: str
-
-
-def _resume_command(
-    graph: CompiledStateGraph, config: dict[str, Any], value: dict[str, Any]
-) -> Command:
-    """Address ``value`` to the one pending pause by its interrupt ID.
-
-    LangGraph reads a bare dict whose keys all look like interrupt IDs as a map
-    from IDs to values, an empty dict included (it is vacuously true), so a
-    caller's ``{}`` would resume nothing. Keyed by the pause's own ID, the value
-    reaches the pause verbatim whatever its keys. Raises before any node runs.
-    """
-    pending = graph.get_state(config).interrupts
-    if not pending:
-        raise GraphFailure(NO_PENDING_PAUSE)
-    if len(pending) > 1:
-        raise GraphFailure(SEVERAL_PENDING_PAUSES)
-    return Command(resume={pending[0].id: value})
-
-
-def execute(
-    factory: GraphFactory,
-    saver: BaseCheckpointSaver,
-    http: httpx.Client,
-    tools: ToolClient,
-    tracer: Tracer,
-    identity: RunIdentity,
-    run_input: dict[str, Any],
-    *,
-    resume: dict[str, Any] | None = None,
-    on_model_call: CallObserver | None = None,
-) -> RunOutcome:
-    """Compile the workload's graph with the runtime's checkpointer and run it.
-
-    ``tools`` is this run's tool client, built by the caller for the run. With
-    ``resume`` the graph continues its paused thread and its one pending pause
-    reads that value verbatim (see ``_resume_command``), and ``run_input`` is
-    not used; a thread with no pending pause, or with several, raises a
-    ``GraphFailure`` before any node runs. A run that pauses answers
-    ``AwaitingApproval`` with the graph's output so far, if it has one.
-    ``on_model_call`` is told of each call the graph asks of the model client.
-    Raises whatever the graph raises; the caller records the failure.
-    """
-    model = ModelClient(
-        http,
-        tenant=identity.tenant,
-        agent=identity.agent,
-        run_id=identity.run_id,
-        max_calls=MAX_MODEL_CALLS_PER_RUN,
-        on_call=on_model_call,
-    )
-    graph = factory(model, tools).compile(checkpointer=saver)
-    config = {
-        "recursion_limit": RECURSION_LIMIT,
-        "configurable": {"thread_id": str(identity.thread_id)},
-        "callbacks": [NodeSpans(tracer, run_id=identity.run_id, agent=identity.agent)],
-    }
-    graph_input = (
-        run_input if resume is None else _resume_command(graph, config, resume)
-    )
-    graph.invoke(graph_input, config, durability="sync")
-    snapshot = graph.get_state(config)
-    output = snapshot.values.get("output")
-    if output is not None and not isinstance(output, dict):
-        raise TypeError("a graph's output must be an object")
-    state: RunState = "AwaitingApproval" if snapshot.interrupts else "Completed"
-    return RunOutcome(state, output)
 
 
 def _audit(

@@ -21,12 +21,14 @@
 
 - [Governance](governance/README.md): how a model provider is onboarded and
   when a workload counts as accepted. Start there before adding a provider or
-  a workload. Designed (S034): written and applied once on paper, enforced by
+  a workload. Designed (S034, S037): written and applied on paper, enforced by
   no gate beyond the checks the documents name:
   [provider onboarding](governance/provider-onboarding.md) and
   [its application to Azure OpenAI](governance/provider-onboarding-azure-openai.md),
-  [service acceptance](governance/service-acceptance.md) and
-  [its application to claims triage](governance/service-acceptance-claims-triage.md).
+  [service acceptance](governance/service-acceptance.md),
+  [its application to claims triage](governance/service-acceptance-claims-triage.md)
+  and [its application to the claim brief](governance/service-acceptance-claim-brief.md),
+  the second workload, on a second agent framework.
 
 - [Development environment](development-environment.md): what the machine
   the work runs on needs, what git does not carry to a new one, and the

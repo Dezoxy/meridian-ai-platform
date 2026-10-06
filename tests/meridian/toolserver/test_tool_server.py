@@ -293,7 +293,7 @@ def claim_of_another_tenant(world: World) -> uuid.UUID:
 
 PLANT_NO_AGENTS = (
     "tenants.yaml",
-    "agents: [claims-triage, knowledge-ingestion]",
+    "agents: [claims-triage, knowledge-ingestion, claim-brief]",
     "agents: []",
 )
 # Four services name the tenant claims-triage; a tenant that runs no agent may

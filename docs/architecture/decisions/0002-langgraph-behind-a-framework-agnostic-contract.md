@@ -204,3 +204,8 @@ to the pending pause by its interrupt ID, because LangGraph reads a resume
 value whose keys all look like interrupt IDs, an empty object among them,
 as a map of pauses. The claims workload's run reads the adjuster's
 decision from the Claims API's record, not from the resume.
+
+Amended on 2026-10-06 (S037): the optional second workload in Microsoft Agent
+Framework was built, on a second host behind the same protocol; see
+[9. Run a second agent framework behind the same host
+protocol](0009-run-a-second-agent-framework-behind-the-same-host-protocol.md).

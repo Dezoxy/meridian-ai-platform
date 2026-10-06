@@ -46,6 +46,9 @@ SECONDS_PER_DAY = 24 * 60 * 60
 # below: the sweep imports them, and ``triaging.py`` loads FastAPI, httpx and
 # OpenTelemetry, which a job that needs only PostgreSQL does not.
 AGENT = "claims-triage"
+# The agent of the claim brief (S037), here for the same reason: the sweep lists
+# its runs, and ``briefs.py`` loads FastAPI.
+BRIEF_AGENT = "claim-brief"
 # What a call to the Agent Runtime may take, per phase (httpx's four timeouts;
 # ``triaging.runtime_timeout`` builds them). Each value bounds one phase, not the
 # call: the connect value is given to the TCP connect and again to the TLS

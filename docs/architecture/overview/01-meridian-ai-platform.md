@@ -79,7 +79,7 @@ stateDiagram-v2
 |---|---|---|---|
 | Ingress | TLS termination and routing | Envoy Gateway (Gateway API) on kind; Application Gateway WAF in the Azure design | Edge |
 | Model Gateway | Provider and region policy, fallback, quotas, budgets, cost, redaction, audit | Python, FastAPI | Control |
-| Agent Runtime | Hosts workload graphs: start, pause for approval, resume, checkpoint, guardrails | Python, LangGraph host | Control |
+| Agent Runtime | Hosts workload graphs and workflows: start, pause for approval, resume, checkpoint, guardrails | Python, LangGraph and Microsoft Agent Framework hosts | Control |
 | Policy MCP Server | Policy lookup and claim history as tools | Python, MCP SDK | Control |
 | Knowledge MCP Server | Hybrid search over policy wording with citations; ingestion | Python, MCP SDK, pgvector | Control |
 | Evaluation Harness | Golden-set replay, graders, CI gate | Python, pytest | Control |
@@ -87,7 +87,7 @@ stateDiagram-v2
 | Platform Registry | Models, providers, tools, agents, policies, tenants, services | YAML in git, JSON Schema | Control |
 | Platform Database | Claims, wording chunks, checkpoints, audit, usage, results | PostgreSQL 17, pgvector | Control |
 | Key Vault | Provider credentials and signing secrets | Azure Key Vault; Kubernetes Secrets on kind | Control |
-| Claims Triage App | Claims API, adjuster queue UI, claimant pages, the triage graph package, the scheduled sweep (a job with a database role of its own) | Python, FastAPI, Jinja | Workload |
+| Claims Triage App | Claims API (with the three routes that start, decide and read a claim brief), adjuster queue UI, claimant pages, the triage graph package, the scheduled sweep (a job with a database role of its own) | Python, FastAPI, Jinja | Workload |
 | Claims MCP Server | Notes, approval requests and the outcome recorded for a request as tools; adjuster decisions are recorded by the Claims Triage App | Python, MCP SDK | Workload |
 
 ![Containers view: the building blocks of the platform and the claims-triage workload](embed:Containers)
@@ -97,9 +97,13 @@ stateDiagram-v2
 - One cloud, recreated on demand: Azure for demo days, kind on a laptop the
   rest of the time; AWS is designed, not deployed
   ([ADR 1](../decisions/0001-run-on-azure-and-kind-design-aws.md)).
-- The platform never imports the agent framework; LangGraph lives in the
-  workload and the boundary is enforced in CI
-  ([ADR 2](../decisions/0002-langgraph-behind-a-framework-agnostic-contract.md)).
+- The platform never imports an agent framework. LangGraph and Microsoft Agent
+  Framework live in the Agent Runtime's two hosts and in the workloads that run
+  on them, behind one `Host` protocol, and the boundary is enforced in CI
+  ([ADR 2](../decisions/0002-langgraph-behind-a-framework-agnostic-contract.md),
+  [ADR 9](../decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)).
+  The second host and its workload, the claim brief, are implemented and tested
+  and have not run on a cluster.
 - Every model call crosses one gateway that the platform owns, so provider,
   region, budget and audit are policy rather than convention
   ([ADR 3](../decisions/0003-build-a-thin-model-gateway.md)).
