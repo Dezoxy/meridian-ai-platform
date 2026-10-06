@@ -57,11 +57,12 @@
 
 ## Part A — How a session works
 
-One step per branch and per worktree, and since 2026-10-06 up to three
-steps in one session ("Up to three steps at a time", below). A session
-that grows long compacts between steps: the advisor re-reads the whole
-transcript on every call, uncached, and a long context blurs what a step
-was for.
+One step per branch and per worktree, and two or three steps side by side
+in one session whenever that many are ready and do not meet ("Two or
+three steps side by side", below). A session that grows long is
+compacted between steps (step 6 says how that is made safe): the advisor
+re-reads the whole transcript on every call, uncached, and a long context
+blurs what a step was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -97,6 +98,16 @@ was for.
    just put it away, note it and go on"). A follow-up that no step's "done when"
    covers goes into Part B's follow-up backlog, with a proposed home, not
    only into the step's own section.
+7. **Checkpoint.** At every close, and before a long stretch of work,
+   nothing that matters is left in the conversation alone: the step's
+   record is in Part C, every open branch is pushed, the contracts that
+   are still to run are in a folder that outlives the session, and a
+   short state note says what is merged, what is in flight on which
+   branch and what comes next. Then the session tells the owner in one
+   line that it is a good moment to compact. A session cannot compact
+   itself: the owner does, or the harness does when the context is full,
+   and after a checkpoint neither loses anything (the owner, 2026-10-06:
+   "we should optimalise the conversation but it should be a routine").
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -131,18 +142,41 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**Up to three steps at a time.** The owner's decision of 2026-10-06: "So
-back to multisteps… what steps could you start to proceed more? Can we run 3
-steps at once?" It reverses the decision of the day before ("Work one step
-at a time, nothing in parallel: no parallel steps and no parallel
-implementers"), after a night in which one step at a time, and a session
-that stood still for six hours, gave two steps. One session runs up to three
-steps whose dependencies are `done` and whose files do not overlap, each in
-its own worktree and on its own branch, with the subagents it starts. Inside
-a step one `implementer` works at a time where its contracts share files,
-and a step's reviewers run one after another. What follows holds for the
-steps of one session as for separate sessions; the brief of each step, or of
-each session, says:
+**Two or three steps side by side.** This is the default, not an
+allowance: when a session starts, and whenever a step closes, it fills up to
+three slots with steps whose dependencies are `done`. The owner's decisions:
+2026-10-06, "So back to multisteps… what steps could you start to proceed
+more? Can we run 3 steps at once?", which reversed the one-at-a-time rule of
+the day before (a night of one step at a time, and of a session that stood
+still for six hours, had given two steps); and, the same day, "can we make
+default the 2-3steps to do next to each other yeah if the situation allows
+it, so deperated steps i mean, there eill be less colusion".
+
+Steps are chosen so that they do not meet. Three things exist once, and at
+most one running step may hold each:
+
+| Lane | A step is in it when it | Why only one |
+|---|---|---|
+| Cluster | runs `make up`, `make deploy`, `make smoke` or `make demo`, or changes what they deploy or check | One kind cluster; a second step's deploy changes what the first is verifying |
+| Database | adds a migration | One sequence of numbers; a test database is built from every packaged file |
+| Evaluation | changes a prompt, the triage graph, a tool's contract, a guardrail screen, the golden set or an injection case | One set of recorded answers and baselines |
+
+A step in none of the three (documents, a spike, tests and tooling, code
+that touches none of them) is free and fills any slot. Among the ready
+steps the session takes at most one per lane and prefers those with no file
+in common; the plan and the root README are shared by every step and are
+merged, not avoided. If fewer steps are ready, fewer run: a step whose
+dependency is not `done` is never started to fill a slot. It is prepared
+instead (mapped, its contracts written), so that it starts the moment its
+dependency lands. The owner is asked only where the plan itself asks: a
+step that costs money, an optional step beyond the plan's limit, a store or
+a design that shapes what comes later.
+
+Each step has its own worktree and branch, and its implementers work in
+worktrees of their own. Inside a step, contracts whose files do not overlap
+run side by side and the others one after another; a step's reviewers run
+together. What follows holds for the steps of one session as for separate
+sessions; the brief of each step, or of each session, says:
 
 - **What is shared, and who owns it.** There is one kind cluster and one
   Azure environment: one session owns them, and the others run no
@@ -9153,3 +9187,10 @@ repository holds.
   pointers, each for an action (the cluster, the registry, what the
   evaluation gate fingerprints, a provider or an accepted workload,
   something broken) to the page that holds its rules.
+- **v0.49, 2026-10-06:** two or three steps side by side is the default of
+  Part A, the owner's decision; steps are chosen by lane (the cluster, the
+  database's migrations, the evaluation's recordings: one running step
+  each) so that they do not meet, and a step that is not ready is prepared,
+  not started. A step's reviewers run together. Step 7, the checkpoint:
+  at every close nothing that matters is left in the conversation alone,
+  and the owner is told that it is a good moment to compact.
