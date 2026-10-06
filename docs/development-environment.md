@@ -149,9 +149,13 @@ For the virtual machine both are recorded below.
   pr merge --admin`, which merges past failing checks. Since S075 it
   also asks before `psql`, `pg_dump`, `pg_dumpall` or `pg_restore`
   through `kubectl exec`, `run` or `debug`, before `kubectl cnpg psql`
-  and before `helm get manifest`, `values` or `all`, and it denies the
-  other ways to a Secret's value (the secret-rotation runbook lists
-  them, and what the guard does not see). A known limit, older than this
+  and before `helm get manifest`, `values`, `hooks` or `all`, before
+  `make gateway-upkeep` when it can change a tenant's budget ledger
+  (`credit`, `close`, `expire --confirm`), and before the commands that
+  print a credential; it denies the other ways to a Secret's value (the
+  secret-rotation runbook lists them, and what the guard does not see:
+  it is a guard for habits, and the session can edit the guard's own
+  files, which is the owner's to decide). A known limit, older than this
   change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of
   4,000 segments, took it that long (1.3 s when idle), and Claude Code
@@ -161,12 +165,17 @@ For the virtual machine both are recorded below.
   between commands and cannot stop one regex match in flight, so three
   bounds ask before the rules run: a command typed over 16384 bytes, a
   command whose text is over 8192 bytes once heredoc bodies written to a
-  file are dropped (the slowest single match at 8192 bytes took 0.25 s
-  with the machine idle, 1 s at 16384), and one of more than 1000 parts
-  (split on newlines, `;`, `&&`, `||` and `|`; the cost follows the
-  parts, 3 s of CPU for 8192 of them, 0.25 s for 1000). A command of
-  this repository's own has a handful. Write a long script with the
-  Write tool and run the file.
+  file are dropped (the slowest single match at 8192 bytes took 0.23 to
+  0.27 s on 2026-10-06, on the shapes that cost most, at a load average
+  of 3 and of 18; it was about 1 s at 16384, which is why the bound is
+  8192), and one of more than 1000 parts (split on newlines, `;`, `&&`,
+  `||` and `|`; the cost follows the parts, 3 s of CPU for 8192 of them,
+  0.25 s for 1000). The pass that drops heredoc bodies runs before the
+  first two bounds and costs 0.04 s of CPU on its worst shape at 16384
+  bytes (a heredoc marker followed by 16 KB of dots; it was 1.5 s until
+  the second security pass), a test holds it under 0.5 s. A command of
+  this repository's own has a handful of parts. Write a long script with
+  the Write tool and run the file.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.

@@ -17,7 +17,23 @@
 # would; and $(cat <<'EOF' ... ) used as a command passes, because its body is
 # dropped as a file write though the substitution runs it.
 # This is a regex guard, not a sandbox: Claude Code's permission rules and the
-# owner's approvals remain the real boundary.
+# owner's approvals remain the real boundary. It stops a session from doing by
+# reflex what it should stop and think about; it does not stop a session that
+# means to get past it. It reads the text of the command, and these it does not
+# see, each once (docs/operations/runbooks/secret-rotation.md, "What the
+# command guard does not see", has the same list with the rules):
+#   - quoting inside a word (e''nv, secr''ets, get-secret-"value")
+#   - a variable that holds the verb or the path ($P, K=kind; $K get ...)
+#   - brace expansion ({env,}, {secrets,})
+#   - an alias for a tool (alias a=aws)
+#   - a file written and then run (a heredoc or the Write tool, then bash it)
+#   - an interpreter in a pod (python or awk reading what env would print)
+#   - a value echoed by name (sh -c 'echo $DATABASE_URL')
+#   - a proxy and curl (kubectl proxy, then curl on a path a variable builds)
+#   - a script's inside, and anything that is not typed as a command
+#   - this guard's own files: a session can edit this hook and
+#     .claude/settings.json (the permission rules allow Edit and Write on
+#     them), so a rule against that is the owner's decision, not built here.
 set -euo pipefail
 
 # A hook that runs past its timeout does not block the call: Claude Code lets
@@ -279,7 +295,7 @@ hook_cmd="$cmd"
 # shellcheck disable=SC2016  # the Python source below is meant to stay literal
 if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg_* \
       || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* \
-      || "$cmd" == *kind* ]] \
+      || "$cmd" == *kind* || "$cmd" == *upkeep* ]] \
    && command -v python3 >/dev/null 2>&1; then
   hook_cmd="$(printf '%s' "$cmd" | python3 -I -c '
 import re, sys
@@ -407,6 +423,14 @@ k8s_get_re="(^|[^[:alnum:]_-])get[[:space:]]+(.*)\$"
 k8s_secret_re="(^|[[:space:],\"'])secrets?([[:space:],/.)\"']|\$)"
 k8s_output_re="(^|[[:space:]])(-[AwR]*o[=[:space:]]*|--output[=[:space:]]+)[\"']?([^nw=[:space:]\"']|n[^a]|w[^i])"
 k8s_template_re="(^|[[:space:]])--template([=[:space:]]|\$)"
+# Verbosity 8 and up (-v=8, -v 9, --v=10, -v9) makes kubectl log the API
+# response body, and a response to a get of Secrets holds their values, so it
+# counts as an output format that prints them. The default output and -o name
+# pass. Known from kubectl's documented behaviour (--v=8 "display HTTP request
+# contents", 9 "...without truncation"): the reviewer who found it and this rule
+# did not run it against a cluster. It is read on the whole segment, since the
+# flag may stand before `get` (kubectl -v=8 get secret x).
+k8s_verbose_re="(^|[[:space:]])--?v[=[:space:]]*([89]|[1-9][0-9]+)([[:space:]]|\$)"
 k8s_handed_re="[\$]|[{][}]"
 k8s_xargs_re="(^|[^[:alnum:]_-])xargs[[:space:]]"
 k8s_secret_seen=""
@@ -425,7 +449,8 @@ while IFS= read -r seg; do
   if [[ "$seg" =~ $k8s_get_re ]]; then
     k8s_rest="${BASH_REMATCH[2]}"
     k8s_values=""
-    if [[ "$k8s_rest" =~ $k8s_output_re ]] || [[ "$k8s_rest" =~ $k8s_template_re ]]; then
+    if [[ "$k8s_rest" =~ $k8s_output_re ]] || [[ "$k8s_rest" =~ $k8s_template_re ]] \
+       || [[ "$seg" =~ $k8s_verbose_re ]]; then
       k8s_values=1
     fi
     if [[ "$k8s_rest" =~ $k8s_secret_re ]]; then
@@ -457,20 +482,32 @@ joined="$hook_cmd"
 # What follows `exec ... --` (or `debug`: its --target shares the process
 # namespace and its command is read the same way): the pod's own command,
 # after a wrapper word and its options, a quote and a directory, if there are
-# any. `kubectl run` is not read: a pod it starts holds none of the workload's
-# environment, and the same words follow `docker run` and `uv run` (the psql
-# ask below does read `run`).
-exec_wrap="((busybox|command|sudo|exec|nohup|nice|timeout|time|stdbuf|setsid)[[:space:]]+(-[^[:space:]]*[[:space:]]+|[0-9][0-9.]*[smhd]?[[:space:]]+)*)*"
+# any. `kubectl run` is not read as exec is: a pod it starts holds none of the
+# workload's own environment, and the same words follow `docker run` and `uv
+# run` (the psql ask below does read `run`). But that is true only of a run
+# without --overrides or --env, which can put a Secret into the new pod; those
+# ask (kube_run_re below).
+exec_wrap="((busybox|command|sudo|exec|nohup|nice|timeout|time|stdbuf|setsid)[[:space:]]+(-[ugC][[:space:]]+[^-[:space:]][^[:space:]]*[[:space:]]+|-[^[:space:]]*[[:space:]]+|[0-9][0-9.]*[smhd]?[[:space:]]+)*)*"
 exec_head="(^|[^[:alnum:]_-])(exec|debug)[[:space:]]+[^;&|${eol}]*[[:space:]]--[[:space:]]+${exec_wrap}[\"${sq}]?([^[:space:];&|\"${sq}]*/)?"
 # What ends a command: a separator, a redirect (`2>&1` included), a comment, a
 # backtick, a newline, or a quote that closes a string (one that is followed
 # by the end or a separator, not the quote that opens an argument of
 # `env "PGOPTIONS=x" psql`).
-exec_end="([;&|)<>#\`${eol}]|[0-9]+[<>]|[\"${sq}][[:space:]]*(\$|[;&|)]))"
+exec_end="([;&|)<>#\`${eol}]|[0-9]+[<>]|\\\\[\"${sq}]|[\"${sq}][[:space:]]*(\$|[;&|)]))"
 # env and printenv print the environment; env with options and assignments only
 # does too, and so does `env -u X` (-u, -C and -S take a value). `env VAR=x
-# some-command` runs the command and passes.
-env_tail="(printenv([[:space:]]|\$|${exec_end})|env([[:space:]]+(-[uCS][[:space:]]+[^[:space:]]+|-[^[:space:]]*|[^[:space:]=;&|\"${sq}]+=[^[:space:];&|\"${sq}]*))*[[:space:]]*(\$|${exec_end}))"
+# some-command` runs the command and passes. printenv prints one variable when
+# it is given one name, and that is no harm unless the name looks like it holds
+# a secret (secret_name: a password, token, key, credential, URL or URI, DSN,
+# the database, a certificate: DATABASE_URL holds a password). So printenv is
+# read as a print of the environment when it has no name (options only), when
+# it has a name of that shape anywhere, when it has two names or more, or when
+# a name is a $ or backtick that the pod's shell or the session fills in;
+# `printenv HOME` and `printenv PATH` pass. A name outside the list that holds
+# a secret passes: this reads the name, not the value.
+secret_name="(secret|passw|pass|token|key|cred|auth|uri|url|dsn|conn|database|private|cert|sign|salt)"
+printenv_re="printenv(([[:space:]]+-[^[:space:]]*)*[[:space:]]*(\$|${exec_end})|[[:space:]]+[^;&|${eol}]*${secret_name}|[[:space:]]+[^[:space:];&|${eol}]+[[:space:]]+[A-Za-z_\$\"${sq}\`]|[[:space:]]+[^;&|${eol}]*[\$\`])"
+env_tail="(${printenv_re}|env([[:space:]]+(-[uCS][[:space:]]+[^[:space:]]+|-[^[:space:]]*|[^[:space:]=;&|\"${sq}]+=[^[:space:];&|\"${sq}]*))*[[:space:]]*(\$|${exec_end}))"
 # The shell builtins that print every variable: set, export and declare with
 # nothing but -p after them (`set -e` and `export FOO=1` pass).
 set_tail="(set|(export|declare|typeset)([[:space:]]+-p)?)[[:space:]]*(\$|${exec_end})"
@@ -478,7 +515,7 @@ set_tail="(set|(export|declare|typeset)([[:space:]]+-p)?)[[:space:]]*(\$|${exec_
 # (token and creds as words, so tokenizer.json and token_usage.log pass), and
 # the directories a pod mounts them in, which need no word.
 secret_path="(/var/run/secrets/|/run/secrets/|/etc/secrets|secret|tokens?([^[:alnum:]_]|\$)|credential|creds?([^[:alnum:]_]|\$)|password|\.key|/proc/[^[:space:]]*/environ)"
-mount_path="(/var/run/secrets/|/run/secrets/|/etc/secrets|/proc/[^[:space:]]*/environ)"
+mount_path="(/var/run/secrets|/run/secrets|/etc/secrets|/proc/[^[:space:]]*/environ)"
 reader="(cat|head|tail|less|base64|xxd|strings)"
 # The pod's command as typed after `--`: env, a reader and a secret path in the
 # same command, or /proc/<pid>/environ read by anything.
@@ -489,14 +526,28 @@ exec_direct="(${env_tail}|${reader}[[:space:]]+[^;&|${eol}]*${secret_path}|[^;&|
 # words before it. Read in the body: env and printenv, set and export -p, a
 # reader beside a secret path, /proc/<pid>/environ whatever reads it, and a
 # reader and a mounted path anywhere in the same body, in either order.
+#
+# The shell's options may stand before -c: a short one (-x), a long one
+# (--norc) and -o with its word (-o pipefail). The body ends at its closing
+# quote, but a backslash-escaped quote in a double-quoted body is no end, and a
+# closing quote that touches the next character ('x'";env") is no end either:
+# the shell joins the pieces into one word. A command in the body also starts
+# after the words of a compound command (do, then, else, if, while, !), and a
+# shell started in the body is read the same way (sh -c 'sh -c env').
 assign="([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*"
-exec_sh_open="(ba|da|k|z|a)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*"
+exec_sh_open="(ba|da|k|z|a)?sh[[:space:]]+(([-+][oO][[:space:]]+[A-Za-z]+|-[-a-z]+)[[:space:]]+)*"
+exec_sh_nested="(([^[:space:];&|\"${sq}]*/)?${exec_sh_open}[\\\\\"${sq}]*)?"
+exec_sh_kw="((do|then|else|elif|if|while|until|!)[[:space:]]+)*"
 exec_sh_body() { # $1=the quote that opens the body; sets exec_sh_alts
   local q="$1" in nonword at
-  in="[^${q}]*"
+  if [ "$q" = '"' ]; then
+    in="([^\"\\\\]|\\\\.|\"[^[:space:];&|)<>])*"
+  else
+    in="([^${q}]|${q}[^[:space:];&|)<>])*"
+  fi
   nonword="[^[:alnum:]_${q}-]"
-  at="(${in}[;&|(\`{${eol}])?[[:space:]]*${assign}${exec_wrap}([^[:space:];&|\"${sq}]*/)?"
-  exec_sh_alts="${at}(${env_tail}|${set_tail})"
+  at="(${in}[;&|(\`{${eol}])?[[:space:]]*${exec_sh_kw}${assign}${exec_wrap}([^[:space:];&|\"${sq}]*/)?"
+  exec_sh_alts="${at}${exec_sh_nested}(${env_tail}|${set_tail})"
   exec_sh_alts+="|(${in}${nonword})?${reader}[[:space:]]+[^;&|${q}]*${secret_path}"
   exec_sh_alts+="|${in}/proc/[^[:space:]${q}]*/environ"
   exec_sh_alts+="|(${in}${nonword})?${reader}[[:space:]]${in}${mount_path}"
@@ -514,6 +565,36 @@ exec_msg="That would print a pod's environment or a mounted Secret to the transc
 if [[ "$joined" == *" -- "* && ( "$joined" == *exec* || "$joined" == *debug* ) && "$joined" =~ $exec_pod_re ]]; then
   decide deny "$exec_msg"
 fi
+# A Secret's mount read by whatever reader. The rule above knows a few readers;
+# there are as many more (grep, tar, find -exec, awk, sed, od, dd, python), so
+# this one reads the path and not the reader: a command after the `--` of an
+# exec or debug that names a mounted path (mount_path: the service account
+# directory, /run/secrets, /etc/secrets, /proc/<pid>/environ) is denied unless
+# its verb is ls, stat or test, which show a name or a mode and no content.
+# ERE has no negative look-ahead, so each `exec ... --` is cut off in turn and
+# the verb tested on what follows it. `sh -c '...'` has the verb sh: a body
+# that is one ls, stat or test with no separator, redirect or substitution in
+# it (the repository's tests use sh -c "ls /etc/secrets") passes like the bare
+# verb, and any other body that names a mount is denied, whatever it does with
+# it. The text after the
+# `--` is read to its end: a mounted path in a later command of the line
+# counts too, which is the safe side. A line with more than eight such calls
+# is not read to the end and asks.
+exec_dash_re="(^|[^[:alnum:]_-])(exec|debug)[[:space:]]+[^;&|${eol}]*[[:space:]]--[[:space:]]+"
+exec_look_re="^${exec_wrap}[\"${sq}]?([^[:space:];&|\"${sq}]*/)?(ls|stat|test)([[:space:]]|\$|[;&|)\"${sq}])"
+exec_look_sh_re="^${exec_wrap}${exec_sh_open}(\"(ls|stat|test)[[:space:]][^\"\\\\;&|<>\$\`]*\"|${sq}(ls|stat|test)[[:space:]][^${sq};&|<>\$\`]*${sq})[[:space:]]*(\$|[;&|)])"
+if [[ "$joined" == *" -- "* && ( "$joined" == *exec* || "$joined" == *debug* ) && "$joined" =~ $mount_path ]]; then
+  exec_rest="$joined"
+  exec_calls=0
+  while [[ "$exec_rest" =~ $exec_dash_re ]]; do
+    exec_rest="${exec_rest#*"${BASH_REMATCH[0]}"}"
+    [[ "$exec_rest" =~ $mount_path ]] || break
+    [ $(( ++exec_calls )) -le 8 ] || \
+      decide ask "This command runs more than eight exec or debug calls and names a Secret mount: the guard did NOT read the rest of them, and one may read a mounted Secret it would deny; confirm that none does, or split the command."
+    [[ "$exec_rest" =~ $exec_look_re || "$exec_rest" =~ $exec_look_sh_re ]] || \
+      decide deny "That names a mounted Secret or a pod's environment file in a command run in a pod, and the guard knows no list of harmless readers: only ls, stat and test of such a path pass. kubectl describe pod shows which Secrets it uses; run it yourself for a value."
+  done
+fi
 # A path under /secrets in the API prints Secret values without the word get
 # secret, in either order of the flag and the path and with the path
 # percent-encoded (the API server decodes it: secre%74s); so does a
@@ -524,6 +605,24 @@ raw_secrets_re="(^|[^[:alnum:]_-])get[[:space:]]+([^;&|${eol}]*[[:space:]])?--ra
 config_view_re="(^|[^[:alnum:]_-])config[[:space:]]+([^;&|${eol}]*[[:space:]])?view[[:space:]]+([^;&|${eol}]*[[:space:]])?--(raw|flatten)([=[:space:]]|\$)"
 create_token_re="(^|[^[:alnum:]_-])create[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*token([[:space:]]|\$)"
 cp_secret_re="(^|[^[:alnum:]_-])cp[[:space:]]+([^;&|${eol}]*[[:space:]])?[^[:space:]:]+:[^[:space:]]*${secret_path}"
+# `--help` (or -h) after a reader of secrets prints its usage and no value
+# (aws secretsmanager get-secret-value --help, helm get values -h). `unhelped`
+# succeeds when the regex matches somewhere that no whole-word --help or -h
+# follows in the same segment (up to a separator or a newline); a command that
+# reads once with --help and once without still counts. It looks at the first
+# twenty matches and counts the rest as not helped: the safe side.
+help_re="(^|[[:space:]])(--help|-h)([[:space:]]|\$)"
+unhelped() { # $1=text $2=regex
+  local text="$1" re="$2" m rest tries=0
+  while [[ "$text" =~ $re ]]; do
+    m="${BASH_REMATCH[0]}"
+    text="${text#*"$m"}"
+    rest="${text%%[;&|$'\n']*}"
+    [[ " $rest" =~ $help_re ]] || return 0
+    [ $(( ++tries )) -lt 20 ] || return 0
+  done
+  return 1
+}
 raw_secrets_msg="That reads Secret values through the API to the transcript. -o name lists Secrets and kubectl describe secret shows keys and sizes; run it yourself for a value."
 if [[ "$joined" == *--raw* ]]; then
   [[ "$joined" =~ $raw_secrets_re ]] && decide deny "$raw_secrets_msg"
@@ -544,7 +643,7 @@ if [[ "$joined" == *--raw* ]]; then
 fi
 [[ "$joined" =~ $config_view_re ]] && \
   decide deny "kubectl config view --raw (and --flatten) prints the kubeconfig's keys and tokens to the transcript. Run it yourself."
-[[ "$joined" =~ $create_token_re ]] && \
+unhelped "$joined" "$create_token_re" && \
   decide deny "kubectl create token puts a service account token into the transcript. Run it yourself."
 [[ "$joined" =~ $cp_secret_re ]] && \
   decide deny "kubectl cp out of a Secret mount or a token file copies secret material off the pod. Run it yourself."
@@ -558,14 +657,14 @@ az_secret_list_re="${cloud_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?containe
 gcloud_secret_re="${cloud_cli}gcloud[[:space:]]+([^;&|${eol}]*[[:space:]])?secrets[[:space:]]+versions[[:space:]]+access([[:space:]]|\$)"
 aws_secret_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?secretsmanager[[:space:]]+(batch-)?get-secret-value([[:space:]]|\$)"
 aws_ssm_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?ssm[[:space:]]+get-parameters?(-by-path|-history)?[[:space:]]+([^;&|${eol}]*[[:space:]])?--with-decryption([[:space:]=]|\$)"
-if [[ "$joined" =~ $az_secret_re || "$joined" =~ $az_secret_list_re || "$joined" =~ $gcloud_secret_re \
-      || "$joined" =~ $aws_secret_re || "$joined" =~ $aws_ssm_re ]]; then
-  decide deny "A cloud secret store's value never enters the transcript or the command line. Run it yourself; list the names instead."
-fi
+for cloud_re in "$az_secret_re" "$az_secret_list_re" "$gcloud_secret_re" "$aws_secret_re" "$aws_ssm_re"; do
+  unhelped "$joined" "$cloud_re" && \
+    decide deny "A cloud secret store's value never enters the transcript or the command line. Run it yourself; list the names instead."
+done
 # The kubectl plugin view-secret prints a Secret's decoded values (krew installs
 # it as kubectl-view_secret).
 view_secret_re="(^|[^[:alnum:]_.])view[-_]secret([[:space:]]|\$)"
-[[ "$hook_cmd" =~ $view_secret_re ]] && \
+unhelped "$hook_cmd" "$view_secret_re" && \
   decide deny "kubectl view-secret prints Secret values to the transcript. kubectl describe secret shows keys and sizes; run it yourself for a value."
 [[ "$hook_cmd" =~ $commit_n_wrapped_re ]] && \
   decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
@@ -583,7 +682,7 @@ hookspath_env_re="(^|[^[:alnum:]_])(GIT_CONFIG_KEY_[0-9]+|GIT_CONFIG_PARAMETERS)
   decide deny "Changing core.hooksPath disables the repository's git hooks. Run it yourself if intended."
 [[ "$hook_cmd" =~ (^|[^[:alnum:]_])(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0) ]] && \
   decide deny "Disabling the hook manager (HUSKY=0, LEFTHOOK=0) bypasses git hooks. Fix what the hook reports, or run it yourself."
-[[ "$cmd" =~ az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|download|backup|restore) ]] && \
+unhelped "$cmd" "az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|download|backup|restore)" && \
   decide deny "Key Vault secret values never enter the transcript or the command line. Run it yourself; list secret names with 'az keyvault secret list'."
 [[ "$cmd" =~ az[[:space:]].*(group|keyvault|postgres|aks|cognitiveservices|acr)[[:space:]]+(.*[[:space:]])?delete([[:space:]]|$) ]] && \
   decide deny "Azure resource delete is destructive; run it yourself after confirming subscription and resource."
@@ -679,6 +778,76 @@ foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?
   decide ask "terraform state surgery, import, taint or force-unlock can orphan or corrupt resources, and state pull prints resource secrets; confirm the workspace and the reason."
 [[ "$cmd" =~ (^|[^[:alnum:]_.-])az[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?account[[:space:]]+get-access-token ]] && \
   decide ask "That would put a bearer token into the transcript; run it yourself, or use a script that passes it on stdin."
+# make gateway-upkeep (infra/kind/upkeep.sh): credit and close change a tenant's
+# budget ledger, and expire --confirm deletes months of it; reservations, and an
+# expire without --confirm, only read. ARGS is a make variable and an
+# environment variable, so it may stand before or after the target, and the
+# segment is judged as a whole. It fails closed: a segment that names the target
+# asks unless it shows exactly one ARGS= whose first word is reservations or
+# expire, with no --confirm. A variable, any other verb, no ARGS at all
+# (export ARGS=...; make ...) and a bare `make gateway-upkeep` (a no-op the
+# script refuses) therefore ask. The script splits ARGS on blanks into words of
+# letters, digits, . _ = and -, and its first word is the subcommand, so the
+# first word is what is read. It is a segment-by-segment loop of its own, after
+# every deny above, so that a deny in another segment of the same command
+# still wins. Reads hook_cmd: a commit message that names the target passes.
+upkeep_target_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^;&|]*[[:space:]])?[\"${sq}]?gateway-upkeep[\"${sq}]?([[:space:]]|\$|[;&|)])|^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|${sq}[^${sq}]*${sq}|[^[:space:]]*)[[:space:]]+)*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*/)?upkeep\.sh([[:space:]]|\$)"
+upkeep_twice_re="(^|[[:space:]])ARGS=.*[[:space:]]ARGS="
+upkeep_read_re="(^|[[:space:]])ARGS=[\"${sq}]?[[:space:]]*(reservations|expire)([[:space:]\"${sq}]|\$)"
+upkeep_confirm_re="(^|[[:space:]=\"${sq}])--confirm([[:space:]=\"${sq}]|\$)"
+if [[ "$hook_cmd" == *upkeep* ]]; then
+  while IFS= read -r seg; do
+    [[ "$seg" =~ $upkeep_target_re ]] || continue
+    if ! [[ "$seg" =~ $upkeep_read_re ]] || [[ "$seg" =~ $upkeep_confirm_re || "$seg" =~ $upkeep_twice_re ]]; then
+      decide ask "make gateway-upkeep credit, close and expire --confirm change a tenant's budget ledger on the local cluster; confirm the tenant, the amount and the reason, or run it in a terminal of your own. reservations and expire without --confirm only read."
+    fi
+  done < <(printf '%s\n' "$hook_cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+fi
+# kubectl run with --overrides or --env. The pod it starts holds none of the
+# workload's own environment, but --overrides is a pod spec of the caller's
+# making (an env entry with a secretKeyRef, envFrom, a Secret volume) and
+# --env sets variables: either can put a Secret into the new pod, and the
+# command after its `--` then prints it. So these ask; `kubectl run` without
+# them passes, as do `docker run --env`, `uv run` and `gh run`, which are not
+# kubectl. The command after the `--` is not read as exec's is.
+kube_run_re="(^|[^[:alnum:]_.-])kubectl[[:space:]]+([^;&|${eol}]*[[:space:]])?run[[:space:]]+([^;&|${eol}]*[[:space:]])?--(overrides|env)([=[:space:]]|\$)"
+[[ "$hook_cmd" =~ $kube_run_re ]] && \
+  decide ask "kubectl run with --overrides or --env can put a Secret into the new pod (a secretKeyRef, envFrom or a Secret volume), and its command can print it; confirm what the pod carries."
+# Other printers of a credential, which ask as `az account get-access-token`
+# does: a service account token minted through the API (create --raw ...
+# /serviceaccounts/NAME/token; `create token` is denied above), the aws
+# commands that print a session, a role's credentials, a registry password, a
+# cluster token or the stored secret key, gh auth token, gcloud's access and
+# identity tokens, the az commands that print a registry credential, a storage
+# key, a login token or a new service principal's secret, helm's hook manifests
+# (in the helm rule below), crictl inspect (a container's environment, secret
+# values injected into it included: on a kind node it is reached with docker
+# exec), and the path of the Secrets API anywhere in a command (kubectl proxy
+# and curl, after the --raw deny above). Each reads hook_cmd and passes with
+# --help. Not asked, and why: aws configure get of a name that holds no
+# secret, gh auth status, gcloud auth list, and the az and aws reads that
+# list or describe.
+cred_cli="${cloud_cli}"
+cred_ask_res=(
+  "(^|[^[:alnum:]_-])create[[:space:]]+[^;&|${eol}]*(--raw[^;&|${eol}]*/serviceaccounts/[^;&|${eol}]*/token|/serviceaccounts/[^;&|${eol}]*/token[^;&|${eol}]*--raw)"
+  "${cred_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?(sts[[:space:]]+(get-session-token|assume-role(-with-saml|-with-web-identity)?)|configure[[:space:]]+export-credentials|ecr[[:space:]]+get-login-password|eks[[:space:]]+get-token)([[:space:]]|\$)"
+  "${cred_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?configure[[:space:]]+get[[:space:]]+[\"${sq}]?aws_(secret_access_key|session_token)([[:space:]\"${sq}]|\$)"
+  "${cred_cli}gh[[:space:]]+auth[[:space:]]+token([[:space:]]|\$)"
+  "${cred_cli}gcloud[[:space:]]+([^;&|${eol}]*[[:space:]])?auth[[:space:]]+(application-default[[:space:]]+)?print-(access|identity)-token([[:space:]]|\$)"
+  "${cred_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?(acr[[:space:]]+credential[[:space:]]+show|storage[[:space:]]+account[[:space:]]+keys[[:space:]]+list|ad[[:space:]]+sp[[:space:]]+create-for-rbac)([[:space:]]|\$)"
+  "${cred_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?acr[[:space:]]+login[[:space:]]+([^;&|${eol}]*[[:space:]])?--expose-token([[:space:]=]|\$)"
+  "${cred_cli}crictl[[:space:]]+([^;&|${eol}]*[[:space:]])?inspect([[:space:]]|\$)"
+  "/api/v1/(namespaces/[^/[:space:]]+/)?secrets([/?[:space:]\"${sq}]|\$)"
+)
+if [[ "$hook_cmd" == *token* || "$hook_cmd" == *credential* || "$hook_cmd" == *login-password* \
+      || "$hook_cmd" == *get-session* || "$hook_cmd" == *assume-role* || "$hook_cmd" == *crictl* \
+      || "$hook_cmd" == *rbac* || "$hook_cmd" == *keys* || "$hook_cmd" == */secrets* \
+      || "$hook_cmd" == *configure* ]]; then
+  for cred_re in "${cred_ask_res[@]}"; do
+    unhelped "$hook_cmd" "$cred_re" && \
+      decide ask "That prints a token, a key or a Secret's value to the transcript (a credential printer, or a path of the Secrets API); run it yourself, or use a script that passes the value on stdin. With --help it passes."
+  done
+fi
 # psql through `kubectl exec` runs SQL inside the database pod, where the
 # default login is usually the superuser. The `--` that kubectl exec puts
 # before the pod's command tells it from a local psql, from `docker exec` and
@@ -710,10 +879,15 @@ kind_kubeconfig_re="(^|[^[:alnum:]_.-])kind[[:blank:]]+([^;&|${nl}]*[[:blank:]])
 # values, which can hold Secret data. They ask, they do not deny: reading a
 # release's values is routine (the rollback runbook does). Options may stand
 # between get and the verb, and the verb does not span a line. A call inside a
-# script file is not a typed command and is not seen.
-helm_get_re="(^|[^[:alnum:]_.-])helm[[:blank:]]+([^;&|${nl}]*[[:blank:]])?get[[:blank:]]+([^;&|${nl}]*[[:blank:]])?(manifest|values|all)([[:space:]]|\$)"
-[[ "$hook_cmd" =~ $helm_get_re ]] && \
-  decide ask "helm get manifest, values and all print a release's rendered manifests and values, which can hold Secret data; confirm that this release has none, or run it yourself."
+# script file is not a typed command and is not seen. hooks prints the hook
+# manifests (this chart's Jobs: their environment and Secret references). notes
+# and metadata are left out: metadata prints the chart's name, version and
+# status, and notes prints the chart's NOTES.txt, which this chart does not have
+# (a chart that renders a value into its notes would print it: that is a fact
+# about this chart, not about helm).
+helm_get_re="(^|[^[:alnum:]_.-])helm[[:blank:]]+([^;&|${nl}]*[[:blank:]])?get[[:blank:]]+([^;&|${nl}]*[[:blank:]])?(manifest|values|all|hooks)([[:space:]]|\$)"
+unhelped "$hook_cmd" "$helm_get_re" && \
+  decide ask "helm get manifest, values, hooks and all print a release's rendered manifests, hook manifests and values, which can hold Secret data; confirm that this release has none, or run it yourself."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
 # A mutating kubectl call asks, because the current kube context may not be the
