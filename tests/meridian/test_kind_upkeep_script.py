@@ -584,7 +584,15 @@ def test_the_help_line_of_the_target_names_the_variable_and_the_four_subcommands
 
 def test_make_dry_run_shows_the_recipe_and_nothing_else() -> None:
     done = subprocess.run(
-        ["make", "-n", "gateway-upkeep", "ARGS=reservations --older-than 15"],
+        # --no-print-directory: under a parent make (make pytest) a nested make
+        # prints "Entering directory" lines, which are not the recipe.
+        [
+            "make",
+            "--no-print-directory",
+            "-n",
+            "gateway-upkeep",
+            "ARGS=reservations --older-than 15",
+        ],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
