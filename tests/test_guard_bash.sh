@@ -148,4 +148,181 @@ else
   echo "FAIL 16384 bytes of one-word segments take ${cpu_seconds} s of CPU, not under 0.5"
   fail=1
 fi
+
+# The parts are counted the way the loops split them: && and || count, a CRLF
+# line is a part, and a continuation joins lines into one part (unless a ; or
+# an && stands before it).
+parts() { # $1=count, $2=the separator: that many one-word parts
+  local i out=""
+  for ((i = 1; i <= $1; i++)); do
+    out+="a"
+    [ "$i" -ge "$1" ] || out+="$2"
+  done
+  printf '%s' "$out"
+}
+ask_for "a command of exactly the segment bound joined by && passes" none "$(parts "$segment_bound" '&&')"
+ask_for "a command one part over the bound joined by && asks" ask "$(parts $((segment_bound + 1)) '&&')"
+ask_for "a command of exactly the segment bound joined by || passes" none "$(parts "$segment_bound" '||')"
+ask_for "a command one part over the bound joined by || asks" ask "$(parts $((segment_bound + 1)) '||')"
+ask_for "a command of exactly the segment bound of CRLF lines passes" none "$(parts "$segment_bound" $'\r\n')"
+ask_for "a command one part over the bound of CRLF lines asks" ask "$(parts $((segment_bound + 1)) $'\r\n')"
+ask_for "lines joined by a continuation are one part and pass" none "$(parts $((segment_bound + 500)) $' \\\n')"
+ask_for "a ; before a continuation still cuts the part, so the count asks" ask "$(parts $((segment_bound + 1)) $';\\\n')"
+
+# The watchdog (H1). The byte and segment bounds keep the hook short for the
+# shapes they were measured on; the watchdog answers `ask` whatever the shape,
+# so that a hook past its timeout (which Claude Code lets through unread) is
+# not the way past the guard. Its time and the timeout in settings.json are
+# held together here: the watchdog must leave guard_watchdog_margin seconds
+# for the one command in flight that its trap waits for.
+settings_timeout="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | contains("guard-bash.sh")) | .timeout] | first' \
+  "$here/../.claude/settings.json")"
+watchdog_default="$(sed -n 's/^guard_watchdog_default=\([0-9][0-9]*\)$/\1/p' "$hook")"
+guard_watchdog_margin=4
+if [[ "$settings_timeout" =~ ^[0-9]+$ && "$watchdog_default" =~ ^[0-9]+$ ]] \
+  && [ "$watchdog_default" -ge 1 ] \
+  && [ $((watchdog_default + guard_watchdog_margin)) -le "$settings_timeout" ]; then
+  echo "ok   the watchdog's ${watchdog_default} s and a margin of ${guard_watchdog_margin} s fit the hook's timeout of ${settings_timeout} s"
+else
+  echo "FAIL the watchdog (${watchdog_default:-unset} s) plus ${guard_watchdog_margin} s does not fit the hook's timeout (${settings_timeout:-unset} s)"
+  fail=1
+fi
+# The worst shape the review found: `kubectl ` and then `&(` to just under the
+# byte bound is one segment, and the patterns that read it are quadratic.
+amp_shape() { # $1=the bytes: kubectl, then &( up to just under that
+  printf 'kubectl '
+  printf '&(%.0s' $(seq $((($1 - 8) / 2)))
+}
+amp_command="$(amp_shape "$bound")"
+jq -nc --arg c "$amp_command" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
+  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under 1.5"
+else
+  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under 1.5"
+  fail=1
+fi
+ask_for "the worst shape followed by a denied segment is denied, not skipped" deny \
+  "$(amp_shape $((bound - 32)))"'; git push --force'
+# A slow path forced: the watchdog is set to a tenth of a second (it can only be
+# shortened, never lengthened, through GUARD_WATCHDOG_SECONDS) and the worst
+# shape cannot be read that fast. A distinctive value lets pgrep find the
+# helper's sleep afterwards.
+slow="0.1$$"
+slow_out="$(GUARD_WATCHDOG_SECONDS="$slow" bash "$hook" < "$big_input")"
+slow_decision="$(jq -r '.hookSpecificOutput.permissionDecision // "none"' <<<"$slow_out")"
+slow_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"$slow_out")"
+if [ "$slow_decision" = ask ]; then
+  echo "ok   a command the hook cannot read in time asks: $slow_decision"
+else
+  echo "FAIL a command the hook cannot read in time: expected ask, got $slow_decision"
+  fail=1
+fi
+case "$slow_reason" in
+  *"ran out of time"*"NOT read"*"Write tool"*) echo "ok   the watchdog's ask says the guard ran out of time and the command was not read" ;;
+  *)
+    echo "FAIL the watchdog's ask does not say it ran out of time, that the command was NOT read, and to use the Write tool: $slow_reason"
+    fail=1
+    ;;
+esac
+if [ "$(wc -l <<<"$slow_out")" -eq 1 ]; then
+  echo "ok   the watchdog's answer is one JSON object"
+else
+  echo "FAIL the watchdog's answer is not one line: $slow_out"
+  fail=1
+fi
+# Nothing of the hook is left: the helper's sleep is gone, after an answer by
+# the watchdog and after an ordinary one. pgrep is given a second to see it go.
+no_sleep_left() { # $1=the sleep's argument
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -f "sleep $1" > /dev/null || return 0
+    sleep 0.1
+  done
+  return 1
+}
+if no_sleep_left "$slow"; then
+  echo "ok   no helper is left after the watchdog answered"
+else
+  echo "FAIL a helper process is left after the watchdog answered"
+  fail=1
+fi
+quiet="5.1$$"
+jq -nc --arg c "ls -la" '{tool_input:{command:$c}}' | GUARD_WATCHDOG_SECONDS="$quiet" bash "$hook" > /dev/null
+if no_sleep_left "$quiet"; then
+  echo "ok   no helper is left after an ordinary answer"
+else
+  echo "FAIL a helper process is left after an ordinary answer"
+  fail=1
+fi
+jq -nc --arg c "git push --force" '{tool_input:{command:$c}}' | GUARD_WATCHDOG_SECONDS="$quiet" bash "$hook" > /dev/null
+if no_sleep_left "$quiet"; then
+  echo "ok   no helper is left after a decision"
+else
+  echo "FAIL a helper process is left after a decision"
+  fail=1
+fi
+# The time can be shortened through the variable and not lengthened: a value
+# over the default, or one that is not a positive number, leaves the default.
+# The hook is started on a pipe that stays open, so that it is waiting for its
+# command: the helper is then armed and its sleep can be read from ps. That the
+# helper is armed before the hook reads anything is the same check.
+fifo_dir="$(mktemp -d)"
+mkfifo "$fifo_dir/in"
+armed_sleep() { # $1=the value of GUARD_WATCHDOG_SECONDS: the sleep's argument
+  local hook_pid
+  GUARD_WATCHDOG_SECONDS="$1" bash "$hook" < "$fifo_dir/in" > /dev/null &
+  hook_pid=$!
+  exec 3> "$fifo_dir/in"
+  sleep 0.3
+  ps -eo pid=,ppid=,args= | awk -v root="$hook_pid" '
+    { parent[$1] = $2; line[$1] = $0 }
+    END {
+      for (p in parent) {
+        if (parent[parent[p]] == root && line[p] ~ / sleep /) {
+          sub(/^ *[0-9]+ +[0-9]+ +(sleep )?/, "", line[p]);
+          print line[p]
+        }
+      }
+    }'
+  exec 3>&-
+  wait "$hook_pid" || true
+}
+for value_and_want in "|${watchdog_default}" "0.9$$|0.9$$" "$((watchdog_default + 1)).5$$|${watchdog_default}" "abc|${watchdog_default}" "0|${watchdog_default}" "-1|${watchdog_default}"; do
+  got="$(armed_sleep "${value_and_want%%|*}")"
+  if [ "$got" = "${value_and_want#*|}" ]; then
+    echo "ok   GUARD_WATCHDOG_SECONDS='${value_and_want%%|*}' arms a sleep of ${got}, before the command is read"
+  else
+    echo "FAIL GUARD_WATCHDOG_SECONDS='${value_and_want%%|*}': expected a sleep of ${value_and_want#*|}, found '${got}'"
+    fail=1
+  fi
+done
+rm -f "$fifo_dir/in"
+rmdir "$fifo_dir"
+
+# What the user reads when a command is not read (M10): the length asks and the
+# watchdog's ask all say that the command was not read and may hold a form the
+# guard would deny, so that nobody approves one unread.
+reason_of() { # $1=the command
+  jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bash "$hook" \
+    | jq -r '.hookSpecificOutput.permissionDecisionReason // ""'
+}
+for name_and_command in "byte|${prefix}$(padding "$((bound + 1))" a)" "segment|$(segments $((segment_bound + 1)) a)"; do
+  reason="$(reason_of "${name_and_command#*|}")"
+  case "$reason" in
+    *"NOT read"*"deny"*) echo "ok   the ${name_and_command%%|*} ask says that the command was NOT read and may hold a denied form" ;;
+    *)
+      echo "FAIL the ${name_and_command%%|*} ask does not say the command was NOT read and may hold a denied form: $reason"
+      fail=1
+      ;;
+  esac
+done
+case "$slow_reason" in
+  *"deny"*) echo "ok   the watchdog's ask says the unread command may hold a denied form" ;;
+  *)
+    echo "FAIL the watchdog's ask does not say the unread command may hold a denied form: $slow_reason"
+    fail=1
+    ;;
+esac
 exit "$fail"

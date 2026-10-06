@@ -9,6 +9,80 @@
 # This is a regex guard, not a sandbox: Claude Code's permission rules and the
 # owner's approvals remain the real boundary.
 set -euo pipefail
+
+# A hook that runs past its timeout does not block the call: Claude Code lets
+# it continue through the normal permission flow, so a hook that stalled would
+# let a command through unread. The hook has ten seconds (.claude/settings.json)
+# and the bounds below keep the commands it was measured on far under that, but
+# a bound is a measurement of some shapes, not a guarantee for every shape. So
+# the first thing the hook does, before it reads the command, is to start a
+# watchdog: a helper that signals the hook after guard_watchdog_default seconds
+# (5 of the 10, a margin of 5 for the one command that may be in flight, see
+# below), and the hook then answers `ask`, whatever it was reading, saying that
+# it ran out of time and did NOT read the command. tests/test_guard_bash.sh
+# reads the timeout from settings.json and holds the two numbers together.
+#
+# What the watchdog cannot do: bash runs a trap between commands, and waits for
+# a foreground command (one regex match, one of the python or sed passes) to
+# end before it runs the trap. A command in flight is not interrupted, so the
+# slowest single command decides how late the answer can be, and the byte bound
+# below is chosen from it. Measured on 2026-10-06 with the machine idle (load
+# about 4), as the gap between two xtrace stamps, on the shapes that cost most
+# (runs of `&(`, `(`, quotes and backticks after `kubectl `, and the same after
+# `kubectl exec x -- `, which reach the Azure script rules and the pod rule):
+#   16384 bytes: 0.97 s     8192 bytes: 0.24 s     4096 bytes: 0.06 s
+# The cost goes with the square of the length. The review of the first bounds
+# saw this machine run 3.5 to 6.2 times slower than idle (3 s of CPU took 10.8
+# and 19.3 s of wall with every core oversubscribed three times): 16384 bytes
+# would leave 0.97 x 6.2 = 6 s in flight, more than the margin; 8192 bytes
+# leave 0.24 x 6.2 = 1.5 s, and the margin holds a machine 20 times slower
+# than idle. Beyond that the answer can come after the timeout, and the call
+# then goes through unread: the one case this hook cannot close.
+#
+# GUARD_WATCHDOG_SECONDS may shorten the time (the tests do, to force the slow
+# path) and never lengthens it: a value that is not a positive number under the
+# default leaves the default.
+guard_watchdog_default=5
+guard_watchdog_seconds="$guard_watchdog_default"
+if [[ "${GUARD_WATCHDOG_SECONDS:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+   && awk -v s="$GUARD_WATCHDOG_SECONDS" -v d="$guard_watchdog_default" 'BEGIN { exit !(s > 0 && s < d) }'; then
+  guard_watchdog_seconds="$GUARD_WATCHDOG_SECONDS"
+fi
+guard_helper=""
+guard_disarm() { # the helper is killed on every way out, and waited for
+  [ -z "$guard_helper" ] && return 0
+  kill "$guard_helper" 2>/dev/null || true
+  wait "$guard_helper" 2>/dev/null || true
+  guard_helper=""
+}
+decide() { # $1=decision $2=reason
+  # Disarmed before it prints: a late alarm is ignored, so two answers are
+  # never printed.
+  trap '' ALRM
+  guard_disarm
+  jq -nc --arg d "$1" --arg r "$2" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
+  exit 0
+}
+trap guard_disarm EXIT
+trap 'decide ask "The guard ran out of time reading this command, so it was NOT read to the end and may hold a form the guard would deny: confirm that it holds none, or write it to a script with the Write tool and run the file."' ALRM
+# The helper: a subshell with its own sleep. Killing the subshell must kill the
+# sleep too (or it would linger for the time left), so the subshell traps TERM,
+# kills its sleep and leaves without signalling; the flag closes the window
+# between starting the sleep and knowing its pid. Its output is closed so that
+# it never holds the pipe the harness reads.
+(
+  guard_stopped=""
+  guard_sleeper=""
+  trap 'guard_stopped=1; [ -z "$guard_sleeper" ] || kill "$guard_sleeper" 2>/dev/null' TERM
+  sleep "$guard_watchdog_seconds" &
+  guard_sleeper=$!
+  [ -z "$guard_stopped" ] || kill "$guard_sleeper" 2>/dev/null
+  wait "$guard_sleeper" 2>/dev/null || true
+  [ -n "$guard_stopped" ] || kill -ALRM "$$" 2>/dev/null
+) >/dev/null 2>&1 </dev/null &
+guard_helper=$!
+
 input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [ -z "$cmd" ] && exit 0
@@ -16,25 +90,21 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null |
 # run, so the kubectl rule that lets a call through reads this copy.
 raw_cmd="$cmd"
 
-decide() { # $1=decision $2=reason
-  jq -nc --arg d "$1" --arg r "$2" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
-  exit 0
-}
-
-# A hook that runs past its timeout does not block the call: Claude Code lets
-# it continue through the normal permission flow. So a command too long to be
-# read inside the timeout (ten seconds, in .claude/settings.json) would pass
-# unread. This is the first thing the hook does with the command: a command
-# over guard_max_bytes asks, before the heredoc pass and before any pattern
-# runs. The rules below cost time in proportion to the length (some, to its
-# square); a 70 KB command once took 16 s with every core busy, and 16384
-# bytes scale that to about 3.7 s. Bytes, not characters: wc counts bytes and
-# the arithmetic trims the padding some wc print.
-guard_max_bytes=16384
+# The byte bound: a command over guard_max_bytes asks, before the heredoc pass
+# and before any pattern runs, and it says that the command was not read. The
+# rules below cost time in proportion to the length (some, to its square): see
+# the figures above for the value. The check sits before the heredoc pass: a wc
+# over the raw command costs nothing however long it is. Moving it after the
+# pass would let a long heredoc that is only written to a file through (the
+# pass is linear: 0.1 s of CPU for 1 MB, 0.4 s for 4 MB, measured), and would
+# bound what the patterns read instead of what was typed; it was not moved,
+# because it changes which commands pass, and the owner has not asked. Bytes,
+# not characters: wc counts bytes and the arithmetic trims the padding some wc
+# print.
+guard_max_bytes=8192
 guard_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
 [ "$guard_bytes" -le "$guard_max_bytes" ] || \
-  decide ask "This command is too long for the guard to read (${guard_bytes} bytes, the limit is ${guard_max_bytes}): write it to a script with the Write tool and run the file."
+  decide ask "This command is too long for the guard to read (${guard_bytes} bytes, the limit is ${guard_max_bytes}): it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run the file."
 
 if command -v python3 >/dev/null 2>&1; then
   cmd="$(printf '%s' "$cmd" | python3 -c '
@@ -82,8 +152,9 @@ fi
 
 # The rules below read a command one segment at a time (split on newlines, ;,
 # &&, || and |, line continuations joined), and the time they take follows the
-# number of segments, not the bytes: 8192 one-word segments fill the byte bound
-# above and took 3 s of CPU on an idle machine, against 0.25 s for 1000. So the
+# number of segments, not the bytes: 8192 one-word segments filled the former
+# byte bound (16384) and took 3 s of CPU on an idle machine, 4096 (the present
+# bound's worth) took 1 s, against 0.25 s for 1000. So the
 # segments are counted once, by the same split the loops use (one sed pass over
 # at most guard_max_bytes, cheap), before any loop runs, and a command with more
 # than guard_max_segments asks. The bound is the round number at which the
@@ -96,7 +167,7 @@ bs_nl=$'\\\n'
 guard_max_segments=1000
 guard_segments=$(( $(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g' | wc -l) ))
 [ "$guard_segments" -le "$guard_max_segments" ] || \
-  decide ask "This command has ${guard_segments} parts; the guard reads at most ${guard_max_segments}: write it to a script with the Write tool and run that."
+  decide ask "This command has ${guard_segments} parts; the guard reads at most ${guard_max_segments}: it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run that."
 
 # hook_cmd is what the git hook-bypass rules read, and the Kubernetes Secret
 # and psql rules after them. A commit message or a pull
@@ -121,7 +192,8 @@ guard_segments=$(( $(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\
 hook_cmd="$cmd"
 # shellcheck disable=SC2016  # the Python source below is meant to stay literal
 if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg_* \
-      || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* ]] \
+      || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* \
+      || "$cmd" == *kind* ]] \
    && command -v python3 >/dev/null 2>&1; then
   hook_cmd="$(printf '%s' "$cmd" | python3 -c '
 import re, sys
@@ -185,8 +257,8 @@ while IFS= read -r seg; do
   [[ "$seg" =~ (^|[[:space:]])(rm|mv|unlink|truncate)[[:space:]].*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) || \
      "$seg" =~ chmod[[:space:]]+[ugoa]*-[rwx]*x.*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) ]] && \
     decide deny "Removing or disabling a git hook file bypasses it. Run it yourself if intended."
-  [[ "$seg_env" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config) ]] && \
-    decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig)."
+  [[ "$seg_env" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config|admin\.conf) ]] && \
+    decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig, a node's admin.conf)."
 done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 # Git hook bypasses. A repository's hooks are its guard rails (a pre-push
 # hook may be the only thing stopping a push to main), so an agent never
@@ -283,36 +355,95 @@ done < <(printf '%s\n' "${hook_cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g
 # hook_cmd (a commit message that names one passes) with line continuations
 # joined, and the ones that look at a pod's command stop at a separator, a
 # newline included, so `kubectl exec x -- ls; env FOO=1 make` is not an env
-# print. Inside `sh -c "..."` a separator belongs to the pod's command, so
-# there the whole rest is read. Neutral rules, none names a Meridian path.
+# print. Inside `sh -c "..."` a separator belongs to the pod's command: the
+# body is read as far as its closing quote and no further, so a command that
+# follows the quoted body (`sh -c 'ls' | grep env`) is not part of it. Neutral
+# rules, none names a Meridian path.
 eol=$'\n'
 joined="${hook_cmd//"$bs_nl"/ }"
-# What follows `exec ... --`: the pod's own command.
-exec_head="(^|[^[:alnum:]_-])exec[[:space:]]+[^;&|${eol}]*[[:space:]]--[[:space:]]+([^[:space:];&|\"${sq}]*/)?"
-exec_sh="(ba|da|z|k)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*[\"${sq}]?.*[[:space:];&|(\`\"${sq}]"
-# What ends a command: a separator, or a quote that closes a string (one that
-# is followed by the end or a separator, not the quote that opens an argument
-# of `env "PGOPTIONS=x" psql`).
-exec_end="([;&|)<>]|[\"${sq}][[:space:]]*(\$|[;&|)]))"
-exec_env_re="${exec_head}(printenv([[:space:]]|\$|${exec_end})|env([[:space:]]+(-[^[:space:]]*|[^[:space:]=;&|\"${sq}]+=[^[:space:];&|\"${sq}]*))*[[:space:]]*(\$|${exec_end}))"
-exec_sh_env_re="${exec_head}${exec_sh}(printenv([[:space:]]|\$|${exec_end})|env[[:space:]]*(\$|${exec_end}))"
-# The files a Secret or a token lives in: a path that holds one of these words.
-secret_path="(/var/run/secrets/|/run/secrets/|/etc/secrets|secret|token|credential|password|\.key|/proc/[^[:space:]]*/environ)"
+# What follows `exec ... --` (or `debug`: its --target shares the process
+# namespace and its command is read the same way): the pod's own command,
+# after a wrapper word and its options, a quote and a directory, if there are
+# any. `kubectl run` is not read: a pod it starts holds none of the workload's
+# environment, and the same words follow `docker run` and `uv run` (the psql
+# ask below does read `run`).
+exec_wrap="((busybox|command|sudo|exec|nohup|nice|timeout|time|stdbuf|setsid)[[:space:]]+(-[^[:space:]]*[[:space:]]+|[0-9][0-9.]*[smhd]?[[:space:]]+)*)*"
+exec_head="(^|[^[:alnum:]_-])(exec|debug)[[:space:]]+[^;&|${eol}]*[[:space:]]--[[:space:]]+${exec_wrap}[\"${sq}]?([^[:space:];&|\"${sq}]*/)?"
+# What ends a command: a separator, a redirect (`2>&1` included), a comment, a
+# backtick, a newline, or a quote that closes a string (one that is followed
+# by the end or a separator, not the quote that opens an argument of
+# `env "PGOPTIONS=x" psql`).
+exec_end="([;&|)<>#\`${eol}]|[0-9]+[<>]|[\"${sq}][[:space:]]*(\$|[;&|)]))"
+# env and printenv print the environment; env with options and assignments only
+# does too, and so does `env -u X` (-u, -C and -S take a value). `env VAR=x
+# some-command` runs the command and passes.
+env_tail="(printenv([[:space:]]|\$|${exec_end})|env([[:space:]]+(-[uCS][[:space:]]+[^[:space:]]+|-[^[:space:]]*|[^[:space:]=;&|\"${sq}]+=[^[:space:];&|\"${sq}]*))*[[:space:]]*(\$|${exec_end}))"
+# The shell builtins that print every variable: set, export and declare with
+# nothing but -p after them (`set -e` and `export FOO=1` pass).
+set_tail="(set|(export|declare|typeset)([[:space:]]+-p)?)[[:space:]]*(\$|${exec_end})"
+# The files a Secret or a token lives in: a path that holds one of these words
+# (token and creds as words, so tokenizer.json and token_usage.log pass), and
+# the directories a pod mounts them in, which need no word.
+secret_path="(/var/run/secrets/|/run/secrets/|/etc/secrets|secret|tokens?([^[:alnum:]_]|\$)|credential|creds?([^[:alnum:]_]|\$)|password|\.key|/proc/[^[:space:]]*/environ)"
+mount_path="(/var/run/secrets/|/run/secrets/|/etc/secrets|/proc/[^[:space:]]*/environ)"
 reader="(cat|head|tail|less|base64|xxd|strings)"
-exec_read_re="${exec_head}${reader}[[:space:]]+[^;&|${eol}]*${secret_path}"
-exec_sh_read_re="${exec_head}${exec_sh}${reader}[[:space:]]+[^;&|]*${secret_path}"
+# The pod's command as typed after `--`: env, a reader and a secret path in the
+# same command, or /proc/<pid>/environ read by anything.
+exec_direct="(${env_tail}|${reader}[[:space:]]+[^;&|${eol}]*${secret_path}|[^;&|${eol}]*/proc/[^[:space:]]*/environ)"
+# `sh -c` and its relatives, then a body in double quotes, single quotes or
+# bare. A quoted body is read up to its closing quote. A command in it starts
+# at the opening quote, or after a separator, with assignments and wrapper
+# words before it. Read in the body: env and printenv, set and export -p, a
+# reader beside a secret path, /proc/<pid>/environ whatever reads it, and a
+# reader and a mounted path anywhere in the same body, in either order.
+assign="([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*"
+exec_sh_open="(ba|da|k|z|a)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*"
+exec_sh_body() { # $1=the quote that opens the body; sets exec_sh_alts
+  local q="$1" in nonword at
+  in="[^${q}]*"
+  nonword="[^[:alnum:]_${q}-]"
+  at="(${in}[;&|(\`{${eol}])?[[:space:]]*${assign}${exec_wrap}([^[:space:];&|\"${sq}]*/)?"
+  exec_sh_alts="${at}(${env_tail}|${set_tail})"
+  exec_sh_alts+="|(${in}${nonword})?${reader}[[:space:]]+[^;&|${q}]*${secret_path}"
+  exec_sh_alts+="|${in}/proc/[^[:space:]${q}]*/environ"
+  exec_sh_alts+="|(${in}${nonword})?${reader}[[:space:]]${in}${mount_path}"
+  exec_sh_alts+="|${in}${mount_path}${in}${nonword}${reader}([[:space:]]|\$)"
+}
+exec_sh_body '"'
+exec_sh_dq="${exec_sh_alts}"
+exec_sh_body "$sq"
+exec_sh_sq="${exec_sh_alts}"
+exec_sh_bare="${assign}${exec_wrap}([^[:space:];&|\"${sq}]*/)?(${env_tail}|${set_tail})"
+exec_pod_re="${exec_head}(${exec_direct}|${exec_sh_open}(\"(${exec_sh_dq})|${sq}(${exec_sh_sq})|${exec_sh_bare}))"
 exec_msg="That would print a pod's environment or a mounted Secret to the transcript. kubectl describe pod shows which Secrets it uses; run it yourself for a value."
-[[ "$joined" =~ $exec_env_re || "$joined" =~ $exec_sh_env_re ]] && decide deny "$exec_msg"
-[[ "$joined" =~ $exec_read_re || "$joined" =~ $exec_sh_read_re ]] && decide deny "$exec_msg"
+# Every shape this reads has a ` -- ` and exec or debug in it: a command
+# without them is not run through the pattern at all.
+if [[ "$joined" == *" -- "* && ( "$joined" == *exec* || "$joined" == *debug* ) && "$joined" =~ $exec_pod_re ]]; then
+  decide deny "$exec_msg"
+fi
 # A path under /secrets in the API prints Secret values without the word get
-# secret; so does a kubeconfig's raw view (client keys, tokens) and a minted
-# service account token.
-raw_secrets_re="(^|[^[:alnum:]_-])get[[:space:]]+[^;&|${eol}]*--raw[^;&|${eol}]*/secrets"
+# secret, in either order of the flag and the path and with the path
+# percent-encoded (the API server decodes it: secre%74s); so does a
+# kubeconfig's raw view (client keys, tokens) and a minted service account
+# token (flags may stand between create and token; `create secret generic
+# token` is another command and passes).
+raw_secrets_re="(^|[^[:alnum:]_-])get[[:space:]]+([^;&|${eol}]*[[:space:]])?--raw([=[:space:]][^;&|${eol}]*)?/secrets|(^|[^[:alnum:]_-])get[[:space:]]+[^;&|${eol}]*/secrets[^;&|${eol}]*[[:space:]]--raw"
 config_view_re="(^|[^[:alnum:]_-])config[[:space:]]+([^;&|${eol}]*[[:space:]])?view[[:space:]]+([^;&|${eol}]*[[:space:]])?--(raw|flatten)([=[:space:]]|\$)"
-create_token_re="(^|[^[:alnum:]_-])create[[:space:]]+((-n|--namespace|--context|--kubeconfig)[=[:space:]]+[^[:space:]]+[[:space:]]+)*token([[:space:]]|\$)"
+create_token_re="(^|[^[:alnum:]_-])create[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*token([[:space:]]|\$)"
 cp_secret_re="(^|[^[:alnum:]_-])cp[[:space:]]+([^;&|${eol}]*[[:space:]])?[^[:space:]:]+:[^[:space:]]*${secret_path}"
-[[ "$joined" =~ $raw_secrets_re ]] && \
-  decide deny "That reads Secret values through the API to the transcript. -o name lists Secrets and kubectl describe secret shows keys and sizes; run it yourself for a value."
+raw_secrets_msg="That reads Secret values through the API to the transcript. -o name lists Secrets and kubectl describe secret shows keys and sizes; run it yourself for a value."
+if [[ "$joined" == *--raw* ]]; then
+  [[ "$joined" =~ $raw_secrets_re ]] && decide deny "$raw_secrets_msg"
+  # One pass over each distinct %XX (twenty at most): enough for the words
+  # that matter, bounded for a command that is nothing but percent signs.
+  raw_decoded="$joined"
+  for _ in {1..20}; do
+    [[ "$raw_decoded" =~ %([0-9A-Fa-f][0-9A-Fa-f]) ]] || break
+    printf -v raw_char "\\x${BASH_REMATCH[1]}"
+    raw_decoded="${raw_decoded//"${BASH_REMATCH[0]}"/"$raw_char"}"
+  done
+  [[ "$raw_decoded" =~ $raw_secrets_re ]] && decide deny "$raw_secrets_msg"
+fi
 [[ "$joined" =~ $config_view_re ]] && \
   decide deny "kubectl config view --raw (and --flatten) prints the kubeconfig's keys and tokens to the transcript. Run it yourself."
 [[ "$joined" =~ $create_token_re ]] && \
@@ -327,12 +458,17 @@ cloud_cli="(^|[^[:alnum:]_.-])"
 az_secret_re="${cloud_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?containerapp[[:space:]]+([^;&|${eol}]*[[:space:]])?secret[[:space:]]+show([[:space:]]|\$)"
 az_secret_list_re="${cloud_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?containerapp[[:space:]]+([^;&|${eol}]*[[:space:]])?secret[[:space:]]+list[[:space:]]+([^;&|${eol}]*[[:space:]])?--show-values([[:space:]=]|\$)"
 gcloud_secret_re="${cloud_cli}gcloud[[:space:]]+([^;&|${eol}]*[[:space:]])?secrets[[:space:]]+versions[[:space:]]+access([[:space:]]|\$)"
-aws_secret_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?secretsmanager[[:space:]]+get-secret-value([[:space:]]|\$)"
-aws_ssm_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?ssm[[:space:]]+get-parameters?(-by-path)?[[:space:]]+([^;&|${eol}]*[[:space:]])?--with-decryption([[:space:]=]|\$)"
+aws_secret_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?secretsmanager[[:space:]]+(batch-)?get-secret-value([[:space:]]|\$)"
+aws_ssm_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?ssm[[:space:]]+get-parameters?(-by-path|-history)?[[:space:]]+([^;&|${eol}]*[[:space:]])?--with-decryption([[:space:]=]|\$)"
 if [[ "$joined" =~ $az_secret_re || "$joined" =~ $az_secret_list_re || "$joined" =~ $gcloud_secret_re \
       || "$joined" =~ $aws_secret_re || "$joined" =~ $aws_ssm_re ]]; then
   decide deny "A cloud secret store's value never enters the transcript or the command line. Run it yourself; list the names instead."
 fi
+# The kubectl plugin view-secret prints a Secret's decoded values (krew installs
+# it as kubectl-view_secret).
+view_secret_re="(^|[^[:alnum:]_.])view[-_]secret([[:space:]]|\$)"
+[[ "$hook_cmd" =~ $view_secret_re ]] && \
+  decide deny "kubectl view-secret prints Secret values to the transcript. kubectl describe secret shows keys and sizes; run it yourself for a value."
 [[ "$hook_cmd" =~ $commit_n_wrapped_re ]] && \
   decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
 # Environment switches are checked across the whole command, because
@@ -377,6 +513,9 @@ nl=$'\n'
 # The longest command, in characters, that the kind rules below read segment by
 # segment: they cost time in proportion to the length, and a hook has ten
 # seconds. A longer command that holds such a call asks without being read.
+# The byte bound at the top is now this value, and characters are never more
+# than bytes, so no command reaches the checks that use this: they stay as a
+# second line, for the day the byte bound is raised.
 kind_scan_max=8192
 kind_delete_re="(^|[^[:alnum:]_.-])kind([[:space:]]+-[^[:space:]]*([[:space:]]+[0-9]+)?)*[[:space:]]+delete([[:space:]]|\$)"
 kind_delete_local_re="^[[:space:]]*kind([[:space:]]+-[^[:space:]]*([[:space:]]+[0-9]+)?)*[[:space:]]+delete[[:space:]]+cluster[[:space:]]"
@@ -458,14 +597,22 @@ foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?
 psql_exec_re="(^|[^[:alnum:]_-])(exec|run|debug)[[:space:]].*[[:space:]]--[[:space:]](.*[[:space:]/\"';|&(])?(psql|pg_dump|pg_dumpall|pg_restore)([[:space:]\"';|&<>)]|\$)"
 [[ "$hook_cmd" =~ $psql_exec_re ]] && \
   decide ask "psql, pg_dump or pg_restore through kubectl exec, run or debug reaches the database as its superuser or dumps it; confirm the statement and the kube context."
-cnpg_psql_re="(^|[^[:alnum:]_.])cnpg[[:space:]]+([^;&|]*[[:space:]])?psql([[:space:]]|\$)"
+cnpg_psql_re="(^|[^[:alnum:]_.])cnpg[[:blank:]]+([^;&|${nl}]*[[:blank:]])?psql([[:space:]]|\$)"
 [[ "$hook_cmd" =~ $cnpg_psql_re ]] && \
   decide ask "kubectl cnpg psql runs SQL in the database pod, usually as its superuser; confirm the statement and the kube context."
+# kind get kubeconfig prints the cluster's admin credentials. It asks, it does
+# not deny: writing it to a file is the legitimate use (kind export kubeconfig
+# does that and passes; so do the repository's scripts, which this hook never
+# reads). Reading a node's admin.conf is denied with the other readers above.
+kind_kubeconfig_re="(^|[^[:alnum:]_.-])kind[[:blank:]]+([^;&|${nl}]*[[:blank:]])?get[[:blank:]]+kubeconfig([[:space:]]|\$)"
+[[ "$hook_cmd" =~ $kind_kubeconfig_re ]] && \
+  decide ask "kind get kubeconfig prints the cluster's admin credentials to the transcript; write it to a file instead (kind export kubeconfig --kubeconfig <file>), or confirm."
 # helm get manifest, values and all print a release's rendered manifests and
 # values, which can hold Secret data. They ask, they do not deny: reading a
-# release's values is routine (the rollback runbook does). A call inside a
+# release's values is routine (the rollback runbook does). Options may stand
+# between get and the verb, and the verb does not span a line. A call inside a
 # script file is not a typed command and is not seen.
-helm_get_re="(^|[^[:alnum:]_.-])helm[[:space:]]+([^;&|]*[[:space:]])?get[[:space:]]+(manifest|values|all)([[:space:]]|\$)"
+helm_get_re="(^|[^[:alnum:]_.-])helm[[:blank:]]+([^;&|${nl}]*[[:blank:]])?get[[:blank:]]+([^;&|${nl}]*[[:blank:]])?(manifest|values|all)([[:space:]]|\$)"
 [[ "$hook_cmd" =~ $helm_get_re ]] && \
   decide ask "helm get manifest, values and all print a release's rendered manifests and values, which can hold Secret data; confirm that this release has none, or run it yourself."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
