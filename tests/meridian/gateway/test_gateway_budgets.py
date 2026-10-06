@@ -66,7 +66,10 @@ from meridian.platform.gateway.providers.base import (
     ProviderError,
     ProviderReply,
 )
-from meridian.platform.gateway.ratelimit import RateRefusalReason
+from meridian.platform.gateway.ratelimit import (
+    RateRefusalReason,
+    RateStoreRefusalReason,
+)
 from meridian.platform.gateway.refusals import (
     LIMIT_ANSWERS,
     TENANT_BUDGET_USED_UP,
@@ -1261,10 +1264,14 @@ def test_a_policy_refusal_row_keeps_its_content_and_adds_the_count(
 
 
 def test_the_answers_of_the_limits_are_exactly_the_reasons_there_are() -> None:
-    reasons = set(get_args(RateRefusalReason)) | set(get_args(BudgetRefusalReason))
+    reasons = (
+        set(get_args(RateRefusalReason))
+        | set(get_args(BudgetRefusalReason))
+        | set(get_args(RateStoreRefusalReason))
+    )
 
     assert set(LIMIT_ANSWERS) == reasons
-    assert len(reasons) == 5
+    assert len(reasons) == 6
 
 
 def test_a_refusal_whose_audit_write_fails_is_a_503_and_still_counted(

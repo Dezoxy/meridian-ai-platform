@@ -82,14 +82,17 @@ from meridian.platform.guardrails import redact
 ACCESS_LOGGER = "uvicorn.access"
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", ACCESS_LOGGER)
 # Loggers that say too much at INFO, held at WARNING: httpx and httpx2 log the
-# request's URL. The measurement in ``test_logformat_services.py`` put the root
-# at INFO and sent three requests (the probe, an unknown path and a post)
-# through each of the six services with the app's lifespan, and the sweep's
-# ``main`` against an empty database, and found no other logger that writes at
-# INFO. It did not cover what ``psycopg`` and ``langgraph`` write at INFO
-# during a real run of the runtime or the sweep with data, nor the gateway's
-# live providers: a logger found there later is held here.
-HELD_AT_WARNING = ("httpx", "httpx2")
+# request's URL, and the second agent framework (a name held as a string, not
+# imported: ADR 2) writes about a dozen lines a leg of a workflow (supersteps,
+# checkpoint IDs, the step IDs of a dead-end check). The measurement in
+# ``test_logformat_services.py`` put the root at INFO and sent three requests
+# (the probe, an unknown path and a post) through each of the six services with
+# the app's lifespan, and the sweep's ``main`` against an empty database, and
+# found no other logger that writes at INFO. It did not cover what ``psycopg``
+# and ``langgraph`` write at INFO during a real run of the runtime or the sweep
+# with data, nor the gateway's live providers: a logger found there later is
+# held here.
+HELD_AT_WARNING = ("httpx", "httpx2", "agent_framework")
 HEALTH_PATH = "/healthz"
 ACCESS_ARGUMENTS = 5
 # The path of an access line, after decoding and redaction, is cut here: a

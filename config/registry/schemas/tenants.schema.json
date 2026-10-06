@@ -101,6 +101,7 @@
           "title": "Cost Per Month Eur"
         },
         "requests_per_10_seconds": {
+          "maximum": 1000000000,
           "minimum": 1,
           "title": "Requests Per 10 Seconds",
           "type": "integer"
@@ -111,6 +112,7 @@
           "type": "integer"
         },
         "tokens_per_minute": {
+          "maximum": 1000000000,
           "minimum": 1,
           "title": "Tokens Per Minute",
           "type": "integer"

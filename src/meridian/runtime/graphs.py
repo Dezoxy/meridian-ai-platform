@@ -1,7 +1,8 @@
 """Find a workload's graph factory by the registry's agent ID (T-40).
 
-A workload publishes ``build(model, tools) -> StateGraph`` in the entry-point group
-``meridian.graphs`` under its agent ID. The runtime loads only what the
+A workload publishes ``build(model, tools) -> StateGraph`` (or, for an agent on
+the second host, a factory that returns a workflow definition) in the entry-point
+group ``meridian.graphs`` under its agent ID. The runtime loads only what the
 registry names, only from the ``meridian`` distribution, only when exactly
 one entry point carries the name, only when the entry point's value names a
 module under ``meridian.workloads`` and only when that module's file lies in
@@ -17,7 +18,7 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import assert_never
+from typing import Any, assert_never
 
 from langgraph.graph import StateGraph
 
@@ -35,6 +36,11 @@ from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
 
 GraphFactory = Callable[[ModelClient, ToolClient], StateGraph]
+# What the loader returns, which is what either host takes: a LangGraph agent's
+# factory returns a ``StateGraph``, an agent-framework agent's a workflow
+# definition and its clients are the asynchronous faces of the two. The registry's
+# ``host`` says which; the host checks it at start (``host_wiring``).
+AgentFactory = Callable[[Any, Any], object]
 
 
 class GraphLoadError(Exception):
@@ -67,7 +73,7 @@ def _refusal_message(agent_id: str, refused: EntryPointRefused) -> str:
             assert_never(refused.reason)
 
 
-def load_graph_factory(agent_id: str, registry: Registry) -> GraphFactory:
+def load_graph_factory(agent_id: str, registry: Registry) -> AgentFactory:
     if not registry.has_agent(agent_id):
         raise GraphLoadError(f"agent {agent_id!r} is not in the registry")
     try:

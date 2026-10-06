@@ -5,6 +5,13 @@ description = "Enterprise agentic AI platform with a claims-triage reference wor
 license = "Apache-2.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    # Microsoft Agent Framework, the second agent framework (S037). Only
+    # meridian.runtime and meridian.workloads may import it, never
+    # meridian.platform (import-linter, ADR 2). Pinned at the version the S037
+    # spike measured (spikes/s037-agent-framework-host); it brings msgspec and
+    # python-dotenv and no provider SDK. The Agent Runtime's second host and
+    # the claim-brief workload import it.
+    "agent-framework-core==1.19.0",
     "azure-identity==1.26.0",
     # Reads the dates of the service's own certificate (common/certlife.py) and
     # makes the test certificates (tests/meridian/tlssupport.py); already
@@ -27,6 +34,9 @@ dependencies = [
     "pydantic==2.13.5",
     "python-multipart==0.0.32",
     "pyyaml==6.0.3",
+    # The gateway's shared rate windows (S066, T-45): synchronous client only, no
+    # hiredis extra. Imported only under meridian.platform.gateway.
+    "redis==8.1.0",
     "typer==0.27.2",
     "uvicorn==0.54.0",
 ]
@@ -38,11 +48,13 @@ meridian = "meridian.platform.cli:app"
 # and accepts only entry points published by this distribution (T-40).
 [project.entry-points."meridian.graphs"]
 claims-triage = "meridian.workloads.claims_triage.graph:build"
+claim-brief = "meridian.workloads.claim_brief.workflow:build"
 
 # `meridian eval run` finds a workload's evaluation plugin here by the workload's
 # name and accepts only entry points published by this distribution (T-80).
 [project.entry-points."meridian.evaluations"]
 claims-triage = "meridian.workloads.claims_triage.evaluation_http:EVALUATION"
+claim-brief = "meridian.workloads.claim_brief.evaluation:EVALUATION"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13"]
@@ -100,6 +112,41 @@ forbidden_modules = [
     "langchain_mistralai",
     "langchain_aws",
     "langchain_anthropic",
+    # The second framework (S037): its package is agent_framework.
+    "agent_framework",
+    # Its adapters are separate top-level modules, named like their
+    # distributions, and none is locked (a test over uv.lock holds that). The
+    # list is the ``all`` extra of agent-framework-core 1.19.0 (its METADATA);
+    # test_import_contracts.py fails when a release adds another.
+    "agent_framework_a2a",
+    "agent_framework_ag_ui",
+    "agent_framework_anthropic",
+    "agent_framework_azure_ai_search",
+    "agent_framework_azure_contentunderstanding",
+    "agent_framework_azure_cosmos",
+    "agent_framework_azurefunctions",
+    "agent_framework_bedrock",
+    "agent_framework_chatkit",
+    "agent_framework_claude",
+    "agent_framework_copilotstudio",
+    "agent_framework_declarative",
+    "agent_framework_devui",
+    "agent_framework_durabletask",
+    "agent_framework_foundry",
+    "agent_framework_foundry_hosting",
+    "agent_framework_foundry_local",
+    "agent_framework_gemini",
+    "agent_framework_github_copilot",
+    "agent_framework_hyperlight",
+    "agent_framework_mem0",
+    "agent_framework_mistral",
+    "agent_framework_monty",
+    "agent_framework_ollama",
+    "agent_framework_openai",
+    "agent_framework_orchestrations",
+    "agent_framework_purview",
+    "agent_framework_redis",
+    "agent_framework_tools",
 ]
 
 [[tool.importlinter.contracts]]
@@ -146,6 +193,23 @@ forbidden_modules = [
     # an external package, so `azure.identity` and `azure.core` cannot be named:
     # `azure` covers every azure.* distribution.
     "azure",
+    # The second framework's adapters that make a model call (S037): each wraps
+    # a provider SDK import-linter cannot see into, and none is locked.
+    "agent_framework_anthropic",
+    "agent_framework_bedrock",
+    "agent_framework_claude",
+    "agent_framework_copilotstudio",
+    "agent_framework_foundry",
+    "agent_framework_foundry_local",
+    "agent_framework_gemini",
+    "agent_framework_github_copilot",
+    "agent_framework_mistral",
+    "agent_framework_ollama",
+    "agent_framework_openai",
+    # Not a provider SDK: the client of the rate windows' store (S066, T-45),
+    # which only the gateway talks to. It is in this list, and not in the
+    # adapter contract's below, because the gateway's own rate store imports it.
+    "redis",
 ]
 
 [[tool.importlinter.contracts]]
@@ -162,6 +226,17 @@ forbidden_modules = [
     "botocore",
     "litellm",
     "azure",
+    "agent_framework_anthropic",
+    "agent_framework_bedrock",
+    "agent_framework_claude",
+    "agent_framework_copilotstudio",
+    "agent_framework_foundry",
+    "agent_framework_foundry_local",
+    "agent_framework_gemini",
+    "agent_framework_github_copilot",
+    "agent_framework_mistral",
+    "agent_framework_ollama",
+    "agent_framework_openai",
 ]
 # Direct imports only: the rest of the gateway may import the adapter, which
 # imports openai and azure. The adapter's own imports are the ignored edges.
@@ -170,6 +245,20 @@ ignore_imports = [
     "meridian.platform.gateway.providers.azure_openai -> openai",
     "meridian.platform.gateway.providers.azure_openai -> azure",
 ]
+
+[[tool.importlinter.contracts]]
+name = "the claim brief imports no HTTP client (S037)"
+type = "forbidden"
+# A step of the workload's own class could hold something that posts to a model
+# itself, which the second host's rule about step classes cannot see (it is about
+# inheritance). The standard library's clients cannot be named here;
+# tests/meridian/workloads/claim_brief/test_brief_import_allowlist.py holds those
+# and the four names the package may import of the framework.
+source_modules = ["meridian.workloads.claim_brief"]
+forbidden_modules = ["httpx", "requests", "aiohttp"]
+# Direct imports only: the package imports the runtime, which imports httpx for
+# its own clients.
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "the gateway imports neither the evaluation package nor the CLI"

@@ -166,6 +166,20 @@ SWEEP_HOLDS = frozenset(
         ("schema", "runtime", "USAGE", ""),
     }
 )
+# What a later file adds to those: 0024 lets the sweep ask whether a claim brief
+# keeps a run (S037). Its text column is not among them.
+BRIEF_SWEEP_HOLDS = frozenset(
+    ("column", "claims.briefs", "SELECT", column)
+    for column in ("run_id", "tenant", "state", "state_changed_at")
+)
+# What 0014 gave the sweep plus what later files added: 0023's table of the
+# second host's checkpoints, removed from the same way as the three above.
+SWEEP_HOLDS_SINCE_0023 = SWEEP_HOLDS | frozenset(
+    {
+        ("table", "runtime.workflow_checkpoints", "DELETE", ""),
+        ("column", "runtime.workflow_checkpoints", "SELECT", "thread_id"),
+    }
+)
 TRIGGER_FUNCTIONS = (
     "claims.confine_sweep_claim_moves()",
     "runtime.confine_sweep_run_moves()",

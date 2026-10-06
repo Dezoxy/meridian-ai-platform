@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=schemas/tenants.schema.json
 # Tenants: the data class of their requests, the agents they may run and what
 # they may use. The Model Gateway enforces four limits per tenant:
-#   requests_per_10_seconds  sliding 10 s window, in process
-#   tokens_per_minute        sliding 60 s window, in process
+#   requests_per_10_seconds  sliding 10 s window, in process or in the shared store
+#   tokens_per_minute        sliding 60 s window, in process or in the shared store
 #   tokens_per_day           UTC calendar day, in PostgreSQL
 #   cost_per_month_eur       UTC calendar month, in PostgreSQL
 # The first two are Azure OpenAI's own windows: the sum of each over all
@@ -17,7 +17,7 @@ tenants:
   - id: claims-triage
     description: The claims workload in production use.
     data_class: personal
-    agents: [claims-triage, knowledge-ingestion]
+    agents: [claims-triage, knowledge-ingestion, claim-brief]
     limits:
       requests_per_10_seconds: 10
       tokens_per_minute: 10000

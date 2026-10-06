@@ -32,16 +32,23 @@ meridian.telemetryCaMount and meridian.telemetryCaVolume, which the sweep's
 CronJob includes too (S064); the Jobs include none, they send nothing.
 tests/meridian/test_kind_manifests.py ties every name below to the code.
 
-The Model Gateway keeps its rate windows in one process: with a second replica
-each one would allow the full limits (threat model T-45), so the chart fails.
-The guard does not cover a rolling update, during which Kubernetes runs a second
-pod for some seconds and each allows the full windows. That is left as it is on
-purpose: the alternative, `maxSurge: 0`, takes the gateway down for those
-seconds. The plan's backlog holds it (T-45).
+The Model Gateway keeps its rate windows in its own process unless the rate store
+is on (S066, rate-store.yaml). Without the store a second replica would allow the
+full limits each (threat model T-45), so the chart fails for more than one. With
+`rateStore.enabled` the windows are shared, the gateway is given the store's
+address (MERIDIAN_GATEWAY_RATE_STORE_URL, from the key `uri` of the Secret
+rateStore.secret, through a required reference: no `optional`, and the variable
+is never rendered with a value of its own or an empty one, which would stop the
+gateway's start; a values `env` item of that name is refused for every service,
+the store on or off) and more replicas are allowed. Without the store the guard does
+not cover a rolling update, during which Kubernetes runs a second pod for some
+seconds and each allows the full windows. That is left as it is on purpose: the
+alternative, `maxSurge: 0`, takes the gateway down for those seconds. With the
+store the two pods share the windows, so the overlap costs nothing (T-45).
 */ -}}
 {{- range $name, $service := .Values.services }}
-{{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) }}
-{{- fail (printf "services.model-gateway.replicas is %v, but the gateway keeps its rate windows in one process, so each replica would allow the full limits (threat model T-45): it runs one replica" $service.replicas) }}
+{{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) (not $.Values.rateStore.enabled) }}
+{{- fail (printf "services.model-gateway.replicas is %v, but without the rate store the gateway keeps its rate windows in one process, so each replica would allow the full limits (threat model T-45): it runs one replica, or set rateStore.enabled=true (and rateStore.image) to share the windows between replicas" $service.replicas) }}
 {{- end }}
 {{- $callers := include "meridian.callers" (dict "root" $ "name" $name) | fromJsonArray }}
 {{- if and $callers (not $service.tls) }}
@@ -93,7 +100,13 @@ spec:
           env:
             {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_DATABASE_URL" "secret" $service.dbSecret) | nindent 12 }}
             {{- range $service.env }}
+            {{- if eq .name "MERIDIAN_GATEWAY_RATE_STORE_URL" }}
+            {{- fail (printf "services.%s.env sets MERIDIAN_GATEWAY_RATE_STORE_URL: the rate store's address holds the gateway's password and comes from the key `uri` of the Secret rateStore.secret and from nowhere else, so no values file may carry it (with the store off the variable does not exist, and with it on the chart adds it from the Secret)" $name) }}
+            {{- end }}
             {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
+            {{- end }}
+            {{- if include "meridian.usesRateStore" (dict "root" $ "name" $name) }}
+            {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_GATEWAY_RATE_STORE_URL" "secret" (include "meridian.rateStore" $ | fromJson).secret) | nindent 12 }}
             {{- end }}
             {{- with include "meridian.telemetryEnv" $ | trim }}
             {{- . | nindent 12 }}

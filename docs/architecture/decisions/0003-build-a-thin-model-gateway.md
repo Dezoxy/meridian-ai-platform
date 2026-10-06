@@ -120,6 +120,12 @@ call is made from Frankfurt. It stays EU-resident; the sentences above that
 name Claude on Bedrock in an EU region or in Frankfurt are read with that
 label.
 
+Amended on 2026-10-06 (S066): the rate windows are no longer kept in the
+process. They are kept in Redis, so two gateway processes count into one
+window, and a call the gateway cannot count is refused. The decision record
+"Share the gateway's rate windows in Redis", in the ADR index, says where and
+why. The text above stands as it was decided.
+
 ## Consequences
 
 Positive:

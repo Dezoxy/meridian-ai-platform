@@ -11,7 +11,6 @@ checkpoints a subgraph writes under a namespace of its own are deleted with the
 run, with a span for every node.
 """
 
-import importlib
 import uuid
 from collections import Counter
 from collections.abc import Callable
@@ -28,10 +27,10 @@ from langgraph.types import interrupt
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from servicesupport import REGISTRY_DIR, REPO_ROOT, audit_events, owner_rows
+from runtimesupport import register
+from servicesupport import REGISTRY_DIR, audit_events, owner_rows
 
 from meridian.platform.common.telemetry import make_tracer_provider
-from meridian.runtime import graphs
 from meridian.runtime.app import create_app
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.settings import RuntimeSettings
@@ -47,27 +46,6 @@ class Shared(TypedDict, total=False):
     claim: dict[str, Any]
     trail: list[str]
     output: dict[str, Any]
-
-
-class Entry:
-    name = "claims-triage"
-    value = "meridian.workloads.claims_triage.graph:build"
-
-    class dist:
-        name = "meridian"
-
-    def __init__(self, factory: Callable[[ModelClient, ToolClient], StateGraph]):
-        self.factory = factory
-
-    def load(self) -> Callable[[ModelClient, ToolClient], StateGraph]:
-        return self.factory
-
-
-def register(monkeypatch: pytest.MonkeyPatch, factory: Callable) -> None:
-    """Publish ``factory`` as the claims-triage graph (as test_runtime_app does)."""
-    monkeypatch.setattr(graphs, "entry_points", lambda *, group: [Entry(factory)])
-    importlib.import_module("meridian.workloads.claims_triage.graph")
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 def make_client(

@@ -1,9 +1,10 @@
 """The smoke check of the NetworkPolicies (S019, S062).
 
-``check_network_policy`` in ``infra/kind/smoke.sh`` prints five lines; this file
-holds the harness and the tests of the first four, and
-``test_smoke_network_collector.py`` those of the fifth (a pod outside `meridian`
-cannot push to the collector). A control
+``check_network_policy`` in ``infra/kind/smoke.sh`` prints six lines; this file
+holds the harness and the tests of the first four, ``test_smoke_network_collector.py``
+those of the fifth (a pod outside `meridian` cannot push to the collector) and
+``test_smoke_network_rate_store.py`` those of the sixth (the Claims API cannot
+reach the rate store, S066). A control
 first: the probe, a TCP connection opened by a short Python snippet inside the
 Claims API's pod, must reach the Agent Runtime, which its policy allows. Then
 three paths that no rule allows, each of which must time out: the Claims API to
@@ -210,6 +211,8 @@ def run_in_bash(
             # (test_smoke_network_collector.py), which test_smoke_line_count.py adds
             # to this one's; here it prints nothing, so the four lines below stay.
             "check_network_collector() { :; }",
+            # And the sixth (the rate store's, S066) has its own too.
+            "check_network_rate_store() { :; }",
             function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             *calls,
@@ -802,11 +805,11 @@ def test_the_database_admits_the_meridian_pods_by_the_part_of_label_alone() -> N
     assert f"readonly NETWORK_DATABASE={DATABASE}\n" in SMOKE_SH
 
 
-def test_the_header_numbers_check_eight_as_five_lines_and_says_what_it_does_not() -> (
+def test_the_header_numbers_check_eight_as_six_lines_and_says_what_it_does_not() -> (
     None
 ):
     header = SMOKE_SH.split("set -euo pipefail")[0]
-    eighth = header.split("8. network policy: five lines")[1].split(
+    eighth = header.split("8. network policy: six lines")[1].split(
         "9. service identity"
     )[0]
     flat = " ".join(line.removeprefix("#").strip() for line in eighth.splitlines())
@@ -833,7 +836,7 @@ def test_the_header_numbers_check_eight_as_five_lines_and_says_what_it_does_not(
 def test_the_readmes_say_what_check_eight_proves_and_what_stays_by_hand() -> None:
     kind = " ".join((KIND_DIR / "README.md").read_text("utf-8").split())
 
-    assert "**Network policy.** Five lines" in kind
+    assert "**Network policy.** Six lines" in kind
     assert "kubernetes.default.svc" in kind
     assert "a pod of another namespace" in kind
     assert "**Network policy.** Four lines" not in kind
