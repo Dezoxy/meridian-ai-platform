@@ -12,6 +12,7 @@ import copy
 import json
 import logging
 import logging.config
+import sys
 import uuid
 from typing import Any
 
@@ -35,6 +36,12 @@ ADDRESS = "203.0.113.77"
 CLIENT = f"{ADDRESS}:51234"
 CANARY_QUERY = "canary-query-7f3a"
 EMAIL = "ana.kovacs@example.com"
+# Text a pattern does not find: a name and a street pass the redaction.
+NAME = "Anna Szabo"
+STREET = "Teszt utca 12, Budapest"
+CANARY_MESSAGE = "canary-message-4c9e"
+CANARY_ERROR = "canary-error-8d12"
+PATH_CUT = 256
 UVICORN_TEMPLATE = '%s - "%s %s HTTP/%s" %d'
 FIELDS = ("time", "level", "logger", "service", "message")
 
@@ -94,11 +101,14 @@ def test_a_message_with_a_newline_a_quote_and_a_control_character_is_one_line(
     assert line["message"] == f"claimant wrote {forged}"
 
 
-def test_an_exception_is_one_field_holding_the_redacted_traceback(
+def test_an_exception_is_one_field_holding_its_frames_and_its_class_and_no_message(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    def fail() -> None:
+        raise ValueError(f"claimant {NAME}, {STREET}; {CANARY_MESSAGE}")
+
     try:
-        raise ValueError(f"cannot reach {EMAIL}")
+        fail()
     except ValueError:
         logging.getLogger("meridian.test").exception("failed")
 
@@ -106,9 +116,159 @@ def test_an_exception_is_one_field_holding_the_redacted_traceback(
     assert out.count("\n") == 1
     line = json.loads(out)
     assert line["message"] == "failed"
-    assert "Traceback (most recent call last)" in line["exception"]
-    assert "ValueError: cannot reach [email]" in line["exception"]
-    assert "ana.kovacs" not in out
+    text = line["exception"]
+    assert text.startswith("Traceback (most recent call last):\n")
+    assert 'test_logformat.py", line ' in text
+    assert "in fail\n" in text
+    assert "raise ValueError(" in text
+    assert text.splitlines()[-1] == "ValueError"
+    for withheld in (NAME, STREET, CANARY_MESSAGE):
+        assert withheld not in out
+
+
+def test_a_chained_pair_of_exceptions_is_written_as_two_links_with_no_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def explicit() -> None:
+        try:
+            raise KeyError(f"{NAME} {CANARY_MESSAGE}")
+        except KeyError as cause:
+            raise ValueError(f"{STREET} {CANARY_MESSAGE}") from cause
+
+    def implicit() -> None:
+        try:
+            raise TypeError(f"{NAME} {CANARY_MESSAGE}")
+        except TypeError:
+            raise OSError(f"{STREET} {CANARY_MESSAGE}") from None
+
+    def during() -> None:
+        try:
+            raise TypeError(f"{NAME} {CANARY_MESSAGE}")
+        except TypeError:
+            raise RuntimeError(f"{STREET} {CANARY_MESSAGE}")  # noqa: B904
+
+    texts = []
+    for raiser in (explicit, implicit, during):
+        try:
+            raiser()
+        except Exception:
+            logging.getLogger("meridian.test").exception("failed")
+        texts.append(json.loads(capsys.readouterr().out)["exception"])
+
+    cause, suppressed, context = texts
+    assert cause.index("\nKeyError\n") < cause.index(
+        "The above exception was the direct cause of the following exception:"
+    )
+    assert cause.splitlines()[-1] == "ValueError"
+    assert "TypeError" not in suppressed
+    assert suppressed.splitlines()[-1] == "OSError"
+    assert context.index("\nTypeError\n") < context.index(
+        "During handling of the above exception, another exception occurred:"
+    )
+    assert context.splitlines()[-1] == "RuntimeError"
+    for text in texts:
+        for withheld in (NAME, STREET, CANARY_MESSAGE):
+            assert withheld not in text
+
+
+def test_an_exception_group_is_written_with_its_members_and_no_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    try:
+        raise ExceptionGroup(
+            f"group {CANARY_MESSAGE}",
+            [ValueError(f"{NAME}"), TypeError(f"{STREET}")],
+        )
+    except ExceptionGroup:
+        logging.getLogger("meridian.test").exception("failed")
+
+    out = capsys.readouterr().out
+    text = json.loads(out)["exception"]
+    assert out.count("\n") == 1
+    assert "ExceptionGroup" in text
+    assert "ValueError" in text
+    assert "TypeError" in text
+    for withheld in (NAME, STREET, CANARY_MESSAGE):
+        assert withheld not in out
+
+
+def test_an_exception_whose_text_cannot_be_made_is_still_written_by_its_class(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class Unprintable(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError(CANARY_MESSAGE)
+
+    try:
+        raise Unprintable(NAME)
+    except Unprintable:
+        logging.getLogger("meridian.test").exception("failed")
+
+    out = capsys.readouterr()
+    text = json.loads(out.out)["exception"]
+    assert text.splitlines()[-1].endswith("Unprintable")
+    assert NAME not in out.out + out.err
+    assert CANARY_MESSAGE not in out.out + out.err
+    assert out.err == ""
+
+
+def test_a_record_with_only_the_text_of_an_exception_gets_the_fixed_word(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A record another factory made: its text is a traceback nobody redacted.
+    record = logging.LogRecord(
+        "meridian.test", logging.ERROR, __file__, 1, "failed", (), None
+    )
+    record.exc_text = f"Traceback (most recent call last):\nValueError: {NAME}"
+
+    line = json.loads(logformat.JsonFormatter(SERVICE).format(record))
+
+    assert line["exception"] == WITHHELD
+    assert NAME not in json.dumps(line)
+
+
+def test_a_record_the_factory_did_not_build_is_written_by_its_class_only() -> None:
+    try:
+        raise ValueError(f"{NAME} {CANARY_MESSAGE}")
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = logging.LogRecord(
+        "meridian.test", logging.ERROR, __file__, 1, "failed", (), exc_info
+    )
+
+    line = json.loads(logformat.JsonFormatter(SERVICE).format(record))
+
+    assert line["exception"].splitlines()[-1] == "ValueError"
+    assert NAME not in json.dumps(line)
+    assert CANARY_MESSAGE not in json.dumps(line)
+
+
+def test_an_exception_that_cannot_be_written_is_the_fixed_word_not_a_lost_record(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: object) -> None:
+        raise RuntimeError(CANARY_MESSAGE)
+
+    monkeypatch.setattr(logformat, "_chain_lines", broken)
+
+    try:
+        raise ValueError(NAME)
+    except ValueError:
+        logging.getLogger("meridian.test").exception("failed")
+
+    out = capsys.readouterr()
+    assert json.loads(out.out)["exception"] == WITHHELD
+    assert out.err == ""
+
+
+def test_logging_an_exception_outside_a_handler_writes_no_exception_field(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    logging.getLogger("meridian.test").info("nothing raised", exc_info=True)
+
+    (line,) = _lines(capsys)
+
+    assert "exception" not in line
 
 
 def test_a_record_without_an_exception_has_no_exception_field(
@@ -168,6 +328,52 @@ def test_what_a_record_carries_in_extra_is_not_written(
     assert "claimant" not in json.loads(out)
 
 
+# ── a write that fails ──────────────────────────────────────────────────────
+class _BrokenStream:
+    """A stream whose every write fails, with a message that quotes a canary."""
+
+    def write(self, text: str) -> int:
+        raise BrokenPipeError(CANARY_ERROR)
+
+    def flush(self) -> None:
+        raise BrokenPipeError(CANARY_ERROR)
+
+
+def _fixed_line(logger: str, level: str, error: str) -> str:
+    return f"log record not written: logger={logger} level={level} error={error}\n"
+
+
+def test_a_failed_write_prints_one_fixed_line_and_never_the_record(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "stdout", _BrokenStream())
+
+    _access(target=f"/claims/CLM-0001?q={CANARY_QUERY}")
+    logging.getLogger("meridian.test").warning("claimant %s wrote", NAME)
+
+    err = capsys.readouterr().err
+    assert err == (
+        _fixed_line("uvicorn.access", "INFO", "BrokenPipeError")
+        + _fixed_line("meridian.test", "WARNING", "BrokenPipeError")
+    )
+    for withheld in (ADDRESS, "51234", CANARY_QUERY, NAME, CANARY_ERROR, "CLM-0001"):
+        assert withheld not in err
+
+
+def test_a_failed_write_with_a_broken_standard_error_raises_nothing(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "stdout", _BrokenStream())
+    monkeypatch.setattr(sys, "stderr", _BrokenStream())
+
+    logging.getLogger("meridian.test").warning("claimant %s wrote", NAME)
+
+    monkeypatch.undo()
+    logging.getLogger("meridian.test").info("still logging")
+    (line,) = _lines(capsys)
+    assert line["message"] == "still logging"
+
+
 # ── the access line ─────────────────────────────────────────────────────────
 def test_an_access_record_is_fields_with_the_path_cut_before_the_query(
     capsys: pytest.CaptureFixture[str],
@@ -225,6 +431,121 @@ def test_an_access_record_of_another_shape_is_written_without_its_arguments(
     assert line["logger"] == "uvicorn.access"
     assert "path" not in line
     assert "status" not in line
+    assert line["unparsed"] is True
+
+
+def test_an_access_record_of_the_known_shape_is_not_marked_unparsed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _access()
+    logging.getLogger("meridian.test").info(UVICORN_TEMPLATE, 1, "a", "b", "c", 2)
+
+    lines = _lines(capsys)
+
+    assert [line["logger"] for line in lines] == ["uvicorn.access", "meridian.test"]
+    assert all("unparsed" not in line for line in lines)
+
+
+def test_an_access_record_of_another_shape_is_written_as_its_template_only(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A WebSocket record: two arguments, as uvicorn writes it.
+    logging.getLogger("uvicorn.access").info(
+        '%s - "WebSocket %s" [accepted]', CLIENT, f"/ws?q={CANARY_QUERY}"
+    )
+
+    (line,) = _lines(capsys)
+
+    assert line["message"] == '%s - "WebSocket %s" [accepted]'
+    assert line["unparsed"] is True
+
+
+# ── the path: decoded, redacted, bounded ────────────────────────────────────
+@pytest.mark.parametrize(
+    ("target", "path"),
+    [
+        ("/u/anna.kovacs%40example.com", "/u/[email]"),
+        ("/p/%2B36301234567", "/p/[phone]"),
+        (
+            "http%3A//user%3Apass%40host.example/path?x=1",
+            "http://user:[email]/path",
+        ),
+    ],
+)
+def test_an_identifier_percent_encoded_in_the_path_is_redacted_after_decoding(
+    capsys: pytest.CaptureFixture[str], target: str, path: str
+) -> None:
+    _access(target=target)
+
+    out = capsys.readouterr().out
+
+    line = json.loads(out)
+    assert line["path"] == path
+    assert line["message"] == f"GET {path} HTTP/1.1 200"
+    for withheld in ("anna.kovacs", "36301234567", "pass", "x=1"):
+        assert withheld not in out
+
+
+def test_a_decoded_newline_quote_and_question_mark_stay_in_one_line(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _access(target=f"/a%0Ab%22c%3Fd%0D%1B?q={CANARY_QUERY}")
+
+    out = capsys.readouterr().out
+
+    assert out.count("\n") == 1
+    line = json.loads(out)
+    # The query is cut at the first real "?", before the decoding; the decoded
+    # "?" is a character of the path.
+    assert line["path"] == '/a\nb"c?d\r\x1b'
+    assert line["message"] == 'GET /a\nb"c?d\r\x1b HTTP/1.1 200'
+    assert CANARY_QUERY not in out
+
+
+def test_a_long_path_is_cut_at_the_bound_with_a_marker(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _access(target="/" + "a" * 30_000)
+
+    out = capsys.readouterr().out
+
+    line = json.loads(out)
+    assert line["path"] == "/" + "a" * (PATH_CUT - 1) + logformat.PATH_CUT_MARKER
+    assert line["message"] == f"GET {line['path']} HTTP/1.1 200"
+    assert len(out) < 1_000
+
+
+def test_a_path_of_exactly_the_bound_is_written_whole_and_one_more_is_cut(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _access(target="/" + "a" * (PATH_CUT - 1))
+    _access(target="/" + "a" * PATH_CUT)
+
+    whole, cut = _lines(capsys)
+
+    assert whole["path"] == "/" + "a" * (PATH_CUT - 1)
+    assert cut["path"] == "/" + "a" * (PATH_CUT - 1) + logformat.PATH_CUT_MARKER
+
+
+def test_an_address_that_crosses_the_bound_is_redacted_before_the_cut(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _access(target="/" + "a" * (PATH_CUT - 5) + f"/{EMAIL}")
+
+    out = capsys.readouterr().out
+
+    # Cut first, the e-mail address would be left as "ana.kovacs@exam".
+    assert "ana" not in out
+    assert "kovacs" not in out
+    assert json.loads(out)["path"].endswith("[em" + logformat.PATH_CUT_MARKER)
+
+
+def test_the_health_probe_is_found_by_its_decoded_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _access(target="/%68ealthz", status=200)
+
+    assert capsys.readouterr().out == ""
 
 
 def test_a_healthy_probe_of_the_health_path_is_not_written(
@@ -307,6 +628,59 @@ def test_it_takes_over_the_loggers_uvicorn_configured_before_it() -> None:
     # access log would be switched off.
     assert logging.getLogger("uvicorn.access").hasHandlers() is True
     assert root.level == logging.INFO
+
+
+def test_an_access_log_uvicorn_switched_off_stays_off(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # What ``uvicorn --no-access-log`` leaves: no handler and no propagation.
+    uvicorn.Config("meridian.test:app", access_log=False)
+    access = logging.getLogger("uvicorn.access")
+    assert (access.handlers, access.propagate) == ([], False)
+
+    configure_logging(SERVICE)
+
+    assert (access.handlers, access.propagate) == ([], False)
+    assert access.hasHandlers() is False
+    _access()
+    assert capsys.readouterr().out == ""
+    # The rest of uvicorn's loggers are taken over as before.
+    for name in ("uvicorn", "uvicorn.error"):
+        assert logging.getLogger(name).handlers == []
+        assert logging.getLogger(name).propagate is True
+    logging.getLogger("uvicorn.error").info("still written")
+    (line,) = _lines(capsys)
+    assert line["message"] == "still written"
+
+
+def test_an_access_log_uvicorn_left_on_is_written_after_the_takeover(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    uvicorn.Config("meridian.test:app", access_log=True)
+    access = logging.getLogger("uvicorn.access")
+    assert access.handlers  # uvicorn's own
+
+    configure_logging(SERVICE)
+
+    assert (access.handlers, access.propagate) == ([], True)
+    _access()
+    (line,) = _lines(capsys)
+    assert line["logger"] == "uvicorn.access"
+
+
+def test_an_access_logger_nobody_configured_is_written_and_stays_so_on_a_second_call(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    access = logging.getLogger("uvicorn.access")
+    access.handlers = []
+    access.propagate = True
+
+    configure_logging(SERVICE)
+    configure_logging(SERVICE)
+
+    assert (access.handlers, access.propagate) == ([], True)
+    _access()
+    assert len(_lines(capsys)) == 1
 
 
 def test_uvicorns_own_records_are_json_after_it_took_over(

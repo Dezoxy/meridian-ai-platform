@@ -133,14 +133,15 @@ sets this up after the redaction of personal data and before it reads its
 settings). The fields are `time` (UTC, ISO 8601), `level`, `logger`,
 `service` (the name its spans carry: `model-gateway`, `agent-runtime`,
 `claims-api`, `policy-mcp`, `knowledge-mcp`, `claims-mcp`, `claims-sweep`),
-`message` and, for a record with a traceback, `exception` (one string, the
-traceback redacted). A newline in a message is escaped, so a claimant's
+`message` and, for a record with a traceback, `exception` (one string: each
+exception's frames and its class, no message text, because a message can quote
+a claimant's name or street). A newline in a message is escaped, so a claimant's
 text cannot make a second line. A service's own record, and an
 exception's:
 
 ```json
 {"time": "2026-10-06T10:33:02.222+00:00", "level": "WARNING", "logger": "meridian.workloads.claims_triage.triaging", "service": "claims-api", "message": "claim CLM-0001 moved to review"}
-{"time": "2026-10-06T10:33:02.222+00:00", "level": "ERROR", "logger": "meridian.platform.common.http", "service": "claims-api", "message": "request failed", "exception": "Traceback (most recent call last):\n  ...\nValueError: cannot reach [email]"}
+{"time": "2026-10-06T10:33:02.222+00:00", "level": "ERROR", "logger": "meridian.platform.common.http", "service": "claims-api", "message": "request failed", "exception": "Traceback (most recent call last):\n  ...\nValueError"}
 ```
 
 The access record of uvicorn has `method`, `path`, `http_version` and

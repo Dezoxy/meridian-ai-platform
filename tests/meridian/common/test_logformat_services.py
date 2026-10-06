@@ -224,6 +224,44 @@ def test_the_claims_api_under_uvicorn_logs_no_query_and_no_address(
 
 
 @pytest.mark.usefixtures("environment")
+def test_an_address_encoded_in_the_path_is_redacted_in_the_line_uvicorn_wrote(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        _serving("meridian.workloads.claims_triage.app:create_app_from_env") as port,
+        httpx.Client() as client,
+    ):
+        url = f"http://{LOOPBACK}:{port}"
+        assert client.get(f"{url}/u/ana.kovacs%40example.com?q=1").status_code == 404
+
+    out = capsys.readouterr().out
+    access = [x for x in _json_lines(out) if x["logger"] == "uvicorn.access"]
+    assert [(a["path"], a["status"]) for a in access] == [("/u/[email]", 404)]
+    assert "ana.kovacs" not in out
+
+
+@pytest.mark.usefixtures("environment")
+def test_no_access_log_stays_off_under_uvicorn_while_the_other_records_are_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        _serving(
+            "meridian.workloads.claims_triage.app:create_app_from_env",
+            access_log=False,
+        ) as port,
+        httpx.Client() as client,
+    ):
+        assert client.get(f"http://{LOOPBACK}:{port}/nowhere").status_code == 404
+
+    captured = capsys.readouterr()
+    lines = _json_lines(captured.out)
+    assert lines
+    assert [x for x in lines if x["logger"] == "uvicorn.access"] == []
+    assert any(x["logger"] == "uvicorn.error" for x in lines)
+    assert captured.err == ""
+
+
+@pytest.mark.usefixtures("environment")
 def test_a_tool_server_behind_the_certificate_wrapper_logs_no_query_and_no_address(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
