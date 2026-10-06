@@ -7,12 +7,34 @@
 # observability:        Prometheus, Grafana, Tempo, Loki, the collector.
 # meridian:             platform-db and, from S041, the Meridian applications.
 #
-# Pod Security Admission on `meridian`: warn and audit at `restricted`, never
-# enforce. These two never refuse a pod; they make the API server warn about,
-# and audit, a pod that does not meet `restricted`. A server-side dry run of
-# enforce=restricted reported no violation among the pods of 2026-10-04, the
-# database's included, but a first `make up` under enforce (CloudNativePG's init
-# Job) was not tried, so enforce waits (the plan's backlog).
+# Pod Security Admission: warn and audit, never enforce, on the three
+# namespaces below that carry the platform's own pods. These two never refuse a
+# pod; they make the API server warn about, and audit, a pod that does not meet
+# the level. A server-side dry run of enforce=restricted on `meridian` reported
+# no violation among the pods of 2026-10-04, the database's included, but a
+# first `make up` under enforce (CloudNativePG's init Job) was not tried, so
+# enforce waits (the plan's backlog). The level is the strictest the namespace's
+# pods meet as `helm template` renders them with infra/kind/values (S063, read on
+# 2026-10-06, tested without a cluster; the server-side dry run is the main
+# session's):
+#   meridian:      restricted.
+#   cert-manager:  restricted. The five pods of cert-manager v1.21.2 and
+#                  approver-policy v0.28.0 (controller, cainjector, webhook,
+#                  the startup check Job, approver-policy) meet it as rendered.
+#   observability: baseline. Two pods stop `restricted`, each by name: `tempo`
+#                  (its container sets no allowPrivilegeEscalation: false, no
+#                  capabilities.drop: [ALL] and no seccompProfile) and
+#                  `otel-collector` (the same three, and no runAsNonRoot). Both
+#                  are a matter of their values files, not of this one. The
+#                  pods the Prometheus operator makes for the Prometheus
+#                  resource are not rendered by Helm and were not read; the
+#                  resource sets runAsNonRoot and seccompProfile RuntimeDefault
+#                  for them. node-exporter would have held the namespace at
+#                  `privileged`: it uses the node's network and PID namespaces
+#                  and mounts /proc and /sys from the host. It is turned off on
+#                  kind (values/kube-prometheus-stack.yaml), because no alert
+#                  rule and no dashboard of this repository reads a series of
+#                  it, and a label that says `privileged` says nothing.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -27,11 +49,17 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: cert-manager
+  labels:
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: observability
+  labels:
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
 ---
 apiVersion: v1
 kind: Namespace

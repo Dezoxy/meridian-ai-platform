@@ -25,7 +25,7 @@ adjuster; the rules decide every other claim.
 | approver-policy (decides which certificate requests are approved) | `cert-manager-approver-policy` (`https://charts.jetstack.io`) | v0.28.0 | `cert-manager` |
 | CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `cnpg-system` |
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
-| Prometheus, Grafana, kube-state-metrics, node-exporter | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
+| Prometheus, Grafana, kube-state-metrics (node-exporter is off, see below) | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
 | Tempo (traces) | `tempo` | 3.1.0 | `observability` |
 | Loki (logs) | `loki` | 18.13.7 | `observability` |
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
@@ -37,15 +37,33 @@ each month. CI does not start this platform: such a pull request needs
 `make up` and `make smoke` before it merges, and the table above follows
 by hand. The values that override chart defaults are in
 [`values/`](values/); the Gateway, the namespaces, Grafana's Role and the
-database's NetworkPolicy are in [`manifests/`](manifests/). The Meridian
+NetworkPolicies of the database, `cert-manager`, `observability` and smoke's
+Jobs are in [`manifests/`](manifests/). The Meridian
 services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
 which `make deploy` installs (below).
 
-How telemetry flows: an application sends OTLP to
-`otel-collector.observability:4317` (gRPC) or `:4318` (HTTP). The collector
+How telemetry flows: a Meridian service sends OTLP over HTTP to
+`otel-collector.observability:4318`. The collector also listens for gRPC on
+`:4317`, but since S063 that port is admitted from no namespace and no pod
+(see "The namespaces outside `meridian`" below). The collector
 forwards traces to Tempo, metrics to Prometheus's OTLP receiver and logs to
 Loki's OTLP endpoint. Grafana has three datasources with fixed uids:
 `prometheus`, `tempo` and `loki`. Retention is 24 hours everywhere.
+
+node-exporter is off on kind (S063). It is the one pod of `observability` that
+needs the node's own network and PID namespaces and `/proc` and `/sys` from the
+host, which would hold the namespace's Pod Security level at `privileged`, and
+no alert rule and no dashboard of this repository reads a `node_*` series (a
+test keeps it so). So the chart's own node-exporter dashboards show no data on
+kind, and are not installed at all: the switch (`nodeExporter.enabled` in
+[`values/kube-prometheus-stack.yaml`](values/kube-prometheus-stack.yaml))
+drops them with the DaemonSet, and the four rule groups that read its series
+are turned off too (`node.rules` stays: one of its five rules is
+kube-state-metrics', and the other four record nothing without node-exporter).
+The "Compute Resources" dashboards read kube-state-metrics and cAdvisor and
+stay. A node's CPU, memory or disk is therefore not observed on kind; turn
+node-exporter on again when a rule needs it, and give it a namespace of its
+own or label `observability` `privileged`.
 
 Grafana reads ConfigMaps in its own namespace and nothing else (S043). The
 chart's defaults let its dashboard sidecar watch every namespace, which gave
@@ -261,9 +279,17 @@ node image, Kubernetes components and the platform).
    certificate (line 9). Before `make deploy` this check prints SKIP.
 4. **Telemetry.** Three short Jobs run `telemetrygen` and send one trace, one
    log and one metric for a fresh service name (`meridian-smoke-<epoch>`)
-   through the collector. The script then reads each back through Grafana's
-   datasource proxy from Tempo, Loki and Prometheus, waiting up to 120 seconds
-   each. It prints the trace ID and how to find the data in Grafana Explore.
+   through the collector, over OTLP/HTTP to port 4318 (`--otlp-http`: the same
+   port the six services use). Since S063 the Jobs run in `meridian`, not in
+   `observability`: the collector admits the pods of `meridian` and no pod of
+   another namespace, with no exception that exists only while smoke runs, and
+   [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml)
+   gives them the egress the chart's `default-deny` would otherwise take (DNS
+   and the collector's 4318). On a cluster that `make up` has not brought up
+   to date the Jobs time out, and the FAIL line says so. The script then
+   reads each back through Grafana's datasource proxy from Tempo, Loki and
+   Prometheus, waiting up to 120 seconds each. It prints the trace ID and how
+   to find the data in Grafana Explore.
    What a PASS line prints of an answer (the trace ID, the log line, the
    series count) is cleaned of control characters and newlines and cut to 120
    characters: anyone who can push a log line to the collector chooses its
@@ -317,13 +343,13 @@ node image, Kubernetes components and the platform).
    and while it is suspended (`.spec.suspend`: it makes no runs, so none is
    overdue), this line prints SKIP. A PASS does not say the sweep did its
    work, only that a Job finished.
-8. **Network policy.** Four lines. Each opens a TCP connection and sends
+8. **Network policy.** Five lines. Each opens a TCP connection and sends
    nothing, from Python in a pod (the image has no curl); a denied path passes
    only when it times out (a refused connection or a name that does not
    resolve fails), and a path that answers fails the line. The first line is
    the control: the Claims API's pod reaches the Agent Runtime, which the
    Claims API's policy and the Agent Runtime's both name, so a "blocked" below
-   is not a broken probe (if it fails, the other three are not printed). Then
+   is not a broken probe (if it fails, the other four are not printed). Then
    the Claims API cannot reach the Model Gateway, which no rule names; the
    Claims API cannot reach the API server's Service address
    (`kubernetes.default.svc:443`), which no service's policy lists and which
@@ -336,9 +362,20 @@ node image, Kubernetes components and the platform).
    that the sweep's policy lets it reach DNS and the database, and not
    `app.kubernetes.io/part-of=meridian`, which the database's ingress admits by),
    cannot reach `platform-db-rw.meridian.svc:5432` until the same pod is given
-   that label, and then can. The pod also carries
-   `meridian-smoke=network-probe`, which no policy, Service or Deployment
-   selects. A run that is killed hard (SIGKILL, a power cut) leaves the pod as
+   that label, and then can. The fifth line (S063) is the collector's: a
+   second probe pod of the same image, in the namespace `default` (outside
+   `meridian` and `observability`, and on every cluster) and with no
+   workload's label, opens a connection to
+   `otel-collector.observability.svc.cluster.local:4318`, and it must time out,
+   because the collector admits the pods of `meridian` alone. A missing or
+   too wide policy, or a cluster that does not enforce it, makes the collector
+   answer and fails the line, and so do a refusal, a name that does not
+   resolve and a failed exec. It prints SKIP when the collector's Deployment
+   is absent. It does not prove that a pod of `meridian` can push (line 4
+   does, from the Jobs it runs there), that 4317 is closed to every pod (it
+   probes 4318), or that a namespace other than `default` is refused. The pods
+   also carry `meridian-smoke=network-probe`, which no policy, Service or
+   Deployment selects. A run that is killed hard (SIGKILL, a power cut) leaves the pod as
    a Failed object with the labels the policies select on, so the check starts
    by listing the pods with that label and deletes by name those older than 300
    seconds (a younger one is another run's; a list that cannot be read is not
@@ -347,13 +384,15 @@ node image, Kubernetes components and the platform).
    interrupted run was not tried on the cluster). The allowed paths are also
    the tool check's proof (line 3). It fails when the NetworkPolicy
    `default-deny` is missing. Before
-   `make deploy` one line prints SKIP in place of the four. It adds about 20
-   seconds. On 2026-10-06 the four lines passed on the cluster (the control,
-   the two denied paths out of the Claims API, and the database refusing a pod
-   without the label and taking one with it), and no probe pod was left in
-   `meridian` afterwards. What it does not prove, and stays by hand (S019): that a pod of
-   another namespace cannot reach the database, and that an address outside the
-   machine is unreachable (smoke sends nothing there); and it does not read the
+   `make deploy` one line prints SKIP in place of the five. It adds about 30
+   seconds. On 2026-10-06 the first four lines passed on the cluster (the
+   control, the two denied paths out of the Claims API, and the database
+   refusing a pod without the label and taking one with it), and no probe pod
+   was left in `meridian` afterwards. The fifth line is tested without a
+   cluster only, until the first `make smoke` after S063's `make up`. What it
+   does not prove, and stays by hand (S019): that a pod of another namespace
+   cannot reach the database, and that an address outside the machine is
+   unreachable (smoke sends nothing there); and it does not read the
    policies, which the chart's tests render and compare.
 9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
@@ -780,10 +819,10 @@ What the policies do not do:
 - DNS and the collector are open to the pods that use them, and either
   could carry data out slowly. The database pod may reach port 6443 at any
   address, not only the API server's.
-- They are not enforced by admission. The namespace warns about and audits
-  a pod below the `restricted` Pod Security Standard
-  ([`manifests/namespaces.yaml`](manifests/namespaces.yaml)); it does not
-  refuse one yet (below).
+- They are not enforced by admission. The namespaces warn about and audit
+  a pod below their Pod Security level (`restricted`, and `baseline` for
+  `observability`; [`manifests/namespaces.yaml`](manifests/namespaces.yaml));
+  they do not refuse one yet (below).
 - The Model Gateway has no rule towards a provider: on kind it calls none.
   The rule for Azure OpenAI is S020's.
 
@@ -795,6 +834,63 @@ export KUBECONFIG=$PWD/infra/kind/kubeconfig
 helm -n meridian status meridian
 kubectl -n meridian get networkpolicy,poddisruptionbudget
 ```
+
+### The namespaces outside `meridian` (S063)
+
+Until S063 a pod of any namespace could push to the collector, and
+`cert-manager` and `observability` had neither a NetworkPolicy nor Pod Security
+labels (threat model T-68, T-84). `make up` now applies three policy files
+before the releases they guard, beside the database's; all of it is **tested
+without a cluster** (the manifests and the script's lines are checked against
+stub commands, and the pods' specs were read with `helm template`), until the
+first `make up` and `make smoke` after it have run on one.
+
+| File | Namespace | What it says |
+|---|---|---|
+| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 (the API server) only |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
+| [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
+
+Only Meridian's pods push to the collector, on 4318, and 4317 is admitted from
+no namespace: the collector's rule selects the namespace `meridian` and no pod
+label, and the chart's own policies are what narrow that to the six services
+(its `default-deny` leaves every pod of `meridian` without egress, and only a
+pod given the collector's address has a rule for it; a test reads both halves
+and fails when one drifts from the other). Smoke's Jobs moved into `meridian`
+for that reason, so the sentence has no footnote. The gRPC receiver on 4317
+still listens; a later change closes it, and a later one moves the push to TLS.
+
+What stays open, in one list:
+
+- Egress from `observability` is open: Prometheus scrapes the kubelet and the
+  API server, which are the node, at an address no selector names, and a
+  half-right egress policy that broke a cold `make up` would be worse. A
+  compromised pod there can still reach whatever the other namespaces admit.
+- The three webhooks (cert-manager's, approver-policy's, the Prometheus
+  operator's) are open on one port each to any pod of the cluster, because
+  the API server calls them from the node's address, which changes with every
+  cluster. They are TLS endpoints that answer admission reviews; the
+  operator's is `failurePolicy: Ignore`.
+- The collector's rule admits every pod of `meridian` that the chart's policies
+  let out, and on a cluster where the chart is not installed (`make up` alone)
+  every pod of `meridian` can push to it: `default-deny` is the chart's.
+- Grafana's port-forward needs no ingress rule if the container runtime opens
+  it inside the pod's own network namespace, which was assumed and is the
+  first thing to look at; Loki's memberlist rule assumes the plugin sees the
+  pod's join through its own Service as coming from the pod itself.
+- node-exporter is off (above), so no node's CPU, memory or disk is observed.
+
+Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
+
+| Namespace | Level | What stops the next one |
+|---|---|---|
+| `meridian` | `restricted` | nothing |
+| `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
+| `observability` | `baseline` | `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either (their values files, not the label); node-exporter would have stopped `baseline` too, and is off |
+
+The Prometheus pods are the operator's, not rendered by Helm, and were not read:
+a server-side dry run on the cluster (`kubectl label --dry-run=server`) is the
+check that reads them.
 
 ### Who a service is (S055)
 
@@ -1182,9 +1278,10 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
 - TLS on the gateway: no step yet (the plan's follow-up backlog). The edge
   listens on loopback only.
 - `enforce` for Pod Security Admission on the `meridian` namespace, which
-  has `warn` and `audit` at `restricted` since S019: a server-side dry run
-  of `enforce=restricted` reported no violation, but a cold `make up` under
-  it (CloudNativePG's init Job) was not tried; in the backlog.
+  has `warn` and `audit` at `restricted` since S019 (as `cert-manager` has
+  since S063, and `observability` at `baseline`): a server-side dry run
+  of `enforce=restricted` reported no violation on `meridian`, but a cold
+  `make up` under it (CloudNativePG's init Job) was not tried; in the backlog.
 - A second replica of any service, and so a budget that protects one:
   whether each service is safe to run twice is not measured (S027).
 - Alertmanager: Prometheus evaluates the alert rules and nothing is

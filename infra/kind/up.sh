@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
-#   2. namespaces, the database's NetworkPolicy, Envoy Gateway and the edge Gateway
+#   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
+#      the edge Gateway: the database's, those of cert-manager and observability
+#      and the one for smoke's telemetrygen Jobs, all before the releases they
+#      guard,
 #      cert-manager (its own approver off), approver-policy with the policies
 #      that say who may ask for a certificate, and the CA that signs the
 #      services' certificates
@@ -182,6 +185,15 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.
 
 log "network: the database's NetworkPolicy (before the database exists)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/platform-db-networkpolicy.yaml" >/dev/null
+
+log "network: cert-manager's NetworkPolicies (before cert-manager is installed)"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml" >/dev/null
+
+log "network: observability's NetworkPolicies (before Prometheus, Tempo, Loki and the collector)"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observability-networkpolicy.yaml" >/dev/null
+
+log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null
 
 log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \

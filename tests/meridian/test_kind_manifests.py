@@ -1134,9 +1134,7 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
 PSA = "pod-security.kubernetes.io/"
 
 
-def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces() -> (
-    None
-):
+def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() -> None:
     namespaces = {
         d["metadata"]["name"]: d
         for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
@@ -1149,12 +1147,21 @@ def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces(
         "observability",
         "meridian",
     }
-    labels = namespaces["meridian"]["metadata"].get("labels", {})
-    assert labels == {PSA + "warn": "restricted", PSA + "audit": "restricted"}
-    # `enforce` waits: a first `make up` under it was not tried.
-    assert PSA + "enforce" not in labels
+    # The level each namespace's pods meet as rendered (S063): observability's
+    # are baseline, because tempo and the collector do not meet restricted (the
+    # namespaces file's header names what each lacks).
+    levels = {
+        "meridian": "restricted",
+        "cert-manager": "restricted",
+        "observability": "baseline",
+    }
+    for name, level in levels.items():
+        labels = namespaces[name]["metadata"].get("labels", {})
+        assert labels == {PSA + "warn": level, PSA + "audit": level}, name
+        # `enforce` waits: a first `make up` under it was not tried.
+        assert PSA + "enforce" not in labels, name
     for name, namespace in namespaces.items():
-        if name != "meridian":
+        if name not in levels:
             assert "labels" not in namespace["metadata"], name
 
 
@@ -2658,15 +2665,17 @@ def run_open_grafana(
             "readonly GRAFANA_SERVICE=svc/grafana KUBECONFIG_FILE=/dev/null",
             "readonly KUBE_CONTEXT=ctx",
             *re.findall(
-                r"^(?:grafana_url|grafana_failed|network_pod|refused_request"
-                r"|refused_err_file)=.*$",
+                r"^(?:grafana_url|grafana_failed|network_pod|network_outsider"
+                r"|refused_request|refused_err_file)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
+            "readonly NETWORK_OUTSIDER_NAMESPACE=default",
             one_line_function(SMOKE_SH, "clean_lines"),
             f"kctl() {{ printf '%s' '{secret}'; }}",
             f"kubectl() {{ {kubectl}; }}",
             function_definition(SMOKE_SH, "network_delete_pod"),
+            function_definition(SMOKE_SH, "network_outsider_delete"),
             function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             function_definition(SMOKE_SH, "open_grafana"),

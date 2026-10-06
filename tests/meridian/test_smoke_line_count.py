@@ -30,6 +30,7 @@ from test_kind_manifests import (
     sweep_job,
 )
 from test_smoke_alert_rules import SMOKE_LINES_AFTER_DEPLOY, run_alert_rules
+from test_smoke_network_collector import run_collector_check
 from test_smoke_network_policy import run_network_policy_check
 from test_smoke_stores import run_stores_check
 from test_smoke_telemetry import run_telemetry_check
@@ -84,7 +85,9 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         "check_sweep": all_pass(
             lines_of(lambda path: run_sweep_check(path, jobs=healthy_sweep))
         ),
-        "check_network_policy": all_pass(lines_of(run_network_policy_check)),
+        # Four lines and, since S063, the collector's: its harness is apart.
+        "check_network_policy": all_pass(lines_of(run_network_policy_check))
+        + all_pass(lines_of(run_collector_check)),
         "check_service_identity": all_pass(
             lines_of(lambda path: run_identity_check(path, answers=GOOD))
         ),

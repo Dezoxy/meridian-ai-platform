@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prove the local platform works end to end: `make smoke`. Changes nothing apart
-# from three short-lived Jobs (unique names, removed by ttlSecondsAfterFinished),
-# one short-lived Pod of the network policy check (unique name, deleted when the
-# check ends and again by the EXIT trap), one CertificateRequest in default of
+# from three short-lived Jobs in meridian (unique names, removed by
+# ttlSecondsAfterFinished), two short-lived Pods of the network policy check (one
+# in meridian, one in default; unique names, each deleted when its line ends and
+# again by the EXIT trap), one CertificateRequest in default of
 # the certificate policy check (unique name, a request the issuer must refuse,
 # deleted as soon as it is read and again by the EXIT trap) and, at most once
 # per throttle window per tool server, the refusal's audit row that the tool
@@ -44,7 +45,15 @@
 #   4. telemetry: telemetrygen sends one trace, one log and one metric over OTLP
 #                 to the collector; each is then read back through Grafana's
 #                 datasource proxy (Tempo, Loki, Prometheus), the way an owner
-#                 would see it. What each PASS line prints of an answer (the
+#                 would see it. The Jobs run in `meridian`, not in
+#                 `observability` (S063), and push over HTTP to port 4318, the
+#                 port and the namespace the six services push from: the
+#                 collector's ingress admits the pods of `meridian` on 4318 and
+#                 nothing else (manifests/observability-networkpolicy.yaml), and
+#                 smoke's own Jobs get the egress they need from
+#                 manifests/smoke-networkpolicy.yaml, which `make up` applies
+#                 (the chart's default-deny would cut them off without it). What
+#                 each PASS line prints of an answer (the
 #                 trace ID, the log line, the series count) goes through
 #                 clean_lines and is cut to 120 characters: anyone who can push
 #                 a log line to the collector chooses its text.
@@ -98,7 +107,7 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
-#   8. network policy: four lines (S019, S062). Each opens a TCP connection and
+#   8. network policy: five lines (S019, S062, S063). Each opens a TCP connection and
 #                 nothing more; a path that no rule allows is a PASS only when it
 #                 times out, and a connection refused or a name that does not
 #                 resolve is a FAIL, never "blocked". A policy that is missing,
@@ -108,7 +117,7 @@
 #                   which the Claims API's policy and the Agent Runtime's both
 #                   name. It must be reached. The probe, the name resolution and
 #                   the pod's egress to a named peer work, so a "blocked" below
-#                   is not a broken probe. If it fails, the three lines below
+#                   is not a broken probe. If it fails, the four lines below
 #                   would prove nothing and are not printed.
 #                 - the Claims API to the Model Gateway, which no rule of the
 #                   Claims API's policy names: it must time out.
@@ -135,6 +144,34 @@
 #                   network plugin takes a moment): it is the control, one pod
 #                   with and without the label. No Service or Deployment selects
 #                   the name label of the sweep, so the pod takes no traffic.
+#                 - the collector (S063): a second probe Pod, of the same image
+#                   and securityContext, in the namespace `default` (one that
+#                   exists on every cluster, outside `meridian` and
+#                   `observability`), with no name label of a workload and none
+#                   that a policy selects, opens a connection to the collector's
+#                   OTLP HTTP port, otel-collector.observability.svc.cluster.
+#                   local:4318, the port the six services push to. The
+#                   collector's ingress admits the pods of `meridian` alone
+#                   (manifests/observability-networkpolicy.yaml, which `make up`
+#                   applies), so it must time out. A policy that is missing or
+#                   too wide, or a cluster that does not enforce it, makes the
+#                   collector answer, and the line fails; a refusal, a name that
+#                   does not resolve and a failed exec are failures too, never
+#                   "blocked". It is skipped, one line, when the collector's
+#                   Deployment is not there. The control above is this line's
+#                   control: the same probe, the same image, the name resolution
+#                   and the cluster's enforcement work, and it is not printed
+#                   when the control failed. What the fifth line does not prove:
+#                   that a pod of `meridian` can push (check 4 does, with the
+#                   telemetrygen Jobs it runs there); that 4317, the collector's
+#                   gRPC port, is closed to every pod (the collector still
+#                   listens on it; the policy admits no one, and this line
+#                   probes 4318 only, the port a Meridian pod is let in on); or
+#                   that a pod of another namespace than `default` is refused
+#                   (the rule is "the namespace meridian only", and `default`
+#                   stands for all the others). It adds about 10 s: one timeout of 4 s and
+#                   the second Pod's start, and at most 60 s more for its start
+#                   when something is wrong.
 #                 The Pod carries one label of smoke's own as well,
 #                 meridian-smoke=network-probe, which no policy, Service or
 #                 Deployment selects, so it changes nothing they see. A Pod
@@ -154,7 +191,7 @@
 #                 fails too. The Pod ends on its own after five minutes, and is
 #                 not created when the control failed. The check fails when the
 #                 policy `default-deny` does not exist.
-#                 Skipped, one line instead of four, while the Claims API is not
+#                 Skipped, one line instead of five, while the Claims API is not
 #                 deployed (`make deploy`). What it does not prove: that
 #                 every other pair of pods is allowed or denied as the chart
 #                 says (the chart's tests render and compare the rules); that a
@@ -409,6 +446,11 @@ readonly NETWORK_POD_NAME_LABEL=meridian-sweep
 # the Pods with it and deletes by name those older than NETWORK_LEFTOVER_AGE
 # seconds, as it does for check 10's request (REFUSED_LEFTOVER_AGE).
 readonly NETWORK_POD_SMOKE_LABEL=meridian-smoke=network-probe
+# The collector line (the fifth of check 8) probes from a Pod in this namespace:
+# one that exists on every cluster and is neither `meridian` nor `observability`.
+# The Pod's name is NETWORK_OUTSIDER_PREFIX and the time.
+readonly NETWORK_OUTSIDER_NAMESPACE=default
+readonly NETWORK_OUTSIDER_PREFIX=smoke-outsider-
 readonly NETWORK_LEFTOVER_AGE=300
 readonly NETWORK_POD_LIFETIME=300
 readonly NETWORK_POD_READY_TIMEOUT=60s
@@ -600,7 +642,15 @@ readonly REFUSED_DENYING_POLICY=meridian-deny-unlisted
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
-readonly COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4317
+# The collector's OTLP HTTP port: the one the six services push to
+# (telemetry.otlpEndpoint in values/meridian.yaml; a test keeps them equal), the
+# one the collector's ingress admits the pods of `meridian` on, and, since S063,
+# the one telemetrygen pushes to (--otlp-http). Never 4317, OTLP over gRPC, which
+# the collector's ingress admits from no one.
+readonly COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4318
+# The namespace of telemetrygen's Jobs (see check 4 and manifests/smoke-
+# networkpolicy.yaml): the collector's ingress admits the pods of this one.
+readonly TELEMETRYGEN_NAMESPACE=meridian
 # What the telemetry check (4) prints of an answer of Tempo, Loki or Prometheus
 # is cut to this many characters (see telemetry_answer).
 readonly TELEMETRY_ANSWER_LENGTH=120
@@ -641,6 +691,7 @@ identity_mark_problem="" # set by identity_mark_start: why there is no mark
 rules_body=""      # set by fetch_rules
 network_answer=""  # set by network_probe
 network_pod=""     # the probe Pod of check 8 while it may exist
+network_outsider="" # the probe Pod of check 8's collector line, in NETWORK_OUTSIDER_NAMESPACE
 refused_request="" # the CertificateRequest of check 10 while it may exist
 refused_err_file="" # the messages of check 10's commands, while it runs
 refused_state=""   # set by refused_read: "<verdict>|<issued>|<reason>|<message>"
@@ -883,6 +934,11 @@ check_tools() {
 # ── 4. telemetry ─────────────────────────────────────────────────────────────
 # start_job SIGNAL COUNT_FLAG: one Job that sends one item of SIGNAL (traces,
 # logs or metrics) for service ${service}. Named uniquely, so reruns never clash.
+# The Job runs in ${TELEMETRYGEN_NAMESPACE} (`meridian`) and pushes OTLP over HTTP
+# (--otlp-http, which sends each signal to its default path, /v1/traces and so
+# on): the collector's ingress admits the pods of that namespace on 4318. The
+# Job's pods carry no part-of label, so the database's ingress does not admit
+# them, and manifests/smoke-networkpolicy.yaml selects them by the name label.
 start_job() {
   local signal=$1 count_flag=$2
   kctl create -f - >/dev/null <<EOF
@@ -890,7 +946,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: smoke-${signal}-${epoch}
-  namespace: observability
+  namespace: ${TELEMETRYGEN_NAMESPACE}
   labels:
     app.kubernetes.io/name: meridian-smoke
 spec:
@@ -914,6 +970,7 @@ spec:
             - ${signal}
             - --otlp-endpoint
             - ${COLLECTOR_ENDPOINT}
+            - --otlp-http
             - --otlp-insecure
             - --service
             - ${service}
@@ -996,6 +1053,7 @@ refused_delete_request() {
 cleanup() {
   # On stderr, not stdout: the lines a reader counts do not change.
   network_delete_pod || echo "smoke: could not delete the probe pod ${network_pod} in meridian; delete it by hand: kubectl -n meridian delete pod ${network_pod}" >&2
+  network_outsider_delete || echo "smoke: could not delete the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE}; delete it by hand: kubectl -n ${NETWORK_OUTSIDER_NAMESPACE} delete pod ${network_outsider}" >&2
   refused_delete_request || true
   if [[ -n "${refused_err_file}" ]]; then rm -f "${refused_err_file}"; fi
   if [[ -n "${pf_pid:-}" ]]; then
@@ -1073,9 +1131,9 @@ check_telemetry() {
 
   local signal
   for signal in traces logs metrics; do
-    if ! kctl -n observability wait --for=condition=complete \
+    if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
       "job/smoke-${signal}-${epoch}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
-      fail "telemetry: telemetrygen ${signal} job did not complete (kubectl -n observability logs job/smoke-${signal}-${epoch})"
+      fail "telemetry: telemetrygen ${signal} job did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/smoke-${signal}-${epoch}; a Job with no egress to the collector is the likeliest cause on a cluster that make up has not brought up to date: it applies manifests/smoke-networkpolicy.yaml and manifests/observability-networkpolicy.yaml)"
       return
     fi
   done
@@ -1629,27 +1687,28 @@ check_sweep() {
 # (the API server's), so a skewed clock only delays the sweep. A list that cannot
 # be read is not an error: the check goes on, and the leftover waits.
 network_sweep_leftovers() {
-  local json names leftover
-  json="$(kctl -n meridian get pod -l "${NETWORK_POD_SMOKE_LABEL}" \
+  local namespace=${1:-meridian} json names leftover
+  json="$(kctl -n "${namespace}" get pod -l "${NETWORK_POD_SMOKE_LABEL}" \
     -o json 2>/dev/null)" || return 0
   names="$(jq -r --argjson age "${NETWORK_LEFTOVER_AGE}" '
     .items[] | select(now - (.metadata.creationTimestamp | fromdateiso8601) > $age)
     | .metadata.name' <<<"${json}" 2>/dev/null)" || return 0
   while IFS= read -r leftover; do
     [[ -n "${leftover}" ]] || continue
-    kctl -n meridian delete pod "${leftover}" \
+    kctl -n "${namespace}" delete pod "${leftover}" \
       --ignore-not-found --wait=false >/dev/null 2>&1 || true
   done <<<"${names}"
 }
 
-# network_probe WHERE TARGET: the probe from WHERE (deploy/claims-api, or the name
-# of the probe Pod) to TARGET (host:port), its answer in ${network_answer}:
+# network_probe WHERE TARGET [NAMESPACE]: the probe from WHERE (deploy/claims-api,
+# or the name of the probe Pod) in NAMESPACE (meridian unless given) to TARGET
+# (host:port), its answer in ${network_answer}:
 # "reached", "blocked", or "error: ..." with what it wrote on stderr when it failed
 # (a traceback is never read as an answer).
 network_probe() {
-  local where=$1 target=$2 err_file
+  local where=$1 target=$2 namespace=${3:-meridian} err_file
   err_file="$(mktemp)"
-  if network_answer="$(kctl -n meridian exec "${where}" -- \
+  if network_answer="$(kctl -n "${namespace}" exec "${where}" -- \
     python -c "${NETWORK_PROBE}" "${target%:*}" "${target##*:}" 2>"${err_file}")"; then
     network_answer="$(clean_lines "${network_answer}")"
   else
@@ -1658,13 +1717,14 @@ network_probe() {
   rm -f "${err_file}"
 }
 
-# network_expect EXPECTED WHERE TARGET PASS_TEXT WRONG_TEXT: a PASS line with
-# PASS_TEXT when the probe's answer is EXPECTED (reached or blocked); a FAIL with
-# WRONG_TEXT when it is the other word; a FAIL with what it said when it is neither.
-# Returns 1 unless it passed.
+# network_expect EXPECTED WHERE TARGET PASS_TEXT WRONG_TEXT [NAMESPACE]: a PASS
+# line with PASS_TEXT when the probe's answer is EXPECTED (reached or blocked); a
+# FAIL with WRONG_TEXT when it is the other word; a FAIL with what it said when it
+# is neither. WHERE is in NAMESPACE (meridian unless given). Returns 1 unless it
+# passed.
 network_expect() {
-  local expected=$1 where=$2 target=$3 pass_text=$4 wrong_text=$5
-  network_probe "${where}" "${target}"
+  local expected=$1 where=$2 target=$3 pass_text=$4 wrong_text=$5 namespace=${6:-meridian}
+  network_probe "${where}" "${target}" "${namespace}"
   if [[ "${network_answer}" == "${expected}" ]]; then
     pass "network policy: ${pass_text}"
     return 0
@@ -1676,20 +1736,22 @@ network_expect() {
   return 1
 }
 
-# network_pod_spec: the probe Pod as JSON, from the Claims API's Deployment: its
-# image, pull policy and security contexts, so the Pod runs what is on the node
-# under the same restrictions, and a sleep that ends on its own. Its labels are
-# the sweep's name label (and not part-of: see the header) and smoke's own, which
-# the next run's sweep finds a leftover by.
+# network_pod_spec NAME NAMESPACE NAME_LABEL: the probe Pod as JSON, from the
+# Claims API's Deployment: its image, pull policy and security contexts, so the
+# Pod runs what is on the node under the same restrictions, and a sleep that ends
+# on its own. Its labels are NAME_LABEL as the name label (the sweep's, and not
+# part-of: see the header; empty: no name label at all, for the Pod in `default`)
+# and smoke's own, which the next run's sweep finds a leftover by.
 network_pod_spec() {
-  kctl -n meridian get deployment claims-api -o json | jq --arg name "${network_pod}" \
-    --arg label "${NETWORK_POD_NAME_LABEL}" --argjson lifetime "${NETWORK_POD_LIFETIME}" \
+  kctl -n meridian get deployment claims-api -o json | jq --arg name "$1" \
+    --arg namespace "$2" --arg label "$3" --argjson lifetime "${NETWORK_POD_LIFETIME}" \
     --arg smoke_key "${NETWORK_POD_SMOKE_LABEL%%=*}" --arg smoke_value "${NETWORK_POD_SMOKE_LABEL#*=}" '
     .spec.template.spec as $pod | $pod.containers[0] as $container | {
       apiVersion: "v1", kind: "Pod",
       metadata: {
-        name: $name, namespace: "meridian",
-        labels: {"app.kubernetes.io/name": $label, ($smoke_key): $smoke_value}
+        name: $name, namespace: $namespace,
+        labels: ({($smoke_key): $smoke_value}
+          + (if $label == "" then {} else {"app.kubernetes.io/name": $label} end))
       },
       spec: {
         restartPolicy: "Never", automountServiceAccountToken: false,
@@ -1711,7 +1773,8 @@ network_start_pod() {
   local err_file detail
   network_pod="smoke-network-$(date +%s)"
   err_file="$(mktemp)"
-  if ! network_pod_spec 2>"${err_file}" | kctl -n meridian create -f - >/dev/null 2>>"${err_file}"; then
+  if ! network_pod_spec "${network_pod}" meridian "${NETWORK_POD_NAME_LABEL}" 2>"${err_file}" |
+    kctl -n meridian create -f - >/dev/null 2>>"${err_file}"; then
     detail="$(clean_lines "$(<"${err_file}")")"
     rm -f "${err_file}"
     fail "network policy: could not start the probe pod ${network_pod} in meridian (${detail})"
@@ -1765,6 +1828,69 @@ check_network_database() {
   network_delete_pod || true # the Pod stays named: the EXIT trap tries again
 }
 
+# network_outsider_delete: delete the probe Pod of the collector line when one was
+# named, and forget it only when kubectl said it is gone, as network_delete_pod
+# does for the other Pod, so a delete that failed is tried again by the EXIT trap.
+# Returns 1 when the delete failed.
+network_outsider_delete() {
+  [[ -n "${network_outsider}" ]] || return 0
+  kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" delete pod "${network_outsider}" \
+    --ignore-not-found --wait=false >/dev/null 2>&1 || return 1
+  network_outsider=""
+}
+
+# network_outsider_start: start the probe Pod of the collector line in
+# NETWORK_OUTSIDER_NAMESPACE, with no name label, and wait until it is Ready. One
+# FAIL line and 1 when it cannot. ${network_outsider} is set before the Pod
+# exists, so the trap deletes it whichever step fails.
+network_outsider_start() {
+  local err_file detail
+  network_outsider="${NETWORK_OUTSIDER_PREFIX}$(date +%s)"
+  err_file="$(mktemp)"
+  if ! network_pod_spec "${network_outsider}" "${NETWORK_OUTSIDER_NAMESPACE}" "" 2>"${err_file}" |
+    kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" create -f - >/dev/null 2>>"${err_file}"; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "network policy: could not start the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} (${detail})"
+    return 1
+  fi
+  if ! kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" wait --for=condition=Ready "pod/${network_outsider}" \
+    --timeout="${NETWORK_POD_READY_TIMEOUT}" >/dev/null 2>"${err_file}"; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    rm -f "${err_file}"
+    fail "network policy: the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} (${detail})"
+    return 1
+  fi
+  rm -f "${err_file}"
+}
+
+# check_network_collector: the fifth line of check 8 (S063). A pod outside
+# `meridian` and `observability` cannot push to the collector: the probe Pod in
+# NETWORK_OUTSIDER_NAMESPACE must time out on the collector's HTTP port, which
+# only the pods of `meridian` are admitted to. SKIP when the collector's
+# Deployment is not there. The control is check 8's own (the caller returns
+# before this when it failed).
+check_network_collector() {
+  local found
+  network_sweep_leftovers "${NETWORK_OUTSIDER_NAMESPACE}"
+  if ! found="$(kctl -n observability get deployment otel-collector -o name --ignore-not-found)"; then
+    fail "network policy: could not look for deployment/otel-collector in observability (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "network policy: the collector is not deployed (make up), so no push to it was tried from outside meridian"
+    return
+  fi
+  if network_outsider_start; then
+    network_expect blocked "${network_outsider}" "${COLLECTOR_ENDPOINT}" \
+      "a pod outside meridian and observability (a probe in ${NETWORK_OUTSIDER_NAMESPACE}) cannot push to the collector (${COLLECTOR_ENDPOINT}), which only the pods of meridian may reach" \
+      "a pod in ${NETWORK_OUTSIDER_NAMESPACE} reached the collector (${COLLECTOR_ENDPOINT}): its ingress admits more than the pods of meridian, or is missing (make up applies manifests/observability-networkpolicy.yaml), or the cluster does not enforce it" \
+      "${NETWORK_OUTSIDER_NAMESPACE}" ||
+      true
+  fi
+  network_outsider_delete || true # the Pod stays named: the EXIT trap tries again
+}
+
 check_network_policy() {
   local found policy
   network_sweep_leftovers
@@ -1799,6 +1925,7 @@ check_network_policy() {
     "the Claims API reached the API server's Service (${NETWORK_API_SERVER}), which no rule of its policy lists: the cluster does not enforce egress rules, or one is too wide" ||
     true
   check_network_database
+  check_network_collector
 }
 
 # ── 9. service identity ──────────────────────────────────────────────────────

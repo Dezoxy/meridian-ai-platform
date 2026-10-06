@@ -65,8 +65,8 @@ def run_telemetry_check(
             '  [[ -n "${poll_result}" ]]',
             "}",
             *re.findall(
-                r"^readonly (?:COLLECTOR_ENDPOINT|JOB_TIMEOUT|POLL_TIMEOUT"
-                r"|TELEMETRY_ANSWER_LENGTH)=.*$",
+                r"^readonly (?:COLLECTOR_ENDPOINT|TELEMETRYGEN_NAMESPACE|JOB_TIMEOUT"
+                r"|POLL_TIMEOUT|TELEMETRY_ANSWER_LENGTH)=.*$",
                 SMOKE_SH,
                 re.M,
             ),

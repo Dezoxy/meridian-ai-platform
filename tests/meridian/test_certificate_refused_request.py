@@ -105,9 +105,15 @@ def run_check(
             'fail() { echo "FAIL  $*"; failures=$((failures + 1)); }',
             'skip() { echo "SKIP  $*"; }',
             "sleep() { :; }",
-            *re.findall(r"^readonly (?:REFUSED|POLICY)_\w+=.*$", SMOKE_SH, re.M),
+            *re.findall(
+                r"^readonly (?:REFUSED|POLICY|NETWORK_OUTSIDER_NAMESPACE)\w*=.*$",
+                SMOKE_SH,
+                re.M,
+            ),
             # The script's own globals: the request and the state check 10 keeps.
-            *re.findall(r"^(?:refused_|network_pod)\w*=.*$", SMOKE_SH, re.M),
+            *re.findall(
+                r"^(?:refused_|network_pod|network_outsider)\w*=.*$", SMOKE_SH, re.M
+            ),
             script_function(SMOKE_SH, "clean_lines"),
             "openssl() {",
             f'  echo "$*" >>"{openssl_log}"',
@@ -161,6 +167,7 @@ def run_check(
                 script_function(SMOKE_SH, name)
                 for name in (
                     "network_delete_pod",
+                    "network_outsider_delete",
                     "refused_delete_request",
                     "cleanup",
                     "refused_make_csr",
@@ -791,7 +798,7 @@ def test_the_header_says_what_check_ten_creates_removes_and_does_not_prove() -> 
 
     # The sentence at the top names the request, beside what it named before.
     assert "three short-lived Jobs" in opening
-    assert "one short-lived Pod of the network policy check" in opening
+    assert "two short-lived Pods of the network policy check" in opening
     assert f"one CertificateRequest in {NAMESPACE}" in opening
     for words in (
         "must refuse",
