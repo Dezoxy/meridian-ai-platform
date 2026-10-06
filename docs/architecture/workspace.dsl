@@ -25,6 +25,7 @@ workspace "Meridian AI Platform" "Architecture model for the Meridian AI Platfor
         !include model/people-systems.dsl
         !include model/containers.dsl
         !include model/deployment-aws.dsl
+        !include model/deployment-gcp.dsl
     }
 
     views {
