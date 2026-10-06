@@ -159,7 +159,10 @@
 #                 output is read: over the last hour Loki holds no stream of a
 #                 container named postgres and none whose namespace is not
 #                 meridian (two queries; a FAIL says which kind and how many,
-#                 never a label). It runs only after the eighth passed, because
+#                 never a label), after a control: the Claims API's own stream
+#                 by the same two labels must be there, or the line FAILs (the
+#                 labels cannot be selected by, so the two empty answers prove
+#                 nothing). It runs only after the eighth passed, because
 #                 while nothing is shipped an empty answer proves nothing: when
 #                 the eighth did not pass, it is a SKIP, and it is one after
 #                 `make up` alone. It does not look for a Job's or a smoke pod's
@@ -1658,7 +1661,12 @@ check_telemetry_log_agent() {
 # and its include list names the services and the sweep): two queries, and the
 # first stream found ends the line as a FAIL that says what kind it was and how
 # many, never a label from the answer (the labels come from paths and from
-# whatever pushes to the collector). The second query leads with a matcher that
+# whatever pushes to the collector). Before the two, a control (M1 of the second
+# review): {k8s_namespace_name="meridian", k8s_container_name="claims-api"} must
+# return a stream in the same window, or the line FAILs (not SKIP: the eighth
+# line has just found the Claims API's access line by service_name) because the
+# two labels are not there to select by and the two negatives prove nothing; PASS
+# says what was found and what was not. The second query leads with a matcher that
 # cannot match an empty value, because Loki refuses a selector made only of
 # matchers that can (`!=` is one). It runs only after the eighth line passed (
 # ${log_agent_shipped}): while nothing is shipped an empty answer proves nothing,
@@ -1670,6 +1678,19 @@ check_telemetry_log_agent_streams() {
   local what query kind
   if [[ "${log_agent_shipped}" != yes ]]; then
     skip "telemetry: the Claims API's line above did not pass, so no stream that must not be in Loki was looked for: an empty answer proves nothing while nothing is shipped"
+    return
+  fi
+  # The control: the Claims API's own stream, by the two labels the negatives
+  # use. Without it a Loki that stopped indexing either label answers both
+  # negatives with nothing, and the line would say the agent ships only its list.
+  if ! poll 'select(.status == "success") | .data.result | length | tostring' -G "${url}" \
+    --data-urlencode "query={k8s_namespace_name=\"meridian\", k8s_container_name=\"${LOG_AGENT_SERVICE}\"}" \
+    --data-urlencode "since=1h" --data-urlencode "limit=5"; then
+    fail "telemetry: Loki did not answer the question for the stream of the Claims API's container after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
+    return
+  fi
+  if [[ "${poll_result}" == 0 ]]; then
+    fail "telemetry: Loki holds no stream of the Claims API's container (k8s_container_name=${LOG_AGENT_SERVICE} in k8s_namespace_name=meridian) from the last hour, though its access line is there by service_name: the labels k8s_container_name and k8s_namespace_name are not there to select by (a Loki that stopped indexing them), so the questions for streams of postgres and of other namespaces would prove nothing and were not asked"
     return
   fi
   for what in database outside; do
@@ -1690,7 +1711,7 @@ check_telemetry_log_agent_streams() {
       return
     fi
   done
-  pass "telemetry: Loki holds no stream of a container named postgres and none outside the namespace meridian from the last hour: the log agent ships only what its include list names"
+  pass "telemetry: Loki holds a stream of the Claims API's container (${LOG_AGENT_SERVICE} in meridian), so its labels select, and holds no stream of a container named postgres and none outside the namespace meridian, all from the last hour: the log agent ships only what its include list names"
 }
 
 check_telemetry() {

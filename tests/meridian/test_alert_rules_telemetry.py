@@ -387,10 +387,14 @@ def test_the_file_holds_no_other_rule_that_reads_a_series_of_these_modules() -> 
 
 
 def test_the_manifest_header_says_why_the_sweeps_series_is_one_set() -> None:
-    text = " ".join(RULES_FILE.read_text("utf-8").split())
+    words = RULES_FILE.read_text("utf-8").split()
+    text = " ".join(word for word in words if word != "#")  # comment markers
 
     assert "service.instance.id=claims-sweep" in text
-    assert "the later sample wins" in text
+    assert "keeps the sample with the later timestamp" in text
+    assert "refused as out of order" in text
+    assert "Only a Job run by hand can overlap a scheduled one" in text
+    assert "the later sample wins" not in text
 
 
 # ── The log agent's alert (S064, G1) ─────────────────────────────────────────

@@ -543,7 +543,14 @@ node image, Kubernetes components and the platform).
    (`{k8s_namespace_name=~".+", k8s_namespace_name!="meridian"}`: Loki refuses
    a selector whose every matcher can match an empty value, and `!=` is one,
    so the first matcher cannot). A FAIL says which kind and how many, never a
-   label. It runs only after the eighth line passed, because while nothing is
+   label. Before the two, a control: the Claims API's own stream by the same
+   two labels (`{k8s_namespace_name="meridian",
+   k8s_container_name="claims-api"}`) must be there in the same window, or the
+   line FAILs (not SKIP: the eighth line has just found its access line by
+   `service_name`) with a text that says the two labels are not there to
+   select by, so the two empty answers would prove nothing, as they would if a
+   Loki stopped indexing either label. PASS says what was found and what was
+   not. It runs only after the eighth line passed, because while nothing is
    shipped an empty answer proves nothing: otherwise it is a SKIP, which it is
    after `make up` alone (so that run prints 32 lines, and one after
    `make deploy` 44). It does not look for a Job's or a smoke pod's output,
@@ -1779,8 +1786,10 @@ sends before it exits, and, in S064's C3, the fixed instance ID
 `service.instance.id=claims-sweep` so that every pass writes the same six
 series; on kind on 2026-10-06 the findings arrived and the six series were one
 `instance`, `claims-sweep`, in the third run; the 5-second deadline is tested
-without a cluster, not seen on one). A by-hand Job beside a
-scheduled one writes the same series too: the later sample wins.
+without a cluster, not seen on one). Prometheus keeps the sample with the later
+timestamp, and a sample that arrives with an earlier timestamp is refused as
+out of order (the collector logs it). Only a Job run by hand can overlap a
+scheduled one (`concurrencyPolicy: Forbid`).
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
 

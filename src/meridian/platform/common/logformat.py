@@ -17,10 +17,18 @@ be worth reading and safe to keep:
   for every exception of the chain (``__cause__``, ``__context__``) and every
   member of an exception group, and NO message and no notes: a message can
   quote claimant text, and the redaction finds patterns (an address, an IBAN),
-  not a name or a street. It is built from ``record.exc_info``. A record that
-  holds only ``exc_text`` (made by another record factory) gets the fixed word
-  ``WITHHELD``: that text was never made without a message. An exception that
-  cannot be walked is ``WITHHELD`` as well, never a lost record;
+  not a name or a street. What the field still shows is source lines, of this
+  code and of the libraries it calls, pattern-redacted: a literal in a source
+  line (a message in a ``raise``, a value in an assignment) goes out as
+  written apart from what a pattern finds, so no source line may hold a name
+  or a street. The joined text goes through ``redact`` (imported at the top of
+  this module from the guardrails, as the path's is; no import cycle, the
+  guardrails do not import this module) and is cut at ``EXCEPTION_MAX_CHARS``
+  with ``PATH_CUT_MARKER``, redaction first. It is built from
+  ``record.exc_info``. A record that holds only ``exc_text`` (made by another
+  record factory) gets the fixed word ``WITHHELD``: that text was never made
+  without a message. An exception that cannot be walked is ``WITHHELD`` as
+  well, never a lost record;
 - uvicorn applies its own logging configuration before it imports the app
   with ``--factory``, so the factory runs second and takes uvicorn's loggers
   over: their handlers go, they propagate to the root's one handler. They keep
@@ -88,6 +96,9 @@ ACCESS_ARGUMENTS = 5
 # request can send a path of any length, and a line is read in Loki.
 PATH_MAX_CHARS = 256
 PATH_CUT_MARKER = "[cut]"
+# The ``exception`` field, after redaction, is cut here with the same marker: a
+# deeply nested exception group gave 166 KB of indentation and frames.
+EXCEPTION_MAX_CHARS = 8192
 CAUSE_LINE = "The above exception was the direct cause of the following exception:"
 CONTEXT_LINE = "During handling of the above exception, another exception occurred:"
 
@@ -179,7 +190,12 @@ def _exception_field(record: logging.LogRecord) -> str | None:
             return None
         try:
             top = traceback.TracebackException(*exc_info)
-            return "\n".join(_chain_lines(top))
+            # Redacted before the cut, as the path is: an address across the
+            # bound is not left in pieces.
+            text = redact("\n".join(_chain_lines(top))).text
+            if len(text) > EXCEPTION_MAX_CHARS:
+                return text[:EXCEPTION_MAX_CHARS] + PATH_CUT_MARKER
+            return text
         except Exception:
             # Nothing of the cause: it can quote the exception's text.
             return WITHHELD

@@ -400,11 +400,14 @@ spec:
         # collector's address (telemetry.otlpEndpoint): this file is kind's, and
         # there the chart does, so a pass that sends nothing is a fault here. The
         # CronJob sets service.instance.id=claims-sweep (templates/sweep.yaml),
-        # so the six series are the same from pass to pass and a pass at once
-        # beside another writes the same series: the later sample wins. A random
-        # ID, the SDK's default, would be six new series a pass, which no rule
-        # could read. A pass every 5 minutes leaves the series a sample never
-        # older than that, and the first sample of a new series counts.
+        # so the six series are the same from pass to pass. Prometheus keeps the
+        # sample with the later timestamp, and a sample that arrives with an
+        # earlier one is refused as out of order (the collector logs it). Only
+        # a Job run by hand can overlap a scheduled one (concurrencyPolicy:
+        # Forbid). A random ID, the SDK's default, would be six new series a
+        # pass, which no rule could read. A pass every 5 minutes leaves the
+        # series a sample never older than that, and the first sample of a new
+        # series counts.
         - alert: MeridianSweepNotReporting
           expr: |
             time() - kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"} < 900

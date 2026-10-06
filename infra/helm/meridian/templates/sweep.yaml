@@ -58,9 +58,12 @@ With no address it gets none of the three and sends nothing.
                               series, and no rule or panel could read them
                               without knowing it. With one fixed ID the six
                               series are the same from pass to pass, and the
-                              later sample wins, which is what "the last pass"
-                              means: two passes at once (a by-hand Job beside a
-                              scheduled one) write the same series. The SDK
+                              sample with the later timestamp is kept, which
+                              is what "the last pass" means. A sample that
+                              arrives with an earlier timestamp is refused as
+                              out of order (the collector logs it). Only a Job
+                              run by hand can overlap a scheduled one
+                              (concurrencyPolicy: Forbid). The SDK
                               takes the ID from this variable and the service's
                               name from the code, so the variable cannot rename
                               the service (tested). A service must not get it:

@@ -10,8 +10,11 @@ the Claims API's own record (``test_smoke_log_agent.py``):
   host network, PID or port, ``runAsNonRoot`` and no service-account token;
 - ``check_telemetry_log_agent_streams`` asks Loki, over the last hour, for a
   stream of a container named ``postgres`` and for one whose namespace is not
-  ``meridian``, and expects neither. It runs only after the Claims API's line
-  passed: while nothing is shipped an empty answer proves nothing.
+  ``meridian``, and expects neither. Before them it asks for the Claims API's
+  own stream by the same two labels and fails when there is none (a control:
+  a Loki that stopped indexing a label would answer both negatives with
+  nothing). It runs only after the Claims API's line passed: while nothing is
+  shipped an empty answer proves nothing.
 
 Both run here in bash against stubs for ``kctl`` and ``gcurl`` (and a ``sleep``
 that moves the clock past the wait, so no test waits).
@@ -37,7 +40,8 @@ pytestmark = requires_jq
 
 AGENT_GET = "-n logging get daemonset log-agent-agent -o json --ignore-not-found"
 CONSTANTS = (
-    r"^readonly (?:LOG_AGENT_NAMESPACE|LOG_AGENT_DAEMONSET|POLL_TIMEOUT"
+    r"^readonly (?:LOG_AGENT_NAMESPACE|LOG_AGENT_DAEMONSET|LOG_AGENT_SERVICE"
+    r"|POLL_TIMEOUT"
     r"|POLL_INTERVAL|TELEMETRY_ANSWER_LENGTH)=.*$"
 )
 # The jq program is one constant over several lines, in single quotes.
@@ -335,6 +339,7 @@ STREAM_STUBS = r"""
 gcurl() {
   printf 'gcurl %s\n' "$*" >>"${ASKED}"
   case "$*" in
+    *claims-api*) answer="${CONTROL}" ;;
     *k8s_container_name*) answer="${DATABASE}" ;;
     *k8s_namespace_name*) answer="${OUTSIDE}" ;;
     *) echo "unexpected gcurl call: $*" >&2; return 1 ;;
@@ -360,12 +365,14 @@ def run_streams(
     tmp_path: Path,
     *,
     shipped: str = "yes",
+    control: str | None = None,
     database: str = EMPTY,
     outside: str = EMPTY,
 ) -> tuple[list[str], list[str]]:
     """``check_telemetry_log_agent_streams`` against a Grafana stub that answers
-    each of the two questions with ``database`` and ``outside``; ``shipped`` is
-    the global the Claims API's line sets. Returns the lines and the calls."""
+    the control and each of the two questions with ``control`` (one stream
+    unless given), ``database`` and ``outside``; ``shipped`` is the global the
+    Claims API's line sets. Returns the lines and the calls."""
     asked = tmp_path / "asked"
     asked.touch()
     script = "\n".join(
@@ -394,6 +401,7 @@ def run_streams(
         env={
             "PATH": os.environ["PATH"],
             "ASKED": str(asked),
+            "CONTROL": found_streams(1) if control is None else control,
             "DATABASE": database,
             "OUTSIDE": outside,
         },
@@ -413,14 +421,43 @@ def test_two_empty_answers_print_one_pass_line_that_says_what_was_not_found(
     lines, _ = run_streams(tmp_path)
 
     (line,) = lines
-    assert line.startswith("PASS  telemetry: Loki holds no stream ")
-    assert "postgres" in line and "meridian" in line and "last hour" in line
+    assert line.startswith("PASS  telemetry: Loki holds a stream of ")
+    # What was found (the control) and what was not (the two negatives).
+    assert "claims-api" in line
+    assert "and holds no stream of a container named postgres" in line
+    assert "none outside the namespace meridian" in line and "last hour" in line
 
 
-def test_loki_is_asked_once_for_each_over_the_last_hour(tmp_path: Path) -> None:
+def test_the_control_missing_is_a_fail_that_says_the_labels_cannot_be_selected_by(
+    tmp_path: Path,
+) -> None:
+    lines, asked = run_streams(tmp_path, control=EMPTY)
+
+    (line,) = lines
+    assert line.startswith("FAIL  telemetry: Loki holds no stream of the Claims API")
+    assert "k8s_container_name" in line and "k8s_namespace_name" in line
+    assert "not there to select by" in line and "prove nothing" in line
+    assert len(asked) == 1  # neither negative is asked
+
+
+def test_a_missing_control_is_a_fail_even_when_both_negatives_would_be_empty(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_streams(tmp_path, control=EMPTY, database=EMPTY, outside=EMPTY)
+
+    assert [line.split()[0] for line in lines] == ["FAIL"]
+
+
+def test_loki_is_asked_for_the_control_first_and_then_once_for_each(
+    tmp_path: Path,
+) -> None:
     _, asked = run_streams(tmp_path)
 
-    database, outside = asked
+    control, database, outside = asked
+    assert (
+        'query={k8s_namespace_name="meridian", k8s_container_name="claims-api"}'
+        in control
+    )
     assert 'query={k8s_container_name="postgres"}' in database
     # A selector whose every matcher can match the empty value is refused by
     # Loki, and `!=` is one: the second query leads with a matcher that cannot.
@@ -438,7 +475,7 @@ def test_a_stream_of_a_container_named_postgres_is_a_fail_that_says_so(
     (line,) = lines
     assert line.startswith("FAIL  telemetry: Loki holds 2 stream(s) of a container")
     assert "postgres" in line
-    assert len(asked) == 1  # the first finding ends the line
+    assert len(asked) == 2  # the control, then the first finding ends the line
 
 
 def test_a_stream_outside_the_namespace_is_a_fail_that_says_so(tmp_path: Path) -> None:
@@ -456,7 +493,7 @@ def test_what_loki_holds_is_a_count_and_never_a_label(tmp_path: Path) -> None:
     assert "\x1b" not in line and "forged" not in line
 
 
-@pytest.mark.parametrize("which", ["database", "outside"])
+@pytest.mark.parametrize("which", ["control", "database", "outside"])
 def test_a_loki_that_does_not_answer_is_a_fail_that_says_that_instead(
     tmp_path: Path, which: str
 ) -> None:
