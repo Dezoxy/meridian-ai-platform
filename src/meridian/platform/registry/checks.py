@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import assert_never, get_args
 
+from meridian.platform.registry.host_checks import HOST_CHECKS
 from meridian.platform.registry.models import (
     DataClass,
     Deployment,
@@ -846,6 +847,7 @@ CHECKS: tuple[Callable[[Registry], list[str]], ...] = (
     check_tenant_coverage,
     check_tenant_limits,
     *WORKER_CHECKS,
+    *HOST_CHECKS,
     *SERVICE_CHECKS,
 )
 

@@ -173,6 +173,17 @@ The runtime loads no graph for it and refuses a run that names it. The one job
 is `knowledge-ingestion` (S012), which embeds the policy wordings for the
 knowledge store and may run for the tenant `claims-triage` only.
 
+An agent may name its `host` (S037): `langgraph` (the default) or
+`agent-framework` (Microsoft Agent Framework), the framework that runs its
+entry point; the Agent Runtime will pick its host by it. The default is not
+written into an agent's dump, so the `tools` fingerprint of an agent that
+names no host does not move. Validation refuses a `job` that declares a host
+at all (`host: langgraph` too: no host runs a job) and workers on
+`agent-framework` (the worker view of the tool client is built and tested for
+the langgraph host only; the check goes when the second host carries
+workers). Status: declared and checked, implemented in tests; no agent names
+it yet and nothing reads it at run time.
+
 An agent may declare `workers` (S031): parts of its graph, each with an `id`,
 a `description` and a `tools` list that may be empty (a worker that only asks
 the model). A worker is part of one agent, not an agent of its own: the run,
@@ -302,8 +313,9 @@ an in-memory reader; a dashboard for them is designed (S043).
 - **A tool or an agent:** edit `tools.yaml` or `agents.yaml`. A tool that
   changes state has effect `write` and requires an idempotency key.
   `uv run meridian workload new NAME` appends a new workload's agent to
-  `agents.yaml` with no tool and no worker, and adds it to no tenant: both
-  are edits a person makes (T-81). It also writes the agent into the `agents` of
+  `agents.yaml` with no tool, no worker and no host (the default), and adds
+  it to no tenant: the tools, the workers and the tenant are edits a person
+  makes (T-81). It also writes the agent into the `agents` of
   `agent-runtime` in `services.yaml`, so the runtime may name it; no
   call is admitted before a tenant lists the agent (S061).
 - **The models themselves:** edit `src/meridian/platform/registry/`, then
