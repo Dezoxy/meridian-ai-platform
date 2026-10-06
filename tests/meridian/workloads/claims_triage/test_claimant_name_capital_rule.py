@@ -7,8 +7,12 @@ things are pinned here that a table of examples cannot:
 
 * nothing the function replaced before S067 is left in the clear now: every span
   the pre-S067 pattern replaced lies inside a span the current one replaces;
-* the price that is left, counted over the 40 golden descriptions and the four
-  wordings for twenty common English given names.
+* the price that is left, counted over the golden descriptions and the wordings
+  for twenty common English given names.
+
+The golden set and the injection cases are read from the data: their sizes are
+pinned in ``tests/synthetic``. The pre-S067 pattern is copied below as it stood in
+``triaging.py`` at b7f5b45, the spelling rules are cited in ``claimant_name``.
 """
 
 import json
@@ -125,7 +129,8 @@ def golden_claimants_and_texts() -> tuple[list[Claimant], list[str]]:
         path.read_text(encoding="utf-8") for path in wordings
     ]
     claimants = [Claimant.model_validate(claim["claimant"]) for claim in claims]
-    assert (len(claimants), len(texts)) == (40, 44)
+    assert claimants
+    assert len(texts) > len(claimants)
     return claimants, texts
 
 
@@ -153,7 +158,7 @@ def test_no_span_replaced_before_s067_is_left_in_the_golden_names_over_all_texts
 def test_no_span_replaced_before_s067_is_left_in_an_injection_case() -> None:
     path = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
     cases = json.loads(path.read_text(encoding="utf-8"))
-    assert len(cases) == 94
+    assert cases
 
     for case in cases:
         claimant = Claimant.model_validate(case["claim"]["claimant"])
@@ -227,12 +232,17 @@ ENGLISH_NAMES = [
 
 
 def test_the_golden_texts_lose_one_word_to_an_english_name_and_an_ending() -> None:
-    """Counted over the 40 golden descriptions and the four wordings, for each
-    of the twenty names: the pre-S067 rule (the bare name, in any case) replaces
-    35 words, all of them "May" or "may"; C4, which let every ending through in
-    any case, replaced 52, adding "time", "same", "market", "done", "came", "even"
-    and "Leon" (17 words); with the capital rule one is added, "Leon" in "Seat
-    Leon" for a claimant named Leo, which is written as a name is."""
+    """Counted over the golden descriptions and the wordings, for each of the
+    twenty names: the pre-S067 rule (the bare name, in any case) replaces only
+    "May" and "may"; C4, which let every ending through in any case, added
+    "time", "same", "market", "done", "came", "even" and "Leon" (17 words); with
+    the capital rule one is added, "Leon" in "Seat Leon" for a claimant named
+    Leo, which is written as a name is, and the family form, the plural and the
+    unassimilated ending (F1n) add none.
+
+    This is the one pin of a count of the data: the words beyond the bare name,
+    which a change to the golden descriptions can move. The size of the set is
+    pinned in ``tests/synthetic``, and the other totals are read from the data."""
     _, texts = golden_claimants_and_texts()
     before_words: Counter[str] = Counter()
     now_words: Counter[str] = Counter()
@@ -249,7 +259,6 @@ def test_the_golden_texts_lose_one_word_to_an_english_name_and_an_ending() -> No
                     searched[a:b] for a, b in replaced_spans(pattern, searched)
                 )
 
-    assert before_words.total() == 35
     assert {word.lower() for word in before_words} == {"may"}
-    assert now_words.total() == 36
+    assert not before_words - now_words
     assert now_words - before_words == Counter({"Leon": 1})

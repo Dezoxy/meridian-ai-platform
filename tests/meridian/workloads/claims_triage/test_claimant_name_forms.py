@@ -4,13 +4,18 @@ No database. The run's copy of a description replaces the claimant's name with
 ``[name]``; this file pins the forms it finds besides the bare name: a case
 ending, ``-né``, the assimilated ``-val``/``-vel`` and ``-vá``/``-vé``, a final
 ``a`` or ``e`` that lengthens, and a name written without its accents. The rules
-and the examples are those of the sourced note ``hungarian-identifiers.md``
-(AkH is *A magyar helyesírás szabályai*, 11th edition; the section number is
-cited with each example). A row marked "derived" is by analogy to a cited
-example, not one of the grammar's own.
+and the examples are those of *A magyar helyesírás szabályai* (AkH), 11th edition
+(1984; reprint https://mek.oszk.hu/01500/01547/01547.pdf), with the section
+number cited beside each: §42 (the assimilation of -val/-vel after a vowel and
+after a consonant), §93 (a doubled digraph is written truncated), §94 (the
+simplification of three equal letters does not apply to a family name), §159 (the
+wife's forms), §162 (an ending goes on the last word of a full name) and §163
+(the names: a single consonant doubled, an archaic letter group, a doubled letter
+with a hyphen). The case endings are English Wikipedia's "Hungarian noun phrase".
+A row marked "derived" is by analogy to a cited example, not one of the grammar's
+own. The family form and the plural are in ``test_claimant_name_pattern``.
 """
 
-import itertools
 import json
 import unicodedata
 
@@ -19,7 +24,6 @@ from cputime import MAX_GROWTH, growth
 from servicesupport import REPO_ROOT, synthetic_claims
 
 from meridian.platform.guardrails import PLACEHOLDERS, addresses_the_model
-from meridian.workloads.claims_triage import claimant_name
 from meridian.workloads.claims_triage.claimant_name import (
     NAME_PLACEHOLDER,
     description_for_run,
@@ -353,7 +357,6 @@ def test_the_full_name_with_the_ending_on_its_first_word_leaves_two_placeholders
         ("Ana", "Anastasia"),
         ("Kovács", "Kovácsnakx"),
         ("Kovács", "Kovácsnakot"),  # one ending only
-        ("Kovács", "Kovácsok"),  # the plural is not in the closed list
         ("Kovács", "xKovácsnak"),
         ("Kovács", "Kovácsnak7"),
         ("Nagy", "Nagyobb"),
@@ -563,17 +566,18 @@ def test_the_worst_growth_of_the_copy_is_the_one_a_bare_three_letter_part_gives(
 
 
 def test_no_golden_name_in_its_forms_is_found_in_any_golden_text_or_wording() -> None:
-    """The cost of the endings, measured (S067): each of the 40 claimants' names
-    over the 40 descriptions and the four wordings, 1,760 pairs. Before the
-    endings none was found either, so the forms add no replacement to the
-    recorded evaluation's requests."""
+    """The cost of the endings, measured (S067): each golden claimant's name over
+    every golden description and the wordings, all pairs. Before the endings none
+    was found either, so the forms add no replacement to the recorded
+    evaluation's requests. The size of the golden set is pinned in
+    ``tests/synthetic/test_golden_set.py``, not here."""
     claims = synthetic_claims()
     wordings = (REPO_ROOT / "data" / "synthetic" / "wordings").glob("*.md")
     texts = [claim["description"] for claim in claims] + [
         path.read_text(encoding="utf-8") for path in wordings
     ]
-    assert len(claims) == 40
-    assert len(texts) == 44
+    assert claims
+    assert len(texts) > len(claims)
 
     for claim in claims:
         claimant = Claimant.model_validate(claim["claimant"])
@@ -739,25 +743,4 @@ def test_a_long_run_of_lower_case_name_and_ending_words_is_left_alone_in_linear_
     assert result < MAX_GROWTH
 
 
-def fifty_distinct_three_letter_words() -> str:
-    letters = itertools.product("bcdfgh", "aeiou", "bcdfgklmn")
-    return " ".join("".join(word) for word in itertools.islice(letters, 50))
-
-
-@pytest.mark.parametrize(
-    ("name", "bound"),
-    [
-        ("a" * LONGEST_NAME, 5_000),
-        ("aeiou" * (LONGEST_NAME // 5), 5_000),
-        # The worst: the most parts a name of 200 characters has, and the full
-        # name, each with its endings (about 600 characters each).
-        (fifty_distinct_three_letter_words(), 40_000),
-    ],
-    ids=["one-letter", "vowels-only", "fifty-parts"],
-)
-def test_the_pattern_of_the_longest_name_stays_small(name: str, bound: int) -> None:
-    assert len(name) <= LONGEST_NAME
-
-    alternatives = claimant_name._name_alternatives(name)
-
-    assert sum(len(alternative) for alternative in alternatives) < bound
+# The size of the pattern is pinned in ``test_claimant_name_pattern``.
