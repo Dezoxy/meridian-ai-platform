@@ -454,15 +454,35 @@ enviroment and you should go until azure step where we have to spend some
 money on it". So the session goes on, without waiting for a go-ahead between
 steps, through every step that needs no Azure resource and no payment: S064,
 S066 and S037 (running that day), S067, S068 to S076, S025 and S077, and the
-first halves of S036 and S078. It stops, and says what the next thing costs,
+first halves of S036 and S078 (since the next paragraph: S078 whole, and the
+first half of S079). It stops, and says what the next thing costs,
 at each point where money is spent: a paid model call (S071 whole, and any
 recording a changed prompt needs in S067), the apply of S036 in the owner's
-AWS account and of S078 in the owner's Google Cloud project, and S020.
+AWS account ~~and of S078 in the owner's Google Cloud project~~ (dropped by
+the next paragraph), the apply of S079 in that AWS account, and S020.
 The parts of a step that need no payment are done and the paid part is parked
 in its section, as the owner said of a blocked step on 2026-10-05. Decisions
 inside those steps that are the owner's (retention periods, uploads,
 node-exporter, a coverage gate, the Renovate hold, two guard rules) are asked
 when their step opens and do not stop the others.
+
+**Managed and self-managed Kubernetes (the owner, 2026-10-06).** After asking
+why the kind cluster has one node, which is its control plane: "okay but when
+we are at gcp, aws and azure we should prezent manages k8s and not managed
+too", then "we should build managed so i guess aks on azure and not managed on
+aws and gcp just scafold", and, to the session's first reading of that,
+"Self-managed Kubernetes is a scaffold only, on AWS - no we will build it on
+aws, gcp just scafold". So: on Azure the managed cluster (AKS) is the one that
+is built and run (S020 and what follows). On AWS a cluster whose control plane
+the owner's account runs itself, on the cloud's virtual machines, is built and
+applied once (S079), after its cost is stated and the owner says yes. On Google
+Cloud both kinds are a scaffold only: Terraform that is validated and scanned
+and never applied, which drops the applied half of S078. The managed cluster of
+S036 stays validated code; whether it is also applied is asked at S079's paid
+stop (the session's suggestion, which the owner heard: one cluster at a time on
+AWS, the self-managed one first). The comparison of the two kinds is written
+for all three clouds, in their mapping documents (S079). The owner confirmed
+both readings the same hour ("yes both are right, go on").
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
@@ -508,12 +528,15 @@ S039 took the one. The owner lifted the limit for S038 on 2026-10-06
 (its section says how), for S037 the same day ("We can do s037 if we
 can now") and for S036 with it ("add the aws template too and we will
 test it in a real aws enviroment"): all four are built or to be built.
-S078 was added the same day, with S077 in M2, for Google Cloud.
+S078 was added the same day, with S077 in M2, for Google Cloud, and S079
+after it for a cluster that is not managed ("Managed and self-managed
+Kubernetes" above).
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so | todo | S025 |
-| S078 | GCP Terraform, applied once | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). Two halves. Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
+| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged | todo | S025 |
+| S078 | GCP Terraform, ~~applied once~~ a scaffold only | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). ~~Two halves.~~ Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. ~~With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged.~~ Changed by the owner on 2026-10-06 ("gcp just scafold"): the module is never applied, and its two commands are tested with stand-ins alone. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
+| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS that reuses S036's network, wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied | todo | S036, S078 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
@@ -790,7 +813,7 @@ that day; the rest stand as their step recorded them.
 | The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
 | The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
 | The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
-| The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; they are corrected when a module is applied, not from documentation | S078 |
+| The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; ~~they are corrected when a module is applied, not from documentation~~ no module is applied on Google Cloud (the owner, 2026-10-06), so S078 closes this row by saying in each threat row that its Google Cloud reading is from documentation alone | S078 |
 
 ## Part C — Step details
 
@@ -11104,3 +11127,9 @@ A, step 4).
   runs on kind, the third a cold cycle with one retry and a real certificate
   renewal. T-45 rewritten and T-92 new; fifteen backlog rows new and two
   closed.
+- **v0.62, 2026-10-06:** the owner's decision on managed and self-managed
+  Kubernetes: AKS is the managed cluster that is built; S079 added, a
+  self-managed cluster applied once on AWS and a scaffold on Google Cloud, with
+  the comparison of the two kinds for all three clouds; S078 is a scaffold only
+  (its applied half dropped); the apply of S036's managed cluster is asked at
+  S079's paid stop.
