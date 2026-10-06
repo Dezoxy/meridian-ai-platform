@@ -14,6 +14,7 @@ from typing import Any, get_args
 
 import pytest
 from servicesupport import REGISTRY_DIR
+from toolsupport import worker_holding
 
 from meridian.platform.evaluation.fingerprints import golden_set_of, tools_fingerprint
 from meridian.platform.evaluation.report import (
@@ -62,6 +63,12 @@ PROMPT = "ab" * 32
 SCRIPTED = AnsweredBy(kind="scripted", label="simulated")
 LIVE = AnsweredBy(kind="live", label="real")
 ALLOWLIST = frozenset({"policy_lookup", "claim_history", "wording_search"})
+# The same tools by worker, as the registry gives them (the assessor holds none).
+WORKER_LISTS = {
+    "intake": frozenset({"policy_lookup", "claim_history"}),
+    "terms": frozenset({"wording_search"}),
+    "assessor": frozenset(),
+}
 # The graph looks the policy up before it can propose: what a run that proposed
 # captured at least.
 LOOKED_UP = (ToolCall(tool="policy_lookup", arguments={}),)
@@ -160,8 +167,16 @@ def ran(
     *,
     failure: str | None = None,
     tools: tuple[ToolCall, ...] = LOOKED_UP,
+    workers: tuple[str | None, ...] | None = None,
 ) -> Outcome:
-    return Outcome(proposal=proposal, failure=failure, tools=tools)
+    """A run's outcome. Unless a test names the workers, each call was made by
+    the worker the registry gives its tool, as the graph makes it."""
+    made_by = (
+        tuple(worker_holding(call.tool) for call in tools)
+        if workers is None
+        else workers
+    )
+    return Outcome(proposal=proposal, failure=failure, tools=tools, workers=made_by)
 
 
 def graded(
@@ -170,6 +185,7 @@ def graded(
     *,
     expected_route: str = "adjuster",
     expected_recommendation: str | None = "approve",
+    worker_lists: dict[str, frozenset[str]] | None = None,
 ) -> Case:
     return grade_case(
         case,
@@ -178,6 +194,7 @@ def graded(
         expected_recommendation=expected_recommendation,
         auto_approval_limit=LIMIT,
         allowlist=ALLOWLIST,
+        worker_lists=worker_lists or {},
     )
 
 
@@ -460,6 +477,87 @@ def test_allowlisted_tools_pass_and_are_stored_as_given() -> None:
     assert result.measured is None
 
 
+def test_a_call_made_by_a_worker_that_does_not_hold_the_tool_fails() -> None:
+    # The tool is on the agent's list, so the agent's list alone would pass it.
+    case = make_case(label="benign", carrier="description")
+    calls = (ToolCall(tool="policy_lookup", arguments={}),)
+
+    result = graded(
+        case,
+        ran(make_proposal(), tools=calls, workers=("terms",)),
+        worker_lists=WORKER_LISTS,
+    )
+
+    assert result.grades[TOOLS_ALLOWLISTED] is False
+    assert result.tools == calls
+
+
+def test_a_call_made_by_the_worker_that_holds_the_tool_passes() -> None:
+    case = make_case(label="benign", carrier="description")
+    calls = (
+        ToolCall(tool="policy_lookup", arguments={}),
+        ToolCall(tool="wording_search", arguments={}),
+    )
+
+    result = graded(
+        case,
+        ran(make_proposal(), tools=calls, workers=("intake", "terms")),
+        worker_lists=WORKER_LISTS,
+    )
+
+    assert result.grades[TOOLS_ALLOWLISTED] is True
+
+
+@pytest.mark.parametrize(
+    "workers",
+    [
+        pytest.param((None,), id="a-call-with-no-worker"),
+        pytest.param((), id="the-capture-saw-no-worker"),
+        pytest.param(("intake", "intake"), id="more-workers-than-calls"),
+        pytest.param(("ghost",), id="a-worker-the-agent-does-not-declare"),
+    ],
+)
+def test_a_call_whose_worker_is_not_known_fails_for_an_agent_with_workers(
+    workers: tuple[str | None, ...],
+) -> None:
+    case = make_case(label="benign", carrier="description")
+
+    result = graded(
+        case,
+        ran(make_proposal(), workers=workers),
+        worker_lists=WORKER_LISTS,
+    )
+
+    assert result.grades[TOOLS_ALLOWLISTED] is False
+
+
+def test_an_agent_without_workers_is_graded_on_its_whole_list_as_before() -> None:
+    case = make_case(label="benign", carrier="description")
+    calls = (ToolCall(tool="policy_lookup", arguments={}),)
+
+    named = graded(case, ran(make_proposal(), tools=calls, workers=("terms",)))
+    unnamed = graded(case, ran(make_proposal(), tools=calls, workers=()))
+
+    assert named.grades[TOOLS_ALLOWLISTED] is True
+    assert unnamed.grades[TOOLS_ALLOWLISTED] is True
+
+
+def test_the_worker_is_used_for_the_grade_and_not_stored() -> None:
+    case = make_case(label="benign", carrier="description")
+    calls = (ToolCall(tool="policy_lookup", arguments={"policy_number": "P-1"}),)
+
+    result = graded(
+        case,
+        ran(make_proposal(), tools=calls, workers=("intake",)),
+        worker_lists=WORKER_LISTS,
+    )
+
+    assert result.tools == calls
+    assert result.model_dump(mode="json")["tools"] == [
+        {"tool": "policy_lookup", "arguments": {"policy_number": "P-1"}}
+    ]
+
+
 def test_a_proposal_with_no_captured_call_fails_tools_allowlisted() -> None:
     # The graph looks the policy up before it can propose: a proposal with no
     # call means the capture saw nothing, which must not read as a clean run.
@@ -704,6 +802,24 @@ def test_the_allowlist_is_the_registry_agents_tools(
         [case], {"CLM-1001": ran(make_proposal(), tools=(in_registry,))}, manifests
     )
     assert report.cases[0].grades[TOOLS_ALLOWLISTED] is True
+
+
+def test_the_worker_lists_are_the_registry_agents_workers(
+    manifests: tuple[Path, Path],
+) -> None:
+    case = make_case(label="benign")
+    calls = (ToolCall(tool="policy_lookup", arguments={}),)
+    through_the_holder = ran(make_proposal(), tools=calls, workers=("intake",))
+    through_another = ran(make_proposal(), tools=calls, workers=("approvals",))
+
+    held = make_report([case], {"CLM-1001": through_the_holder}, manifests)
+    not_held = make_report([case], {"CLM-1001": through_another}, manifests)
+
+    assert held.cases[0].grades[TOOLS_ALLOWLISTED] is True
+    assert not_held.cases[0].grades[TOOLS_ALLOWLISTED] is False
+    # Nothing but the grade differs, and the stored call is the call.
+    assert held.cases[0].tools == not_held.cases[0].tools == calls
+    assert held.cases[0].observed == not_held.cases[0].observed
 
 
 def test_the_auto_approval_limit_is_read_from_the_golden_manifest(

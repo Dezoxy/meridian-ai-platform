@@ -574,7 +574,14 @@ def test_the_gateway_call_goes_out_under_the_runs_agent_when_it_is_not_the_seede
         tracer_provider=make_tracer_provider(APPLICATION, None),
     ).server
 
-    result = search(server, world, run_id=run_id)
+    # The second agent declares no workers, so the call names none (S031).
+    result = run_call(
+        server,
+        "wording_search",
+        {"query": QUERY, "product": PRODUCT},
+        run_id=run_id,
+        worker=None,
+    )
 
     assert result.is_error is False
     (headers,) = scripted.headers
@@ -746,8 +753,9 @@ def test_a_failed_gateway_call_reaches_the_runtimes_tool_client_as_unavailable(
             run_id=world.run_id,
             tracer=tracer_of(exporter),
             on_refusal=lambda tool: None,
+            on_worker_refusal=lambda tool, reason, worker: None,
             max_calls=4,
-        )
+        ).for_worker("terms")
 
         with pytest.raises(ToolUnavailable):
             tools.call("wording_search", {"query": QUERY, "product": PRODUCT})
@@ -1133,8 +1141,9 @@ def live(
             run_id=world.run_id,
             tracer=tracer_of(exporter),
             on_refusal=lambda tool: None,
+            on_worker_refusal=lambda tool, reason, worker: None,
             max_calls=4,
-        )
+        ).for_worker("terms")
         yield Live(base, tools, world)
 
 

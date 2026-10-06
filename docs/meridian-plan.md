@@ -421,7 +421,7 @@ pinned images resolve there.
 | S028 | Game day | Provider outage, budget exhaustion and database failure exercised; INC-001 written from the real timeline; rollback exercised | todo | S027 |
 | S029 | Backup and restore drill | PostgreSQL restored into a scratch environment; restore time measured and recorded | todo | S020 |
 | S030 | Provider change without breaking consumers | A model version swapped by a registry change only; consumer contract tests stay green; the evaluation compares both versions | todo | S017, S023, S050 |
-| S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
+| S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | done | S017 |
 | S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | done | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
 | S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | done | S024 |
@@ -484,10 +484,10 @@ that day; the rest stand as their step recorded them.
 | The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed. Not taken by S065 (not in its "done when"); its PostgreSQL review measured 105 ms at 200,000 audit rows, the same with `seq` in the order | none |
 | A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | open | S067 |
 | Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | open | none |
-| The tool-call limits are the same for every agent | S014 | open | S031 |
+| The tool-call limits are the same for every agent | S014 | open; S031 looked and left it: the limits stay per run and per leg, shared by an agent's workers, and neither an agent nor a worker has one of its own | none |
 | Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | closed by S060 for the Claims API (a stored submission, a stored proposal and the facts a run gets are logged as location and error type); the graph's own validation is S067's row below | S060 |
 | A migration that adds columns locks `claims.claims` for its backfill | S015 | closed by S065 (the rule is written in the migrations' README, column in one file and backfill in the next, and a test refuses a new file that adds a column to a table and updates it; no column was added in the step) | S065 |
-| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
+| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open; S031 changed nothing here: the triage still ignores the resume value, and a workload that read it would read the first leg's. Measured beside it (ADR 5): a worker invoked from the pause node continues, after a failure, at the node that failed, with the state its first leg checkpointed | none |
 | Reads of a claim's page are not audited | S016 | open | S021 |
 | The adjuster's queue shows at most 100 claims with no next page | S016 | closed by S060 (a keyset on the queue's own order and index, 100 to a page) | S060 |
 | `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
@@ -576,7 +576,7 @@ that day; the rest stand as their step recorded them.
 | The injection screen stops 24 of 66 of the suite's attacks and flags 16 of 22 look-alike sentences; improving it needs cases it was not fitted to (a held-out set), or a classifier, and a decision on what a false alarm may cost | S032 | open | none |
 | The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | open | S067 |
 | A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | open | S067 |
-| A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open | S031 |
+| A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open; not S031's to decide: the split changed no proposal and no page. The owner's | none |
 | The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | closed by S057, accepted with its number: 34 s of one worker in CI (pull request 79), 50 to 55 s on a laptop | S057 |
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once | none |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | closed by S061 (public names; four benign clause cases on claims no exclusion applies to; a sixth fingerprint over the screens' patterns, flags and source) | S061 |
@@ -672,6 +672,10 @@ that day; the rest stand as their step recorded them.
 | `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | open; the step's second half | S066 |
 | `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | open | none |
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | none |
+| The triage as a supervisor and workers, the worker's name on the wire and migration 0021 have run in tests and in the replayed evaluation, not on a cluster | S031 | open; the next deploy from `main` on kind shows them | S063 |
+| `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | open | none |
+| A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
+| One workload declares workers; the scaffold for a new agent writes one without them, and nothing has built a second graph of subgraphs | S031 | open | none |
 
 ## Part C — Step details
 
@@ -9553,6 +9557,154 @@ the first contract was written, and before the pull request.
   it and has no default); and whether the second half's Redis should
   wait for S063 to release the cluster or run beside it.
 
+### S031 — Supervisor and workers
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** the triage is split into a supervisor and workers with
+per-worker tool allowlists, and the evaluation shows no regression.
+
+**Decisions:**
+
+- **Code and rules decide which worker runs next, the owner's choice
+  (2026-10-06)**, as the session recommended. Rejected: a model as
+  supervisor, which adds a model call per step, reopens "the model
+  chooses no tool and no route" (S014, T-30) and needs a paid recording
+  before the evaluation could pass.
+- **A worker's tool list is enforced by the runtime and again by the
+  tool servers, the owner's choice (2026-10-06)**, as the session
+  recommended. Rejected: the runtime alone, which leaves the server
+  checking the whole agent's list.
+- **A worker is part of one agent, not an agent of its own** (the
+  session's). The registry entry of `claims-triage` declares four:
+  `intake`, `terms`, `assessor` (no tool) and `approvals`. The run, the
+  tenant's list, the gateway's caller, budgets and the evaluation still
+  see one agent. Rejected: a registry agent per worker, which every
+  tenant and the runtime's identity would have to list and which makes
+  each worker startable alone through the run API.
+- **The worker's name on the wire only narrows.** The tool server still
+  reads tenant, agent and claim from the run's own row (T-22) and
+  accepts the name only as a worker of that row's agent. For an agent
+  with workers the tool client itself, with no worker, calls nothing:
+  a call site that forgot its worker is refused, not let through on
+  the agent's whole list.
+- **The pause and the work after it are one node of the supervisor**,
+  against the first design, which had a node that only paused. A probe
+  through the runtime showed that LangGraph consumes a pause when its
+  node finishes: a failure in the worker after it left no pause to
+  resume, and the next decision ended the run as failed. The
+  implementer stopped at that probe and reported; the advisor and the
+  main session chose the shape the graph had before the split. The
+  runtime did not change. Rejected: a pause inside the worker's
+  subgraph, which survives a failed resume too but does not pass the
+  pause again on the second resume.
+- **The model request is byte-identical**, so the recorded answers
+  still answer it and nothing was recorded again: no cost.
+- **The audit column's check is added `NOT VALID`** (migration 0021).
+  Written inline, as 0015 wrote its own, PostgreSQL scans the table
+  for it under the exclusive lock; the test measures one scan that
+  way and none this way. It stays unvalidated on purpose: validating a
+  column that is null everywhere only adds a scan.
+- **ADR 5** records the first three decisions and the pause's shape.
+
+**Advisor:** NOT consulted before the first contract (the registry's
+workers went out after the owner's two answers and before any advisor
+call: the gap this day's rule was written for). Consulted before the
+second and third contracts (it changed the third: the resume's
+semantics, the step count and the order of the server's checks became
+things to measure first); at the third contract's surprise, about
+08:10 UTC (the pause's shape, and one more probe: a failure in the
+worker's last node); and before the pull request.
+
+**Work log:**
+
+- **Mapping first** (an Explore subagent), then the design and its
+  threat note, with two questions to the owner.
+- **Four contracts and one of review fixes to the `implementer`**,
+  each in a worktree of its own: the registry's workers and their
+  check; the tool client's view per worker, the key on the wire and
+  the tool server's check, with four refusal reasons; the graph as a
+  supervisor and four workers, after probes of what the runtime does
+  with a subgraph; the worker in the audit row; the reviews' findings.
+- **What the probes measured** (`test_runtime_subgraphs.py`, through
+  the real runtime and PostgreSQL): each graph of a run counts its own
+  steps for each leg against the limit of ten (the supervisor takes at
+  most six, a worker two); a finished run leaves no checkpoint row, a
+  subgraph's included; a worker's nodes carry the worker on their
+  spans; a worker invoked from the pause node continues, after a
+  failure, at the node that failed.
+- **Reviews, at once**, by `security-reviewer`,
+  `platform-boundary-reviewer` and `python-reviewer` on the first four
+  contracts: no critical and no high finding. The security review
+  tried to widen a call through the worker's name (type, case,
+  whitespace, a trailing newline, a list, a 50 MB value, a worker of
+  another agent) and could not; it found that the evaluation would
+  not notice if the runtime stopped checking a worker's list. All
+  three found that the registry accepted a worker ID longer than the
+  wire does.
+
+**Result / verification:**
+
+- **The triage is a supervisor and four workers, each with a tool list
+  of its own, enforced twice.** The registry declares the workers and
+  checks that their lists are inside the agent's and together equal to
+  it. The runtime's tool client calls for such an agent only through the
+  view of one worker; each tool server accepts the worker a call names
+  only as a worker of the run row's agent and allows that worker's tools
+  alone. Tested against PostgreSQL through the real runtime and the
+  three real tool servers: a triage and its decision make nine tool
+  calls, each naming the worker that holds the tool on both ends' spans
+  and in both ends' audit rows; a node that calls through the wrong
+  worker is refused by the runtime alone, and a call that bypasses the
+  runtime's view by the tool server alone (each shown with the other
+  end's check switched off).
+- **The evaluation shows no regression.** Both baselines moved in the
+  fingerprint of the tools' contracts and in nothing else: 40 golden
+  claims and 94 injection cases with every grade, every model call and
+  every tool call unchanged, replayed from the recording at no cost.
+  Since the review fixes the injection suite grades each call against
+  the list of the worker that made it, so it would fail if the runtime
+  stopped checking a worker's list; the worker is used for the grade and
+  not stored, so no report changed shape.
+- **A failed step after the adjuster's decision leaves the run
+  resumable**, as before the split: the stack test of S015 passes with
+  its expectation unchanged, and a test keeps the shape that would have
+  broken it.
+- **The audit row names the worker** (`audit.events.worker`, migration
+  0021), written only once the name is one of the agent's; a made-up
+  name reaches no row, span, log line or error text. The migration takes
+  its lock for a catalog change only: the test measures no rewrite and
+  no scan.
+- **Gates, run by the main session with `main` merged in:** the whole
+  suite with a database, 10,878 passed, 8 skipped, exit 0, in 2 min 29
+  s; `make eval` (both comparisons passed, `tools_allowlisted` 94 of
+  94); `make lint` (5 contracts kept), `make registry`, `make
+  helm-lint`, `make docs`, `make test`, `make check` (no ERROR line) and
+  `make secret-scan`, each exit 0; the two evaluation stack tests pass
+  against the committed baselines.
+- **Not run on a cluster.** The graph, the worker's name on the wire and
+  migration 0021 have run in tests and in the replayed evaluation only;
+  the next deploy from `main` on kind shows them (`make demo` posts a
+  claim through the six services).
+- **Not done:** a call limit per worker or per agent (the limits stay
+  per run); a second workload with workers (the scaffold still writes an
+  agent without them); a credential per worker (the tool server takes
+  the worker's name on the runtime's word).
+
+**Follow-ups:**
+
+- In the backlog: the split has not run on a cluster (S063's cold cycle
+  deploys it); `test_claims_graph.py` is about 1,780 lines and needs its
+  stubs moved before it can be split (none); a tool server deployed
+  before its runtime would refuse every call, which one image for six
+  services rules out on kind and a rollout order must rule out in Azure
+  (S020).
+- Three rows that named this step as their home are not closed by it and
+  say so: the tool-call limits per agent, the resume value LangGraph
+  keeps after a failed leg, and whether the adjuster's page should mark
+  a recommendation that rests on the model's answer (the owner's).
+- The migrations' README said a nullable column only changes the
+  catalog; with an inline check it does not, as 0021's test measured.
+  The README now says to add the check `NOT VALID`.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9948,3 +10100,13 @@ the first contract was written, and before the pull request.
   reproduced by tests and gone. The step stays open for its second
   half, the rate windows shared in Redis. One backlog row closed, five
   new.
+- **v0.54, 2026-10-06:** S031: the claims triage is a supervisor and four
+  workers, each with a tool list of its own that the runtime's tool
+  client and every tool server enforce; the owner chose routing by code
+  and rules and enforcement at both ends (ADR 5). A probe changed the
+  design before the graph moved: a pause node of its own cannot be
+  resumed twice after a failure, so the pause and the work after it stay
+  one node. The evaluation moved in the tools' fingerprint alone, and
+  now grades each call against its worker's list. Migration 0021 puts
+  the worker on the audit row. Not run on a cluster yet. Three backlog
+  rows re-homed, four new.

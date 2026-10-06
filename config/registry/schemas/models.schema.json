@@ -44,6 +44,7 @@
           "title": "Dimensions"
         },
         "id": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Id",
           "type": "string"
@@ -57,6 +58,7 @@
           "$ref": "#/$defs/Price"
         },
         "provider": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Provider",
           "type": "string"
@@ -83,6 +85,7 @@
         "recorded_from": {
           "anyOf": [
             {
+              "maxLength": 64,
               "pattern": "^[a-z0-9][a-z0-9-]*$",
               "type": "string"
             },

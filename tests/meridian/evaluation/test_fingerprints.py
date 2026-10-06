@@ -614,10 +614,69 @@ def test_tools_fingerprint_changes_with_the_agents_allowlist(
 ) -> None:
     before = tools_fingerprint(load_registry(real_registry), AGENT)
 
-    planted = plant(("agents.yaml", "      - approval_outcome\n", ""))
+    # The tool leaves the agent's list and the list of the worker that holds it.
+    planted = plant(
+        ("agents.yaml", "      - approval_outcome\n", ""),
+        ("agents.yaml", "          - approval_outcome\n", ""),
+    )
     after = tools_fingerprint(load_registry(planted), AGENT)
 
     assert after != before
+
+
+def test_tools_fingerprint_changes_when_a_workers_tool_list_changes(
+    real_registry: Path, plant: Callable[..., Path]
+) -> None:
+    before = tools_fingerprint(load_registry(real_registry), AGENT)
+
+    # Move a tool from one worker to another: the agent's own list stays as it is.
+    planted = plant(
+        (
+            "agents.yaml",
+            "          - claim_history\n",
+            "",
+        ),
+        (
+            "agents.yaml",
+            "          - wording_search\n",
+            "          - wording_search\n          - claim_history\n",
+        ),
+    )
+    after = tools_fingerprint(load_registry(planted), AGENT)
+
+    assert after != before
+
+
+def test_tools_fingerprint_changes_when_a_worker_is_added(
+    real_registry: Path, plant: Callable[..., Path]
+) -> None:
+    before = tools_fingerprint(load_registry(real_registry), AGENT)
+
+    planted = plant(
+        (
+            "agents.yaml",
+            "      - id: assessor\n",
+            "      - id: checker\n        description: Checks nothing.\n"
+            "        tools: []\n      - id: assessor\n",
+        )
+    )
+    after = tools_fingerprint(load_registry(planted), AGENT)
+
+    assert after != before
+
+
+def test_tools_fingerprint_of_an_agent_without_workers_is_what_it_was_before_workers(
+    real_registry: Path,
+) -> None:
+    registry = load_registry(real_registry)
+
+    # Computed on main at 3c52910, before the registry knew a worker.
+    assert tools_fingerprint(registry, "knowledge-ingestion") == (
+        "657d05288fca6e6d4ce8f280b771e75368fea1828c7ae60b6dc52c3a46f16978"
+    )
+    assert tools_fingerprint(registry, "evaluation-judge") == (
+        "5ff6bdd037c44aa4290031ca6e528a21c779127bd7a33dfe44a06f5173689013"
+    )
 
 
 def test_tools_fingerprint_differs_between_two_agents(real_registry: Path) -> None:

@@ -6,6 +6,7 @@
       "properties": {
         "agents": {
           "items": {
+            "maxLength": 64,
             "pattern": "^[a-z0-9][a-z0-9-]*$",
             "type": "string"
           },
@@ -14,6 +15,7 @@
         },
         "calls": {
           "items": {
+            "maxLength": 64,
             "pattern": "^[a-z0-9][a-z0-9-]*$",
             "type": "string"
           },
@@ -26,12 +28,14 @@
           "type": "string"
         },
         "id": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Id",
           "type": "string"
         },
         "tenants": {
           "items": {
+            "maxLength": 64,
             "pattern": "^[a-z0-9][a-z0-9-]*$",
             "type": "string"
           },

@@ -1,5 +1,5 @@
-"""The triage graph (S014, S015): seven nodes, the tools in a fixed order, one
-model call, and a pause for an adjuster.
+"""The triage graph (S014, S015, S031): a supervisor and four workers, the tools
+in a fixed order, one model call, and a pause for an adjuster.
 
 No database and no tool server: a stub answers each tool from the synthetic data
 and records the calls, and a stub stands in for the model client. The stub
@@ -13,8 +13,10 @@ Every graph is compiled with a ``MemorySaver`` under one thread ID, as the
 runtime compiles it with its checkpointer.
 """
 
+import inspect
 import json
 import logging
+import uuid
 from collections.abc import Callable, Mapping
 from functools import cache
 from importlib.metadata import entry_points
@@ -25,11 +27,17 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from pydantic import ValidationError
 from servicesupport import REGISTRY_DIR, REPO_ROOT
+from toolsupport import tracer_of
 
+from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.chunking import parse_wording
 from meridian.platform.registry import load_registry
+from meridian.runtime import runs
 from meridian.runtime.failures import GraphFailure, failure_reason
 from meridian.runtime.graphs import load_graph_factory
 from meridian.runtime.model_client import (
@@ -46,13 +54,16 @@ from meridian.runtime.tool_client import (
     ToolResult,
     ToolUnavailable,
 )
+from meridian.runtime.tracing import NodeSpans
 from meridian.workloads.claims_triage import assessment as assessment_module
 from meridian.workloads.claims_triage import wording as wording_module
+from meridian.workloads.claims_triage import workers
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
-from meridian.workloads.claims_triage.graph import ApprovalOutcome, build
+from meridian.workloads.claims_triage.graph import build
 from meridian.workloads.claims_triage.models import DECISION_NOTES
 from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.wording import AMOUNTS_PROBE, TIMING_PROBE
+from meridian.workloads.claims_triage.workers import ApprovalOutcome
 
 SYNTHETIC = REPO_ROOT / "data" / "synthetic"
 CANARY = "CANARY-7f3a91"
@@ -184,10 +195,27 @@ class StubTools:
         self.tamper = tamper
         self.recorded = recorded
         self.searches = 0
+        # (worker, tool) of every call, in order (S031).
+        self.workers: list[tuple[str, str]] = []
+
+    def for_worker(self, worker_id: str) -> "StubWorkerView":
+        return StubWorkerView(self, worker_id)
 
     def call(
         self, tool: str, arguments: dict[str, Any], *, step: str | None = None
     ) -> ToolResult:
+        """What the real client does for an agent with workers: nothing."""
+        raise AssertionError("a call with no worker: the graph names its worker")
+
+    def call_as(
+        self,
+        worker: str,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        step: str | None = None,
+    ) -> ToolResult:
+        self.workers.append((worker, tool))
         if tool in WRITE_ANSWERS:
             self.writes.append((tool, dict(arguments), step))
         else:
@@ -241,6 +269,19 @@ class StubTools:
 
     def names(self) -> list[str]:
         return [tool for tool, _ in self.calls]
+
+
+class StubWorkerView:
+    """What ``StubTools.for_worker`` returns: the same calls, said as a worker."""
+
+    def __init__(self, tools: StubTools, worker: str) -> None:
+        self._tools = tools
+        self._worker = worker
+
+    def call(
+        self, tool: str, arguments: dict[str, Any], *, step: str | None = None
+    ) -> ToolResult:
+        return self._tools.call_as(self._worker, tool, arguments, step=step)
 
 
 def compiled(
@@ -585,10 +626,11 @@ def test_a_proposal_without_an_assessment_in_the_state_is_a_failure() -> None:
     assert raised.value.code == "missing-assessment"
 
 
-@pytest.mark.parametrize("node", ["retrieve_terms", "assess"])
+@pytest.mark.parametrize("node", ["terms", "assessor"])
 def test_a_node_that_needs_a_policy_fails_without_one(node: str) -> None:
-    """``lookup_policy`` routes a claim without a policy to ``propose``, so a
-    state that reaches a later node with none is a bug of the graph."""
+    """The intake worker ends a claim without a policy and the supervisor routes
+    it to ``propose``, so a state that reaches a later worker with none is a bug
+    of the graph."""
     graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
     state = {
         "claim": facts("CLM-0011"),
@@ -1068,6 +1110,33 @@ def test_a_decision_is_noted_with_its_fixed_text_and_the_run_completes(
     assert snapshot.values["output"] == output
 
 
+def test_each_tool_is_called_through_the_worker_that_holds_it() -> None:
+    triage = load_registry(REGISTRY_DIR).agent("claims-triage")
+    assert triage is not None
+    graph, tools = paused()
+    tools.recorded = "withdrawn"
+
+    resume(graph, {})
+
+    # The whole path: the two reads, four searches, the request, the outcome
+    # and the note, each through its worker, which the registry says holds it.
+    assert [worker for worker, _ in tools.workers] == [
+        "intake",
+        "intake",
+        "terms",
+        "terms",
+        "terms",
+        "terms",
+        "approvals",
+        "approvals",
+        "approvals",
+    ]
+    for worker, tool in tools.workers:
+        holder = triage.worker(worker)
+        assert holder is not None
+        assert tool in holder.tools
+
+
 def test_the_five_notes_are_different_fixed_texts() -> None:
     assert set(DECISION_NOTES) == set(OUTCOMES)
     assert len(set(DECISION_NOTES.values())) == 5
@@ -1263,7 +1332,9 @@ def test_a_rerun_of_the_approval_request_sends_the_same_payload_and_step() -> No
 
     first, second = node.invoke(state), node.invoke(state)
 
-    assert first == second == {"request_id": REQUEST_ID}
+    # The worker's subgraph answers with its whole state: the key it wrote is
+    # the same both times.
+    assert first["request_id"] == second["request_id"] == REQUEST_ID
     assert tools.writes == [approval_request("over_threshold")] * 2
 
 
@@ -1280,8 +1351,10 @@ def test_a_run_replayed_from_the_checkpoint_before_the_request_sends_it_again() 
 
 
 def test_a_resume_that_failed_after_its_note_sends_the_same_note_again() -> None:
-    """The node that paused runs from its start when the run resumes, so a
-    resume that failed after sending the note sends it again: the same one."""
+    """The node that paused runs from its start when the run resumes. The outcome
+    worker it runs continues from its own checkpoint (the read of the outcome
+    is not made again, see ``test_runtime_subgraphs.py``), so a resume that
+    failed after sending the note sends it again: the same one."""
     tools = StubTools(answers={"add_claim_note": {}}, recorded="reject")
     graph, _ = paused(tools=tools)
     with pytest.raises(GraphFailure):
@@ -1291,6 +1364,7 @@ def test_a_resume_that_failed_after_its_note_sends_the_same_note_again() -> None
     resume(graph, {})
 
     assert tools.writes[1:] == [decision_note("reject")] * 2
+    assert tools.names().count("approval_outcome") == 1
     assert graph.get_state(THREAD).values["decision"] == "reject"
 
 
@@ -1414,18 +1488,274 @@ def test_the_graph_is_returned_uncompiled() -> None:
     assert not hasattr(graph, "invoke")
 
 
-def test_the_graph_has_seven_nodes_and_two_branches() -> None:
+def test_the_supervisor_names_its_nodes_and_routes_in_two_branches() -> None:
     graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
 
     assert list(graph.nodes) == [
-        "lookup_policy",
-        "load_history",
-        "retrieve_terms",
-        "assess",
+        "intake",
+        "terms",
+        "assessor",
         "propose",
         "request_approval",
         "await_decision",
     ]
+    # No policy goes straight to the rules, and only an adjuster's claim goes on
+    # to ask for an approval.
+    assert set(graph.branches) == {"intake", "propose"}
+
+
+# -- the supervisor and its workers (S031) ------------------------------------
+
+
+class Receipts:
+    """The arguments each worker's builder was called with, in call order."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.received: dict[str, tuple[Any, ...]] = {}
+        for name in BUILDERS:
+            self._wrap(monkeypatch, name)
+
+    def _wrap(self, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+        real = getattr(workers, name)
+
+        def recording(*args: Any, **kwargs: Any) -> Any:
+            assert not kwargs
+            self.received[name] = args
+            return real(*args)
+
+        monkeypatch.setattr(workers, name, recording)
+
+
+BUILDERS = (
+    "build_intake",
+    "build_terms",
+    "build_assessor",
+    "build_request_approval",
+    "build_outcome",
+)
+
+
+def test_each_builder_receives_only_what_its_worker_needs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipts = Receipts(monkeypatch)
+    model, tools = StubModel(), StubTools()
+
+    build(cast(ModelClient, model), cast(ToolClient, tools))
+
+    received = receipts.received
+    assert set(received) == set(BUILDERS)
+    assert received["build_assessor"] == (model,)
+    for builder, worker in [
+        ("build_intake", "intake"),
+        ("build_terms", "terms"),
+        ("build_request_approval", "approvals"),
+        ("build_outcome", "approvals"),
+    ]:
+        (view,) = received[builder]
+        assert isinstance(view, StubWorkerView)
+        assert view is not tools
+        assert view._worker == worker
+    # Nobody gets the whole tool client, and only the assessor gets the model:
+    # the supervisor holds neither.
+    assert [name for name, args in received.items() if tools in args] == []
+    assert [name for name, args in received.items() if model in args] == [
+        "build_assessor"
+    ]
+
+
+def test_the_assessors_builder_takes_the_model_and_no_tool_client() -> None:
+    parameters = inspect.signature(workers.build_assessor).parameters
+
+    assert [(p.name, p.annotation) for p in parameters.values()] == [
+        ("model", ModelClient)
+    ]
+    for builder in BUILDERS:
+        if builder != "build_assessor":
+            signature = inspect.signature(getattr(workers, builder))
+            (parameter,) = signature.parameters.values()
+            assert parameter.annotation is ToolClient
+
+
+def test_the_supervisor_and_its_workers_call_no_tool_but_through_a_view() -> None:
+    # StubTools.call, as the real client for an agent with workers, refuses a call
+    # with no worker: a whole run, with a pause and a decision, makes none.
+    graph, tools = paused()
+    tools.recorded = "approve"
+
+    resume(graph, {})
+
+    assert len(tools.workers) == 9
+
+
+def real_client(worker: str) -> ToolClient:
+    """The runtime's own client for the claims-triage agent, with no server: a
+    call a view refuses is refused before anything is sent."""
+    client = ToolClient(
+        {},
+        registry=load_registry(REGISTRY_DIR),
+        agent="claims-triage",
+        run_id=uuid.uuid4(),
+        tracer=tracer_of(InMemorySpanExporter()),
+        on_refusal=lambda tool: None,
+        on_worker_refusal=lambda tool, reason, worker: None,
+        max_calls=16,
+    )
+    return client.for_worker(worker)
+
+
+def planted_state(*keys: str) -> dict[str, Any]:
+    """The part of a claim's state that a worker's first node reads."""
+    number = CLAIMS["CLM-0004"]["policy_number"]
+    values = {
+        "claim": facts("CLM-0004"),
+        "policy": StubTools._policy({"policy_number": number})["policy"],
+        "chunks": [],
+        "output": expected_proposal(reason="over_threshold"),
+    }
+    return {key: values[key] for key in ("claim", *keys)}
+
+
+PLANTED = [
+    pytest.param(workers.build_intake, "terms", (), id="intake-over-the-terms-view"),
+    pytest.param(
+        workers.build_terms, "intake", ("policy", "chunks"), id="terms-over-intake"
+    ),
+    pytest.param(
+        workers.build_request_approval,
+        "intake",
+        ("output",),
+        id="approvals-request-over-intake",
+    ),
+    pytest.param(workers.build_outcome, "terms", (), id="approvals-outcome-over-terms"),
+]
+
+
+@pytest.mark.parametrize(("builder", "wrong_view", "keys"), PLANTED)
+def test_a_worker_that_calls_a_tool_of_another_worker_is_refused(
+    builder: Callable[[ToolClient], CompiledStateGraph],
+    wrong_view: str,
+    keys: tuple[str, ...],
+) -> None:
+    """Each worker's first call is a tool its own worker holds. Built over the
+    view of another worker, the node makes a call that is not on that worker's
+    list, and the view refuses it with the reason the runtime records."""
+    worker = builder(real_client(wrong_view))
+
+    with pytest.raises(ToolNotAllowed) as raised:
+        worker.invoke(planted_state(*keys))
+
+    assert failure_reason(raised.value) == "worker-tool-not-allowed"
+
+
+def test_a_note_with_no_decision_in_the_state_is_a_failure_and_writes_nothing() -> None:
+    """``read_outcome`` sets the decision or raises, so the note's node never
+    sees none; a state that lacks it is a bug of the graph and writes no note."""
+    tools = StubTools()
+    outcome = workers.build_outcome(cast(ToolClient, tools.for_worker("approvals")))
+    state = {"claim": facts("CLM-0004"), "decision": None}
+
+    with pytest.raises(GraphFailure) as raised:
+        outcome.nodes["write_note"].invoke(state)
+
+    assert raised.value.code == "missing-decision"
+    assert tools.writes == []
+
+
+def test_the_pause_node_returns_only_the_key_its_worker_wrote() -> None:
+    graph, tools = paused()
+    tools.recorded = "withdrawn"
+    (pending,) = graph.get_state(THREAD).interrupts
+
+    updates = list(
+        graph.stream(Command(resume={pending.id: {}}), THREAD, stream_mode="updates")
+    )
+
+    assert updates == [{"await_decision": {"decision": "withdrawn"}}]
+
+
+def test_the_spans_of_a_workers_nodes_name_it_and_the_supervisors_do_not() -> None:
+    exporter = InMemorySpanExporter()
+    provider = make_tracer_provider("agent-runtime", exporter)
+    handler = NodeSpans(
+        provider.get_tracer("test"), run_id=uuid.uuid4(), agent="claims-triage"
+    )
+    tools = StubTools(recorded="approve")
+    graph = compiled(StubModel(), tools)
+    config = {**THREAD, "callbacks": [handler]}
+    graph.invoke({"claim": facts("CLM-0004")}, config)
+    (pending,) = graph.get_state(THREAD).interrupts
+
+    graph.invoke(Command(resume={pending.id: {}}), config)
+
+    worker_of = {
+        span.attributes["meridian.node"]: span.attributes.get("meridian.worker")
+        for span in exporter.get_finished_spans()
+    }
+    assert worker_of == {
+        "intake": "intake",
+        "lookup_policy": "intake",
+        "load_history": "intake",
+        "terms": "terms",
+        "retrieve_terms": "terms",
+        "assessor": "assessor",
+        "assess": "assessor",
+        "propose": None,
+        "request_approval": "approvals",
+        "await_decision": None,
+        "read_outcome": "approvals",
+        "write_note": "approvals",
+    }
+
+
+def inner_steps(worker: CompiledStateGraph) -> int:
+    return len([name for name in worker.nodes if name != "__start__"])
+
+
+def test_the_longest_path_fits_the_runtimes_limit_of_steps() -> None:
+    """Every graph, the parent and each subgraph, counts its own steps for each
+    leg against the one limit (``test_runtime_subgraphs.py``). The parent's first
+    leg is five nodes and the step that pauses; the resumed leg is the one node
+    that pauses and runs the outcome worker; no worker has more than two nodes."""
+    tools, model = StubTools(), StubModel()
+    graph = compiled(model, tools)
+    first_leg = [
+        next(iter(update))
+        for update in graph.stream(
+            {"claim": facts("CLM-0004")}, THREAD, stream_mode="updates"
+        )
+    ]
+    (pending,) = graph.get_state(THREAD).interrupts
+    tools.recorded = "approve"
+    resumed = [
+        next(iter(update))
+        for update in graph.stream(
+            Command(resume={pending.id: {}}), THREAD, stream_mode="updates"
+        )
+    ]
+    views = {name: tools.for_worker(name) for name in ("intake", "terms", "approvals")}
+    longest_worker = max(
+        inner_steps(worker)
+        for worker in (
+            workers.build_intake(cast(ToolClient, views["intake"])),
+            workers.build_terms(cast(ToolClient, views["terms"])),
+            workers.build_assessor(cast(ModelClient, model)),
+            workers.build_request_approval(cast(ToolClient, views["approvals"])),
+            workers.build_outcome(cast(ToolClient, views["approvals"])),
+        )
+    )
+
+    assert first_leg == [
+        "intake",
+        "terms",
+        "assessor",
+        "propose",
+        "request_approval",
+        "__interrupt__",
+    ]
+    assert resumed == ["await_decision"]
+    assert (longest_worker, len(first_leg), len(resumed)) == (2, 6, 1)
+    assert max(longest_worker, len(first_leg), len(resumed)) < runs.RECURSION_LIMIT
 
 
 def test_the_entry_point_is_installed_from_the_meridian_distribution() -> None:

@@ -71,6 +71,7 @@ from meridian.runtime.models import (
 from meridian.runtime.runs import RunIdentity, RunOutcome
 from meridian.runtime.settings import RuntimeSettings
 from meridian.runtime.tool_client import (
+    ClientRefusal,
     ToolClient,
     ToolError,
     ToolRefused,
@@ -82,7 +83,7 @@ from meridian.runtime.tool_transport import ToolTransport
 GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
 # The audit reason of a call the runtime's own allowlist refuses.
-REFUSAL_REASON = "tool-not-allowed"
+REFUSAL_REASON: ClientRefusal = "tool-not-allowed"
 # The audit reason of a run request for a job agent, which has no graph.
 JOB_REFUSAL_REASON = "not-a-graph-agent"
 # The detail of a 404 for a run: the same text whether the run does not exist
@@ -375,8 +376,15 @@ def tool_client_for(
     way. The tenant is a key because ``create_run`` has checked it against the
     registry, so the throttle's map is bounded."""
 
-    def audit_refusal(tool: str | None) -> None:
-        key = f"{tool or '-'}/{REFUSAL_REASON}"
+    def audit_refusal(
+        tool: str | None,
+        reason: ClientRefusal = REFUSAL_REASON,
+        worker: str | None = None,
+    ) -> None:
+        # A window per tool and reason: a worker's refusal of a tool does not
+        # use up the window of the agent's refusal of it (S031). The worker is
+        # the view's, from the client, never a name a model or a caller chose.
+        key = f"{tool or '-'}/{reason}"
         carried = throttle.due(identity.tenant, key)
         if carried is None:
             return
@@ -387,8 +395,9 @@ def tool_client_for(
                     service=SERVICE_NAME,
                     event="tool.call",
                     outcome="refused",
-                    reason=REFUSAL_REASON,
+                    reason=reason,
                     tool=tool,
+                    worker=worker,
                     tenant=identity.tenant,
                     agent=identity.agent,
                     run_id=identity.run_id,
@@ -407,6 +416,7 @@ def tool_client_for(
         run_id=identity.run_id,
         tracer=tracer,
         on_refusal=audit_refusal,
+        on_worker_refusal=audit_refusal,
         max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
         verify=verify,
         transport=transport,

@@ -13,7 +13,14 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+)
 
 ResidencyLabel = Literal["eu-region", "eu-zone", "global"]
 DataClass = Literal["synthetic", "internal", "personal", "special"]
@@ -27,7 +34,14 @@ NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 # Also what a caller's service ID must match when it is read from a certificate
 # (``common/identity.py``).
 ENTITY_ID_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
-EntityId = Annotated[str, StringConstraints(pattern=ENTITY_ID_PATTERN)]
+# The longest an ID may be. The tool-server kit builds its worker pattern from
+# it (``toolserver/wire.py``), so an ID the registry accepts is one the wire
+# accepts.
+ENTITY_ID_MAX_LENGTH = 64
+EntityId = Annotated[
+    str,
+    StringConstraints(pattern=ENTITY_ID_PATTERN, max_length=ENTITY_ID_MAX_LENGTH),
+]
 # MCP tool names: lower-case words joined by underscores.
 ToolId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
 Money = Annotated[Decimal, Field(ge=0)]
@@ -144,6 +158,20 @@ class ToolsFile(RegistryModel):
     tools: tuple[Tool, ...]
 
 
+class Worker(RegistryModel):
+    """A part of one agent, with a tool list of its own (S031).
+
+    Not an agent: the run, the tenant's list, the gateway and the budgets all
+    know the agent. ``worker_checks.py`` holds a worker's tools to a subset of
+    its agent's, and the workers' lists together to the agent's list.
+    """
+
+    id: EntityId
+    description: NonEmptyStr
+    # May be empty: a worker that only asks the model.
+    tools: tuple[ToolId, ...]
+
+
 class Agent(RegistryModel):
     id: EntityId
     description: NonEmptyStr
@@ -156,6 +184,23 @@ class Agent(RegistryModel):
     # The agent may send the Model Gateway a response schema; the gateway
     # refuses one from an agent that does not declare it.
     structured_outputs: bool = False
+    # The parts the agent's graph is split into, each with its own tools; empty
+    # for an agent that is not split. worker_checks.py refuses a job's workers.
+    workers: tuple[Worker, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_workers(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """An agent without workers dumps as it did before the key existed, so
+        the evaluation's ``tools`` fingerprint of such an agent does not move."""
+        data: dict[str, Any] = handler(self)
+        if not self.workers:
+            data.pop("workers", None)
+        return data
+
+    def worker(self, worker_id: str) -> Worker | None:
+        return next((w for w in self.workers if w.id == worker_id), None)
 
 
 class AgentsFile(RegistryModel):

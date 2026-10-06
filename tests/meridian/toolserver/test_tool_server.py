@@ -55,6 +55,7 @@ from toolsupport import (
     tracer_of,
     with_client,
     without_output_schema,
+    worker_holding,
 )
 
 from meridian.platform.common.env import SettingsError
@@ -95,6 +96,7 @@ from meridian.platform.toolserver.wire import (
     META_REFUSAL,
     META_RUN,
     META_TIMEOUT_MS,
+    META_WORKER,
     RefusalReason,
 )
 from meridian.runtime.tool_client import ToolClient, ToolUnavailable
@@ -299,13 +301,21 @@ PLANT_NO_AGENTS = (
 PLANT_NO_SERVICE_TENANTS = (
     ("services.yaml", "tenants: [claims-triage]", "tenants: []"),
 ) * 4
-PLANT_NO_HISTORY = ("agents.yaml", "      - claim_history\n", "")
+# The tool leaves the agent's list and the list of the worker that holds it
+# (S031): the second edit lands on the worker's line, which sits further in.
+PLANT_NO_HISTORY = (
+    ("agents.yaml", "      - claim_history\n", ""),
+    ("agents.yaml", "          - claim_history\n", ""),
+)
 PLANT_APPROVAL = (
     "tools.yaml",
     "    scope: claims:note:write\n",
     "    scope: claims:note:write\n    approval_required: true\n",
 )
-PLANT_NO_WORDING = ("agents.yaml", "      - wording_search\n", "")
+PLANT_NO_WORDING = (
+    ("agents.yaml", "      - wording_search\n", ""),
+    ("agents.yaml", "tools:\n          - wording_search\n", "tools: []\n"),
+)
 # A search of a claim whose policy has no row: what each refusal that comes
 # before the policy is read must still answer.
 UNKNOWN_POLICY = {
@@ -366,7 +376,7 @@ REFUSALS = [
         Refusal(
             "tool-not-allowed",
             tool="claim_history",
-            edits=(PLANT_NO_HISTORY,),
+            edits=PLANT_NO_HISTORY,
         ),
         id="agent-lacks-tool",
     ),
@@ -495,7 +505,7 @@ REFUSALS = [
         Refusal(
             "tool-not-allowed",
             arguments=SEARCH,
-            edits=(PLANT_NO_WORDING,),
+            edits=PLANT_NO_WORDING,
             **UNKNOWN_POLICY,
         ),
         id="agent-lacks-search-and-policy-has-no-row",
@@ -546,7 +556,7 @@ def test_each_refusal_answers_its_reason_audits_it_and_runs_no_handler(
 def test_a_tool_that_is_not_allowlisted_is_refused_before_its_arguments_are_read(
     world: World, plant: Callable[..., Path]
 ) -> None:
-    registry_dir = plant(PLANT_NO_HISTORY)
+    registry_dir = plant(*PLANT_NO_HISTORY)
     app = spy_app(world.db, "claim_history", Spy(), registry_dir=registry_dir)
 
     result = run_call(
@@ -1047,6 +1057,7 @@ def test_the_span_carries_the_identifiers_and_no_value(
         "meridian.run_id": str(world.run_id),
         "meridian.tenant": TENANT,
         "meridian.agent": AGENT,
+        "meridian.worker": "intake",
     }
 
 
@@ -1429,7 +1440,9 @@ def test_no_more_than_the_limit_of_handlers_run_at_once(world: World) -> None:
         async def one() -> None:
             answers.append(
                 await client.call_tool(
-                    "policy_lookup", LOOKUP, meta={META_RUN: str(world.run_id)}
+                    "policy_lookup",
+                    LOOKUP,
+                    meta={META_RUN: str(world.run_id), META_WORKER: "intake"},
                 )
             )
 
@@ -1512,7 +1525,9 @@ async def try_call(client: Client, run_id: uuid.UUID, **meta: Any) -> Any:
     with anyio.fail_after(CALL_WAIT_SECONDS):
         try:
             return await client.call_tool(
-                "policy_lookup", LOOKUP, meta={META_RUN: str(run_id), **meta}
+                "policy_lookup",
+                LOOKUP,
+                meta={META_RUN: str(run_id), META_WORKER: "intake", **meta},
             )
         except MCPError as error:
             return error
@@ -1874,7 +1889,11 @@ def test_a_shed_call_that_names_no_registry_tool_writes_a_row_with_no_tool(
                     await client.call_tool(
                         CANARY,
                         LOOKUP,
-                        meta={META_RUN: str(world.run_id), META_TIMEOUT_MS: 5},
+                        meta={
+                            META_RUN: str(world.run_id),
+                            META_WORKER: "intake",
+                            META_TIMEOUT_MS: 5,
+                        },
                     )
                 except MCPError as error:
                     assert_shed(error)
@@ -1959,8 +1978,9 @@ def test_a_call_the_server_shed_reaches_the_runtimes_tool_client_as_unavailable(
             run_id=world.run_id,
             tracer=tracer_of(InMemorySpanExporter()),
             on_refusal=lambda tool: None,
+            on_worker_refusal=lambda tool, reason, worker: None,
             max_calls=2,
-        )
+        ).for_worker("intake")
 
     with serve(app.app) as base:
         threads = [
@@ -2036,6 +2056,8 @@ def finish(
     key: str | None = None,
 ) -> Finished:
     meta = {META_RUN: str(world.run_id)}
+    if (worker := worker_holding(tool)) is not None:
+        meta[META_WORKER] = worker
     if key is not None:
         meta[META_IDEMPOTENCY_KEY] = key
     return pipeline.run(Call(uuid.uuid4()), tool, arguments, meta, deadline)
@@ -2154,7 +2176,7 @@ def test_a_call_with_its_time_up_that_the_allowlist_refuses_is_still_that_refusa
         "claim_history",
         custom("claim_history", lambda conn, call: FOUND_NOTHING)
         + other_handler("claim_history"),
-        registry_dir=plant(PLANT_NO_HISTORY),
+        registry_dir=plant(*PLANT_NO_HISTORY),
     )
 
     finished = finish(pipeline, world, "claim_history", LOOKUP, LAPSED)
