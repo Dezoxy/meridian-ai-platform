@@ -280,6 +280,15 @@ def _judged_case(
     )
 
 
+def check_manifest_workload(manifest_path: Path) -> None:
+    """``ReportError`` with a fixed text unless the manifest names this
+    workload. Both report builders call it before they use anything else of a
+    manifest, so a report is never built from another workload's set (T-72)."""
+    manifest = read_json_file(manifest_path)
+    if not isinstance(manifest, dict) or manifest.get("workload") != WORKLOAD:
+        raise ReportError(NOT_THIS_WORKLOADS_MANIFEST)
+
+
 def auto_approval_limit(manifest_path: Path) -> int:
     """The golden set's auto-approval limit, from its manifest; refuse a manifest
     that is not JSON or has no integer limit."""
@@ -291,6 +300,9 @@ def auto_approval_limit(manifest_path: Path) -> int:
 
 
 SCREENS_UNREADABLE = "the source of the screens cannot be read to fingerprint them"
+# Fixed words: the workload's own ID is a registry ID; the ID a manifest names
+# instead is a caller's text and is never quoted.
+NOT_THIS_WORKLOADS_MANIFEST = f"the manifest does not name the workload {WORKLOAD}"
 
 
 def screens_fingerprint() -> str:
@@ -342,10 +354,13 @@ def build_report(
     graders only. With them (all three, or ``ValueError``) it adds groundedness
     and cost, and latency in a live run, and each case holds its tool calls and
     what it measured; a claim the maps do not name measured nothing. The rule
-    grades are computed before and without the judgements."""
+    grades are computed before and without the judgements. ``ReportError`` when
+    the manifest does not name this workload, checked before anything else of it
+    is used."""
     _check_parts(
         (judgements, measured, tools), (judge_fingerprint, recording_fingerprint)
     )
+    check_manifest_workload(manifest_path)
     limit = auto_approval_limit(manifest_path)
     live = answered_by.kind == "live"
     cases = []

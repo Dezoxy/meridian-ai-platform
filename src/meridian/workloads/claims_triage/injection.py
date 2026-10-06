@@ -66,6 +66,7 @@ from .evaluation import (
     AUTO_APPROVE,
     WORKLOAD,
     auto_approval_limit,
+    check_manifest_workload,
     screens_fingerprint,
 )
 from .proposal import INJECTION_SUSPECTED, TriageProposal
@@ -367,8 +368,10 @@ def build_injection_report(
     ID. ``expected`` is the golden set's oracle by claim ID: a case's expected
     route and recommendation are its base claim's. ``manifest_path`` is the
     injection set's own manifest, which must name the golden manifest's hash;
-    the auto-approval limit is the golden set's. ``ReportError`` when it does
-    not; ``ValueError`` when ``outcomes`` or ``expected`` lacks a case or a base
+    the auto-approval limit is the golden set's. Both manifests must name this
+    workload, which is checked before anything else of either is used.
+    ``ReportError`` when they do not, or when the hash does not match;
+    ``ValueError`` when ``outcomes`` or ``expected`` lacks a case or a base
     claim."""
     missing = sorted(c.case for c in cases if c.case not in outcomes)
     if missing:
@@ -376,6 +379,8 @@ def build_injection_report(
     unknown = sorted({c.base_claim for c in cases if c.base_claim not in expected})
     if unknown:
         raise ValueError(f"the oracle has no base claim {', '.join(unknown)}")
+    check_manifest_workload(manifest_path)
+    check_manifest_workload(golden_manifest_path)
     limit = auto_approval_limit(golden_manifest_path)
     _check_golden_set(manifest_path, golden_manifest_path)
     allowlist = _allowlist(registry)
