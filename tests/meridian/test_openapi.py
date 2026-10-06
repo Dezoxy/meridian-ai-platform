@@ -135,6 +135,27 @@ ERRORS = {
         "503",
         "504",
     },
+    ("claims", "post", "/claims/{claim_id}/brief"): {
+        "404",
+        "409",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    ("claims", "post", "/claims/{claim_id}/brief/decision"): {
+        "404",
+        "409",
+        "413",
+        "422",
+        "500",
+        "502",
+        "503",
+        "504",
+    },
+    ("claims", "get", "/claims/{claim_id}/brief"): {"404", "422", "500", "503"},
 }
 
 
@@ -404,6 +425,68 @@ def test_the_moves_that_take_no_input_declare_a_required_json_body_with_no_field
     assert request["additionalProperties"] is False
     assert not request.get("properties")
     assert not request.get("required")
+
+
+def test_the_brief_routes_answer_the_brief_view_and_its_errors_carry_the_claim() -> (
+    None
+):
+    spec = SPECS["claims"]
+    start = "/claims/{claim_id}/brief"
+    decision = "/claims/{claim_id}/brief/decision"
+
+    assert schema_ref(spec, start, "post", "201").endswith("/BriefView")
+    assert schema_ref(spec, decision, "post", "200").endswith("/BriefView")
+    assert schema_ref(spec, start, "get", "200").endswith("/BriefView")
+    for path, method in ((start, "post"), (decision, "post")):
+        assert schema_ref(spec, path, method, "404").endswith("/ErrorBody")
+        assert schema_ref(spec, path, method, "409").endswith("/ErrorBody")
+        assert schema_ref(spec, path, method, "502").endswith("/ClaimErrorBody")
+        assert schema_ref(spec, path, method, "504").endswith("/ClaimErrorBody")
+    view = spec["components"]["schemas"]["BriefView"]
+    assert set(view["properties"]) == {
+        "claim_id",
+        "state",
+        "brief",
+        "run_id",
+        "created_at",
+        "state_changed_at",
+    }
+    assert view["properties"]["state"]["enum"] == [
+        "drafting",
+        "awaiting_decision",
+        "filed",
+        "rejected",
+        "failed",
+    ]
+
+
+def test_starting_a_brief_takes_a_required_json_body_with_no_field() -> None:
+    """T-01, as the moves that take no input: a required JSON body keeps a
+    browser from posting without a preflight."""
+    spec = SPECS["claims"]
+
+    body = spec["paths"]["/claims/{claim_id}/brief"]["post"]["requestBody"]
+
+    assert body["required"] is True
+    assert list(body["content"]) == ["application/json"]
+    assert body["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ClaimMoveRequest"
+    )
+
+
+def test_the_brief_decision_is_one_of_two_words_and_the_run_it_was_read_on() -> None:
+    spec = SPECS["claims"]
+
+    body = spec["paths"]["/claims/{claim_id}/brief/decision"]["post"]["requestBody"]
+    request = spec["components"]["schemas"]["BriefDecision"]
+
+    assert body["required"] is True
+    assert list(body["content"]) == ["application/json"]
+    assert request["additionalProperties"] is False
+    assert set(request["required"]) == {"decision", "run"}
+    # Not triage's third word: a brief is filed or it is not.
+    assert request["properties"]["decision"]["enum"] == ["approve", "reject"]
+    assert request["properties"]["run"]["format"] == "uuid"
 
 
 def test_the_claim_move_response_has_a_run_and_a_proposal_only_when_a_triage_ran() -> (

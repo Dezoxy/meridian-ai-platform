@@ -13,6 +13,7 @@ import psycopg
 import pytest
 from dbsupport import OWNER, SERVICE_ROLES, DatabaseHandle
 from sweepmigrationsupport import (
+    BRIEF_SWEEP_HOLDS,
     CLAIM_ID,
     CLAIM_MESSAGE,
     INSERT_CLAIM,
@@ -104,8 +105,9 @@ def test_the_sweep_holds_exactly_the_grants_of_the_contract(
     migrated_database: DatabaseHandle,
 ) -> None:
     held = privileges(migrated_database, ROLE)
+    expected = SWEEP_HOLDS | BRIEF_SWEEP_HOLDS  # 0014's, and 0024's (S037)
 
-    assert held == SWEEP_HOLDS, (held - SWEEP_HOLDS, SWEEP_HOLDS - held)
+    assert held == expected, (held - expected, expected - held)
 
 
 def test_the_migration_gives_the_sweep_everything_it_holds_and_changes_no_other_role(

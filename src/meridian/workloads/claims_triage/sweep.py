@@ -8,7 +8,8 @@ behind, in this order, each step safe to repeat and safe beside another pass:
    claim whose documents are overdue goes to an adjuster (no claim is rejected
    without a person, C-02), and a claim left ``submitted`` or ``triaging`` is
    failed, which a person sees;
-2. runs that no process works on and no claim keeps: they end ``Failed``;
+2. runs that no process works on and no claim or claim brief keeps: they end
+   ``Failed``;
 3. checkpoints that no unfinished run needs: they are deleted.
 
 It connects as the database role ``claims_sweep`` (``MERIDIAN_DATABASE_URL``),
@@ -48,6 +49,7 @@ from meridian.runtime.sweep import (
 )
 from meridian.workloads.claims_triage.lifecycle import (
     AGENT,
+    BRIEF_AGENT,
     DOCUMENTS_DEADLINE_ENV,
     DOCUMENTS_OVERDUE,
     TRIAGE_ABANDONED,
@@ -88,6 +90,10 @@ SUMMARY_LOG = (
 MOVES = (TRIAGE_NOT_STARTED, TRIAGE_ABANDONED, DOCUMENTS_OVERDUE)
 # An adjuster's queue holds the claim; the run it names is theirs to resume.
 WAITING_STATE = "awaiting_adjuster"
+# The runs the sweep ends when abandoned: a closed tuple of the two agents, never
+# a pattern. A brief waits for the adjuster's decision in its own state.
+SWEPT_AGENTS = (AGENT, BRIEF_AGENT)
+WAITING_BRIEF_STATE = "awaiting_decision"
 RUNS_ENDED = "runs-ended"
 THREADS_CLEANED = "threads-cleaned"
 FAILURES = "failures"
@@ -101,18 +107,27 @@ LIMIT %(limit)s
 """
 # A claim keeps the run it names while an adjuster waits on it, and while it has
 # moved so lately that the request which moved it may still be ending or resuming
-# the run. Only a claim of the run's own tenant keeps it, as ``audit.claim_trail``
-# links a claim to a run. The listing and the check below say it in the same
-# words.
+# the run. A claim brief (S037) keeps its run the same way: while it waits for its
+# decision, and while it has changed within the lease. Only a claim or a brief of
+# the run's own tenant keeps it, as ``audit.claim_trail`` links a claim to a run.
+# The listing and the check below say it in the same words. The sweep reads a
+# brief's run, tenant, state and time, never its text (migration 0024).
 ABANDONED_RUNS = """
 SELECT r.run_id FROM runtime.runs AS r
-WHERE r.agent = %(agent)s AND r.status = ANY(%(statuses)s)
+WHERE r.agent = ANY(%(agents)s) AND r.status = ANY(%(statuses)s)
     AND r.updated_at < now() - make_interval(secs => %(lease)s)
     AND NOT EXISTS (
         SELECT 1 FROM claims.claims AS c
         WHERE c.run_id = r.run_id AND c.tenant = r.tenant AND (
             c.state = %(waiting_state)s
             OR c.state_changed_at > now() - make_interval(secs => %(lease)s)
+        )
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM claims.briefs AS b
+        WHERE b.run_id = r.run_id AND b.tenant = r.tenant AND (
+            b.state = %(waiting_brief_state)s
+            OR b.state_changed_at > now() - make_interval(secs => %(lease)s)
         )
     )
 ORDER BY random()
@@ -125,6 +140,12 @@ SELECT EXISTS (
     WHERE c.run_id = %(run_id)s AND c.tenant = %(tenant)s AND (
         c.state = %(waiting_state)s
         OR c.state_changed_at > now() - make_interval(secs => %(lease)s)
+    )
+) OR EXISTS (
+    SELECT 1 FROM claims.briefs AS b
+    WHERE b.run_id = %(run_id)s AND b.tenant = %(tenant)s AND (
+        b.state = %(waiting_brief_state)s
+        OR b.state_changed_at > now() - make_interval(secs => %(lease)s)
     )
 )
 """
@@ -276,17 +297,18 @@ def _sweep_claims(
 
 def list_abandoned_runs(conn: psycopg.Connection) -> list[UUID]:
     """A random sample, at most ``MAX_RUNS_PER_PASS``, of the runs of this
-    workload's agent that are unfinished, idle past the lease and kept by no claim.
-    The
-    claims are in the listing, not only in the check, so that runs a claim keeps
+    workload's two agents (triage and the claim brief) that are unfinished, idle
+    past the lease and kept by no claim and no brief. The claims and the briefs
+    are in the listing, not only in the check, so that runs they keep
     cannot fill the bound and starve the runs that are abandoned."""
     rows = conn.execute(
         ABANDONED_RUNS,
         {
-            "agent": AGENT,
+            "agents": list(SWEPT_AGENTS),
             "statuses": list(SWEPT_STATUSES),
             "lease": float(RUNNING_LEASE_SECONDS),
             "waiting_state": WAITING_STATE,
+            "waiting_brief_state": WAITING_BRIEF_STATE,
             "limit": MAX_RUNS_PER_PASS,
         },
     ).fetchall()
@@ -312,6 +334,7 @@ def end_run_unless_kept(conn: psycopg.Connection, run_id: UUID) -> bool:
             "run_id": run_id,
             "tenant": locked[0],
             "waiting_state": WAITING_STATE,
+            "waiting_brief_state": WAITING_BRIEF_STATE,
             "lease": float(RUNNING_LEASE_SECONDS),
         },
     ).fetchone()
