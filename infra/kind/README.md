@@ -381,10 +381,35 @@ node image, Kubernetes components and the platform).
    not prove a completed call: no single role can make up a claim and a run,
    so that is `make demo`'s proof. The calls run over TLS with the runtime's
    certificate (line 9). Before `make deploy` this check prints SKIP.
-4. **Telemetry.** Three short Jobs run `telemetrygen` and send one trace, one
-   log and one metric for a fresh service name (`meridian-smoke-<epoch>`)
-   through the collector, over OTLP/HTTP to port 4318 (`--otlp-http`: the same
-   port the six services use). Since S063 the Jobs run in `meridian`, not in
+4. **Telemetry.** Six lines (S063; tested without a cluster until the main
+   session has run them). The first two are about TLS and do not need the
+   Meridian services. The ConfigMap `telemetry-ca` in `meridian`, which the six
+   services and telemetrygen mount to trust the collector, holds the
+   certificate its authority has now: the SHA-256 fingerprint of its `ca.crt`
+   equals that of `tls.crt` of the Secret `telemetry-ca` in `observability`
+   (only that one field of the Secret is read, the line prints the first twelve
+   hex digits of a fingerprint and nothing else, SKIP while the Secret is not
+   there, and a FAIL that says to run `make up` and then restart the services
+   when the ConfigMap is missing or stale). Then a push in clear text is not
+   accepted: a Job pod in `meridian`, which the policies admit to the
+   collector's port, so that what refuses it is the TLS listener and not a
+   NetworkPolicy, runs the database image's `bash` (on the node after `make
+   up`: no image is pulled) and sends plain HTTP to port 4318. A status that is
+   not 2xx (a Go TLS listener answers `400 Bad Request`: "Client sent an HTTP
+   request to an HTTPS server", read from its source and not yet seen on the
+   cluster) or a connection closed with no answer passes, and the line says
+   which; a 2xx fails; a connection that times out, is refused or gets no
+   answer fails with "proves nothing", so a policy that cuts the probe off is
+   not read as a refusal by the listener. Then three short Jobs run
+   `telemetrygen` and send one trace, one log and one metric for a fresh
+   service name (`meridian-smoke-<epoch>`) through the collector, over OTLP/HTTP
+   with TLS to port 4318 (`--otlp-http` and `--ca-cert`, the authority's file
+   from the ConfigMap; the same port the six services use). Those three lines
+   prove the TLS path end to end for telemetrygen, and check 5's cost series,
+   which the Model Gateway's own exporter pushes, proves it for a service; they
+   do not prove that a service refuses another authority (the exporters' test
+   does) or that every service has the file (`make demo`'s trace with a span of
+   each service does). Since S063 the Jobs run in `meridian`, not in
    `observability`: the collector admits the pods of `meridian` and no pod of
    another namespace, with no exception that exists only while smoke runs, and
    [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml)
@@ -818,9 +843,9 @@ In order, `make deploy`:
 Each pod gets its own role's connection string from its Secret, and the
 cluster CA's public certificate (`ca.crt` only, not the CA's private key that
 shares the Secret `platform-db-ca`) at `/etc/meridian/db-ca/ca.crt`. Spans go
-to the collector's OTLP/HTTP port, `:4318`; the `/healthz` probes are not
-traced. The `*.localhost` name resolves to the loopback address on macOS and
-on current Linux resolvers; the edge listens on `127.0.0.1` only.
+to the collector's OTLP/HTTP port, `:4318`, over TLS (S063); the `/healthz`
+probes are not traced. The `*.localhost` name resolves to the loopback address
+on macOS and on current Linux resolvers; the edge listens on `127.0.0.1` only.
 
 The route is the whole boundary: the Claims API is the only service with one,
 on the host `claims.meridian.localhost`. A request with any other `Host`
@@ -1147,7 +1172,21 @@ renewal, the DNS names `otel-collector.observability.svc` and
   Secret, so this authority has to reach them: `make up` writes its public
   certificate (`tls.crt` of the Secret `telemetry-ca`, never the key) into the
   ConfigMap `telemetry-ca`, key `ca.crt`, in `meridian`, on every run, and
-  `make deploy` refuses to start without it. The services mount that file.
+  `make deploy` refuses to start without it. The chart's `telemetry.caConfigMap`
+  names it (kind's values: `telemetry-ca`, with an `https` endpoint); each of
+  the six services mounts its one key, read-only, at
+  `/etc/meridian/telemetry-ca/ca.crt` (not under its own certificate's
+  directory: that CA signs the services, not the collector) and trusts it
+  through the SDK's own variable, `OTEL_EXPORTER_OTLP_CERTIFICATE`. The chart
+  refuses an `https` endpoint with no ConfigMap and a ConfigMap with an `http`
+  endpoint. A service whose endpoint is `https` and whose variable is unset, or
+  names a file that cannot be loaded as a CA certificate, does not start: the
+  factory raises a `SettingsError` that names the variable and never the path
+  (the last line of the traceback `uvicorn --factory` logs), and the container
+  restarts, as it does for a certificate it cannot read (not seen on a
+  cluster). That is better than starting with telemetry that fails on every
+  export. The Jobs and the sweep set no endpoint and get none of this. Status:
+  tested without a cluster.
 - **What the collector does.** It serves OTLP/HTTP with TLS on `:4318` from the
   Secret `otel-collector-tls`, mounted read-only as a directory, and reads the
   files again at a handshake every five minutes at most (`reload_interval`),

@@ -797,7 +797,8 @@ def test_the_header_says_what_check_ten_creates_removes_and_does_not_prove() -> 
     )[0]
 
     # The sentence at the top names the request, beside what it named before.
-    assert "three short-lived Jobs" in opening
+    # Three of telemetrygen's and, since S063, the clear-text probe's.
+    assert "four short-lived Jobs" in opening
     assert "two short-lived Pods of the network policy check" in opening
     assert f"one CertificateRequest in {NAMESPACE}" in opening
     for words in (

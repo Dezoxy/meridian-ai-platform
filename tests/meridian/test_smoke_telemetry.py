@@ -51,6 +51,10 @@ def run_telemetry_check(
             "skip() { printf 'SKIP  %s\\n' \"$*\"; }",
             "log() { :; }",
             "start_job() { :; }",
+            # The two TLS lines that open the check have a harness of their own
+            # (test_smoke_telemetry_tls.py), which test_smoke_line_count.py adds.
+            "check_telemetry_ca() { :; }",
+            "check_telemetry_clear_text() { :; }",
             "open_grafana() { grafana_url=http://127.0.0.1:1; }",
             'kctl() { [[ "${JOBS_COMPLETE}" == yes ]]; }',
             "poll() {",
@@ -66,7 +70,7 @@ def run_telemetry_check(
             "}",
             *re.findall(
                 r"^readonly (?:COLLECTOR_ENDPOINT|TELEMETRYGEN_NAMESPACE|JOB_TIMEOUT"
-                r"|POLL_TIMEOUT|TELEMETRY_ANSWER_LENGTH)=.*$",
+                r"|POLL_TIMEOUT|TELEMETRY_ANSWER_LENGTH|TELEMETRY_CA_CONFIGMAP)=.*$",
                 SMOKE_SH,
                 re.M,
             ),

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prove the local platform works end to end: `make smoke`. Changes nothing apart
-# from three short-lived Jobs in meridian (unique names, removed by
+# from four short-lived Jobs in meridian (unique names, removed by
 # ttlSecondsAfterFinished), two short-lived Pods of the network policy check (one
 # in meridian, one in default; unique names, each deleted when its line ends and
 # again by the EXIT trap), one CertificateRequest in default of
@@ -42,12 +42,43 @@
 #                 was given), with a run ID that does not exist: each server must
 #                 refuse it as `unknown-run`. Skipped, not failed, while the
 #                 Meridian services are not deployed (`make deploy`).
-#   4. telemetry: telemetrygen sends one trace, one log and one metric over OTLP
-#                 to the collector; each is then read back through Grafana's
-#                 datasource proxy (Tempo, Loki, Prometheus), the way an owner
-#                 would see it. The Jobs run in `meridian`, not in
-#                 `observability` (S063), and push over HTTP to port 4318, the
-#                 port and the namespace the six services push from: the
+#   4. telemetry: six lines (S063). The first two are about TLS and do not need
+#                 the Meridian services: the ConfigMap `telemetry-ca` in
+#                 `meridian`, which the six services mount to trust the
+#                 collector, holds the certificate its authority has now (the
+#                 fingerprint of its ca.crt equals that of tls.crt of the Secret
+#                 `telemetry-ca` in `observability`; SKIP while the Secret is
+#                 not there, FAIL "run make up" when the ConfigMap is missing or
+#                 stale; only the first twelve hex digits of a fingerprint are
+#                 printed, and only that one field of the Secret is read); and a
+#                 push in clear text to the collector's port is not accepted: a
+#                 Job pod in `meridian` (so one the policies admit, and the
+#                 refusal is the TLS listener's, not a NetworkPolicy's) sends
+#                 plain HTTP with the database image's bash and the line says
+#                 what came back (a 400 from a Go TLS listener, or a connection
+#                 closed with no answer, is a PASS; a 2xx is a FAIL; a timeout,
+#                 a refused connection or silence is a FAIL that proves nothing,
+#                 told apart from a refusal by the listener). Then telemetrygen
+#                 sends one trace, one log and one metric over OTLP to the
+#                 collector, over TLS with the authority's certificate
+#                 (--ca-cert; no --otlp-insecure); each is then read back
+#                 through Grafana's datasource proxy (Tempo, Loki, Prometheus),
+#                 the way an owner would see it. Since S063 these lines prove the TLS path end
+#                 to end for telemetrygen (the collector serves TLS only, so a
+#                 trace, a log and a metric that arrive came over it), and the
+#                 cost series of check 5, which the Model Gateway's own exporter
+#                 pushes, proves it for a service (a series that arrives was
+#                 sent over TLS and verified against the authority's file: an
+#                 exporter that did not trust it would drop its metrics). What
+#                 they do not prove: that a service checks the collector's name
+#                 and refuses another authority (the exporters' own test,
+#                 tests/meridian/common/test_otlp_tls.py, does), that every
+#                 service has the file (`make demo`'s trace with a span of each
+#                 service does), and that the collector's own hops to Tempo, Loki
+#                 and Prometheus are encrypted (they are not). The Jobs run in
+#                 `meridian`, not in `observability` (S063), and push over
+#                 HTTPS to port 4318, the port and the namespace the six
+#                 services push from: the
 #                 collector's ingress admits the pods of `meridian` on 4318 and
 #                 nothing else (manifests/observability-networkpolicy.yaml), and
 #                 smoke's own Jobs get the egress they need from
@@ -652,6 +683,53 @@ readonly COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4318
 # The namespace of telemetrygen's Jobs (see check 4 and manifests/smoke-
 # networkpolicy.yaml): the collector's ingress admits the pods of this one.
 readonly TELEMETRYGEN_NAMESPACE=meridian
+# The collector serves TLS with a certificate from an authority of its own
+# (manifests/telemetry-ca.yaml; S063). `make up` copies the authority's public
+# certificate, `tls.crt` of the Secret TELEMETRY_CA_SECRET in `observability`,
+# into the ConfigMap TELEMETRY_CA_CONFIGMAP (key ca.crt) in `meridian` (a test
+# keeps both names equal to up.sh's). telemetrygen's Job pod mounts that key at
+# TELEMETRYGEN_CA_FILE's directory and pushes with --ca-cert.
+readonly TELEMETRY_CA_SECRET=telemetry-ca
+readonly TELEMETRY_CA_CONFIGMAP=telemetry-ca
+readonly TELEMETRY_CA_NAMESPACE=meridian
+# How many hex digits of a certificate's fingerprint a line may print.
+readonly TELEMETRY_FINGERPRINT_SHOWN=12
+readonly TELEMETRYGEN_CA_DIRECTORY=/etc/telemetry-ca
+readonly TELEMETRYGEN_CA_FILE="${TELEMETRYGEN_CA_DIRECTORY}/ca.crt"
+# The clear-text probe of check 4: a Job named CLEAR_TEXT_JOB_PREFIX and the
+# epoch, in TELEMETRYGEN_NAMESPACE (the pods of `meridian` are the ones the
+# collector's ingress admits, and the label of smoke's Jobs gets the egress, so
+# the policies let the probe through and a refusal is the TLS listener's). The
+# pod runs the platform database's own image, which `make up` has put on the
+# node, so no image is pulled and the Meridian services need not be deployed.
+# CLEAR_TEXT_PROBE runs under bash in it with the collector's host, port and
+# CLEAR_TEXT_TIMEOUT seconds as arguments. It first connects with `timeout`
+# (a connection that hangs is "timeout"; any other failure is "error: ..." with
+# bash's own message), then sends a POST with an empty body in clear text and
+# prints the status line the server answers ("answered HTTP/1.0 400 Bad
+# Request"), "closed" when the server ends the connection without a word, or
+# "no answer" when it says nothing for CLEAR_TEXT_TIMEOUT seconds.
+readonly CLEAR_TEXT_JOB_PREFIX=smoke-cleartext-
+readonly CLEAR_TEXT_TIMEOUT=4
+# shellcheck disable=SC2016 # the script's own variables, expanded by the pod's bash
+readonly CLEAR_TEXT_PROBE='host=$1 port=$2 limit=$3
+err="$(timeout "${limit}" bash -c ": </dev/tcp/\$0/\$1" "${host}" "${port}" 2>&1)"
+case $? in
+  0) ;;
+  124) echo timeout; exit 0 ;;
+  *) echo "error: ${err}"; exit 0 ;;
+esac
+exec 3<>"/dev/tcp/${host}/${port}"
+printf "POST /v1/traces HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" "${host}" "${port}" >&3
+IFS= read -r -t "${limit}" line <&3
+status=$?
+if [ -n "${line}" ]; then
+  echo "answered $(printf "%s" "${line}" | tr -d "\r")"
+elif [ "${status}" -gt 128 ]; then
+  echo "no answer"
+else
+  echo closed
+fi'
 # What the telemetry check (4) prints of an answer of Tempo, Loki or Prometheus
 # is cut to this many characters (see telemetry_answer).
 readonly TELEMETRY_ANSWER_LENGTH=120
@@ -937,7 +1015,10 @@ check_tools() {
 # logs or metrics) for service ${service}. Named uniquely, so reruns never clash.
 # The Job runs in ${TELEMETRYGEN_NAMESPACE} (`meridian`) and pushes OTLP over HTTP
 # (--otlp-http, which sends each signal to its default path, /v1/traces and so
-# on): the collector's ingress admits the pods of that namespace on 4318. The
+# on) and TLS: there is no --otlp-insecure, and --ca-cert names the authority's
+# certificate, which the pod reads from the ConfigMap ${TELEMETRY_CA_CONFIGMAP}
+# of its own namespace (a Job that cannot find it never starts). The
+# collector's ingress admits the pods of that namespace on 4318. The
 # Job's pods carry no part-of label, so the database's ingress does not admit
 # them, and manifests/smoke-networkpolicy.yaml selects them by the name label.
 start_job() {
@@ -972,7 +1053,8 @@ spec:
             - --otlp-endpoint
             - ${COLLECTOR_ENDPOINT}
             - --otlp-http
-            - --otlp-insecure
+            - --ca-cert
+            - ${TELEMETRYGEN_CA_FILE}
             - --service
             - ${service}
             - ${count_flag}
@@ -988,6 +1070,17 @@ spec:
               memory: 32Mi
             limits:
               memory: 64Mi
+          volumeMounts:
+            - name: telemetry-ca
+              mountPath: ${TELEMETRYGEN_CA_DIRECTORY}
+              readOnly: true
+      volumes:
+        - name: telemetry-ca
+          configMap:
+            name: ${TELEMETRY_CA_CONFIGMAP}
+            items:
+              - key: ca.crt
+                path: ca.crt
 EOF
 }
 
@@ -1122,9 +1215,154 @@ telemetry_answer() {
   printf '%s' "${text:0:TELEMETRY_ANSWER_LENGTH}"
 }
 
+# pem_fingerprint PEM: the SHA-256 fingerprint of the first certificate of PEM,
+# as upper-case hex without colons; returns 1 when PEM holds no certificate. The
+# certificate is public; nothing of PEM but this is kept.
+pem_fingerprint() {
+  local line
+  line="$(openssl x509 -noout -fingerprint -sha256 <<<"$1" 2>/dev/null)" || return 1
+  line="${line#*=}"
+  printf '%s' "${line//:/}"
+}
+
+# check_telemetry_ca: the first line of check 4 (S063). The ConfigMap
+# ${TELEMETRY_CA_CONFIGMAP} in `meridian`, which the six services mount to trust
+# the collector and telemetrygen's Jobs too, holds the certificate the authority
+# has now: the fingerprints of its ca.crt and of tls.crt of the Secret
+# ${TELEMETRY_CA_SECRET} in `observability` are equal. Only that one field of
+# the Secret is read (a jsonpath, as up.sh does), never the object and never
+# tls.key. Prints nothing but the first TELEMETRY_FINGERPRINT_SHOWN hex digits of
+# either fingerprint. SKIP while the Secret is not there (nothing of the
+# authority exists, `make up`); FAIL when the ConfigMap is missing or differs,
+# with the remedy: `make up` publishes the current certificate, and the services
+# read the file when they start, so they are restarted after it.
+check_telemetry_ca() {
+  local found encoded authority published authority_print published_print
+  if ! found="$(kctl -n observability get secret "${TELEMETRY_CA_SECRET}" -o name --ignore-not-found)"; then
+    fail "telemetry: could not look for the Secret ${TELEMETRY_CA_SECRET} in observability (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "telemetry: the collector's authority is not there (no Secret ${TELEMETRY_CA_SECRET} in observability: run make up), so the ConfigMap ${TELEMETRY_CA_CONFIGMAP} was not compared with it"
+    return
+  fi
+  if ! encoded="$(kctl -n observability get secret "${TELEMETRY_CA_SECRET}" -o 'jsonpath={.data.tls\.crt}')"; then
+    fail "telemetry: could not read tls.crt of the Secret ${TELEMETRY_CA_SECRET} in observability (kubectl's error is above)"
+    return
+  fi
+  if ! published="$(kctl -n "${TELEMETRY_CA_NAMESPACE}" get configmap "${TELEMETRY_CA_CONFIGMAP}" -o 'jsonpath={.data.ca\.crt}' --ignore-not-found)"; then
+    fail "telemetry: could not read ca.crt of the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} (kubectl's error is above)"
+    return
+  fi
+  if ! authority="$(base64 -d <<<"${encoded}" 2>/dev/null)" ||
+    ! authority_print="$(pem_fingerprint "${authority}")"; then
+    fail "telemetry: tls.crt of the Secret ${TELEMETRY_CA_SECRET} in observability is not a certificate: read the Certificate (kubectl -n observability get certificate ${TELEMETRY_CA_SECRET})"
+    return
+  fi
+  if [[ -z "${published}" ]]; then
+    fail "telemetry: the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} is missing or has no ca.crt, so the services and telemetrygen cannot verify the collector: run make up"
+    return
+  fi
+  if ! published_print="$(pem_fingerprint "${published}")"; then
+    fail "telemetry: ca.crt of the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} is not a certificate: run make up"
+    return
+  fi
+  if [[ "${published_print}" == "${authority_print}" ]]; then
+    pass "telemetry: the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} holds the certificate of the collector's authority (fingerprints equal, sha256 ${authority_print:0:TELEMETRY_FINGERPRINT_SHOWN}...)"
+  else
+    fail "telemetry: the ConfigMap ${TELEMETRY_CA_CONFIGMAP} in ${TELEMETRY_CA_NAMESPACE} holds another certificate (sha256 ${published_print:0:TELEMETRY_FINGERPRINT_SHOWN}...) than the collector's authority has now (sha256 ${authority_print:0:TELEMETRY_FINGERPRINT_SHOWN}...): run make up, which publishes the current one, then restart the services (kubectl -n ${TELEMETRY_CA_NAMESPACE} rollout restart deployment), which read it when they start"
+  fi
+}
+
+# clear_text_job_spec NAME: the probe Job of check_telemetry_clear_text as JSON.
+# The pod carries the label of smoke's Jobs (manifests/smoke-networkpolicy.yaml
+# gives it DNS and the collector's port and nothing else), the database image's
+# bash runs CLEAR_TEXT_PROBE, and the restrictions are telemetrygen's: no root,
+# no privilege escalation, a read-only root filesystem, no capability, no
+# service-account token. IfNotPresent, not Always: the image is on the node.
+clear_text_job_spec() {
+  jq -n --arg name "$1" --arg namespace "${TELEMETRYGEN_NAMESPACE}" \
+    --arg image "${POSTGRES_IMAGE}" --arg probe "${CLEAR_TEXT_PROBE}" \
+    --arg host "${COLLECTOR_ENDPOINT%:*}" --arg port "${COLLECTOR_ENDPOINT##*:}" \
+    --arg limit "${CLEAR_TEXT_TIMEOUT}" '
+    {"app.kubernetes.io/name": "meridian-smoke"} as $labels | {
+      apiVersion: "batch/v1", kind: "Job",
+      metadata: {name: $name, namespace: $namespace, labels: $labels},
+      spec: {
+        ttlSecondsAfterFinished: 900, backoffLimit: 0, activeDeadlineSeconds: 60,
+        template: {
+          metadata: {labels: $labels},
+          spec: {
+            restartPolicy: "Never", automountServiceAccountToken: false,
+            securityContext: {runAsNonRoot: true, runAsUser: 10001,
+              seccompProfile: {type: "RuntimeDefault"}},
+            containers: [{
+              name: "probe", image: $image, imagePullPolicy: "IfNotPresent",
+              command: ["bash", "-c", $probe, "probe", $host, $port, $limit],
+              securityContext: {allowPrivilegeEscalation: false,
+                readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}},
+              resources: {requests: {cpu: "10m", memory: "32Mi"},
+                limits: {memory: "64Mi"}}
+            }]
+          }
+        }
+      }
+    }'
+}
+
+# check_telemetry_clear_text: the second line of check 4 (S063). A push in clear
+# text to the collector's port is not accepted. The probe Job (see
+# CLEAR_TEXT_PROBE) runs in a pod the policies admit, so what refuses it is the
+# TLS listener and not a NetworkPolicy; it sends plain HTTP to ${COLLECTOR_ENDPOINT}
+# and the line reports what came back, told apart from a connection that never
+# opened. PASS: a status that is not 2xx (a Go TLS listener answers 400, "Client
+# sent an HTTP request to an HTTPS server") or a connection closed with no
+# answer. FAIL: a 2xx (the receiver takes clear text), and every answer that
+# says nothing about the listener (a timeout, a refused connection, no answer, a
+# Job that did not finish), each naming that the line then proves nothing. SKIP
+# while the collector is not deployed (`make up`); the Meridian services are not
+# needed. What the answer is is cleaned and cut like every answer from a pod.
+check_telemetry_clear_text() {
+  local found job answer code detail
+  if ! found="$(kctl -n observability get deployment otel-collector -o name --ignore-not-found)"; then
+    fail "telemetry: could not look for deployment/otel-collector in observability (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "telemetry: the collector is not deployed (make up), so no clear-text push to it was tried"
+    return
+  fi
+  job="${CLEAR_TEXT_JOB_PREFIX}${epoch}"
+  if ! detail="$(clear_text_job_spec "${job}" |
+    kctl -n "${TELEMETRYGEN_NAMESPACE}" create -f - 2>&1 >/dev/null)"; then
+    fail "telemetry: could not start the clear-text probe ${job} in ${TELEMETRYGEN_NAMESPACE} ($(clean_lines "${detail}")), so the line proves nothing"
+    return
+  fi
+  if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
+    "job/${job}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
+    fail "telemetry: the clear-text probe ${job} did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/${job}), so the line proves nothing"
+    return
+  fi
+  if ! answer="$(kctl -n "${TELEMETRYGEN_NAMESPACE}" logs "job/${job}" 2>/dev/null)"; then
+    fail "telemetry: could not read the logs of the clear-text probe ${job} (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/${job}), so the line proves nothing"
+    return
+  fi
+  answer="$(telemetry_answer "${answer}")"
+  read -r _ _ code _ <<<"${answer}"
+  if [[ "${answer}" == "answered HTTP/"* && "${code}" =~ ^2[0-9][0-9]$ ]]; then
+    fail "telemetry: the collector accepted a push in clear text on ${COLLECTOR_ENDPOINT} (${answer}): its receiver does not serve TLS (make up applies values/otel-collector.yaml)"
+  elif [[ "${answer}" == "answered HTTP/"* && "${code}" =~ ^[1-5][0-9][0-9]$ ]] || [[ "${answer}" == closed ]]; then
+    pass "telemetry: a push in clear text to the collector (${COLLECTOR_ENDPOINT}) is not accepted: a pod the policies admit got \"${answer}\""
+  else
+    fail "telemetry: the clear-text probe to ${COLLECTOR_ENDPOINT} gave no answer that shows what the listener does (${answer:-nothing}), so the line proves nothing"
+  fi
+}
+
 check_telemetry() {
   epoch="$(date +%s)"
   service="meridian-smoke-${epoch}"
+  check_telemetry_ca
+  check_telemetry_clear_text
   log "telemetry: sending one trace, log and metric as service ${service}"
   start_job traces --traces
   start_job logs --logs
@@ -1134,7 +1372,7 @@ check_telemetry() {
   for signal in traces logs metrics; do
     if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
       "job/smoke-${signal}-${epoch}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
-      fail "telemetry: telemetrygen ${signal} job did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/smoke-${signal}-${epoch}; a Job with no egress to the collector is the likeliest cause on a cluster that make up has not brought up to date: it applies manifests/smoke-networkpolicy.yaml and manifests/observability-networkpolicy.yaml)"
+      fail "telemetry: telemetrygen ${signal} job did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/smoke-${signal}-${epoch}; a Job with no egress to the collector, or one that cannot find the ConfigMap ${TELEMETRY_CA_CONFIGMAP}, is the likeliest cause on a cluster that make up has not brought up to date: it applies manifests/smoke-networkpolicy.yaml and manifests/observability-networkpolicy.yaml and makes the ConfigMap)"
       return
     fi
   done

@@ -72,9 +72,23 @@ certificate:
   duration: 2160h
   renewBefore: ""
 
-# Where a service sends its traces (OTLP over HTTP). Empty: no variable.
+# Where a service sends its traces and metrics (OTLP over HTTP). Empty: no
+# variable, and a service sends nothing.
+#   otlpEndpoint  the collector's address. An https address needs caConfigMap,
+#                 and the chart fails without it.
+#   caConfigMap   the ConfigMap in the release's namespace that holds the
+#                 collector's authority, the public certificate in its key
+#                 ca.crt (`make up` makes it on kind, from the authority of
+#                 infra/kind/manifests/telemetry-ca.yaml). Each service mounts
+#                 that key at /etc/meridian/telemetry-ca/ca.crt and trusts it
+#                 through the SDK's OTEL_EXPORTER_OTLP_CERTIFICATE; the service's
+#                 own CA (MERIDIAN_TLS_CA_FILE) is another authority and does
+#                 not sign the collector's certificate. Empty with an https
+#                 address fails the chart; set with an http address it fails too:
+#                 a name that nothing reads would say the telemetry is encrypted.
 telemetry:
   otlpEndpoint: ""
+  caConfigMap: ""
 
 database:
   # The Secrets Kubernetes reads, created out of band (infra/kind/up.sh). A

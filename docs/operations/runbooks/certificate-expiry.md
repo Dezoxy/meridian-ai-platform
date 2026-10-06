@@ -166,7 +166,20 @@ fail and are dropped (the exporters run on their own threads and log the
 failure: `telemetry.py` uses a batch span processor and `metrics.py` a
 periodic reader, and a failed export returns a failure that is logged), and
 the service keeps serving requests; what is lost is its traces and metrics, and
-the dashboards and `make smoke`'s telemetry checks show it.
+the dashboards and `make smoke`'s telemetry checks show it. The first of those
+lines compares the ConfigMap with the authority's current certificate (the
+fingerprints of `ca.crt` and of `tls.crt` of the Secret) and says to run
+`make up` when they differ; it cannot say whether the services were restarted
+since, so restart them after `make up` whatever it printed. The services read
+the file through the SDK's variable `OTEL_EXPORTER_OTLP_CERTIFICATE` (the
+chart's `telemetry.caConfigMap`, mounted at `/etc/meridian/telemetry-ca`). A
+service whose endpoint is `https` and whose variable is unset, or names a file
+that cannot be loaded as a CA certificate, does not start: the factory raises a
+`SettingsError` that names the variable and never the path (the last line of
+the traceback in the pod's log), and the container restarts, as it does for a
+certificate it cannot read, so an empty or unreadable file shows as a restarting
+Deployment and not as missing traces (not seen on a cluster). Status: tested
+without a cluster.
 
 A request for either certificate that a policy refuses is Denied, with the
 policy's reason, and the Certificate stays not Ready (a first issuance) or

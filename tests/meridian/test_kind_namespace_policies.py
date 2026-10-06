@@ -512,6 +512,10 @@ def start_job_manifest() -> dict:
         "TELEMETRYGEN_IMAGE": "telemetrygen:test",
         "TELEMETRYGEN_NAMESPACE": constants.get("TELEMETRYGEN_NAMESPACE", ""),
         "COLLECTOR_ENDPOINT": constants["COLLECTOR_ENDPOINT"],
+        # S063: the authority's ConfigMap and the file telemetrygen trusts.
+        "TELEMETRY_CA_CONFIGMAP": constants["TELEMETRY_CA_CONFIGMAP"],
+        "TELEMETRYGEN_CA_DIRECTORY": constants["TELEMETRYGEN_CA_DIRECTORY"],
+        "TELEMETRYGEN_CA_FILE": constants["TELEMETRYGEN_CA_DIRECTORY"] + "/ca.crt",
     }
     filled = re.sub(r"\$\{(\w+)\}", lambda m: values[m.group(1)], text)
     return yaml.safe_load(filled)
@@ -527,7 +531,9 @@ def test_smokes_telemetry_job_runs_in_meridian_and_pushes_otlp_over_http_to_4318
 
     assert manifest["metadata"]["namespace"] == "meridian"
     assert "--otlp-http" in args
-    assert "--otlp-insecure" in args  # N4b moves this push to TLS
+    # S063: the push is TLS, verified against the authority's file.
+    assert "--otlp-insecure" not in args
+    assert args[args.index("--ca-cert") + 1] == "/etc/telemetry-ca/ca.crt"
     endpoint = args[args.index("--otlp-endpoint") + 1]
     # The same address and port the six services push to, not the gRPC port.
     port = peer["ports"][0]["port"]

@@ -50,17 +50,21 @@ GROUPS = [
 # The file holds 12 alert rules and 1 recording rule.
 RULE_COUNT = 13
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
-# check prints when all is well, so a 37th ``pass`` there fails that test. S063
-# added the fifth line of the network policy check (the collector): 35 before.
-SMOKE_LINES_AFTER_DEPLOY = 36
+# check prints when all is well, so a 39th ``pass`` there fails that test. S063
+# added the fifth line of the network policy check (the collector) and the two
+# TLS lines that open the telemetry check (the authority's ConfigMap, a push in
+# clear text): 35 before.
+SMOKE_LINES_AFTER_DEPLOY = 38
 # Counted from the checks' own skip lines, not measured: edge 1, database 2 and
-# one SKIP for its stores, tools 1 SKIP, telemetry 4, cost panel 2 and one SKIP
+# one SKIP for its stores, tools 1 SKIP, telemetry 6, cost panel 2 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP
 # (the collector's line is skipped with the other four: it is part of the same
 # check, which stops at the Claims API), service identity 1 SKIP, certificate
 # policy 4, alert rules 4. This held 29 before the refused request was added: six
-# more than the 23 the checks print. S063 leaves it at 24.
-SMOKE_LINES_AFTER_UP = 24
+# more than the 23 the checks print. S063's two telemetry lines make it 26: the
+# authority's Secret and the collector exist after `make up`, and the services
+# are not needed.
+SMOKE_LINES_AFTER_UP = 26
 
 
 def tree_groups() -> list[dict]:

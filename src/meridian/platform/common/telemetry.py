@@ -7,6 +7,7 @@ accident (T-03).
 """
 
 import os
+import ssl
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 
@@ -26,7 +27,12 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 from starlette.exceptions import HTTPException
 
+from meridian.platform.common.env import SettingsError
+
 OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
+# The CA file the OTLP exporters trust, read by the SDK itself; the chart sets it
+# to the collector's authority (S063, T-90), never to the service CA.
+OTLP_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CERTIFICATE"
 HTTP_SERVER_ERROR = 500
 
 # The only attribute keys our code may set on a span: identifiers, never
@@ -112,6 +118,31 @@ def start_span(tracer: Tracer, name: str) -> Iterator[Span]:
             raise
 
 
+def require_otlp_ca(environ: Mapping[str, str] = os.environ) -> None:
+    """Raise ``SettingsError`` when the OTLP endpoint is ``https`` and the CA
+    file the exporters would trust is unset or cannot be loaded as certificates.
+
+    Without it the SDK falls back to the system's CAs, which do not know the
+    collector's authority, and every export would fail after the service had
+    started. The message names the variable and never the path or the file's
+    content. An endpoint that is not ``https`` (or no endpoint) needs no file.
+    """
+    if not environ.get(OTLP_ENDPOINT_ENV, "").lower().startswith("https://"):
+        return
+    path = environ.get(OTLP_CERTIFICATE_ENV)
+    if not path:
+        raise SettingsError(
+            f"{OTLP_CERTIFICATE_ENV} must name the collector's CA file when "
+            f"{OTLP_ENDPOINT_ENV} is an https address"
+        )
+    try:
+        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cafile=path)
+    except (OSError, ssl.SSLError):
+        raise SettingsError(
+            f"{OTLP_CERTIFICATE_ENV} cannot be loaded as a CA certificate"
+        ) from None
+
+
 def make_tracer_provider(
     service_name: str, exporter: SpanExporter | None = None
 ) -> TracerProvider:
@@ -119,7 +150,8 @@ def make_tracer_provider(
 
     An explicit exporter gets a simple processor (tests read spans at once).
     Otherwise, with ``OTEL_EXPORTER_OTLP_ENDPOINT`` set, spans go to it over
-    OTLP/HTTP in batches. With neither, spans are created and dropped.
+    OTLP/HTTP in batches; an ``https`` endpoint needs the CA file
+    (``require_otlp_ca``). With neither, spans are created and dropped.
     """
     # ALWAYS_ON, not the default parent-based sampler: a caller's ``traceparent``
     # with the sampled flag 00 must not switch tracing off for its request.
@@ -129,6 +161,7 @@ def make_tracer_provider(
     if exporter is not None:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
     elif os.environ.get(OTLP_ENDPOINT_ENV):
+        require_otlp_ca()
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     return provider
 

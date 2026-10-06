@@ -428,12 +428,16 @@ def run_telemetry_calls(
             'fail() { printf "FAIL  %s\\n" "$*"; }',
             "log() { :; }",
             'start_job() { printf \'%s\\n\' "start ${1}" >>"${ASKED}"; }',
+            # The two TLS lines that open the check have a harness of their own
+            # (test_smoke_telemetry_tls.py).
+            "check_telemetry_ca() { :; }",
+            "check_telemetry_clear_text() { :; }",
             "open_grafana() { return 1; }",
             'kctl() { printf "%s\\n" "$*" >>"${ASKED}";'
             ' [[ "${JOBS_COMPLETE}" == yes ]]; }',
             *re.findall(
                 r"^readonly (?:COLLECTOR_ENDPOINT|TELEMETRYGEN_NAMESPACE|JOB_TIMEOUT"
-                r"|POLL_TIMEOUT|TELEMETRY_ANSWER_LENGTH)=.*$",
+                r"|POLL_TIMEOUT|TELEMETRY_ANSWER_LENGTH|TELEMETRY_CA_CONFIGMAP)=.*$",
                 SMOKE_SH,
                 re.M,
             ),

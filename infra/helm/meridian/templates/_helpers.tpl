@@ -321,6 +321,45 @@ callers' URIs start with. No container without the mount gets any of them.
 {{- end }}
 {{- end -}}
 
+{{- /* telemetryCaDirectory: where a service reads the collector's authority. A literal. */ -}}
+{{- define "meridian.telemetryCaDirectory" -}}
+/etc/meridian/telemetry-ca
+{{- end -}}
+
+{{- /*
+telemetryCa: the name of the ConfigMap that holds the collector's authority, or
+empty when the services push to no https address; takes the root. Refused, with
+the value's name in the message:
+
+  an https endpoint with no   the exporters would fall back to the system's CAs,
+  ConfigMap                   which do not know the collector's authority, and
+                              every push would fail after the pod had started
+  a ConfigMap with an http    nothing would read it, and the name would say the
+  endpoint                    telemetry is encrypted when it is not
+  a name that is not a DNS    the apiserver would refuse the volume
+  subdomain
+
+The scheme is read without regard to case, as the SDK reads it. An empty endpoint
+sends nothing, so no name is needed or mounted.
+*/ -}}
+{{- define "meridian.telemetryCa" -}}
+{{- $telemetry := .Values.telemetry | default dict -}}
+{{- $endpoint := lower (toString ($telemetry.otlpEndpoint | default "")) -}}
+{{- $name := toString ($telemetry.caConfigMap | default "") -}}
+{{- if and (hasPrefix "https://" $endpoint) (not $name) -}}
+{{- fail "telemetry.otlpEndpoint is an https address, but telemetry.caConfigMap is empty: name the ConfigMap that holds the collector's CA certificate in its key ca.crt (kind's is telemetry-ca, which make up creates), or the services could not verify the collector and every push would fail" -}}
+{{- end -}}
+{{- if and $name (hasPrefix "http://" $endpoint) -}}
+{{- fail (printf "telemetry.caConfigMap is %q, but telemetry.otlpEndpoint is an http address: nothing would read the CA certificate and the telemetry would not be encrypted; use an https address or leave telemetry.caConfigMap empty" $name) -}}
+{{- end -}}
+{{- if and $name (or (gt (len $name) 253) (not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $name))) -}}
+{{- fail (printf "telemetry.caConfigMap is %q, which is not a ConfigMap's name (lower-case letters, digits, - and ., at most 253 characters)" $name) -}}
+{{- end -}}
+{{- if hasPrefix "https://" $endpoint -}}
+{{- $name -}}
+{{- end -}}
+{{- end -}}
+
 {{- /*
 minutes: a duration of hours and minutes (2160h, 1h30m, 45m) in minutes; takes
 name (the value's, for the message) and value. Go's duration syntax has more

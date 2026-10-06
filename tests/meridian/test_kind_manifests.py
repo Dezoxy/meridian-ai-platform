@@ -41,7 +41,7 @@ from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS, make_meter_provider
-from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
+from meridian.platform.common.telemetry import OTLP_CERTIFICATE_ENV, OTLP_ENDPOINT_ENV
 from meridian.platform.gateway.meters import GatewayMeters
 from meridian.platform.gateway.ratelimit import (
     TOKEN_WINDOW_SECONDS as GATEWAY_TOKEN_WINDOW_SECONDS,
@@ -124,6 +124,7 @@ KNOWN_ENV = {
     MODE_ENV,
     ENVIRONMENT_ENV,
     OTLP_ENDPOINT_ENV,
+    OTLP_CERTIFICATE_ENV,
     SWEEP_DEADLINE_ENV,
 }
 FACTORIES = {
@@ -349,6 +350,7 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
         DATABASE_URL_ENV,
         ALLOWED_HOSTS_ENV,
         OTLP_ENDPOINT_ENV,
+        OTLP_CERTIFICATE_ENV,
         IDENTITY_PREFIX_ENV,
         # Every container that mounts its certificate names its files, so
         # /healthz watches the one the server serves (S056).
@@ -531,7 +533,7 @@ def test_traces_go_to_the_collectors_http_port() -> None:
     for name in SERVICES:
         endpoint = env_of(containers(deployment(name))[0])[OTLP_ENDPOINT_ENV]["value"]
         url = urlsplit(endpoint)
-        assert url.scheme == "http"
+        assert url.scheme == "https"  # the collector serves TLS (S063, T-90)
         assert url.hostname == "otel-collector.observability.svc.cluster.local"
         assert url.port == 4318  # 4317 is gRPC; the exporter speaks HTTP
         assert url.path in ("", "/")

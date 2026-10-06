@@ -34,6 +34,7 @@ from test_smoke_network_collector import run_collector_check
 from test_smoke_network_policy import run_network_policy_check
 from test_smoke_stores import run_stores_check
 from test_smoke_telemetry import run_telemetry_check
+from test_smoke_telemetry_tls import healthy_ca_lines, healthy_clear_text_lines
 
 pytestmark = requires_jq
 
@@ -79,7 +80,11 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         "check_edge": pass_sites("check_edge"),
         "check_database": pgvector_lines() + all_pass(lines_of(run_stores_check)),
         "check_tools": pass_sites("check_tools"),
-        "check_telemetry": all_pass(run_telemetry_check(fresh())),
+        # Four lines and, since S063, the two TLS lines that open the check:
+        # their harnesses are apart.
+        "check_telemetry": all_pass(run_telemetry_check(fresh()))
+        + all_pass(healthy_ca_lines(fresh()))
+        + all_pass(healthy_clear_text_lines(fresh())),
         "check_cost_panel": all_pass(lines_of(run_cost_panel)),
         "check_adjuster_pages": pass_sites("check_adjuster_pages"),
         "check_sweep": all_pass(
