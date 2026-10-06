@@ -75,6 +75,7 @@ from meridian.platform.common.identity import (
     caller_service,
     install_caller_check,
 )
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import set_span_attributes, start_span
@@ -784,4 +785,5 @@ def create_app(
 def create_app_from_env() -> FastAPI:
     """The factory S041 runs under ``uvicorn --factory``."""
     install_log_redaction()
+    configure_logging(SERVICE_NAME)
     return create_app(GatewaySettings.from_env())

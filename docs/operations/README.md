@@ -126,6 +126,42 @@ not. PostgreSQL's own log holds the failing statement and, for a broken
 constraint, the row's values. Read logs on a private terminal and do not
 paste them into a pull request, an issue or a chat with a session.
 
+**What a line looks like (S064, implemented and tested, not yet run on a
+cluster).** The six services and the sweep write one JSON object per line to
+standard output, uvicorn's own records included (each service's factory
+sets this up after the redaction of personal data and before it reads its
+settings). The fields are `time` (UTC, ISO 8601), `level`, `logger`,
+`service` (the name its spans carry: `model-gateway`, `agent-runtime`,
+`claims-api`, `policy-mcp`, `knowledge-mcp`, `claims-mcp`, `claims-sweep`),
+`message` and, for a record with a traceback, `exception` (one string, the
+traceback redacted). A newline in a message is escaped, so a claimant's
+text cannot make a second line. A service's own record, and an
+exception's:
+
+```json
+{"time": "2026-10-06T10:33:02.222+00:00", "level": "WARNING", "logger": "meridian.workloads.claims_triage.triaging", "service": "claims-api", "message": "claim CLM-0001 moved to review"}
+{"time": "2026-10-06T10:33:02.222+00:00", "level": "ERROR", "logger": "meridian.platform.common.http", "service": "claims-api", "message": "request failed", "exception": "Traceback (most recent call last):\n  ...\nValueError: cannot reach [email]"}
+```
+
+The access record of uvicorn has `method`, `path`, `http_version` and
+`status` as well, and the `message` is rebuilt from them. The path is cut at
+the first `?`, so a request's query string is not in any line of a service,
+and the client's address is in none: behind the edge it is a person's. A
+200 on `GET /healthz` (the kubelet's probe) is not written; a `/healthz`
+that is not a 200 is.
+
+```json
+{"time": "2026-10-06T10:33:02.222+00:00", "level": "INFO", "logger": "uvicorn.access", "service": "claims-api", "message": "GET /claimant/claims/CLM-0001 HTTP/1.1 200", "method": "GET", "path": "/claimant/claims/CLM-0001", "http_version": "1.1", "status": 200}
+```
+
+Not JSON: what a process prints before its factory ran, a start-up error
+(a missing setting is uvicorn's traceback on standard error, exit status 1,
+with nothing on standard output) and a crash of the interpreter. The edge's
+own log is not ours to format. The two HTTP client libraries are held at
+WARNING because they log each request's URL at INFO. The records stay in each
+pod's output: nothing ships them to Loki until the node agent of the
+cluster half of S064 is built.
+
 ## A runbook is something people execute
 
 Each alert links its runbook on `main`, and an operator pastes its

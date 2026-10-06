@@ -7,6 +7,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.policy_mcp import SERVICE_NAME
 from meridian.platform.policy_mcp.tools import HANDLERS
@@ -35,4 +36,5 @@ def create_app(
 def create_app_from_env() -> Starlette:
     """The ASGI app, for ``uvicorn --factory``."""
     install_log_redaction()
+    configure_logging(SERVICE_NAME)
     return create_app(ToolServerSettings.from_env()).app

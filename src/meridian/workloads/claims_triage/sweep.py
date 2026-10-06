@@ -38,6 +38,7 @@ import psycopg
 
 from meridian.platform.common.db import DATABASE_URL_ENV, connect
 from meridian.platform.common.env import SettingsError, require_env
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.runtime.sweep import (
     RUNNING_LEASE_SECONDS,
@@ -75,7 +76,6 @@ MAX_THREADS_PER_PASS = 100
 EXIT_CLEAN = 0
 EXIT_FAILED = 1
 EXIT_SETTINGS = 2
-LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 FAILURE_LOG = "%s %s: the sweep could not finish it: %s (sqlstate %s)"
 SUMMARY_LOG = (
     "sweep pass: %d claims referred as overdue, %d claims failed as not started, "
@@ -382,7 +382,7 @@ def run_pass(conn: psycopg.Connection, documents_deadline_days: int) -> PassResu
 def main(environ: Mapping[str, str] = os.environ) -> int:
     """Run one pass and return the exit code."""
     install_log_redaction()
-    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
+    configure_logging(SERVICE_NAME)
     try:
         settings = read_settings(environ)
     except SettingsError as exc:
