@@ -29,6 +29,7 @@ from meridian.platform.knowledge_mcp.settings import (
 )
 from meridian.platform.knowledge_mcp.verify import (
     Verification,
+    database_error_event,
     verification_event,
     verify_wordings,
 )
@@ -180,6 +181,12 @@ def _audit_check(conn: psycopg.Connection, event: AuditEvent) -> str | None:
     return None
 
 
+def _database_failure(exc: psycopg.Error) -> str:
+    # Only the server's own message: libpq's text can echo part of a bad DSN.
+    detail = exc.diag.message_primary or "no server message (connection failed?)"
+    return f"verification failed ({type(exc).__name__}): {detail}"
+
+
 def _report(result: Verification) -> None:
     for difference in result.differences:
         typer.echo(difference.line)
@@ -220,12 +227,18 @@ def verify(
                         err=True,
                     )
                 raise typer.Exit(code=EXIT_UNVERIFIABLE) from None
+            except psycopg.Error as exc:
+                # The check's own query failed: the row is a fixed word, and the
+                # transaction is rolled back before it is written.
+                unaudited = _audit_check(conn, database_error_event(run_id))
+                failure = _database_failure(exc)
+                if unaudited:
+                    failure += f"; the failure could not be audited ({unaudited})"
+                _cannot_verify(failure)
             _report(result)
             unaudited = _audit_check(conn, verification_event(result, run_id))
     except psycopg.Error as exc:
-        # Only the server's own message: libpq's text can echo part of a bad DSN.
-        detail = exc.diag.message_primary or "no server message (connection failed?)"
-        _cannot_verify(f"verification failed ({type(exc).__name__}): {detail}")
+        _cannot_verify(_database_failure(exc))
     if unaudited:
         _cannot_verify(f"the check could not be audited ({unaudited})")
     if result.differences:

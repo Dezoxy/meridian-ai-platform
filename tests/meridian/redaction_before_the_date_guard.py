@@ -1,4 +1,16 @@
-"""Redaction of personal identifiers from text on its way to a model."""
+"""Redaction of personal identifiers from text on its way to a model.
+
+THIS IS A REFERENCE FOR A TEST AND NEVER THE PRODUCT'S CODE. It is
+``meridian/platform/guardrails/redaction.py`` byte for byte as commit
+``f0360a5`` had it (``git show f0360a5:src/meridian/platform/guardrails/
+redaction.py``) below this docstring: the last version before the guard that
+keeps a date from being read as a phone number existed. It is frozen: do not
+edit it, do not follow the product with it, and do not import it from the
+product. ``test_redaction_differential.py`` holds today's ``redact`` to it:
+whatever it hid, today's hides, except in a named, closed set of shapes. It
+shares with the product only ``hungarian`` (the numbering plan and the check
+digits, which are data, not a matcher).
+"""
 
 import re
 import string
@@ -105,43 +117,16 @@ CARD_MAX_DIGITS = 19
 CARD_MIN_GROUP_DIGITS = 4
 
 # International form: "+", a country code and 7 to 14 more digits, with single
-# spaces, hyphens, slashes or dots between groups and one pair of parentheses
-# around a group (the country code and the area code together too, with the
-# "+" inside the parenthesis, as the research note's spelling advice has it).
-# The national
+# spaces or hyphens and one pair of parentheses around a group. The national
 # Hungarian forms have a rule of their own below: written without the "+", a
 # number is told from an amount, a claim number or a date only by a closed
-# prefix and a length that the numbering plan gives. The hyphen goes last, so
-# that a character class built from the separators holds no range.
-PHONE = re.compile(rf"\+[0-9(][0-9{SPACE_CHARS}()/.-]{{6,32}}")
+# prefix and a length that the numbering plan gives.
+PHONE = re.compile(rf"\+[0-9(][0-9{SPACE_CHARS}()-]{{6,32}}")
 PHONE_MIN_DIGITS = 8
 PHONE_MAX_DIGITS = 17
-PHONE_SEPARATORS = SPACE_CHARS + "/." + JOINING_HYPHEN
-PHONE_SHAPE = re.compile(rf"\+[0-9]+(?:[{PHONE_SEPARATORS}][0-9]+)*")
-# An international span does not cross a slash or a dot that is followed (after
-# an opening parenthesis, if there is one) by the national or the international
-# prefix of another number: an international
-# number, a slash and a national one are two numbers, not one span that ends
-# inside the second. (A "+" is not in ``PHONE``'s class, so it ends a candidate
-# by itself.) Residual: a dotted international number whose group after a dot
-# begins "06" or "00" is cut there.
-PHONE_JOIN = re.compile(r"[/.]\(?(?:06|00)")
-PAREN_GROUP = re.compile(r"\(\+?[0-9]+\)")
-# A phone number may be followed by a hyphen and a Hungarian case ending (the
-# number, then "-es" or "-val"): the ending stays and the number is replaced.
-# The endings are a closed list, lower case, as a word has them, so that the
-# start of a longer hyphenated identifier (a number, then "-ab", or "-es" and a
-# year) is still no phone number.
-PHONE_ENDINGS = (
-    *("as", "es", "ba", "be", "ban", "ben", "ból", "ből", "en", "et", "ig"),
-    *("hez", "hoz", "höz", "nak", "nek", "nál", "nél", "on", "ön", "ot", "öt"),
-    *("ra", "re", "ról", "ről", "tól", "től", "val", "vel", "ért", "ként", "at"),
-    # The ending after the last digit's spoken name: "-tel" after 5 or 7, "-tal"
-    # after 6, "-mal" after 3, "-gyel" after 1 or 4, "-cal" after 8, "-cel"
-    # after 9, and the adjective "-ös" after 5 and "-os" after 6.
-    *("tel", "tal", "mal", "gyel", "cal", "cel", "ös", "os"),
-)
-PHONE_ENDING = re.compile(rf"-(?:{'|'.join(PHONE_ENDINGS)})(?!\w)")
+PHONE_SHAPE = re.compile(rf"\+[0-9]+(?:[{SPACE_CHARS}-][0-9]+)*")
+PAREN_GROUP = re.compile(r"\([0-9]+\)")
+PHONE_SEPARATORS = SPACE_CHARS + JOINING_HYPHEN
 
 # Hungarian forms (S067). A candidate starts at a token boundary, as an IBAN
 # does: not inside a longer word or number, unless a JSON escape sits right
@@ -152,51 +137,8 @@ NON_DIGITS = re.compile(r"[^0-9]")
 
 # National phone number: "06" or "0036" ("00 36" too), then digit groups joined
 # by one space, hyphen, slash or dot, with one pair of parentheses round any run
-# of groups (the prefix, the code, or both). The candidate is at most 35
-# characters (the "(" and the prefix, 3, and 32 more); the numbering plan's code
-# and length decide. Two shapes of a date are not a phone number:
-# - the tail of a date: a candidate right after one or two groups of a date and
-#   a dot or a slash ("2026/06/30 1250000", "30.06.30 1250000"), when the
-#   candidate begins with the group "06" and the same separator follows that
-#   group (the rest of the date). A group is a year (1900 to 2099) or one or two
-#   digits, the groups of one date share one separator, and the first group does
-#   not follow a letter, a digit, a hyphen, a dot or a slash ("CLM-0001/0630...",
-#   "12345/0630..." are no dates). A candidate that goes on in another way
-#   ("1.06301234567", "12/06 30 123 4567") is a number after a list number or a
-#   year and is replaced. The guard does not apply when the separator directly
-#   follows a span the same pass has just accepted (two numbers joined by a
-#   slash or a dot are two numbers);
-# - a candidate that starts as a day-first date on the 6th: "06", a separator, a
-#   month (01 to 12), the same separator and a year ("06.12.2026 14:30"; the
-#   separator is a dot, a slash, a hyphen or a space), or that is the month and
-#   the year of one (a date on the 6th of June, then an amount: the candidate
-#   that starts at the month). A
-#   Budapest number whose second group is 10, 11 or 12 and whose third looks
-#   like a year, written with one separator throughout, is the form this
-#   misses: no other national number can be written so (the digits of "06 12
-#   2026 14" are a Budapest number of the numbering plan).
-DATE_SEPARATORS = "./"
-DATE_LEAD_SEPARATORS = DATE_SEPARATORS + SPACE_CHARS + JOINING_HYPHEN
-DATE_YEAR = "(?:19|20)[0-9]{2}"
-DATE_GROUP = rf"(?:{DATE_YEAR}|[0-9]{{1,2}})"
-DATE_TAIL = re.compile(
-    rf"(?<![\w./-]){DATE_GROUP}(?P<separator>[{DATE_SEPARATORS}])"
-    rf"(?:{DATE_GROUP}(?P=separator))?\Z"
-)
-# The longest a date tail is: a year, a separator, a year, a separator.
-DATE_TAIL_MAX_CHARS = 10
-DATE_LEAD = re.compile(
-    rf"06(?P<separator>[{DATE_LEAD_SEPARATORS}])(?:0[1-9]|1[0-2])(?P=separator)"
-    rf"{DATE_YEAR}(?![0-9])"
-)
-# The month and year of a day-first date whose month is 06: the day, then the
-# candidate. It is looked for three characters (the day and a separator) before
-# the candidate, so ``DATE_MONTH_LEAD_CHARS`` is the distance.
-DATE_MONTH_LEAD = re.compile(
-    rf"(?<![\w./-])(?:0[1-9]|[12][0-9]|3[01])"
-    rf"(?P<separator>[{DATE_LEAD_SEPARATORS}])06(?P=separator){DATE_YEAR}(?![0-9])"
-)
-DATE_MONTH_LEAD_CHARS = 3
+# of groups (the prefix, the code, or both). The candidate is at most 36
+# characters; the numbering plan's code and length decide.
 NATIONAL_PHONE_SEPARATORS = SPACE_CHARS + "/.-"
 NATIONAL_PHONE = re.compile(
     rf"{TOKEN_START}\(?(?:06|00)[0-9(){NATIONAL_PHONE_SEPARATORS}]{{6,32}}"
@@ -224,21 +166,16 @@ PERSONAL_ID = re.compile(rf"{TOKEN_START}[0-9](?:-[0-9]{{6}}-[0-9]{{4}}|[0-9]{{1
 
 # An identifier with no structure of its own that an amount or a date does not
 # share (a bare run of digits that chance passes one time in ten) is replaced
-# only when one of a closed list of words stands before it on the same line or
-# the next: the word, then at most WORD_GAP_MAX_CHARS characters that are
-# neither digits nor a backslash (a colon, "szám", "number", "no.", spaces),
-# then the number. One line break may stand in the gap (a form puts "TAJ szám:"
-# on one line and the number on the next): a real one or the escape
-# ``json.dumps`` writes, with at most WORD_GAP_MAX_CHARS characters on each
-# side of it, and no second break. The word is a whole word: no letter or digit
-# before it (a JSON escape before it does not count) and no letter right after
-# it. The word stays; only the number is replaced.
+# only when one of a closed list of words stands before it on the same line:
+# the word, then at most WORD_GAP_MAX_CHARS characters that are neither digits,
+# a backslash nor a line break (a colon, "szám", "number", "no.", spaces), then
+# the number. The word is a whole word: no letter or digit before it (a JSON
+# escape before it does not count) and no letter right after it. The word
+# stays; only the number is replaced.
 WORD_GAP_MAX_CHARS = 12
 WORD_START = rf"(?:(?<![^\W_])|(?<={JSON_ESCAPE_BEFORE}))"
 WORD_END = r"(?![^\W\d_])"
-LINE_BREAK = r"(?:\r\n|[\r\n]|\\r\\n|\\[nr])"
-WORD_GAP_RUN = rf"[^0-9\\\r\n]{{0,{WORD_GAP_MAX_CHARS}}}"
-WORD_GAP = rf"{WORD_GAP_RUN}(?:{LINE_BREAK}{WORD_GAP_RUN})?(?=[0-9])"
+WORD_GAP = rf"[^0-9\\\r\n]{{0,{WORD_GAP_MAX_CHARS}}}(?=[0-9])"
 # The words, matched ignoring case, with and without accents: the social
 # security number's (TAJ, tajszám, TAJ-szám, its official name, "social
 # security", "social insurance"), the tax identification number's (adóazonosító
@@ -313,9 +250,7 @@ def redact(text: str) -> Redaction:
     window that passes Luhn and is a whole token is replaced, then the search
     resumes after it. An
     IBAN written without spaces is replaced only when its country code is
-    uppercase, so an all-lowercase unspaced IBAN is missed (T-73's residual), and
-    redacting twice is not redacting once where two numbers touch by ``+`` or
-    ``(``: the second is found on the second pass only (T-73's residual).
+    uppercase, so an all-lowercase unspaced IBAN is missed (T-73's residual).
     Text that is not matched is returned unchanged, byte for byte.
 
     Hungarian identifiers (``hungarian``), each as a whole token and only when
@@ -323,26 +258,7 @@ def redact(text: str) -> Redaction:
     of the numbering plan and its length), the tax number as 8-1-2, a domestic
     account number of two or three blocks of eight digits, and the personal
     identification number; the social security number, the tax identification
-    number and the unhyphenated tax number only after a word of a closed list
-    (the number may stand on the next line: one line break, real or as JSON
-    writes it). A national phone number is left alone where it is the tail of a
-    date ("2026/06/30 1250000") or starts as a day-first date on the 6th
-    ("06.12.2026 14:30"), but not when a slash or a dot joins it to a number
-    just replaced; a phone number may be followed by a hyphen and a Hungarian
-    case ending of a closed list, which stays.
-    Phone numbers still in the clear, in a closed set of shapes (T-73's
-    residuals; ``test_redaction_differential.py`` holds today's matcher to the
-    one before the date guard and lists each with an example): a number that
-    reads as the rest of a date, which is "06" and a dot or a slash written
-    throughout after one or two date groups and the same separator
-    ("30/06/06/22270/67/2"), a Budapest number written "06-12-2026-14" (a month
-    from 10 to 12, a year, one separator), or a mobile number "06 2026 12345"
-    after a day and the same separator ("30 06 2026 12345"); and a national
-    number after an international one with no slash or dot between them
-    ("+36/83/701/902 00 36/73/48/9525"), whose first digits the international
-    span takes. Not found, and not found before the guard either: two numbers
-    joined by a hyphen ("06301234567-06201234567") and a number written
-    "(+36 30) 123 4567".
+    number and the unhyphenated tax number only after a word of a closed list.
     It does not find names, addresses, identity card, passport or driving
     licence numbers (no check digit), vehicle plates, an account number written
     without separators (a card's Luhn rule already reads 16 digits, so one that
@@ -379,7 +295,6 @@ def _replace_candidates(
     found: dict[str, int],
     *,
     rescan_failed: bool = False,
-    refuse: Callable[[str, int], bool] | None = None,
 ) -> str:
     """Replace the span ``choose`` accepts in each candidate ``pattern`` finds.
 
@@ -387,22 +302,13 @@ def _replace_candidates(
     bounded in size and ``choose`` has already looked at every span of it. With
     ``rescan_failed`` the search resumes one character on, so that a valid
     IBAN that starts inside a failed candidate is still found; the pattern's
-    lookbehind keeps that to a few starts per word. ``refuse`` is given the text
-    and a candidate's start and skips the candidate on true, unless one
-    character (a separator) is all that stands between it and the span just
-    accepted."""
+    lookbehind keeps that to a few starts per word."""
     parts: list[str] = []
     copied_to = 0
     position = 0
     count = 0
     while match := pattern.search(text, position):
-        start = match.start()
-        refused = (
-            refuse is not None
-            and not (count and start == copied_to + 1)
-            and refuse(text, start)
-        )
-        span = None if refused else choose(text, start, match.end())
+        span = choose(text, match.start(), match.end())
         if span is None:
             position = match.start() + 1 if rescan_failed else match.end()
             continue
@@ -451,15 +357,6 @@ def _joins_after(text: str, end: int) -> bool:
     return (
         after == JOINING_HYPHEN and end + 1 < len(text) and text[end + 1] in TOKEN_CHARS
     )
-
-
-def _joins_after_phone(text: str, end: int) -> bool:
-    """Like ``_joins_after``, except that a hyphen and a Hungarian case ending
-    from ``PHONE_ENDINGS`` do not join, when nothing joins after the ending."""
-    if not _joins_after(text, end):
-        return False
-    ending = PHONE_ENDING.match(text, end)
-    return ending is None or _joins_after(text, ending.end())
 
 
 def _is_whole_token(text: str, start: int, end: int) -> bool:
@@ -516,7 +413,7 @@ def _replace_cards(text: str, found: dict[str, int]) -> str:
     copied_to = 0
     for start, end in spans:
         parts.append(text[copied_to:start])
-        parts.append(PLACEHOLDERS["card"])
+        parts.append(CARD_PLACEHOLDER)
         copied_to = end
     parts.append(text[copied_to:])
     found["card"] = len(spans)
@@ -609,15 +506,7 @@ def _choose_phone_span(text: str, start: int, end: int) -> tuple[int, int] | Non
     """The longest prefix of the candidate, cut after a digit or a closing
     parenthesis, whose shape is an international number and that is a whole
     token: the "+" is not preceded by a letter, a digit or "_", unless a JSON
-    escape sits between. A number written with the "+" inside its parentheses
-    round the country code and the area code is taken with the "(" before it."""
-    span = _international_span(text, start, end)
-    if span is None and start > 0 and text[start - 1] == "(":
-        span = _international_span(text, start - 1, end)
-    return span
-
-
-def _international_span(text: str, start: int, end: int) -> tuple[int, int] | None:
+    escape sits between."""
     joined_before = (
         start > 0
         and text[start - 1] in TOKEN_CHARS
@@ -625,13 +514,11 @@ def _international_span(text: str, start: int, end: int) -> tuple[int, int] | No
     )
     if joined_before:
         return None
-    join = PHONE_JOIN.search(text, start, end)
-    trimmed = text[start : join.start() if join else end]
+    trimmed = text[start:end]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed)
-        stop = start + len(trimmed)
-        if not _joins_after_phone(text, stop) and _phone_shape_holds(trimmed):
-            return start, stop
+        if not _joins_after(text, start + len(trimmed)) and _phone_shape_holds(trimmed):
+            return start, start + len(trimmed)
         cut = max(trimmed.rfind(sep) for sep in PHONE_SEPARATORS)
         trimmed = trimmed[:cut] if cut > 0 else ""
     return None
@@ -653,47 +540,19 @@ def _national_shape_holds(text: str) -> bool:
     )
 
 
-def _is_date_tail(text: str, start: int) -> bool:
-    """Whether the candidate at ``start`` can be the rest of a date: the text
-    right before it is one or two groups of a date and their separator
-    (``DATE_TAIL``), the candidate starts with the group "06" (a month or a
-    day) and that group is followed by the tail's own separator ("2026/06/30
-    ..."). A candidate that goes on in any other way ("1.06301234567") is a
-    number after a list number or a year, and hides nothing."""
-    window = max(0, start - DATE_TAIL_MAX_CHARS)
-    tail = DATE_TAIL.search(text, window, start)
-    return (
-        tail is not None
-        and text.startswith("06", start)
-        and text[start + 2 : start + 3] == tail.group("separator")
-    )
-
-
-def _starts_as_date(text: str, start: int) -> bool:
-    """Whether the candidate, after an opening parenthesis if it has one, starts
-    as a day-first date on the 6th (``DATE_LEAD``), or is the month and the year
-    of one (``DATE_MONTH_LEAD``)."""
-    if DATE_LEAD.match(text, start + (text[start] == "(")) is not None:
-        return True
-    day = start - DATE_MONTH_LEAD_CHARS
-    return day >= 0 and DATE_MONTH_LEAD.match(text, day) is not None
-
-
 def _choose_national_phone_span(
     text: str, start: int, end: int
 ) -> tuple[int, int] | None:
     """The longest prefix of the candidate, cut after a digit or a closing
     parenthesis, that is a national number of the numbering plan and a whole
-    token. Parentheses that round the whole number stay outside the span. A
-    candidate that starts as a date is none (the date tail is the caller's
-    ``refuse``)."""
-    if _joins_before(text, start) or _starts_as_date(text, start):
+    token. Parentheses that round the whole number stay outside the span."""
+    if _joins_before(text, start):
         return None
     trimmed = text[start:end]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed, NATIONAL_PHONE_SEPARATORS)
         stop = start + len(trimmed)
-        if not _joins_after_phone(text, stop) and _national_shape_holds(trimmed):
+        if not _joins_after(text, stop) and _national_shape_holds(trimmed):
             if trimmed.startswith("(") and trimmed.endswith(")"):
                 return start + 1, stop - 1
             return start, stop
@@ -779,8 +638,7 @@ HUNGARIAN_RULES: tuple[tuple[str, re.Pattern[str], Chooser], ...] = (
 
 def _replace_hungarian(text: str, found: dict[str, int]) -> str:
     for kind, pattern, choose in HUNGARIAN_RULES:
-        refuse = _is_date_tail if pattern is NATIONAL_PHONE else None
         text = _replace_candidates(
-            text, kind, pattern, choose, found, rescan_failed=True, refuse=refuse
+            text, kind, pattern, choose, found, rescan_failed=True
         )
     return text

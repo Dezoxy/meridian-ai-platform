@@ -9,6 +9,7 @@ text the output must never carry.
 """
 
 import re
+import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
 
@@ -35,9 +36,12 @@ from meridian.platform.common.db import connect
 from meridian.platform.gateway.replay import replay_embedding
 from meridian.platform.knowledge_mcp.ingest import IngestError
 from meridian.platform.knowledge_mcp.search import QueryEmbedding, hybrid_search
+from meridian.platform.knowledge_mcp.verify import verify_wordings
 from meridian.platform.registry import Registry
 
 CLAUSES = 85
+BULK_CLAUSES = 6000
+BULK_TEXT_BYTES = BULK_CLAUSES * 3900
 PRODUCT = "HOME-STD"
 VERSION = "2026-01"
 CLOSING_SENTENCE = "This exclusion applies to claims for"
@@ -336,6 +340,59 @@ def test_a_database_that_cannot_be_read_exits_2_without_a_traceback(
     assert result.exit_code == 2
     assert result.output.startswith("ERROR verification failed (")
     assert isinstance(result.exception, SystemExit)
+
+
+def test_a_database_error_inside_the_check_exits_2_and_leaves_a_refused_audit_row(
+    stored: DatabaseHandle, as_ingestion: DatabaseHandle
+) -> None:
+    # The role may no longer read the body column: the check's own query fails
+    # after it has connected, and the ingestion role can still write its row.
+    as_owner(
+        stored,
+        f"REVOKE SELECT (body) ON knowledge.chunks FROM {INGEST_ROLE}",  # noqa: S608
+    )
+
+    result = runner.invoke(app, ["knowledge", "verify", "--from", str(REAL_SOURCE)])
+
+    assert result.exit_code == 2
+    assert result.output.startswith("ERROR verification failed (InsufficientPrivilege)")
+    assert isinstance(result.exception, SystemExit)
+    ((role, _, outcome, _, _, reference, reason),) = verify_rows(stored)
+    assert (role, outcome, reference) == (INGEST_ROLE, "refused", "wordings")
+    assert reason == "database-error"
+
+
+def test_the_stored_clauses_are_read_through_a_cursor_not_all_into_memory(
+    stored: DatabaseHandle,
+) -> None:
+    # 6,000 more clauses of 3,900 characters, 23 MB of text, in products the
+    # manifest does not have: each one is a difference, and none may be kept.
+    as_owner(
+        stored,
+        "INSERT INTO knowledge.chunks (product, wording_version, clause, section, "
+        "title, body, source_sha256, deployment, model, dimensions, embedding) "
+        "SELECT 'BULK-' || (g / 81), %s, "
+        "(1 + mod(g, 9)) || '.' || (1 + mod(g / 9, 9)), section, title, "
+        "repeat('a ', 1950), source_sha256, deployment, model, "
+        "dimensions, embedding "
+        "FROM generate_series(0, 5999) AS g, "
+        "(SELECT * FROM knowledge.chunks LIMIT 1) AS one",
+        (VERSION,),
+    )
+    assert chunk_count(stored) == CLAUSES + BULK_CLAUSES
+
+    with connect(stored.dsn(INGEST_ROLE), "test-verify") as conn:
+        tracemalloc.start()
+        try:
+            result = verify_wordings(conn, REAL_SOURCE)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        conn.rollback()
+
+    assert result.stored == CLAUSES + BULK_CLAUSES
+    assert len(result.differences) == BULK_CLAUSES
+    assert peak < BULK_TEXT_BYTES // 2, peak
 
 
 def test_the_command_needs_no_gateway_and_makes_no_http_call(

@@ -8,6 +8,8 @@ until the pull request merges.
 """
 
 import datetime
+import re
+from typing import get_args
 
 import psycopg
 import pytest
@@ -18,6 +20,7 @@ from meridian.platform.common.db import connect
 from meridian.platform.migrations import runner
 from meridian.platform.migrations.runner import migration_files
 from meridian.platform.policy_mcp.tools import SELECT_HISTORY
+from meridian.workloads.claims_triage.lifecycle import LifecycleState
 
 SUFFIX = "_open_claims.sql"
 INDEX = "claims_open_idx"
@@ -26,8 +29,6 @@ OTHER_ROLES = tuple(role for role in SERVICE_ROLES if role != ROLE)
 TENANT = "development"
 CLAIM = "CLM-0013"
 INSUFFICIENT_PRIVILEGE = "42501"
-OBJECT_NOT_IN_PREREQUISITE_STATE = "55000"
-FEATURE_NOT_SUPPORTED = "0A000"
 OPEN_STATES = (
     "submitted",
     "triaging",
@@ -331,6 +332,36 @@ def test_the_partial_index_predicate_is_exactly_the_five_open_states(
     )
 
 
+def listed_states(definition: str) -> set[str]:
+    """The state literals after the last WHERE of a view's or an index's
+    definition, as the catalogue prints it."""
+    condition = definition.rsplit("WHERE", 1)[-1]
+    return set(re.findall(r"'([a-z_]+)'::text", condition))
+
+
+def test_the_two_views_and_the_index_list_the_states_of_the_lifecycle_between_them(
+    migrated_database: DatabaseHandle,
+) -> None:
+    # A ninth state added to the lifecycle is in neither view until a file puts
+    # it in one; this fails the day the lifecycle and the views part, so that it
+    # is decided, not missed.
+    ((open_view, decided_view, predicate),) = run(
+        migrated_database,
+        OWNER,
+        "SELECT pg_get_viewdef('claims.open_claims'::regclass), "
+        "pg_get_viewdef('claims.decided_claims'::regclass), "
+        "pg_get_expr(indpred, indrelid) FROM pg_index "
+        "WHERE indexrelid = 'claims.claims_open_idx'::regclass",
+    )
+
+    opened, decided = listed_states(open_view), listed_states(decided_view)
+    assert opened == set(OPEN_STATES)
+    assert decided == {"approved", "rejected"}
+    assert opened.isdisjoint(decided)
+    assert opened | decided | {"withdrawn"} == set(get_args(LifecycleState))
+    assert listed_states(predicate) == opened
+
+
 def test_the_decided_view_still_holds_only_the_decided_states(
     fresh_database: DatabaseHandle,
 ) -> None:
@@ -396,18 +427,27 @@ def test_the_view_is_granted_to_policy_mcp_alone_and_to_public_not_at_all(
         "AND grantee <> %s ORDER BY grantee, privilege_type",
         (OWNER,),
     )
+    # A grant on one column does not show in role_table_grants: ask for each.
+    writes = run(
+        migrated_database,
+        OWNER,
+        "SELECT has_any_column_privilege('policy_mcp', 'claims.open_claims', "
+        "'INSERT, UPDATE, REFERENCES')",
+    )
 
     assert rows == [("policy_mcp", "SELECT")]
+    assert writes == [(False,)]
 
 
+# Each statement names plain columns only (the view's literal and computed ones
+# cannot be written), so PostgreSQL checks the privilege and nothing else comes
+# first: the one SQLSTATE that can come out is a missing privilege.
 @pytest.mark.parametrize(
     "statement",
     [
-        "INSERT INTO claims.open_claims (claim_id, tenant, policy_number, "
-        "loss_date, peril, paid_amount, state) VALUES "
-        "('CLM-0099', 'development', 'POL-0001', '2026-07-13', 'storm', 1, "
-        "'submitted')",
-        "UPDATE claims.open_claims SET paid_amount = 1",
+        "INSERT INTO claims.open_claims (claim_id, tenant, state) "
+        "VALUES ('CLM-0099', 'development', 'submitted')",
+        "UPDATE claims.open_claims SET state = 'approved'",
         "DELETE FROM claims.open_claims",
     ],
 )
@@ -416,17 +456,29 @@ def test_policy_mcp_cannot_write_through_the_view(
 ) -> None:
     add_claim(fresh_database, CLAIM, "submitted")
 
-    # PostgreSQL may refuse the write for the view's shape (it joins nothing but
-    # holds a literal column) before it checks a privilege; either way nothing
-    # passes.
     sqlstate = refused(fresh_database, ROLE, statement)
 
-    assert sqlstate in {
-        INSUFFICIENT_PRIVILEGE,
-        OBJECT_NOT_IN_PREREQUISITE_STATE,
-        FEATURE_NOT_SUPPORTED,
-    }
+    assert sqlstate == INSUFFICIENT_PRIVILEGE
     assert run(fresh_database, OWNER, "SELECT count(*) FROM claims.claims") == [(1,)]
+    assert run(fresh_database, OWNER, "SELECT state FROM claims.claims") == [
+        ("submitted",)
+    ]
+
+
+def test_the_view_is_writable_by_its_shape_so_the_grants_alone_stop_a_write(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # The view is a plain one over one table: PostgreSQL would pass an update of
+    # its plain columns to the table. Only the missing grant stops it, which is
+    # why the tests above and the grant test below read the privileges.
+    add_claim(fresh_database, CLAIM, "submitted")
+    run(fresh_database, OWNER, f"GRANT UPDATE (state) ON claims.open_claims TO {ROLE}")
+
+    run(fresh_database, ROLE, "UPDATE claims.open_claims SET state = 'approved'")
+
+    assert run(fresh_database, OWNER, "SELECT state FROM claims.claims") == [
+        ("approved",)
+    ]
 
 
 def apply_everything_before(
@@ -458,6 +510,31 @@ def test_a_migration_run_by_a_role_that_does_not_own_the_schema_is_refused(
         empty_database, OWNER, "SELECT to_regclass('claims.open_claims') IS NOT NULL"
     )
     assert exists is False
+
+
+def test_a_missing_role_fails_clearly_and_creates_nothing(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = apply_everything_before(empty_database, monkeypatch)
+    text = dict(files)[migration_name()].replace(ROLE, "role_that_does_not_exist")
+
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        with pytest.raises(
+            psycopg.Error,
+            match=(
+                "required role role_that_does_not_exist does not exist; "
+                "create it out of band before migrating"
+            ),
+        ):
+            conn.execute(text)
+        conn.rollback()
+
+    assert run(
+        empty_database,
+        OWNER,
+        "SELECT to_regclass('claims.open_claims') IS NOT NULL, "
+        "to_regclass('claims.claims_open_idx') IS NOT NULL",
+    ) == [(False, False)]
 
 
 def test_the_migration_gives_policy_mcp_the_one_view_and_changes_no_other_role(

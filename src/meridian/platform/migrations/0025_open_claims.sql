@@ -45,8 +45,14 @@
 -- SELECT on claims.claims.submission or state.
 --
 -- Grants: SELECT on claims.open_claims to policy_mcp, nothing else, and nothing
--- to PUBLIC. No role may write through the view. policy_mcp has had USAGE on
--- schema claims since 0004. To undo the grant, a next file holds
+-- to PUBLIC. The view is a plain one over one table, so by its shape PostgreSQL
+-- would pass a DELETE, an INSERT or an UPDATE of its plain columns (claim_id,
+-- tenant, state) through to claims.claims: the GRANTS are the barrier, not the
+-- view, and a column grant on it would open a write (the tests read the
+-- privileges column by column). It does not filter by tenant, as 0013's view
+-- does not: tenant is one of its columns, a role that may read it reads every
+-- tenant's open claims, and the tool's query filters by tenant. policy_mcp has
+-- had USAGE on schema claims since 0004. To undo the grant, a next file holds
 -- REVOKE ALL ON claims.open_claims FROM policy_mcp (there is no down migration;
 -- an applied file never changes).
 --

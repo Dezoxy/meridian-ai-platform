@@ -360,6 +360,14 @@ def _names_a_clause(citation: Any) -> bool:
     return isinstance(citation, dict) and isinstance(citation.get("clause"), str)
 
 
+def _policy_is_readable(policy: Mapping[str, Any]) -> bool:
+    """Whether ``_wanted`` can read the policy: its product and its wording
+    version, the two fields each citation carries, are strings."""
+    return isinstance(policy.get("product"), str) and isinstance(
+        policy.get("wording_version"), str
+    )
+
+
 def _policy_of(
     expected: Mapping[str, Any],
     claim: Mapping[str, Any],
@@ -370,15 +378,18 @@ def _policy_of(
     nothing (so no field of a policy is read); any other claim with no policy is
     a golden set whose files disagree. So is a record the grading cannot read: a
     claim with no policy number, an expected record that ``_is_readable`` refuses
-    (a field missing or of another kind, citations that name no clause; the
-    files are a folder a person chose). This is the one place the record is
-    checked, before ``grade`` indexes it."""
+    (a field missing or of another kind, citations that name no clause), a
+    policy that ``_policy_is_readable`` refuses (no product or wording version
+    of the kind a citation carries); the files are a folder a person chose. This
+    is the one place the records are checked, before ``grade`` indexes them."""
     number = claim.get("policy_number")
     if not (isinstance(number, str) and _is_readable(expected)):
         raise ReportError(FILES_DISAGREE)
     reason, citations = expected["reason"], expected["citations"]
     policy = policies.get(number)
     if policy is not None:
+        if not _policy_is_readable(policy):
+            raise ReportError(FILES_DISAGREE)
         return policy
     if reason == POLICY_NOT_FOUND and not citations:
         return {}

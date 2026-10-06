@@ -35,6 +35,12 @@ from meridian.platform.knowledge_mcp.ingest import (
 )
 
 AUDIT_EVENT = "knowledge.verify"
+# The stored clauses are read through a named (server-side) cursor, this many
+# rows at a time.
+CURSOR_NAME = "verify_chunks"
+FETCH_ROWS = 200
+# The word of the audit row of a check that a database error stopped.
+DATABASE_ERROR_REASON = "database-error"
 SELECT_STORED = (
     "SELECT product, wording_version, clause, section, title, body, source_sha256 "
     "FROM knowledge.chunks"
@@ -139,38 +145,52 @@ def _expected(source: Path) -> dict[Key, dict[str, str]]:
     return expected
 
 
-def _stored(conn: psycopg.Connection) -> dict[Key, dict[str, str]]:
-    columns = ("section", "title", "body", "source_sha256")
-    return {
-        (product, version, clause): dict(zip(columns, rest, strict=True))
-        for product, version, clause, *rest in conn.execute(SELECT_STORED)
-    }
+def _kinds(want: dict[str, str], row: tuple[str, ...]) -> list[Kind]:
+    """The kinds of difference between a stored row's four columns (in the
+    order of ``SELECT_STORED`` after the key) and what the manifest gives."""
+    section, title, body, source_sha256 = row
+    have = {"section": section, "title": title, "body": body}
+    kinds = [kind for column, kind in COMPARED if want[column] != have[column]]
+    if want["source_sha256"] != source_sha256:
+        kinds.append("source-hash-differs")
+    return kinds
 
 
-def _compare(
-    expected: dict[Key, dict[str, str]], stored: dict[Key, dict[str, str]]
-) -> list[Difference]:
-    found = [_difference(key, "not-stored") for key in expected.keys() - stored.keys()]
-    found += [
-        _difference(key, "not-in-manifest") for key in stored.keys() - expected.keys()
-    ]
-    for key in expected.keys() & stored.keys():
-        want, have = expected[key], stored[key]
-        kinds = [kind for column, kind in COMPARED if want[column] != have[column]]
-        if want["source_sha256"] != have["source_sha256"]:
-            kinds.append("source-hash-differs")
-        found += [_difference(key, kind) for kind in kinds]
-    return sorted(found, key=_order)
+def _compare_stored(
+    conn: psycopg.Connection, expected: dict[Key, dict[str, str]]
+) -> tuple[int, list[Difference]]:
+    """The number of stored clauses and the differences, comparing each row as it
+    arrives from a server-side cursor, so that what is held is the manifest's
+    clauses and the differences found, never the store."""
+    found: list[Difference] = []
+    seen: set[Key] = set()
+    stored = 0
+    with conn.cursor(name=CURSOR_NAME) as cursor:
+        cursor.itersize = FETCH_ROWS
+        cursor.execute(SELECT_STORED)
+        for product, version, clause, *row in cursor:
+            stored += 1
+            key = (product, version, clause)
+            if key not in expected:
+                found.append(_difference(key, "not-in-manifest"))
+                continue
+            seen.add(key)
+            found += [_difference(key, kind) for kind in _kinds(expected[key], row)]
+    found += [_difference(key, "not-stored") for key in expected.keys() - seen]
+    return stored, sorted(found, key=_order)
 
 
 def verify_wordings(conn: psycopg.Connection, source: Path) -> Verification:
     """Compare the stored clauses with the wordings under ``source``. Reads the
     store and writes nothing; leaves the read transaction open for the caller to
     end. Raises ``IngestError`` when the wordings are refused, as the ingestion
-    refuses them."""
+    refuses them. The store is read through a server-side cursor, ``FETCH_ROWS``
+    rows at a time: memory is the manifest's clauses and the differences found,
+    whatever the store holds (read whole, 100,000 rows of 800 characters took
+    316 MB, and the ingestion Job's limit is 192Mi)."""
     expected = _expected(source)
-    stored = _stored(conn)
-    return Verification(len(expected), len(stored), tuple(_compare(expected, stored)))
+    stored, differences = _compare_stored(conn, expected)
+    return Verification(len(expected), stored, tuple(differences))
 
 
 def verification_event(result: Verification, run_id: uuid.UUID) -> AuditEvent:
@@ -187,9 +207,7 @@ def verification_event(result: Verification, run_id: uuid.UUID) -> AuditEvent:
     )
 
 
-def refusal_event(error: IngestError, run_id: uuid.UUID) -> AuditEvent:
-    """The audit row of a check the wordings' refusal stopped: the reason word
-    only, as the ingestion's refusal row has it."""
+def _refused(run_id: uuid.UUID, reason: str) -> AuditEvent:
     return AuditEvent(
         service=AUDIT_SERVICE,
         event=AUDIT_EVENT,
@@ -197,5 +215,17 @@ def refusal_event(error: IngestError, run_id: uuid.UUID) -> AuditEvent:
         agent=INGESTION_AGENT,
         run_id=run_id,
         reference=AUDIT_REFERENCE,
-        reason=error.reason,
+        reason=reason,
     )
+
+
+def refusal_event(error: IngestError, run_id: uuid.UUID) -> AuditEvent:
+    """The audit row of a check the wordings' refusal stopped: the reason word
+    only, as the ingestion's refusal row has it."""
+    return _refused(run_id, error.reason)
+
+
+def database_error_event(run_id: uuid.UUID) -> AuditEvent:
+    """The audit row of a check a database error stopped inside the check: a
+    fixed word, never the server's message."""
+    return _refused(run_id, DATABASE_ERROR_REASON)

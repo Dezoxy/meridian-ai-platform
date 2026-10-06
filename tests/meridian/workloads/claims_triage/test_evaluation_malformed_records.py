@@ -6,7 +6,8 @@ expected record with a field the grading indexes (``route``, ``reason``,
 ``missing_documents``, ``citations`` and the first citation's ``clause``)
 missing, of another kind or, for citations, naming no clause is a ``ReportError``
 with the fixed text, never a ``KeyError`` or a ``TypeError``, and the text names
-neither the field's value nor the claim's policy."""
+neither the field's value nor the claim's policy. So is a policy record with no
+``product`` or ``wording_version`` of the kind a citation carries (S067, F3)."""
 
 import json
 import shutil
@@ -203,6 +204,57 @@ def test_a_null_recommendation_or_payable_amount_is_a_record_the_grading_reads(
     # edited copy is then refused by the manifest's hash, which is checked last:
     # the text is the manifest's, not the files-disagree one.
     golden_copy(tmp_path, ANY_CLAIM, expected=null(field))
+
+    refusal = report_refused(tmp_path, ANY_CLAIM)
+
+    assert refusal.startswith(FILES_DIFFER)
+
+
+def policy_copy(directory: Path, claim_id: str, edit: Callable[[Any], None]) -> None:
+    """The golden set's files, with one edit to the policy record of the claim."""
+    shutil.copytree(SYNTHETIC_DIR, directory, dirs_exist_ok=True)
+    claims = json.loads((directory / "claims.json").read_text("utf-8"))
+    (number,) = (c["policy_number"] for c in claims if c["claim_id"] == claim_id)
+    path = directory / "policies.json"
+    records = json.loads(path.read_text("utf-8"))
+    (entry,) = (r for r in records if r["policy_number"] == number)
+    edit(entry)
+    path.write_text(json.dumps(records), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        drop("product"),
+        null("product"),
+        set_to("product", 3),
+        drop("wording_version"),
+        null("wording_version"),
+        set_to("wording_version", ["2025.1"]),
+    ],
+    ids=[
+        "no-product",
+        "null-product",
+        "product-not-a-string",
+        "no-wording-version",
+        "null-wording-version",
+        "wording-version-not-a-string",
+    ],
+)
+def test_a_policy_record_missing_what_the_grading_reads_is_files_disagree(
+    tmp_path: Path, edit: Callable[[Any], None]
+) -> None:
+    policy_copy(tmp_path, ANY_CLAIM, edit)
+
+    assert report_refused(tmp_path, ANY_CLAIM) == FILES_DISAGREE
+
+
+def test_an_intact_policy_copy_is_read_and_refused_only_by_the_manifest(
+    tmp_path: Path,
+) -> None:
+    # The same edit as the refusals above, with a value of the right kind: the
+    # record is read and the copy is then refused by the manifest's hash.
+    policy_copy(tmp_path, ANY_CLAIM, set_to("product", "other-product"))
 
     refusal = report_refused(tmp_path, ANY_CLAIM)
 

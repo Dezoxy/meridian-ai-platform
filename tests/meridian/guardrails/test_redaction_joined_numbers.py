@@ -41,11 +41,41 @@ from meridian.platform.guardrails import Redaction, hungarian, redact
         ("CLM-2026/06301234567", "CLM-2026/[phone]"),
         # Different separators in a date are no date.
         ("2026-07-13/06301234567", "2026-07-13/[phone]"),
+        # The second number's prefix may stand in parentheses (S067, F3).
+        ("+36 30 123 4567/(06) 20 765 4321", "[phone]/[phone]"),
+        ("+36 30 123 4567.(06) 20 765 4321", "[phone].[phone]"),
+        ("+36 30 123 4567/(0036) 20 765 4321", "[phone]/[phone]"),
+        ("+36301234567/(06)201234567", "[phone]/[phone]"),
+        ("+36301234567.(06)201234567", "[phone].[phone]"),
+        ("+36301234567/(0036)201234567", "[phone]/[phone]"),
     ],
 )
 def test_the_second_of_two_phone_numbers_joined_by_a_slash_or_a_dot_is_replaced(
     text: str, expected: str
 ) -> None:
+    result = redact(text)
+
+    assert result.text == expected
+    assert result.found == {"phone": expected.count("[phone]")}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1.06301234567", "1.[phone]"),
+        ("12/06 30 123 4567", "12/[phone]"),
+        ("Tel:1/06301234567", "Tel:1/[phone]"),
+        ("Fax:30.06301234567", "Fax:30.[phone]"),
+        ("2026.06301234567", "2026.[phone]"),
+        ("2026.0036500191530", "2026.[phone]"),
+        ("Tel 1/06301234567 vagy 2.06201234567", "Tel 1/[phone] vagy 2.[phone]"),
+    ],
+)
+def test_a_list_number_or_a_year_and_a_separator_before_a_number_hides_nothing(
+    text: str, expected: str
+) -> None:
+    # The group and the separator read as the tail of a date only when the
+    # candidate goes on as the rest of one: "06", then the separator again.
     result = redact(text)
 
     assert result.text == expected

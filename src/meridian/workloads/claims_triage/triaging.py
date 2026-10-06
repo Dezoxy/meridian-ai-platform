@@ -1,11 +1,11 @@
 """How the Claims API triages a claim (moved from ``app.py``, S048).
 
 The request that moves a claim to ``triaging`` owns its triage: it posts the
-run's facts to the Agent Runtime, then closes the triage in one transaction,
+run's input to the Agent Runtime, then closes the triage in one transaction,
 storing the proposal and moving the claim on. A failure moves the claim to
 ``triage_failed`` and answers 502, 503 or 504 with the claim's ID (and the
-run's, when there is one). The facts the run is sent carry neither the
-claimant's name nor e-mail address (S047).
+run's, when there is one). The run input carries neither the claimant's name
+nor e-mail address (S047).
 """
 
 import logging

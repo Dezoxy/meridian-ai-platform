@@ -392,7 +392,7 @@ def _store_arrival(
     dsn: str, tenant: str, claim_id: str, documents: Sequence[str]
 ) -> _Arrival:
     """Store the names and move the claim: to ``triaging`` with the moment it
-    moved and the facts to triage it with, or, when it has been triaged as often
+    moved and the run input to triage it with, or, when it has been triaged as often
     as the cap allows, to ``awaiting_adjuster`` (no triage). Either move drops the
     claim's run, so the run it held is returned: it may still be paused (an
     adjuster's request for documents whose resume failed). A claim in any other
