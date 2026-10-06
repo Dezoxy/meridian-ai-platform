@@ -11597,26 +11597,39 @@ any):
   `ubuntu-26.04`, which the installed actionlint 1.7.12 does not know; a
   test fails on a runner label that neither actionlint nor the file knows.
 
-**Advisor:** the design file records no consultation before the first
-contract, and none is claimed here. The handoff files show one, the reading
-of 18:46 UTC, taken with the holder's record seen on kind once and the
-cluster deleted by the session's script behind it. It changed four things.
-M2b was not to be closed by stand-ins alone: the two refusals the record
-exists for were to be seen on the cluster (another holder's deploy refused
-while a deploy runs, and another holder's `make down` refused with the
-record `ok`), which the 18:47 run did, and which showed one wording fault
-(the refusal said "did not end well" of a run that was still going; M2c).
-The 503 became a backlog row with its discriminating fact (two deploys a
-minute apart failed alike on the old cluster and a fresh one passed, which
-points at the cluster's state and not at load) and a third candidate, the
-ledger's close. There was to be no fourth guard pass; at the last
-consultation the session was to read F4g's heredoc-delimiter hunk itself
-and confirm that the commit idiom still passes (the lane board of 18:58
-UTC says the idiom and the new rule were probed by the session; the probe's
-output is not in the handoff files); and F4g's neutral items were to go
-into the base's copy as one pull request. Owed before the pull request: the
-whole suite on the branch (the merge 2387ba5 had been pushed after the
-cheap gates only), Part A's two sentences, and N4 to the owner. ADVISOR-BEFORE-PR
+**Advisor:** the design file records no consultation before the first contract,
+and none is claimed here. The handoff files show one, the reading of 18:46 UTC,
+taken with the holder's record seen on kind once and the cluster deleted by the
+session's script behind it. It changed four things. M2b was not to be closed by
+stand-ins alone: the two refusals the record exists for were to be seen on the
+cluster (another holder's deploy refused while a deploy runs, and another
+holder's `make down` refused with the record `ok`), which the 18:47 run did,
+and which showed one wording fault (the refusal said "did not end well" of a
+run that was still going; M2c). The 503 became a backlog row with its
+discriminating fact (two deploys a minute apart failed alike on the old cluster
+and a fresh one passed, which points at the cluster's state and not at load)
+and a third candidate, the ledger's close. There was to be no fourth guard
+pass; at the last consultation the session was to read F4g's heredoc-delimiter
+hunk itself and confirm that the commit idiom still passes (done before the
+pull request: below); and F4g's neutral items were to go into the base's copy
+as one pull request. Owed before the pull request: the whole suite on the
+branch (the merge 2387ba5 had been pushed after the cheap gates only), Part A's
+two sentences, and N4 to the owner. A second reading, at about 19:27 UTC before
+the pull request, because F4g, M2b, M2c and R2 had been read by no reviewer: it
+took the session's check of F4g's heredoc hunk (a lookahead after the delimiter
+that admits every closer the shell does; the backslash form of a delimiter is
+never read as a heredoc, so its body stays read) and four probes fed to the
+hook from a file (the commit idiom with a heredoc in a command substitution
+answers nothing, a denied command after a delimiter with a dash is denied,
+prose written to a file answers nothing, a credential printer in a command
+substitution asks), and asked for no fourth pass: the rest of F4g widens a deny
+or an ask, where a mistake costs an ask too many. It changed three things: the
+instruction files' paragraph on the hooks and the `redis-cli` exception of the
+pod's mount rule are named for the owner in the pull request; S036's contract
+for its guard rules was written before this pull request opened; and the
+retention periods of S068 are not the session's to set from the owner's "we
+should go with EU based thing" (the direction is the owner's, the numbers are
+asked in S068's design).
 
 **Work log:**
 
@@ -11717,7 +11730,12 @@ cheap gates only), Part A's two sentences, and N4 to the owner. ADVISOR-BEFORE-P
   not tried); the guard's `-v=8` and `crictl inspect` rules against a
   cluster.
 - **The whole suite on the final tree, with `main` merged in, run by the
-  main session:** FINAL-SUITE-RESULT
+  main session:** 13,962 passed, 8 skipped, in 3 minutes 18 seconds, alone
+  with six workers and no other test database running (the tree at 7c346d6;
+  only this section's last lines changed after it). The evaluation's free
+  replay passed twice on it (`eval compare: passed`). `make docs` (14
+  checks), `make check`, `make test`, `make lint` (six contracts kept) and
+  `make registry`: exit 0.
 - **The development base:** pull requests 49 (the split-table check) and 50
   (the length bounds and the ten forms) are merged; the last, with the
   watchdog and the neutral fixes of the three security passes, is pull
@@ -11767,7 +11785,10 @@ cheap gates only), Part A's two sentences, and N4 to the owner. ADVISOR-BEFORE-P
   chart's image before its chart, and the missing rule for the framework's
   package. Two closed in part and re-homed (the lock hold; the ledger's
   audit row), one re-homed (pgvector).
-- For the owner: N4 (question 6); the user setting `bashEditDiffEnabled`
+- For the owner: N4 (question 6); `redis-cli` as a fourth harmless verb of
+  the pod's mount rule, beside `ls`, `stat` and `test` (F4g added it so that
+  the rate store runbook's probe, which names its certificate and key files,
+  still passes); the user setting `bashEditDiffEnabled`
   that wakes the shell-edit hook; the box on the Dependency Dashboard that
   lets a young update through (Part A); and each decision above that the
   owner may overturn: the reading of the answer to the two older items, that
