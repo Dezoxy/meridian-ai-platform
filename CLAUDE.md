@@ -197,10 +197,12 @@ A change that violates one is wrong even if it works.
 - Hooks in `.claude/settings.json`: `guard-bash.sh` denies destructive
   commands and git hook bypasses, and asks before a command that deletes,
   costs money, leaves the machine, merges past failing checks or would
-  change a cluster it cannot tell is the local one (heredoc bodies are
-  ignored, so documentation that mentions a dangerous command is not
-  blocked for the mention; a command over 16384 bytes or 1000 parts asks
-  unread, and the secret-rotation runbook lists what it does not see);
+  change a cluster it cannot tell is the local one (the body of a heredoc
+  that is only written to a file is ignored, so documentation that mentions
+  a dangerous command is not blocked for the mention; a command over 16384
+  bytes typed, 8192 bytes read or 1000 parts asks unread, as does one the
+  guard cannot finish reading in five seconds, and the secret-rotation
+  runbook lists what it does not see);
   `check-py.sh`, `check-iac.sh`,
   `check-docs.sh` and `check-boundary.sh` inject advisory findings after an
   edit. GateGuard, vendored from ECC under `.claude/hooks/node/` and

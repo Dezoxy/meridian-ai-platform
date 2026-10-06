@@ -337,7 +337,10 @@ known.
   cases placed where they had to fail; a fingerprint that left out the
   code it was for).
 - An unattended stretch runs in the Remote Control service in tmux.
-- The cluster is deleted on the owner's word only. It frees about 3.3 GiB
+- The session may delete the local cluster and make it again when a test
+  needs it, and says so when it does; never to clear a fault nobody has
+  looked at, because the cluster's database is the only copy of the audit
+  log (hard rule 8; the owner, 2026-10-06). Deleting it frees about 3.3 GiB
   when the steps that need it are done.
 
 A test database is a copy of one migrated template since S065, not a
