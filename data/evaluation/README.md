@@ -49,6 +49,35 @@ new baseline in the same reviewed change (T-29, T-72):
   before it reads a case, empty set or not (S061); the two live reports
   were written before that and carry none.
 
+What the `screen` digest covers is narrower than the word "screens" may read.
+Covered: the source text, as `inspect.getsource` gives it, of the three
+functions `_normalise`, `holds_special_category` and `addresses_the_model`
+(docstrings and comments included, so an edited comment asks for a new
+baseline too), and the data they read: the two normalisation values, the
+special-category pattern and each pattern of the injection screen, with its
+flags, in the order they are tried. Not covered:
+
+- the Unicode database of the interpreter, which NFKC, the category check,
+  casefolding and `\s` and `\b` read, and the `re` module that runs the
+  patterns: a baseline is made under one Python, and another release may
+  match differently while the digest stays the same;
+- the helpers a pattern is built from when the module is imported (such as
+  `_phrase`): their result is covered, in the patterns, but not their source;
+- which text the screens are applied to, which is the graph's code and the
+  judge's (`assessment.py`, `evaluation/judge.py`), and the redaction that
+  runs before them (`guardrails/redaction.py`);
+- the code that runs: the source is read from the file at the time of the
+  call, so a process that outlives an edit of `screening.py` fingerprints
+  whatever now sits at the old line numbers of the file, while it still runs
+  the old code.
+
+The digest is not widened to the interpreter's Unicode version and `re`: the
+Unicode database changes with the interpreter's minor release, not its patch
+release, so that would tie both baselines to one Python minor release, and
+every move to the next one would become a baseline change. It does not hash
+code objects either: a changed comment would then ask for no new baseline, and
+asking is the safe direction (T-72).
+
 ## The recording
 
 An entry is found by the SHA-256 of the request the provider is given: the
@@ -253,10 +282,13 @@ to raise them.
 
 `meridian workload new NAME` writes `NAME/golden/` here: `cases.json`, an
 empty list, and the `manifest.json` that names the workload and lists the
-file's hash. No such directory is
-committed; the claims workload's golden set is `data/synthetic/`. A golden
-set with no case is an empty evaluation: `meridian eval run --allow-empty`
-says that nothing was evaluated, sends nothing and writes no report, and
-without the flag the run fails (T-82). Cases added later are synthetic and
-come from a seeded generator (hard rule 2), and the manifest's hash changes
-with them.
+file's hash. One such directory is committed, `claim-brief/golden/`, the second
+workload's (S037, a brief of a claim on the second agent framework): no case,
+and the workload has no grader, so its evaluation raises `NO_GRADERS` and
+evaluates nothing. The gate above compares the claims workload's baselines
+only, so nothing in CI grades or fingerprints the brief or its prompt. The
+claims workload's golden set is `data/synthetic/`. A golden set with no case is
+an empty evaluation: `meridian eval run --allow-empty` says that nothing was
+evaluated, sends nothing and writes no report, and without the flag the run
+fails (T-82). Cases added later are synthetic and come from a seeded generator
+(hard rule 2), and the manifest's hash changes with them.

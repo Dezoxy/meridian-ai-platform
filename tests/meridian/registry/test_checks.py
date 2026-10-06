@@ -42,7 +42,7 @@ REFERENCE_CASES = [
         [
             (
                 "tenants.yaml",
-                "agents: [claims-triage, knowledge-ingestion]",
+                "agents: [claims-triage, knowledge-ingestion, claim-brief]",
                 "agents: [ghost]",
             )
         ],
@@ -264,8 +264,11 @@ def test_decision_tool_in_an_agent_allowlist_is_reported(
 
     errors = load_errors(directory)
 
+    # One error for each agent that lists the tool: claims-triage and claim-brief.
     assert errors == (
         "agents.yaml: agents[0].tools[0]: agent 'claims-triage' lists decision "
+        "tool 'policy_lookup'; only humans decide (T-31)",
+        "agents.yaml: agents[3].tools[0]: agent 'claim-brief' lists decision "
         "tool 'policy_lookup'; only humans decide (T-31)",
     )
 
@@ -275,6 +278,8 @@ def test_decision_tool_outside_every_allowlist_is_accepted(plant: Plant) -> None
         ("tools.yaml", FIRST_TOOL_ROW, DECISION_ROWS),
         ("agents.yaml", "      - policy_lookup\n", ""),
         ("agents.yaml", "          - policy_lookup\n", ""),
+        # claim-brief's own list: the first six-space line that is left.
+        ("agents.yaml", "      - policy_lookup\n", ""),
     )
 
     tool = load_registry(directory).tool("policy_lookup")
@@ -617,6 +622,8 @@ def test_decision_tool_without_an_idempotency_key_is_reported(
                 ("agents.yaml", "- add_claim_note", "- record_decision"),
                 # The tool is also on the worker that holds it (S031).
                 ("agents.yaml", "- add_claim_note", "- record_decision"),
+                # And on the second agent's own list (S037).
+                ("agents.yaml", "- add_claim_note", "- record_decision"),
             ],
             "decision",
             id="write-tool-named-record-decision",
@@ -624,6 +631,7 @@ def test_decision_tool_without_an_idempotency_key_is_reported(
         pytest.param(
             [
                 ("tools.yaml", "id: request_approval", "id: approve_claim"),
+                ("agents.yaml", "- request_approval", "- approve_claim"),
                 ("agents.yaml", "- request_approval", "- approve_claim"),
                 ("agents.yaml", "- request_approval", "- approve_claim"),
             ],
@@ -648,9 +656,12 @@ def test_decision_word_in_an_allowlisted_tool_is_reported_whatever_its_effect(
 ) -> None:
     errors = load_errors(plant(*edits))
 
-    assert len(errors) == 1
+    # One error for each agent that lists the tool: claims-triage and claim-brief.
+    assert len(errors) == 2
     assert errors[0].startswith("agents.yaml: agents[0].tools[")
-    assert f"decision word {word!r}; only humans decide (T-31)" in errors[0]
+    assert errors[1].startswith("agents.yaml: agents[3].tools[")
+    for error in errors:
+        assert f"decision word {word!r}; only humans decide (T-31)" in error
 
 
 def test_request_approval_is_not_a_decision_tool(real_registry: Path) -> None:
@@ -665,6 +676,8 @@ def test_decision_word_in_a_tool_no_agent_lists_is_accepted(plant: Plant) -> Non
         ("tools.yaml", "id: add_claim_note", "id: record_decision"),
         ("agents.yaml", "      - add_claim_note\n", ""),
         ("agents.yaml", "          - add_claim_note\n", ""),
+        # claim-brief's own list: the first six-space line that is left.
+        ("agents.yaml", "      - add_claim_note\n", ""),
     )
 
     assert load_registry(directory).tool("record_decision") is not None
@@ -745,9 +758,11 @@ def test_empty_routes_report_every_purpose(
 
 def rename_note_tool(new_id: str) -> list[Edit]:
     """Rename the add_claim_note tool in the tool list, the allowlist and the
-    list of the worker that holds it (each edit changes the first match)."""
+    list of the worker that holds it, and in claim-brief's list (each edit
+    changes the first match)."""
     return [
         ("tools.yaml", "id: add_claim_note", f"id: {new_id}"),
+        ("agents.yaml", "- add_claim_note", f"- {new_id}"),
         ("agents.yaml", "- add_claim_note", f"- {new_id}"),
         ("agents.yaml", "- add_claim_note", f"- {new_id}"),
     ]
@@ -772,8 +787,10 @@ def test_inflected_decision_word_in_a_tool_id_is_reported(
 ) -> None:
     errors = load_errors(plant(*rename_note_tool(tool_id)))
 
-    assert len(errors) == 1
-    assert f"decision word {word!r}; only humans decide (T-31)" in errors[0]
+    # One error for each agent that lists the tool: claims-triage and claim-brief.
+    assert len(errors) == 2
+    for error in errors:
+        assert f"decision word {word!r}; only humans decide (T-31)" in error
 
 
 @pytest.mark.parametrize(
@@ -791,8 +808,10 @@ def test_inflected_decision_word_in_a_scope_is_reported(
         plant(("tools.yaml", "scope: claims:note:write", f"scope: {scope}"))
     )
 
-    assert len(errors) == 1
-    assert f"decision word {word!r}; only humans decide (T-31)" in errors[0]
+    # One error for each agent that lists the tool: claims-triage and claim-brief.
+    assert len(errors) == 2
+    for error in errors:
+        assert f"decision word {word!r}; only humans decide (T-31)" in error
 
 
 @pytest.mark.parametrize(

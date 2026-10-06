@@ -1,13 +1,14 @@
 """Plan and write a new workload into a checkout of this repository (S039, T-81).
 
 ``plan_workload`` reads the tree and returns what would be written; it writes
-nothing. ``write_plan`` writes it. Every edit of an existing file is made as
-text, after the last line of its table or list or inside the brackets of one
-line (a YAML or TOML writer would drop the file's comments), and is verified
-before the plan is returned: the new ``pyproject.toml`` must parse to the old
-one plus exactly two entry points, and a copy of the registry with the new
-``agents.yaml`` and ``services.yaml`` must validate (``scaffold_services`` makes
-the second edit and checks it parses to the old one plus one name).
+nothing. ``write_plan`` (in ``scaffold_writes``, with its undo) writes it. Every
+edit of an existing file is made as text, after the last line of its table or
+list or inside the brackets of one line (a YAML or TOML writer would drop the
+file's comments), and is verified before the plan is returned: the new
+``pyproject.toml`` must parse to the old one plus exactly two entry points, and a
+copy of the registry with the new ``agents.yaml`` and ``services.yaml`` must
+validate (``scaffold_services`` makes the second edit and checks it parses to the
+old one plus one name).
 
 The command declares and never grants: the agent lists no tool and no tenant
 lists it, so the gateway refuses its model calls and no tool server answers it
@@ -18,7 +19,9 @@ beyond the agent itself is the Agent Runtime's right to name it in a call
 The templates are text files filled with ``string.Template``: a ``.py`` file
 under ``meridian.platform`` that imports LangGraph would break the import
 contract (hard rule 5). Only ``$name`` and ``$module`` are substituted. Every
-refusal is a fixed text that never quotes the name.
+refusal is a fixed text that never quotes the name; the one place a name can
+appear is the path of a file left behind after a failed write, which the person
+has to find and which a kind of path would not help them find.
 """
 
 import copy
@@ -28,12 +31,10 @@ import keyword
 import os
 import re
 import shutil
-import stat
 import string
 import tempfile
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
@@ -44,10 +45,58 @@ import yaml
 from meridian.platform.cli.scaffold_services import (
     SERVICES_PATH,
     ServicesEditError,
+    line_of,
     services_edit,
+)
+from meridian.platform.cli.scaffold_writes import (
+    AGENTS_PATH,
+    AN_INTERRUPT,
+    AN_UNEXPECTED_ERROR,
+    CHECKING_THE_PLAN,
+    CREATING_A_FILE,
+    LEFT_AS_SAVED,
+    LEFT_BEHIND,
+    MAKING_A_DIRECTORY,
+    PATH_EXISTS,
+    PLAN_CHANGED,
+    PYPROJECT_PATH,
+    REPLACING,
+    ROLLBACK_FAILED,
+    STALE_PLAN,
+    WRITE_FAILED,
+    WRITE_ORDER,
+    Plan,
+    ScaffoldError,
+    ScaffoldWriteError,
+    _digest,
+    write_plan,
 )
 from meridian.platform.common.entry_points import EVALUATIONS_GROUP, GRAPHS_GROUP
 from meridian.platform.registry.loader import RegistryError, load_registry
+
+# What moved to ``scaffold_writes`` and is still imported from here: the command,
+# the errors, the plan and the fixed texts of the write.
+__all__ = [
+    "AN_INTERRUPT",
+    "AN_UNEXPECTED_ERROR",
+    "CHECKING_THE_PLAN",
+    "CREATING_A_FILE",
+    "LEFT_AS_SAVED",
+    "LEFT_BEHIND",
+    "MAKING_A_DIRECTORY",
+    "PATH_EXISTS",
+    "PLAN_CHANGED",
+    "REPLACING",
+    "ROLLBACK_FAILED",
+    "STALE_PLAN",
+    "WRITE_FAILED",
+    "WRITE_ORDER",
+    "Plan",
+    "ScaffoldError",
+    "ScaffoldWriteError",
+    "plan_workload",
+    "write_plan",
+]
 
 MAX_NAME_CHARS = 40
 # The registry's agent ID, with a length limit. Used with fullmatch: an end
@@ -65,7 +114,16 @@ NOT_A_CHECKOUT = (
     "the directory is not a checkout of the meridian repository: run the command "
     "at the checkout's root or pass --root"
 )
+# The parser gave no line to name: bytes that are not UTF-8, or an error "at end
+# of document".
 PYPROJECT_NOT_TOML = "pyproject.toml cannot be read as TOML"
+# The field is the line of the person's own file where the parser stopped; the
+# parser's own text is never quoted, it may hold the file's content.
+PYPROJECT_NOT_TOML_AT = (
+    "pyproject.toml cannot be read as TOML: the parser stopped at line {}"
+)
+# The end of a TOML error's text, where it names the position it stopped at.
+TOML_POSITION = re.compile(r"\(at line (\d+), column \d+\)\Z")
 REGISTRY_INVALID = (
     "the registry does not validate: run `meridian registry validate --registry-dir` "
     "on the checkout's config/registry and fix it first"
@@ -106,6 +164,12 @@ REGISTRY_COPY_FAILED = "the registry could not be copied to check the edit ({})"
 PYPROJECT_EDIT_UNVERIFIED = (
     "the edit of pyproject.toml does not verify; nothing was written"
 )
+# The field is the line of the person's own file where the table's header is.
+PYPROJECT_TABLE_UNVERIFIED = (
+    "the edit of pyproject.toml does not verify: adding the entry point to the "
+    "table whose header is on line {} does not give the old file plus one entry; "
+    "nothing was written"
+)
 # The fields are the table header and the lines of the person's own file that
 # start with it.
 PYPROJECT_HEADER_UNUSABLE = (
@@ -113,23 +177,10 @@ PYPROJECT_HEADER_UNUSABLE = (
     "header {} alone on its line, and once; lines that start with it: {}; "
     "nothing was written"
 )
-PATH_EXISTS = "a file or directory the workload would create already exists"
-STALE_PLAN = (
-    "agents.yaml, services.yaml or pyproject.toml changed after the plan was made, "
-    "or cannot be read again: nothing was written; run the command again"
-)
 PATH_OUTSIDE = (
     "a path the workload would be written to leaves the checkout or is a symbolic link"
 )
-WRITE_FAILED = "writing the workload failed ({}); what was written has been removed"
-ROLLBACK_FAILED = (
-    "writing the workload failed ({}) and could not be fully undone: "
-    "check the working tree"
-)
-LEFT_BEHIND = "left behind: {}"
 
-AGENTS_PATH = "config/registry/agents.yaml"
-PYPROJECT_PATH = "pyproject.toml"
 REGISTRY_DIRECTORY = "config/registry"
 TEMPLATES = ("templates", "workload")
 # Template file -> where its rendering goes; {module} and {name} are filled in.
@@ -155,10 +206,6 @@ CONTAINED_WHEN_PRESENT = (
 )
 # Files the command replaces: a symbolic link would send the edit elsewhere.
 EDITED_FILES = (PYPROJECT_PATH, AGENTS_PATH, SERVICES_PATH)
-# The order of the writes. A half-written tree must still validate and must never
-# let the runtime name an agent that does not exist: the agent comes first, then
-# the runtime's right to name it, then the entry points that load the workload.
-WRITE_ORDER = (AGENTS_PATH, SERVICES_PATH, PYPROJECT_PATH)
 GOLDEN_DIRECTORY = "data/evaluation/{name}/golden"
 CASES = "[]\n"
 AGENT_DESCRIPTION = (
@@ -167,30 +214,9 @@ AGENT_DESCRIPTION = (
 # Lines that split a text into lines without dropping or changing a byte; unlike
 # str.splitlines, only a line feed ends a line.
 LINES = re.compile(r"[^\n]*\n|[^\n]+")
-
-
-class ScaffoldError(Exception):
-    """Refused; the message is a fixed text and never quotes the name. ``details``
-    are further lines the caller prints after it: the registry's own messages, or
-    the paths a rollback could not put back."""
-
-    def __init__(self, message: str, *, details: tuple[str, ...] = ()) -> None:
-        super().__init__(message)
-        self.details = details
-
-
-class ScaffoldWriteError(ScaffoldError):
-    """A write failed: not a refusal, the plan was sound."""
-
-
-@dataclass(frozen=True, slots=True)
-class Plan:
-    name: str  # the agent ID and the entry points' name
-    module: str  # name with "-" replaced by "_"
-    created: Mapping[str, str]  # relative POSIX path -> text of a new file
-    changed: Mapping[str, str]  # relative POSIX path -> whole new text
-    # relative POSIX path -> SHA-256 of the bytes a changed file was planned from
-    base: Mapping[str, str]
+# A line that can be a table header: "[", anything, "]", then at most a comment.
+# A superset of the headers: whether it is one is the parser's to say.
+HEADER_SHAPE = re.compile(r"\[.*\](?:\s*#.*)?")
 
 
 def _module_of(name: str) -> str:
@@ -217,8 +243,16 @@ def _read_pyproject(root: Path) -> tuple[str, dict[str, Any]]:
         document = tomllib.loads(text)
     except OSError:
         raise ScaffoldError(NOT_A_CHECKOUT) from None
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except (UnicodeDecodeError, RecursionError):
+        # No line either: the parser stopped on its own depth, not on a position.
         raise ScaffoldError(PYPROJECT_NOT_TOML) from None
+    except tomllib.TOMLDecodeError as exc:
+        # The error has no line attribute: the number is read from the end of its
+        # text with a fixed pattern, and printed alone.
+        position = TOML_POSITION.search(str(exc))
+        if position is None:
+            raise ScaffoldError(PYPROJECT_NOT_TOML) from None
+        raise ScaffoldError(PYPROJECT_NOT_TOML_AT.format(position[1])) from None
     project = document.get("project")
     if not isinstance(project, dict) or project.get("name") != "meridian":
         raise ScaffoldError(NOT_A_CHECKOUT)
@@ -228,7 +262,14 @@ def _read_pyproject(root: Path) -> tuple[str, dict[str, Any]]:
         for group in (GRAPHS_GROUP, EVALUATIONS_GROUP)
     ):
         raise ScaffoldError(NOT_A_CHECKOUT)
-    if not (root / AGENTS_PATH).is_file():
+    try:
+        has_agents_file = (root / AGENTS_PATH).is_file()
+    except OSError as exc:
+        # The one place the registry's being unreadable reaches this module as an
+        # error: `load_registry` turns its own into a `RegistryError`, but this
+        # stat is made before it (a directory with no search bit).
+        raise ScaffoldError(REGISTRY_UNREADABLE.format(type(exc).__name__)) from None
+    if not has_agents_file:
         raise ScaffoldError(NOT_A_CHECKOUT)
     if not (root / "src" / "meridian" / "workloads").is_dir():
         raise ScaffoldError(NOT_A_CHECKOUT)
@@ -310,23 +351,6 @@ def _created_files(name: str, module: str) -> dict[str, str]:
     return created
 
 
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _refuse_a_stale_plan(root: Path, plan: Plan) -> None:
-    """Refuse when a file the plan edits is not what it was planned from."""
-    try:
-        stale = any(
-            _digest((root / relative).read_bytes().decode("utf-8")) != digest
-            for relative, digest in plan.base.items()
-        )
-    except (OSError, UnicodeDecodeError):
-        stale = True
-    if stale:
-        raise ScaffoldError(STALE_PLAN)
-
-
 def _read_text(root: Path, relative: str) -> str:
     try:
         return (root / relative).read_bytes().decode("utf-8")
@@ -390,14 +414,14 @@ def _agents_list_line(text: str) -> int | None:
     """The 1-based line of ``text`` where the value of its top-level ``agents`` key
     starts, or ``None`` when ``text`` has no such key."""
     try:
-        document = yaml.compose(text)
+        document = yaml.compose(text, Loader=yaml.SafeLoader)
     except yaml.YAMLError:
         return None
     if not isinstance(document, yaml.MappingNode):
         return None
     for key, value in document.value:
         if isinstance(key, yaml.ScalarNode) and key.value == "agents":
-            return value.start_mark.line + 1
+            return line_of(text, value.start_mark)
     return None
 
 
@@ -433,17 +457,53 @@ def _header_line(lines: list[str], group: str) -> int:
     raise ScaffoldError(PYPROJECT_HEADER_UNUSABLE.format(header, numbers))
 
 
+def _parsed(text: str) -> dict[str, Any] | None:
+    """What ``text`` parses to as TOML, or ``None`` when it does not."""
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+
+
+def _could_be_a_header(line: str) -> bool:
+    """Whether ``line`` can be a table header: with a trailing comment and the space
+    around it removed, it starts with ``[`` and ends with ``]``, and it is valid TOML
+    on its own, as every header is. A line of an array (``  [1],``, ``  [1], # ]``)
+    or of a key is no candidate, so it costs no parse of the text before it. A ``#``
+    inside a quoted key (``["a#b"]``) does not hide a header: the pattern asks for a
+    ``]`` followed by a comment or by nothing, wherever the ``]`` is. The parse of
+    one line is as long as the line."""
+    stripped = line.strip()
+    return HEADER_SHAPE.fullmatch(stripped) is not None and (
+        _parsed(stripped + "\n") is not None
+    )
+
+
+def _table_end(lines: list[str], start: int) -> int:
+    """The index of the line where the table whose header is at ``start`` ends: the
+    first later line that can be a header (``_could_be_a_header``; TOML ignores
+    indentation), with a complete document before it; the end of the file when
+    there is none. A candidate inside an array or a multi-line string is no header:
+    the text before it ends inside a value and does not parse. The parser gives no
+    positions, so it is asked, and only on a candidate: the text before it is
+    joined and parsed for no other line."""
+    for index in range(start + 1, len(lines)):
+        if not _could_be_a_header(lines[index]):
+            continue
+        if _parsed("".join(lines[:index])) is not None:
+            return index
+    return len(lines)
+
+
 def _with_entry_point(text: str, group: str, line: str) -> str:
-    """``text`` with ``line`` after the last key line of the table of ``group``;
-    the table ends at the next line that starts with ``[`` or at the end of the
-    file, and the blank and comment lines after its last key stay after ``line``.
-    Raise ``ScaffoldError`` when the table's header line is not usable."""
+    """``text`` with ``line`` after the last key line of the table of ``group``
+    (see ``_table_end`` for where the table ends); the blank and comment lines
+    after its last key stay after ``line``. Raise ``ScaffoldError`` when the
+    table's header line is not usable."""
     lines = LINES.findall(text)
     start = _header_line(lines, group)
     last = start
-    for index in range(start + 1, len(lines)):
-        if lines[index].startswith("["):
-            break
+    for index in range(start + 1, _table_end(lines, start)):
         if lines[index].strip() and not lines[index].lstrip().startswith("#"):
             last = index
     if lines[last].endswith("\n"):
@@ -465,22 +525,22 @@ def _pyproject_edit(
         GRAPHS_GROUP: f"meridian.workloads.{module}.graph:build",
         EVALUATIONS_GROUP: f"meridian.workloads.{module}.evaluation:EVALUATION",
     }
-    # Checked in the person's own text first: once the first line is inserted, a
-    # line number found in the edited text would be off by one for a later table.
-    for group in values:
-        _header_line(LINES.findall(old), group)
+    # Found in the person's own text first: once the first line is inserted, a line
+    # number found in the edited text would be off by one for a later table.
+    headers = {group: _header_line(LINES.findall(old), group) + 1 for group in values}
     new = old
-    for group, value in values.items():
-        new = _with_entry_point(new, group, f'{name} = "{value}"')
-    expected = copy.deepcopy(document)
-    for group, value in values.items():
-        expected["project"]["entry-points"][group][name] = value
     try:
-        verified = tomllib.loads(new) == expected
-    except tomllib.TOMLDecodeError:
-        verified = False
-    if not verified:
-        raise ScaffoldError(PYPROJECT_EDIT_UNVERIFIED)
+        expected = copy.deepcopy(document)
+        for group, value in values.items():
+            new = _with_entry_point(new, group, f'{name} = "{value}"')
+            expected["project"]["entry-points"][group][name] = value
+            if _parsed(new) != expected:
+                raise ScaffoldError(PYPROJECT_TABLE_UNVERIFIED.format(headers[group]))
+    except RecursionError:
+        # A file nested deeper than a copy or a comparison of it can follow, though
+        # the parser took it (it has a limit of its own, caught in ``_read_pyproject``):
+        # refused as that is, with no line, never a traceback.
+        raise ScaffoldError(PYPROJECT_NOT_TOML) from None
     return new
 
 
@@ -496,9 +556,9 @@ def plan_workload(root: Path, name: str) -> Plan:
     try:
         registry = load_registry(root / REGISTRY_DIRECTORY)
     except RegistryError as exc:
+        # An unreadable directory or file is a `RegistryError` too: the loader
+        # turns an `OSError` into one itself.
         raise ScaffoldError(REGISTRY_INVALID, details=_registry_details(exc)) from None
-    except OSError as exc:
-        raise ScaffoldError(REGISTRY_UNREADABLE.format(type(exc).__name__)) from None
     _refuse_a_taken_name(root, name, module, document, registry.agent(name) is not None)
     created = _created_files(name, module)
     agents = _read_text(root, AGENTS_PATH)
@@ -523,174 +583,3 @@ def plan_workload(root: Path, name: str) -> Plan:
         changed=MappingProxyType(changed),
         base=MappingProxyType(base),
     )
-
-
-def _replace(path: Path, data: bytes) -> None:
-    """Replace ``path`` with ``data`` in one step, keeping its mode: the bytes go
-    to a temporary file beside it, which then takes its place."""
-    mode = stat.S_IMODE(path.stat().st_mode)
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(data)
-        os.chmod(temporary, mode)
-        os.replace(temporary, path)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-
-def _make_directories(directory: Path, made: list[Path]) -> None:
-    """Create ``directory`` and the parents that are missing, noting each one
-    this call made in ``made``, outermost first. A directory is noted before it
-    is made, so that an interrupt between the two is undone; one that turns out to
-    exist already is not this call's, and is taken out again."""
-    missing = []
-    current = directory
-    while not os.path.lexists(current):
-        missing.append(current)
-        current = current.parent
-    for each in reversed(missing):
-        made.append(each)
-        try:
-            each.mkdir()
-        except FileExistsError:
-            made.remove(each)
-            raise
-
-
-def _failure(exc: OSError) -> str:
-    """What the error says of an ``OSError``: its type and, when it carries an
-    errno, the operating system's text for it. Never a path or the name."""
-    if exc.errno is None:
-        return type(exc).__name__
-    return f"{type(exc).__name__}: {os.strerror(exc.errno)}"
-
-
-def _put_back(path: Path, old: bytes) -> None:
-    """Make ``path`` hold ``old`` again. A file that already does (its replacement
-    never happened, perhaps because it is the one that failed) is left alone: the
-    same failure would otherwise be met again and reported as an undo that failed.
-    A file that cannot be read is replaced."""
-    try:
-        if path.read_bytes() == old:
-            return
-    except OSError:
-        pass
-    _replace(path, old)
-
-
-def _undo(
-    root: Path,
-    files: list[Path],
-    directories: list[Path],
-    replaced: list[tuple[Path, bytes]],
-) -> list[str]:
-    """Put back what a failed write changed; the relative paths that did not go
-    back, in the order tried. Everything is noted before it is done, so an entry
-    may be one whose change never happened: ``replaced`` holds each edited file and
-    its old bytes, in the order they were replaced, and goes back in the reverse
-    order (a file not yet replaced already holds them and is left alone); a file
-    in ``files`` or a directory in ``directories`` that was never created is
-    skipped.
-    Once a file will not go back, the files replaced before it are left as they
-    are and named: undoing the agents file while the services file still lets the
-    runtime name the agent would leave a registry that does not validate."""
-    left: list[Path] = []
-    for path, old in reversed(replaced):
-        if not left:
-            try:
-                _put_back(path, old)
-                continue
-            except OSError:
-                pass
-        left.append(path)
-    for file in files:
-        try:
-            file.unlink(missing_ok=True)
-        except OSError:
-            left.append(file)
-    for directory in reversed(directories):
-        try:
-            directory.rmdir()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            left.append(directory)
-    return [path.relative_to(root).as_posix() for path in left]
-
-
-def _create_files(
-    targets: list[tuple[Path, str]], files: list[Path], directories: list[Path]
-) -> None:
-    """Create each file of ``targets`` with its text, and the directories it
-    needs, noting what this call made in ``files`` and ``directories``. A file is
-    noted before it is created, so that an interrupt between the two is undone;
-    one that turns out to exist already is not this call's, and is taken out
-    again so that the undo leaves it alone."""
-    for path, text in targets:
-        _make_directories(path.parent, directories)
-        files.append(path)
-        try:
-            with open(path, "x", encoding="utf-8", newline="\n") as stream:
-                stream.write(text)
-        except FileExistsError:  # only the exclusive creation can say so
-            files.remove(path)
-            raise
-
-
-def _read_as_planned(path: Path, digest: str) -> bytes:
-    """The bytes of ``path``, which must be what the plan was made from: raise the
-    stale plan's own error when it cannot be read or hashes to something else."""
-    try:
-        old = path.read_bytes()
-    except OSError:
-        raise ScaffoldError(STALE_PLAN) from None
-    if hashlib.sha256(old).hexdigest() != digest:
-        raise ScaffoldError(STALE_PLAN)
-    return old
-
-
-def _replace_files(root: Path, plan: Plan, replaced: list[tuple[Path, bytes]]) -> None:
-    """Replace the edited files in ``WRITE_ORDER``. Each is noted, with the bytes
-    it was planned from, before it is replaced, so that an interrupt between the
-    two is undone; a file that is not what the plan was made from (saved after
-    the check at the start of ``write_plan``) is not touched."""
-    for relative in WRITE_ORDER:
-        path = root / relative
-        replaced.append((path, _read_as_planned(path, plan.base[relative])))
-        _replace(path, plan.changed[relative].encode("utf-8"))
-
-
-def write_plan(root: Path, plan: Plan) -> None:
-    """Write ``plan`` under ``root``: the new files, then ``agents.yaml``, then
-    ``services.yaml`` (``WRITE_ORDER``), then ``pyproject.toml``, whose entry
-    points are what makes the platform load the workload. Refuse, before the first
-    write, a plan whose three edited files are no longer what it was planned from;
-    each is checked again just before its own replacement, and a file that
-    changed since ends the write with the same refusal. When a write fails, or the
-    process is interrupted, remove what this call made and put the edited files
-    back; an ``OSError`` becomes a ``ScaffoldWriteError`` and anything else
-    propagates unchanged."""
-    targets = [(root / relative, text) for relative, text in plan.created.items()]
-    if any(os.path.lexists(path) for path, _ in targets):
-        raise ScaffoldError(PATH_EXISTS)
-    _refuse_a_stale_plan(root, plan)
-    files: list[Path] = []
-    directories: list[Path] = []
-    replaced: list[tuple[Path, bytes]] = []
-    try:
-        _create_files(targets, files, directories)
-        _replace_files(root, plan, replaced)
-    except BaseException as exc:
-        left = _undo(root, files, directories, replaced)
-        if not isinstance(exc, OSError):
-            raise
-        if not left:
-            raise ScaffoldWriteError(WRITE_FAILED.format(_failure(exc))) from None
-        raise ScaffoldWriteError(
-            ROLLBACK_FAILED.format(_failure(exc)),
-            details=tuple(LEFT_BEHIND.format(path) for path in left),
-        ) from None

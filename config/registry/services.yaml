@@ -12,15 +12,15 @@ services:
     description: Takes a claim and has the Agent Runtime triage it; reached from the edge.
     calls: [agent-runtime]
     # The run request: the Claims API's own tenant (MERIDIAN_TENANT, default
-    # claims-triage) and the triage agent.
+    # claims-triage) and the triage agent, or the brief agent for a brief.
     tenants: [claims-triage]
-    agents: [claims-triage]
+    agents: [claims-triage, claim-brief]
   - id: agent-runtime
     description: Runs the agent graphs; calls the Model Gateway and the tool servers.
     calls: [model-gateway, policy-mcp, claims-mcp, knowledge-mcp]
     # The tenant and agent of the run it was asked for, on every gateway call.
     tenants: [claims-triage]
-    agents: [claims-triage]
+    agents: [claims-triage, claim-brief]
   - id: model-gateway
     description: The one door to a model; calls no service.
     calls: []

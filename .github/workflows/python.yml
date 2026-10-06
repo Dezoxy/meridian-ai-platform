@@ -38,6 +38,9 @@ jobs:
       # MERIDIAN_REQUIRE_DB makes a missing database a failure, not a skip.
       MERIDIAN_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
       MERIDIAN_REQUIRE_DB: "1"
+      # The gateway's shared rate windows (S066) run against the Redis service
+      # container below; MERIDIAN_REQUIRE_DB makes a missing Redis a failure too.
+      MERIDIAN_TEST_REDIS_URL: redis://127.0.0.1:6379/0
     services:
       postgres:
         # Throwaway and unreachable from outside the job, so trust auth keeps
@@ -53,6 +56,21 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres -h 127.0.0.1"
           --health-start-period 5s
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        # Throwaway and unreachable from outside the job. A service container
+        # takes no command, so it runs with the image's defaults (snapshots to
+        # its own disk, gone with it); `make pytest-db` switches them off, and
+        # no test depends on either. Same image as `make pytest-db` (Redis
+        # 8.10.2 on Alpine 3.23; a test compares the two strings).
+        image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-start-period 2s
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10

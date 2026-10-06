@@ -19,8 +19,8 @@ from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
     AGENTS_NO_FINAL_NEWLINE,
-    PYPROJECT_EDIT_UNVERIFIED,
     PYPROJECT_HEADER_UNUSABLE,
+    PYPROJECT_TABLE_UNVERIFIED,
     ScaffoldError,
     plan_workload,
 )
@@ -230,7 +230,9 @@ def test_an_agents_list_in_flow_style_is_refused_with_its_line(root: Path) -> No
     assert snapshot(root) == before
 
 
-LAST_AGENT = "  - id: evaluation-judge\n"
+# An agent of its own after every agent the registry holds, whatever they are:
+# the test does not name the agent that is last in the committed file.
+LAST_AGENT = "  - id: block-scalar-agent\n"
 # The last agent's text ends the file inside a block scalar.
 BLOCK_SCALAR_TAIL = (
     LAST_AGENT + "    kind: job\n    tools: []\n    structured_outputs: true\n"
@@ -240,7 +242,7 @@ BLOCK_SCALAR_TAIL = (
 
 def end_in_a_block_scalar(root: Path, final_newline: bool) -> None:
     path = root / AGENTS_FILE
-    head = path.read_text(encoding="utf-8").split(LAST_AGENT)[0]
+    head = path.read_text(encoding="utf-8")
     tail = BLOCK_SCALAR_TAIL + ("\n" if final_newline else "")
     path.write_text(head + tail, encoding="utf-8")
 
@@ -249,7 +251,7 @@ def test_an_edit_that_changes_the_last_agent_is_refused_by_the_comparison_alone(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     end_in_a_block_scalar(root, final_newline=False)
-    assert load_registry(root / "config/registry").agent("evaluation-judge")
+    assert load_registry(root / "config/registry").agent("block-scalar-agent")
     before = snapshot(root)
 
     def never(*args: Any, **kwargs: Any) -> None:
@@ -319,7 +321,9 @@ TOML_WITH_A_HEADER_TWICE = (
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_EDIT_UNVERIFIED),
+        # Changed on purpose (S076): the refusal names the table, by its header's
+        # line (4, inside the string), instead of saying only "does not verify".
+        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_TABLE_UNVERIFIED.format(4)),
         (
             TOML_WITH_A_HEADER_TWICE,
             # The header is on lines 4 and 12 of the text.

@@ -26,6 +26,7 @@ from chartsupport import (
     CHART_DIR,
     IMAGE_REPOSITORY,
     JOBS,
+    RATE_STORE,
     TEST_TAG,
     helm_arguments,
     peers,
@@ -53,6 +54,7 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.gateway.settings import (
     ENVIRONMENT_ENV,
     MODE_ENV,
+    RATE_STORE_URL_ENV,
     GatewaySettings,
 )
 from meridian.platform.knowledge_mcp import INGESTION_AGENT
@@ -106,6 +108,8 @@ DEMO_SH = (KIND_DIR / "demo.sh").read_text(encoding="utf-8")
 PLATFORM_DB = yaml.safe_load((KIND_DIR / "values" / "platform-db.yaml").read_text())
 
 OWNER_SECRET = "meridian-owner-db"  # noqa: S105 (a Secret name, not a password)
+# The rate store's Secret (S066): the gateway's address and the store's ACL file.
+RATE_STORE_SECRET = "rate-store-credentials"  # noqa: S105 (a Secret name)
 SERVICES = (
     "claims-api",
     "agent-runtime",
@@ -137,6 +141,7 @@ KNOWN_ENV = {
     OTLP_ENDPOINT_ENV,
     OTLP_CERTIFICATE_ENV,
     SWEEP_DEADLINE_ENV,
+    RATE_STORE_URL_ENV,
 }
 FACTORIES = {
     "claims-api": "meridian.workloads.claims_triage.app:create_app_from_env",
@@ -242,6 +247,15 @@ def synthetic_destination() -> str:
     return destination
 
 
+# What a variable that a Secret supplies is given here, where no Secret exists:
+# the database's address for the database variables, and for the gateway's rate
+# store (S066) an address of the form its settings accept, with nothing real in it.
+DATABASE_STAND_IN = "postgresql://placeholder"
+SECRET_REFERENCE_STAND_INS = {
+    RATE_STORE_URL_ENV: "rediss://gateway:stand-in@rate-store.meridian.svc:6379/0"
+}
+
+
 def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
     for name in SERVICES:
         deployment(name)
@@ -251,8 +265,10 @@ def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
         assert service["spec"]["type"] == "ClusterIP"
         assert name in {d["metadata"]["name"] for d in documents_of("ServiceAccount")}
     accounts = documents_of("ServiceAccount")
-    # each Job, and the sweep's CronJob, has its own
-    assert len(accounts) == len(SERVICES) + len(JOBS) + 1
+    # each Job, and the sweep's CronJob, has its own, and since kind's values
+    # turn the rate store on (S066), so has the store
+    assert len(accounts) == len(SERVICES) + len(JOBS) + 1 + 1
+    assert RATE_STORE in {a["metadata"]["name"] for a in accounts}
     assert all(a["automountServiceAccountToken"] is False for a in accounts)
 
 
@@ -296,7 +312,7 @@ def test_a_deployment_sets_only_variables_the_code_reads(name: str) -> None:
 def test_a_deployments_environment_satisfies_its_services_settings(name: str) -> None:
     (container,) = containers(deployment(name))
     environ = {
-        key: item.get("value", "postgresql://placeholder")
+        key: item.get("value", SECRET_REFERENCE_STAND_INS.get(key, DATABASE_STAND_IN))
         for key, item in env_of(container).items()
     }
     # The registry directory comes from the image, not the manifest.
@@ -464,7 +480,9 @@ def test_dockerignore_allows_the_seed_data_and_nothing_more_of_that_folder() -> 
 
 def test_every_container_runs_non_root_without_privileges() -> None:
     workloads = pod_workloads()
-    assert len(workloads) == len(SERVICES) + len(JOBS) + 1  # the sweep
+    # The six services, the three Jobs, the sweep and the rate store (S066): the
+    # store holds the same hardening, on its image's own user.
+    assert len(workloads) == len(SERVICES) + len(JOBS) + 1 + 1
 
     for workload in workloads:
         pod = pod_spec(workload)
@@ -477,7 +495,12 @@ def test_every_container_runs_non_root_without_privileges() -> None:
 
 
 def test_every_container_runs_the_image_of_the_values_and_never_pulls() -> None:
+    # The six services, the Jobs and the sweep run the image `make deploy` loads.
+    # The rate store runs the official image, pulled by its digest
+    # (test_kind_rate_store.py).
     for workload in pod_workloads():
+        if workload["metadata"]["name"] == RATE_STORE:
+            continue
         for container in pod_spec(workload)["containers"]:
             assert container["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
             assert container["imagePullPolicy"] == "Never"
@@ -1055,8 +1078,14 @@ def test_a_deployment_reads_only_its_own_secrets_and_takes_no_env_from(
 ) -> None:
     pod = pod_spec(deployment(name))
 
-    # Its role's Secret, the database's CA and its own certificate (S055).
-    assert secrets_referenced_by(pod) == {f"{name}-db", "platform-db-ca", f"{name}-tls"}
+    # Its role's Secret, the database's CA and its own certificate (S055) and,
+    # for the gateway alone, the rate store's address (S066): the store's other
+    # key, the ACL file, is mounted by the store, and no other service's pod
+    # names the Secret.
+    expected = {f"{name}-db", "platform-db-ca", f"{name}-tls"}
+    if name == "model-gateway":
+        expected.add(RATE_STORE_SECRET)
+    assert secrets_referenced_by(pod) == expected
     assert all("envFrom" not in c for c in pod["containers"])
 
 
@@ -1082,6 +1111,8 @@ def test_the_manifests_run_the_user_the_dockerfile_sets() -> None:
     uid, gid = (int(part) for part in user.split(":"))
 
     for workload in pod_workloads():
+        if workload["metadata"]["name"] == RATE_STORE:
+            continue  # its image's own user, 999:1000 (test_kind_rate_store.py)
         context = pod_spec(workload)["securityContext"]
         assert (context["runAsUser"], context["runAsGroup"]) == (uid, gid)
         for container in pod_spec(workload)["containers"]:
@@ -1350,7 +1381,12 @@ def test_the_release_holds_no_job_a_flag_renders_one_and_deploy_knows_services()
         (account,) = [d for d in added if d["kind"] == "ServiceAccount"]
         assert account["metadata"]["name"] == f"meridian-{name}"
     assert set(services.split()) == set(SERVICES)
-    assert {d["metadata"]["name"] for d in documents_of("Deployment")} == set(SERVICES)
+    # deploy.sh's SERVICES are the six, and the store (kind turns it on) is its
+    # own Deployment, which deploy.sh waits for apart.
+    assert {d["metadata"]["name"] for d in documents_of("Deployment")} == {
+        *SERVICES,
+        RATE_STORE,
+    }
     # Each service's database role, and so its Secret, is one deploy.sh checks.
     (roles,) = re.findall(
         r"^readonly DATABASE_ROLES=\((.*)\)$", COMMON_SH, re.MULTILINE
@@ -1392,21 +1428,29 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # Secret that cert-manager makes from one of them (S055). The issuer is a
     # precondition like the database: it is checked before the image is built
     # and before any Job runs (S056); so is the approval of the Certificates:
-    # approver-policy with its five policies.
+    # approver-policy with its five policies. So is the rate store's Secret
+    # (S066), which `make up` makes: a pod that cannot read it would not start,
+    # after the Jobs had run. The store is waited for before the gateway, whose
+    # every call (the ingestion's too) needs it.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
         "require_approval",
+        "require_rate_store_secret",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
         "install_release",
         "wait_for_certificates",
+        'wait_for_deployment "${RATE_STORE_DEPLOYMENT}"',
         'wait_for_deployment "${GATEWAY_SERVICE}"',
         "ingest_corpus",
         "wait_for_other_rollouts",
         "wait_for_route",
         "wait_for_token_window",
+        # S075: the record of who holds the cluster, written last, when it ended well
+        # (`changing` was written before the first of these, right after the check).
+        "record_cluster_holder ok",
     ]
     assert "run_migrations" not in DEPLOY_SH
 
@@ -1549,7 +1593,7 @@ def test_a_succeeded_job_with_no_chunks_or_no_answer_ingests_again(count: str) -
 
 def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
     body = function_body(DEPLOY_SH, "run_job")
-    filter_body = function_body(DEPLOY_SH, "printable_ascii")
+    filter_body = function_body(COMMON_SH, "printable_ascii")
     log_reads = re.findall(r"^.*logs \"job/\$\{job\}\".*$", body, re.MULTILINE)
 
     # The success line and both failure paths (a verdict and the timeout): a
@@ -1564,7 +1608,7 @@ def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
 def test_the_printable_ascii_filter_drops_escapes_and_other_bytes() -> None:
     hostile = "ok \\033[31mred\\033[0m\\tcaf\\303\\251\\r\\nnext\\n"
     script = (
-        function_definition(DEPLOY_SH, "printable_ascii")
+        function_definition(COMMON_SH, "printable_ascii")
         + f"printf '{hostile}' | printable_ascii"
     )
 
@@ -1583,7 +1627,7 @@ def test_the_printable_ascii_filter_redacts_a_postgresql_connection_string() -> 
         "plain line",
     )
     script = (
-        function_definition(DEPLOY_SH, "printable_ascii")
+        function_definition(COMMON_SH, "printable_ascii")
         + "printf '%s\\n' "
         + " ".join(f"'{line}'" for line in lines)
         + " | printable_ascii"

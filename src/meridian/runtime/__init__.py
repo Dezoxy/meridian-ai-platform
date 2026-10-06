@@ -1,4 +1,5 @@
-"""The Agent Runtime: hosts LangGraph graphs behind the platform's run API."""
+"""The Agent Runtime: hosts LangGraph graphs and Microsoft Agent Framework
+workflows, each in its own host, behind the platform's run API (ADR 9)."""
 
 import os
 
@@ -27,4 +28,19 @@ LANGSMITH_REQUESTED_BY: tuple[str, ...] = tuple(
     if os.environ.get(name, "").strip().lower() in _TRUTHY
 )
 for _name in LANGSMITH_TRACING_VARIABLES:
+    os.environ[_name] = "false"
+
+# The second agent framework instruments its workflows by default and reads
+# these two once, when its observability module is first imported (S037): its
+# spans would go to any tracer provider installed later, with message content
+# when the second says so. The step spans are the host's own, made from the
+# framework's events, so both stay off. An operator who sets either to true
+# is not refused: it changes nothing here, and nothing says so. A process that
+# imports the framework before this package reads them too late; the second
+# host sets the framework's own settings object off as well when it is imported.
+AGENT_FRAMEWORK_TELEMETRY_VARIABLES = (
+    "ENABLE_INSTRUMENTATION",
+    "ENABLE_SENSITIVE_DATA",
+)
+for _name in AGENT_FRAMEWORK_TELEMETRY_VARIABLES:
     os.environ[_name] = "false"

@@ -68,6 +68,7 @@ from meridian.workloads.claims_triage.adjuster import (
     ClaimId,
     add_adjuster_pages,
 )
+from meridian.workloads.claims_triage.briefs import add_brief_routes
 from meridian.workloads.claims_triage.claimant import (
     add_claimant_pages,
     claimant_too_large,
@@ -437,6 +438,7 @@ def create_app(
             claim_id,
         )
 
+    add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
     add_adjuster_pages(
         app,
         dsn=dsn,

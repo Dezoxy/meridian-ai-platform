@@ -16,7 +16,11 @@ exercises this runbook; the game day (S028) exercises it again.
 - `MeridianGatewayRefusingByPolicy` after a registry change: calls are
   refused with `no-route`, `no-allowed-deployment`, `agent-not-allowed`
   or `unknown-tenant`.
-- `make deploy` or `make smoke` fails after a change that passed CI.
+- `make deploy` or `make smoke` fails after a change that passed CI. A
+  `make deploy` that failed leaves the cluster's record saying `changing`
+  (`make cluster-holder` prints it): look at what failed, in the pods' logs
+  and the audit rows, before deleting the cluster, because on kind its
+  database is the only copy of the audit log.
 
 `MeridianGatewayRefusingByPolicy` could be raised by a caller on purpose
 before S055, with five requests that name an unknown tenant; now a caller
@@ -108,8 +112,12 @@ on kind.
    checkout to `main`.
 
 A rolling update starts the new pod before the old one stops. For that
-moment two gateway pods each allow a tenant's full rate windows (T-45).
-A gateway pod that stops with calls in flight leaves their reservations
+moment two gateway pods share the tenant's rate windows when the rate store
+is on (kind's values turn it on: the two pods count in the one store, so the
+overlap costs nothing) and each allow a tenant's full rate windows only
+without the store (T-45; the chart then runs one replica). A rolled-back
+release that predates the store has no store: its gateway counts in its own
+process. A gateway pod that stops with calls in flight leaves their reservations
 `reserved`, charged until the period ends
 ([budget exhaustion](budget-exhaustion.md#what-spent-it)).
 
@@ -119,7 +127,9 @@ A gateway pod that stops with calls in flight leaves their reservations
 objects, with the image tag they named; the image is still on the node.
 It runs no Job and touches no schema. It puts back that revision's
 network policies too, so read `helm get values meridian --revision <n>`
-first: a revision from before a policy existed removes it. No script
+first (the command guard asks before it, since a release's values can
+hold Secret data; confirm it): a revision from before a policy existed
+removes it. No script
 uses it and it has not been tried here, so prefer the path above; it is
 the owner's to run. It does not wait for the rollouts: check them with
 `kubectl rollout status`.

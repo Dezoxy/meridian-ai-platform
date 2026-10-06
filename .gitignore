@@ -53,4 +53,6 @@ tf.log
 
 # Claude Code local state
 .claude/settings.local.json
+# The session's board of parallel lanes, read by .claude/hooks/check-lanes.sh
+.claude/lanes.md
 .claude/ecc/

@@ -1,0 +1,28 @@
+[project]
+name = "s037-agent-framework-host"
+version = "0.0.0"
+description = "Throwaway spike: what Microsoft Agent Framework 1.19.0 does under the runtime's real clients and a PostgreSQL-backed checkpoint store."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "agent-framework-core==1.19.0",
+    # The repository's own package, so the probes import the real clients in
+    # meridian.runtime. It brings the root's dependency tree into this lock.
+    "meridian",
+]
+
+[dependency-groups]
+dev = [
+    "opentelemetry-sdk==1.45.0",
+    "pytest==9.1.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+meridian = { path = "../..", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "--import-mode=importlib"

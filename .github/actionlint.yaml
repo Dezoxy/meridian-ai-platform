@@ -1,0 +1,16 @@
+# Configuration for actionlint, which the advisory hook
+# .claude/hooks/check-iac.sh runs on an edit of a workflow.
+#
+# The installed actionlint (1.7.12) has no name for `ubuntu-26.04`, the runner
+# label every workflow here runs on, and reported it as unknown on every edit.
+# GitHub's hosted runners are not self-hosted: the key below is only how
+# actionlint is told about a label it does not know.
+#
+# Remove a label from this list when an actionlint that knows it is installed
+# (run `actionlint .github/workflows/*.yml` with this file moved aside: no
+# "unknown label" line means it can go), and remove the file when the list is
+# empty. tests/test_actionlint_config.py fails when a workflow runs on a label
+# that neither actionlint 1.7.12 nor this file names.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

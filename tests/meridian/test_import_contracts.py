@@ -8,6 +8,7 @@ does not depend on someone remembering to try one.
 """
 
 import ast
+import importlib.metadata
 import os
 import re
 import shutil
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -117,6 +119,18 @@ def test_unmodified_copy_passes_with_at_least_one_kept_contract(
             "langchain_community",
             id="platform-imports-langchain-community",
         ),
+        # The second framework (S037): the dependency is the runtime's and the
+        # workloads', never the platform's.
+        pytest.param(
+            "import agent_framework\n",
+            "agent_framework",
+            id="platform-imports-the-agent-framework",
+        ),
+        pytest.param(
+            "from agent_framework import Executor\n",
+            "agent_framework",
+            id="platform-imports-a-name-from-the-agent-framework",
+        ),
         pytest.param(
             "import meridian.workloads\n",
             "meridian.workloads",
@@ -183,6 +197,12 @@ def add_probe_in(project: Path, package: str, source: str) -> str:
         pytest.param("meridian.runtime", "boto3", id="runtime-imports-boto3"),
         pytest.param("meridian.runtime", "botocore", id="runtime-imports-botocore"),
         pytest.param("meridian.runtime", "litellm", id="runtime-imports-litellm"),
+        # Not a provider SDK, but the rate store's client belongs to the gateway
+        # alone (S066): the same contract keeps it there.
+        pytest.param("meridian.runtime", "redis", id="runtime-imports-redis"),
+        pytest.param("meridian.workloads", "redis", id="workloads-import-redis"),
+        pytest.param("meridian.platform.cli", "redis", id="cli-imports-redis"),
+        pytest.param("meridian.platform.common", "redis", id="common-imports-redis"),
     ],
 )
 def test_an_import_of_a_provider_sdk_outside_the_gateway_breaks_a_contract(
@@ -442,6 +462,19 @@ def test_the_isolation_contract_forbids_the_evaluation_and_the_cli() -> None:
     assert not contract.get("allow_indirect_imports", False)
 
 
+def test_a_gateway_module_importing_the_rate_stores_client_keeps_the_contracts(
+    project_copy: Path,
+) -> None:
+    # Arrange: ratelimit_redis.py does exactly this.
+    add_probe_in(project_copy, GATEWAY_PACKAGE, "import redis\n")
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code == 0, output
+
+
 def test_a_gateway_module_importing_the_adapter_keeps_the_contracts(
     project_copy: Path,
 ) -> None:
@@ -519,6 +552,7 @@ def test_importing_the_services_loads_no_provider_sdk_or_credential_library() ->
         "import meridian.platform.gateway.app\n"
         "import meridian.runtime.app\n"
         "import meridian.workloads.claims_triage.app\n"
+        "import meridian.workloads.claim_brief.workflow\n"
         "import meridian.platform.policy_mcp.app\n"
         "import meridian.workloads.claims_triage.mcp_server.app\n"
         "from meridian.platform.gateway.settings import GatewaySettings\n"
@@ -574,6 +608,151 @@ def test_the_upkeep_command_loads_no_provider_sdk_and_no_gateway_module() -> Non
     # Assert
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "loaded:", completed.stdout
+
+
+# ── the second framework's adapters (S037, F3r, boundary M1) ──────────────────
+# The framework's provider adapters are separate top-level modules, named like
+# their distributions (``agent-framework-openai`` is ``agent_framework_openai``),
+# which wrap a provider SDK that import-linter cannot see into. Each is named in
+# the contracts beside the SDKs, so that the day one is added to the lock, an
+# import of it outside the gateway breaks ``lint-imports``.
+PLATFORM_CONTRACT = "platform never imports the agent framework (ADR 2)"
+CORE_PACKAGE = "agent-framework-core"
+FRAMEWORK_PREFIX = "agent-framework-"
+# The adapters that make a model call: the ones the two SDK contracts name.
+MODEL_ADAPTERS = {
+    "agent_framework_anthropic",
+    "agent_framework_bedrock",
+    "agent_framework_claude",
+    "agent_framework_copilotstudio",
+    "agent_framework_foundry",
+    "agent_framework_foundry_local",
+    "agent_framework_gemini",
+    "agent_framework_github_copilot",
+    "agent_framework_mistral",
+    "agent_framework_ollama",
+    "agent_framework_openai",
+}
+
+
+def framework_adapters() -> set[str]:
+    """The modules of every adapter distribution the pinned core names in its
+    ``all`` extra, read from the installed package's metadata (so a release that
+    adds one fails the tests below until the contracts name it)."""
+    found: set[str] = set()
+    for requirement in importlib.metadata.requires(CORE_PACKAGE) or []:
+        distribution = requirement.split(";")[0].strip()
+        in_all = 'extra == "all"' in requirement
+        if distribution.startswith(FRAMEWORK_PREFIX) and in_all:
+            found.add(distribution.replace("-", "_"))
+    return found
+
+
+def contract_named(name: str) -> dict[str, Any]:
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return next(
+        c for c in config["tool"]["importlinter"]["contracts"] if c["name"] == name
+    )
+
+
+def test_the_adapter_list_is_read_from_the_pinned_package_and_is_not_empty() -> None:
+    adapters = framework_adapters()
+
+    assert adapters >= MODEL_ADAPTERS
+    assert "agent_framework_core" not in adapters
+    assert len(adapters) > len(MODEL_ADAPTERS)
+
+
+def test_the_platform_contract_names_every_adapter_of_the_framework() -> None:
+    forbidden = set(contract_named(PLATFORM_CONTRACT)["forbidden_modules"])
+
+    assert not framework_adapters() - forbidden
+
+
+@pytest.mark.parametrize("name", [SDK_CONTRACT, ADAPTER_CONTRACT])
+def test_the_sdk_contracts_name_every_adapter_that_makes_a_model_call(
+    name: str,
+) -> None:
+    forbidden = set(contract_named(name)["forbidden_modules"])
+
+    assert not MODEL_ADAPTERS - forbidden
+
+
+@pytest.mark.parametrize(
+    ("package", "adapter", "contract"),
+    [
+        pytest.param(
+            "meridian.runtime", "agent_framework_openai", SDK_CONTRACT, id="runtime"
+        ),
+        pytest.param(
+            "meridian.workloads",
+            "agent_framework_anthropic",
+            SDK_CONTRACT,
+            id="workloads",
+        ),
+        pytest.param(
+            "meridian.platform.common",
+            "agent_framework_foundry",
+            SDK_CONTRACT,
+            id="platform-common",
+        ),
+        pytest.param(
+            GATEWAY_PACKAGE, "agent_framework_openai", ADAPTER_CONTRACT, id="gateway"
+        ),
+        pytest.param(
+            "meridian.platform.registry",
+            "agent_framework_redis",
+            PLATFORM_CONTRACT,
+            id="platform-non-model-adapter",
+        ),
+    ],
+)
+def test_an_import_of_a_framework_adapter_where_it_may_not_be_breaks_a_contract(
+    project_copy: Path, package: str, adapter: str, contract: str
+) -> None:
+    # Arrange
+    probe = add_probe_in(project_copy, package, f"import {adapter}\n")
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code != 0, output
+    assert contract in output, output
+    assert f"{probe} -> {adapter}" in output, output
+
+
+def framework_packages_locked(lock_text: str) -> set[str]:
+    """The names of the locked packages that begin ``agent-framework-``, the
+    core excepted."""
+    names = {package["name"] for package in tomllib.loads(lock_text)["package"]}
+    return {
+        name
+        for name in names
+        if name.startswith(FRAMEWORK_PREFIX) and name != CORE_PACKAGE
+    }
+
+
+def test_the_lock_holds_the_framework_core_and_no_adapter() -> None:
+    lock_text = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    locked = {package["name"] for package in tomllib.loads(lock_text)["package"]}
+
+    assert CORE_PACKAGE in locked
+    assert framework_packages_locked(lock_text) == set()
+
+
+def test_a_lock_that_holds_an_adapter_is_reported() -> None:
+    # The control: the test above can fail.
+    lock_text = (
+        '[[package]]\nname = "agent-framework-core"\nversion = "1.19.0"\n'
+        '[[package]]\nname = "agent-framework-openai"\nversion = "1.0.0"\n'
+        '[[package]]\nname = "agent-framework-foundry-local"\nversion = "1.0.0"\n'
+    )
+
+    assert framework_packages_locked(lock_text) == {
+        "agent-framework-openai",
+        "agent-framework-foundry-local",
+    }
 
 
 def test_a_cli_module_importing_the_gateway_app_breaks_the_sdk_contract(

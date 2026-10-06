@@ -17,7 +17,10 @@
 #      approver-policy running, because the
 #      issuer is Ready without them and with cert-manager's own approver off
 #      nothing would approve a request, so the wait of step 4 would run out. A
-#      cluster made before S056 does not know the policy kind: the same refusal
+#      cluster made before S056 does not know the policy kind: the same refusal;
+#      and the Secret `rate-store-credentials` (S066), with its two keys, the
+#      gateway's address in the rate store and the store's ACL file, which
+#      `make up` makes once: a pod that cannot read it would not start
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
 #   2. the migration Job, as the database owner role, then the policy seed Job,
@@ -29,7 +32,10 @@
 #   3. the Helm release `meridian` (infra/helm/meridian, with kind's values in
 #      values/meridian.yaml), installed or upgraded: the six Deployments and
 #      Services (Claims API, Agent Runtime, Model Gateway and the policy,
-#      claims and knowledge tool servers), the one route (Claims API only)
+#      claims and knowledge tool servers), the rate store that holds the
+#      gateway's rate windows (S066: its Deployment, Service, Certificate and
+#      NetworkPolicy; its image is RATE_STORE_IMAGE of pins.env, passed as
+#      --set-string rateStore.image), the one route (Claims API only)
 #      with its request-size limit, and the sweep's CronJob (S052). The
 #      release never holds a Job (the chart renders those only on request, so
 #      step 2 and 4 can run them). The CronJob's spec is mutable (a change
@@ -43,25 +49,26 @@
 #   4. the Certificates, waited for until each is Ready: a pod whose Secret does
 #      not exist yet stays in ContainerCreating, and the ingestion Job (applied
 #      outside the release, after it) would spend its deadline waiting for one
-#   5. the Model Gateway's rollout, then the ingestion Job (it embeds the
+#   5. the rate store's rollout, then the Model Gateway's (every call it makes
+#      is counted in the store), then the ingestion Job (it embeds the
 #      wordings through the gateway), at most once per image: a finished Job of
 #      this image's tag, and rows in knowledge.chunks, are the record that its
 #      corpus is in the store
 #   6. the other rollouts and the route, then, when an ingestion ran, a wait
 #      until its token reservation has left the tenant's one-minute window
-# The chart's only inputs from this script are the image's repository and tag
-# (a Job's name ends in the tag; the CronJob's name has none).
+# The chart's inputs from this script are the image's repository and tag (a
+# Job's name ends in the tag; the CronJob's name has none) and the rate store's
+# image, which is a pin and not a build.
 # Nothing here prints a Secret's value, or a connection string of a Job's log.
+# Who holds the cluster (S075, common.sh): another holder stops this before step
+# 0 unless TAKE_CLUSTER=1; the record is written with state `changing` right after
+# that check, and with state `ok` as the last step, when the run ended well, so a
+# run that fails or is interrupted leaves `changing`.
 set -euo pipefail
 
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-REPO_ROOT="$(cd "${KIND_DIR}/../.." && pwd)"
-readonly REPO_ROOT
-readonly CHART_DIR="${REPO_ROOT}/infra/helm/meridian"
-readonly VALUES_FILE="${KIND_DIR}/values/meridian.yaml"
-readonly RELEASE=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
 # The ClusterIssuer of kind's values (identity.issuer.name), made by `make up`.
@@ -110,6 +117,13 @@ need_tools docker kind kubectl helm jq
 require_local_docker
 need_cluster
 docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
+# Who holds the cluster (S075): another holder stops this, before anything is
+# built or run, unless TAKE_CLUSTER=1. Then the record says `changing` until the
+# last line of this script: a run that fails or is interrupted leaves it so. It is
+# written before the prerequisites below, which only read: one that fails ("run
+# make up first") leaves `changing` too, which costs the same holder nothing.
+check_cluster_holder "make deploy"
+record_cluster_holder changing
 
 # The database, its roles and the role Secrets come from `make up`.
 require_database() {
@@ -138,6 +152,81 @@ require_database() {
     die "the database roles are not all reconciled; run 'make up' first"
 }
 
+# The rate store's Secret (S066, T-45), made by `make up`: the key `uri` is the
+# gateway's address in Redis and `users.acl` is the store's ACL file. The chart
+# makes the gateway's pod read the first through a required reference and the
+# store's pod mount the second, so a missing Secret or key would keep a pod in
+# CreateContainerConfigError after the Jobs had run; this stops before the image
+# is built. Only the names of the keys are read (jq prints them), never a value,
+# and a key that is there and empty counts as missing: an empty address stops the
+# gateway's start. `make up` keeps a Secret that exists, so one made before the
+# ACL file changed (or with a key short) is deleted first. A Secret that exists
+# with both keys is still refused when its annotation (RATE_STORE_ACL_ANNOTATION,
+# common.sh: the hash of the ACL's rules with the password's hash masked) is
+# missing or is not the one `make up` would write now: a Secret from before the
+# probes' user has no such user, and the store's probes would never pass, so the
+# pod would not be Ready and nothing but its restarts would say why. The annotation
+# is only a note `make up` left, so the ACL file the Secret holds is checked too:
+# jq decodes its key users.acl and the hash function masks and hashes it in the same
+# pipe, and the hash must be the one `make up` would write now; a file edited or
+# replaced after `make up` under an annotation that still matches is refused. The
+# rules below are up.sh's, copied (a test holds the two equal). Nothing of the
+# Secret is printed, traced (tracing is off inside the function) or kept: the
+# JSON is cleared once the hashes are taken, and only hashes are compared.
+readonly RATE_STORE_SECRET=rate-store-credentials
+readonly RATE_STORE_SECRET_KEYS=(uri users.acl)
+readonly RATE_STORE_USER=gateway
+readonly RATE_STORE_KEY_PATTERN='~meridian:rate:*'
+readonly RATE_STORE_COMMANDS='+evalsha +script|load +time +zremrangebyscore +zrange +zadd +pexpire +hello'
+readonly RATE_STORE_PROBE_USER=probe
+readonly RATE_STORE_PROBE_COMMANDS='+ping'
+# The store's Deployment: waited for before the gateway's, whose every call needs it.
+readonly RATE_STORE_DEPLOYMENT=rate-store
+
+# The hash of the rules `make up` writes now: up.sh's ACL file with a placeholder
+# where the password's hash goes (it is masked in the hash anyway).
+rate_store_expected_acl_hash() {
+  printf 'user default off\nuser %s on #%s %s resetchannels -@all %s\nuser %s on nopass resetkeys resetchannels -@all %s\n' \
+    "${RATE_STORE_USER}" "$(printf '0%.0s' {1..64})" "${RATE_STORE_KEY_PATTERN}" "${RATE_STORE_COMMANDS}" \
+    "${RATE_STORE_PROBE_USER}" "${RATE_STORE_PROBE_COMMANDS}" | rate_store_acl_rules_hash
+}
+
+require_rate_store_secret() {
+  # Tracing is off inside, and on again when the function returns if it was on: the
+  # Secret's JSON holds the gateway's password, and a `bash -x` run would trace the
+  # variable it is assigned to. (A `die` ends the script, so it needs no restore.)
+  local traced=0 secret present key annotation acl_hash
+  if [[ "$-" == *x* ]]; then traced=1; fi
+  { set +x; } 2>/dev/null
+  secret="$(kctl -n "${NAMESPACE}" get secret "${RATE_STORE_SECRET}" -o json 2>/dev/null)" ||
+    die "Secret ${RATE_STORE_SECRET} does not exist; run 'make up' first (it holds the gateway's address in the rate store and the store's ACL file)"
+  present="$(jq -r '.data // {} | to_entries[] | select(.value != "") | .key' <<<"${secret}")"
+  for key in "${RATE_STORE_SECRET_KEYS[@]}"; do
+    grep -qxF -- "${key}" <<<"${present}" ||
+      die "Secret ${RATE_STORE_SECRET} has no key '${key}', or it is empty; run 'make up' first, after deleting the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}): 'make up' keeps a Secret that exists"
+  done
+  annotation="$(jq -r --arg name "${RATE_STORE_ACL_ANNOTATION}" '.metadata.annotations[$name] // ""' <<<"${secret}")"
+  # The ACL file itself, decoded by jq and hashed masked in the same pipe: its text
+  # is never in a variable, an argument or a message, only the hash is. `-j`: no
+  # newline of jq's own after the text, which the hash would see. jq's error output
+  # goes nowhere: on a value it cannot decode it quotes the value's first characters,
+  # and the sentence below already says what failed.
+  acl_hash="$(jq -j '.data["users.acl"] // "" | @base64d' <<<"${secret}" 2>/dev/null | rate_store_acl_rules_hash)" ||
+    die "Secret ${RATE_STORE_SECRET}: could not read its key 'users.acl' as base64 text, so the store's ACL file cannot be checked; run 'make up' first, after deleting the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET})"
+  secret=""
+  local remedy="delete the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}), run 'make up' (it makes the Secret again), restart the rate store (kubectl -n ${NAMESPACE} rollout restart deployment/${RATE_STORE_DEPLOYMENT}) and then the Model Gateway (deployment/model-gateway), which read the ACL file and the address at their start and not before, then run 'make deploy' again; the order is docs/operations/runbooks/rate-store.md's"
+  [[ -n "${annotation}" ]] ||
+    die "Secret ${RATE_STORE_SECRET} has no annotation ${RATE_STORE_ACL_ANNOTATION}: it was made before the store's probes had a user of their own (probe), so its ACL file has none and the store's pod would never be Ready. ${remedy}"
+  local expected
+  expected="$(rate_store_expected_acl_hash)"
+  [[ "${annotation}" == "${expected}" ]] ||
+    die "the ACL file of Secret ${RATE_STORE_SECRET} was made for other users, commands or keys than 'make up' writes now (its annotation ${RATE_STORE_ACL_ANNOTATION} differs), so the store would refuse the gateway or its probes. ${remedy}"
+  [[ "${acl_hash}" == "${expected}" ]] ||
+    die "the ACL file in Secret ${RATE_STORE_SECRET} (its key users.acl) is not what 'make up' writes now, though its annotation ${RATE_STORE_ACL_ANNOTATION} says it is: the file was edited or replaced after 'make up' made it (or the annotation was copied onto another Secret), so the store would run other users, commands or keys than the chart and its tests assume. ${remedy}"
+  ((traced == 0)) || set -x
+  return 0
+}
+
 # The issuer of the services' certificates (S056): the ClusterIssuer that kind's
 # values name (identity.issuer; a test keeps the two equal) must exist and be
 # Ready, or the chart's Certificates would never be issued, and the migration
@@ -159,7 +248,7 @@ require_issuer() {
 approver_error=""
 readonly APPROVER_ERROR_LENGTH=300
 
-# one_line TEXT: TEXT on one line: printable ASCII only (printable_ascii, below),
+# one_line TEXT: TEXT on one line: printable ASCII only (printable_ascii, common.sh),
 # line breaks and runs of blanks squeezed to one blank, trimmed, cut short.
 one_line() {
   printable_ascii <<<"$1" | tr '\n' ' ' | tr -s ' ' |
@@ -237,42 +326,12 @@ build_image() {
   log "image ${image} loaded into cluster ${CLUSTER_NAME}"
 }
 
-# helm_chart VERB [ARGUMENT...]: `helm VERB` on the release's chart with what
-# every call shares: the release, the chart, the namespace, kind's values and
-# the image just built (--set-string: twelve hex digits can be all digits, which
-# --set would turn into a number). The tests render the chart with these same
-# arguments (tests/meridian/chartsupport.py).
-helm_chart() {
-  local verb="$1"
-  shift
-  helmc "${verb}" "${RELEASE}" "${CHART_DIR}" --namespace "${NAMESPACE}" -f "${VALUES_FILE}" --set-string "image.repository=${IMAGE_REPOSITORY}" --set-string "image.tag=${tag}" "$@"
-}
-
 # render_job NAME: the manifest of the Job `migrate`, `seed` or `ingest` with
 # its ServiceAccount, from the chart with that Job's flag on. The release never
 # holds a Job: deploy.sh applies each one itself.
 render_job() {
   local name="$1"
   helm_chart template --set "jobs.${name}.enabled=true" --show-only "templates/job-${name}.yaml"
-}
-
-# job_state NAME: "succeeded", "failed" or "running", from the Job's conditions.
-job_state() {
-  kctl -n "${NAMESPACE}" get job "$1" -o json |
-    jq -r 'if any(.status.conditions[]?; .type == "Complete" and .status == "True") then "succeeded"
-           elif any(.status.conditions[]?; .type == "Failed" and .status == "True") then "failed"
-           else "running" end'
-}
-
-# printable_ascii: stdin without any byte that is not printable ASCII or a
-# newline, and with anything that looks like a PostgreSQL URL (postgres:// or
-# postgresql:// up to the next whitespace) replaced by postgresql://[redacted].
-# A Job's log can quote data of a checkout (a manifest key, a database message),
-# and an escape sequence in it must not reach the terminal; a driver's error can
-# quote the connection string, and its password must not reach the log.
-printable_ascii() {
-  LC_ALL=C tr -cd '[:print:]\n' |
-    sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://[redacted]#g'
 }
 
 # run_job NAME CHART_JOB: the Job NAME, rendered by render_job CHART_JOB, run to
@@ -412,14 +471,17 @@ wait_for_token_window() {
 require_database
 require_issuer
 require_approval
+require_rate_store_secret
 build_image
 run_job "meridian-migrate-${tag}" migrate
 run_job "meridian-seed-${tag}" seed
 install_release
 wait_for_certificates
+wait_for_deployment "${RATE_STORE_DEPLOYMENT}"
 wait_for_deployment "${GATEWAY_SERVICE}"
 ingest_corpus
 wait_for_other_rollouts
 wait_for_route
 wait_for_token_window
+record_cluster_holder ok
 log "done. Next: make demo"

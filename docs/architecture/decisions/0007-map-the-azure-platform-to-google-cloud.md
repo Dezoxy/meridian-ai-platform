@@ -581,6 +581,15 @@ Google Cloud:
   candidates and labels; a model is chosen, with recordings and baselines,
   by a step of its own.
 
+Amended on 2026-10-06 (the owner's decision on managed and self-managed
+Kubernetes, the plan's Part B): nothing of this record is applied on Google
+Cloud. S078 writes the Terraform module and checks it without a project, and
+it is never applied, so no applied test falsifies a row here: a row stays a
+reading of the vendor's pages until someone applies it. The sketch of what
+the test would cost stands as a sketch of a test that is not planned. A
+cluster whose control plane is not managed is S079's, on Google Cloud a
+scaffold too. The text above stands as it was decided.
+
 ## Consequences
 
 Positive:

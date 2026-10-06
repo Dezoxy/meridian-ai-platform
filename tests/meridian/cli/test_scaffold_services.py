@@ -34,7 +34,7 @@ from meridian.platform.cli.scaffold_services import (
     SERVICES_AGENTS_MISSING,
     SERVICES_AGENTS_UNUSABLE,
     SERVICES_EDIT_UNVERIFIED,
-    SERVICES_NOT_YAML,
+    SERVICES_NOT_YAML_AT,
     SERVICES_RUNTIME_MISSING,
     SERVICES_RUNTIME_TWICE,
     ServicesEditError,
@@ -108,6 +108,13 @@ def read(root: Path, relative: str = SERVICES) -> str:
     return (root / relative).read_bytes().decode("utf-8")
 
 
+def runtime_agents(root: Path) -> tuple[str, ...]:
+    """The agents the registry in ``root`` lets the runtime's identity name."""
+    runtime = load_registry(root / REGISTRY).service("agent-runtime")
+    assert runtime is not None
+    return runtime.agents
+
+
 def runtime_line_index(text: str) -> int:
     """The 0-based index of the line of the runtime's ``agents``."""
     lines = text.split("\n")
@@ -133,7 +140,10 @@ def validate(root: Path) -> Any:
 
 
 def list_in_a_tenant(root: Path) -> None:
-    old = "agents: [claims-triage, knowledge-ingestion]"
+    tenant = load_registry(root / REGISTRY).tenant("claims-triage")
+    assert tenant is not None
+    old = f"agents: [{', '.join(tenant.agents)}]"
+    assert old in (root / "config/registry/tenants.yaml").read_text(encoding="utf-8")
     edit(
         root / "config/registry/tenants.yaml",
         lambda text: text.replace(old, old.replace("]", f", {NAME}]")),
@@ -145,6 +155,7 @@ def test_the_runtime_names_the_new_agent_and_one_line_of_services_yaml_changed(
 ) -> None:
     # Arrange
     old = read(root)
+    before = runtime_agents(root)
 
     # Act
     result = new_workload(root)
@@ -157,10 +168,8 @@ def test_the_runtime_names_the_new_agent_and_one_line_of_services_yaml_changed(
     pairs = enumerate(zip(old_lines, new_lines, strict=True))
     differing = [i for i, (a, b) in pairs if a != b]
     assert differing == [runtime_line_index(old)]
-    assert new_lines[differing[0]] == f"    agents: [claims-triage, {NAME}]"
-    runtime = load_registry(root / REGISTRY).service("agent-runtime")
-    assert runtime is not None
-    assert runtime.agents == ("claims-triage", NAME)
+    assert new_lines[differing[0]] == f"    agents: [{', '.join((*before, NAME))}]"
+    assert runtime_agents(root) == (*before, NAME)
     assert validate(root).exit_code == 0
 
 
@@ -185,12 +194,14 @@ def test_the_same_hand_edit_fails_with_the_rules_message_without_the_write(
     new_workload(root)
     (root / SERVICES).write_bytes(old.encode("utf-8"))
     list_in_a_tenant(root)
+    services = yaml.safe_load(old)["services"]
+    position = [service["id"] for service in services].index("agent-runtime")
 
     with pytest.raises(RegistryError) as refused:
         load_registry(root / REGISTRY)
 
     assert (
-        "services.yaml: services[1].agents: graph agent "
+        f"services.yaml: services[{position}].agents: graph agent "
         f"{NAME!r} is listed by a tenant, so add it to the agents of "
         "'agent-runtime': without it every call for the agent is refused"
     ) in refused.value.errors
@@ -198,14 +209,13 @@ def test_the_same_hand_edit_fails_with_the_rules_message_without_the_write(
 
 
 def test_a_second_workload_is_appended_after_the_first(root: Path) -> None:
+    before = runtime_agents(root)
     new_workload(root)
 
     result = new_workload(root, "claim-audit")
 
     assert result.exit_code == 0, result.stderr
-    runtime = load_registry(root / REGISTRY).service("agent-runtime")
-    assert runtime is not None
-    assert runtime.agents == ("claims-triage", NAME, "claim-audit")
+    assert runtime_agents(root) == (*before, NAME, "claim-audit")
 
 
 @pytest.mark.parametrize(
@@ -233,15 +243,19 @@ def test_the_name_goes_inside_the_brackets_and_a_trailing_comment_survives(
 
 
 def test_a_comment_on_the_runtime_line_survives_the_whole_command(root: Path) -> None:
+    before = runtime_agents(root)
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, RUNTIME_LINE + "  # kept"),
+        lambda text: with_runtime_agents(
+            text, f"    agents: [{', '.join(before)}]  # kept"
+        ),
     )
 
     result = new_workload(root)
 
     assert result.exit_code == 0, result.stderr
-    assert f"    agents: [claims-triage, {NAME}]  # kept" in read(root).split("\n")
+    kept = f"    agents: [{', '.join((*before, NAME))}]  # kept"
+    assert kept in read(root).split("\n")
 
 
 def test_a_file_with_crlf_line_endings_keeps_every_other_line_as_it_was() -> None:
@@ -334,7 +348,9 @@ def refusal_cases(text: str) -> list[tuple[str, str, str]]:
             with_runtime_agents(text, RUNTIME_LINE + "\n" + RUNTIME_LINE),
             SERVICES_EDIT_UNVERIFIED.format(agents),
         ),
-        ("not yaml", "services: [", SERVICES_NOT_YAML),
+        # Changed on purpose (S076): a text that is not YAML is refused with the
+        # line the parser gave, here the one line of the text.
+        ("not yaml", "services: [", SERVICES_NOT_YAML_AT.format(1)),
         ("not a mapping", "- a\n- b\n", SERVICES_RUNTIME_MISSING),
         ("no services key", "other: []\n", SERVICES_RUNTIME_MISSING),
     ]
@@ -358,14 +374,18 @@ def test_the_edit_refuses_what_it_cannot_extend_with_the_line_and_never_the_name
 def block_style(root: Path) -> None:
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, "    agents:\n      - claims-triage"),
+        lambda text: with_runtime_agents(
+            text, "    agents:\n      - claims-triage\n      - claim-brief"
+        ),
     )
 
 
 def over_two_lines(root: Path) -> None:
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, "    agents: [claims-triage\n    ]"),
+        lambda text: with_runtime_agents(
+            text, "    agents: [claims-triage, claim-brief\n    ]"
+        ),
     )
 
 
@@ -550,8 +570,9 @@ def test_a_write_that_fails_at_each_file_leaves_all_three_as_they_were(
 
     # The failure came at the position under test: that many files were replaced.
     assert at_failure == replaced_first
+    # The kind of write is named since S076: "replacing <the file's fixed name>".
     assert str(refused.value) == WRITE_FAILED.format(
-        f"PermissionError: {os.strerror(errno.EACCES)}"
+        f"replacing {target}", f"PermissionError: {os.strerror(errno.EACCES)}"
     )
     assert refused.value.details == ()
     assert snapshot(root) == before
@@ -603,7 +624,7 @@ def test_a_rollback_that_cannot_restore_services_yaml_leaves_the_agent_in_place(
         write_plan(root, plan)
 
     assert str(refused.value) == ROLLBACK_FAILED.format(
-        f"PermissionError: {os.strerror(errno.EACCES)}"
+        "replacing pyproject.toml", f"PermissionError: {os.strerror(errno.EACCES)}"
     )
     assert refused.value.details == (
         "left behind: config/registry/services.yaml",

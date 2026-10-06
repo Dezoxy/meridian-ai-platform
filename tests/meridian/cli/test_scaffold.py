@@ -32,6 +32,8 @@ from meridian.platform.cli.scaffold import (
     PYPROJECT_EDIT_UNVERIFIED,
     PYPROJECT_HEADER_UNUSABLE,
     PYPROJECT_NOT_TOML,
+    PYPROJECT_NOT_TOML_AT,
+    PYPROJECT_TABLE_UNVERIFIED,
     REGISTRY_COPY_FAILED,
     REGISTRY_EDIT_INVALID,
     REGISTRY_INVALID,
@@ -40,7 +42,6 @@ from meridian.platform.cli.scaffold import (
     STALE_PLAN,
     WRITE_FAILED,
     ScaffoldError,
-    ScaffoldWriteError,
     plan_workload,
 )
 from meridian.platform.cli.scaffold_services import (
@@ -49,8 +50,10 @@ from meridian.platform.cli.scaffold_services import (
     SERVICES_AGENTS_UNUSABLE,
     SERVICES_EDIT_UNVERIFIED,
     SERVICES_NOT_YAML,
+    SERVICES_NOT_YAML_AT,
     SERVICES_RUNTIME_MISSING,
     SERVICES_RUNTIME_TWICE,
+    SERVICES_SHARED_NODE,
 )
 from meridian.platform.registry.loader import RegistryError, load_registry
 
@@ -326,12 +329,17 @@ def test_a_tree_that_is_not_a_meridian_checkout_is_refused(
 
 
 @pytest.mark.parametrize(
-    "content",
-    [b"[project\nname = \n", b"\xff\xfe"],
+    ("content", "message"),
+    [
+        # Changed on purpose (S076): TOML that does not parse is refused with the
+        # line the parser gave; bytes that are not UTF-8 have none to give.
+        (b"[project\nname = \n", PYPROJECT_NOT_TOML_AT.format(1)),
+        (b"\xff\xfe", PYPROJECT_NOT_TOML),
+    ],
     ids=["not-toml", "not-utf-8"],
 )
 def test_a_pyproject_that_cannot_be_read_as_toml_says_so(
-    root: Path, content: bytes
+    root: Path, content: bytes, message: str
 ) -> None:
     (root / "pyproject.toml").write_bytes(content)
     before = snapshot(root)
@@ -339,7 +347,7 @@ def test_a_pyproject_that_cannot_be_read_as_toml_says_so(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == PYPROJECT_NOT_TOML
+    assert str(refused.value) == message
     assert snapshot(root) == before
 
 
@@ -374,22 +382,6 @@ def test_a_registry_that_does_not_validate_is_refused_with_the_registrys_message
         f"the registry: {message}" for message in raised.value.errors
     )
     assert snapshot(root) == before
-
-
-def test_a_registry_that_cannot_be_read_is_refused_not_a_traceback(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def unreadable(directory: Path) -> None:
-        raise PermissionError(errno.EACCES, LEAKED, str(directory))
-
-    monkeypatch.setattr(scaffold, "load_registry", unreadable)
-
-    with pytest.raises(ScaffoldError) as refused:
-        plan_workload(root, NAME)
-
-    assert str(refused.value) == REGISTRY_UNREADABLE.format("PermissionError")
-    assert LEAKED not in str(refused.value)
-    assert not isinstance(refused.value, ScaffoldWriteError)
 
 
 def test_a_tree_defect_is_reported_before_a_registry_defect(root: Path) -> None:
@@ -736,6 +728,8 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         AGENTS_LIST_UNUSABLE,
         AGENTS_NO_FINAL_NEWLINE,
         SERVICES_NOT_YAML,
+        SERVICES_NOT_YAML_AT,
+        SERVICES_SHARED_NODE,
         SERVICES_RUNTIME_MISSING,
         SERVICES_RUNTIME_TWICE,
         SERVICES_AGENTS_MISSING,
@@ -744,7 +738,9 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         SERVICES_EDIT_UNVERIFIED,
         PYPROJECT_EDIT_UNVERIFIED,
         PYPROJECT_HEADER_UNUSABLE,
+        PYPROJECT_TABLE_UNVERIFIED,
         PYPROJECT_NOT_TOML,
+        PYPROJECT_NOT_TOML_AT,
         PATH_EXISTS,
         STALE_PLAN,
         REGISTRY_UNREADABLE,
@@ -753,7 +749,8 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         WRITE_FAILED,
         ROLLBACK_FAILED,
     ]
-    # The first four take the type of an error; the other eight take what the
+    # The first four take the type of an error (the last two also the kind of
+    # write that failed, a closed set of fixed words); the others take what the
     # refusal says of the person's own tree: what holds a name, a line, a header.
     taking_a_type = {
         REGISTRY_UNREADABLE,
@@ -763,6 +760,10 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         NAME_TAKEN,
         AGENTS_LIST_UNUSABLE,
         PYPROJECT_HEADER_UNUSABLE,
+        PYPROJECT_TABLE_UNVERIFIED,
+        PYPROJECT_NOT_TOML_AT,
+        SERVICES_NOT_YAML_AT,
+        SERVICES_SHARED_NODE,
         SERVICES_RUNTIME_TWICE,
         SERVICES_AGENTS_MISSING,
         SERVICES_AGENTS_UNUSABLE,

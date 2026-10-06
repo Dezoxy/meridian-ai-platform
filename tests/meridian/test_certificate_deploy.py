@@ -8,11 +8,13 @@ and its wait for the Certificates runs in bash against a stub ``kctl``.
 ``smoke.sh``'s checks are in ``test_certificate_smoke.py``.
 """
 
+import base64
 import json
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,8 +22,37 @@ import yaml
 from certscriptsupport import KIND_DIR, POLICIES, POLICY_STATES, SECONDS
 from servicesupport import REPO_ROOT
 from test_helm_identity import DEPLOY_SH, script_function
+from test_kind_rate_store_secret import run_ensure
 
 VALUES_FILE = KIND_DIR / "values" / "meridian.yaml"
+
+
+def rate_store_secret_json() -> str:
+    """What the stub answers `kubectl get secret rate-store-credentials -o json`
+    with: both keys, non-empty, holding no real value (deploy.sh reads only the
+    names), and the annotation that `make up` puts on the Secret it makes (the
+    hash of the ACL file's rules, which deploy.sh compares, and so is the ACL
+    file's own hash)."""
+    with tempfile.TemporaryDirectory() as directory:
+        done, created, _ = run_ensure(Path(directory))
+    assert done.returncode == 0, done.stderr
+    secret = yaml.safe_load(created)
+    # deploy.sh decodes users.acl and compares its hash with the one `make up`
+    # would write now, so the stub holds the ACL file `make up` makes (its
+    # password's hash is a throwaway of this run) and a placeholder address.
+    acl = secret["stringData"]["users.acl"]
+    return json.dumps(
+        {
+            "metadata": {"annotations": secret["metadata"]["annotations"]},
+            "data": {
+                "uri": "eA==",
+                "users.acl": base64.b64encode(acl.encode()).decode(),
+            },
+        }
+    )
+
+
+RATE_STORE_SECRET_JSON = rate_store_secret_json()
 
 ISSUER_STATES = {
     "missing": 'echo "Error from server (NotFound): clusterissuers.cert-manager.io '
@@ -60,6 +91,18 @@ def write_stub(directory: Path, name: str, body: str) -> None:
     path = directory / name
     path.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
     path.chmod(0o755)
+
+
+def without_the_record(calls: str) -> str:
+    """``calls`` less the calls that write the record of who holds the cluster
+    (S075), which ``deploy.sh`` makes right after its check, before the
+    prerequisites that these tests stop it at."""
+    return "\n".join(
+        line
+        for line in calls.splitlines()
+        if "meridian-cluster-holder" not in line
+        and "-n kube-system apply --server-side" not in line
+    )
 
 
 def run_deploy(
@@ -112,6 +155,9 @@ def run_deploy(
     write_stub(stubs, "kind", log.format(name="kind"))
     write_stub(stubs, "helm", log.format(name="helm"))
     write_stub(stubs, "sleep", log.format(name="sleep"))
+    # The record of who holds the cluster (S075) names the checkout's commit; this
+    # scratch directory is not a git checkout.
+    write_stub(stubs, "git", 'echo "abc1234"')
     write_stub(
         stubs,
         "docker",
@@ -124,9 +170,17 @@ def run_deploy(
         f"{log.format(name='kubectl')}\n"
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
+        # Who holds the cluster (S075): no record, so deploy.sh goes on.
+        '  *"get configmap meridian-cluster-holder"*) ;;\n'
+        # ... and the record it writes at the start and the end (`create | apply`).
+        '  *"create configmap meridian-cluster-holder"*) echo "{}" ;;\n'
+        '  *"-n kube-system apply --server-side"*) cat >/dev/null ;;\n'
         '  *"get database"*) printf true ;;\n'
         f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
         f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
+        # The rate store's Secret (S066), with its two keys and no real value.
+        '  *"get secret rate-store-credentials -o json"*) '
+        f"printf '%s' '{RATE_STORE_SECRET_JSON}' ;;\n"
         '  *"get secret"*) ;;\n'
         + (
             '  *"get configmap telemetry-ca"*) ;;\n'
@@ -153,6 +207,8 @@ def run_deploy(
             "PATH": f"{stubs}:{os.environ['PATH']}",
             "DOCKER_HOST": "unix:///stub.sock",
             "HOME": str(tmp_path),
+            # The holder's name (S075) comes from here, not from a git checkout.
+            "CLUSTER_HOLDER": "test-holder",
         },
         check=False,
         timeout=SECONDS,
@@ -207,7 +263,7 @@ def test_deploy_stops_before_the_image_and_the_jobs_without_a_ready_issuer(
     assert "docker build" not in calls
     assert "kind load" not in calls
     assert "helm" not in calls
-    assert " apply " not in calls
+    assert " apply " not in without_the_record(calls)
     assert "job" not in calls.replace("get clusterissuer", "")
     assert "get clusterissuer" in calls
 
@@ -240,7 +296,7 @@ def assert_stopped_before_the_image(
     assert "docker build" not in calls
     assert "kind load" not in calls
     assert "helm" not in calls
-    assert " apply " not in calls
+    assert " apply " not in without_the_record(calls)
     assert "job" not in calls.replace("get clusterissuer", "")
 
 
@@ -468,10 +524,12 @@ def test_deploy_checks_the_issuer_and_the_approval_after_the_database_only() -> 
     assert calls.index("require_approval") < calls.index("build_image")
     assert calls.index("require_approval") < first_job
     # `require_database` is the line the split above cut at; the issuer is the
-    # first call after it, the approval the second.
-    assert [line for line in calls if line][:3] == [
+    # first call after it, the approval the second, and the rate store's Secret
+    # (S066) the third, in front of the build.
+    assert [line for line in calls if line][:4] == [
         "require_issuer",
         "require_approval",
+        "require_rate_store_secret",
         "build_image",
     ]
 

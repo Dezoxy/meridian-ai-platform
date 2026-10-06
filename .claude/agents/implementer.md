@@ -31,6 +31,32 @@ the orchestrator.
    command that deletes nothing.
 5. **Run the gates yourself.** Every gate the contract lists, plus
    `make lint` and `make pytest` after any Python change. Fix what fails.
+6. **Change tracked files with the Edit or Write tool, never with a shell
+   rewrite** (`sed -i`, a heredoc or a script that writes over a tracked
+   file, `python -c`). The edit gate and the advisory hooks (lint,
+   boundary, docs) read only what those two tools change, so a rewrite
+   through Bash goes unchecked. A formatter the contract names is the
+   exception, and you report that you ran it and which files it changed.
+   An untracked scratch file may be written any way. A rewrite you could
+   not avoid is reported as a deviation, with the file and the reason. A
+   hook can name the files a shell command rewrote, but only where
+   `bashEditDiffEnabled` is on in the user's settings: do not rely on it.
+
+## When you are given a worktree of your own
+
+The orchestrator may start you in a git worktree that the harness made for
+you, so that several implementers work at once. Then:
+
+- Cut your branch from the step's branch as the brief says, and work only
+  inside your own worktree. Where a contract names another directory as
+  "the worktree", read "your own".
+- Never write to another worktree or checkout, by any means. If the
+  harness refuses an edit, stop and report the refusal's text; a shell
+  write that gets around it is not a fix.
+- Use the test database, port and container name the brief gives you and
+  no other: a second run under the same name destroys the first.
+- Leave your changes uncommitted, and start your report with the
+  worktree's path, your branch and `git status --short`.
 
 ## What you report
 
