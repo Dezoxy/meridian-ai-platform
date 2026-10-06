@@ -32,7 +32,8 @@ import stat
 import string
 import tempfile
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -65,7 +66,16 @@ NOT_A_CHECKOUT = (
     "the directory is not a checkout of the meridian repository: run the command "
     "at the checkout's root or pass --root"
 )
+# The parser gave no line to name: bytes that are not UTF-8, or an error "at end
+# of document".
 PYPROJECT_NOT_TOML = "pyproject.toml cannot be read as TOML"
+# The field is the line of the person's own file where the parser stopped; the
+# parser's own text is never quoted, it may hold the file's content.
+PYPROJECT_NOT_TOML_AT = (
+    "pyproject.toml cannot be read as TOML: the parser stopped at line {}"
+)
+# The end of a TOML error's text, where it names the position it stopped at.
+TOML_POSITION = re.compile(r"\(at line (\d+), column \d+\)\Z")
 REGISTRY_INVALID = (
     "the registry does not validate: run `meridian registry validate --registry-dir` "
     "on the checkout's config/registry and fix it first"
@@ -121,9 +131,11 @@ STALE_PLAN = (
 PATH_OUTSIDE = (
     "a path the workload would be written to leaves the checkout or is a symbolic link"
 )
-WRITE_FAILED = "writing the workload failed ({}); what was written has been removed"
+# The fields are the kind of write that failed, one of the fixed words below, and
+# what ``_failure`` says of the error: never a path, never the error's own text.
+WRITE_FAILED = "writing the workload failed ({}, {}); what was written has been removed"
 ROLLBACK_FAILED = (
-    "writing the workload failed ({}) and could not be fully undone: "
+    "writing the workload failed ({}, {}) and could not be fully undone: "
     "check the working tree"
 )
 LEFT_BEHIND = "left behind: {}"
@@ -131,6 +143,15 @@ LEFT_BEHIND = "left behind: {}"
 AGENTS_PATH = "config/registry/agents.yaml"
 PYPROJECT_PATH = "pyproject.toml"
 REGISTRY_DIRECTORY = "config/registry"
+# The kinds of write a failure is named by: a closed set of fixed words. A created
+# path would hold the workload's name, which no text of the scaffold quotes.
+MAKING_A_DIRECTORY = "making a directory"
+CREATING_A_FILE = "creating a new file"
+REPLACING = {
+    AGENTS_PATH: "replacing agents.yaml",
+    SERVICES_PATH: "replacing services.yaml",
+    PYPROJECT_PATH: "replacing pyproject.toml",
+}
 TEMPLATES = ("templates", "workload")
 # Template file -> where its rendering goes; {module} and {name} are filled in.
 RENDERED_FILES = {
@@ -217,8 +238,15 @@ def _read_pyproject(root: Path) -> tuple[str, dict[str, Any]]:
         document = tomllib.loads(text)
     except OSError:
         raise ScaffoldError(NOT_A_CHECKOUT) from None
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except UnicodeDecodeError:
         raise ScaffoldError(PYPROJECT_NOT_TOML) from None
+    except tomllib.TOMLDecodeError as exc:
+        # The error has no line attribute: the number is read from the end of its
+        # text with a fixed pattern, and printed alone.
+        position = TOML_POSITION.search(str(exc))
+        if position is None:
+            raise ScaffoldError(PYPROJECT_NOT_TOML) from None
+        raise ScaffoldError(PYPROJECT_NOT_TOML_AT.format(position[1])) from None
     project = document.get("project")
     if not isinstance(project, dict) or project.get("name") != "meridian":
         raise ScaffoldError(NOT_A_CHECKOUT)
@@ -228,7 +256,14 @@ def _read_pyproject(root: Path) -> tuple[str, dict[str, Any]]:
         for group in (GRAPHS_GROUP, EVALUATIONS_GROUP)
     ):
         raise ScaffoldError(NOT_A_CHECKOUT)
-    if not (root / AGENTS_PATH).is_file():
+    try:
+        has_agents_file = (root / AGENTS_PATH).is_file()
+    except OSError as exc:
+        # The one place the registry's being unreadable reaches this module as an
+        # error: `load_registry` turns its own into a `RegistryError`, but this
+        # stat is made before it (a directory with no search bit).
+        raise ScaffoldError(REGISTRY_UNREADABLE.format(type(exc).__name__)) from None
+    if not has_agents_file:
         raise ScaffoldError(NOT_A_CHECKOUT)
     if not (root / "src" / "meridian" / "workloads").is_dir():
         raise ScaffoldError(NOT_A_CHECKOUT)
@@ -435,14 +470,16 @@ def _header_line(lines: list[str], group: str) -> int:
 
 def _with_entry_point(text: str, group: str, line: str) -> str:
     """``text`` with ``line`` after the last key line of the table of ``group``;
-    the table ends at the next line that starts with ``[`` or at the end of the
-    file, and the blank and comment lines after its last key stay after ``line``.
-    Raise ``ScaffoldError`` when the table's header line is not usable."""
+    the table ends at the next line that starts with ``[``, indented or not (TOML
+    ignores indentation, and ``_header_line`` accepts an indented header), or at
+    the end of the file, and the blank and comment lines after its last key stay
+    after ``line``. Raise ``ScaffoldError`` when the table's header line is not
+    usable."""
     lines = LINES.findall(text)
     start = _header_line(lines, group)
     last = start
     for index in range(start + 1, len(lines)):
-        if lines[index].startswith("["):
+        if lines[index].lstrip().startswith("["):
             break
         if lines[index].strip() and not lines[index].lstrip().startswith("#"):
             last = index
@@ -496,9 +533,9 @@ def plan_workload(root: Path, name: str) -> Plan:
     try:
         registry = load_registry(root / REGISTRY_DIRECTORY)
     except RegistryError as exc:
+        # An unreadable directory or file is a `RegistryError` too: the loader
+        # turns an `OSError` into one itself.
         raise ScaffoldError(REGISTRY_INVALID, details=_registry_details(exc)) from None
-    except OSError as exc:
-        raise ScaffoldError(REGISTRY_UNREADABLE.format(type(exc).__name__)) from None
     _refuse_a_taken_name(root, name, module, document, registry.agent(name) is not None)
     created = _created_files(name, module)
     agents = _read_text(root, AGENTS_PATH)
@@ -542,6 +579,24 @@ def _replace(path: Path, data: bytes) -> None:
         raise
 
 
+class _StepFailed(Exception):
+    """An ``OSError`` met while writing, with the kind of write it was met in."""
+
+    def __init__(self, kind: str, cause: OSError) -> None:
+        super().__init__(kind)
+        self.kind = kind
+        self.cause = cause
+
+
+@contextmanager
+def _writing(kind: str) -> Iterator[None]:
+    """Make an ``OSError`` of the block a ``_StepFailed`` of ``kind``."""
+    try:
+        yield
+    except OSError as exc:
+        raise _StepFailed(kind, exc) from exc
+
+
 def _make_directories(directory: Path, made: list[Path]) -> None:
     """Create ``directory`` and the parents that are missing, noting each one
     this call made in ``made``, outermost first. A directory is noted before it
@@ -554,11 +609,12 @@ def _make_directories(directory: Path, made: list[Path]) -> None:
         current = current.parent
     for each in reversed(missing):
         made.append(each)
-        try:
-            each.mkdir()
-        except FileExistsError:
-            made.remove(each)
-            raise
+        with _writing(MAKING_A_DIRECTORY):
+            try:
+                each.mkdir()
+            except FileExistsError:
+                made.remove(each)
+                raise
 
 
 def _failure(exc: OSError) -> str:
@@ -569,41 +625,51 @@ def _failure(exc: OSError) -> str:
     return f"{type(exc).__name__}: {os.strerror(exc.errno)}"
 
 
-def _put_back(path: Path, old: bytes) -> None:
-    """Make ``path`` hold ``old`` again. A file that already does (its replacement
-    never happened, perhaps because it is the one that failed) is left alone: the
-    same failure would otherwise be met again and reported as an undo that failed.
-    A file that cannot be read is replaced."""
-    try:
-        if path.read_bytes() == old:
-            return
-    except OSError:
-        pass
+def _put_back(path: Path, old: bytes, new: bytes) -> bool:
+    """Make ``path`` hold ``old`` again, only over ``new``, the bytes this command
+    wrote; ``False`` when it holds anything else and was left as it is. A file
+    that already holds ``old`` (its replacement never happened, perhaps because it
+    is the one that failed) is left alone and counts as back: the same failure
+    would otherwise be met again and reported as an undo that failed. Anything
+    else is a save of the person's, which the undo must not overwrite. A file that
+    cannot be read raises ``OSError``.
+
+    This closes the window of the undo and no other: a save that lands between the
+    read here and the replacement just after it, or between a file's own check in
+    ``_read_as_planned`` and its replacement, is lost to the replacement. Closing
+    them takes a lock the person's editor would have to honour; none is built."""
+    current = path.read_bytes()
+    if current == old:
+        return True
+    if current != new:
+        return False
     _replace(path, old)
+    return True
 
 
 def _undo(
     root: Path,
     files: list[Path],
     directories: list[Path],
-    replaced: list[tuple[Path, bytes]],
+    replaced: list[tuple[Path, bytes, bytes]],
 ) -> list[str]:
     """Put back what a failed write changed; the relative paths that did not go
     back, in the order tried. Everything is noted before it is done, so an entry
-    may be one whose change never happened: ``replaced`` holds each edited file and
-    its old bytes, in the order they were replaced, and goes back in the reverse
-    order (a file not yet replaced already holds them and is left alone); a file
-    in ``files`` or a directory in ``directories`` that was never created is
-    skipped.
+    may be one whose change never happened: ``replaced`` holds each edited file
+    with its old bytes and the new bytes this command writes to it, in the order
+    they were replaced, and goes back in the reverse order (a file not yet replaced
+    already holds the old bytes and is left alone; a file that holds neither was
+    saved by the person and is left as it is and named); a file in ``files`` or a
+    directory in ``directories`` that was never created is skipped.
     Once a file will not go back, the files replaced before it are left as they
     are and named: undoing the agents file while the services file still lets the
     runtime name the agent would leave a registry that does not validate."""
     left: list[Path] = []
-    for path, old in reversed(replaced):
+    for path, old, new in reversed(replaced):
         if not left:
             try:
-                _put_back(path, old)
-                continue
+                if _put_back(path, old, new):
+                    continue
             except OSError:
                 pass
         left.append(path)
@@ -633,12 +699,13 @@ def _create_files(
     for path, text in targets:
         _make_directories(path.parent, directories)
         files.append(path)
-        try:
-            with open(path, "x", encoding="utf-8", newline="\n") as stream:
-                stream.write(text)
-        except FileExistsError:  # only the exclusive creation can say so
-            files.remove(path)
-            raise
+        with _writing(CREATING_A_FILE):
+            try:
+                with open(path, "x", encoding="utf-8", newline="\n") as stream:
+                    stream.write(text)
+            except FileExistsError:  # only the exclusive creation can say so
+                files.remove(path)
+                raise
 
 
 def _read_as_planned(path: Path, digest: str) -> bytes:
@@ -653,15 +720,21 @@ def _read_as_planned(path: Path, digest: str) -> bytes:
     return old
 
 
-def _replace_files(root: Path, plan: Plan, replaced: list[tuple[Path, bytes]]) -> None:
+def _replace_files(
+    root: Path, plan: Plan, replaced: list[tuple[Path, bytes, bytes]]
+) -> None:
     """Replace the edited files in ``WRITE_ORDER``. Each is noted, with the bytes
-    it was planned from, before it is replaced, so that an interrupt between the
-    two is undone; a file that is not what the plan was made from (saved after
-    the check at the start of ``write_plan``) is not touched."""
+    it was planned from and the bytes it is given, before it is replaced, so that
+    an interrupt between the two is undone; a file that is not what the plan was
+    made from (saved after the check at the start of ``write_plan``) is not
+    touched."""
     for relative in WRITE_ORDER:
         path = root / relative
-        replaced.append((path, _read_as_planned(path, plan.base[relative])))
-        _replace(path, plan.changed[relative].encode("utf-8"))
+        old = _read_as_planned(path, plan.base[relative])
+        new = plan.changed[relative].encode("utf-8")
+        replaced.append((path, old, new))
+        with _writing(REPLACING[relative]):
+            _replace(path, new)
 
 
 def write_plan(root: Path, plan: Plan) -> None:
@@ -672,25 +745,27 @@ def write_plan(root: Path, plan: Plan) -> None:
     each is checked again just before its own replacement, and a file that
     changed since ends the write with the same refusal. When a write fails, or the
     process is interrupted, remove what this call made and put the edited files
-    back; an ``OSError`` becomes a ``ScaffoldWriteError`` and anything else
-    propagates unchanged."""
+    back (a file the person saved in the meantime is left as it is and named); an
+    ``OSError`` becomes a ``ScaffoldWriteError`` that names the kind of write
+    that failed, and anything else propagates unchanged."""
     targets = [(root / relative, text) for relative, text in plan.created.items()]
     if any(os.path.lexists(path) for path, _ in targets):
         raise ScaffoldError(PATH_EXISTS)
     _refuse_a_stale_plan(root, plan)
     files: list[Path] = []
     directories: list[Path] = []
-    replaced: list[tuple[Path, bytes]] = []
+    replaced: list[tuple[Path, bytes, bytes]] = []
     try:
         _create_files(targets, files, directories)
         _replace_files(root, plan, replaced)
     except BaseException as exc:
         left = _undo(root, files, directories, replaced)
-        if not isinstance(exc, OSError):
+        if not isinstance(exc, _StepFailed):
             raise
+        failure = _failure(exc.cause)
         if not left:
-            raise ScaffoldWriteError(WRITE_FAILED.format(_failure(exc))) from None
+            raise ScaffoldWriteError(WRITE_FAILED.format(exc.kind, failure)) from None
         raise ScaffoldWriteError(
-            ROLLBACK_FAILED.format(_failure(exc)),
+            ROLLBACK_FAILED.format(exc.kind, failure),
             details=tuple(LEFT_BEHIND.format(path) for path in left),
         ) from None

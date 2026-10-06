@@ -15,10 +15,23 @@ because ``scaffold`` imports this module: it wraps the one into the other.
 
 import yaml
 
+from meridian.platform.registry.loader import MERGE_TAG
 from meridian.platform.registry.service_checks import RUNTIME_SERVICE
 
 SERVICES_PATH = "config/registry/services.yaml"
+# The parser gave no line to name.
 SERVICES_NOT_YAML = "services.yaml cannot be read as YAML"
+# The field is the line of the person's own file where the parser stopped; the
+# parser's own text is never quoted, it may hold the file's content.
+SERVICES_NOT_YAML_AT = (
+    "services.yaml cannot be read as YAML: the parser stopped at line {}"
+)
+# The field is the line of the first anchor or alias, or else of the first merge
+# key: the text edit follows neither, so it could not see what its edit changes.
+SERVICES_SHARED_NODE = (
+    "the edit of services.yaml does not verify: line {} uses an anchor, an alias or "
+    "a merge key, which the text edit does not follow; nothing was written"
+)
 SERVICES_RUNTIME_MISSING = (
     f"the edit of services.yaml does not verify: no entry has `id: {RUNTIME_SERVICE}`; "
     "nothing was written"
@@ -84,13 +97,55 @@ def _runtime_entries(document: yaml.Node | None) -> list[yaml.MappingNode]:
     return entries
 
 
+def _not_yaml(old: str, exc: yaml.YAMLError) -> str:
+    """The refusal for a text the parser stopped on: with the line it gave (a
+    mark, or the position of a character it cannot read), else without one."""
+    mark = getattr(exc, "problem_mark", None)
+    if mark is not None:
+        return SERVICES_NOT_YAML_AT.format(mark.line + 1)
+    if isinstance(exc, yaml.reader.ReaderError):
+        return SERVICES_NOT_YAML_AT.format(old.count("\n", 0, max(exc.position, 0)) + 1)
+    return SERVICES_NOT_YAML
+
+
+def _merge_key_lines(node: yaml.Node) -> list[int]:
+    """The 0-based lines of the merge keys in the tree under ``node``. Meant for a
+    tree without aliases: with one a node can be its own descendant."""
+    if isinstance(node, yaml.SequenceNode):
+        return [line for child in node.value for line in _merge_key_lines(child)]
+    if not isinstance(node, yaml.MappingNode):
+        return []
+    found = [key.start_mark.line for key, _ in node.value if key.tag == MERGE_TAG]
+    for key, value in node.value:
+        found += _merge_key_lines(key) + _merge_key_lines(value)
+    return found
+
+
+def _shared_node_line(old: str, document: yaml.Node | None) -> int | None:
+    """The 1-based line of the first anchor or alias of ``old``, or else of its
+    first merge key, or ``None``. The registry's loader refuses all three, but this
+    function stands on its own: ``yaml.compose`` resolves an alias to the anchor's
+    node, so an anchor is found among the parser's events, and a merge key (which
+    the loader refuses only when it constructs) in the composed tree."""
+    for event in yaml.parse(old, Loader=yaml.SafeLoader):
+        if getattr(event, "anchor", None) is not None:
+            return event.start_mark.line + 1
+    merges = _merge_key_lines(document) if document is not None else []
+    return min(merges) + 1 if merges else None
+
+
 def _runtime_agents(old: str) -> tuple[yaml.Node, yaml.Node]:
     """The key node and the value node of the runtime's one ``agents``; raise
-    ``ServicesEditError`` when there is no entry, two, or no ``agents`` key."""
+    ``ServicesEditError`` when the text is not YAML, uses an anchor, an alias or a
+    merge key, has no entry for the runtime, two, or no ``agents`` key."""
     try:
-        entries = _runtime_entries(yaml.compose(old))
-    except yaml.YAMLError:
-        raise ServicesEditError(SERVICES_NOT_YAML) from None
+        document = yaml.compose(old)
+    except yaml.YAMLError as exc:
+        raise ServicesEditError(_not_yaml(old, exc)) from None
+    line = _shared_node_line(old, document)
+    if line is not None:
+        raise ServicesEditError(SERVICES_SHARED_NODE.format(line))
+    entries = _runtime_entries(document)
     if not entries:
         raise ServicesEditError(SERVICES_RUNTIME_MISSING)
     lines = [str(entry.start_mark.line + 1) for entry in entries]

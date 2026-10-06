@@ -34,7 +34,7 @@ from meridian.platform.cli.scaffold_services import (
     SERVICES_AGENTS_MISSING,
     SERVICES_AGENTS_UNUSABLE,
     SERVICES_EDIT_UNVERIFIED,
-    SERVICES_NOT_YAML,
+    SERVICES_NOT_YAML_AT,
     SERVICES_RUNTIME_MISSING,
     SERVICES_RUNTIME_TWICE,
     ServicesEditError,
@@ -334,7 +334,9 @@ def refusal_cases(text: str) -> list[tuple[str, str, str]]:
             with_runtime_agents(text, RUNTIME_LINE + "\n" + RUNTIME_LINE),
             SERVICES_EDIT_UNVERIFIED.format(agents),
         ),
-        ("not yaml", "services: [", SERVICES_NOT_YAML),
+        # Changed on purpose (S076): a text that is not YAML is refused with the
+        # line the parser gave, here the one line of the text.
+        ("not yaml", "services: [", SERVICES_NOT_YAML_AT.format(1)),
         ("not a mapping", "- a\n- b\n", SERVICES_RUNTIME_MISSING),
         ("no services key", "other: []\n", SERVICES_RUNTIME_MISSING),
     ]
@@ -550,8 +552,9 @@ def test_a_write_that_fails_at_each_file_leaves_all_three_as_they_were(
 
     # The failure came at the position under test: that many files were replaced.
     assert at_failure == replaced_first
+    # The kind of write is named since S076: "replacing <the file's fixed name>".
     assert str(refused.value) == WRITE_FAILED.format(
-        f"PermissionError: {os.strerror(errno.EACCES)}"
+        f"replacing {target}", f"PermissionError: {os.strerror(errno.EACCES)}"
     )
     assert refused.value.details == ()
     assert snapshot(root) == before
@@ -603,7 +606,7 @@ def test_a_rollback_that_cannot_restore_services_yaml_leaves_the_agent_in_place(
         write_plan(root, plan)
 
     assert str(refused.value) == ROLLBACK_FAILED.format(
-        f"PermissionError: {os.strerror(errno.EACCES)}"
+        "replacing pyproject.toml", f"PermissionError: {os.strerror(errno.EACCES)}"
     )
     assert refused.value.details == (
         "left behind: config/registry/services.yaml",

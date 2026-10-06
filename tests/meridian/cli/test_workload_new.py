@@ -209,7 +209,7 @@ def test_a_failed_write_exits_1_not_2_and_says_what_is_left_behind(
     assert result.stderr == (
         "ERROR "
         + scaffold.ROLLBACK_FAILED.format(
-            f"PermissionError: {os.strerror(errno.EACCES)}"
+            "replacing pyproject.toml", f"PermissionError: {os.strerror(errno.EACCES)}"
         )
         + "\nERROR left behind: config/registry/agents.yaml\n"
     )
@@ -234,7 +234,9 @@ def test_a_write_that_was_undone_exits_1_with_one_line(
     assert result.stdout == ""
     assert result.stderr == (
         "ERROR "
-        + scaffold.WRITE_FAILED.format(f"PermissionError: {os.strerror(errno.EACCES)}")
+        + scaffold.WRITE_FAILED.format(
+            "replacing pyproject.toml", f"PermissionError: {os.strerror(errno.EACCES)}"
+        )
         + "\n"
     )
     assert snapshot(root) == before

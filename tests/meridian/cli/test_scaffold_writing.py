@@ -230,12 +230,13 @@ def fail_replace_on(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
     monkeypatch.setattr(os, "replace", replace)
 
 
-def failure_text(template: str, exc_type: str, code: int | None) -> str:
-    """What the scaffold says of an ``OSError``: its type and, when it carries an
-    errno, the operating system's text for it; never the exception's own text."""
+def failure_text(template: str, kind: str, exc_type: str, code: int | None) -> str:
+    """What the scaffold says of an ``OSError``: the kind of write that failed
+    (S076) and the error's type and, when it carries an errno, the operating
+    system's text for it; never the exception's own text."""
     if code is None:
-        return template.format(exc_type)
-    return template.format(f"{exc_type}: {os.strerror(code)}")
+        return template.format(kind, exc_type)
+    return template.format(kind, f"{exc_type}: {os.strerror(code)}")
 
 
 @pytest.mark.parametrize("target", ["pyproject.toml", "agents.yaml", "services.yaml"])
@@ -250,11 +251,13 @@ def test_a_failed_replacement_leaves_the_tree_byte_identical(
         write_plan(root, plan)
 
     assert str(refused.value) == failure_text(
-        WRITE_FAILED, "PermissionError", errno.EACCES
+        WRITE_FAILED, f"replacing {target}", "PermissionError", errno.EACCES
     )
     assert refused.value.details == ()
     assert LEAKED not in str(refused.value)
-    assert target not in str(refused.value)
+    # Changed on purpose (S076): the message used to leave the edited file's name
+    # out; it now names the kind of write, "replacing <the file's fixed name>".
+    assert f"replacing {target}" in str(refused.value)
     assert snapshot(root) == before
 
 
@@ -355,7 +358,9 @@ def test_a_failed_creation_is_rolled_back_too(
     with pytest.raises(ScaffoldWriteError) as refused:
         write_plan(root, plan)
 
-    assert str(refused.value) == failure_text(WRITE_FAILED, "OSError", errno.ENOSPC)
+    assert str(refused.value) == failure_text(
+        WRITE_FAILED, "making a directory", "OSError", errno.ENOSPC
+    )
     assert snapshot(root) == before
 
 
@@ -375,7 +380,9 @@ def test_an_oserror_without_an_errno_is_named_by_its_type_alone(
     with pytest.raises(ScaffoldWriteError) as refused:
         write_plan(root, plan)
 
-    assert str(refused.value) == failure_text(WRITE_FAILED, "OSError", None)
+    assert str(refused.value) == failure_text(
+        WRITE_FAILED, "replacing pyproject.toml", "OSError", None
+    )
 
 
 class FailingStream:
@@ -411,7 +418,9 @@ def test_a_write_that_fails_after_the_file_was_created_leaves_nothing_behind(
     with pytest.raises(ScaffoldWriteError) as refused:
         write_plan(root, plan)
 
-    assert str(refused.value) == failure_text(WRITE_FAILED, "OSError", errno.ENOSPC)
+    assert str(refused.value) == failure_text(
+        WRITE_FAILED, "creating a new file", "OSError", errno.ENOSPC
+    )
     assert refused.value.details == ()
     assert snapshot(root) == before
 
@@ -436,7 +445,7 @@ def test_exclusive_creation_alone_protects_a_file_that_appeared_after_planning(
         write_plan(root, plan)
 
     assert str(refused.value) == failure_text(
-        WRITE_FAILED, "FileExistsError", errno.EEXIST
+        WRITE_FAILED, "creating a new file", "FileExistsError", errno.EEXIST
     )
     assert appeared.read_text(encoding="utf-8") == "not the plan's"
     assert snapshot(root) == before
@@ -463,7 +472,7 @@ def test_a_rollback_that_fails_says_so_and_names_what_it_could_not_put_back(
         write_plan(root, plan)
 
     assert str(refused.value) == failure_text(
-        ROLLBACK_FAILED, "PermissionError", errno.EACCES
+        ROLLBACK_FAILED, "replacing pyproject.toml", "PermissionError", errno.EACCES
     )
     assert LEAKED not in str(refused.value)
     assert refused.value.details == ("left behind: config/registry/agents.yaml",)
