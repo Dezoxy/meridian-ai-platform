@@ -321,7 +321,10 @@ callers' URIs start with. No container without the mount gets any of them.
 {{- end }}
 {{- end -}}
 
-{{- /* telemetryCaDirectory: where a service reads the collector's authority. A literal. */ -}}
+{{- /*
+telemetryCaDirectory: where a pod reads the collector's authority (a service's,
+and the sweep's, S064). A literal.
+*/ -}}
 {{- define "meridian.telemetryCaDirectory" -}}
 /etc/meridian/telemetry-ca
 {{- end -}}
@@ -358,6 +361,46 @@ sends nothing, so no name is needed or mounted.
 {{- if hasPrefix "https://" $endpoint -}}
 {{- $name -}}
 {{- end -}}
+{{- end -}}
+
+{{- /*
+telemetryEnv, telemetryCaMount, telemetryCaVolume: what a pod that sends
+telemetry gets, written once for the six services and the sweep (S064); each
+takes the root and renders nothing when its value is empty. The env items are
+the SDK's address and, when the address is https, the file that verifies it.
+The mount and the volume are the ConfigMap's one key, read-only, at
+telemetryCaDirectory. Each calls telemetryCa, so the refusals above apply to
+every pod that includes one.
+*/ -}}
+{{- define "meridian.telemetryEnv" -}}
+{{- $telemetryCa := include "meridian.telemetryCa" . -}}
+{{- with .Values.telemetry.otlpEndpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+{{- if $telemetryCa }}
+- name: OTEL_EXPORTER_OTLP_CERTIFICATE
+  value: {{ include "meridian.telemetryCaDirectory" . }}/ca.crt
+{{- end }}
+{{- end -}}
+
+{{- define "meridian.telemetryCaMount" -}}
+{{- if include "meridian.telemetryCa" . }}
+- name: telemetry-ca
+  mountPath: {{ include "meridian.telemetryCaDirectory" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "meridian.telemetryCaVolume" -}}
+{{- with include "meridian.telemetryCa" . }}
+- name: telemetry-ca
+  configMap:
+    name: {{ . }}
+    items:
+      - key: ca.crt
+        path: ca.crt
+{{- end }}
 {{- end -}}
 
 {{- /*
@@ -593,9 +636,11 @@ services' port; takes root, direction (to or from), names (a list, not empty).
 
 {{- /*
 egress: the rules of a workload's egress; takes root, env (the workload's env
-list: the services it calls) and collector (true: it sets the collector's
-address, so it may reach the collector). Every workload gets DNS and the
-database; nothing else unless its environment names it.
+list: the services it calls), collector (true: it sets the collector's address,
+so it may reach the collector) and rateStore (true: it is given the rate store's
+address, so it may reach the store; a caller that does not pass it gets none).
+Every workload gets DNS and the database; nothing else unless its environment
+names it.
 */ -}}
 {{- define "meridian.egress" -}}
 {{- $callees := include "meridian.callees" .env | fromJsonArray -}}
@@ -604,6 +649,9 @@ database; nothing else unless its environment names it.
 {{- if .collector }}
 {{ include "meridian.peerRule" (dict "root" .root "key" "collector") }}
 {{- end }}
+{{- if .rateStore }}
+{{ include "meridian.rateStoreRule" (dict "direction" "to" "name" "rate-store") }}
+{{- end }}
 {{- if $callees }}
 {{ include "meridian.serviceRule" (dict "root" .root "direction" "to" "names" $callees) }}
 {{- end }}
@@ -611,7 +659,7 @@ database; nothing else unless its environment names it.
 
 {{- /*
 job: a Job, its ServiceAccount and its NetworkPolicy, each Job its own account
-and policy; takes root, name (migrate, seed or ingest), job (its values), databaseUrl
+and policy; takes root, name (migrate, seed, ingest or upkeep), job (its values), databaseUrl
 (the variable its command reads) and secret (the Secret of the database role that
 variable holds: the owner's for the migration alone, the seed's and the
 ingestion's own roles for the other two, S063). A Job that calls a service mounts the Secret of its Certificate (certificates.yaml,
@@ -620,11 +668,17 @@ Job's name ends in the tag, or in the digest's first twelve digits; the policy's
 does not, so a later deploy replaces it instead of adding one. It lives here,
 not in the release, because deploy.sh applies it with the Job: the policy is
 never one deploy behind its Job.
+Two optional keys serve the upkeep Job (S066), which an operator runs many times
+under one image: suffix replaces the tag in the Job's name, so a second run is a
+new Job; args is a list of strings that follows the command in the container's
+`args`, rendered as YAML strings and never as a shell line. Neither is given for
+the three Jobs deploy.sh runs, whose rendering does not change.
 */ -}}
 {{- define "meridian.job" -}}
 {{- $root := .root -}}
 {{- $job := .job -}}
 {{- $app := printf "meridian-%s" .name -}}
+{{- $suffix := .suffix | default (include "meridian.jobSuffix" $root) -}}
 {{- $hasIdentity := include "meridian.callees" $job.env | fromJsonArray -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -655,7 +709,7 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $app }}-{{ include "meridian.jobSuffix" $root }}
+  name: {{ $app }}-{{ $suffix }}
   namespace: {{ $root.Release.Namespace }}
   labels:
     {{- include "meridian.labels" $app | nindent 4 }}
@@ -681,6 +735,10 @@ spec:
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           command:
             {{- toYaml $job.command | nindent 12 }}
+          {{- with .args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             {{- include "meridian.secretEnv" (dict "name" .databaseUrl "secret" .secret) | nindent 12 }}
             {{- range $job.env }}

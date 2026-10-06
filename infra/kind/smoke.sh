@@ -13,7 +13,7 @@
 # rows in the audit table on each run (a 401's and a 403's, which the gateway
 # throttles to one a minute per reason) and puts a throwaway key in the probe
 # pod's /tmp, which the probe removes when it ends; and the checks that read
-# Grafana (4, 5 and 11) read its admin Secret, never printing it.
+# Grafana (4, 5, 7 and 11) read its admin Secret, never printing it.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
 #   2. database:  the database's NetworkPolicy names the API server's address
 #                 (S063, first line, read from two objects and run even when no
@@ -64,7 +64,7 @@
 #                 was given), with a run ID that does not exist: each server must
 #                 refuse it as `unknown-run`. Skipped, not failed, while the
 #                 Meridian services are not deployed (`make deploy`).
-#   4. telemetry: six lines (S063). The first two are about TLS and do not need
+#   4. telemetry: nine lines (S063, S064, G1). The first two are about TLS and do not need
 #                 the Meridian services: the ConfigMap `telemetry-ca` in
 #                 `meridian`, which the six services mount to trust the
 #                 collector, holds the certificate its authority has now (the
@@ -117,6 +117,59 @@
 #                 trace ID, the log line, the series count) goes through
 #                 clean_lines and is cut to 120 characters: anyone who can push
 #                 a log line to the collector chooses its text.
+#                 The last three lines are about the log agent, the DaemonSet in
+#                 `logging` that reads the pods' output on the node and sends it
+#                 to the collector; they run after the three read-backs. The
+#                 seventh line (G1) reads the live DaemonSet, with one
+#                 `kubectl get -o json` and no Grafana, and checks the facts of
+#                 its pod that a bump of the collector's chart could change
+#                 without any test noticing, because no test renders that chart:
+#                 the one hostPath volume is /var/log/pods and its mount is
+#                 read-only; no host network, host PID or host port; runAsNonRoot;
+#                 and no service-account token. PASS says the four facts, each FAIL
+#                 names the first that does not hold, and a SKIP says the
+#                 DaemonSet is not there. It does not prove the pod runs (that is
+#                 the eighth line) or that its security context is complete (the
+#                 capabilities and the seccomp profile are the values file's,
+#                 tested without a cluster; the user, 10001 with runAsNonRoot,
+#                 was seen on kind on 2026-10-06).
+#                 The eighth line (S064) is the Claims API's access line, through
+#                 the same Grafana forward as the three read-backs. Smoke asks the Claims API,
+#                 through the edge the adjuster pages use, for a path that does
+#                 not exist and carries this run's marker in the path
+#                 (/smoke-<epoch>: a path and not a query, because the access
+#                 line keeps no query), expects a 404, and then looks in Loki
+#                 for a record of the service claims-api whose path is that
+#                 marker and whose status is 404 (the edge's answer), within the
+#                 wait the log line above uses. PASS says what
+#                 was found (the record's body, cleaned and cut like the other
+#                 answers). Three FAILs tell what is wrong apart: the edge did
+#                 not answer 404 (what came back, or that it did not answer at
+#                 all), Loki answered and has no such line (the agent is not
+#                 sending, the services' image does not write the JSON access
+#                 line, or the line is not what the query reads), and Loki did
+#                 not answer. One SKIP replaces it while the Meridian services
+#                 are not deployed (`make deploy`; so it is a SKIP after `make
+#                 up` alone) and while the agent's DaemonSet is not there. What
+#                 it does not prove: that every service's output arrives (one
+#                 service, one line), that a line that is not JSON arrives (a
+#                 crash, output before a service set up its logging), and that
+#                 the agent's checkpoint survives a restart. The ninth line (G1)
+#                 is what the eighth cannot say, that nothing but the services'
+#                 output is read: over the last hour Loki holds no stream of a
+#                 container named postgres and none whose namespace is not
+#                 meridian (two queries; a FAIL says which kind and how many,
+#                 never a label), after a control: the Claims API's own stream
+#                 by the same two labels must be there, or the line FAILs (the
+#                 labels cannot be selected by, so the two empty answers prove
+#                 nothing). It runs only after the eighth passed, because
+#                 while nothing is shipped an empty answer proves nothing: when
+#                 the eighth did not pass, it is a SKIP, and it is one after
+#                 `make up` alone. It does not look for a Job's or a smoke pod's
+#                 output, which would be in streams of the namespace meridian:
+#                 the include list, which a test holds equal to the chart's
+#                 services and the sweep, is what keeps them out, and a query
+#                 for them is by hand (infra/kind/README.md).
 #   5. cost panel: four lines. Grafana serves the provisioned dashboard
 #                 "Meridian: Model Gateway tokens and cost", its queries equal
 #                 the file's and every one of them runs in Prometheus (a
@@ -126,7 +179,16 @@
 #                 so), Prometheus holds its tokens, cost and calls series (the
 #                 series line is skipped while the services are not deployed,
 #                 `make deploy`, or the gateway has settled nothing yet, `make
-#                 demo`, and fails when the gateway is not available); and
+#                 demo`, and fails when the gateway is not available). Since
+#                 S066 that series line also means the rate store answered: the
+#                 gateway refuses every call it cannot count (a 503, with the
+#                 store unreachable), so a call settled since the gateway
+#                 started, which is what the series needs, went through the
+#                 store's windows. No line reads the store itself: no check
+#                 may hold its credential (the Secret `rate-store-
+#                 credentials` is the gateway's and the store's alone), and
+#                 check 8's last line shows only that nothing else reaches it;
+#                 and
 #                 Grafana's service account may not read Secrets in meridian or
 #                 observability; and (S063) kube-state-metrics' service account
 #                 may not get, list or watch Secrets in meridian or cert-manager
@@ -147,7 +209,8 @@
 #                 start page answers 200 with the same policy and the banner's
 #                 fictional-data sentence (T-04), and changes no claim. Skipped
 #                 while the Meridian services are not deployed (`make deploy`).
-#   7. sweep:     one line, read-only. The CronJob meridian-sweep exists, and the
+#   7. sweep:     two lines, read-only (the second is below). The first: the
+#                 CronJob meridian-sweep exists, and the
 #                 last of its Jobs to finish (the scheduled ones and any made by
 #                 hand) succeeded; the line prints when it finished. It fails
 #                 when the last one failed (with its reason), when the CronJob
@@ -177,7 +240,29 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
-#   8. network policy: five lines (S019, S062, S063). Each opens a TCP connection and
+#                 The second line (S064, C3) asks Prometheus, through the same
+#                 Grafana forward as check 5, whether the pass that line passed
+#                 sent its findings: the gauge meridian_sweep_last_pass for job
+#                 claims-sweep, each of the six findings (documents-overdue,
+#                 triage-not-started, triage-abandoned, runs-ended,
+#                 threads-cleaned, failures) with a sample in the last 15
+#                 minutes, in one query that takes the newest value of each
+#                 over every instance, waited for with `poll` as the cost series
+#                 are. PASS names the six values. FAIL tells three causes apart:
+#                 Prometheus did not answer with status success, it has no
+#                 finding at all, or it has some and the line names the ones
+#                 missing (only the six words the script holds are printed,
+#                 never a label of the answer: any pod of meridian can push a
+#                 series under the sweep's name). SKIP, one line, when the first
+#                 line was not a PASS (no pass has finished: so also after `make
+#                 up` alone), when the Job that line passed was made without the
+#                 collector's address (the first smoke after a deploy that added
+#                 it reads a Job made before: wait for a pass), and when Grafana
+#                 could not be reached. What it does not prove: that the values
+#                 are the pass's own (a pod of meridian can push the same
+#                 series) or that the series are one instance's (the query
+#                 takes the newest of each).
+#   8. network policy: six lines (S019, S062, S063, S066). Each opens a TCP connection and
 #                 nothing more; a path that no rule allows is a PASS only when it
 #                 times out, and a connection refused or a name that does not
 #                 resolve is a FAIL, never "blocked". A policy that is missing,
@@ -253,9 +338,53 @@
 #                   stands for all the others). It adds about 10 s: one timeout of 4 s and
 #                   the second Pod's start, and at most 60 s more for its start
 #                   when something is wrong.
+#                 - the rate store (S066), last, from a probe Pod of its own,
+#                   which proves the store's INGRESS rule and not the
+#                   sender's egress rule: the connection to
+#                   rate-store.meridian.svc:6379, the store that holds the Model
+#                   Gateway's rate windows, must time out. The Pod has the
+#                   sweep's name label and the label of smoke's own, and
+#                   kind's policy manifests/smoke-rate-store-networkpolicy.yaml
+#                   (which `make up` applies) gives the pods with that label an
+#                   egress rule to the store's pods on its port, so nothing but
+#                   the store's ingress rule, which admits the Model Gateway's
+#                   pods alone, can make it time out (from the Claims API's
+#                   pod, which has no egress rule to the store, the packets
+#                   were dropped at the sender and the line passed with the
+#                   store's policy deleted). A pod that could connect would
+#                   read or reset every tenant's window; a refusal and a name
+#                   that does not resolve (a store that is not deployed) are
+#                   FAIL lines, never "blocked", and so is a missing kind policy
+#                   (without it the timeout would be the sender's) and a kind policy
+#                   of the wrong shape (read from its JSON before any Pod starts:
+#                   it must select the probe label, list Egress and name the
+#                   store's pods on TCP 6379, or the timeout would again be the
+#                   sender's). The
+#                   control, as the database's line does it: the same Pod given
+#                   the label app.kubernetes.io/name=model-gateway, which the
+#                   gateway's own egress rule and the store's ingress rule
+#                   admit, must reach the port (a connection that is then reset
+#                   or answered is "reached": the Pod holds no certificate and
+#                   no password, so it can do nothing there), in up to four
+#                   tries; when it does not, the control did not reach and the
+#                   line proves nothing, which is a FAIL. While it carries
+#                   that name the Pod, which has no readiness probe, is an
+#                   endpoint of the model-gateway Service, so it is labelled
+#                   back to the sweep's name straight after the control, and
+#                   deleted at the end. The line is one PASS when both hold
+#                   (the count of lines does not move), and is not printed when
+#                   the check's own control failed. What the sixth line does not
+#                   prove: that the store is up and serving, since a timeout is
+#                   also what a store that hangs gives. That is read elsewhere:
+#                   `make deploy` waits for the store's Deployment and its
+#                   Certificate, and a completed model call (check 5's series)
+#                   shows the gateway reached the store and was answered. It
+#                   adds a Pod's start and one timeout of 4 s.
 #                 The Pod carries one label of smoke's own as well,
-#                 meridian-smoke=network-probe, which no policy, Service or
-#                 Deployment selects, so it changes nothing they see. A Pod
+#                 meridian-smoke=network-probe, which no policy of the chart,
+#                 Service or Deployment selects (kind's policy for the rate
+#                 store line does, and gives egress to the store alone), so it
+#                 changes nothing they see. A Pod
 #                 that a lost trap left (a run killed with SIGKILL, or a power
 #                 cut) stays as a Failed object once its five minutes have
 #                 passed, with the labels the policies select on; so the check
@@ -272,7 +401,7 @@
 #                 fails too. The Pod ends on its own after five minutes, and is
 #                 not created when the control failed. The check fails when the
 #                 policy `default-deny` does not exist.
-#                 Skipped, one line instead of five, while the Claims API is not
+#                 Skipped, one line instead of six, while the Claims API is not
 #                 deployed (`make deploy`). What it does not prove: that
 #                 every other pair of pods is allowed or denied as the chart
 #                 says (the chart's tests render and compare the rules); that a
@@ -436,7 +565,7 @@
 #                 last. Three lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for
 #                 the PrometheusRule `meridian` that `make up` applies. The
-#                 four groups of infra/kind/alerts/meridian.yaml are loaded and
+#                 five groups of infra/kind/alerts/meridian.yaml are loaded and
 #                 every rule of the loaded meridian.* groups has health ok (a
 #                 FAIL names the rule, its health and Prometheus' lastError,
 #                 cut to 120 printable ASCII characters). The loaded group and
@@ -468,7 +597,7 @@
 #                 by hand, in docs/operations/README.md), that a threshold is
 #                 right, or that anyone would be told (kind has no
 #                 Alertmanager). It adds one request for the rules, one for
-#                 the dashboard and its nine queries: a few seconds.
+#                 the dashboard and its ten queries: a few seconds.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -488,6 +617,16 @@ readonly SWEEP_PERIOD_SECONDS=300
 readonly SWEEP_STALE_PERIODS=3
 # The clock the sweep check trusts: the database's, as whole seconds.
 readonly SWEEP_CLOCK_SQL='SELECT floor(extract(epoch FROM now()))::bigint'
+# The sweep's findings line (S064): the gauge the pass sends before it exits, its
+# `job` (the sweep's service name), the six findings under `meridian_finding` in
+# the order of the pass's summary line, the variable that tells a Job was given
+# the collector's address and the window the line looks back over (the rule
+# MeridianSweepNotReporting's 15 minutes: three passes).
+readonly SWEEP_SERIES=meridian_sweep_last_pass
+readonly SWEEP_JOB_LABEL=claims-sweep
+readonly SWEEP_FINDINGS=(documents-overdue triage-not-started triage-abandoned runs-ended threads-cleaned failures)
+readonly SWEEP_ENDPOINT_ENV=OTEL_EXPORTER_OTLP_ENDPOINT
+readonly SWEEP_SERIES_WINDOW=15m
 # The stores check (2): the newest migration file of this checkout, the probe
 # for the schemas, the policy count and the ledger's newest name. The chunk
 # count is CHUNK_COUNT_SQL of common.sh. COLLATE "C": the ledger's names sort as
@@ -519,6 +658,17 @@ readonly NETWORK_RUNTIME=agent-runtime.meridian.svc:8000
 readonly NETWORK_GATEWAY=model-gateway.meridian.svc:8000
 readonly NETWORK_API_SERVER=kubernetes.default.svc:443
 readonly NETWORK_DATABASE=platform-db-rw.meridian.svc:5432
+# The rate store's Service (S066): the host is the DNS name of its Certificate
+# and the port its Service's; only the Model Gateway's pods are admitted to it.
+readonly NETWORK_RATE_STORE=rate-store.meridian.svc:6379
+# Kind's own policy that gives the probe Pod its egress to the store
+# (manifests/smoke-rate-store-networkpolicy.yaml, applied by `make up`): the line
+# looks for it, because without it a timeout would be the sender's and the line
+# would pass with the store wide open.
+readonly NETWORK_RATE_STORE_POLICY=meridian-smoke-rate-store
+# The label of the store's pods, which that policy's rule must name, as the chart's
+# own do (the line also reads the policy's shape, not only that it exists).
+readonly NETWORK_RATE_STORE_LABEL=app.kubernetes.io/name=rate-store
 # The probe Pod: the sweep's name label (its policy reaches DNS and the database
 # and no Service or Deployment selects it), a sleep that ends on its own, and how
 # long to wait for it and for the network plugin to see the label added to it.
@@ -783,6 +933,37 @@ fi'
 # What the telemetry check (4) prints of an answer of Tempo, Loki or Prometheus
 # is cut to this many characters (see telemetry_answer).
 readonly TELEMETRY_ANSWER_LENGTH=120
+# The log agent's line (the seventh of check 4, S064): the namespace and the
+# DaemonSet of the log agent (the chart names a DaemonSet <fullname>-agent, and
+# values/log-agent.yaml sets the fullname; a test keeps them equal), the service
+# whose record is looked for (the container's name, which the agent makes the
+# service name), and the edge's address for the Claims API, the host the adjuster
+# pages are asked on. The marker is a path of this run: /smoke-<epoch>.
+readonly LOG_AGENT_NAMESPACE=logging
+readonly LOG_AGENT_DAEMONSET=log-agent-agent
+readonly LOG_AGENT_SERVICE=claims-api
+readonly CLAIMS_EDGE_ORIGIN=http://claims.meridian.localhost:8088
+# The log agent's pod shape (G1, the seventh line of check 4): a jq program that
+# reads the live DaemonSet and prints one word, the first fact that does not hold
+# (hostpath, readonly, hostnetwork, hostpid, hostport, nonroot, token) or nothing
+# when all hold. It prints a word of its own and never a value from the object.
+# The facts are the header of values/log-agent.yaml's: the one hostPath volume is
+# /var/log/pods and every mount of it is read-only; no host network, no host PID,
+# no hostPort; every container has runAsNonRoot (its own, or the pod's); and the
+# pod mounts no service-account token.
+# shellcheck disable=SC2016  # the $variables are jq's, not the shell's
+readonly LOG_AGENT_SHAPE_FILTER='
+  .spec.template.spec as $pod
+  | [($pod.containers // [])[], ($pod.initContainers // [])[]] as $containers
+  | [($pod.volumes // [])[] | select(has("hostPath"))] as $host
+  | if ($host | map(.hostPath.path)) != ["/var/log/pods"] then "hostpath"
+    elif ([$containers[] | (.volumeMounts // [])[] | select(.name == $host[0].name) | .readOnly == true] | (length == 0 or any(not))) then "readonly"
+    elif ($pod.hostNetwork // false) then "hostnetwork"
+    elif ($pod.hostPID // false) then "hostpid"
+    elif ([$containers[] | (.ports // [])[] | .hostPort // empty | select(. != 0)] | length > 0) then "hostport"
+    elif ([$containers[] | (if .securityContext.runAsNonRoot != null then .securityContext.runAsNonRoot else $pod.securityContext.runAsNonRoot end) == true] | (length == 0 or any(not))) then "nonroot"
+    elif $pod.automountServiceAccountToken != false then "token"
+    else "" end'
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
@@ -824,6 +1005,7 @@ network_answer=""  # set by network_probe
 network_pod=""     # the probe Pod of check 8 while it may exist
 network_outsider="" # the probe Pod of check 8's collector line, in NETWORK_OUTSIDER_NAMESPACE
 telemetry_pushed="" # set to yes by check 4 when telemetrygen's push from meridian passed: check 8's control
+log_agent_shipped="" # set to yes by check 4 when the Claims API's line was found in Loki: the streams line's control
 refused_request="" # the CertificateRequest of check 10 while it may exist
 refused_err_file="" # the messages of check 10's commands, while it runs
 refused_state=""   # set by refused_read: "<verdict>|<issued>|<reason>|<message>"
@@ -833,6 +1015,7 @@ refused_reason=""  # set by refused_wait: the verdict's reason, cleaned
 refused_message="" # set by refused_wait: the verdict's message, cleaned and cut
 refused_message_full="" # set by refused_wait: the same message, cleaned, not cut
 poll_error=""      # what the last failed poll attempt saw
+sweep_job_finished="" # set by report_sweep: the Job whose success check 7's first line passed
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
 skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
@@ -1444,6 +1627,157 @@ check_telemetry_clear_text() {
   fi
 }
 
+# check_telemetry_log_agent_pod: the seventh line of check 4 (G1). The log agent's
+# DaemonSet as the cluster holds it, read with one `kubectl get -o json`, has the
+# shape values/log-agent.yaml says (the facts are LOG_AGENT_SHAPE_FILTER's), so a
+# chart bump that changes a default (a hostPort, a second mount, a preset, a
+# user) is seen by `make smoke`, which the Renovate group's note says to run.
+# No test renders the collector's chart, so nothing else would see it. PASS says
+# the four facts; each FAIL names the first that does not hold (the filter's own
+# word, never a value of the object); SKIP while the DaemonSet is not there; a
+# read that fails, or an answer that is not JSON, is a FAIL.
+check_telemetry_log_agent_pod() {
+  local json broken
+  if ! json="$(kctl -n "${LOG_AGENT_NAMESPACE}" get daemonset "${LOG_AGENT_DAEMONSET}" -o json --ignore-not-found)"; then
+    fail "telemetry: could not read daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE} (kubectl's error is above), so its pod's shape was not checked"
+    return
+  fi
+  if [[ -z "${json}" ]]; then
+    skip "telemetry: the log agent is not there (no daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE}: run make up), so its pod's shape was not read"
+    return
+  fi
+  if ! broken="$(jq -r "${LOG_AGENT_SHAPE_FILTER}" <<<"${json}" 2>/dev/null)"; then
+    fail "telemetry: what kubectl printed for daemonset/${LOG_AGENT_DAEMONSET} is not a DaemonSet this check can read, so its pod's shape was not checked"
+    return
+  fi
+  case "${broken}" in
+    "") pass "telemetry: the log agent's pod is the shape its values say: one hostPath, /var/log/pods, mounted read-only; no host network, PID or port; runAsNonRoot; no service-account token" ;;
+    hostpath) fail "telemetry: the log agent's pod is not what its values say: its hostPath volumes are not exactly /var/log/pods (a chart bump added, changed or dropped a volume)" ;;
+    readonly) fail "telemetry: the log agent's pod is not what its values say: a mount of the hostPath /var/log/pods is missing or is not read-only" ;;
+    hostnetwork) fail "telemetry: the log agent's pod is not what its values say: it uses the host network" ;;
+    hostpid) fail "telemetry: the log agent's pod is not what its values say: it uses the host PID namespace" ;;
+    hostport) fail "telemetry: the log agent's pod is not what its values say: a container has a host port" ;;
+    nonroot) fail "telemetry: the log agent's pod is not what its values say: a container does not have runAsNonRoot" ;;
+    token) fail "telemetry: the log agent's pod is not what its values say: it mounts a service-account token" ;;
+    *) fail "telemetry: the shape check of daemonset/${LOG_AGENT_DAEMONSET} answered a word it does not know, so the pod's shape was not checked" ;;
+  esac
+}
+
+# check_telemetry_log_agent: the eighth line of check 4 (S064, the seventh until
+# G1 put the pod's shape before it). The log agent
+# sent a record of a service's own output to Loki. The Claims API is asked,
+# through the edge, for /smoke-${epoch}, a path that does not exist (404), and
+# Loki is then asked for a record of the service ${LOG_AGENT_SERVICE} whose
+# `path` is that marker: the access line of the request, as the agent ships it
+# from the pod's output (the fields other than the message are structured
+# metadata in Loki, so the filter reads the field and not the text). The marker
+# is in the path, not in a query: the access line keeps no query. SKIP while
+# the services are not deployed or the agent's DaemonSet is not there. Needs the
+# Grafana forward of check_telemetry (${grafana_url}) and its poll. The three
+# FAILs: the edge did not answer 404; Loki answered and has no such line (poll
+# keeps the start of its last answer, which for a query that found nothing is a
+# `"status":"success"` body); Loki did not answer (a curl error or an answer
+# that is not a success). What came back is cleaned and cut by telemetry_answer.
+check_telemetry_log_agent() {
+  local found marker status
+  if ! found="$(deployed_services)"; then
+    fail "telemetry: could not look for the Meridian deployments (kubectl's error is above), so no line of theirs was looked for in Loki"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "telemetry: the Meridian services are not deployed (make deploy), so no line of theirs was looked for in Loki"
+    return
+  fi
+  if ! found="$(kctl -n "${LOG_AGENT_NAMESPACE}" get daemonset "${LOG_AGENT_DAEMONSET}" -o name --ignore-not-found)"; then
+    fail "telemetry: could not look for daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE} (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "telemetry: the log agent is not there (no daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE}: run make up), so no line of the services was looked for in Loki"
+    return
+  fi
+  marker="/smoke-${epoch}"
+  if ! status="$(curl -q --noproxy '*' -sS -m 10 -o /dev/null -w '%{http_code}' "${CLAIMS_EDGE_ORIGIN}${marker}" 2>&1)"; then
+    fail "telemetry: the edge did not answer 404 for ${CLAIMS_EDGE_ORIGIN}${marker}: $(telemetry_answer "${status}")"
+    return
+  fi
+  if [[ "${status}" != 404 ]]; then
+    fail "telemetry: the edge did not answer 404 for ${CLAIMS_EDGE_ORIGIN}${marker}: it answered $(telemetry_answer "${status}")"
+    return
+  fi
+  if poll '.data.result[0].values[0][1] // empty' -G \
+    "${grafana_url}/api/datasources/proxy/uid/loki/loki/api/v1/query_range" \
+    --data-urlencode "query={service_name=\"${LOG_AGENT_SERVICE}\"} | path=\"${marker}\" | status=\"404\"" \
+    --data-urlencode "limit=5"; then
+    log_agent_shipped=yes
+    pass "telemetry: the log agent shipped the Claims API's access line for ${marker}: Loki has a record of ${LOG_AGENT_SERVICE} with that path and status 404: $(telemetry_answer "${poll_result}")"
+  elif [[ "${poll_error}" == *'"status":"success"'* ]]; then
+    fail "telemetry: Loki has no line of ${LOG_AGENT_SERVICE} whose path is ${marker} after ${POLL_TIMEOUT}s, though the edge answered 404: the log agent is not sending (kubectl -n ${LOG_AGENT_NAMESPACE} logs daemonset/${LOG_AGENT_DAEMONSET}), or the Claims API does not write its access line as JSON with a path field"
+  else
+    fail "telemetry: Loki did not answer the question for ${marker} after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
+  fi
+}
+
+# check_telemetry_log_agent_streams: the ninth line of check 4 (G1). Over the last
+# hour Loki holds no stream of a container named postgres (the database's output
+# is PostgreSQL's, not the services', and is not redacted) and none whose
+# namespace is not meridian (the agent's mount reaches every namespace's output
+# and its include list names the services and the sweep): two queries, and the
+# first stream found ends the line as a FAIL that says what kind it was and how
+# many, never a label from the answer (the labels come from paths and from
+# whatever pushes to the collector). Before the two, a control (M1 of the second
+# review): {k8s_namespace_name="meridian", k8s_container_name="claims-api"} must
+# return a stream in the same window, or the line FAILs (not SKIP: the eighth
+# line has just found the Claims API's access line by service_name) because the
+# two labels are not there to select by and the two negatives prove nothing; PASS
+# says what was found and what was not. The second query leads with a matcher that
+# cannot match an empty value, because Loki refuses a selector made only of
+# matchers that can (`!=` is one). It runs only after the eighth line passed (
+# ${log_agent_shipped}): while nothing is shipped an empty answer proves nothing,
+# so it is a SKIP, which is also what it is after `make up` alone. Needs the
+# Grafana forward of check_telemetry (${grafana_url}) and its poll. A Loki that
+# does not answer, or answers with anything but a success, is a FAIL of its own.
+check_telemetry_log_agent_streams() {
+  local url="${grafana_url}/api/datasources/proxy/uid/loki/loki/api/v1/query_range"
+  local what query kind
+  if [[ "${log_agent_shipped}" != yes ]]; then
+    skip "telemetry: the Claims API's line above did not pass, so no stream that must not be in Loki was looked for: an empty answer proves nothing while nothing is shipped"
+    return
+  fi
+  # The control: the Claims API's own stream, by the two labels the negatives
+  # use. Without it a Loki that stopped indexing either label answers both
+  # negatives with nothing, and the line would say the agent ships only its list.
+  if ! poll 'select(.status == "success") | .data.result | length | tostring' -G "${url}" \
+    --data-urlencode "query={k8s_namespace_name=\"meridian\", k8s_container_name=\"${LOG_AGENT_SERVICE}\"}" \
+    --data-urlencode "since=1h" --data-urlencode "limit=5"; then
+    fail "telemetry: Loki did not answer the question for the stream of the Claims API's container after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
+    return
+  fi
+  if [[ "${poll_result}" == 0 ]]; then
+    fail "telemetry: Loki holds no stream of the Claims API's container (k8s_container_name=${LOG_AGENT_SERVICE} in k8s_namespace_name=meridian) from the last hour, though its access line is there by service_name: the labels k8s_container_name and k8s_namespace_name are not there to select by (a Loki that stopped indexing them), so the questions for streams of postgres and of other namespaces would prove nothing and were not asked"
+    return
+  fi
+  for what in database outside; do
+    if [[ "${what}" == database ]]; then
+      query='{k8s_container_name="postgres"}'
+      kind="a container named postgres"
+    else
+      query='{k8s_namespace_name=~".+", k8s_namespace_name!="meridian"}'
+      kind="any namespace but meridian"
+    fi
+    if ! poll 'select(.status == "success") | .data.result | length | tostring' -G "${url}" \
+      --data-urlencode "query=${query}" --data-urlencode "since=1h" --data-urlencode "limit=5"; then
+      fail "telemetry: Loki did not answer the question for streams of ${kind} after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
+      return
+    fi
+    if [[ "${poll_result}" != 0 ]]; then
+      fail "telemetry: Loki holds $(telemetry_answer "${poll_result}") stream(s) of ${kind} from the last hour, which the log agent must not ship: its include list (values/log-agent.yaml) names the services and the sweep only"
+      return
+    fi
+  done
+  pass "telemetry: Loki holds a stream of the Claims API's container (${LOG_AGENT_SERVICE} in meridian), so its labels select, and holds no stream of a container named postgres and none outside the namespace meridian, all from the last hour: the log agent ships only what its include list names"
+}
+
 check_telemetry() {
   epoch="$(date +%s)"
   service="meridian-smoke-${epoch}"
@@ -1494,6 +1828,10 @@ check_telemetry() {
   else
     fail "metric: no series for ${service} in Prometheus after ${POLL_TIMEOUT}s"
   fi
+
+  check_telemetry_log_agent_pod
+  check_telemetry_log_agent
+  check_telemetry_log_agent_streams
 }
 
 # ── 5. cost panel ────────────────────────────────────────────────────────────
@@ -1946,6 +2284,7 @@ report_sweep() {
   third="$(clean_lines "${third}")"
   case "${kind}" in
     succeeded)
+      sweep_job_finished="${first}"
       pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}"
       ;;
     failed)
@@ -1984,8 +2323,11 @@ report_sweep() {
 
 # Same skip rule as the tool check: only when no Meridian Deployment exists. Only
 # reads (kubectl get, and one SELECT of the database's clock); the Jobs of the
-# whole namespace are listed and filtered by owner.
-check_sweep() {
+# whole namespace are listed and filtered by owner. The first of the check's two
+# lines (the second is check_sweep_findings'): it leaves the name of the Job
+# whose success it passed in ${sweep_job_finished}, and nothing for any other
+# line.
+check_sweep_job() {
   local found cronjob jobs verdict now period
   if ! found="$(deployed_services)"; then
     fail "sweep: could not look for the Meridian deployments (kubectl's error is above)"
@@ -2021,6 +2363,100 @@ check_sweep() {
     return
   fi
   report_sweep "${verdict}" "${period}"
+}
+
+# sweep_findings_query: the instant query of check 7's second line. `max by`
+# takes the last value of each finding whatever its `instance`: a pass sent
+# before the CronJob set one instance ID is a series of its own, which
+# Prometheus keeps five minutes.
+sweep_findings_query() {
+  printf 'max by (meridian_finding) (last_over_time(%s{job="%s"}[%s]))' \
+    "${SWEEP_SERIES}" "${SWEEP_JOB_LABEL}" "${SWEEP_SERIES_WINDOW}"
+}
+
+# sweep_findings_report ANSWER JOB: the FAIL line, once the poll found no answer
+# with all six findings; ANSWER is one more look at the query, for the message.
+# It tells three causes apart: Prometheus did not answer, it has no finding at
+# all, or it has some and not all. Only the six words the script holds are
+# printed, never a label from the answer: any pod of meridian can push a series
+# under the sweep's name (T-68).
+sweep_findings_report() {
+  local answer=$1 job=$2 status word found=0 missing=""
+  status="$(jq -r '.status // empty' <<<"${answer}" 2>/dev/null || true)"
+  if [[ "${status}" != success ]]; then
+    fail "sweep findings: Prometheus did not answer the query with status success after ${POLL_TIMEOUT}s (last answer: ${poll_error:-none})"
+    return
+  fi
+  for word in "${SWEEP_FINDINGS[@]}"; do
+    if jq -e --arg word "${word}" 'any(.data.result[]?; .metric.meridian_finding == $word)' \
+      <<<"${answer}" >/dev/null 2>&1; then
+      found=$((found + 1))
+    else
+      missing="${missing:+${missing}, }${word}"
+    fi
+  done
+  if ((found == 0)); then
+    fail "sweep findings: Prometheus has no ${SWEEP_SERIES} series of job ${SWEEP_JOB_LABEL} from the last ${SWEEP_SERIES_WINDOW} after ${POLL_TIMEOUT}s, though job/${job} succeeded with ${SWEEP_ENDPOINT_ENV} set (the pass sends them before it exits; the runbook telemetry-missing says where to look)"
+    return
+  fi
+  fail "sweep findings: Prometheus has ${found} of ${#SWEEP_FINDINGS[@]} findings of ${SWEEP_SERIES} from the last ${SWEEP_SERIES_WINDOW} after ${POLL_TIMEOUT}s, though job/${job} succeeded; missing: ${missing}"
+}
+
+# check_sweep_findings: the second line of check 7. The pass sends its six
+# findings (meridian_sweep_last_pass) to the collector before it exits, and this
+# asks Prometheus, through Grafana's datasource proxy as check 5 does, whether
+# each of the six has a sample in the last 15 minutes: one query, waited for with
+# `poll` as the cost series are. It looks for what the Job whose success the line
+# above passed should have sent, so the Job's own spec says whether it was given
+# the collector's address (the first smoke after a deploy that added it reads a
+# Job made before: a SKIP, not a FAIL). A SKIP in every case where no pass has
+# finished (the line above was a SKIP or a FAIL), the Job has no address or
+# Grafana's forward is not open. Only reads.
+check_sweep_findings() {
+  local job=${sweep_job_finished} spec addressed query query_url final
+  if [[ -z "${job}" ]]; then
+    skip "sweep findings: no pass of the sweep has finished (see the line above), so there is nothing to look for"
+    return
+  fi
+  if ! spec="$(kctl -n meridian get job "${job}" -o json)"; then
+    fail "sweep findings: could not read job/${job} (kubectl's error is above)"
+    return
+  fi
+  addressed="$(jq -r --arg name "${SWEEP_ENDPOINT_ENV}" \
+    '[.spec.template.spec.containers[]?.env[]? | select(.name == $name)] | length' \
+    <<<"${spec}" 2>/dev/null || true)"
+  if ! [[ "${addressed}" =~ ^[0-9]+$ ]]; then
+    fail "sweep findings: could not read the environment of job/${job}"
+    return
+  fi
+  if ((addressed == 0)); then
+    skip "sweep findings: job/${job} was made without ${SWEEP_ENDPOINT_ENV}, so it sent nothing (the chart gives the CronJob the collector's address: a pass made after make deploy has it)"
+    return
+  fi
+  if ! open_grafana; then # the grafana line above said why
+    skip "sweep findings: not looked for, because Grafana could not be reached"
+    return
+  fi
+  query_url="${grafana_url}/api/datasources/proxy/uid/prometheus/api/v1/query"
+  query="$(sweep_findings_query)"
+  if poll "([.data.result[]? | {(.metric.meridian_finding // \"\"): (.value[1] | tostring)}] | add // {}) as \$got
+    | $(printf '%s\n' "${SWEEP_FINDINGS[@]}" | jq -R . | jq -sc .) as \$words
+    | if all(\$words[]; \$got[.] != null)
+      then [\$words[] | \"\(.)=\(\$got[.])\"] | join(\", \") else empty end" \
+    -G "${query_url}" --data-urlencode "query=${query}"; then
+    pass "sweep findings: job/${job} succeeded and Prometheus has all ${#SWEEP_FINDINGS[@]} findings of ${SWEEP_SERIES} (job ${SWEEP_JOB_LABEL}) from the last ${SWEEP_SERIES_WINDOW}: $(clean_lines "${poll_result}")"
+    return
+  fi
+  # One more look, for the message only; ${poll_error} is what the last attempt saw.
+  final="$(gcurl -G "${query_url}" --data-urlencode "query=${query}" 2>/dev/null || true)"
+  sweep_findings_report "${final}" "${job}"
+}
+
+# Check 7: the sweep's two lines, the Job's and its findings'.
+check_sweep() {
+  sweep_job_finished=""
+  check_sweep_job
+  check_sweep_findings
 }
 
 # ── 8. network policy ────────────────────────────────────────────────────────
@@ -2253,6 +2689,93 @@ check_network_collector() {
   network_outsider_delete || true # the Pod stays named: the EXIT trap tries again
 }
 
+# network_rate_store_lines: the rate store's line, from the probe Pod. With the
+# sweep's name label and kind's egress rule to the store (the policy the caller
+# looked for) it must time out, which only the store's ingress rule can cause;
+# given the Model Gateway's name label, which the gateway's egress rule and the
+# store's ingress rule admit, the same Pod must reach the port, for up to
+# NETWORK_LABEL_ATTEMPTS tries. The Pod has no readiness probe, so with the
+# gateway's name it is an endpoint of the model-gateway Service: it is labelled
+# back to the sweep's name as soon as the control has run. One PASS or FAIL line.
+network_rate_store_lines() {
+  local gateway_label=app.kubernetes.io/name=model-gateway attempt
+  network_probe "${network_pod}" "${NETWORK_RATE_STORE}"
+  if [[ "${network_answer}" == reached ]]; then
+    fail "network policy: a pod that is not the Model Gateway's reached the rate store (${NETWORK_RATE_STORE}): its ingress admits more than the Model Gateway's pods, or is missing (the chart's rate-store policy), or the cluster does not enforce it, and a pod that can connect can read or reset every tenant's window"
+    return
+  elif [[ "${network_answer}" != blocked ]]; then
+    fail "network policy: the probe in ${network_pod} to ${NETWORK_RATE_STORE} gave no answer of reached or blocked: ${network_answer}"
+    return
+  fi
+  if ! kctl -n meridian label pod "${network_pod}" "${gateway_label}" --overwrite >/dev/null 2>&1; then
+    fail "network policy: could not give the probe pod ${network_pod} the label ${gateway_label}"
+    return
+  fi
+  for ((attempt = 1; attempt <= NETWORK_LABEL_ATTEMPTS; attempt++)); do
+    network_probe "${network_pod}" "${NETWORK_RATE_STORE}"
+    [[ "${network_answer}" == blocked ]] || break
+    ((attempt == NETWORK_LABEL_ATTEMPTS)) || sleep "${NETWORK_LABEL_INTERVAL}"
+  done
+  kctl -n meridian label pod "${network_pod}" "app.kubernetes.io/name=${NETWORK_POD_NAME_LABEL}" --overwrite >/dev/null 2>&1 || true
+  if [[ "${network_answer}" == reached ]]; then
+    pass "network policy: a pod that is not the Model Gateway's cannot reach the rate store (${NETWORK_RATE_STORE}) though its egress is open to it, which only the store's ingress rule can cause, and with the Model Gateway's name label the same pod can"
+  elif [[ "${network_answer}" == blocked ]]; then
+    fail "network policy: the same pod still cannot reach the rate store (${NETWORK_RATE_STORE}) after the label ${gateway_label} was added, in ${NETWORK_LABEL_ATTEMPTS} tries: the Model Gateway's egress rule or the store's ingress rule is too narrow, and the control did not reach, so the line proves nothing"
+  else
+    fail "network policy: the probe in ${network_pod} to ${NETWORK_RATE_STORE} gave no answer of reached or blocked: ${network_answer}"
+  fi
+}
+
+# check_network_rate_store: the sixth line of check 8 (S066), which proves the
+# store's INGRESS rule: a probe Pod that kind's policy lets send to the store must
+# time out, and with the gateway's name label reach it. Without that policy a
+# timeout would be the sender's egress and the line would pass with the store open,
+# so a missing policy is a FAIL before any Pod starts, and so is one that exists
+# but does not give the probe pod egress to the store's pods on TCP 6379 (read
+# from its JSON: the selector, the policy type, the peer and the port). The probe is check 8's own
+# and its control, the caller's, has passed before this runs. The header says what
+# the line does not prove.
+check_network_rate_store() {
+  local found
+  if ! found="$(kctl -n meridian get networkpolicy "${NETWORK_RATE_STORE_POLICY}" -o json --ignore-not-found)"; then
+    fail "network policy: could not look for networkpolicy/${NETWORK_RATE_STORE_POLICY} in meridian (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    fail "network policy: networkpolicy/${NETWORK_RATE_STORE_POLICY} does not exist in meridian: it gives the probe pod its egress to the rate store, so without it the pod has no egress to the rate store, a timeout would be the sender's and the line would pass with the store open (make up applies infra/kind/manifests/smoke-rate-store-networkpolicy.yaml)"
+    return
+  fi
+  # That it exists is not enough: a policy that selects another pod, names another
+  # peer, port or protocol, or does not list Egress leaves the probe pod without a
+  # path to the store, so the first attempt would time out at the sender, the
+  # control would reach through the gateway's own egress rule, and the line would
+  # PASS with the store's ingress unproven. The shape the line needs, from the
+  # manifest's own: exactly the probe pods selected by their label, Egress listed,
+  # and a rule whose peers include the store's pods of this namespace (a pod
+  # selector of that one label and neither a namespace selector nor an address
+  # block) on TCP 6379 (no ports at all is every port, and the API server may
+  # leave the protocol out for TCP).
+  if ! jq -e --arg smoke_key "${NETWORK_POD_SMOKE_LABEL%%=*}" --arg smoke_value "${NETWORK_POD_SMOKE_LABEL#*=}" \
+    --arg store_key "${NETWORK_RATE_STORE_LABEL%%=*}" --arg store_value "${NETWORK_RATE_STORE_LABEL#*=}" \
+    --argjson port "${NETWORK_RATE_STORE##*:}" '
+    (.spec.podSelector == {matchLabels: {($smoke_key): $smoke_value}})
+    and ((.spec.policyTypes // []) | index("Egress") != null)
+    and ([.spec.egress[]? | select(
+      ([.to[]? | select(
+        .podSelector == {matchLabels: {($store_key): $store_value}}
+        and (has("namespaceSelector") | not) and (has("ipBlock") | not))] | length) > 0
+      and (((.ports // []) | length) == 0
+        or ([.ports[] | select((.protocol // "TCP") == "TCP" and .port == $port)] | length) > 0)
+    )] | length) > 0' >/dev/null 2>&1 <<<"${found}"; then
+    fail "network policy: networkpolicy/${NETWORK_RATE_STORE_POLICY} exists but does not give the probe pod (the label ${NETWORK_POD_SMOKE_LABEL}) egress to the rate store's pods (${NETWORK_RATE_STORE_LABEL}) on TCP ${NETWORK_RATE_STORE##*:}: with another selector, peer, port, protocol or policy type the pod's packets are dropped at the sender, a timeout would not be the store's ingress rule, the control would still reach through the gateway's own egress rule, and the line would pass with the store's ingress unproven (delete the policy and run make up: it applies infra/kind/manifests/smoke-rate-store-networkpolicy.yaml)"
+    return
+  fi
+  if network_start_pod; then
+    network_rate_store_lines
+  fi
+  network_delete_pod || true # the Pod stays named: the EXIT trap tries again
+}
+
 check_network_policy() {
   local found policy
   network_sweep_leftovers
@@ -2288,6 +2811,7 @@ check_network_policy() {
     true
   check_network_database
   check_network_collector
+  check_network_rate_store
 }
 
 # ── 9. service identity ──────────────────────────────────────────────────────

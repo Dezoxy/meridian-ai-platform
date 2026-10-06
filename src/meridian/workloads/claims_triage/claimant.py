@@ -108,6 +108,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     LifecycleState,
     documents_due,
 )
+from meridian.workloads.claims_triage.meters import ClaimsMeters
 from meridian.workloads.claims_triage.models import (
     ClaimMoveResponse,
     ClaimResponse,
@@ -446,6 +447,7 @@ def add_claimant_pages(
     tracer: Tracer,
     today: Callable[[], date] | None = None,
     deadline_days: int = DOCUMENTS_DEADLINE_DAYS,
+    meters: ClaimsMeters | None = None,
 ) -> None:
     """Add the start page, the claim form, the status page and the documents and
     withdrawal forms to the Claims API. Called after ``add_adjuster_pages``,
@@ -455,7 +457,8 @@ def add_claimant_pages(
     unhandled one by ``ClaimantErrorMiddleware``) and gives every other path the
     shared answer. ``today`` is the clock of the report date the claim form's
     submissions are stamped with (the date now in the insurer's time zone by
-    default); ``deadline_days`` is how long a claim waits for documents."""
+    default); ``deadline_days`` is how long a claim waits for documents;
+    ``meters`` counts the proposals the pages' triages store."""
     clock = today or today_in_vienna
     shared_database_error = app.exception_handlers[psycopg.Error]
     shared_audit_error = app.exception_handlers[AuditUnavailable]
@@ -571,7 +574,9 @@ def add_claimant_pages(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
             )
             try:
-                result = triage_claim(dsn, tenant, http, span, claim_id, submission)
+                result = triage_claim(
+                    dsn, tenant, http, span, claim_id, submission, meters
+                )
             except HTTPException as exc:
                 logger.info(
                     "triage of claim %s refused: %s (the claim's state answers)",
@@ -745,7 +750,7 @@ def add_claimant_pages(
             answered,
             claim_id,
             lambda: add_documents(
-                dsn, tenant, http, tracer, claim_id, arrival.documents
+                dsn, tenant, http, tracer, claim_id, arrival.documents, meters
             ),
         )
 

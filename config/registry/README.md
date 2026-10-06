@@ -269,8 +269,8 @@ Each tenant has four limits, each with its own job:
 
 | Limit | Window | Enforced | Job |
 |---|---|---|---|
-| `requests_per_10_seconds` | sliding 10 s | in the gateway process | Azure OpenAI's own request window; keeps one tenant from causing a provider 429 for all (T-45) |
-| `tokens_per_minute` | sliding 60 s | in the gateway process | Azure OpenAI's own token window; same job |
+| `requests_per_10_seconds` | sliding 10 s | in the gateway process, or in the shared store | Azure OpenAI's own request window; keeps one tenant from causing a provider 429 for all (T-45) |
+| `tokens_per_minute` | sliding 60 s | in the gateway process, or in the shared store | Azure OpenAI's own token window; same job |
 | `tokens_per_day` | UTC calendar day | PostgreSQL | the token budget (QA-12, T-15) |
 | `cost_per_month_eur` | UTC calendar month | PostgreSQL | the cost quota (C-04) |
 
@@ -279,6 +279,14 @@ and `tokens_per_minute`) as Azure reports them for the deployment; replay
 deployments have none. The first two tenant limits are the same windows, so
 the validation above refuses a registry whose tenants could together ask for
 more than the smallest candidate of any route allows.
+
+The two windows are kept in the gateway's process, or, when the gateway is
+given the address of the shared store (`MERIDIAN_GATEWAY_RATE_STORE_URL`, a
+Redis), in that store, so that two gateway processes count into one window. A
+gateway that is given the store and cannot reach it refuses the call (503,
+reason `rate-store-unavailable`); it never falls back to its own windows.
+Implemented and tested against a Redis on loopback; not run on a cluster
+(S066).
 
 `exchange` in `tenants.yaml` is the planning rate the EUR quota is computed
 with. Prices are in USD, the quota is in EUR, and the gateway converts a

@@ -3,7 +3,8 @@
 `make up` builds the local Meridian platform on a one-node kind cluster from
 pinned Helm charts. `make smoke` proves it works. `make deploy` puts the six
 Meridian services on it (Claims API, Agent Runtime, Model Gateway and the
-policy, claims and knowledge tool servers), seeds the policy store and ingests
+policy, claims and knowledge tool servers) and, since S066, the rate store that
+holds the Model Gateway's rate windows, seeds the policy store and ingests
 the policy wordings; `make demo` runs a claim through them. `make down`
 removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
@@ -29,6 +30,68 @@ adjuster; the rules decide every other claim.
 | Tempo (traces) | `tempo` | 3.1.0 | `observability` |
 | Loki (logs) | `loki` | 18.13.7 | `observability` |
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
+| Log agent: a second release of the collector's chart, the contrib build, as a DaemonSet that ships the services' output to Loki (S064) | `opentelemetry-collector` | 0.174.0 (collector 0.162.0, contrib) | `logging` |
+
+Besides the releases, `make up` makes the Secrets the platform needs and
+never overwrites one: the eleven database roles', Grafana's admin password
+and, since S066, `rate-store-credentials` in `meridian`. That one holds two
+keys for the rate store that the Meridian chart runs (`make deploy`, below):
+`uri`, the Model Gateway's address in Redis,
+`rediss://gateway:<password>@rate-store.meridian.svc:6379/0` (the host is the
+DNS name of the store's Certificate, which the gateway verifies), and
+`users.acl`, Redis's access-control file, which only the store's pod mounts:
+the `default` user off, and one user, `gateway`, that is on, with the SHA-256
+of the password and not the password, the keys `~meridian:rate:*`, no channel
+and exactly the commands the gateway's connection and script send: `evalsha`,
+`script|load` (that one subcommand alone), `time`, `zremrangebyscore`,
+`zrange`, `zadd`, `pexpire` and `hello`. Nothing else: no `client`, no
+`script flush` or `script kill`, no `eval`, no `function`, no `keys`, no
+`del`. Within those five commands the gateway's user can do more than run the
+gateway's script: it can run them directly on any tenant's key, so it can read,
+fill, empty or freeze any tenant's windows, and it can load a script that never
+ends (the ledger in PostgreSQL it cannot touch). A second user, `probe`, is on
+with no password (`nopass`), no key, no channel and exactly `ping`: the store's
+two probes run `PING` as it and pass only when the answer is `PONG`, so a store
+frozen by such a script (every other client gets `BUSY`) fails them and the
+kubelet restarts the pod within about a minute. It may only run `ping`, which is
+not nothing: with no password, any client that holds a certificate of the
+services' CA (all six services do) and has a network path to the port is an
+authenticated session of that user, and may fill its query buffer; what bounds
+that is the store's NetworkPolicy and `maxmemory-clients` (below), not the
+user. The password is 32 random bytes as 64 lower-case hex digits, an
+alphabet that needs no percent-encoding in an address, so the address is
+exact; it goes to kubectl on standard input and is never an argument, a file
+or output. The Secret carries the annotation
+`meridian.kind/rate-store-acl-rules`: the SHA-256 of the ACL file with the
+password's hash masked, so it names the users, their command lists and their
+key patterns and holds no secret. **A Secret that exists is kept**: an ACL
+that changed in `up.sh` reaches a running cluster only by deleting the Secret
+(the cluster is disposable on the development machine, and deleting it is a
+rotation of the store's password: the owner's to confirm), running `make up`
+again and restarting the store and then the gateway
+([runbook](../../docs/operations/runbooks/rate-store.md)); `make deploy`
+refuses a cluster whose Secret lacks a key, lacks the annotation (a Secret
+from before the `probe` user has none and no such user) or has one that is not
+the hash of what `make up` would write now, and says to do that. The gateway's
+list was read from Redis 8.10.2 under that user, on plain TCP outside a
+cluster, with the gateway's own client and limiter: a cold call, a warm call
+and a call after the server lost the script ran with an empty access-control
+log, and `GET`, `KEYS`, `DEL`, `FLUSHALL`, `CLIENT LIST`, `SCRIPT FLUSH`,
+`EVAL` and a key outside the pattern were refused. The `probe` user and the
+probes were run on the pinned image over TLS, read-only, as the image's user,
+with the chart's rendered configuration and probe scripts (a healthy store, a
+store frozen by a looping script, and the restart that ended it). Those
+proofs, and the refusals above, were made outside a cluster: no session has
+frozen the store on kind or tried a refused command there. Seen on kind on
+2026-10-06 (third run, on a cluster made from nothing; local only): `make up`
+made the Secret, the store started under its file and its probes, and its pod
+was 1/1 Running with no restart ten minutes later; a ping as `probe` in the
+store's container, over TLS with the container's own certificate, returned
+`PONG`; and the gateway's calls completed (`make demo`), so its user works.
+`ACL LIST` needs a credential that a session does not have, so the file on a
+cluster cannot be listed whole. What can be read without one: that ping (the
+chart's probe does that); a login as the gateway with a wrong password is
+refused (`WRONGPASS`); and the annotation is the hash `make deploy` checks.
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
 to change one. `.github/renovate.json` reads them, so Renovate, once the
@@ -37,8 +100,8 @@ each month. CI does not start this platform: such a pull request needs
 `make up` and `make smoke` before it merges, and the table above follows
 by hand. The values that override chart defaults are in
 [`values/`](values/); the Gateway, the namespaces, Grafana's Role and the
-NetworkPolicies of the database, `cert-manager`, `observability` and smoke's
-Jobs are in [`manifests/`](manifests/). The Meridian
+NetworkPolicies of the database, `cert-manager`, `observability`, the log agent's
+namespace and smoke's Jobs are in [`manifests/`](manifests/). The Meridian
 services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
 which `make deploy` installs (below).
 
@@ -49,16 +112,19 @@ every image a chart starts here is pinned by the multi-architecture index
 digest of its tag, each in [`pins.env`](pins.env) as `X_IMAGE_TAG` and
 `X_IMAGE_DIGEST` under a `# renovate:` comment, and `make up` passes both to
 the chart with `--set`. The tag is the one the chart installs by default at
-its pinned version, except the collector's: the chart's appVersion is 0.161.0
-and the pin is 0.162.0 (it was pinned before this step). A chart upgrade moves
+its pinned version, except the collector's and the log agent's (S064): the
+chart's appVersion is 0.161.0 and the pins are 0.162.0 (the collector's was
+pinned before this step, and the agent's contrib build is the same release,
+so the two move together). A chart upgrade moves
 the tags with it, by hand, in the chart's pull request: Renovate does not
 propose a new tag for an image a chart installs (`.github/renovate.json`
 switches off its major, minor and patch updates for them, so no image arrives
 before the chart that installs it), only a new digest of the tag in place. The
 pull request that moves a chart reads the chart's defaults again (below) and
 writes each new tag, and the index digest of that tag, into `pins.env`. The
-collector's images are outside that rule until their pin and their chart agree,
-and Renovate still proposes their tags. What a chart's key takes is not
+collector's and the log agent's images are outside that rule until their pins
+and their chart agree, and Renovate still proposes their tags. What a chart's
+key takes is not
 uniform: `digest` takes `sha256:<hex>`; `sha` in kube-prometheus-stack and
 Grafana takes the hex alone (their templates write `@sha256:` themselves) and
 `up.sh` strips the prefix; `sha` in kube-state-metrics takes the whole digest;
@@ -83,6 +149,7 @@ digests were read from the registries on 2026-10-06 (each is an index with
 | approver-policy | `quay.io/jetstack/cert-manager-approver-policy:v0.28.0` | `image.tag`, `image.digest` | yes |
 | cnpg | `ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1` | `image.tag` as `tag@digest`; the chart passes it as `OPERATOR_IMAGE_NAME` too, so the init container of every database pod is by digest as well | yes, through the tag key |
 | platform-db | `ghcr.io/cloudnative-pg/postgresql:17.11-standard-trixie` | `cluster.imageName` (`POSTGRES_IMAGE`) | yes |
+| meridian (the rate store, S066) | `docker.io/library/redis:8.10.2-alpine` | `rateStore.image` (`RATE_STORE_IMAGE`), passed by `make deploy` with `--set-string`, not by `make up`; the same image and digest as the Makefile's `PYTEST_REDIS_IMAGE`, which the tests and CI run against, and one Renovate group moves both | yes |
 | platform-db | `alpine:3.17` | the chart's `helm test` Job, started by `helm test` only | left by tag, never started |
 | kube-prometheus-stack | `quay.io/prometheus-operator/prometheus-operator:v0.94.1` | `prometheusOperator.image.tag`, `.sha` | yes |
 | kube-prometheus-stack | `quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1` | `prometheusOperator.prometheusConfigReloader.image.tag`, `.sha` (the operator's flag `--prometheus-config-reloader`; the sidecar of Prometheus) | yes |
@@ -96,6 +163,7 @@ digests were read from the registries on 2026-10-06 (each is an index with
 | tempo | `docker.io/grafana/tempo:3.1.0` | `tempo.tag` as `tag@digest` | yes, through the tag key |
 | loki | `docker.io/grafana/loki:3.7.8` | `loki.image.tag`, `.digest` | yes |
 | otel-collector | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:0.162.0` | `image.repository`, `.tag`, `.digest` (before S063) | yes |
+| log-agent | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.162.0` | `image.repository`, `.tag`, `.digest`: the contrib build of the collector's release, which has the receiver that reads files (S064; digest read 2026-10-06) | yes |
 
 The Prometheus tag is also the Makefile's `PROMTOOL_IMAGE`. Every image left
 by tag is one that nothing starts: if an ACME issuer, a rate-limit policy, a
@@ -149,6 +217,11 @@ logs to Loki's OTLP endpoint, and those three hops stay clear text: they are
 inside `observability`, and the threat model names the hop to the collector.
 Grafana has three datasources with fixed uids:
 `prometheus`, `tempo` and `loki`. Retention is 24 hours everywhere.
+
+The services' logs reach Loki another way (S064): they write to their output,
+and the log agent, a DaemonSet in `logging`, reads those files on the node and
+sends each line to the same collector as an OTLP log record (see "The log agent
+and the namespace `logging`" below, which also says what that pod can read).
 
 node-exporter is off on kind (S063). It is the one pod of `observability` that
 needs the node's own network and PID namespaces and `/proc` and `/sys` from the
@@ -302,12 +375,19 @@ time, a run by hand beside the scheduled one makes two pods, and each may open
 a second connection while it replaces a broken one. The upkeep role may hold at
 most 2: the command opens one connection for milliseconds. That bounds what a
 holder of the credential can hold open; it does not stop one session from
-sitting in an open transaction. Only an operator uses `gateway_upkeep`, from a
-terminal (the runbook
+sitting in an open transaction. Only an operator uses `gateway_upkeep`, and on
+the cluster through `make gateway-upkeep` (below; the runbook
 [budget exhaustion](../../docs/operations/runbooks/budget-exhaustion.md#the-upkeep-command)
-says how); no workload of the chart holds its Secret `gateway-upkeep-db`, and a
-test keeps it so. The three tool-server roles may each hold at most 20
-connections: a tool server runs at most eight calls at once, one connection
+says how): a Job of its own that `infra/kind/upkeep.sh` renders from the chart
+and applies outside the release, so no workload of the release holds its Secret
+`gateway-upkeep-db` (the Deployments, the sweep's CronJob and the three Jobs
+`make deploy` runs), and a test keeps it so. The Job exists only for the one
+run, and is kept for a day for its output. Implemented and tested with stub
+commands and the real chart, and seen on kind on 2026-10-06 (second and third
+runs): the read of the open reservations, a refusal that failed the Job (`ERROR
+GU304`) and a credit of one token, each as a Job of its own. The audit row of
+that credit was not read on the cluster. The three tool-server roles may each
+hold at most 20 connections: a tool server runs at most eight calls at once, one connection
 each and one more for a failure's audit row, and during a rollout two of its
 pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
 other roles have no such bound until they get a connection pool (S027). The `app`
@@ -389,10 +469,11 @@ node image, Kubernetes components and the platform).
 | `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local, on the laptop; 5 min 04 s and 4 min 28 s on the Linux machine of the table above), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
 | `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Run on the cluster on 2026-10-06: after three deploys it listed three `meridian:*` images in the engine and in the node, one `in use` and two `rollback` (an old ReplicaSet names each), kept with no removal command, and removed nothing; on the cluster made again from nothing it listed three in the engine, one in use and two unused (no ReplicaSet of the new cluster names them) with the `docker image rm` line printed for them, and one in the node. The refusal in a checkout without the cluster's credentials was tested against stub commands and not tried on the cluster. |
-| `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
+| `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on (the upkeep Job with one argument and a suffix, which it needs to render). Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
+| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). Only a failure whose output holds the command's own `ERROR GUnnn` line says that nothing was changed; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
@@ -447,13 +528,18 @@ node image, Kubernetes components and the platform).
    not prove a completed call: no single role can make up a claim and a run,
    so that is `make demo`'s proof. The calls run over TLS with the runtime's
    certificate (line 9). Before `make deploy` this check prints SKIP.
-4. **Telemetry.** Six lines (S063; seen on kind on 2026-10-06: the ConfigMap
-   line, the clear-text line answering `400` and telemetrygen's three lines
-   passed. Not seen: a renewal of the collector's certificate or of its
+4. **Telemetry.** Nine lines (six from S063; seen on kind on 2026-10-06: the
+   ConfigMap line, the clear-text line answering `400` and telemetrygen's three
+   lines passed. Not seen: a renewal of the collector's certificate or of its
    authority, and a cold start. The rule that only a 400 passes, the Jobs'
    deadline and check 8's dependence on the push are tested without a cluster
-   until the next run). The first two are about TLS and do not need the
-   Meridian services. The ConfigMap `telemetry-ca` in `meridian`, which the six
+   until the next run; the eighth line, S064's, passed on kind on 2026-10-06
+   in all three of S064's runs (with the agent as root in the first two and as
+   user 10001 in the third); the seventh and the ninth, from the infra review,
+   are described at the end of this item and passed in the third run, where
+   `make smoke` printed 44 PASS, 0 FAIL and 0 SKIP). The first two are about
+   TLS and do not need the Meridian services. The ConfigMap `telemetry-ca` in
+   `meridian`, which the six
    services and telemetrygen mount to trust the collector, holds the
    certificate its authority has now: the SHA-256 fingerprint of its `ca.crt`
    equals that of `tls.crt` of the Secret `telemetry-ca` in `observability`
@@ -501,7 +587,63 @@ node image, Kubernetes components and the platform).
    What a PASS line prints of an answer (the trace ID, the log line, the
    series count) is cleaned of control characters and newlines and cut to 120
    characters: anyone who can push a log line to the collector chooses its
-   text.
+   text. The last three lines are about the log agent, after the three
+   read-backs.
+   The seventh line (from the infra review of S064) reads the agent's live
+   DaemonSet with one `kubectl get -o json` and checks the facts of its pod
+   that a bump of the collector's chart could change without a test noticing
+   (no test renders that chart, and the Renovate group's note already says to
+   run `make smoke`): the one hostPath volume is `/var/log/pods` and its mount
+   is read-only; no host network, host PID or host port; `runAsNonRoot`; and no
+   service-account token. PASS says the four facts; a FAIL names the first that
+   does not hold, in a word of the script's own and never a value of the
+   object; a SKIP says the DaemonSet is not there. It is read after `make up`
+   alone too, so it PASSes there. It does not prove the pod runs, or that its
+   security context is complete. The user was seen on kind on 2026-10-06
+   (the third run: uid and gid 10001, `runAsNonRoot`, the supplementary group
+   0, and a server-side dry run of `enforce=restricted` on `logging` that
+   warned of the hostPath volume alone); the capabilities and the seccomp
+   profile are the values file's, tested without a cluster.
+   The eighth line (S064) asks the Claims API, through the edge the adjuster
+   pages use, for `/smoke-<epoch>`, a path that does not exist, and expects a
+   404; the marker is in the path and not in a query, because the access line
+   keeps no query. It then looks in Loki, within the same wait as the log line
+   above, for a record of the service `claims-api` whose `path` is that marker
+   and whose `status` is 404 (`{service_name="claims-api"} |
+   path="/smoke-<epoch>" | status="404"`, filters on the record's fields,
+   which Loki keeps as structured metadata). PASS prints the record's body.
+   Three FAILs: the edge did not answer 404; Loki answered and has no such
+   line (the agent is not sending, the services' image does not write the JSON
+   access line, or the line is not what the query reads); Loki did not
+   answer. One SKIP replaces it while the Meridian services are not deployed,
+   so it is a SKIP after `make up` alone, and while the agent's DaemonSet is
+   not there. It proves one service's one line made the whole way; it does not
+   prove that every service's output arrives, that a line that is not JSON
+   arrives (a crash, output before a service set up its logging), or that the
+   checkpoint survives a restart.
+   The ninth line (from the infra review) is what the eighth cannot say: that
+   nothing but the services' output is read. Over the last hour Loki holds no
+   stream of a container named `postgres` (`{k8s_container_name="postgres"}`)
+   and none whose namespace is not `meridian`
+   (`{k8s_namespace_name=~".+", k8s_namespace_name!="meridian"}`: Loki refuses
+   a selector whose every matcher can match an empty value, and `!=` is one,
+   so the first matcher cannot). A FAIL says which kind and how many, never a
+   label. Before the two, a control: the Claims API's own stream by the same
+   two labels (`{k8s_namespace_name="meridian",
+   k8s_container_name="claims-api"}`) must be there in the same window, or the
+   line FAILs (not SKIP: the eighth line has just found its access line by
+   `service_name`) with a text that says the two labels are not there to
+   select by, so the two empty answers would prove nothing, as they would if a
+   Loki stopped indexing either label. PASS says what was found and what was
+   not. It runs only after the eighth line passed, because while nothing is
+   shipped an empty answer proves nothing: otherwise it is a SKIP, which it is
+   after `make up` alone (so that run prints 32 lines, and one after
+   `make deploy` 45, with S066's rate store line). It does not look for a
+   Job's or a smoke pod's output, which would be in streams of the namespace
+   `meridian`; the include list keeps them out, and the query for them is by hand:
+   `{k8s_container_name=~"migrate|seed|ingest|probe|telemetrygen"}` over a
+   window that starts after the `make up` that installed this agent, because
+   Loki keeps 24 hours and the first form of the agent shipped them.
 5. **Cost panel.** Four lines. The dashboard: Grafana serves
    `meridian-gateway-cost` as provisioned, with the same queries as the
    file, and Prometheus runs each of them without an error (a dashboard with
@@ -531,7 +673,8 @@ node image, Kubernetes components and the platform).
    the same policy and carries the banner's second sentence, which says that
    every value entered must be fictional (T-04); the request is a GET and
    changes no claim. Before `make deploy` this check prints SKIP.
-7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, and
+7. **Sweep.** Two lines, read-only (the second is S064's, below). The first:
+   the CronJob `meridian-sweep` exists, and
    the last of its Jobs to finish, scheduled or made by hand, succeeded; the
    line says when it finished. It fails when the CronJob is missing, when the
    last finished Job failed (the line gives its reason, and `describe` and
@@ -556,13 +699,31 @@ node image, Kubernetes components and the platform).
    and while it is suspended (`.spec.suspend`: it makes no runs, so none is
    overdue), this line prints SKIP. A PASS does not say the sweep did its
    work, only that a Job finished.
-8. **Network policy.** Five lines. Each opens a TCP connection and sends
+   The second line (S064) asks Prometheus, through Grafana's datasource proxy
+   as check 5 does, whether the six findings of the pass have arrived: the
+   gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of
+   `documents-overdue`, `triage-not-started`, `triage-abandoned`, `runs-ended`,
+   `threads-cleaned` and `failures` with a sample in the last 15 minutes, in
+   one query that takes the last value of each over every `instance`, waited
+   for up to 120 seconds. PASS names the six values. FAIL tells three causes
+   apart: Prometheus did not answer with status `success`, it has no finding at
+   all, or it has some (the line names the ones missing). Only the six words
+   the script holds are printed, never a label from the answer. SKIP, in one
+   line, when the first line was not a PASS (no pass has finished), when the
+   Job it passed was made without `OTEL_EXPORTER_OTLP_ENDPOINT` (the first
+   smoke after a deploy that added the address reads a Job made before it: wait
+   for a pass), and when Grafana could not be reached. After `make up` alone it
+   prints SKIP, with the first line. It passed on kind on 2026-10-06 in the
+   third run (the six values, from one `instance`, `claims-sweep`; all six
+   findings were 0 in the first run); its
+   FAIL and SKIP branches are tested without a cluster and were not seen.
+8. **Network policy.** Six lines. Each opens a TCP connection and sends
    nothing, from Python in a pod (the image has no curl); a denied path passes
    only when it times out (a refused connection or a name that does not
    resolve fails), and a path that answers fails the line. The first line is
    the control: the Claims API's pod reaches the Agent Runtime, which the
    Claims API's policy and the Agent Runtime's both name, so a "blocked" below
-   is not a broken probe (if it fails, the other four are not printed). Then
+   is not a broken probe (if it fails, the other five are not printed). Then
    the Claims API cannot reach the Model Gateway, which no rule names; the
    Claims API cannot reach the API server's Service address
    (`kubernetes.default.svc:443`), which no service's policy lists and which
@@ -593,9 +754,48 @@ node image, Kubernetes components and the platform).
    from the collector fails as before, whatever check 4 did. It does not prove
    that a pod of `meridian` can push (line 4 does, from the Jobs it runs
    there, and this line depends on it), that 4317 is closed to every pod (it
-   probes 4318), or that a namespace other than `default` is refused. The pods
-   also carry `meridian-smoke=network-probe`, which no policy, Service or
-   Deployment selects. A run that is killed hard (SIGKILL, a power cut) leaves the pod as
+   probes 4318), or that a namespace other than `default` is refused. The
+   sixth line (S066) is the rate store's and it proves the store's ingress
+   rule, not the sender's egress rule. From a probe pod of its own (the sweep's
+   name label and smoke's) the connection to `rate-store.meridian.svc:6379`
+   must time out. [`manifests/smoke-rate-store-networkpolicy.yaml`](manifests/smoke-rate-store-networkpolicy.yaml),
+   which `make up` applies, gives the pods with smoke's label an egress rule to
+   the store's pods on that port and nothing else, so the only rule between
+   the pod and the store is the store's ingress, which admits the Model
+   Gateway's pods alone. (The first version connected from the Claims API's
+   pod, which has no egress rule to the store: the packets were dropped at the
+   sender, and the line passed with the store's policy deleted.) The control,
+   as the database's line does it: the same pod, given the name label
+   `app.kubernetes.io/name=model-gateway`, which the gateway's egress rule and
+   the store's ingress rule admit, must reach the port (a connection that is
+   then reset or answered is "reached": the pod holds no certificate and no
+   password, so it can do nothing there), in up to four tries; when it does
+   not, the control did not reach and the line says it proves nothing. While
+   it carries that name the pod, which has no readiness probe, is an endpoint
+   of the model-gateway Service, so it is labelled back to the sweep's name
+   straight after the control and deleted at the end. A missing kind policy is
+   a FAIL before any pod starts (without it a timeout would be the sender's and
+   the line would pass with the store open), and so is one that exists with the
+   wrong shape: the line reads the policy's JSON and fails with a sentence of
+   its own unless the policy selects exactly the pods with smoke's label, lists
+   `Egress`, and has a rule whose peers include the store's pods of this
+   namespace (a pod selector of `app.kubernetes.io/name=rate-store` and neither
+   a namespace selector nor an address block) on TCP 6379 (no ports at all is
+   every port). With another port or selector the first attempt would time out
+   at the sender, the control would reach through the gateway's own egress
+   rule, and the line would pass with the store's ingress unproven; the count
+   of lines does not change (implemented and tested with a stub `kubectl`, one
+   test for each wrong shape; the main session runs it on kind after this
+   lands). It fails like the others on an
+   answer, a refusal and a name that does not resolve (a store that is not
+   deployed), and prints one line when both parts hold. It does not prove that
+   the store is up: `make deploy` waits for its Deployment and its Certificate,
+   and the cost-series line of check 5 now also means the store answered,
+   because the gateway refuses every call it cannot count. No line reads the
+   store itself: that would need its credential. The pods also carry
+   `meridian-smoke=network-probe`, which no policy of the chart, Service or
+   Deployment selects (kind's policy for the rate store line does). A run that
+   is killed hard (SIGKILL, a power cut) leaves the pod as
    a Failed object with the labels the policies select on, so the check starts
    by listing the pods with that label and deletes by name those older than 300
    seconds (a younger one is another run's; a list that cannot be read is not
@@ -604,14 +804,20 @@ node image, Kubernetes components and the platform).
    interrupted run was not tried on the cluster). The allowed paths are also
    the tool check's proof (line 3). It fails when the NetworkPolicy
    `default-deny` is missing. Before
-   `make deploy` one line prints SKIP in place of the five. It adds about 30
-   seconds. On 2026-10-06 the first four lines passed on the cluster (the
+   `make deploy` one line prints SKIP in place of the six. It adds about 45
+   seconds (the rate store's line is a second probe pod's start and one more
+   timeout of 4 s; an estimate, the pod's start was not timed). On 2026-10-06
+   the first four lines passed on the cluster (the
    control, the two denied paths out of the Claims API, and the database
    refusing a pod without the label and taking one with it), and no probe pod
    was left in `meridian` afterwards. The fifth line passed on the cluster on
    2026-10-06 (a probe in `default` cannot push to the collector on 4318); its
    dependence on check 4's push is tested without a cluster until the next
-   `make smoke`. What it
+   `make smoke`. The sixth line passed on the cluster on 2026-10-06 (third
+   run, among its 45 PASS lines): the pod without the gateway's label could not
+   reach the store and, given the label, reached it. Its FAIL branches (the kind
+   policy missing, a pod that reached the store, a control that did not reach)
+   are tested against stub commands and were not seen on a cluster. What it
    does not prove, and stays by hand (S019): that a pod of another namespace
    cannot reach the database, and that an address outside the machine is
    unreachable (smoke sends nothing there); and it does not read the
@@ -749,7 +955,7 @@ node image, Kubernetes components and the platform).
 11. **Alert rules and health dashboard.** Four lines, read-only, run last.
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
-    applies. The four groups of `alerts/meridian.yaml` are loaded and every
+    applies. The five groups of `alerts/meridian.yaml` are loaded and every
     rule in them has health `ok`: a FAIL names each rule that has not, with
     its health and Prometheus' last error, cut to 120 printable characters
     (a rule that has not been evaluated yet is `unknown`, which is not `ok`;
@@ -779,7 +985,9 @@ node image, Kubernetes components and the platform).
     of [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster)
     stays by hand; nor that a threshold is right; nor that anyone would be
     told, because kind runs no Alertmanager. The four lines passed on the
-    cluster on every smoke run of 2026-10-06. Smoke was not run while the
+    cluster on every smoke run of 2026-10-06 (in the third of S064's runs with
+    the five groups and all 19 rules, none firing or pending). Smoke was not
+    run while the
     renewal watch's short certificates were in place and the alert fired; a
     firing alert is a FAIL of the third line, so it would have failed (see
     "How long a certificate lasts" below).
@@ -859,7 +1067,32 @@ In order, `make deploy`:
    the last look (an API error, a refused read), the refusal quotes it on one
    line, because that is not an absent add-on and `make up` is not its remedy.
    (Tested against stub commands;
-   not yet seen on a cluster.)
+   not yet seen on a cluster.) After those, and again before it builds
+   anything, it refuses when the Secret `rate-store-credentials` is missing or
+   lacks a key, or holds one empty (S066): the gateway's pod reads `uri` and
+   the store's pod mounts `users.acl`, and a pod that cannot read its Secret
+   would not start after the Jobs had run. Only the names of the keys are read,
+   never a value. It also refuses a Secret whose annotation
+   `meridian.kind/rate-store-acl-rules` is missing (a Secret from before the
+   store's probes had a user of their own) or is not the hash of the ACL that
+   `make up` would write now: the store's pod would never be Ready, or would
+   refuse the gateway, and nothing but its restarts would say why. The
+   annotation is only a note `make up` left, so it also decodes the Secret's
+   own `users.acl`, hashes it the same way (the password's hash masked, in one
+   pipe from `jq` to the hash: the text is never printed, traced or kept, and
+   tracing is off inside the function) and refuses a file whose hash is not the
+   one `make up` would write now, with a sentence of its own: an ACL file edited
+   or replaced after `make up` under an annotation that still matches is no
+   longer let through (implemented and tested with stub commands; not yet run
+   on a cluster). Such a Secret
+   (or one `make up` made with an ACL that has since changed) is deleted first,
+   because `make up` keeps a Secret that exists; the message gives the order:
+   delete it, `make up`, restart the store, then the gateway (above, and the
+   [rate store runbook](../../docs/operations/runbooks/rate-store.md)).
+   (Tested against stub commands. Seen on kind on 2026-10-06: the third run's
+   `make deploy` passed these checks on the Secret `make up` had just made. The
+   refusals were not seen on a cluster: that run made the cluster again instead
+   of meeting an old Secret.)
 2. Builds and loads the image, tagged `meridian:<first 12 hex of its ID>`. A
    deploy of a changed tree leaves the previous image in the Docker engine
    and in the node, and images stay there until a person removes them.
@@ -899,11 +1132,16 @@ In order, `make deploy`:
 4. Installs or upgrades the Helm release `meridian` (`helm upgrade
    --install`, server-side apply): the ServiceAccounts, Deployments,
    Services, PodDisruptionBudgets and NetworkPolicies, the HTTPRoute, the
-   BackendTrafficPolicy and the sweep's CronJob. The image's repository and
-   tag are the only values the script passes; the rest is the chart's
-   `values.yaml` and [`values/meridian.yaml`](values/meridian.yaml). Helm
-   does not wait for the rollouts; the next steps do.
-5. Waits for the Model Gateway, then runs a Job `meridian-ingest-<tag>` with
+   BackendTrafficPolicy and the sweep's CronJob, and, since kind's values turn
+   it on (S066), the rate store: its own ServiceAccount, ConfigMap, Deployment,
+   Service, Certificate and NetworkPolicy. The image's repository and
+   tag are the values the script passes, and the store's image
+   (`RATE_STORE_IMAGE` of [`pins.env`](pins.env), as `--set-string
+   rateStore.image=`, so it has one place and one Renovate reader); the rest is
+   the chart's `values.yaml` and [`values/meridian.yaml`](values/meridian.yaml).
+   Helm does not wait for the rollouts; the next steps do.
+5. Waits for the rate store, then for the Model Gateway (every call it makes
+   needs the store), then runs a Job `meridian-ingest-<tag>` with
    `meridian knowledge ingest` as `knowledge_ingest` (its audit row names that
    role), which embeds the 85 clauses of the four
    wordings through the gateway and replaces the knowledge store in one
@@ -972,7 +1210,8 @@ peers) will differ. Neither file holds a secret: Helm keeps a release's
 values in a Secret of the namespace, so a value names a Secret and never
 holds a password or a connection string.
 
-Every pod of the chart, the Jobs' and the sweep's included:
+Every pod of the chart, the Jobs' and the sweep's included, but the rate
+store's (S066; the next paragraphs, and the list below say where it differs):
 
 - runs as user and group 10001, never root, with every capability dropped,
   no privilege escalation, the runtime's default seccomp profile and no
@@ -996,8 +1235,58 @@ Each service has readiness and liveness probes on `/healthz` and a
 PodDisruptionBudget with `maxUnavailable: 1`. With the one replica each
 service runs, that budget permits the pod's eviction: it blocks no node
 drain and protects nothing yet, and starts to matter with a second replica.
-The chart refuses a second replica of the Model Gateway, whose rate windows
-live in one process (threat model T-45).
+The chart refuses a second replica of the Model Gateway unless the rate store
+is on (threat model T-45): without it the rate windows live in one process, and
+each replica would allow the full limits. Kind's values turn the store on and
+leave the gateway at one replica, the laptop's memory being the reason; the
+chart allows a second one now, and no load test has run two.
+
+**The rate store (S066)** is a seventh workload of the release, with a
+Deployment, Service, ServiceAccount, ConfigMap, Certificate and NetworkPolicy
+named `rate-store`, and it is not like the six services. It runs the official
+Redis image (`RATE_STORE_IMAGE`, by digest, pulled: `IfNotPresent`, not kind's
+`Never`, which is for the loaded Meridian image), without the image's
+entrypoint, as the image's own user, 999 and group 1000, which the chart
+writes down; the rest of the hardening is the services': no capability, no
+privilege escalation, the default seccomp profile, a read-only root and no
+service-account token. It has no `/tmp` and nothing writable at all (Redis
+writes nothing: no snapshot, no append-only file), its volumes are its
+certificate, the access-control file (the one key `users.acl` of the Secret)
+and its configuration, one replica that is replaced rather than rolled, no
+PodDisruptionBudget and a memory limit of 64 MiB, which is the real bound on
+what it can hold (Redis's own `maxmemory` does not stop the gateway's script
+writing). It serves TLS 1.3 alone, asks every client for a certificate of the
+services' CA, and its `default` user is off; a bulk and a client's query buffer
+are bounded at 1 MB (the gateway's script is a little over 1 KB) and every
+client's buffers together at 8 MB (`maxmemory-clients`: past it Redis
+disconnects the largest clients; without it 240 authenticated connections each
+holding the head of a 1 MB request killed the store under its 64 MiB limit, with
+it the same flood held it between 13 and 27 MiB, the probe and the gateway's
+calls still answered; measured on the pinned image outside a cluster), and no
+directive bounds a script that writes without end, which the pod's memory limit
+ends by restarting the store, so every tenant has its windows again. Both
+probes ping as the ACL user `probe` and pass only on `PONG`, so a store frozen
+by a looping script is restarted within about a minute (every window starts
+again); their `redis-cli` runs under `timeout 2`, inside the kubelet's 3
+seconds, so a store frozen below the protocol fails the probe at once and
+leaves no client behind (proved against a paused container). Its
+NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
+else, and gives it no egress; it is the store's only control before
+authentication, so the chart refuses the store with `networkPolicy.enabled`
+false. The gateway's policy has the matching rule to it, and no other
+workload's has. The gateway reads its address from the key `uri` of the Secret
+through a required reference, and the chart refuses a values `env` item of any
+service named `MERIDIAN_GATEWAY_RATE_STORE_URL`, so the address comes from the
+Secret and from nowhere else. A test of each
+(`tests/meridian/test_kind_rate_store.py`, `test_helm_rate_store_hardening.py`)
+renders kind's values; the checks of the six services leave the store out by
+name, so no check on them was loosened. Implemented and tested, and seen on
+kind on 2026-10-06 (third run): the store running under this configuration
+with the gateway's calls counted by it, its probes passing, its certificate's
+renewal followed by one restart, and the policy's ingress rule enforced on a
+pod without the gateway's label. Not seen on a cluster: a store frozen by a
+script and restarted by its probe, a TLS 1.2 client or an oversized bulk
+refused, and the 503 of a store that is down.
 
 The namespace denies all traffic by default: the NetworkPolicy
 `default-deny` selects every pod in `meridian`, whatever its labels, and
@@ -1008,7 +1297,8 @@ names:
 |---|---|---|
 | Claims API | the edge (Envoy's proxy pods) | Agent Runtime |
 | Agent Runtime | Claims API | Model Gateway, the three tool servers |
-| Model Gateway | Agent Runtime, Knowledge tool server, the ingest Job | nothing (replay mode) |
+| Model Gateway | Agent Runtime, Knowledge tool server, the ingest Job | the rate store (replay mode: no provider) |
+| Rate store (S066) | Model Gateway | nothing, not even DNS |
 | Policy and Claims tool servers | Agent Runtime | nothing |
 | Knowledge tool server | Agent Runtime | Model Gateway |
 | The migrate and seed Jobs, the sweep | nobody | nothing |
@@ -1018,7 +1308,8 @@ The policies are unchanged by TLS: the services listen on the same port, so
 every rule names the same peers and the same port as before, and a test
 renders the chart with TLS off and compares the policies byte for byte.
 Every workload may also reach DNS and the database, and the six services
-the collector; the Jobs and the sweep send no telemetry and may not. A test
+the collector, and the sweep when it has the address (S064); the Jobs send no
+telemetry and may not. A test
 derives the table from each container's environment: a service address
 without a rule, or a rule without an address, fails it. A Job's policy is
 rendered and applied with the Job, so it is never one deploy behind.
@@ -1135,7 +1426,11 @@ record that in the plan.
 Until S063 a pod of any namespace could push to the collector, and
 `cert-manager` and `observability` had neither a NetworkPolicy nor Pod Security
 labels (threat model T-68, T-84). `make up` now applies three policy files
-before the releases they guard, beside the database's; all of it is **tested
+before the releases they guard, beside the database's (a fourth, for the log
+agent's namespace, came with S064, below, and was applied on kind on
+2026-10-06, where the agent sent through it; a fifth, in `meridian`, for the
+probe pod of smoke's rate store line, came with S066 and was applied on kind
+on 2026-10-06, in the third run, where that line passed); all of it is **tested
 without a cluster** (the manifests and the script's lines are checked against
 stub commands, and the pods' specs were read with `helm template`), until the
 first `make up` and `make smoke` after it have run on one.
@@ -1143,10 +1438,13 @@ first `make up` and `make smoke` after it have run on one.
 | File | Namespace | What it says |
 |---|---|---|
 | [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
-| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
+| [`manifests/smoke-rate-store-networkpolicy.yaml`](manifests/smoke-rate-store-networkpolicy.yaml) | `meridian` | The probe pod of smoke's rate store line (the pods with the label `meridian-smoke=network-probe`) may send to the rate store on 6379, so that only the store's ingress rule can stop it |
+| [`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml) | `logging` | Ingress and egress denied for every pod; the log agent may reach DNS and the collector's 4318 and nothing else (S064) |
 
-Only Meridian's pods push to the collector, on 4318, and 4317 is admitted from
+Only Meridian's pods push to the collector, on 4318, and the log agent, which
+sends only what `meridian`'s pods wrote (S064); 4317 is admitted from
 no namespace: the collector's rule selects the namespace `meridian` and no pod
 label, and the chart's own policies are what narrow that to the six services
 (its `default-deny` leaves every pod of `meridian` without egress, and only a
@@ -1189,10 +1487,216 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 | `meridian` | `restricted` | nothing |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
 | `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
+| `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume alone (it allows no hostPath): the pod runs as user 10001 with `runAsNonRoot` (S064, read as `helm template` renders it, 2026-10-06, and seen on kind the same day: a server-side dry run of `enforce=restricted` warned of "restricted volume types" alone; the label warns of nothing) |
 
 The Prometheus pods are the operator's, not rendered by Helm, and were not read:
 a server-side dry run on the cluster (`kubectl label --dry-run=server`) is the
 check that reads them.
+
+### The log agent and the namespace `logging` (S064)
+
+Status: **implemented; it ran on the kind cluster three times on 2026-10-06
+(local only), the third time in the form below.** The first form (as root, every
+pod of `meridian` that a pattern matched) ran at 11:10 UTC and, with the
+reviews' fixes in the services, at 11:34 UTC: the pod was Running with no
+permission or TLS error in its output, smoke's line found the Claims API's
+access line in Loki (41 PASS, 0 FAIL, 0 SKIP) and the canaries (a query string,
+an address in a path) were in no line there. The third run, at the final tip
+(12:56 to 13:06 UTC), ran the form below: the pod 1/1 Running with no restart,
+as uid and gid 10001 with `runAsNonRoot` and the supplementary group 0; 14
+"Started watching file" lines, all for pods of the six services and the sweep,
+and no line with "permission denied", "x509" or "error"; Loki held the six
+services and `sweep` and nothing of the Jobs or smoke's pods; smoke printed 44
+PASS, 0 FAIL, 0 SKIP. Not seen: a restart of the agent, a renewal of the
+authority, a flood of lines. The form below changed three things since the
+first: the user (10001, no longer root), the files it opens (a list of the
+workloads, no longer the whole namespace) and what it does with a line (names
+removed, `CRITICAL` mapped). The first two were seen in the third run; the
+third was run only over fixture files with the pinned image and is tested
+without a cluster, not seen on one.
+The owner chose, on 2026-10-06, that a node agent reads the pods' output and
+ships it to Loki, over each service pushing its own records (which would not
+have carried uvicorn's access line, output before a service's logging was set
+up, or a crash). The agent is a second release of the collector's chart, the
+contrib build (the core build has no receiver that reads files), as a
+DaemonSet named `log-agent-agent` in the namespace `logging`:
+[`values/log-agent.yaml`](values/log-agent.yaml), its image in `pins.env` as
+`LOG_AGENT_IMAGE_*`, its policy in
+[`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml).
+`make up` installs it after the collector, once the ConfigMap `telemetry-ca`
+(the authority's public certificate, which `up.sh` now publishes to `meridian`
+and to `logging`) is there.
+
+**What the owner's decision costs.** The agent mounts the node's pod-log
+directory, `/var/log/pods`, read-only. That directory holds the output of every
+pod on the node, in every namespace, and the pod can read all of it: a
+compromised agent reads the output of every pod on its node, not only
+`meridian`'s. The receiver is configured to open only the files of the
+workloads in its include list (below), and to drop a record whose file resolves
+to a path outside that list, but that is configuration of the pod, not a limit
+on it: the include list is a set of path patterns, not the identity of a pod,
+and writing under the directory needs the node. What bounds the pod:
+
+- one host path and no other, mounted read-only and recursively read-only
+  (`recursiveReadOnly: Enabled`, so a mount made under `/var/log/pods` is
+  read-only too; Kubernetes v1.36 and containerd 2.3 on kind take it, and a
+  node that cannot refuses the pod with an error, where `IfPossible` would run
+  it without); the checkpoint is an `emptyDir`, not a writable host directory
+- no host network, no host PID, no `hostPort` (every port of the chart is off,
+  so the pod receives nothing; the chart still binds its health check, 13133,
+  and its own metrics, 8888, on the pod's address, and the policy below denies
+  ingress), no service-account token and no ClusterRole;
+  namespace, pod and container are read from each file's path by the
+  receiver's own `container` operator, so nothing calls the API server
+- the container runs as the image's own user and group, 10001, not as root, with
+  `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, every capability
+  dropped, the default seccomp profile and a read-only root filesystem. The
+  node's files are readable by their group: measured on the node on
+  2026-10-06 (containerd v2.3.4), `/var/log/pods` is `drwxr-x---` (0750)
+  `root:root`, a pod's directory is 0755 `root:root` and a container's log file
+  is `-rw-r-----` (0640) `root:root`. So the pod holds gid 0 as a
+  supplementary group (`podSecurityContext.supplementalGroups: [0]`), to read
+  and for nothing else; `fsGroup` does not apply to a hostPath. The primary
+  group is 10001, set explicitly (`runAsUser` alone leaves gid 0 where the
+  image has no passwd entry, which would make the checkpoint group-root). The
+  `emptyDir` is 0777, so the user writes its checkpoint. A pod **without** the
+  group does not fail loudly: the pinned image, run as 10001 over a tree with
+  these modes and without gid 0, started, logged no error and read no file, so
+  "no `permission denied` in its output" proves nothing; smoke's line, which
+  looks for a record in Loki, is what notices (on kind, in the third run, the
+  pod with the group shipped the services' lines; the pod without it was run
+  only over fixture files)
+- a NetworkPolicy of its own: no ingress, and egress to DNS and the
+  collector's 4318 alone, so what it reads can go to Loki and nowhere else (the
+  cluster's DNS pods answer any name, which a few bytes can ride; the policy
+  does not stop that)
+- memory and CPU requests, a memory limit of 192 MiB and the `memory_limiter`
+  first in the pipeline
+- smoke reads the live DaemonSet on every run (check 4) and fails when a chart
+  bump changed one of: the one hostPath and its read-only mount, no host
+  network, PID or port, `runAsNonRoot`, no service-account token
+
+**What it ships.** Only the output of the pods its include list names, one
+pattern for each pod family of the Meridian chart: the six services (a
+Deployment's pod is `<service>-<hash>-<id>`) and the sweep (`meridian-sweep`,
+whose Jobs' pods end in an id). They are the pods whose output went through the
+JSON log format and the redaction of personal data. The three Jobs (`migrate`,
+`seed`, `ingest`) run the CLI, which prints and does not log, so its tracebacks
+and database messages are not redacted; smoke's own pods print what they like;
+the database's output is PostgreSQL's, and the rate store's (S066, a
+Deployment of the chart) is Redis's, in neither format and not redacted by the
+platform's. **None of those is shipped**: the store's output stays in its pod's
+output on the node (`kubectl -n meridian logs deploy/rate-store`), a Job's
+output stays in `kubectl -n meridian logs job/<name>`, and `make deploy` prints
+each Job's output as it ends. The list is positive, so a
+workload the chart gains later is not shipped until someone lists it, and
+`tests/meridian/test_log_agent.py` fails first (it holds the list equal to the
+Deployments and CronJobs the chart renders, less the rate store). The
+receiver's `filter` holds the same list as a regular expression over the
+resolved path, and a test holds the two equal.
+
+**What the agent itself loses, and who would notice.** The agent's own metrics
+(its exporter's failed sends, the `memory_limiter`'s refusals) are served on
+port 8888 of the pod and **nothing scrapes them**: an open item, not built.
+What is seen is the DaemonSet not being ready (`MeridianLogAgentNotReady`,
+[the runbook](../../docs/operations/runbooks/telemetry-missing.md)) and smoke's
+line. A flood of lines from one pod shares the limiter with the others and may
+stall or drop theirs (not tried), and kubelet's rotation (five files of 10 MiB
+for each container) loses what the agent had not read before a rename. A
+DaemonSet that does not exist leaves no series, so no alert says so.
+
+Pod Security: `logging` is labelled `privileged` for `warn` and `audit`, as the
+other namespaces are labelled and never enforced. `baseline` forbids a hostPath
+volume, which this pod has; `restricted` forbids it too, and the hostPath volume
+alone is what stops it, now that the user is not root. The label warns of
+nothing: it says what the pod is. The pod is not in `observability` because
+that would make `observability`'s `restricted` untrue of one of its pods.
+
+Where the files are on kind: the node runs containerd, whose CRI plugin writes
+`/var/log/pods/<namespace>_<pod>_<uid>/<container>/<restart>.log` as the files
+themselves, in the CRI format; `/var/log/containers/*.log` are symlinks into
+that directory, and `/var/lib/docker/containers` is Docker's own and is not
+there. So one mount reaches the files. The collector chart's `logsCollection`
+preset, which was not used, would also mount `/var/lib/docker/containers` and a
+writable `/var/lib/otelcol` from the host.
+
+The pipeline: the receiver reads each line (the CRI format gives the time, the
+stream and the partial-line flag, and partial lines are joined), takes the
+namespace, pod and container from the path, and sets the resource attribute
+`service.name` to the container's name. The six services' containers are named
+for their service and the sweep's is `sweep`; a CronJob's pod is
+`meridian-sweep-<number>-<suffix>`. A line that is a JSON object becomes
+attributes, its `level` the record's severity and its `message` the body (the
+other fields, `logger`, `service`, `method`, `path`, `status` and `time`, stay
+attributes, which Loki keeps as structured metadata); a line that is not (a
+crash, output before the service's factory ran, a line cut off) is sent as it
+is, with no severity. No line is dropped for failing to parse. Python's
+`CRITICAL` is given the severity fatal (the receiver's own table has no entry
+for it, and the record would carry no severity). Three things are done to keep
+a pod's own words apart from what the file's path says:
+
+- the receiver records the path of each file with its symlinks resolved, and a
+  `filter` operator drops a record whose resolved path is not a file of a listed
+  family. A symlink under a listed directory that leads to another pod's file
+  ships nothing, and neither does a record that has no resolved path
+- the stream (`stdout` or `stderr`) is parked on the resource, a `transform`
+  processor removes from the record every attribute whose name starts with
+  `service.`, `k8s.` or `log.` (the file's path and name, and whatever a
+  line's own JSON named like them, `service.name`, `k8s.namespace.name`,
+  `log.iostream`), and puts the stream back. The resource, which the path made,
+  is not touched: in Loki `service_name` and `k8s_*` are the file's, and
+  `service`, `level` and `logger` are the line's own word
+- a line cannot take another service's name by carrying `service.name`; one
+  that carries `"service": "policy-mcp"` is still only claiming it in its own
+  stream's metadata
+
+The pinned image was run over a fixture tree that had the node's modes
+(a `0750` directory, `0640` files, owned as the node owns them, in rootless
+Docker), with the debug exporter in place of OTLP: lines of both kinds arrived,
+partial lines were joined, a file present at start was read from its end, the
+Jobs', the database's, smoke's and other namespaces' files and a symlink to
+one of them were not shipped, a line that carried the resource's names arrived
+without them, `CRITICAL` arrived as severity fatal, user 10001 with gid 0 read
+the files and wrote its checkpoint, and user 10001 without it read nothing and
+said nothing. That check is by hand and is not a test of the repository. The
+third run on kind confirmed the user, the group and the include list (see the
+status above) and not the rest of this paragraph.
+
+What a restart re-sends. The checkpoint, the offset of each file read so far,
+is on an `emptyDir` of at most 32 MiB. It survives a restart of the container
+(a crash, an OOM kill), which then re-sends nothing. It is gone when the pod is
+replaced (a new release of the chart, a deleted pod, a reboot of the node):
+the new pod starts each file it finds at its end, so it re-sends nothing
+either, and the lines written while no agent ran are not sent. A file that
+appears later is read from its beginning. Lines read and not yet exported (the
+batch and the exporter's queue are in memory) are lost when the pod stops, and
+an export that keeps failing for the exporter's retry window (five minutes) is
+dropped. Kubelet keeps five rotated files of 10 MiB for each container; the
+agent does not read the rotated ones. None of this was seen on kind: the agent
+was not restarted in the three runs.
+
+The agent verifies the collector's certificate against the ConfigMap
+`telemetry-ca` in `logging`. The services re-read that file at each new
+connection; the exporter of the agent is not known to, so after the authority
+is renewed (`make up` publishes the new certificate to both namespaces),
+restart the DaemonSet: `kubectl -n logging rollout restart
+daemonset/log-agent-agent` (a renewal of the authority was not seen on kind,
+so this is tested without a cluster, not seen on one). Reading the logs in
+Grafana is in
+[`docs/operations/README.md`](../../docs/operations/README.md), "Reading logs".
+
+The agent ships whatever a service prints. What a line holds is the service's
+doing: the JSON log format of this step's code half builds the access line from
+the method, the path without its query and the status, and the redaction of
+personal data runs before it. A service that still ran uvicorn's plain access
+line would send the client's address and the query string to Loki, and the
+agent would ship it unchanged. The edge's own access log is not the
+services': its pod (`envoy-gateway-system`, container `envoy`) writes one JSON
+line per request that keeps the whole request target, query string included,
+and a client address (seen on kind on 2026-10-06). It stays in that pod's
+output on the node and is not shipped to Loki: the include list names the six
+services and the sweep in `meridian`, and smoke's ninth telemetry line holds
+that Loki has no stream outside `meridian`.
 
 ### Who a service is (S055)
 
@@ -1204,14 +1708,18 @@ release and its Secret must exist before its pod starts; `make deploy` waits
 for every Certificate to be Ready right after the release. What the deploy
 creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
 
-- seven `Certificate` objects in `meridian`, signed by the `meridian-services`
-  ClusterIssuer: ECDSA P-256, a new key at every renewal (`rotationPolicy:
+- seven `Certificate` objects in `meridian` and, since S066, the rate store's
+  eighth (`rate-store`, with the DNS name `rate-store.meridian.svc` and the same
+  usages as a service that serves TLS: the gateway verifies that name, and the
+  store asks every client for a certificate of this issuer's CA), signed by the
+  `meridian-services` ClusterIssuer: ECDSA P-256, a new key at every renewal (`rotationPolicy:
   Always`, set in the chart), a lifetime of `certificate.duration` (90 days by
   default, renewed at 60: see "How long a certificate lasts" below), the URI
   `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
   for the five services that serve TLS the DNS name `<name>.meridian.svc`;
-- seven Secrets `<name>-tls` (`tls.crt`, `tls.key`, `ca.crt`), each mounted
-  read-only at `/etc/meridian/tls` in its own pod and in no other;
+- seven Secrets `<name>-tls` (`tls.crt`, `tls.key`, `ca.crt`) and the store's
+  `rate-store-tls`, each mounted read-only at `/etc/meridian/tls` in its own pod
+  and in no other;
 - no new Service, port or NetworkPolicy.
 
 The values `identity.trustDomain` (`meridian.kind`) and `identity.issuer` are
@@ -1358,8 +1866,9 @@ renewal, the DNS names `otel-collector.observability.svc` and
   (the last line of the traceback `uvicorn --factory` logs), and the container
   restarts, as it does for a certificate it cannot read (not seen on a
   cluster). That is better than starting with telemetry that fails on every
-  export. The Jobs and the sweep set no endpoint and get none of this. Status:
-  tested without a cluster.
+  export. The Jobs set no endpoint and get none of this; the sweep gets it
+  (S064; its six findings arrived in Prometheus through this path on kind on
+  2026-10-06). Status: tested without a cluster.
 - **What the collector does.** It serves OTLP/HTTP with TLS on `:4318` from the
   Secret `otel-collector-tls`, mounted read-only as a directory, and reads the
   files again at a handshake every five minutes at most (`reload_interval`),
@@ -1491,8 +2000,18 @@ five minutes later. Kubernetes removes any Job a day after it finishes
 (`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
 the morning, and the last success of a suspended CronJob. A pod has no
 service-account token, no extra privilege and a read-only root filesystem,
-mounts only the CA's public certificate, and may reach DNS and the database
-and nothing else (S019).
+mounts only the CA's public certificate and the collector's, and may reach DNS,
+the database and the collector's port 4318, and nothing else (S019; the
+collector from S064, where `telemetry.otlpEndpoint` is set, with the SDK's
+export deadline `sweep.telemetryTimeoutSeconds`, 5 seconds, for the findings it
+sends before it exits, and, in S064's C3, the fixed instance ID
+`service.instance.id=claims-sweep` so that every pass writes the same six
+series; on kind on 2026-10-06 the findings arrived and the six series were one
+`instance`, `claims-sweep`, in the third run; the 5-second deadline is tested
+without a cluster, not seen on one). Prometheus keeps the sample with the later
+timestamp, and a sample that arrives with an earlier timestamp is refused as
+out of order (the collector logs it). Only a Job run by hand can overlap a
+scheduled one (`concurrencyPolicy: Forbid`).
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
 
@@ -1540,12 +2059,36 @@ What the numbers are, which the dashboard also says on its first panel:
 ## The alert rules and the health dashboard
 
 [`alerts/meridian.yaml`](alerts/meridian.yaml) is one `PrometheusRule`
-(S024, S056) in four groups: `meridian.gateway.recording` (a recorded series
-for the gateway's calls of the last 15 minutes), `meridian.gateway` (alerts
-on that series), `meridian.workloads` (from kube-state-metrics) and
-`meridian.certificates` (from cert-manager's controller). It holds 12 alert
-rules and one recording rule: five on the gateway, three on the workloads
-and four on the certificates. It
+(S024, S056, S064, S066) in five groups: `meridian.gateway.recording` (a recorded
+series for the gateway's calls of the last 15 minutes), `meridian.gateway`
+(alerts on that series), `meridian.workloads` (from kube-state-metrics),
+`meridian.certificates` (from cert-manager's controller) and
+`meridian.telemetry` (two recorded series of the same kind, for the
+runtime's completed model calls and the Claims API's stored triages, and
+three alerts that notice a series that is not there, and a fourth that
+notices the log agent not being ready). It holds 17 alert
+rules and three recording rules: six on the gateway, three on the workloads
+and four on the certificates (the gateway's sixth, `MeridianRateStoreRefusing`,
+fires when, of the calls of the last 15 minutes that the rate store could have
+counted, more than 5 percent and at least 5, or more than half and at least 2,
+were refused because the store gave no answer, for 2 minutes: one refused call
+no longer fires it, and calls refused before the store is asked do not dilute
+it; loaded and healthy on kind on 2026-10-06 in this form, after `make up`,
+since `make deploy` does not apply the rules; never seen firing), and, from
+S064, four on missing telemetry
+(loaded and healthy on kind on 2026-10-06, in the third run, and none seen
+firing; tested without a cluster, not seen firing on one): the Model Gateway's,
+the Agent Runtime's and the sweep's metrics, each fired when the upstream end
+counted something in the last 15 minutes and the downstream end has no
+sample at all, and `MeridianLogAgentNotReady`, which fires when the log
+agent's DaemonSet in `logging` has had fewer ready pods than nodes for 10
+minutes (it reads kube-state-metrics' two numbers of a DaemonSet, which the
+stack serves: only the `secrets` collector is excluded, and the two series
+for `logging` were seen on kind on 2026-10-06; a DaemonSet that does
+not exist leaves no series and so no alert, and smoke's line says it is not
+there). The CronJob of the sweep sets one instance ID
+(`service.instance.id=claims-sweep`), so its six series are the same from
+pass to pass (seen on kind on 2026-10-06). It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:
@@ -1564,8 +2107,11 @@ lose.
 
 `make up` applies both: the rules with `kubectl apply`, the dashboard as a
 ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
-(check 11, passed on the cluster on 2026-10-06): Prometheus has loaded the
-four groups with every rule healthy, the loaded rule names are the file's,
+(check 11, passed on the cluster on 2026-10-06 with four groups and, in the
+third of S064's runs, with five groups and all 19 rules, and in the third of
+S066's runs the same day with all 20, `MeridianRateStoreRefusing` among them):
+Prometheus has loaded the
+five groups with every rule healthy, the loaded rule names are the file's,
 no Meridian alert is firing, and Grafana serves the health dashboard with
 the file's queries, every one of which runs in Prometheus. What stays by
 hand is whether each series a rule or a panel names exists: a rule over a
@@ -1579,7 +2125,11 @@ point to.
 
 Rerunning `make up` is the first thing to try. If a release is stuck in a
 `pending-*` state, or the node was only half created, run `make down` and then
-`make up` again.
+`make up` again. A chart that could not be downloaded in time is such a case:
+on 2026-10-06 `make up` on a cluster made from nothing stopped after 296
+seconds at the Tempo chart (`context deadline exceeded`, fetching it from
+GitHub, with the machine under load), and running `make up` again completed in
+125 seconds, so a cold start depends on the chart hosts being reachable.
 
 If `make up` times out waiting for the Gateway to be programmed while the
 edge's proxy pod is ready, the condition is stale. The script stops with
@@ -1633,15 +2183,25 @@ kubectl get pods -A
 ## Memory
 
 The laptop this was built on gives Docker Desktop 7.65 GiB. The memory limits
-of the components add up to about 4.4 GiB. Measured with `docker stats` on the
-node container on 2026-09-30, after a `make up` from no cluster, a second
-`make up` and one `make smoke`: 3.6 GiB, which includes the Kubernetes control
-plane, the kubelet and containerd. The six Meridian services add limits of
+of the components add up to about 4.4 GiB (the log agent of S064 adds a limit
+of 192 MiB, a request of 64 MiB, and no measurement yet). Measured with
+`docker stats` on the node container on 2026-09-30, after a `make up` from no
+cluster, a second `make up` and one `make smoke`: 3.6 GiB, which includes the
+Kubernetes control plane, the kubelet and containerd. The six Meridian services
+add limits of
 192 MiB (Claims API, Model Gateway) and 256 MiB (Agent Runtime and each tool
 server), 1.4 GiB in all; a Job adds 192 MiB while it runs. Measured from
 cAdvisor on 2026-10-02, twice, after demo claims and smoke runs: the working
 sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
 87 MB), and `docker stats` showed 4.9 GiB for the node container.
+
+The rate store (S066) adds a limit of 64 MiB, a request of 32 MiB, to those
+limits (about 4.5 GiB in all). It was not measured on the cluster: outside one,
+on the pinned image without its modules, over TLS, read-only and as user 999, it
+held 12 MB when idle and a peak of 17 MB after 12,000 admissions from 40
+connections on 3 tenants (2026-10-06), and its own ceiling, `maxmemory`, is
+32 MB, half the limit. The next `make deploy` on the cluster should read the
+pod's working set from cAdvisor as the services' were read.
 
 ## Deliberately not here yet
 
@@ -1653,7 +2213,11 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
   of `enforce=restricted` reported no violation on `meridian`, but a cold
   `make up` under it (CloudNativePG's init Job) was not tried; in the backlog.
 - A second replica of any service, and so a budget that protects one:
-  whether each service is safe to run twice is not measured (S027).
+  whether each service is safe to run twice is not measured (S027). The Model
+  Gateway's rate windows no longer stop a second replica (they are in the rate
+  store, S066), but its circuit breaker and its refusal throttles are still per
+  process, and no load test has run two. A rolling update of the gateway under
+  load, and a restart of the store under load, were not tried on the cluster.
 - Alertmanager: Prometheus evaluates the alert rules and nothing is
   notified (S024). Routing and notification are designed, with the game
   day (S028) as their first use. Its Grafana datasource is off too.

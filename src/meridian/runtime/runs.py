@@ -22,7 +22,7 @@ from meridian.platform.common.db import connect
 from meridian.runtime import SERVICE_NAME
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.graphs import GraphFactory
-from meridian.runtime.model_client import ModelClient
+from meridian.runtime.model_client import CallObserver, ModelClient
 from meridian.runtime.models import RunState, RunStatus
 from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
 from meridian.runtime.tool_client import ToolClient
@@ -101,6 +101,7 @@ def execute(
     run_input: dict[str, Any],
     *,
     resume: dict[str, Any] | None = None,
+    on_model_call: CallObserver | None = None,
 ) -> RunOutcome:
     """Compile the workload's graph with the runtime's checkpointer and run it.
 
@@ -110,6 +111,7 @@ def execute(
     not used; a thread with no pending pause, or with several, raises a
     ``GraphFailure`` before any node runs. A run that pauses answers
     ``AwaitingApproval`` with the graph's output so far, if it has one.
+    ``on_model_call`` is told of each call the graph asks of the model client.
     Raises whatever the graph raises; the caller records the failure.
     """
     model = ModelClient(
@@ -118,6 +120,7 @@ def execute(
         agent=identity.agent,
         run_id=identity.run_id,
         max_calls=MAX_MODEL_CALLS_PER_RUN,
+        on_call=on_model_call,
     )
     graph = factory(model, tools).compile(checkpointer=saver)
     config = {

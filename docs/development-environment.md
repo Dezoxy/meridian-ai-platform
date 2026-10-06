@@ -254,7 +254,11 @@ known.
 - **Each test run has a database of its own**: `PYTEST_DB_CONTAINER` and
   `PYTEST_DB_PORT` per step, and per implementer when several of one
   step run at once. `make pytest-db` removes the container of its name
-  when it starts, so two runs under one name destroy each other.
+  when it starts, so two runs under one name destroy each other. It starts
+  a throwaway Redis beside the database (S066, the gateway's shared rate
+  windows), which needs a name and a port of its own the same way:
+  `PYTEST_REDIS_CONTAINER` and `PYTEST_REDIS_PORT`, handed to the tests as
+  `MERIDIAN_TEST_REDIS_URL`.
 - **Named test files during a contract, the whole suite once per step.**
   A contract's own files take seconds; the whole suite is the main
   session's, alone, at the end.

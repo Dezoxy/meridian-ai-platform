@@ -37,6 +37,7 @@ import meridian.runtime  # noqa: F401  # isort: skip
 
 import psycopg
 import pytest
+import redis
 from dbsupport import (
     OWNER,
     WORKERINPUT_KEY,
@@ -52,6 +53,9 @@ from dbsupport import (
 )
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from redissupport import RateKeys
+
+from meridian.platform.common.logformat import HELD_AT_WARNING, UVICORN_LOGGERS
 
 # (file name, text to find, replacement); the first occurrence is replaced.
 Edit = tuple[str, str, str]
@@ -59,6 +63,11 @@ Edit = tuple[str, str, str]
 TEST_DATABASE_URL_ENV = "MERIDIAN_TEST_DATABASE_URL"
 REQUIRE_DB_ENV = "MERIDIAN_REQUIRE_DB"
 SKIP_REASON = "set MERIDIAN_TEST_DATABASE_URL (make pytest-db)"
+# The rate windows' store (S066): a throwaway Redis that `make pytest-db` starts
+# beside PostgreSQL and CI runs as a service container. It is held to the same
+# rule as the database: a missing one skips, unless MERIDIAN_REQUIRE_DB=1.
+TEST_REDIS_URL_ENV = "MERIDIAN_TEST_REDIS_URL"
+REDIS_SKIP_REASON = "set MERIDIAN_TEST_REDIS_URL (make pytest-db)"
 
 # The xdist controller's passwords for this run; a worker never reads it.
 _PASSWORDS = pytest.StashKey[dict[str, str]]()
@@ -86,6 +95,40 @@ def _keep_the_log_record_factory() -> Iterator[None]:
         yield
     finally:
         logging.setLogRecordFactory(saved)
+
+
+@pytest.fixture(autouse=True)
+def _keep_the_logging_configuration() -> Iterator[None]:
+    """A test that calls a service's production factory (or the sweep's
+    ``main``) configures logging for the process (S064): a handler and the
+    INFO level on the root logger, and uvicorn's loggers taken over. Put the
+    root's level and uvicorn's handlers, levels and propagation back after
+    every test, and take off the root only the handlers the test added:
+    pytest's own capture handlers come and go around each phase, so the root's
+    list is never restored wholesale."""
+    root = logging.getLogger()
+    root_handlers = set(root.handlers)
+    root_level = root.level
+    saved = {
+        name: (
+            logging.getLogger(name).handlers[:],
+            logging.getLogger(name).level,
+            logging.getLogger(name).propagate,
+        )
+        for name in (*UVICORN_LOGGERS, *HELD_AT_WARNING)
+    }
+    try:
+        yield
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in root_handlers:
+                root.removeHandler(handler)
+        root.setLevel(root_level)
+        for name, (handlers, level, propagate) in saved.items():
+            logger = logging.getLogger(name)
+            logger.handlers[:] = handlers
+            logger.setLevel(level)
+            logger.propagate = propagate
 
 
 @pytest.fixture(scope="session")
@@ -183,6 +226,36 @@ def fresh_database(
         yield handle
     finally:
         drop_database(handle)
+
+
+# ── the rate windows' Redis (S066) ──────────────────────────────────────────
+@pytest.fixture(scope="session")
+def redis_client() -> Iterator[redis.Redis]:
+    """A client of the throwaway Redis, one per xdist worker.
+
+    A missing address skips the test, unless ``MERIDIAN_REQUIRE_DB=1`` (`make
+    pytest-db`, CI), where it is a failure: a Redis test that quietly skipped
+    would prove nothing.
+    """
+    url = os.environ.get(TEST_REDIS_URL_ENV)
+    if not url:
+        if os.environ.get(REQUIRE_DB_ENV) == "1":
+            pytest.fail(f"{TEST_REDIS_URL_ENV} is required: {REDIS_SKIP_REASON}")
+        pytest.skip(REDIS_SKIP_REASON)
+    client = redis.Redis.from_url(url)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def rate_keys(redis_client: redis.Redis) -> Iterator[RateKeys]:
+    keys = RateKeys(redis_client)
+    try:
+        yield keys
+    finally:
+        keys.forget()
 
 
 # ── a scratch copy of the registry to plant a variant in ────────────────────

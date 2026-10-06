@@ -12,7 +12,7 @@ views and the decisions.
 step list (S000…), the session protocol and the open questions.
 
 - Take the next `todo` steps whose dependencies are `done`, unless the owner
-  names others: two or three side by side by default, at most one that
+  names others: up to five side by side by default, at most one that
   needs the cluster, one that adds a migration and one that changes what
   the evaluation fingerprints (the plan's Part A). Each step has its own
   branch off `main` and its own worktree.

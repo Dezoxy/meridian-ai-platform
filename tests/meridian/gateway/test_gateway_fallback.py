@@ -883,7 +883,7 @@ def test_the_audit_failure_of_a_failed_attempt_carries_no_provider_exception(
     assert raised.__cause__ is None
 
 
-def test_the_503_of_the_chat_route_says_a_deployment_can_be_unavailable(
+def test_the_503_of_the_chat_route_says_a_deployment_or_the_store_can_be_unavailable(
     two: Path,
 ) -> None:
     gateway = build_gateway(two)
@@ -893,7 +893,8 @@ def test_the_503_of_the_chat_route_says_a_deployment_can_be_unavailable(
     ]["503"]["description"]
 
     assert description == (
-        "The audit log is unavailable, or no model deployment can be tried now."
+        "The audit log or the rate store is unavailable, or no model deployment "
+        "can be tried now."
     )
 
 

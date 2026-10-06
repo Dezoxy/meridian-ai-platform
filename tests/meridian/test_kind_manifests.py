@@ -26,6 +26,7 @@ from chartsupport import (
     CHART_DIR,
     IMAGE_REPOSITORY,
     JOBS,
+    RATE_STORE,
     TEST_TAG,
     helm_arguments,
     peers,
@@ -53,6 +54,7 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.gateway.settings import (
     ENVIRONMENT_ENV,
     MODE_ENV,
+    RATE_STORE_URL_ENV,
     GatewaySettings,
 )
 from meridian.platform.knowledge_mcp import INGESTION_AGENT
@@ -106,6 +108,8 @@ DEMO_SH = (KIND_DIR / "demo.sh").read_text(encoding="utf-8")
 PLATFORM_DB = yaml.safe_load((KIND_DIR / "values" / "platform-db.yaml").read_text())
 
 OWNER_SECRET = "meridian-owner-db"  # noqa: S105 (a Secret name, not a password)
+# The rate store's Secret (S066): the gateway's address and the store's ACL file.
+RATE_STORE_SECRET = "rate-store-credentials"  # noqa: S105 (a Secret name)
 SERVICES = (
     "claims-api",
     "agent-runtime",
@@ -137,6 +141,7 @@ KNOWN_ENV = {
     OTLP_ENDPOINT_ENV,
     OTLP_CERTIFICATE_ENV,
     SWEEP_DEADLINE_ENV,
+    RATE_STORE_URL_ENV,
 }
 FACTORIES = {
     "claims-api": "meridian.workloads.claims_triage.app:create_app_from_env",
@@ -242,6 +247,15 @@ def synthetic_destination() -> str:
     return destination
 
 
+# What a variable that a Secret supplies is given here, where no Secret exists:
+# the database's address for the database variables, and for the gateway's rate
+# store (S066) an address of the form its settings accept, with nothing real in it.
+DATABASE_STAND_IN = "postgresql://placeholder"
+SECRET_REFERENCE_STAND_INS = {
+    RATE_STORE_URL_ENV: "rediss://gateway:stand-in@rate-store.meridian.svc:6379/0"
+}
+
+
 def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
     for name in SERVICES:
         deployment(name)
@@ -251,8 +265,10 @@ def test_each_service_has_a_deployment_a_service_and_an_account() -> None:
         assert service["spec"]["type"] == "ClusterIP"
         assert name in {d["metadata"]["name"] for d in documents_of("ServiceAccount")}
     accounts = documents_of("ServiceAccount")
-    # each Job, and the sweep's CronJob, has its own
-    assert len(accounts) == len(SERVICES) + len(JOBS) + 1
+    # each Job, and the sweep's CronJob, has its own, and since kind's values
+    # turn the rate store on (S066), so has the store
+    assert len(accounts) == len(SERVICES) + len(JOBS) + 1 + 1
+    assert RATE_STORE in {a["metadata"]["name"] for a in accounts}
     assert all(a["automountServiceAccountToken"] is False for a in accounts)
 
 
@@ -296,7 +312,7 @@ def test_a_deployment_sets_only_variables_the_code_reads(name: str) -> None:
 def test_a_deployments_environment_satisfies_its_services_settings(name: str) -> None:
     (container,) = containers(deployment(name))
     environ = {
-        key: item.get("value", "postgresql://placeholder")
+        key: item.get("value", SECRET_REFERENCE_STAND_INS.get(key, DATABASE_STAND_IN))
         for key, item in env_of(container).items()
     }
     # The registry directory comes from the image, not the manifest.
@@ -464,7 +480,9 @@ def test_dockerignore_allows_the_seed_data_and_nothing_more_of_that_folder() -> 
 
 def test_every_container_runs_non_root_without_privileges() -> None:
     workloads = pod_workloads()
-    assert len(workloads) == len(SERVICES) + len(JOBS) + 1  # the sweep
+    # The six services, the three Jobs, the sweep and the rate store (S066): the
+    # store holds the same hardening, on its image's own user.
+    assert len(workloads) == len(SERVICES) + len(JOBS) + 1 + 1
 
     for workload in workloads:
         pod = pod_spec(workload)
@@ -477,7 +495,12 @@ def test_every_container_runs_non_root_without_privileges() -> None:
 
 
 def test_every_container_runs_the_image_of_the_values_and_never_pulls() -> None:
+    # The six services, the Jobs and the sweep run the image `make deploy` loads.
+    # The rate store runs the official image, pulled by its digest
+    # (test_kind_rate_store.py).
     for workload in pod_workloads():
+        if workload["metadata"]["name"] == RATE_STORE:
+            continue
         for container in pod_spec(workload)["containers"]:
             assert container["image"] == f"{IMAGE_REPOSITORY}:{TEST_TAG}"
             assert container["imagePullPolicy"] == "Never"
@@ -703,7 +726,17 @@ def test_the_sweep_takes_its_own_roles_connection_string_and_the_deadline() -> N
 
     # The role's Secret is named as common.sh's role_secret_name names it.
     secret = SWEEP_ROLE.replace("_", "-") + "-db"
-    assert set(environment) == {DATABASE_URL_ENV, SWEEP_DEADLINE_ENV}
+    # Beside them, the three variables of the collector (S064, C2): its address,
+    # the file that verifies it and the bound on the send; and (C3) the instance
+    # ID that keeps the pass's series the same from one pass to the next.
+    assert set(environment) == {
+        DATABASE_URL_ENV,
+        SWEEP_DEADLINE_ENV,
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+        "OTEL_RESOURCE_ATTRIBUTES",
+    }
     assert environment[DATABASE_URL_ENV]["valueFrom"]["secretKeyRef"] == {
         "name": secret,
         "key": "uri",
@@ -1045,8 +1078,14 @@ def test_a_deployment_reads_only_its_own_secrets_and_takes_no_env_from(
 ) -> None:
     pod = pod_spec(deployment(name))
 
-    # Its role's Secret, the database's CA and its own certificate (S055).
-    assert secrets_referenced_by(pod) == {f"{name}-db", "platform-db-ca", f"{name}-tls"}
+    # Its role's Secret, the database's CA and its own certificate (S055) and,
+    # for the gateway alone, the rate store's address (S066): the store's other
+    # key, the ACL file, is mounted by the store, and no other service's pod
+    # names the Secret.
+    expected = {f"{name}-db", "platform-db-ca", f"{name}-tls"}
+    if name == "model-gateway":
+        expected.add(RATE_STORE_SECRET)
+    assert secrets_referenced_by(pod) == expected
     assert all("envFrom" not in c for c in pod["containers"])
 
 
@@ -1072,6 +1111,8 @@ def test_the_manifests_run_the_user_the_dockerfile_sets() -> None:
     uid, gid = (int(part) for part in user.split(":"))
 
     for workload in pod_workloads():
+        if workload["metadata"]["name"] == RATE_STORE:
+            continue  # its image's own user, 999:1000 (test_kind_rate_store.py)
         context = pod_spec(workload)["securityContext"]
         assert (context["runAsUser"], context["runAsGroup"]) == (uid, gid)
         for container in pod_spec(workload)["containers"]:
@@ -1193,7 +1234,7 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
 PSA = "pod-security.kubernetes.io/"
 
 
-def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() -> None:
+def test_meridian_cert_manager_observability_and_logging_never_enforce() -> None:
     namespaces = {
         d["metadata"]["name"]: d
         for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
@@ -1205,14 +1246,18 @@ def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() 
         "cert-manager",
         "observability",
         "meridian",
+        "logging",
     }
     # The level each namespace's pods meet as rendered (S063): all three meet
     # restricted since the values of tempo and the collector set the fields
     # that `restricted` asks for (test_kind_observability_security_context.py).
+    # The log agent's pod (S064) mounts a host directory, which `restricted`
+    # forbids, so `logging` is privileged (test_log_agent_network.py says why).
     levels = {
         "meridian": "restricted",
         "cert-manager": "restricted",
         "observability": "restricted",
+        "logging": "privileged",
     }
     for name, level in levels.items():
         labels = namespaces[name]["metadata"].get("labels", {})
@@ -1336,7 +1381,12 @@ def test_the_release_holds_no_job_a_flag_renders_one_and_deploy_knows_services()
         (account,) = [d for d in added if d["kind"] == "ServiceAccount"]
         assert account["metadata"]["name"] == f"meridian-{name}"
     assert set(services.split()) == set(SERVICES)
-    assert {d["metadata"]["name"] for d in documents_of("Deployment")} == set(SERVICES)
+    # deploy.sh's SERVICES are the six, and the store (kind turns it on) is its
+    # own Deployment, which deploy.sh waits for apart.
+    assert {d["metadata"]["name"] for d in documents_of("Deployment")} == {
+        *SERVICES,
+        RATE_STORE,
+    }
     # Each service's database role, and so its Secret, is one deploy.sh checks.
     (roles,) = re.findall(
         r"^readonly DATABASE_ROLES=\((.*)\)$", COMMON_SH, re.MULTILINE
@@ -1378,16 +1428,21 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # Secret that cert-manager makes from one of them (S055). The issuer is a
     # precondition like the database: it is checked before the image is built
     # and before any Job runs (S056); so is the approval of the Certificates:
-    # approver-policy with its five policies.
+    # approver-policy with its five policies. So is the rate store's Secret
+    # (S066), which `make up` makes: a pod that cannot read it would not start,
+    # after the Jobs had run. The store is waited for before the gateway, whose
+    # every call (the ingestion's too) needs it.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
         "require_approval",
+        "require_rate_store_secret",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
         "install_release",
         "wait_for_certificates",
+        'wait_for_deployment "${RATE_STORE_DEPLOYMENT}"',
         'wait_for_deployment "${GATEWAY_SERVICE}"',
         "ingest_corpus",
         "wait_for_other_rollouts",
@@ -1535,7 +1590,7 @@ def test_a_succeeded_job_with_no_chunks_or_no_answer_ingests_again(count: str) -
 
 def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
     body = function_body(DEPLOY_SH, "run_job")
-    filter_body = function_body(DEPLOY_SH, "printable_ascii")
+    filter_body = function_body(COMMON_SH, "printable_ascii")
     log_reads = re.findall(r"^.*logs \"job/\$\{job\}\".*$", body, re.MULTILINE)
 
     # The success line and both failure paths (a verdict and the timeout): a
@@ -1550,7 +1605,7 @@ def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
 def test_the_printable_ascii_filter_drops_escapes_and_other_bytes() -> None:
     hostile = "ok \\033[31mred\\033[0m\\tcaf\\303\\251\\r\\nnext\\n"
     script = (
-        function_definition(DEPLOY_SH, "printable_ascii")
+        function_definition(COMMON_SH, "printable_ascii")
         + f"printf '{hostile}' | printable_ascii"
     )
 
@@ -1569,7 +1624,7 @@ def test_the_printable_ascii_filter_redacts_a_postgresql_connection_string() -> 
         "plain line",
     )
     script = (
-        function_definition(DEPLOY_SH, "printable_ascii")
+        function_definition(COMMON_SH, "printable_ascii")
         + "printf '%s\\n' "
         + " ".join(f"'{line}'" for line in lines)
         + " | printable_ascii"
@@ -1869,9 +1924,32 @@ def test_no_target_uses_increase_or_rate_or_a_range_that_is_not_in_seconds() -> 
         assert not re.search(r"\$\{?__range(?!_s)", expr), expr
         assert not re.search(r"\$__rate_interval|\$__interval", expr), expr
         # The form that matched the ledger: the last value minus the value at
-        # the start of the window, or the last value alone for a new process.
-        assert expr.count("last_over_time(") == 2, expr
+        # the start of the window (looked for 24 hours back, see the test
+        # below), or the last value alone for a new process.
+        assert expr.count("last_over_time(") == 3, expr
         assert " offset " in expr and " or " in expr, expr
+
+
+def test_every_target_looks_24_hours_back_for_the_earlier_value_as_health_does() -> (
+    None
+):
+    # The health dashboard's form (test_health_dashboard.py): the series' last
+    # value at or before the start of the window, looked for 24 hours back, or
+    # the last value alone for a series with no sample before the window. A bare
+    # `selector offset` looks back only Prometheus's 5 minutes and, after a gap
+    # longer than that, counts a whole series as new and shows its lifetime
+    # total as the range's (S043's review, S024's, S064).
+    health = (KIND_DIR / "dashboards" / "platform-health.json").read_text("utf-8")
+    assert "[24h] offset " in health
+    for target in dashboard_targets():
+        expr = target["expr"]
+        deltas = expr.count(" offset ")
+        assert deltas == 1, expr
+        assert expr.count("last_over_time(") == 3 * deltas, expr
+        assert expr.count("[24h] offset ") == deltas, expr
+        assert len(selectors_of(expr)) == 3 * deltas, expr
+        assert expr.count(" or ") == deltas, expr
+        assert not re.search(r"\}\s*offset\b", expr), expr
 
 
 def test_every_label_a_target_groups_or_selects_by_is_one_the_gateway_exports() -> None:
@@ -1948,6 +2026,8 @@ def test_the_dashboard_has_the_panels_the_plan_asks_for_in_order() -> None:
     series = panel_titled("Tokens per 5 minutes, by model")
     assert "[5m]" in series["targets"][0]["expr"]
     assert series["interval"] == "1m"
+    # The point after a gap holds the gap's tokens, and the panel says so.
+    assert "first point after a gap" in series["description"]
 
 
 def test_up_applies_labelled_dashboard_configmaps_after_prometheus_is_ready() -> None:
@@ -2658,7 +2738,7 @@ def test_the_dashboard_check_runs_each_query_over_an_hour_and_for_each_dimension
     for query in asked:
         assert "${__range_s}" not in query and "$dimension" not in query
     assert len([q for q in asked if "[3600s]" in q]) == len(asked) - 1
-    assert all("offset 3600s" in q for q in asked if "[3600s]" in q)
+    assert all("[24h] offset 3600s" in q for q in asked if "[3600s]" in q)
     # The two panels that name $dimension run once per option, each a different
     # grouping; the table and the stat panels run once.
     over_the_range = [q for q in asked if "[3600s]" in q]
@@ -2666,8 +2746,8 @@ def test_the_dashboard_check_runs_each_query_over_an_hour_and_for_each_dimension
         grouped = [q for q in over_the_range if q.startswith(f"sum by ({option}) (")]
         assert len(grouped) == 2, option
     assert [q for q in asked if "[5m]" in q] == [
-        q for q in asked if "offset 5m" in q
-    ]  # a window that is not the range stays as it is
+        q for q in asked if "[24h] offset 5m" in q
+    ]  # a window that is not the range keeps its width, and the same lookback
 
 
 @pytest.mark.parametrize(
@@ -2896,9 +2976,11 @@ def test_the_dashboard_refuses_a_custom_dimension_and_says_the_retention() -> No
 
     # A crafted link must not put PromQL into `by (...)`.
     assert variable_named("dimension")["allowCustomValue"] is False
+    assert "looked for up to 24 hours back" in text
     assert text.endswith(
         "Choose a range of at least two minutes. Prometheus keeps 24 hours on kind, "
-        "so a longer range shows what it still holds."
+        "so a longer range shows what it still holds, and a series with no sample "
+        "for longer than that is a new series."
     )
 
 
@@ -3580,7 +3662,7 @@ def test_a_service_counts_as_present_from_its_first_span_and_not_before(
 def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
-    body = function_body(SMOKE_SH, "check_sweep")
+    body = function_body(SMOKE_SH, "check_sweep_job")
 
     assert calls[6] == "check_sweep"
     # Same skip rule as the tool check: only when no Meridian Deployment exists,
@@ -3687,7 +3769,9 @@ def run_sweep_check(
     jobs: list[dict] | str | None = None,
     now: int | str | None = None,
 ) -> tuple[list[str], str]:
-    """``check_sweep`` from smoke.sh in bash against a stub ``kctl``. ``cronjob``
+    """``check_sweep_job``, the first line of check 7 (the second, the findings',
+    has its own harness: test_smoke_sweep_findings.py), from smoke.sh in bash
+    against a stub ``kctl``. ``cronjob``
     is the CronJob's answer (an empty string: it does not exist; ``FAIL``: the
     lookup fails) and ``jobs`` the Jobs of the namespace. ``now`` is what the
     database's clock answers, in epoch seconds (``FAIL``: the query fails; any
@@ -3740,8 +3824,8 @@ def run_sweep_check(
             function_definition(SMOKE_SH, "sweep_period"),
             function_definition(SMOKE_SH, "sweep_verdict"),
             function_definition(SMOKE_SH, "report_sweep"),
-            function_definition(SMOKE_SH, "check_sweep"),
-            "check_sweep",
+            function_definition(SMOKE_SH, "check_sweep_job"),
+            "check_sweep_job",
         ]
     )
     done = subprocess.run(

@@ -21,6 +21,19 @@ container meridian "Governance" "How are models, policies, budgets and evidence 
     autoLayout tb 300 150
 }
 
+// The deployment views are of designed environments and say so in their titles.
+deployment meridian aws "DeploymentAws" "Where would the platform run on AWS, and which infrastructure would it share?" {
+    title "Meridian AI Platform: deployment on AWS in eu-central-1, DESIGNED and not built (what the cloud changes)"
+    include *
+    autoLayout tb 300 150
+}
+
+deployment meridian gcp "DeploymentGcp" "Where would the platform run on Google Cloud, and what does the cloud change?" {
+    title "Meridian AI Platform: deployment on Google Cloud in europe-west3, DESIGNED and not built (what the cloud changes)"
+    include *
+    autoLayout tb 300 150
+}
+
 dynamic meridian "ClaimsTriage" "What happens between a claim being submitted and a triage proposal waiting for an adjuster?" {
     claimant -> meridian.ingress "Submits a claim"
     meridian.ingress -> meridian.claimsApp "Routes the claim"

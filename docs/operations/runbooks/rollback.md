@@ -108,8 +108,12 @@ on kind.
    checkout to `main`.
 
 A rolling update starts the new pod before the old one stops. For that
-moment two gateway pods each allow a tenant's full rate windows (T-45).
-A gateway pod that stops with calls in flight leaves their reservations
+moment two gateway pods share the tenant's rate windows when the rate store
+is on (kind's values turn it on: the two pods count in the one store, so the
+overlap costs nothing) and each allow a tenant's full rate windows only
+without the store (T-45; the chart then runs one replica). A rolled-back
+release that predates the store has no store: its gateway counts in its own
+process. A gateway pod that stops with calls in flight leaves their reservations
 `reserved`, charged until the period ends
 ([budget exhaustion](budget-exhaustion.md#what-spent-it)).
 

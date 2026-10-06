@@ -7,7 +7,8 @@ Status (S024): written from the code of S011, not exercised. The budgets
 apply in replay mode too, so the token budget can run out on kind; the
 cost quota cannot, because the simulated deployments are priced at zero.
 The game day (S028) exercises it. The upkeep command below (S066) is
-implemented and tested against PostgreSQL; it has not run on a cluster.
+implemented and tested against PostgreSQL, and run on kind on 2026-10-06
+through `make gateway-upkeep` (below).
 
 The refusal is the control working (QA-12, C-04). The question this
 runbook answers is whether the budget is right, and what spent it.
@@ -30,13 +31,30 @@ Each tenant has four, in `config/registry/tenants.yaml`:
 
 | Limit | Window | Kept in | When it is reached |
 |---|---|---|---|
-| `requests_per_10_seconds` | Sliding 10 seconds | The gateway's memory | 429 with `Retry-After`, reason `tenant-request-rate` |
-| `tokens_per_minute` | Sliding 60 seconds | The gateway's memory | 429 with `Retry-After`, reason `tenant-token-rate`; 413, reason `tenant-request-too-large`, for one request larger than the window |
+| `requests_per_10_seconds` | Sliding 10 seconds | The gateway's memory, or the shared store | 429 with `Retry-After`, reason `tenant-request-rate` |
+| `tokens_per_minute` | Sliding 60 seconds | The gateway's memory, or the shared store | 429 with `Retry-After`, reason `tenant-token-rate`; 413, reason `tenant-request-too-large`, for one request larger than the window |
 | `tokens_per_day` | The UTC day | PostgreSQL | 429, reason `tenant-token-budget` |
 | `cost_per_month_eur` | The UTC month | PostgreSQL | 429, reason `tenant-cost-budget` |
 
 The two rate limits come back by themselves within their window, and no
 alert watches them: wait. This runbook is about the last two.
+
+A gateway given the address of the shared store keeps the two windows there
+(implemented, tested, and seen working on kind on 2026-10-06: its calls were
+counted there; a failure to reach it, as a 503, was not seen on a cluster).
+When it cannot reach the store
+it refuses the call: 503 `the rate store is unavailable` with `Retry-After: 5`,
+audit reason `rate-store-unavailable`. That is not a tenant's limit: the store
+is down or unreachable, so look at the store, not at the tenant: the
+[rate store runbook](rate-store.md) says how to tell a store that is down from
+one that refuses the gateway, and what a restart of it does (every window
+starts again, and the budgets above are not touched). On kind the store is
+the Meridian chart's, `make deploy` runs it, and the gateway uses it there:
+run on kind three times on 2026-10-06 (`make up`, `make deploy`, `make smoke`
+and `make demo` passed, the third time on a cluster made from nothing; the
+[rate store runbook](rate-store.md#what-has-run-on-a-cluster-and-what-has-not)
+says what each run showed and what none did). The upkeep Job
+(`make gateway-upkeep`) ran on kind in the second and third runs (below).
 
 ## Confirm
 
@@ -178,11 +196,18 @@ Read the second query's `state` column:
 
 ## The upkeep command
 
-Status: implemented (S066) and tested against PostgreSQL; it has not run
-on a cluster. On kind: the role and its Secret `gateway-upkeep-db` are
-declared (`make up` creates both; implemented, not yet read on the cluster),
-and no workload holds that Secret. How the command is run there, with the
-Secret's `uri` as its credential, is designed, with the step's second half.
+Status: implemented (S066) and tested against PostgreSQL. On kind: the role
+and its Secret `gateway-upkeep-db` are declared (`make up` creates both), no
+workload of the release holds that Secret, and `make gateway-upkeep` runs the
+command as a Job of its own (below, "On kind, as a Job"): implemented and
+tested with stub commands and the real chart, and seen on kind on 2026-10-06
+(second and third runs of S066, local only). What was seen: the read of the
+open reservations (`reservations: 0`, in both runs), an `expire` that refused
+with `ERROR GU304` as a failed Job and changed nothing, and a credit of one
+token to `claims-triage`, which printed the counter's new value. The audit row
+of that credit was not read on the cluster (reading `audit.events` there takes
+the database's pod, which asks the owner first). `close`, the euro credit and
+an `expire` that removes rows were not run there.
 
 `meridian gateway` is the supported way to close a reservation, credit a
 tenant or remove old ledger rows. It connects as the database role
@@ -259,7 +284,85 @@ meridian gateway expire --before YYYY-MM --reason old-months --confirm
 (a typed one is kept in the shell's history and shown in the process list).
 Set `MERIDIAN_GATEWAY_UPKEEP_DATABASE_URL` from the store, and ask for
 `sslmode=verify-full` in it: without it the client does not verify the
-server it reaches.
+server it reaches. On kind you do not handle it: the Job below reads it from
+the Secret.
+
+**On kind, as a Job.** `make gateway-upkeep` runs the command in a pod of the
+cluster, under the role, and prints what the command printed. It needs `make
+up` (the Secret) and `make deploy` (the image: the Job runs the image the
+release runs, so the command is the deployed one's). `ARGS` is the subcommand
+and its arguments, as you would type them after `meridian gateway`:
+
+```sh
+make gateway-upkeep ARGS="reservations --older-than 30"
+make gateway-upkeep ARGS="close ATTEMPT_ID --reason dead-process"
+make gateway-upkeep ARGS="close ATTEMPT_ID --reason dead-process --release"
+make gateway-upkeep ARGS="credit TENANT --tokens 50000 --reason retry-loop"
+make gateway-upkeep ARGS="credit TENANT --eur 1.5 --reason retry-loop"
+make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months"
+make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months --confirm"
+```
+
+The first reads and writes no audit row; so does `expire` without `--confirm`,
+which only counts. Every other line changes the ledger and writes one.
+
+What `ARGS` may hold. The script splits it on blanks into a list and reads no
+word of it as shell. Each word is letters, digits, `.`, `_`, `=` and `-` only,
+which is every slug, number, date and ID the command takes; a word with a
+quote, a backslash, a `$`, a backtick, a glob or shell character (`*`, `;`,
+`|`, `&`, `(`, `<` and the rest), a non-ASCII letter or a newline is refused
+before the cluster is asked anything, and the refusal shows the word. Make
+itself expands `$(...)` and `$$` in a value given on its command line before
+the script sees it; what reaches the script is checked the same way. The words
+reach Helm as one JSON list, and the pod runs `meridian gateway` followed by
+them as separate arguments: there is no shell in the Job.
+
+What you see. The script prints the Job's name, waits (at most three minutes;
+the Job's own deadline is two), then prints the command's output and exits:
+
+| Exit code of the script | What `make gateway-upkeep` returns | Meaning |
+|---|---|---|
+| 0 | 0 | The Job succeeded; the output is the command's. |
+| 1 | 2 | The Job failed or did not finish, or `make up` or `make deploy` is missing: the last line, which starts `error:`, says which and what to do. |
+
+`make` itself returns 2 for a recipe that failed, where the script exits 1:
+read the last line, not the number (seen on kind on 2026-10-06, an `expire`
+that refused). The last line says one of two things about the ledger.
+
+- **A refusal changed nothing.** The output holds the command's own line,
+  `ERROR GUnnn ...` (a refusal of one of the database functions), and the last
+  line says so: fix the arguments and run again.
+- **Any other failure may have changed it.** A Job that failed without such a
+  line (a lost connection, a crash, a usage error, a pod that never started), or
+  that did not finish within its three minutes, can have failed after the
+  commit: the change **may have been applied**, and the last line says so. Read
+  the open reservations (`make gateway-upkeep ARGS="reservations --older-than
+  15"`) or the audit rows (below) **before running it again**, because a credit
+  is a new row on every run (it has no idempotency key): a rerun after one that
+  did commit credits twice. The Job's output stays for a day
+  (`kubectl -n meridian logs job/NAME`).
+
+A failed Job is not retried (`backoffLimit: 0`). A second run is a second Job
+(its name ends in the run's time and process number, not in the image's tag), so
+a run never meets the last one's leftovers, and nothing deletes one.
+
+Where the output is kept. The Job and its pod stay for a day
+(`ttlSecondsAfterFinished: 86400`), whether it succeeded or failed:
+`kubectl -n meridian logs job/NAME` reads the output again, and `kubectl -n
+meridian get jobs -l app.kubernetes.io/name=meridian-upkeep` lists the runs.
+Its ServiceAccount and NetworkPolicy stay (they hold no secret); the Job is the
+only object that holds the Secret, and only the Job's own pod reads it. The
+script never prints the connection string, never puts it on a command line and
+passes the Job's output through the filter `make deploy` uses for its Jobs.
+
+Seeing the audit row afterwards: the output names what was done (the IDs, the
+counts and the amounts), and the audit row is the database's record of it. On
+kind the one way to read `audit.events` is the read-only `psql` in the
+database's own pod that
+[the operations index](../README.md#looking-into-the-database-on-kind)
+describes, with the query under "Every change leaves an audit row" below: it
+is a privileged read the platform does not record, and no other path to those
+rows exists yet.
 
 **Every change leaves an audit row**, written by the function in the
 transaction of the change, with the database role `gateway_upkeep`, the
@@ -303,7 +406,9 @@ names the database role, not a person, until people sign in (S021).
   charged.
 - **Do not restart the gateway** to give a tenant room. The budgets are
   in PostgreSQL and survive it; the restart only hands every tenant its
-  rate windows again.
+  rate windows again (without the shared store; with it, the windows
+  survive a gateway restart, and a restart of the store hands them out
+  again).
 - **Do not price a simulated deployment** to see the cost quota work on
   kind: a price for the replay provider would spend a tenant's real
   quota.

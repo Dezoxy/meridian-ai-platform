@@ -1,0 +1,39 @@
+{{- /*
+The gateway's upkeep command as a Job (S066): `meridian gateway` with the
+arguments of jobs.upkeep.args, as the database role gateway_upkeep (Secret
+gateway-upkeep-db, whose key `uri` is the connection string; no other workload
+of the chart holds it). One run of one operator's change, never a schedule: the
+retention of the ledger is the owner's decision and nothing expires rows on a
+timer. The release holds none: it is off by default and infra/kind/upkeep.sh
+(`make gateway-upkeep`) renders it for one run and applies it outside the
+release, as deploy.sh applies the three Jobs, so `make deploy` neither creates
+nor removes it.
+  args       the subcommand and its arguments, a list of strings the container
+             receives after `meridian gateway`. No shell reads them: a word is
+             one argument whatever characters it holds. The chart refuses an
+             empty list, and a value that is not a string
+  runSuffix  what the Job's name ends in, instead of the image's tag, which does
+             not change between two runs: a DNS label of at most 32 characters,
+             so the name and the pod's own suffix stay under 63. The script
+             gives each run its own
+The Job is not retried (backoffLimit 0): a change that failed is read, not
+repeated blind. A refusal of the command (`ERROR GUnnn`) ends it with exit code
+1, a Failed Job.
+*/ -}}
+{{- if .Values.jobs.upkeep.enabled }}
+{{- $upkeep := .Values.jobs.upkeep }}
+{{- if not $upkeep.args }}
+{{- fail "jobs.upkeep.args must be a list of strings: the subcommand of `meridian gateway` and its arguments (the chart refuses a Job that would run the command with none); pass --set-json jobs.upkeep.args='[\"reservations\",\"--older-than\",\"15\"]' or use make gateway-upkeep" }}
+{{- end }}
+{{- range $upkeep.args }}
+{{- if not (kindIs "string" .) }}
+{{- fail (printf "jobs.upkeep.args must hold strings only; got %v (%s)" . (kindOf .)) }}
+{{- end }}
+{{- end }}
+{{- $suffix := toString (required "jobs.upkeep.runSuffix is required: a DNS label of at most 32 characters that makes this run's Job name its own (--set-string, so a number stays text)" $upkeep.runSuffix) }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$" $suffix) }}
+{{- fail (printf "jobs.upkeep.runSuffix must be a DNS label of 1 to 32 characters (lower-case letters, digits and hyphens, starting and ending with a letter or a digit); got %q" $suffix) }}
+{{- end }}
+{{- $secret := required "database.upkeepSecret is required: the Secret of the role gateway_upkeep (key uri)" .Values.database.upkeepSecret }}
+{{- include "meridian.job" (dict "root" . "name" "upkeep" "job" $upkeep "args" $upkeep.args "suffix" $suffix "databaseUrl" "MERIDIAN_GATEWAY_UPKEEP_DATABASE_URL" "secret" $secret) }}
+{{- end }}

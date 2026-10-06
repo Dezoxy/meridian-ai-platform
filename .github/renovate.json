@@ -211,7 +211,7 @@
       ]
     },
     {
-      "description": "An image a chart installs keeps the chart's own tag: the tag moves by hand, in the chart's pull request (infra/kind/README.md says how to read it), so no image is proposed before the chart that installs it. A new digest of the same tag is still proposed. Left out on purpose: kindest/node and the CloudNativePG postgresql image (not a chart's default), the collector and telemetrygen (the pin is 0.162.0 and the chart's appVersion 0.161.0, so those two images are outside this rule until their pin and their chart agree) and the log agent's contrib collector image (S064), which is the collector's release and follows the core image's side; the Envoy Gateway chart is a chart, not an image.",
+      "description": "An image a chart installs keeps the chart's own tag: the tag moves by hand, in the chart's pull request (infra/kind/README.md says how to read it), so no image is proposed before the chart that installs it. A new digest of the same tag is still proposed. Left out on purpose: kindest/node and the CloudNativePG postgresql image (not a chart's default), the collector and telemetrygen (the pin is 0.162.0 and the chart's appVersion 0.161.0, so those two images are outside this rule until their pin and their chart agree) the log agent's contrib collector image (S064), which is the collector's release and follows the core image's side, and the rate store's Redis (S066), whose tag is this repository's own choice and has a group of its own below; the Envoy Gateway chart is a chart, not an image.",
       "matchDatasources": [
         "docker"
       ],
@@ -232,6 +232,19 @@
         "patch"
       ],
       "enabled": false
+    },
+    {
+      "description": "The Redis the tests and CI run against (PYTEST_REDIS_IMAGE in the Makefile) and the rate store the kind cluster runs (RATE_STORE_IMAGE in pins.env) are one image, the same tag and the same digest, so one group holds both and they move in one pull request. This rule comes after the 'kind platform' one so that its group wins for the pins.env line.",
+      "matchPackageNames": [
+        "redis"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "groupName": "redis image",
+      "prBodyNotes": [
+        "This image is the rate store of the kind platform (`RATE_STORE_IMAGE` in `infra/kind/pins.env`) and the Redis the tests and CI run against (`PYTEST_REDIS_IMAGE` in the Makefile): keep them equal, which a test checks. CI starts the Redis of the tests, not the platform: run `make up`, `make deploy` and `make smoke` on this branch and put what they printed in a comment, and read that the store's pod starts without errors in its output (the chart's configuration names directives of Redis 8.10)."
+      ]
     },
     {
       "description": "The test database and the cluster's database carry the same PostgreSQL, pgvector and OS release, so they arrive together.",

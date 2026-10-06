@@ -72,15 +72,16 @@ certificate:
   duration: 2160h
   renewBefore: ""
 
-# Where a service sends its traces and metrics (OTLP over HTTP). Empty: no
-# variable, and a service sends nothing.
+# Where a service sends its traces and metrics (OTLP over HTTP), and the sweep
+# its last pass's findings (S064). Empty: no variable, and none of them sends
+# anything. The three Jobs send nothing whatever it holds.
 #   otlpEndpoint  the collector's address. An https address needs caConfigMap,
 #                 and the chart fails without it.
 #   caConfigMap   the ConfigMap in the release's namespace that holds the
 #                 collector's authority, the public certificate in its key
 #                 ca.crt (`make up` makes it on kind, from the authority of
-#                 infra/kind/manifests/telemetry-ca.yaml). Each service mounts
-#                 that key at /etc/meridian/telemetry-ca/ca.crt and trusts it
+#                 infra/kind/manifests/telemetry-ca.yaml). Each service and the
+#                 sweep mounts that key at /etc/meridian/telemetry-ca/ca.crt and trusts it
 #                 through the SDK's OTEL_EXPORTER_OTLP_CERTIFICATE; the service's
 #                 own CA (MERIDIAN_TLS_CA_FILE) is another authority and does
 #                 not sign the collector's certificate. Empty with an https
@@ -103,6 +104,9 @@ database:
   # The ingestion Job's role (knowledge_ingest): the knowledge chunks, and one
   # insert-only row of the audit log.
   ingestSecret: knowledge-ingest-db
+  # The upkeep Job's role (gateway_upkeep): three functions of the ledger, no
+  # table. Only that Job holds it; the release's workloads never do.
+  upkeepSecret: gateway-upkeep-db
   # The CA that signed the database's certificate. The Secret also holds the
   # CA's private key, so the pods mount only ca.crt.
   caSecret: platform-db-ca
@@ -145,8 +149,9 @@ probes:
 
 # One Deployment, Service, ServiceAccount and PodDisruptionBudget of the same
 # name per entry. `replicas` is the number of pods; the chart refuses more than
-# one for model-gateway (its rate windows live in one process, so each replica
-# would allow the full limits: threat model T-45). `env` is what the service
+# one for model-gateway unless `rateStore.enabled` is true (without the store its
+# rate windows live in one process, so each replica would allow the full limits:
+# threat model T-45; with it they are shared). `env` is what the service
 # sets besides its database URL (from `dbSecret`) and the collector's address.
 # Each service's `resources` has a CPU request and a memory request and limit,
 # and no CPU limit, on purpose: a request reserves what a service needs, while a
@@ -429,12 +434,39 @@ jobs:
         serviceUrl: model-gateway
     resources: *jobResources
 
+  # The Model Gateway's upkeep command (S066): `meridian gateway` with `args`
+  # after it, as the role gateway_upkeep (database.upkeepSecret), for one run
+  # of one operator's change (close a reservation, credit a tenant, expire a
+  # month, or list the open reservations). Off, and never part of the release:
+  # `make gateway-upkeep ARGS="..."` (infra/kind/upkeep.sh) turns it on for one
+  # `helm template`, gives the run a suffix of its own and applies the result
+  # outside the release. Nothing schedules it: retention is the owner's call.
+  #   args       a list of strings, the subcommand and its arguments; the chart
+  #              refuses an empty list and renders each as a YAML string
+  #   runSuffix  a DNS label of at most 32 characters that ends the Job's name,
+  #              so a second run is a new Job (the image's tag does not change)
+  upkeep:
+    enabled: false
+    command: [meridian, gateway]
+    args: []
+    runSuffix: ""
+    # A failed change is read, not repeated blind.
+    backoffLimit: 0
+    # One connection and one transaction: a hung connection ends the Job.
+    activeDeadlineSeconds: 120
+    # A day: what keeps the output (and a refusal) for the morning after.
+    ttlSecondsAfterFinished: 86400
+    resources: *jobResources
+
 # What the namespace may do on the network (templates/networkpolicy.yaml). The
 # namespace denies all traffic; each workload is allowed what its configuration
 # names: DNS, the database, the collector when it sets the collector's address
-# (telemetry.otlpEndpoint), and the services its environment calls. There is no
-# list of calls here: the `env` items above are the one place a service names
-# another, and the egress rules, and the other side's ingress, come from them.
+# (telemetry.otlpEndpoint; the sweep's too, S064), the rate store when the pod
+# is given its address (the Model Gateway, when rateStore.enabled), and the
+# services its environment calls. There is no list of calls here: the `env`
+# items above are the one place a service names another, and the egress rules,
+# and the other side's ingress, come from them. The rate store's own policy
+# admits the gateway's pods and allows it no egress (templates/rate-store.yaml).
 #   enabled   off renders no NetworkPolicy at all (the Jobs' included)
 #   peers     what lies outside the chart. Each peer is
 #               namespace   its namespace; omitted: the release's own
@@ -471,9 +503,105 @@ sweep:
   # Under half the period: a hung connection ends the pass, because the
   # CronJob's Forbid policy would otherwise skip every later run behind it.
   activeDeadlineSeconds: 120
+  # The SDK's deadline for one export of the findings (S064), in SECONDS: the
+  # unit of OTEL_EXPORTER_OTLP_TIMEOUT at the pinned exporter, which the pod
+  # gets only when telemetry.otlpEndpoint is set. Retries run inside it. Above 0
+  # and under activeDeadlineSeconds, or the chart fails.
+  telemetryTimeoutSeconds: 5
   resources:
     requests:
       cpu: 50m
       memory: 96Mi
     limits:
       memory: 192Mi
+
+# The rate store (S066, T-45; templates/rate-store.yaml explains the objects): one
+# Redis that holds the Model Gateway's two rate windows (requests in 10 seconds,
+# tokens in a minute) for every gateway pod, so that two pods, in a rolling update
+# or as replicas, do not each allow the full limits. Off by default; when it is
+# on, the gateway is given its address and the guard on the gateway's replicas
+# lets a second one through. Nothing is persisted: a restart of the store hands
+# every tenant its windows again, as a restart of the gateway did. The store is
+# restarted once for each renewal of its certificate (its liveness probe fails
+# when the files on the volume are newer than the server, within about a minute
+# of the kubelet writing them), because Redis reads its certificate only at
+# start; its duration and renewal are the services' (`certificate`).
+#   enabled     renders the store
+#   image       the full reference, `<name>:<tag>@sha256:<64 hex digits>`: the
+#               digest is required (the chart fails without one) because a tag
+#               can be moved. Empty here: with `enabled` and no image the chart
+#               fails and says so. It is the official image, run without its
+#               entrypoint (the entrypoint would load the image's four modules)
+#               and as its own user, uid 999 and gid 1000, which the chart
+#               writes down as literals, as it does the rest of the hardening.
+#               The image is pulled (IfNotPresent): image.pullPolicy is the
+#               Meridian image's, which a cluster may load into its nodes.
+#   secret      the Secret, made out of band (`make up` on kind), that holds two
+#               keys. The chart never holds a password or a hash.
+#                 uri        the gateway's address, which the gateway reads as
+#                            MERIDIAN_GATEWAY_RATE_STORE_URL through a required
+#                            reference (a missing Secret or key keeps its pod from
+#                            starting). Its form is
+#                              rediss://<user>:<password>@rate-store.<namespace>.svc:6379/0
+#                            with the user and the password percent-encoded
+#                            (`@ : / ? #` and the like). Its host is the very
+#                            name of the store's Certificate, which the gateway
+#                            verifies; its port is the store's
+#                 users.acl  Redis's ACL file, which only the store's pod mounts
+#               The chart cannot read the Secret, so it cannot check that the
+#               file turns the `default` user off, that it gives the gateway's
+#               user exactly the script's commands (EVALSHA, SCRIPT LOAD, TIME,
+#               ZREMRANGEBYSCORE, ZRANGE, ZADD, PEXPIRE, HELLO)
+#               on ~meridian:rate:* and nothing else (no CLIENT command: the
+#               gateway's client no longer sends one), that the hash in it is the
+#               password in `uri`, or that the password is percent-encoded there.
+#               Whoever makes the Secret owns those checks. The file must also
+#               hold the user `probe` (on, nopass, no key, no channel, exactly
+#               PING): both of the store's probes ping as it and pass only on
+#               PONG, which is how a store frozen by a script that never ends
+#               is restarted; without it the store's pod is never Ready. On kind
+#               `make deploy` compares the Secret's annotation
+#               meridian.kind/rate-store-acl-rules with what `make up` writes,
+#               and the hash of the Secret's own users.acl (password hash
+#               masked) with the same, so a file edited under an annotation
+#               that still matches is refused.
+#               The store's NetworkPolicy is its only control before
+#               authentication, so the chart fails with `enabled` and
+#               `networkPolicy.enabled` false; and a values `env` item of any
+#               service named MERIDIAN_GATEWAY_RATE_STORE_URL is refused.
+#   resources   a CPU request and a memory request and limit, no CPU limit, as
+#               for the services. The memory limit is the store's real bound:
+#               `maxmemory` below does not stop this workload writing (the
+#               gateway's script calls a command Redis checks memory for only
+#               after it has written, so a full store still admits it), so the
+#               limit is what ends a store that grows. What can grow it: at most
+#               the admissions of a minute per tenant (about six times the
+#               request limit, 140 entries of about 100 bytes with the
+#               registry's numbers) and the connections (up to 40 per gateway
+#               pod, the size of its thread pool), whose buffers together
+#               `maxmemory-clients 8mb` in redis.conf bounds (the probe user has
+#               no password, so any holder of a services certificate with a
+#               path to the port may open a session and fill its query buffer:
+#               240 of them killed the store under this limit without that
+#               line; templates/rate-store.yaml gives the measurement).
+#               Measured on the pinned image
+#               without modules, over TLS, read-only, as uid 999: 12 MB resident
+#               when idle and a peak of 17 MB after 12,000 admissions from 40
+#               connections on 3 tenants (2026-10-06), so 64Mi leaves nearly
+#               four times that.
+#   maxmemory   Redis's own ceiling, with `noeviction` (an evicting policy would
+#               silently reset a tenant's window). In Redis's units (`32mb` is
+#               32 MiB) and below the memory limit, or the chart fails. Half the
+#               limit: the server, its client buffers and its fragmentation are
+#               outside it.
+rateStore:
+  enabled: false
+  image: ""
+  secret: rate-store-credentials
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+  maxmemory: 32mb

@@ -38,16 +38,18 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 40 lines; PASS, or SKIP (below)
+make smoke     # 45 lines; PASS, or SKIP (below)
 ```
 
 `make smoke` prints a SKIP, and still exits 0, where a line cannot be
 judged yet, and it says why. Seen on 2026-10-06, each leaving 34 PASS and
 one SKIP: the sweep's line until the CronJob has been scheduled once (it
 runs every five minutes, and a smoke run two minutes after `make deploy`
-skips it); the cost series line right after the services restart and
-before any claim is sent ("the gateway has settled no call since it
-started"); and the audit line of the service identity check on a second
+skips it, and since S064 the findings' line beside it, which asks Prometheus
+for what that pass sent: that skip was designed and tested, and not seen, as
+S064's three runs on 2026-10-06 had none); the cost series line right after
+the services restart and before any claim is sent ("the gateway has settled
+no call since it started"); and the audit line of the service identity check on a second
 run inside the gateway's minute ("the gateway wrote this minute's refusal
 row for an earlier run"). After `make up` alone every line that needs the
 services skips: 24 lines, 17 PASS and 7 SKIP.
@@ -64,7 +66,10 @@ On the Linux virtual machine on 2026-10-06, from nothing: `make up` 5 min
 machine), the first `make deploy` 1 min 30 s, a deploy that builds no new
 image 11 s, `make smoke` 37 s after `make up` alone (24 lines: 17 PASS and
 7 SKIP) and 40 to 52 s over the day on the deployed cluster (35 lines, 35
-PASS once the sweep had run), `make demo` 30 s.
+PASS once the sweep had run), `make demo` 30 s. With S064 on the same
+cluster the same day, on the running cluster and not made again: `make up`
+153 s, `make deploy` 80 s and `make smoke` 64 s, 44 PASS, 0 FAIL and 0 SKIP;
+the log agent's access-line check is among them.
 
 In a second terminal, and keep it open:
 
@@ -212,7 +217,7 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 91 threats,
+- [The threat model](architecture/security/threat-model.md): 92 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
 - Not built: sign-in and roles, TLS at the edge and between the edge and

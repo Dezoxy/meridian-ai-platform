@@ -9,10 +9,13 @@ when nothing is allowed or the class is ``special`` (T-13). The tenant's rate
 windows come next, one set for both purposes, on the estimate of the text as
 sent: a request over them is refused (429, or 413 when it alone is larger than
 the tenant's token limit) before any redaction, circuit, reservation or
-provider is touched (T-73). Only a request that passes has its text redacted
-(T-20), whatever its class, so nothing below sees an e-mail address, an IBAN or
-a card number; a request a policy or a window refuses costs no redaction, one
-the budget refuses has been redacted. Then the allowed candidates are walked in
+provider is touched (T-73). The windows are the process's own or, given the
+store's address, shared through it (S066); a store that cannot be reached
+refuses the call the same way (503, ``rate-store-unavailable``), never a pass.
+Only a request that passes has its text redacted (T-20), whatever its class, so
+nothing below sees an e-mail address, an IBAN or a card number; a request a
+policy or a window refuses costs no redaction, one the budget refuses has been
+redacted. Then the allowed candidates are walked in
 order under one deadline (S042), each one reserved in the ledger before it is
 called (QA-12). A candidate whose circuit is open, or that the deadline leaves
 no time for, is skipped; a deployment's own failure moves the walk to the next
@@ -44,10 +47,10 @@ counts as input tokens in the estimate, and is sent to the provider as it is.
 The span says only that one was sent, as a boolean: never a word of it.
 """
 
+import logging
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
 from datetime import date
 from typing import Annotated, Any, NoReturn
 
@@ -75,6 +78,7 @@ from meridian.platform.common.identity import (
     caller_service,
     install_caller_check,
 )
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import set_span_attributes, start_span
@@ -98,25 +102,40 @@ from meridian.platform.gateway.operations import chat_operation, embedding_opera
 from meridian.platform.gateway.providers.base import (
     EmbeddingReply,
     ModelProvider,
-    ProviderError,
     ProviderReply,
 )
-from meridian.platform.gateway.providers.recorded import (
-    RecordedProvider,
-    RecordingError,
-    load_recording,
+from meridian.platform.gateway.rate_store import limiter_from_settings
+from meridian.platform.gateway.ratelimit import (
+    RateLimiter,
+    RateStoreUnavailable,
+    TenantRateLimiter,
 )
-from meridian.platform.gateway.ratelimit import TenantRateLimiter
 from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.refusals import (
     LIMIT_ANSWERS,
+    RATE_STORE_RETRY_SECONDS,
     LimitRefusalReason,
     RefusalAudit,
 )
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
-from meridian.platform.gateway.settings import RECORDINGS_ENV, GatewaySettings
+from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.gateway.startup import (
+    AZURE_KIND as AZURE_KIND,  # re-exported: the tests import it from here
+)
+from meridian.platform.gateway.startup import (
+    CHAT_PURPOSE,
+    EMBEDDING_PURPOSE,
+    RECORDED_KIND,
+    REPLAY_KIND,
+    Route,
+    check_start_allowed,
+    live_providers,
+    provider_kinds,
+    recorded_providers,
+    route_for,
+)
 from meridian.platform.gateway.walk import (
     BudgetRefused,
     CandidateWalker,
@@ -125,21 +144,17 @@ from meridian.platform.gateway.walk import (
     route_attributes,
     route_facts,
 )
-from meridian.platform.registry import Registry, load_registry
-from meridian.platform.registry.models import DataClass, Deployment, Service
+from meridian.platform.registry import load_registry
+from meridian.platform.registry.models import (
+    DataClass,
+    Deployment,
+    Service,
+    TenantLimits,
+)
+
+logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "model-gateway"
-CHAT_PURPOSE = "chat"
-EMBEDDING_PURPOSE = "embedding"
-REPLAY_ENVIRONMENTS = frozenset({"test", "ci", "kind"})
-# A recording is a laptop's or a CI run's, never a cluster's (T-78).
-RECORDED_ENVIRONMENTS = frozenset({"test", "ci", "local"})
-# The Azure CLI credential is a developer's login, so a gateway that builds its
-# own live providers starts on a laptop only.
-LIVE_ENVIRONMENT = "local"
-AZURE_KIND = "azure-openai"
-REPLAY_KIND = "replay"
-RECORDED_KIND = "recorded"
 
 HTTP_BAD_REQUEST = 400
 # The mark of the gateway's own 400: FastAPI answers 400 too, for a body it
@@ -167,7 +182,8 @@ NOT_RECORDED = "no recording answers this request; record again (make eval-recor
 NOT_CALLED_REASON = "unavailable"
 # The route's own description of 503; the shared one names the database only.
 CHAT_UNAVAILABLE = (
-    "The audit log is unavailable, or no model deployment can be tried now."
+    "The audit log or the rate store is unavailable, or no model deployment can "
+    "be tried now."
 )
 # The route's own description of 413: the shared one names the body limit only.
 CHAT_TOO_LARGE = (
@@ -184,174 +200,6 @@ RunHeader = Annotated[uuid.UUID, Header(alias="X-Meridian-Run")]
 # The class of the request, when it is higher than its tenant's (T-11). FastAPI
 # refuses a value that is not one of the four classes, with a 422.
 DataClassHeader = Annotated[DataClass | None, Header(alias="X-Meridian-Data-Class")]
-
-
-def _check_start_allowed(
-    settings: GatewaySettings, providers: Mapping[str, ModelProvider] | None
-) -> None:
-    if settings.mode == "replay":
-        if settings.environment not in REPLAY_ENVIRONMENTS:
-            raise SettingsError(
-                "replay mode is refused outside the test, ci and kind environments "
-                "(T-39)"
-            )
-        return
-    if settings.mode == "recorded":
-        if settings.environment not in RECORDED_ENVIRONMENTS:
-            raise SettingsError(
-                "recorded mode is refused outside the test, ci and local "
-                "environments (T-78)"
-            )
-        if providers is None and settings.recordings is None:
-            raise SettingsError(f"recorded mode needs {RECORDINGS_ENV}")
-        return
-    if providers is not None:
-        return  # the caller brought its own providers (tests)
-    if settings.azure_credential != "azure-cli":
-        raise SettingsError(
-            "live mode needs MERIDIAN_AZURE_CREDENTIAL=azure-cli: the only "
-            "credential source is a developer's az login"
-        )
-    if settings.environment != LIVE_ENVIRONMENT:
-        raise SettingsError(
-            "live mode with the Azure CLI credential is refused outside the local "
-            "environment"
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class _Route:
-    """What one purpose may use: the deployments a request may use before policy
-    narrows them (in replay mode its one replay deployment, in recorded mode its
-    one recorded or else replay deployment, in live mode the route's candidates
-    in order), and, in replay and recorded mode only, that deployment: where the
-    call goes is known before policy decides, so a refusal says it too (T-39).
-    The field is named ``replay`` for the mode it was made for."""
-
-    considered: tuple[Deployment, ...]
-    replay: Deployment | None
-    purpose: str
-
-
-def _route(settings: GatewaySettings, registry: Registry, purpose: str) -> _Route:
-    if settings.mode == "replay":
-        deployment = registry.replay_deployment(purpose)
-        if deployment is None:
-            raise SettingsError(f"the registry has no replay deployment for {purpose}")
-        return _Route((deployment,), deployment, purpose)
-    if settings.mode == "recorded":
-        # A purpose with no recorded deployment (embedding) is answered by replay.
-        recorded = registry.recorded_deployment(purpose)
-        deployment = (
-            recorded if recorded is not None else registry.replay_deployment(purpose)
-        )
-        if deployment is None:
-            raise SettingsError(
-                f"the registry has no recorded or replay deployment for {purpose}"
-            )
-        return _Route((deployment,), deployment, purpose)
-    route = registry.route(purpose)
-    if route is None:
-        return _Route((), None, purpose)
-    found = tuple(registry.deployment(name) for name in route.candidates)
-    if any(d is None for d in found):
-        raise SettingsError(
-            f"the {purpose} route names a deployment the registry lacks"
-        )
-    return _Route(tuple(d for d in found if d is not None), None, purpose)
-
-
-def _provider_kinds(
-    registry: Registry, considered: Sequence[Deployment]
-) -> dict[str, str]:
-    """Deployment ID to the kind of its provider (the key of ``providers``)."""
-    kinds: dict[str, str] = {}
-    for deployment in considered:
-        provider = registry.provider(deployment.provider)
-        if provider is None:
-            raise SettingsError(f"deployment {deployment.id} has no known provider")
-        kinds[deployment.id] = provider.kind
-    return kinds
-
-
-def _check_azure_candidates(
-    settings: GatewaySettings,
-    considered: Sequence[Deployment],
-    kinds: Mapping[str, str],
-) -> None:
-    """What ``AzureOpenAIProvider.chat`` and ``embed`` would otherwise raise a
-    ``ValueError`` for at the first request."""
-    for deployment in considered:
-        if kinds[deployment.id] != AZURE_KIND:
-            continue
-        if deployment.terraform_key is None or deployment.deployment_name is None:
-            raise SettingsError(
-                f"deployment {deployment.id} has no terraform_key or deployment_name"
-            )
-        if deployment.purpose == EMBEDDING_PURPOSE and deployment.dimensions is None:
-            raise SettingsError(f"deployment {deployment.id} has no dimensions")
-        location = deployment.terraform_key.partition("/")[0]
-        if location not in settings.azure_openai_endpoints:
-            raise SettingsError(
-                f"deployment {deployment.id} has no endpoint in "
-                "MERIDIAN_AZURE_OPENAI_ENDPOINTS for its location"
-            )
-
-
-def _live_providers(
-    settings: GatewaySettings,
-    considered: Sequence[Deployment],
-    kinds: Mapping[str, str],
-) -> tuple[dict[str, ModelProvider], Callable[[], None]]:
-    """The Azure provider and the call that closes it, with one token fetched
-    now so a missing ``az login`` stops the start and not the first request.
-
-    The adapter, and with it the SDKs, is imported here and nowhere at module
-    level, so a replay process never loads them.
-    """
-    from meridian.platform.gateway.providers.azure_openai import (
-        AzureOpenAIProvider,
-        azure_cli_token_provider,
-        check_token,
-        refuse_sdk_environment,
-    )
-
-    try:
-        refuse_sdk_environment()
-    except ValueError as error:  # names the variable, never its value
-        raise SettingsError(str(error)) from None
-    if settings.azure_tenant_id is None:
-        raise SettingsError(
-            "live mode needs MERIDIAN_AZURE_TENANT_ID: the Azure CLI's default "
-            "account must not decide which tenant a token is for"
-        )
-    _check_azure_candidates(settings, considered, kinds)
-    token_provider = azure_cli_token_provider(settings.azure_tenant_id)
-    try:
-        check_token(token_provider)
-    except ProviderError:
-        # Nothing of the cause: it can name the tenant or the account.
-        raise SettingsError(
-            "no Azure token: run `az login` for the tenant in "
-            "MERIDIAN_AZURE_TENANT_ID and start again"
-        ) from None
-    provider = AzureOpenAIProvider(settings.azure_openai_endpoints, token_provider)
-    return {AZURE_KIND: provider}, provider.close
-
-
-def _recorded_providers(settings: GatewaySettings) -> dict[str, ModelProvider]:
-    """The recording's provider and the replay one (embeddings). A recording
-    that cannot be read stops the start; the error names the variable and none
-    of the file."""
-    if settings.recordings is None:
-        raise SettingsError(f"recorded mode needs {RECORDINGS_ENV}")
-    try:
-        recording = load_recording(settings.recordings)
-    except RecordingError as error:
-        raise SettingsError(
-            f"{RECORDINGS_ENV} is not a usable recording: {error}"
-        ) from None
-    return {RECORDED_KIND: RecordedProvider(recording), REPLAY_KIND: ReplayProvider()}
 
 
 def _unanswered(result: Unanswered) -> NoReturn:
@@ -385,6 +233,7 @@ def create_app(
     providers: Mapping[str, ModelProvider] | None = None,
     clock: Callable[[], float] = time.monotonic,
     today: Callable[[], date] = utc_today,
+    limiter: RateLimiter | None = None,
 ) -> FastAPI:
     """Build the app; raise when the registry fails to load or the mode,
     environment and providers are not an allowed combination.
@@ -396,20 +245,24 @@ def create_app(
     asked for the method of the purpose of the request only, so a fake with
     ``chat`` alone serves chat, and nothing checks at the start that it has
     ``embed``. ``clock`` times the circuit
-    breaker (one per app), the tenants' rate windows and each request's
-    deadline; ``today`` is the UTC day the ledger charges to. A test injects
-    fakes of both. A ``meter_provider`` is its caller's to shut down; without
-    one the app builds its own.
+    breaker (one per app), the tenants' rate windows (unless ``limiter`` is
+    given) and each request's deadline; ``today`` is the UTC day the ledger
+    charges to. A test injects fakes of both. ``limiter`` keeps the tenants'
+    rate windows (S066): without one they are the process's own, on ``clock``;
+    ``create_app_from_env`` passes the shared store's when its address is set. A
+    limiter that raises ``RateStoreUnavailable`` refuses the call (503). A
+    ``meter_provider`` is its caller's to shut down; without one the app builds
+    its own.
     """
-    _check_start_allowed(settings, providers)
+    check_start_allowed(settings, providers)
     registry = load_registry(settings.registry_dir)
     policy = caller_policy(settings.identity_prefix, SERVICE_NAME, registry)
     routes = {
-        purpose: _route(settings, registry, purpose)
+        purpose: route_for(settings, registry, purpose)
         for purpose in (CHAT_PURPOSE, EMBEDDING_PURPOSE)
     }
     considered = tuple(d for route in routes.values() for d in route.considered)
-    kinds = _provider_kinds(registry, considered)
+    kinds = provider_kinds(registry, considered)
     if settings.mode == "live":
         for purpose, route in routes.items():
             for kind in (REPLAY_KIND, RECORDED_KIND):
@@ -423,9 +276,9 @@ def create_app(
         if settings.mode == "replay":
             providers = {REPLAY_KIND: ReplayProvider()}
         elif settings.mode == "recorded":
-            providers = _recorded_providers(settings)
+            providers = recorded_providers(settings)
         else:
-            providers, close = _live_providers(settings, considered, kinds)
+            providers, close = live_providers(settings, considered, kinds)
     if not set(kinds.values()) <= providers.keys():
         raise SettingsError("a deployment is routed to a provider kind with no adapter")
     owns_meter_provider = meter_provider is None
@@ -464,7 +317,7 @@ def create_app(
     )
     app, tracer = service.app, service.tracer
     meters = GatewayMeters(app_meter_provider)
-    limiter = TenantRateLimiter(clock=clock)
+    limiter = limiter if limiter is not None else TenantRateLimiter(clock=clock)
 
     walker = CandidateWalker(
         tracer=tracer,
@@ -499,7 +352,7 @@ def create_app(
         span: Span,
         record: CallRecord,
         caller: Caller,
-        route: _Route,
+        route: Route,
         data_class: str | None,
         refusal: RefusalReason,
     ) -> NoReturn:
@@ -517,7 +370,7 @@ def create_app(
         span: Span,
         record: CallRecord,
         caller: Caller,
-        route: _Route,
+        route: Route,
         calling: Service | None,
     ) -> NoReturn:
         """Answer 403 for a caller that names a tenant or an agent it may not
@@ -537,27 +390,74 @@ def create_app(
         span: Span,
         record: CallRecord,
         caller: Caller,
-        route: _Route,
+        route: Route,
         data_class: str | None,
         reason: LimitRefusalReason,
         *,
         retry_after: int | None = None,
         candidate: Deployment | None = None,
+        store_failure: RateStoreUnavailable | None = None,
     ) -> NoReturn:
         """Answer a request a tenant limit refuses. Every refusal sets the span
         attribute and is counted; the audit row is written for the first of its
         tenant and reason in the window only (T-49). Both parts of that key are
         registry IDs, because routing passed. In replay mode every row names
-        the replay deployment of the request's purpose (T-39)."""
+        the replay deployment of the request's purpose (T-39). ``store_failure``
+        is why the shared store gave no answer: it is logged once per window,
+        with the row, and not once per request (the exception's text holds no
+        address)."""
         status, detail = LIMIT_ANSWERS[reason]
         set_span_attributes(span, {"meridian.refusal": reason})
         record.end("refused", reason)
         facts = route_facts(
             candidate if candidate is not None else route.replay, data_class
         ) | {"purpose": route.purpose}
-        refusals.record(caller, caller.tenant, reason, facts)
+        row_written = refusals.record(caller, caller.tenant, reason, facts)
+        if row_written and store_failure is not None:
+            logger.error(
+                "the rate store is unavailable (%s): %s",
+                type(store_failure).__name__,
+                store_failure,
+            )
         headers = None if retry_after is None else {"Retry-After": str(retry_after)}
         raise HTTPException(status_code=status, detail=detail, headers=headers)
+
+    def admit_or_refuse(
+        span: Span,
+        record: CallRecord,
+        caller: Caller,
+        route: Route,
+        data_class: str | None,
+        limits: TenantLimits,
+        tokens: int,
+    ) -> None:
+        """Return when the tenant's windows admit the request; otherwise answer
+        it and never return: 429 or 413 for a window, and 503 when the store of
+        the windows gives no answer. No limit is known then, so no call is made:
+        never a pass and never the process's own windows (S066)."""
+        try:
+            rate_refusal = limiter.admit(caller.tenant, limits, tokens)
+        except RateStoreUnavailable as error:
+            refuse_limit(
+                span,
+                record,
+                caller,
+                route,
+                data_class,
+                "rate-store-unavailable",
+                retry_after=RATE_STORE_RETRY_SECONDS,
+                store_failure=error,
+            )
+        if rate_refusal is not None:
+            refuse_limit(
+                span,
+                record,
+                caller,
+                route,
+                data_class,
+                rate_refusal.reason,
+                retry_after=rate_refusal.retry_after_seconds,
+            )
 
     def route_responses(unavailable: str, too_large: str) -> dict[int | str, Any]:
         responses = error_responses(401, 403, 413, 429, 500, 502, 503, 504)
@@ -648,7 +548,7 @@ def create_app(
 
     def handle[ResponseT](
         span_name: str,
-        route: _Route,
+        route: Route,
         caller: Caller,
         estimate: Callable[[], TokenEstimate],
         build: Callable[[TokenEstimate], tuple[Operation[Any, ResponseT], int]],
@@ -686,7 +586,7 @@ def create_app(
         record.end("completed")
         return response
 
-    def describe_call(span: Span, caller: Caller, route: _Route) -> None:
+    def describe_call(span: Span, caller: Caller, route: Route) -> None:
         set_span_attributes(
             span,
             {
@@ -704,7 +604,7 @@ def create_app(
         span: Span,
         record: CallRecord,
         caller: Caller,
-        route: _Route,
+        route: Route,
         estimate: Callable[[], TokenEstimate],
         build: Callable[[TokenEstimate], tuple[Operation[Any, ResponseT], int]],
         requested: DataClass | None,
@@ -746,17 +646,9 @@ def create_app(
         # refuses has been. The limiter and the ledger see one number, the size
         # of the text as sent, and nothing else below sees the original.
         sized = estimate()
-        rate_refusal = limiter.admit(caller.tenant, limits, sized.tokens)
-        if rate_refusal is not None:
-            refuse_limit(
-                span,
-                record,
-                caller,
-                route,
-                decision.data_class,
-                rate_refusal.reason,
-                retry_after=rate_refusal.retry_after_seconds,
-            )
+        admit_or_refuse(
+            span, record, caller, route, decision.data_class, limits, sized.tokens
+        )
         operation, redactions = build(sized)
         if redactions > 0:  # a count only: never a kind, never a value
             set_span_attributes(span, {"meridian.redactions": redactions})
@@ -784,4 +676,6 @@ def create_app(
 def create_app_from_env() -> FastAPI:
     """The factory S041 runs under ``uvicorn --factory``."""
     install_log_redaction()
-    return create_app(GatewaySettings.from_env())
+    configure_logging(SERVICE_NAME)
+    settings = GatewaySettings.from_env()
+    return create_app(settings, limiter=limiter_from_settings(settings))

@@ -183,6 +183,12 @@ def add_probe_in(project: Path, package: str, source: str) -> str:
         pytest.param("meridian.runtime", "boto3", id="runtime-imports-boto3"),
         pytest.param("meridian.runtime", "botocore", id="runtime-imports-botocore"),
         pytest.param("meridian.runtime", "litellm", id="runtime-imports-litellm"),
+        # Not a provider SDK, but the rate store's client belongs to the gateway
+        # alone (S066): the same contract keeps it there.
+        pytest.param("meridian.runtime", "redis", id="runtime-imports-redis"),
+        pytest.param("meridian.workloads", "redis", id="workloads-import-redis"),
+        pytest.param("meridian.platform.cli", "redis", id="cli-imports-redis"),
+        pytest.param("meridian.platform.common", "redis", id="common-imports-redis"),
     ],
 )
 def test_an_import_of_a_provider_sdk_outside_the_gateway_breaks_a_contract(
@@ -440,6 +446,19 @@ def test_the_isolation_contract_forbids_the_evaluation_and_the_cli() -> None:
     }
     # Indirect imports count: no allowance for them.
     assert not contract.get("allow_indirect_imports", False)
+
+
+def test_a_gateway_module_importing_the_rate_stores_client_keeps_the_contracts(
+    project_copy: Path,
+) -> None:
+    # Arrange: ratelimit_redis.py does exactly this.
+    add_probe_in(project_copy, GATEWAY_PACKAGE, "import redis\n")
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code == 0, output
 
 
 def test_a_gateway_module_importing_the_adapter_keeps_the_contracts(

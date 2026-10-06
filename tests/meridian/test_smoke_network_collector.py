@@ -491,14 +491,16 @@ def test_the_probe_targets_the_port_the_services_push_to_and_the_policy_admits()
     assert collector["ports"][0]["port"] == 4318  # never the gRPC port, 4317
 
 
-def test_check_eight_ends_with_the_collector_line_and_its_header_says_so() -> None:
+def test_check_eight_has_the_collector_line_after_the_database_and_says_so() -> None:
     body = function_body(SMOKE_SH, "check_network_policy").strip().splitlines()
     header = SMOKE_SH.split("set -euo pipefail")[0]
-    eighth = header.split("8. network policy: five lines")[1].split("9. service")[0]
+    eighth = header.split("8. network policy: six lines")[1].split("9. service")[0]
     flat = " ".join(line.removeprefix("#").strip() for line in eighth.splitlines())
 
-    assert body[-1].strip() == "check_network_collector"
-    assert body[-2].strip() == "check_network_database"
+    # The rate store's line (S066, test_smoke_network_rate_store.py) follows it.
+    assert body[-1].strip() == "check_network_rate_store"
+    assert body[-2].strip() == "check_network_collector"
+    assert body[-3].strip() == "check_network_database"
     assert "default" in flat and "collector" in flat
     assert "observability-networkpolicy.yaml" in flat
     assert "What the fifth line does not prove" in flat

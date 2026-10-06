@@ -34,6 +34,7 @@ and the harness asks the owner before a session may run it.
 |---|---|---|---|
 | The eleven database roles' passwords | Kubernetes Secrets in `meridian`: `meridian-owner-db`, `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`, `claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db`, `gateway-upkeep-db`, `policy-seed-db`, `knowledge-ingest-db` (keys `username`, `password`, `uri`) | `make up`, once, only if absent | Below; not exercised |
 | Grafana's admin password | Secret `grafana-admin` in `observability` | `make up`, once, only if absent | Below; not exercised |
+| The rate store's password (S066): the gateway's address in Redis and Redis's access-control file, which holds the password's SHA-256 | Secret `rate-store-credentials` in `meridian` (keys `uri` and `users.acl`); the gateway reads the first as an environment variable and only the store mounts the second | `make up`, once, only if absent | [The rate store runbook](rate-store.md#a-password-was-rotated-or-the-two-disagree): delete the Secret, `make up`, restart the store and then the gateway; refused calls in between; not exercised |
 | The database's certificate authority and server certificate | Secret `platform-db-ca` and CloudNativePG's own | CloudNativePG | CloudNativePG issues and renews them; the repository records no expiry to watch (the plan's backlog) |
 | The password of the role `app` | Secret `platform-db-app` | CloudNativePG | Not used: that role cannot reach the `meridian` database |
 | The cluster's admin credentials | `infra/kind/kubeconfig`, gitignored | `make up` | A new cluster: `make down`, `make up` (disposable on the development machine, hard rule 8) |
@@ -102,7 +103,7 @@ k rollout status deploy/claims-api
   |---|---|---|
   | `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`, `claims-mcp-db`, `knowledge-mcp-db` | The Deployment of the same name without `-db` | `rollout restart` of that Deployment |
   | `claims-sweep-db` | The sweep's CronJob | Nothing: every run reads it afresh |
-  | `gateway-upkeep-db` | No workload: the operator's `meridian gateway` command (designed on kind: nothing yet reads the Secret there) | Nothing restarts: the next run of the command reads the new Secret |
+  | `gateway-upkeep-db` | The upkeep Job alone, which `make gateway-upkeep` applies for one run, outside the release (implemented and tested, and run on kind on 2026-10-06): no Deployment, no CronJob and no other Job holds it | Nothing restarts: each run is a new Job and reads the Secret afresh; a Job already running keeps what it read |
   | `meridian-owner-db` | The migration Job alone | Nothing: every `make deploy` reads it afresh |
   | `policy-seed-db` | The seed Job alone | Nothing: every `make deploy` reads it afresh |
   | `knowledge-ingest-db` | The ingestion Job alone | Nothing: `make deploy` reads it afresh, and an ingestion runs once per image, so a rotation shows at the next new image |
@@ -121,7 +122,14 @@ After a leak:
 
 - Rotate every role whose Secret could have been read, not only the one
   that was seen: on kind one reader of the namespace's Secrets reads all
-  eleven.
+  eleven, and the rate store's.
+- **The rate store's Secret is one of them** (S066). Whoever read
+  `rate-store-credentials` holds the gateway's credential for the store: they
+  can fill or empty any tenant's rate window and freeze the store with a script
+  that never ends, which makes every model call a 503. The budgets and the
+  ledger are in PostgreSQL and are not reached that way. A rotation restarts
+  the store and then the gateway
+  ([the rate store runbook](rate-store.md#a-password-was-rotated-or-the-two-disagree)).
 - **A new password does not end a session that is already open.** After
   the restart the owner ends that role's remaining sessions, as the
   superuser: `pg_terminate_backend` over the rows of `pg_stat_activity`
