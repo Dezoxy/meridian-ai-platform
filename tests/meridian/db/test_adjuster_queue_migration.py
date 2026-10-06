@@ -28,6 +28,7 @@ TRAIL_COLUMNS = (
     "event",
     "outcome",
     "reason",  # appended by 0014
+    "seq",  # appended by 0017
 )
 INSERT_CLAIM = (
     "INSERT INTO claims.claims (claim_id, tenant, submission) VALUES (%s, %s, '{}')"
@@ -226,7 +227,7 @@ def test_the_partial_indexes_carry_their_predicates(
     assert (f"WHERE {where}" if found else None) == predicate
 
 
-def test_the_view_has_exactly_the_eight_columns_in_order(
+def test_the_view_has_exactly_the_nine_columns_in_order(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(
@@ -599,7 +600,7 @@ SEED_API_EVENTS = (
 )
 TRAIL_QUERY = (
     "SELECT * FROM audit.claim_trail WHERE claim_id = %s AND tenant = %s "
-    "ORDER BY recorded_at, event LIMIT 200"
+    "ORDER BY recorded_at, seq LIMIT 200"
 )
 QUEUE_QUERY = (
     "SELECT claim_id FROM claims.claims WHERE tenant = %s "

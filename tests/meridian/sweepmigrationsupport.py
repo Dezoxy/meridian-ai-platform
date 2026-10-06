@@ -53,6 +53,7 @@ TRAIL_COLUMNS = (
     "event",
     "outcome",
     "reason",
+    "seq",  # appended by 0017
 )
 
 INSERT_CLAIM = (
