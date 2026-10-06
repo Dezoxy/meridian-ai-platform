@@ -34,7 +34,7 @@ ISSUER_STATES = {
 }
 ROLES = (
     "meridian_owner claims_api agent_runtime model_gateway policy_mcp claims_mcp "
-    "knowledge_mcp claims_sweep"
+    "knowledge_mcp claims_sweep gateway_upkeep"
 )
 APPROVER_STATES = {
     "missing": 'echo "Error from server (NotFound): deployments.apps '

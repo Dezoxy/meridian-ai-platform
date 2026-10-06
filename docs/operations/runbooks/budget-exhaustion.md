@@ -179,8 +179,10 @@ Read the second query's `state` column:
 ## The upkeep command
 
 Status: implemented (S066) and tested against PostgreSQL; it has not run
-on a cluster. On kind: designed, with the step's second half. Nothing yet
-gives the command a credential there.
+on a cluster. On kind: the role and its Secret `gateway-upkeep-db` are
+declared (`make up` creates both; implemented, not yet read on the cluster),
+and no workload holds that Secret. How the command is run there, with the
+Secret's `uri` as its credential, is designed, with the step's second half.
 
 `meridian gateway` is the supported way to close a reservation, credit a
 tenant or remove old ledger rows. It connects as the database role
