@@ -213,8 +213,9 @@ check):
 For an agent without workers the order is as before (`invalid-worker` and
 `worker-unknown` for a key, then `tool-not-allowed`). In the runtime the
 reasons are also the failure word of a run that made the call (`run.failed`),
-and each is audited with the tool when it is a registry tool; the audit row
-has no column for the worker yet.
+and each is audited with the tool when it is a registry tool. The audit row
+of a tool call and of a refusal names the worker (`audit.events.worker`,
+migration 0021), at both ends, once the name is one of the agent's workers.
 
 ```yaml
 - id: claims-triage

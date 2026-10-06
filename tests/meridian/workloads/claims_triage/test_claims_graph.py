@@ -1,5 +1,5 @@
-"""The triage graph (S014, S015): seven nodes, the tools in a fixed order, one
-model call, and a pause for an adjuster.
+"""The triage graph (S014, S015, S031): a supervisor and four workers, the tools
+in a fixed order, one model call, and a pause for an adjuster.
 
 No database and no tool server: a stub answers each tool from the synthetic data
 and records the calls, and a stub stands in for the model client. The stub
