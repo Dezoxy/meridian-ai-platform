@@ -1399,7 +1399,8 @@ def test_deploy_skips_the_ingestion_only_when_the_store_holds_chunks() -> None:
     assert "cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary" in reader
     assert "-c postgres" in reader
     assert "psql -d meridian" in reader
-    assert "FROM knowledge.chunks" in reader
+    assert "${CHUNK_COUNT_SQL}" in reader
+    assert "SELECT count(*) FROM knowledge.chunks" in COMMON_SH
     # The skip is the branch that counted more than zero, and it returns.
     assert "> 0" in body
     skip = next(i for i, line in enumerate(lines) if "already in the store" in line)
@@ -1414,6 +1415,7 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
         [
             "set -euo pipefail",
             "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
+            *re.findall(r"^readonly CHUNK_COUNT_SQL=.*$", COMMON_SH, re.M),
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
             "job_state() { echo succeeded; }",
@@ -3422,15 +3424,20 @@ SWEEP_TOLERANCE_SECONDS = 3 * SWEEP_PERIOD_SECONDS  # three periods
 
 
 def sweep_cronjob_answer(
-    *, scheduled: str | None = SWEEP_SCHEDULED, created: str = SWEEP_CREATED, active=0
+    *,
+    scheduled: str | None = SWEEP_SCHEDULED,
+    created: str = SWEEP_CREATED,
+    active=0,
+    schedule: str | None = None,
 ) -> dict:
-    """The CronJob as the API returns it: the server's own timestamps only."""
+    """The CronJob as the API returns it: the server's own timestamps only
+    (``schedule``: its ``.spec.schedule``, absent by default)."""
     status: dict = {"active": [{"name": f"meridian-sweep-{i}"} for i in range(active)]}
     if scheduled is not None:
         status["lastScheduleTime"] = scheduled
     return {
         "metadata": {"name": "meridian-sweep", "creationTimestamp": created},
-        "spec": {},
+        "spec": {} if schedule is None else {"schedule": schedule},
         "status": status,
     }
 
@@ -3474,23 +3481,46 @@ def other_job(created: str) -> dict:
     }
 
 
+def epoch_of(stamp: str) -> int:
+    return int(datetime.fromisoformat(stamp).timestamp())
+
+
+def newest_stamp(cronjob: dict | str, jobs: list[dict] | str) -> int:
+    """The newest timestamp the answers hold: the server's clock when a test
+    does not say what the database's is (nothing is then overdue by it)."""
+    stamps = []
+    if isinstance(cronjob, dict):
+        stamps += [cronjob["metadata"].get("creationTimestamp")]
+        stamps += [cronjob.get("status", {}).get("lastScheduleTime")]
+    for job in jobs if isinstance(jobs, list) else []:
+        stamps += [job["metadata"].get("creationTimestamp")]
+        stamps += [c.get("lastTransitionTime") for c in job["status"]["conditions"]]
+        stamps += [job["status"].get("completionTime")]
+    return max((epoch_of(stamp) for stamp in stamps if stamp), default=0)
+
+
 def run_sweep_check(
     tmp_path: Path,
     *,
     deployed: str = "deployment.apps/claims-api",
     cronjob: dict | str | None = None,
     jobs: list[dict] | str | None = None,
+    now: int | str | None = None,
 ) -> tuple[list[str], str]:
     """``check_sweep`` from smoke.sh in bash against a stub ``kctl``. ``cronjob``
     is the CronJob's answer (an empty string: it does not exist; ``FAIL``: the
-    lookup fails) and ``jobs`` the Jobs of the namespace. Returns the output
-    lines and what ``kctl`` was asked."""
+    lookup fails) and ``jobs`` the Jobs of the namespace. ``now`` is what the
+    database's clock answers, in epoch seconds (``FAIL``: the query fails; any
+    other text is sent as it is); by default the newest timestamp of the other
+    answers. Returns the output lines and what ``kctl`` was asked."""
     asked = tmp_path / "kctl-calls"
     asked.touch()
     if cronjob is None:
         cronjob = sweep_cronjob_answer()
     if jobs is None:
         jobs = []
+    if now is None:
+        now = newest_stamp(cronjob, jobs)
     script = "\n".join(
         [
             "set -euo pipefail",
@@ -3514,10 +3544,21 @@ def run_sweep_check(
             "      fi",
             '      printf "%s" "${JOBS}" ;;',
             '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            '    *"get pod"*) echo platform-db-1 ;;',
+            '    *" exec "*)',
+            '      if [[ "${NOW}" == FAIL ]]; then',
+            '        echo "psql failed" >&2; return 1',
+            "      fi",
+            '      printf "%s\\n" "${NOW}" ;;',
             "  esac",
             "}",
             function_definition(SMOKE_SH, "deployed_services"),
+            function_definition(SMOKE_SH, "platform_db_primary"),
+            function_definition(SMOKE_SH, "meridian_query"),
+            function_definition(SMOKE_SH, "server_epoch"),
+            function_definition(SMOKE_SH, "sweep_period"),
             function_definition(SMOKE_SH, "sweep_verdict"),
+            function_definition(SMOKE_SH, "report_sweep"),
             function_definition(SMOKE_SH, "check_sweep"),
             "check_sweep",
         ]
@@ -3531,6 +3572,7 @@ def run_sweep_check(
             "DEPLOYED": deployed,
             "CRONJOB": cronjob if isinstance(cronjob, str) else json.dumps(cronjob),
             "JOBS": jobs if isinstance(jobs, str) else json.dumps({"items": jobs}),
+            "NOW": str(now),
         },
         check=True,
     )
@@ -3566,15 +3608,25 @@ def test_the_sweep_check_fails_when_the_cronjob_cannot_be_read(tmp_path: Path) -
 
 
 @requires_jq
-def test_the_sweep_check_fails_on_a_suspended_cronjob_whatever_its_jobs_did(
+def test_the_sweep_check_skips_a_suspended_cronjob_with_a_line_of_its_own(
     tmp_path: Path,
 ) -> None:
     suspended = {"metadata": {"name": "meridian-sweep"}, "spec": {"suspend": True}}
     ok = [sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z")]
 
-    (line,) = run_sweep_check(tmp_path, cronjob=suspended, jobs=ok)[0]
+    # Even with a clock that would call the last success overdue.
+    lines, asked = run_sweep_check(
+        tmp_path,
+        cronjob=suspended,
+        jobs=ok,
+        now=epoch_of("2026-10-03T10:00:00Z") + 10 * SWEEP_TOLERANCE_SECONDS,
+    )
 
-    assert line.startswith("FAIL  sweep: cronjob/meridian-sweep is suspended")
+    assert lines == [
+        "SKIP  sweep: cronjob/meridian-sweep is suspended (spec.suspend), "
+        "so it makes no runs and none can be overdue"
+    ]
+    assert " exec " not in asked
 
 
 @requires_jq
@@ -3763,15 +3815,49 @@ def test_the_sweep_check_skips_a_cronjob_that_has_not_been_scheduled_yet(
 
 
 @requires_jq
-def test_the_sweep_check_says_it_has_no_clock_when_nothing_is_newer_than_the_cronjob(
+def test_the_sweep_check_says_which_clock_it_asked_for_a_cronjob_not_scheduled_yet(
     tmp_path: Path,
 ) -> None:
-    (line,) = run_sweep_check(
-        tmp_path, cronjob=sweep_cronjob_answer(scheduled=None), jobs=[]
+    created = epoch_of(SWEEP_CREATED)
+
+    lines, asked = run_sweep_check(
+        tmp_path,
+        cronjob=sweep_cronjob_answer(scheduled=None),
+        jobs=[],
+        now=created + 120,
+    )
+
+    (line,) = lines
+    assert line.startswith("SKIP  sweep: cronjob/meridian-sweep has not been scheduled")
+    assert "120 s ago by the database's clock" in line
+    assert "no server-side clock" not in line
+    # The clock is the primary's `now()`, read as a whole number of seconds.
+    assert (
+        "exec platform-db-1 -c postgres -- psql -d meridian -tAc "
+        "SELECT floor(extract(epoch FROM now()))::bigint"
+    ) in asked
+
+
+@requires_jq
+def test_the_sweep_check_fails_a_cronjob_never_scheduled_by_the_databases_clock(
+    tmp_path: Path,
+) -> None:
+    created = epoch_of(SWEEP_CREATED)
+    cronjob = sweep_cronjob_answer(scheduled=None)
+
+    # Nothing in the API is newer than the CronJob: only the clock knows.
+    (kept,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, now=created + SWEEP_TOLERANCE_SECONDS
+    )[0]
+    (late,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, now=created + SWEEP_TOLERANCE_SECONDS + 1
     )[0]
 
-    assert line.startswith("SKIP  sweep: cronjob/meridian-sweep has not been scheduled")
-    assert "no server-side clock" in line
+    assert kept.startswith("SKIP  sweep:")
+    assert late.startswith(
+        "FAIL  sweep: cronjob/meridian-sweep has never been scheduled"
+    )
+    assert f"{SWEEP_TOLERANCE_SECONDS + 1} s" in late
 
 
 @requires_jq
@@ -3818,6 +3904,160 @@ def test_the_sweep_check_skips_while_the_first_job_is_running(tmp_path: Path) ->
     assert "running" in line
 
 
+SWEEP_FINISHED_AT = epoch_of(SWEEP_FINISHED)
+
+
+def run_after_a_success(
+    tmp_path: Path, *, ago: int, active: int = 0, schedule: str | None = None
+) -> list[str]:
+    """The sweep check when the newest finished Job (a success) finished
+    ``ago`` seconds before the database's clock and the CronJob was last
+    scheduled at that moment, with ``active`` Jobs running."""
+    cronjob = sweep_cronjob_answer(
+        scheduled=SWEEP_FINISHED, active=active, schedule=schedule
+    )
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+
+    return run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=jobs, now=SWEEP_FINISHED_AT + ago
+    )[0]
+
+
+@requires_jq
+def test_the_sweep_check_fails_a_schedule_that_stopped_after_a_success(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_after_a_success(tmp_path, ago=SWEEP_TOLERANCE_SECONDS + 1)
+
+    assert line.startswith("FAIL  sweep: the schedule stopped")
+    assert "meridian-sweep-1" in line
+    assert SWEEP_FINISHED in line
+    # How long ago by the database's clock, and what the bound is.
+    assert f"{SWEEP_TOLERANCE_SECONDS + 1} s" in line
+    assert "database's clock" in line
+    assert f"{SWEEP_TOLERANCE_SECONDS} s (three periods of 300 s)" in line
+    assert "no Job is running" in line
+
+
+@requires_jq
+def test_the_sweep_check_passes_a_success_exactly_three_periods_old(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_after_a_success(tmp_path, ago=SWEEP_TOLERANCE_SECONDS)
+
+    assert line.startswith("PASS  sweep:")
+
+
+@requires_jq
+def test_the_sweep_check_passes_an_old_success_while_a_job_is_running(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_after_a_success(tmp_path, ago=SWEEP_TOLERANCE_SECONDS * 4, active=1)
+
+    assert line.startswith("PASS  sweep:")
+
+
+@requires_jq
+def test_the_sweep_check_counts_in_the_period_of_the_cronjobs_own_schedule(
+    tmp_path: Path,
+) -> None:
+    ten_minutes = "*/10 * * * *"
+    bound = 3 * 10 * 60
+
+    (kept,) = run_after_a_success(tmp_path, ago=bound, schedule=ten_minutes)
+    (late,) = run_after_a_success(tmp_path, ago=bound + 1, schedule=ten_minutes)
+
+    assert kept.startswith("PASS  sweep:")
+    assert late.startswith("FAIL  sweep: the schedule stopped")
+    assert f"{bound} s (three periods of 600 s)" in late
+
+
+@requires_jq
+@pytest.mark.parametrize(
+    "schedule", ["0 * * * *", "*/0 * * * *", "*/90 * * * *", "*/5 * * * * *", "x"]
+)
+def test_the_sweep_check_uses_its_own_constant_for_a_schedule_it_cannot_read(
+    tmp_path: Path, schedule: str
+) -> None:
+    (kept,) = run_after_a_success(
+        tmp_path, ago=SWEEP_TOLERANCE_SECONDS, schedule=schedule
+    )
+    (late,) = run_after_a_success(
+        tmp_path, ago=SWEEP_TOLERANCE_SECONDS + 1, schedule=schedule
+    )
+
+    assert kept.startswith("PASS  sweep:")
+    assert f"{SWEEP_TOLERANCE_SECONDS} s (three periods of 300 s)" in late
+
+
+@requires_jq
+def test_the_sweep_check_does_not_fail_a_cronjob_deployed_less_than_a_period_ago(
+    tmp_path: Path,
+) -> None:
+    # A Job of an earlier CronJob of the same name is old; this one is new.
+    created = seconds_after(SWEEP_FINISHED, 4 * SWEEP_TOLERANCE_SECONDS)
+    cronjob = sweep_cronjob_answer(scheduled=None, created=created)
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+    created_at = epoch_of(created)
+
+    (young,) = run_sweep_check(
+        tmp_path,
+        cronjob=cronjob,
+        jobs=jobs,
+        now=created_at + SWEEP_PERIOD_SECONDS - 1,
+    )[0]
+    (grown,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=jobs, now=created_at + SWEEP_PERIOD_SECONDS
+    )[0]
+
+    assert young.startswith("SKIP  sweep: cronjob/meridian-sweep was deployed")
+    assert "299 s ago" in young
+    assert grown.startswith("FAIL  sweep: the schedule stopped")
+
+
+@requires_jq
+def test_the_sweep_check_still_fails_a_failed_job_whatever_the_clock_says(
+    tmp_path: Path,
+) -> None:
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED, kind="Failed")]
+
+    (line,) = run_sweep_check(
+        tmp_path,
+        cronjob=sweep_cronjob_answer(scheduled=SWEEP_FINISHED),
+        jobs=jobs,
+        now=SWEEP_FINISHED_AT + 10 * SWEEP_TOLERANCE_SECONDS,
+    )[0]
+
+    assert line.startswith("FAIL  sweep: the last finished Job")
+
+
+@requires_jq
+@pytest.mark.parametrize("clock", ["FAIL", "", "soon", "12.5", "-3"])
+def test_the_sweep_check_fails_when_the_databases_clock_cannot_be_read(
+    tmp_path: Path, clock: str
+) -> None:
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs, now=clock)[0]
+
+    assert line.startswith("FAIL  sweep: could not read the database's clock")
+
+
+def test_the_sweep_check_says_why_it_asks_the_database_and_not_the_laptop() -> None:
+    header = SMOKE_SH.split("set -euo pipefail")[0]
+    section = header.split("7. sweep:")[1].split("8. network policy:")[0]
+    body = " ".join(section.replace("#", " ").split())
+
+    assert "database's clock" in body
+    assert "laptop" in body
+    assert "Lease" in body
+    assert "cannot be seen" not in body
+    assert "no clock the script trusts" not in body
+    assert "Only the API server's timestamps are compared" not in body
+    (clock_sql,) = re.findall(r"^readonly SWEEP_CLOCK_SQL=(.*)$", SMOKE_SH, re.M)
+    assert clock_sql.strip("'") == "SELECT floor(extract(epoch FROM now()))::bigint"
+
+
 @requires_jq
 @pytest.mark.parametrize(
     ("outcome", "cronjob", "jobs"),
@@ -3846,10 +4086,14 @@ def test_the_sweep_check_only_reads(
 ) -> None:
     lines, asked = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs)
 
-    # Every path gets its verdict from `get` calls alone.
+    # Every path gets its verdict from `get` calls and one SELECT of the
+    # database's clock.
     assert lines[0].startswith(outcome), lines
     assert asked.splitlines(), "kubectl was never asked"
     for call in asked.splitlines():
+        if " exec " in call:
+            assert call.endswith("-tAc SELECT floor(extract(epoch FROM now()))::bigint")
+            continue
         assert " get " in call, call
         assert not re.search(r"\b(create|apply|delete|patch|replace|exec)\b", call)
 

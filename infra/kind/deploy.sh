@@ -279,7 +279,8 @@ install_release() {
     die "helm could not install release ${RELEASE} (its error is above; to see why: helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${NAMESPACE} status ${RELEASE}, or history ${RELEASE})"
 }
 
-# stored_chunk_count: the number of rows in knowledge.chunks, read in the
+# stored_chunk_count: the number of rows in knowledge.chunks (the query is
+# CHUNK_COUNT_SQL of common.sh, which smoke.sh reads too), read in the
 # database's primary pod the way smoke.sh reaches psql. Fails when it cannot be
 # read.
 stored_chunk_count() {
@@ -289,7 +290,7 @@ stored_chunk_count() {
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
   [[ -n "${primary}" ]] || return 1
   kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
-    psql -d meridian -tAc 'SELECT count(*) FROM knowledge.chunks' 2>/dev/null
+    psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>/dev/null
 }
 
 # The ingestion of this image's corpus, at most once per image. Its Job is kept

@@ -5,8 +5,24 @@
 # that the tool check below causes.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
 #   2. database:  pgvector is installed in platform-db, in the `app` database and
-#                 in the `meridian` database
-#   3. tools:     one call per MCP tool server through the runtime's own client,
+#                 in the `meridian` database; and three lines for the stores of
+#                 the `meridian` database, read in the primary's pod: the policy
+#                 store holds policies (policy.policies, which the seed Job
+#                 fills), the knowledge store holds chunks (knowledge.chunks,
+#                 counted with the query deploy.sh counts with), and the
+#                 migrations ledger's newest file (public.meridian_migrations)
+#                 is the newest file under src/meridian/platform/migrations of
+#                 the checkout this script runs from, so a cluster deployed
+#                 from another checkout says so. One SKIP line replaces the three
+#                 while the database holds no migrated schemas (`make up`
+#                 alone). What the lines do not prove: a count above zero says
+#                 the seed and the ingestion wrote something, not what or how
+#                 much (the claims and runs tables are not read: `make demo`
+#                 writes them), nor that the chunks are the running image's (the
+#                 ingestion Job of the image's tag, kept by deploy.sh, is that
+#                 proof); and the ledger shows which migrations were applied,
+#                 not that the services run the code that matches them.
+#   3. tools:    one call per MCP tool server through the runtime's own client,
 #                 run in the agent-runtime pod (so with the addresses the runtime
 #                 was given), with a run ID that does not exist: each server must
 #                 refuse it as `unknown-run`. Skipped, not failed, while the
@@ -33,19 +49,33 @@
 #                 start page answers 200 with the same policy and the banner's
 #                 fictional-data sentence (T-04), and changes no claim. Skipped
 #                 while the Meridian services are not deployed (`make deploy`).
-#   7. sweep:     one line, read-only. The CronJob meridian-sweep exists, is not
-#                 suspended, and the last of its Jobs to finish (the scheduled
-#                 ones and any made by hand) succeeded; the line prints when it
-#                 finished. It fails when the last one failed (with its reason),
-#                 when the CronJob was last scheduled more than three periods
-#                 (15 minutes) after that Job finished with nothing running, and
-#                 when it was never scheduled although the API holds a timestamp
-#                 more than three periods after its creation. Skipped while the
-#                 Meridian services are not deployed (`make deploy`), while no
-#                 Job of it has finished yet, and while a CronJob that never ran
-#                 is too young to judge. Only the API server's timestamps are
-#                 compared; a PASS says when it finished, and a schedule that
-#                 stopped since cannot be seen without a clock the script trusts.
+#   7. sweep:     one line, read-only. The CronJob meridian-sweep exists, and the
+#                 last of its Jobs to finish (the scheduled ones and any made by
+#                 hand) succeeded; the line prints when it finished. It fails
+#                 when the last one failed (with its reason), when the CronJob
+#                 was last scheduled more than three periods (15 minutes) after
+#                 that Job finished with nothing running, when that Job finished
+#                 more than three periods before now with nothing running (the
+#                 schedule stopped after a success), and when it was never
+#                 scheduled although it was created more than three periods ago.
+#                 The period is read from the CronJob's own .spec.schedule when
+#                 that is "*/N * * * *" (N from 1 to 59), else it is
+#                 SWEEP_PERIOD_SECONDS. Skipped while the Meridian services are
+#                 not deployed (`make deploy`), while no Job of it has finished
+#                 yet, while a CronJob that never ran is too young to judge,
+#                 while the CronJob was deployed less than one period ago (a
+#                 Job of the CronJob it replaced is old, not overdue), and while
+#                 it is suspended (.spec.suspend: it makes no runs, so none is
+#                 overdue). "Now" is the database's clock: the primary's now(),
+#                 read as whole seconds, which this script already trusts for
+#                 the audit row of check 9. Not this laptop's `date`: it runs
+#                 on a machine whose clock is not the cluster's (see deploy.sh).
+#                 Not the controller manager's Lease: one more API object to
+#                 trust, for no gain over a clock that is already trusted. The
+#                 line fails when that clock cannot be read, rather than judging
+#                 with the timestamps alone. What it does not prove: that the
+#                 sweep did its work (only that a Job finished), and a database
+#                 whose clock is wrong would be believed.
 #   8. network policy: one line, read-only. From inside the Claims API's pod a
 #                 TCP connection to the Model Gateway, which no rule allows,
 #                 must time out: the namespace's default-deny is enforced. It
@@ -126,9 +156,21 @@ readonly ADJUSTER_DECISION_URL=http://claims.meridian.localhost:8088/adjuster/cl
 # The first sentence of the banner every page carries (templates/base.html).
 readonly ADJUSTER_BANNER="Synthetic data only."
 readonly SWEEP_CRONJOB=meridian-sweep
-# The CronJob's schedule is every five minutes; a run is overdue after three.
+# The CronJob's schedule is every five minutes; a run is overdue after three
+# periods (900 s). The period is read from the CronJob's own schedule when it
+# is "*/N * * * *"; SWEEP_PERIOD_SECONDS is what is used for any other form.
 readonly SWEEP_PERIOD_SECONDS=300
 readonly SWEEP_STALE_PERIODS=3
+# The clock the sweep check trusts: the database's, as whole seconds.
+readonly SWEEP_CLOCK_SQL='SELECT floor(extract(epoch FROM now()))::bigint'
+# The stores check (2): the newest migration file of this checkout, the probe
+# for the schemas, the policy count and the ledger's newest name. The chunk
+# count is CHUNK_COUNT_SQL of common.sh. COLLATE "C": the ledger's names sort as
+# bytes, as the script sorts the files.
+readonly MIGRATIONS_DIR="${KIND_DIR}/../../src/meridian/platform/migrations"
+readonly STORES_READY_SQL="SELECT to_regclass('public.meridian_migrations') IS NOT NULL AND to_regclass('policy.policies') IS NOT NULL AND to_regclass('knowledge.chunks') IS NOT NULL"
+readonly POLICY_COUNT_SQL='SELECT count(*) FROM policy.policies'
+readonly LEDGER_NEWEST_SQL='SELECT name FROM public.meridian_migrations ORDER BY name COLLATE "C" DESC LIMIT 1'
 # The connection the network-policy check tries from the Claims API's pod: the
 # Model Gateway's Service, which only the Agent Runtime, the knowledge tool server
 # and the ingestion Job may reach. The image has no curl, so Python opens it. The
@@ -321,7 +363,88 @@ check_edge() {
 }
 
 # ── 2. database ──────────────────────────────────────────────────────────────
-# One line per database: `app` (the platform's own) and `meridian` (the services').
+# platform_db_primary: the name of the database's primary pod and nothing else
+# on stdout; fails when there is none. Shared by the stores check below and the
+# sweep check's clock (7).
+platform_db_primary() {
+  local primary
+  primary="$(kctl -n meridian get pod \
+    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
+  [[ -n "${primary}" ]] || return 1
+  printf '%s' "${primary}"
+}
+
+# meridian_query PRIMARY SQL: the answer of `psql -tA` in the `meridian` database
+# of that pod. Every SQL passed is a constant of this script.
+meridian_query() {
+  kctl -n meridian exec "$1" -c postgres -- psql -d meridian -tAc "$2" 2>/dev/null
+}
+
+# store_count PRIMARY SQL: the count the query gives; fails unless the answer is
+# a whole number.
+store_count() {
+  local answer
+  answer="$(meridian_query "$1" "$2")" || return 1
+  answer="$(clean_lines "${answer}")"
+  [[ "${answer}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${answer}"
+}
+
+# newest_migration: the name of the newest migration file of this checkout, by
+# name as bytes; fails when there is none.
+newest_migration() {
+  local file names=()
+  for file in "${MIGRATIONS_DIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
+    if [[ -e "${file}" ]]; then
+      names+=("${file##*/}")
+    fi
+  done
+  ((${#names[@]} > 0)) || return 1
+  printf '%s\n' "${names[@]}" | LC_ALL=C sort | tail -n 1
+}
+
+# check_stores PRIMARY: the three lines of the stores, or one SKIP before the
+# schemas exist. Prints counts and a file name; no row's content.
+check_stores() {
+  local primary=$1 ready policies chunks ledger tree
+  if ! ready="$(meridian_query "${primary}" "${STORES_READY_SQL}")"; then
+    fail "database: could not read the meridian database in ${primary} to look for its stores"
+    return
+  fi
+  if [[ "$(clean_lines "${ready}")" != t ]]; then
+    skip "database: the meridian database holds no migrated schemas yet (make deploy), so its stores are not read"
+    return
+  fi
+  if ! policies="$(store_count "${primary}" "${POLICY_COUNT_SQL}")"; then
+    fail "database: the policy store's count could not be read (policy.policies in ${primary})"
+  elif ((10#${policies} > 0)); then
+    pass "database: the policy store holds ${policies} policies (policy.policies)"
+  else
+    fail "database: the policy store holds no policies (policy.policies): the seed Job wrote none (make deploy)"
+  fi
+  if ! chunks="$(store_count "${primary}" "${CHUNK_COUNT_SQL}")"; then
+    fail "database: the knowledge store's count could not be read (knowledge.chunks in ${primary})"
+  elif ((10#${chunks} > 0)); then
+    pass "database: the knowledge store holds ${chunks} chunks (knowledge.chunks)"
+  else
+    fail "database: the knowledge store holds no chunks (knowledge.chunks): the ingestion Job stored none (make deploy)"
+  fi
+  if ! tree="$(newest_migration)"; then
+    fail "database: no migration file under src/meridian/platform/migrations, so the ledger cannot be compared with this checkout"
+  elif ! ledger="$(meridian_query "${primary}" "${LEDGER_NEWEST_SQL}")"; then
+    fail "database: the migrations ledger could not be read (public.meridian_migrations in ${primary})"
+  elif [[ -z "$(clean_lines "${ledger}")" ]]; then
+    fail "database: the migrations ledger is empty (public.meridian_migrations): the migration Job applied nothing"
+  elif [[ "$(clean_lines "${ledger}")" == "${tree}" ]]; then
+    pass "database: the migrations ledger's newest file is ${tree}, the newest of this checkout"
+  else
+    fail "database: the migrations ledger's newest file is $(clean_lines "${ledger}"), this checkout's is ${tree}: the cluster was deployed from another checkout (make deploy from this one)"
+  fi
+}
+
+# One line per database: `app` (the platform's own) and `meridian` (the services'),
+# then the stores of `meridian` (check_stores) with the primary found here.
 check_database() {
   local primary database version
   primary="$(kctl -n meridian get pod \
@@ -342,6 +465,7 @@ check_database() {
       fail "database: extension vector is not installed in ${primary}, database ${database}"
     fi
   done
+  check_stores "${primary}"
 }
 
 # ── 3. tools ─────────────────────────────────────────────────────────────────
@@ -858,12 +982,41 @@ check_adjuster_pages() {
 }
 
 # ── 7. sweep ─────────────────────────────────────────────────────────────────
-# Only timestamps the API server set are compared (the CronJob's creation and
-# lastScheduleTime, a Job's completionTime, creation and conditions): this
-# laptop's clock is not the node's (see deploy.sh), so there is no "now". The
-# newest of those timestamps is a lower bound of the server's now.
+# The API server's timestamps (the CronJob's creation and lastScheduleTime, a
+# Job's completionTime and conditions) are compared with each other and with
+# "now", which is the database's clock (server_epoch): the CronJob has none of
+# its own, and this laptop's is not the node's (see deploy.sh).
 #
-# sweep_verdict CRONJOB_JSON JOBS_JSON: one line, fields separated by "|":
+# server_epoch: the database's now() as whole seconds since the epoch, nothing
+# else on stdout; fails when the primary or the answer cannot be read.
+server_epoch() {
+  local primary answer
+  primary="$(platform_db_primary)" || return 1
+  answer="$(meridian_query "${primary}" "${SWEEP_CLOCK_SQL}")" || return 1
+  answer="$(clean_lines "${answer}")"
+  [[ "${answer}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${answer}"
+}
+
+# sweep_period CRONJOB_JSON: the schedule's period in seconds when its
+# .spec.schedule is "*/N * * * *" with N from 1 to 59, else
+# SWEEP_PERIOD_SECONDS.
+sweep_period() {
+  local schedule minutes
+  schedule="$(jq -r '.spec.schedule // ""' <<<"$1")"
+  if [[ "${schedule}" =~ ^\*/([0-9]{1,2})\ \*\ \*\ \*\ \*$ ]]; then
+    minutes=$((10#${BASH_REMATCH[1]}))
+    if ((minutes >= 1 && minutes <= 59)); then
+      printf '%s' "$((minutes * 60))"
+      return
+    fi
+  fi
+  printf '%s' "${SWEEP_PERIOD_SECONDS}"
+}
+
+# sweep_verdict CRONJOB_JSON JOBS_JSON NOW PERIOD: one line, fields separated by
+# "|". NOW is the database's clock in epoch seconds, PERIOD the schedule's in
+# seconds; a run is overdue after SWEEP_STALE_PERIODS of them.
 #   succeeded|JOB|FINISHED_AT          the newest finished Job of the CronJob
 #   failed|JOB|FINISHED_AT|REASON      (scheduled or made by hand with
 #                                      `kubectl create job --from=cronjob/...`,
@@ -871,15 +1024,21 @@ check_adjuster_pages() {
 #   stale|SCHEDULED_AT|FINISHED_AT     last scheduled more than three periods
 #                                      after that Job finished, nothing running:
 #                                      the schedule makes no finished runs
-#   never|SECONDS                      never scheduled, and a timestamp the API
-#                                      holds is more than three periods after
-#                                      the CronJob's creation
-#   unscheduled|SECONDS|CREATED_AT     never scheduled, no proof it is overdue
+#   stopped|JOB|FINISHED_AT|SECONDS    the newest finished Job succeeded more
+#                                      than three periods before NOW, nothing
+#                                      running: the schedule stopped
+#   young|SECONDS|JOB|FINISHED_AT      the same, but the CronJob was created
+#                                      less than one period before NOW: that Job
+#                                      is an earlier CronJob's, not overdue
+#   never|SECONDS                      never scheduled, and the CronJob was
+#                                      created more than three periods before NOW
+#   unscheduled|SECONDS|CREATED_AT     never scheduled, not yet overdue
 #   running                            no Job has finished; one is running
 #   none|SCHEDULED_AT                  no Job has finished, none is running
 sweep_verdict() {
   jq -nr --arg cronjob "${SWEEP_CRONJOB}" --argjson cj "$1" --argjson jobs "$2" \
-    --argjson tolerance "$((SWEEP_PERIOD_SECONDS * SWEEP_STALE_PERIODS))" '
+    --argjson now "$3" --argjson period "$4" \
+    --argjson tolerance "$(($4 * SWEEP_STALE_PERIODS))" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     ($cj.status.lastScheduleTime // null) as $scheduled
     | (($cj.status.active // []) | length) as $active
@@ -890,10 +1049,7 @@ sweep_verdict() {
         | {name: $job.metadata.name, type: $done.type, reason: ($done.reason // ""),
            at: ((if $done.type == "Complete" then ($job.status.completionTime // $done.lastTransitionTime) else $done.lastTransitionTime end) // "")}]
     | (sort_by([.at, .name]) | last) as $newest
-    | ([$cj.metadata.creationTimestamp, $scheduled,
-        ($jobs.items[] | .metadata.creationTimestamp, .status.startTime, .status.completionTime, (.status.conditions[]? | .lastTransitionTime))]
-       | map(select(. != null and . != "") | epoch) | max) as $latest
-    | ($latest - ($cj.metadata.creationTimestamp | epoch)) as $age
+    | ($now - ($cj.metadata.creationTimestamp | epoch)) as $age
     | if $scheduled == null and $age > $tolerance then "never|\($age)"
       elif $newest == null then
         if $active > 0 then "running"
@@ -901,15 +1057,61 @@ sweep_verdict() {
         else "none|\($scheduled)" end
       elif $scheduled != null and $active == 0 and (($scheduled | epoch) - ($newest.at | epoch)) > $tolerance then
         "stale|\($scheduled)|\($newest.at)"
+      elif $newest.type == "Complete" and $active == 0 and ($now - ($newest.at | epoch)) > $tolerance then
+        if $age < $period then "young|\($age)|\($newest.name)|\($newest.at)"
+        else "stopped|\($newest.name)|\($newest.at)|\($now - ($newest.at | epoch))" end
       elif $newest.type == "Complete" then "succeeded|\($newest.name)|\($newest.at)"
       else "failed|\($newest.name)|\($newest.at)|\($newest.reason)" end
   '
 }
 
+# report_sweep VERDICT PERIOD: the line for a verdict of sweep_verdict, whose
+# fields were cleaned of anything that is not printable ASCII.
+report_sweep() {
+  local kind first second third bound=$(($2 * SWEEP_STALE_PERIODS))
+  IFS='|' read -r kind first second third <<<"$1"
+  first="$(clean_lines "${first}")"
+  second="$(clean_lines "${second}")"
+  third="$(clean_lines "${third}")"
+  case "${kind}" in
+    succeeded)
+      pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}"
+      ;;
+    failed)
+      fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, failed at ${second} (${third:-no reason given}); kubectl -n meridian describe job/${first} shows why, and kubectl -n meridian logs job/${first} what its pod printed, if a pod started"
+      ;;
+    stale)
+      fail "sweep: the schedule is not producing finished runs: cronjob/${SWEEP_CRONJOB} was last scheduled at ${first}, more than ${bound} s after its newest finished Job finished at ${second}, and no Job is running"
+      ;;
+    stopped)
+      fail "sweep: the schedule stopped: the newest finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, succeeded at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed, and no Job is running"
+      ;;
+    young)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} was deployed ${first} s ago by the database's clock, less than one period (${2} s); its newest finished Job, ${second}, finished at ${third}, which is an earlier CronJob's, so it is not judged yet"
+      ;;
+    never)
+      fail "sweep: cronjob/${SWEEP_CRONJOB} has never been scheduled, although it was created ${first} s ago by the database's clock (more than three periods, ${bound} s): the schedule is not producing runs"
+      ;;
+    unscheduled)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} has not been scheduled yet (created ${second}, ${first} s ago by the database's clock), within the ${bound} s it allows"
+      ;;
+    running)
+      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet; the first one is running"
+      ;;
+    none)
+      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (last scheduled at ${first})"
+      ;;
+    *)
+      fail "sweep: unexpected verdict from the timestamps"
+      ;;
+  esac
+}
+
 # Same skip rule as the tool check: only when no Meridian Deployment exists. Only
-# reads; the Jobs of the whole namespace are listed and filtered by owner.
+# reads (kubectl get, and one SELECT of the database's clock); the Jobs of the
+# whole namespace are listed and filtered by owner.
 check_sweep() {
-  local found cronjob jobs verdict kind first second third
+  local found cronjob jobs verdict now period
   if ! found="$(deployed_services)"; then
     fail "sweep: could not look for the Meridian deployments (kubectl's error is above)"
     return
@@ -927,47 +1129,23 @@ check_sweep() {
     return
   fi
   if [[ "$(jq -r '.spec.suspend // false' <<<"${cronjob}")" == true ]]; then
-    fail "sweep: cronjob/${SWEEP_CRONJOB} is suspended, so the sweep does not run"
+    skip "sweep: cronjob/${SWEEP_CRONJOB} is suspended (spec.suspend), so it makes no runs and none can be overdue"
     return
   fi
   if ! jobs="$(kctl -n meridian get job -o json)"; then
     fail "sweep: could not read the Jobs in meridian (kubectl's error is above)"
     return
   fi
-  if ! verdict="$(sweep_verdict "${cronjob}" "${jobs}")"; then
+  if ! now="$(server_epoch)"; then
+    fail "sweep: could not read the database's clock (now() in the primary pod of platform-db), so a schedule that stopped cannot be judged"
+    return
+  fi
+  period="$(sweep_period "${cronjob}")"
+  if ! verdict="$(sweep_verdict "${cronjob}" "${jobs}" "${now}" "${period}")"; then
     fail "sweep: could not read the CronJob's and the Jobs' timestamps and conditions"
     return
   fi
-  IFS='|' read -r kind first second third <<<"${verdict}"
-  first="$(clean_lines "${first}")"
-  second="$(clean_lines "${second}")"
-  third="$(clean_lines "${third}")"
-  case "${kind}" in
-    succeeded)
-      pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}"
-      ;;
-    failed)
-      fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, failed at ${second} (${third:-no reason given}); kubectl -n meridian describe job/${first} shows why, and kubectl -n meridian logs job/${first} what its pod printed, if a pod started"
-      ;;
-    stale)
-      fail "sweep: the schedule is not producing finished runs: cronjob/${SWEEP_CRONJOB} was last scheduled at ${first}, more than $((SWEEP_PERIOD_SECONDS * SWEEP_STALE_PERIODS)) s after its newest finished Job finished at ${second}, and no Job is running"
-      ;;
-    never)
-      fail "sweep: cronjob/${SWEEP_CRONJOB} has never been scheduled, although the API holds a timestamp ${first} s after its creation (more than three periods): the schedule is not producing runs"
-      ;;
-    unscheduled)
-      skip "sweep: cronjob/${SWEEP_CRONJOB} has not been scheduled yet (created ${second}); there is no server-side clock to say how long that has been, and the newest timestamp the API holds is ${first} s after its creation, within the $((SWEEP_PERIOD_SECONDS * SWEEP_STALE_PERIODS)) s it allows"
-      ;;
-    running)
-      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet; the first one is running"
-      ;;
-    none)
-      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (last scheduled at ${first})"
-      ;;
-    *)
-      fail "sweep: unexpected verdict from the timestamps"
-      ;;
-  esac
+  report_sweep "${verdict}" "${period}"
 }
 
 # ── 8. network policy ────────────────────────────────────────────────────────

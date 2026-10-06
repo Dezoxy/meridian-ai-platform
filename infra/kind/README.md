@@ -215,8 +215,21 @@ node image, Kubernetes components and the platform).
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
    and Envoy.
-2. **Database.** `pg_extension` lists `vector` in the `app` database and in
-   the `meridian` database.
+2. **Database.** Five lines. `pg_extension` lists `vector` in the `app`
+   database and in the `meridian` database. Then three lines for the stores of
+   the `meridian` database, read in the primary's pod: `policy.policies` holds
+   policies (the seed Job writes them), `knowledge.chunks` holds chunks (the
+   query is the one `make deploy` counts with, in `common.sh`), and the
+   migrations ledger's newest file (`public.meridian_migrations`) is the newest
+   file under `src/meridian/platform/migrations` of the checkout the script
+   runs from, so a cluster deployed from another checkout says so. The lines
+   print counts and a file name, never a row. One SKIP line stands in for them
+   while the database holds no migrated schemas (after `make up`, before
+   `make deploy`). A count above zero says the seed and the ingestion wrote
+   something, not what or how much, and not that the chunks are the running
+   image's (the ingestion Job of the image's tag, which `make deploy` keeps,
+   is that proof); the claims and runs tables are not read, because
+   `make demo` fills them.
 3. **Tools.** One call per tool server through the runtime's own client, run
    inside the Agent Runtime's pod (`python -m meridian.runtime.toolprobe`), so
    with the addresses the runtime itself was given. The call names a run that
@@ -252,20 +265,28 @@ node image, Kubernetes components and the platform).
    the same policy and carries the banner's second sentence, which says that
    every value entered must be fictional (T-04); the request is a GET and
    changes no claim. Before `make deploy` this check prints SKIP.
-7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, is
-   not suspended, and the last of its Jobs to finish, scheduled or made by
-   hand, succeeded; the line says when it finished. It fails when the CronJob
-   is missing or suspended, when the last finished Job failed (the line gives
-   its reason, and `describe` and `logs` commands: a Job that hit its deadline
-   or whose pod never started has no log), when the CronJob was last
-   scheduled more than 15 minutes (three periods) after that Job finished
-   with nothing running, and when it was never scheduled although the API
-   holds a timestamp more than 15 minutes after its creation. Before
-   `make deploy`, while no Job of it has finished yet and while a CronJob that
-   never ran is younger than that, this line prints SKIP. Only timestamps the
-   API server set are compared, never this laptop's clock, so a schedule that
-   stopped after a success keeps printing PASS with that success's finish
-   time: read the time against `date -u`.
+7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, and
+   the last of its Jobs to finish, scheduled or made by hand, succeeded; the
+   line says when it finished. It fails when the CronJob is missing, when the
+   last finished Job failed (the line gives its reason, and `describe` and
+   `logs` commands: a Job that hit its deadline or whose pod never started has
+   no log), when the CronJob was last scheduled more than 15 minutes (three
+   periods) after that Job finished with nothing running, when that Job
+   finished more than 15 minutes before now with nothing running (the
+   schedule stopped after a success; the line says how long ago and what the
+   bound is), when it was never scheduled although it was created more than
+   15 minutes ago, and when the clock below cannot be read. The period is read
+   from the CronJob's own `.spec.schedule` when that is `*/N * * * *`, else it
+   is the script's constant, five minutes. "Now" is the database's clock, the
+   primary's `now()`: the one the identity check already trusts for its audit
+   row, not this laptop's `date` (its clock is not the cluster's) and not the
+   controller manager's Lease (one more object to trust, for no gain). Before
+   `make deploy`, while no Job of it has finished yet, while a CronJob that
+   never ran is younger than 15 minutes, while the CronJob was deployed less
+   than one period ago (a Job of the CronJob it replaced is old, not overdue)
+   and while it is suspended (`.spec.suspend`: it makes no runs, so none is
+   overdue), this line prints SKIP. A PASS does not say the sweep did its
+   work, only that a Job finished.
 8. **Network policy.** One line, read-only. From inside the Claims API's pod
    a connection to the Model Gateway is tried, a path no rule allows, and it
    must be blocked: that proves the cluster's network plugin enforces the
@@ -796,8 +817,8 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 ```
 
 The by-hand Job counts as the sweep's last Job for `make smoke`. To stop the
-schedule, patch `suspend` to `true` on the CronJob; `make smoke` then fails
-until it is `false` again.
+schedule, patch `suspend` to `true` on the CronJob; `make smoke` then prints
+SKIP for the sweep until it is `false` again.
 
 ## The cost dashboard
 

@@ -157,8 +157,9 @@ applied to one. The session that owns the cluster checks, on `main`:
 6. Grafana serves **Meridian: platform health** (uid
    `meridian-platform-health`) and every panel shows data or, for the
    alert table, nothing.
-7. `make smoke` passes, 24 of 24 lines (S055 added three, for service
-   identity; S056 two more for it and three for the certificate policy).
+7. `make smoke` passes, 27 of 27 lines (S055 added three, for service
+   identity; S056 two more for it and three for the certificate policy; S062
+   three for the stores of the `meridian` database).
    It does not check the rules or the new dashboard; that is in the plan's
    backlog.
 

@@ -20,6 +20,10 @@ readonly KUBE_CONTEXT="kind-${CLUSTER_NAME}"
 # and loads it into the node, images.sh lists the tags no workload uses.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 readonly IMAGE_REPOSITORY=meridian
+# The query that counts the rows of the knowledge store: deploy.sh reads it to
+# decide whether to ingest, smoke.sh to check the store holds chunks. One copy.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+readonly CHUNK_COUNT_SQL='SELECT count(*) FROM knowledge.chunks'
 # Helm reads its repository list even when a chart is given with --repo, and
 # fails on a stale entry it finds there. An unreadable file means "no repos".
 export HELM_REPOSITORY_CONFIG=/dev/null
