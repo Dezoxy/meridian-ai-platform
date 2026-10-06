@@ -197,7 +197,9 @@ A change that violates one is wrong even if it works.
   costs money, leaves the machine, merges past failing checks or would
   change a cluster it cannot tell is the local one (heredoc bodies are
   ignored, so documentation that mentions a dangerous command is not
-  blocked for the mention); `check-py.sh`, `check-iac.sh`,
+  blocked for the mention; a command over 16384 bytes or 1000 parts asks
+  unread, and the secret-rotation runbook lists what it does not see);
+  `check-py.sh`, `check-iac.sh`,
   `check-docs.sh` and `check-boundary.sh` inject advisory findings after an
   edit. GateGuard, vendored from ECC under `.claude/hooks/node/` and
   `.claude/hooks/lib/`, denies the first edit of each file and destructive

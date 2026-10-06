@@ -16,6 +16,26 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null |
 # run, so the kubectl rule that lets a call through reads this copy.
 raw_cmd="$cmd"
 
+decide() { # $1=decision $2=reason
+  jq -nc --arg d "$1" --arg r "$2" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
+  exit 0
+}
+
+# A hook that runs past its timeout does not block the call: Claude Code lets
+# it continue through the normal permission flow. So a command too long to be
+# read inside the timeout (ten seconds, in .claude/settings.json) would pass
+# unread. This is the first thing the hook does with the command: a command
+# over guard_max_bytes asks, before the heredoc pass and before any pattern
+# runs. The rules below cost time in proportion to the length (some, to its
+# square); a 70 KB command once took 16 s with every core busy, and 16384
+# bytes scale that to about 3.7 s. Bytes, not characters: wc counts bytes and
+# the arithmetic trims the padding some wc print.
+guard_max_bytes=16384
+guard_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
+[ "$guard_bytes" -le "$guard_max_bytes" ] || \
+  decide ask "This command is too long for the guard to read (${guard_bytes} bytes, the limit is ${guard_max_bytes}): write it to a script with the Write tool and run the file."
+
 if command -v python3 >/dev/null 2>&1; then
   cmd="$(printf '%s' "$cmd" | python3 -c '
 import re, sys
@@ -60,6 +80,24 @@ print("\n".join(out))
 ' 2>/dev/null || printf '%s' "$cmd")"
 fi
 
+# The rules below read a command one segment at a time (split on newlines, ;,
+# &&, || and |, line continuations joined), and the time they take follows the
+# number of segments, not the bytes: 8192 one-word segments fill the byte bound
+# above and took 3 s of CPU on an idle machine, against 0.25 s for 1000. So the
+# segments are counted once, by the same split the loops use (one sed pass over
+# at most guard_max_bytes, cheap), before any loop runs, and a command with more
+# than guard_max_segments asks. The bound is the round number at which the
+# worst shape (one-word segments) stays under 0.5 s of CPU with margin
+# (1500 took 0.37 s, 2000 0.5 s); the largest of the repository's documented
+# command lines has 6 segments. Counted after the heredoc pass: a heredoc body
+# that is merely written to a file is not a segment, one fed to an interpreter
+# (or to kubectl apply) is, a line each.
+bs_nl=$'\\\n'
+guard_max_segments=1000
+guard_segments=$(( $(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g' | wc -l) ))
+[ "$guard_segments" -le "$guard_max_segments" ] || \
+  decide ask "This command has ${guard_segments} parts; the guard reads at most ${guard_max_segments}: write it to a script with the Write tool and run that."
+
 # hook_cmd is what the git hook-bypass rules read, and the Kubernetes Secret
 # and psql rules after them. A commit message or a pull
 # request body is prose: it may name --no-verify or core.hooksPath, and it may
@@ -82,7 +120,9 @@ fi
 # missed again, as before this pass existed.
 hook_cmd="$cmd"
 # shellcheck disable=SC2016  # the Python source below is meant to stay literal
-if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* ]] && command -v python3 >/dev/null 2>&1; then
+if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg_* \
+      || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* ]] \
+   && command -v python3 >/dev/null 2>&1; then
   hook_cmd="$(printf '%s' "$cmd" | python3 -c '
 import re, sys
 PROSE = r"((?<![\w-])-[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
@@ -114,12 +154,6 @@ sys.stdout.write(text)
 ' 2>/dev/null || printf '%s' "$cmd")"
 fi
 
-decide() { # $1=decision $2=reason
-  jq -nc --arg d "$1" --arg r "$2" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
-  exit 0
-}
-
 shopt -s nocasematch
 
 # ---- hard denies ----
@@ -133,14 +167,25 @@ shopt -s nocasematch
 # push, and `echo done && jq '.env' settings.json` prints no secret. Line
 # continuations are joined first, so `git push \<newline> --force` stays one
 # segment.
-bs_nl=$'\\\n'
+#
+# infra/kind/pins.env holds version pins and no secret, and its name ends in
+# .env: a segment that names that exact path (as is, after ./, or after an
+# absolute prefix) is read without it. Another .env in the same segment, and
+# a path that only ends in these words (xinfra/kind/pins.env, pins.env/..),
+# still deny. Meridian's rule: the base has no such file.
+sq="'"
+pins_env_re="(^|[[:space:]\"${sq}=])((/[^[:space:]\"${sq}]*/)?|\./)infra/kind/pins\.env([[:space:]\"${sq}]|\$)"
 while IFS= read -r seg; do
+  seg_env="$seg"
+  while [[ "$seg_env" =~ $pins_env_re ]]; do
+    seg_env="${seg_env/"${BASH_REMATCH[0]}"/${BASH_REMATCH[1]}${BASH_REMATCH[4]}}"
+  done
   [[ "$seg" =~ git[[:space:]]+push([[:space:]].*)?[[:space:]](--force|-[a-zA-Z]*f|[+]|--mirror|--prune) ]] && \
     decide deny "Destructive push (--force*, bundled -f, +refspec, --mirror/--prune) can rewrite shared refs. Run it yourself if you must."
   [[ "$seg" =~ (^|[[:space:]])(rm|mv|unlink|truncate)[[:space:]].*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) || \
      "$seg" =~ chmod[[:space:]]+[ugoa]*-[rwx]*x.*(\.git/hooks|\.githooks|\.husky)([/[:space:]]|$) ]] && \
     decide deny "Removing or disabling a git hook file bypasses it. Run it yourself if intended."
-  [[ "$seg" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config) ]] && \
+  [[ "$seg_env" =~ (^|[[:space:]/])(cat|less|bat|more|head|tail|echo|printf|xxd|base64|strings)[[:space:]].*(\.env($|[^.a-zA-Z])|\.tfvars($|[^.])|\.pem($|[^a-zA-Z])|id_rsa|id_ed25519|kubeconfig|\.kube/config) ]] && \
     decide deny "That would print secret material to the transcript (.env/tfvars/keys/kubeconfig)."
 done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 # Git hook bypasses. A repository's hooks are its guard rails (a pre-push
@@ -231,6 +276,63 @@ while IFS= read -r seg; do
 done < <(printf '%s\n' "${hook_cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 [[ -n "$k8s_secret_seen" && -n "$k8s_handed_seen" ]] && \
   decide deny "A get of Secrets, and a get that prints whatever a variable or xargs hands it, in one command: that can print Secret values to the transcript. Run it yourself."
+# Other ways to a Secret's value. The get rule above reads `kubectl get secret`;
+# these read what a pod mounts or holds in its environment, what the API prints
+# for a path that names Secrets, a kubeconfig's credentials, a service
+# account's token, and what a cloud's secret store hands back. They read
+# hook_cmd (a commit message that names one passes) with line continuations
+# joined, and the ones that look at a pod's command stop at a separator, a
+# newline included, so `kubectl exec x -- ls; env FOO=1 make` is not an env
+# print. Inside `sh -c "..."` a separator belongs to the pod's command, so
+# there the whole rest is read. Neutral rules, none names a Meridian path.
+eol=$'\n'
+joined="${hook_cmd//"$bs_nl"/ }"
+# What follows `exec ... --`: the pod's own command.
+exec_head="(^|[^[:alnum:]_-])exec[[:space:]]+[^;&|${eol}]*[[:space:]]--[[:space:]]+([^[:space:];&|\"${sq}]*/)?"
+exec_sh="(ba|da|z|k)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*[\"${sq}]?.*[[:space:];&|(\`\"${sq}]"
+# What ends a command: a separator, or a quote that closes a string (one that
+# is followed by the end or a separator, not the quote that opens an argument
+# of `env "PGOPTIONS=x" psql`).
+exec_end="([;&|)<>]|[\"${sq}][[:space:]]*(\$|[;&|)]))"
+exec_env_re="${exec_head}(printenv([[:space:]]|\$|${exec_end})|env([[:space:]]+(-[^[:space:]]*|[^[:space:]=;&|\"${sq}]+=[^[:space:];&|\"${sq}]*))*[[:space:]]*(\$|${exec_end}))"
+exec_sh_env_re="${exec_head}${exec_sh}(printenv([[:space:]]|\$|${exec_end})|env[[:space:]]*(\$|${exec_end}))"
+# The files a Secret or a token lives in: a path that holds one of these words.
+secret_path="(/var/run/secrets/|/run/secrets/|/etc/secrets|secret|token|credential|password|\.key|/proc/[^[:space:]]*/environ)"
+reader="(cat|head|tail|less|base64|xxd|strings)"
+exec_read_re="${exec_head}${reader}[[:space:]]+[^;&|${eol}]*${secret_path}"
+exec_sh_read_re="${exec_head}${exec_sh}${reader}[[:space:]]+[^;&|]*${secret_path}"
+exec_msg="That would print a pod's environment or a mounted Secret to the transcript. kubectl describe pod shows which Secrets it uses; run it yourself for a value."
+[[ "$joined" =~ $exec_env_re || "$joined" =~ $exec_sh_env_re ]] && decide deny "$exec_msg"
+[[ "$joined" =~ $exec_read_re || "$joined" =~ $exec_sh_read_re ]] && decide deny "$exec_msg"
+# A path under /secrets in the API prints Secret values without the word get
+# secret; so does a kubeconfig's raw view (client keys, tokens) and a minted
+# service account token.
+raw_secrets_re="(^|[^[:alnum:]_-])get[[:space:]]+[^;&|${eol}]*--raw[^;&|${eol}]*/secrets"
+config_view_re="(^|[^[:alnum:]_-])config[[:space:]]+([^;&|${eol}]*[[:space:]])?view[[:space:]]+([^;&|${eol}]*[[:space:]])?--(raw|flatten)([=[:space:]]|\$)"
+create_token_re="(^|[^[:alnum:]_-])create[[:space:]]+((-n|--namespace|--context|--kubeconfig)[=[:space:]]+[^[:space:]]+[[:space:]]+)*token([[:space:]]|\$)"
+cp_secret_re="(^|[^[:alnum:]_-])cp[[:space:]]+([^;&|${eol}]*[[:space:]])?[^[:space:]:]+:[^[:space:]]*${secret_path}"
+[[ "$joined" =~ $raw_secrets_re ]] && \
+  decide deny "That reads Secret values through the API to the transcript. -o name lists Secrets and kubectl describe secret shows keys and sizes; run it yourself for a value."
+[[ "$joined" =~ $config_view_re ]] && \
+  decide deny "kubectl config view --raw (and --flatten) prints the kubeconfig's keys and tokens to the transcript. Run it yourself."
+[[ "$joined" =~ $create_token_re ]] && \
+  decide deny "kubectl create token puts a service account token into the transcript. Run it yourself."
+[[ "$joined" =~ $cp_secret_re ]] && \
+  decide deny "kubectl cp out of a Secret mount or a token file copies secret material off the pod. Run it yourself."
+# A cloud's secret store, read for a value. `az keyvault secret show` is denied
+# below with the Key Vault rules; these are the same on the other stores.
+# aws ssm get-parameter returns a SecureString's ciphertext without
+# --with-decryption, so only the decrypting form is denied.
+cloud_cli="(^|[^[:alnum:]_.-])"
+az_secret_re="${cloud_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?containerapp[[:space:]]+([^;&|${eol}]*[[:space:]])?secret[[:space:]]+show([[:space:]]|\$)"
+az_secret_list_re="${cloud_cli}az[[:space:]]+([^;&|${eol}]*[[:space:]])?containerapp[[:space:]]+([^;&|${eol}]*[[:space:]])?secret[[:space:]]+list[[:space:]]+([^;&|${eol}]*[[:space:]])?--show-values([[:space:]=]|\$)"
+gcloud_secret_re="${cloud_cli}gcloud[[:space:]]+([^;&|${eol}]*[[:space:]])?secrets[[:space:]]+versions[[:space:]]+access([[:space:]]|\$)"
+aws_secret_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?secretsmanager[[:space:]]+get-secret-value([[:space:]]|\$)"
+aws_ssm_re="${cloud_cli}aws[[:space:]]+([^;&|${eol}]*[[:space:]])?ssm[[:space:]]+get-parameters?(-by-path)?[[:space:]]+([^;&|${eol}]*[[:space:]])?--with-decryption([[:space:]=]|\$)"
+if [[ "$joined" =~ $az_secret_re || "$joined" =~ $az_secret_list_re || "$joined" =~ $gcloud_secret_re \
+      || "$joined" =~ $aws_secret_re || "$joined" =~ $aws_ssm_re ]]; then
+  decide deny "A cloud secret store's value never enters the transcript or the command line. Run it yourself; list the names instead."
+fi
 [[ "$hook_cmd" =~ $commit_n_wrapped_re ]] && \
   decide deny "git commit -n skips the commit hooks. Fix what the hook reports, or run it yourself."
 # Environment switches are checked across the whole command, because
@@ -346,9 +448,26 @@ foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?
 # a shell wrapper after `--` may hold a separator; so any psql after the `--`
 # asks, a `which psql` and a local psql in a later command included. It
 # reads hook_cmd: a commit message that names the command passes.
-psql_exec_re="(^|[^[:alnum:]_-])exec[[:space:]].*[[:space:]]--[[:space:]](.*[[:space:]/\"';|&(])?psql([[:space:]\"';|&<>)]|\$)"
+#
+# The same goes for the dumps (pg_dump, pg_dumpall, pg_restore: a dump holds
+# every row, a restore writes them), and for the pod that `kubectl run` or
+# `kubectl debug` starts for the purpose: the command after its `--` is read
+# the same way. `kubectl cnpg psql` is the plugin's own way to the same
+# prompt. `docker exec <container> psql` is not read: the tests' own database
+# is reached that way, and the runbook lists it as not covered.
+psql_exec_re="(^|[^[:alnum:]_-])(exec|run|debug)[[:space:]].*[[:space:]]--[[:space:]](.*[[:space:]/\"';|&(])?(psql|pg_dump|pg_dumpall|pg_restore)([[:space:]\"';|&<>)]|\$)"
 [[ "$hook_cmd" =~ $psql_exec_re ]] && \
-  decide ask "psql through kubectl exec runs SQL inside the database pod, usually as its superuser; confirm the statement and the kube context."
+  decide ask "psql, pg_dump or pg_restore through kubectl exec, run or debug reaches the database as its superuser or dumps it; confirm the statement and the kube context."
+cnpg_psql_re="(^|[^[:alnum:]_.])cnpg[[:space:]]+([^;&|]*[[:space:]])?psql([[:space:]]|\$)"
+[[ "$hook_cmd" =~ $cnpg_psql_re ]] && \
+  decide ask "kubectl cnpg psql runs SQL in the database pod, usually as its superuser; confirm the statement and the kube context."
+# helm get manifest, values and all print a release's rendered manifests and
+# values, which can hold Secret data. They ask, they do not deny: reading a
+# release's values is routine (the rollback runbook does). A call inside a
+# script file is not a typed command and is not seen.
+helm_get_re="(^|[^[:alnum:]_.-])helm[[:space:]]+([^;&|]*[[:space:]])?get[[:space:]]+(manifest|values|all)([[:space:]]|\$)"
+[[ "$hook_cmd" =~ $helm_get_re ]] && \
+  decide ask "helm get manifest, values and all print a release's rendered manifests and values, which can hold Secret data; confirm that this release has none, or run it yourself."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
 # A mutating kubectl call asks, because the current kube context may not be the

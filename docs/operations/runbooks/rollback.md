@@ -119,7 +119,9 @@ A gateway pod that stops with calls in flight leaves their reservations
 objects, with the image tag they named; the image is still on the node.
 It runs no Job and touches no schema. It puts back that revision's
 network policies too, so read `helm get values meridian --revision <n>`
-first: a revision from before a policy existed removes it. No script
+first (the command guard asks before it, since a release's values can
+hold Secret data; confirm it): a revision from before a policy existed
+removes it. No script
 uses it and it has not been tried here, so prefer the path above; it is
 the owner's to run. It does not wait for the rollouts: check them with
 `kubectl rollout status`.

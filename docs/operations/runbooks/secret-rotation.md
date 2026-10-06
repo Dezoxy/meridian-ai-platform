@@ -218,11 +218,13 @@ a finding in an early commit is not fixed by a later one.
   Do not rely on the harness to stop it. Its hook denies a `get` of a
   Secret with any output format but `name` and `wide`, with a namespace
   flag in front or behind a shell function too, as every command on this
-  page is; it asks before `psql` through `kubectl exec` and before
-  `make grafana-password`. It reads only the command a session types: a
-  script's inside, a file a pod mounts and a pod's environment it does
-  not see, and a person's terminal never meets it. The rule is the
-  operator's to keep.
+  page is; it denies the other ways to a value (the list is in
+  [what the guard does not see](#what-the-command-guard-does-not-see));
+  it asks before `psql`, `pg_dump`, `pg_dumpall` or `pg_restore` through
+  `kubectl exec`, `kubectl run` or `kubectl debug`, before `kubectl cnpg
+  psql`, before `helm get manifest`, `helm get values` and `helm get
+  all`, and before `make grafana-password`. It reads only the command a
+  session types. The rule is the operator's to keep.
 - **Do not edit `password` without `uri`**, or the other way round. The
   services read `uri`; CloudNativePG reads `password`.
 - **Do not rotate while the database is down.** CloudNativePG cannot
@@ -231,6 +233,57 @@ a finding in an early commit is not fixed by a later one.
 - **Do not turn on key authentication** for Azure OpenAI to get past a
   refused identity. A key is a secret this platform is built not to
   hold (T-18).
+
+## What the command guard does not see
+
+The guard (`.claude/hooks/guard-bash.sh`) is a pattern on the command a
+session types, a guard for habits and not a boundary (T-87). This is what
+it does about secrets as of S075, and what it leaves.
+
+Denied, with a message that says what to do instead:
+
+- `kubectl exec … -- env` and `-- printenv`, also inside `sh -c "…"`;
+- `kubectl exec … -- cat` (also `head`, `tail`, `less`, `base64`, `xxd`,
+  `strings`) of a path under `/var/run/secrets/`, `/run/secrets/` or
+  `/etc/secrets`, of any path that holds `secret`, `token`,
+  `credential`, `password` or `.key`, and of `/proc/…/environ`;
+- `kubectl get --raw` of an API path that holds `/secrets`;
+- `kubectl config view --raw` and `--flatten`;
+- `kubectl create token`;
+- `kubectl cp` out of a pod path of the kinds above;
+- `az containerapp secret show` and `az containerapp secret list` with
+  `--show-values`, `gcloud secrets versions access`,
+  `aws secretsmanager get-secret-value` and `aws ssm get-parameter`,
+  `get-parameters` or `get-parameters-by-path` with `--with-decryption`.
+
+Asked: the database forms and `helm get manifest|values|all`, as above.
+Two bounds ask before any rule runs, because a hook that runs past its
+timeout does not block the call: a command over 16384 bytes, and one of
+more than 1000 parts (split on newlines, `;`, `&&`, `||` and `|`, the way
+the rules read it). The cost follows the parts: 8192 of them, 16384
+bytes, took 3 s of CPU with the machine idle. Write the script with the
+Write tool and run the file.
+
+Not seen:
+
+- A script's inside. `bash x.sh` is read as that line; the lines in the
+  file are not. `infra/kind/*.sh` run `kubectl exec … psql` and `kubectl
+  get --raw` that way, and so does anything a session writes and runs.
+- A pod's environment read by a program rather than by `env`: `kubectl
+  exec … -- python -c "import os; …"`, or an application's own debug
+  endpoint.
+- A mounted file read by anything but the readers listed: `grep`, `cp`
+  from inside the pod, `python`, `awk`.
+- `docker exec <container> psql` and `pg_dump`: the tests' own database
+  container is reached that way, so these pass. A container that holds
+  anything else is not covered.
+- A command put together by a shell variable, an alias or `eval`, a
+  tool's own API call, a browser (Grafana, a port-forward) and a
+  person's terminal.
+- Anything that is not typed as a command: a file the harness reads, a
+  tool call that is not Bash.
+- The cloud consoles, and the cloud CLI's other ways to a value than
+  the ones listed.
 
 ## Designed, not built
 

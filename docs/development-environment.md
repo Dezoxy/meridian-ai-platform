@@ -146,11 +146,21 @@ For the virtual machine both are recorded below.
   when it does (`CLAUDE.md`, hard rule 8). What still asks is what costs
   money, leaves the machine or cannot be made again from the repository:
   Azure, Terraform, a Helm uninstall, an image push, a release, and a `gh
-  pr merge --admin`, which merges past failing checks. A known limit,
-  older than this change: the hook has ten seconds, and with the machine
-  loaded (a load average near 70) a command that carries a 70 KB heredoc,
-  or one of 4,000 segments, takes it that long (1.3 s when idle). Write a
-  long script with the Write tool and run the file.
+  pr merge --admin`, which merges past failing checks. Since S075 it
+  also asks before `psql`, `pg_dump`, `pg_dumpall` or `pg_restore`
+  through `kubectl exec`, `run` or `debug`, before `kubectl cnpg psql`
+  and before `helm get manifest`, `values` or `all`, and it denies the
+  other ways to a Secret's value (the secret-rotation runbook lists
+  them, and what the guard does not see). A known limit, older than this
+  change: the hook has ten seconds, and with the machine loaded (a load
+  average near 70) a command that carries a 70 KB heredoc, or one of
+  4,000 segments, took it that long (1.3 s when idle), and Claude Code
+  does not block a call whose hook ran out of time. So two bounds ask
+  before any rule runs: a command over 16384 bytes, and one of more
+  than 1000 parts (split on newlines, `;`, `&&`, `||` and `|`; the cost
+  follows the parts, 3 s of CPU for 8192 of them with the machine idle,
+  0.25 s for 1000). A command of this repository's own has a handful.
+  Write a long script with the Write tool and run the file.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.
