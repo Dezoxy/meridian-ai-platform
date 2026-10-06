@@ -1274,4 +1274,184 @@
 {"expect":"none","command":"az containerapp secret list -n x -g y"}
 {"expect":"none","command":"az containerapp list --resource-group y --show-values-not"}
 {"expect":"none","command":"az containerapp show --name x --resource-group y"}
+{"expect":"deny","command":"cat > f <<END-OF-DATA\ntext\nEND-OF-DATA\ngit push --force"}
+{"expect":"deny","command":"cat > f <<EOF.txt\ntext\nEOF.txt\ngit push --force"}
+{"expect":"deny","command":"cat > f <<EOF-1\ntext\nEOF-1\ngit push --force"}
+{"expect":"deny","command":"cat > f <<EOF:\ntext\nEOF:\ngit push --force"}
+{"expect":"deny","command":"cat > f <<END+1\ntext\nEND+1\ngit push --force"}
+{"expect":"deny","command":"cat > f <<'END-OF-DATA'\ntext\nEND-OF-DATA\ngit push --force"}
+{"expect":"deny","command":"cat > f <<\"EOF.txt\"\ntext\nEOF.txt\ngit push --force"}
+{"expect":"deny","command":"cat > f <<EOF-x\ntext\nEOF\ngit push --force\nEOF-x"}
+{"expect":"deny","command":"cat <<END-OF-DATA\ngit push --force\nEND-OF-DATA"}
+{"expect":"none","command":"cat > f <<EOF_1\ngit push --force\nEOF_1"}
+{"expect":"none","command":"cat > f <<EOF; echo done\ngit push --force\nEOF"}
+{"expect":"none","command":"cat > f <<EOF>>g\ngit push --force\nEOF"}
+{"expect":"none","command":"cat <<EOF|wc -l\ngit push --force\nEOF"}
+{"expect":"none","command":"cat > f <<'END_OF_DATA' && echo done\ngit push --force\nEND_OF_DATA"}
+{"expect":"none","command":"x=$(cat <<EOF\ngit push --force\nEOF\n)"}
+{"expect":"none","command":"git commit -m \"$(cat <<'EOF'\nfix: x\n\nthe body names git push --force and --no-verify\nEOF\n)\""}
+{"expect":"deny","command":"git commit -m \"$(cat <<'EOF'\nfix: x\nEOF\n)\"\ngit push --force"}
+{"expect":"ask","command":"export GH_TOKEN=$(gh auth token)"}
+{"expect":"ask","command":"TOKEN=$(gcloud auth print-access-token)"}
+{"expect":"ask","command":"docker login -u AWS -p $(aws ecr get-login-password) host"}
+{"expect":"ask","command":"echo $(aws sts get-session-token)"}
+{"expect":"ask","command":"gh auth token;"}
+{"expect":"ask","command":"gh auth token|wc -c"}
+{"expect":"ask","command":"x=`gh auth token`"}
+{"expect":"ask","command":"echo \"$(gh auth token)\""}
+{"expect":"ask","command":"sh -c 'gh auth token'"}
+{"expect":"ask","command":"x=$(aws sts assume-role --role-arn x --role-session-name y)"}
+{"expect":"ask","command":"x=$(aws sts assume-role-with-web-identity)"}
+{"expect":"ask","command":"x=$(aws configure export-credentials)"}
+{"expect":"ask","command":"x=$(aws eks get-token)"}
+{"expect":"ask","command":"x=$(aws configure get aws_secret_access_key)"}
+{"expect":"ask","command":"x=$(gcloud auth application-default print-access-token)"}
+{"expect":"ask","command":"x=$(gcloud auth print-identity-token)"}
+{"expect":"ask","command":"x=$(az acr credential show -n x)"}
+{"expect":"ask","command":"x=$(az acr login -n x --expose-token)"}
+{"expect":"ask","command":"x=$(az storage account keys list -n x)"}
+{"expect":"ask","command":"x=$(az ad sp create-for-rbac -n x)"}
+{"expect":"ask","command":"x=$(crictl inspect abc)"}
+{"expect":"ask","command":"aws ecr get-authorization-token"}
+{"expect":"ask","command":"x=$(aws ecr get-authorization-token)"}
+{"expect":"ask","command":"aws sts get-federation-token --name x"}
+{"expect":"ask","command":"x=$(aws sts get-federation-token --name x)"}
+{"expect":"ask","command":"az ad sp credential reset --id x"}
+{"expect":"ask","command":"x=$(az ad sp credential reset --id x)"}
+{"expect":"ask","command":"gh auth status --show-token"}
+{"expect":"ask","command":"gh auth status -h github.com --show-token"}
+{"expect":"ask","command":"gh auth status -t"}
+{"expect":"ask","command":"x=$(gh auth status --show-token)"}
+{"expect":"none","command":"aws ecr describe-repositories"}
+{"expect":"none","command":"aws sts get-caller-identity"}
+{"expect":"none","command":"x=$(aws sts get-caller-identity)"}
+{"expect":"none","command":"gh auth status"}
+{"expect":"none","command":"gh auth status --hostname github.com"}
+{"expect":"none","command":"gh auth status -h github.com"}
+{"expect":"none","command":"az ad sp list --display-name x"}
+{"expect":"none","command":"az ad sp credential list --id x"}
+{"expect":"none","command":"gh auth login"}
+{"expect":"none","command":"echo gh auth tokens"}
+{"expect":"none","command":"aws ecr get-authorization-token --help"}
+{"expect":"none","command":"gh auth status --show-token --help"}
+{"expect":"none","command":"gh auth token --help"}
+{"expect":"none","command":"x=$(gh auth token --help)"}
+{"expect":"ask","command":"gh auth token; echo --help"}
+{"expect":"ask","command":"x=$(gh auth token); echo --help"}
+{"expect":"ask","command":"echo $(gh auth token) --help"}
+{"expect":"ask","command":"gh auth token -h github.com"}
+{"expect":"ask","command":"gh auth token --hostname github.com"}
+{"expect":"ask","command":"gh auth token -h"}
+{"expect":"ask","command":"gh auth token # --help"}
+{"expect":"ask","command":"gh auth token # -h"}
+{"expect":"none","command":"gh auth token --help # note"}
+{"expect":"deny","command":"aws secretsmanager get-secret-value --secret-id x --query 'a --help b'"}
+{"expect":"deny","command":"aws secretsmanager get-secret-value --secret-id \"foo -h bar\""}
+{"expect":"deny","command":"aws secretsmanager get-secret-value --secret-id x # --help"}
+{"expect":"deny","command":"aws secretsmanager get-secret-value --secret-id x # -h"}
+{"expect":"none","command":"aws secretsmanager get-secret-value --help # note"}
+{"expect":"none","command":"aws secretsmanager get-secret-value -h"}
+{"expect":"none","command":"helm get values rel -h"}
+{"expect":"ask","command":"helm get values rel -o 'yaml -h'"}
+{"expect":"ask","command":"helm get values rel # -h"}
+{"expect":"deny","command":"kubectl create token sa # --help"}
+{"expect":"none","command":"kubectl create token sa --help"}
+{"expect":"deny","command":"kubectl exec pod -- awk 1 /etc/meridian/tls/tls.key"}
+{"expect":"deny","command":"kubectl exec pod -- grep . /etc/meridian/tls/tls.key"}
+{"expect":"deny","command":"kubectl exec pod -- tar cf - /etc/meridian"}
+{"expect":"deny","command":"kubectl exec pod -- cat /etc/redis-acl/users.acl"}
+{"expect":"deny","command":"kubectl exec pod -- awk 1 /etc/redis-acl/users.acl"}
+{"expect":"deny","command":"kubectl exec pod -- grep . /etc/meridian/db-ca/ca.crt"}
+{"expect":"deny","command":"kubectl exec pod -- grep . /etc/meridian/telemetry-ca/ca.crt"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c \"grep . /etc/meridian/tls/tls.key\""}
+{"expect":"deny","command":"kubectl debug pod -it --image x -- cat /etc/redis-acl/users.acl"}
+{"expect":"none","command":"kubectl exec pod -- ls /etc/meridian/tls"}
+{"expect":"none","command":"kubectl exec pod -- ls -l /etc/redis-acl"}
+{"expect":"none","command":"kubectl exec pod -- stat /etc/meridian/tls/tls.key"}
+{"expect":"none","command":"kubectl exec pod -- test -r /etc/redis-acl/users.acl"}
+{"expect":"none","command":"kubectl exec pod -- sh -c \"ls /etc/redis-acl\""}
+{"expect":"none","command":"kubectl exec pod -- grep . /etc/hosts"}
+{"expect":"deny","command":"kubectl exec pod -- awk 1 /etc/secrets/db -- x"}
+{"expect":"deny","command":"kubectl exec pod -- ls -- /etc/secrets"}
+{"expect":"deny","command":"kubectl exec pod -- ls /etc/secrets -- awk 1 /etc/secrets/db"}
+{"expect":"none","command":"kubectl exec pod -- ls /etc/secrets -- x"}
+{"expect":"none","command":"kubectl exec pod -- ls -- x"}
+{"expect":"none","command":"kubectl exec pod -- awk 1 /etc/hosts -- /etc/hosts"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c 'sh -c \"env\"'"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c \"sh -c 'printenv'\""}
+{"expect":"deny","command":"kubectl exec pod -- bash -c 'bash -c \"env\"'"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c 'echo x; sh -c \"env\"'"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c 'sh -c env'"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c 'sh -c \"printenv DATABASE_URL\"'"}
+{"expect":"deny","command":"kubectl exec pod -- sh -c \"sh -c 'sh -c \\\"env\\\"'\""}
+{"expect":"none","command":"kubectl exec pod -- sh -c 'sh -c \"ls /tmp\"'"}
+{"expect":"none","command":"kubectl exec pod -- sh -c 'sh -c \"echo env\"'"}
+{"expect":"none","command":"kubectl exec pod -- sh -c 'sh -c \"printenv HOME\"'"}
+{"expect":"none","command":"kubectl exec pod -- sh -c \"ls 'a b'\""}
+{"expect":"none","command":"kubectl exec pod -- env \"A=x\" true"}
+{"expect":"deny","command":"kubectl get -l a=%26 --raw /api/v1/namespaces/ns/secre%74s"}
+{"expect":"deny","command":"kubectl get -l a=%3B --raw /api/v1/namespaces/ns/secre%74s"}
+{"expect":"deny","command":"kubectl get -l a=%3b --raw /api/v1/namespaces/ns/secre%74s"}
+{"expect":"deny","command":"kubectl get -l a=%7C --raw /api/v1/namespaces/ns/secre%74s"}
+{"expect":"deny","command":"kubectl get -l a=%0A --raw /api/v1/namespaces/ns/secre%74s"}
+{"expect":"deny","command":"kubectl get --raw /api/v1/namespaces/ns/secre%74s?a=%26b"}
+{"expect":"none","command":"kubectl get --raw /api/v1/namespaces/ns/pods?x=%26"}
+{"expect":"none","command":"kubectl get --raw /api/v1/namespaces/ns/pods?x=%0A"}
+{"expect":"deny","command":"\\cat .env"}
+{"expect":"deny","command":"echo ok; \\cat id_rsa"}
+{"expect":"deny","command":"true \\\\\ncat .env"}
+{"expect":"deny","command":"true \\\\\\\\\ncat .env"}
+{"expect":"deny","command":"true \\\\\\\n\\cat .env"}
+{"expect":"none","command":"\\cat notes.txt"}
+{"expect":"none","command":"concat .env"}
+{"expect":"none","command":"mycat .env"}
+{"expect":"ask","command":"gmake gateway-upkeep ARGS=credit"}
+{"expect":"ask","command":"gnumake gateway-upkeep ARGS=credit"}
+{"expect":"ask","command":"env ARGS=credit infra/kind/upkeep.sh"}
+{"expect":"ask","command":"time ARGS=credit infra/kind/upkeep.sh"}
+{"expect":"ask","command":"bash -c 'ARGS=credit infra/kind/upkeep.sh'"}
+{"expect":"ask","command":"ARGS=credit bash -x upkeep.sh"}
+{"expect":"ask","command":"( ARGS=credit ./upkeep.sh)"}
+{"expect":"ask","command":"x=$(ARGS=credit infra/kind/upkeep.sh)"}
+{"expect":"ask","command":"source infra/kind/upkeep.sh"}
+{"expect":"ask","command":"bash -x infra/kind/upkeep.sh"}
+{"expect":"ask","command":"make gateway-upkeep ARGS=\"expire --before 2026-01 --reason r $CONFIRM\""}
+{"expect":"ask","command":"make gateway-upkeep ARGS='expire --before 2026-01 --conf$(EMPTY)irm'"}
+{"expect":"ask","command":"ARGS=\"expire --before 2026-01 `echo x`\" make gateway-upkeep"}
+{"expect":"ask","command":"ARGS=\"expire --before 2026-01 $X\" infra/kind/upkeep.sh"}
+{"expect":"none","command":"gmake gateway-upkeep ARGS=reservations"}
+{"expect":"none","command":"env ARGS=reservations infra/kind/upkeep.sh"}
+{"expect":"none","command":"time ARGS=reservations infra/kind/upkeep.sh"}
+{"expect":"none","command":"bash -c 'ARGS=reservations infra/kind/upkeep.sh'"}
+{"expect":"none","command":"ARGS=reservations bash -x upkeep.sh"}
+{"expect":"none","command":"( ARGS=\"expire --before 2026-01\" ./upkeep.sh)"}
+{"expect":"none","command":"ARGS=reservations make gateway-upkeep"}
+{"expect":"none","command":"make gateway-upkeep ARGS=reservations 2>&1 | grep $USER"}
+{"expect":"none","command":"cat infra/kind/upkeep.sh"}
+{"expect":"none","command":"bash -n infra/kind/upkeep.sh"}
+{"expect":"none","command":"shellcheck infra/kind/upkeep.sh"}
+{"expect":"none","command":"grep \"upkeep.sh\" Makefile"}
+{"expect":"none","command":"git diff -- infra/kind/upkeep.sh"}
+{"expect":"none","command":"git log -- 'infra/kind/upkeep.sh'"}
+{"expect":"none","command":"sed -n 1,20p infra/kind/upkeep.sh"}
+{"expect":"none","command":"TAKE_CLUSTER=1 make down"}
+{"expect":"none","command":"TAKE_CLUSTER=1 make deploy"}
+{"expect":"none","command":"CLUSTER_HOLDER=x make up"}
+{"expect":"none","command":"make cluster-holder"}
+{"expect":"ask","command":"sudo ARGS=credit infra/kind/upkeep.sh"}
+{"expect":"ask","command":"nohup ARGS=credit infra/kind/upkeep.sh &"}
+{"expect":"ask","command":"bash -lc 'ARGS=credit infra/kind/upkeep.sh'"}
+{"expect":"none","command":"bash -lc 'ARGS=reservations infra/kind/upkeep.sh'"}
+{"expect":"none","command":"echo upkeep.sh is a script"}
+{"expect":"none","command":"git commit -m \"gmake gateway-upkeep ARGS=credit\""}
+{"expect":"none","command":"gh auth refresh -h github.com"}
+{"expect":"none","command":"kubectl exec pod -- sh -c 'echo \"hello env\"'"}
+{"expect":"none","command":"kubectl exec pod -- sh -c 'sh -c \"env X=1 ls\"'"}
+{"expect":"none","command":"kubectl exec pod -- sh -c \"ls -- /etc/hosts\""}
+{"expect":"none","command":"cat <<EOF-1\nhello\nEOF-1"}
+{"expect":"none","command":"k() { kubectl -n meridian \"$@\"; }\nk exec deploy/rate-store -- redis-cli --tls --cacert /etc/meridian/tls/ca.crt --cert /etc/meridian/tls/tls.crt --key /etc/meridian/tls/tls.key -h 127.0.0.1 -p 6379 --user probe --pass '' --no-auth-warning ping"}
+{"expect":"none","command":"kubectl exec deploy/rate-store -- timeout 2 redis-cli --cacert /etc/meridian/tls/ca.crt ping"}
+{"expect":"deny","command":"kubectl exec deploy/rate-store -- sh -c \"redis-cli ping; cat /etc/redis-acl/users.acl\""}
+{"expect":"deny","command":"kubectl exec deploy/rate-store -- awk 1 /etc/redis-acl/users.acl"}
+{"expect":"deny","command":"kubectl exec deploy/rate-store -- redis-cli ping -- awk 1 /etc/redis-acl/users.acl"}
 {"expect":"ask","command":"gh issue list\nmerge --admin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

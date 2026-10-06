@@ -152,10 +152,11 @@ For the virtual machine both are recorded below.
   and before `helm get manifest`, `values`, `hooks` or `all`, before
   `make gateway-upkeep` when it can change a tenant's budget ledger
   (`credit`, `close`, `expire --confirm`), and before the commands that
-  print a credential; it denies the other ways to a Secret's value (the
-  secret-rotation runbook lists them, and what the guard does not see:
-  it is a guard for habits, and the session can edit the guard's own
-  files, which is the owner's to decide). A known limit, older than this
+  print a credential, also inside `$(…)`, backticks and quotes; it denies
+  the other ways to a Secret's value (the secret-rotation runbook lists
+  them, and what the guard does not see: it is a guard for habits, and
+  the session can edit the guard's own files, which is the owner's to
+  decide). A known limit, older than this
   change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of
   4,000 segments, took it that long (1.3 s when idle), and Claude Code
@@ -166,8 +167,8 @@ For the virtual machine both are recorded below.
   bounds ask before the rules run: a command typed over 16384 bytes, a
   command whose text is over 8192 bytes once heredoc bodies written to a
   file are dropped (the slowest single match at 8192 bytes took 0.23 to
-  0.27 s on 2026-10-06, on the shapes that cost most, at a load average
-  of 3 and of 18; it was about 1 s at 16384, which is why the bound is
+  0.42 s on 2026-10-06, on the shapes that cost most, at a load average
+  of 3 to 18; it was about 1 s at 16384, which is why the bound is
   8192), and one of more than 1000 parts (split on newlines, `;`, `&&`,
   `||` and `|`; the cost follows the parts, 3 s of CPU for 8192 of them,
   0.25 s for 1000). The pass that drops heredoc bodies runs before the

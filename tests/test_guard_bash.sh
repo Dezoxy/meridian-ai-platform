@@ -399,4 +399,26 @@ else
   echo "FAIL 16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, not under 0.5"
   fail=1
 fi
+
+# A tool's name repeated thousands of times before a verb it reads: the cut of
+# the text after a long match (a glob over a literal of that length) took 17 to
+# 24 s of CPU at 8 KB, past the hook's timeout; a match over 256 bytes now counts
+# as not helped and the time is a few tenths. Bytes of arguments up to the cap
+# still let --help through.
+ask_for "a printer with 100 bytes of flags before its verb passes with --help" none \
+  "aws $(for _ in $(seq 50); do printf 'x '; done)sts get-session-token --help"
+ask_for "a printer with 300 bytes of flags before its verb asks, --help or not" ask \
+  "aws $(for _ in $(seq 150); do printf 'x '; done)sts get-session-token --help"
+ask_for "a reader of a secret store with 300 bytes of flags before its verb is denied" deny \
+  "aws $(for _ in $(seq 150); do printf 'x '; done)secretsmanager get-secret-value --help"
+jq -nc --arg c "$(for _ in $(seq 2000); do printf 'aws '; done)secretsmanager get-secret-value" \
+  '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 2) }'; then
+  echo "ok   2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, under 2"
+else
+  echo "FAIL 2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, not under 2"
+  fail=1
+fi
 exit "$fail"

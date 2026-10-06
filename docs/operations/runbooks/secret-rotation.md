@@ -261,7 +261,8 @@ Denied, with a message that says what to do instead:
   such as `timeout 5`, `sudo` or `sudo -u name`, and a line break or
   backtick after it), `set` and `export -p`, also inside `sh -c "…"`,
   `bash -c` and `ash -c` (with options before `-c`, such as `-o pipefail`
-  or `--norc`; after `do`, `then`, `else`, `if` or `!`; in a nested `sh -c`;
+  or `--norc`; after `do`, `then`, `else`, `if` or `!`; in a nested `sh -c`,
+  with quotes of its own, such as `sh -c 'sh -c "env"'`, to three levels;
   and past an escaped quote or a quote that touches the next word);
   `kubectl debug` is read the same way as `exec`. `env VAR=x some-command`
   passes. `printenv NAME` of one name passes unless the name looks secret
@@ -272,12 +273,21 @@ Denied, with a message that says what to do instead:
   name outside that list that holds a secret passes: the rule reads the
   name, not the value;
 - `kubectl exec … -- <anything>` (and `debug`) that names a mounted
-  Secret path, `/var/run/secrets`, `/run/secrets`, `/etc/secrets` or
+  Secret path, `/var/run/secrets`, `/run/secrets`, `/etc/secrets`, the
+  chart's own mounts (`/etc/meridian`, which holds the services' TLS key
+  and the database CA, and `/etc/redis-acl`, the rate store's ACL file) or
   `/proc/…/environ`, whatever the reader: `grep`, `tar`, `find -exec`,
   `awk`, `sed`, `od`, `dd`, `python` and the rest. It passes when the
   command is `ls`, `stat` or `test` (also as the whole body of an
-  `sh -c`), which show a name and no content; `ls /proc/…/environ` is
-  still denied, by the rule for that file;
+  `sh -c`), which show a name and no content, or `redis-cli` (the rate
+  store runbook's probe names its certificate and key files and prints
+  none of them); `ls /proc/…/environ` is
+  still denied, by the rule for that file. Every ` -- ` of the call is
+  tried, so `ls -- /etc/secrets` is denied for its second one (a false
+  deny, left), and `/etc/meridian` also covers a ConfigMap of public
+  certificates (`/etc/meridian/telemetry-ca`), another one. A test reads
+  the chart's templates and fails when a Secret is mounted at a path the
+  hook does not name, so the next mount is not forgotten;
 - `kubectl exec … -- cat` (also `head`, `tail`, `less`, `base64`, `xxd`,
   `strings`) of a path under those directories, of a path with `secret`,
   `credential`, `password`, `.key`, or `token` or `creds` as a word
@@ -288,9 +298,11 @@ Denied, with a message that says what to do instead:
   comes from kubectl's documented behaviour; nobody ran it against a
   cluster for this rule;
 - `kubectl get --raw` of an API path that holds `/secrets`, the flag and
-  the path in either order, also with a percent-encoded `secrets` (a path
-  with more than 20 distinct escapes asks instead, since the guard
-  decodes 20 and does not read the rest);
+  the path in either order, also with a percent-encoded `secrets` and with
+  an encoded separator before it (`%26`, `%3B`, `%7C` and `%0A` are read as
+  plain characters, not as the end of the command); a path with more than
+  20 distinct escapes asks instead, since the guard decodes 20 and does
+  not read the rest;
 - `kubectl config view --raw` and `--flatten`;
 - `kubectl create token`, with other flags between the two words
   (`create secret generic token` is another command and passes);
@@ -303,27 +315,40 @@ Denied, with a message that says what to do instead:
   `get-parameter-history` with `--with-decryption`;
 - reading a kind node's `admin.conf` or any `kubeconfig` with `cat`,
   `less`, `bat`, `more`, `head`, `tail`, `echo`, `printf`, `xxd`,
-  `base64` or `strings`, also inside a quoted `sh -c` body, in brackets or
-  after an equals sign.
+  `base64` or `strings`, also inside a quoted `sh -c` body, in brackets,
+  after an equals sign or behind a backslash (`\cat .env`, which skips an
+  alias).
 
-A secret reader followed by `--help` or `-h` in the same command part
+A secret reader followed by `--help` as an argument in the same command part
 passes (`aws secretsmanager get-secret-value --help`, `helm get values
--h`, `kubectl create token --help`): that prints usage, no value. A second
-read in the same line, without `--help`, still counts.
+--help`, `kubectl create token --help`): that prints usage, no value. So
+does `-h`, except for `gh`, where `-h` is `--hostname` and `gh auth token -h
+github.com` prints the token (it asks). A `--help` or `-h` inside a quoted
+value (`--query 'a --help b'`) or after a `#` is no argument and does not
+count, and neither does one in a later command of the line. A second read
+in the same line, without `--help`, still counts.
 
 Asked: the database forms, `helm get manifest|values|hooks|all` (options
 may stand before the verb; a verb on the next line is not part of it, a
 backslash-newline continuation is) and `kind get kubeconfig` (write it to
 a file with `kind export kubeconfig` instead). Also:
 
-- `make gateway-upkeep` and `infra/kind/upkeep.sh`, when the command can
-  change a tenant's budget ledger: `credit`, `close` and `expire` with
-  `--confirm`. It fails closed: it asks unless the command shows exactly
-  one `ARGS=` whose first word is `reservations` or `expire`, with no
-  `--confirm`. So `reservations` and a dry-run `expire` pass; a variable,
-  any other word, an `ARGS` set by `export` in an earlier part of the line
-  and a bare `make gateway-upkeep` ask. Two such commands in one line are
-  judged one by one, and a deny in another part of the line still wins;
+- `make gateway-upkeep` (also `gmake` and `gnumake`) and
+  `infra/kind/upkeep.sh`, when the command can change a tenant's budget
+  ledger: `credit`, `close` and `expire` with `--confirm`. The script is
+  read when it is run: at the start of a command or a bracket, after
+  `VAR=value` words, `env`, `time`, `nohup`, `exec`, `command` or `sudo`,
+  after an interpreter with flags (`bash -x upkeep.sh`; `bash -n` only
+  checks the syntax and passes), after `source` or `.`, and in the body of
+  a `bash -c '…'`. `cat`, `shellcheck`, `git diff` and `grep` of its name
+  pass. It fails closed: it asks unless the command shows exactly one
+  `ARGS=` whose first word is `reservations` or `expire`, with no
+  `--confirm`. So `reservations` and a dry-run `expire` pass; a variable, an
+  `ARGS` that holds a `$` or a backtick anywhere (make and the shell expand
+  it, even in single quotes, into a word the guard cannot read), any other
+  word, an `ARGS` set by `export` in an earlier part of the line and a bare
+  `make gateway-upkeep` ask. Two such commands in one line are judged one by
+  one, and a deny in another part of the line still wins;
 - `kubectl run` with `--overrides` or `--env`: the pod holds none of the
   workload's own environment, but these can put a Secret into it
   (`secretKeyRef`, `envFrom`, a volume), and its command prints it.
@@ -331,17 +356,23 @@ a file with `kind export kubeconfig` instead). Also:
   run`;
 - the other printers of a credential, as `az account get-access-token`
   already asks: `kubectl create --raw …/serviceaccounts/NAME/token`;
-  `aws sts get-session-token`, `aws sts assume-role` (also with SAML or
-  web identity), `aws configure export-credentials`, `aws configure get`
-  of `aws_secret_access_key` or `aws_session_token`, `aws ecr
-  get-login-password` and `aws eks get-token`; `gh auth token`; `gcloud
-  auth print-access-token` and `print-identity-token`, also under
+  `aws sts get-session-token`, `get-federation-token` and `assume-role`
+  (also with SAML or web identity), `aws configure export-credentials`,
+  `aws configure get` of `aws_secret_access_key` or `aws_session_token`,
+  `aws ecr get-login-password` and `get-authorization-token`, and `aws eks
+  get-token`; `gh auth token` and `gh auth status --show-token` (or `-t`);
+  `gcloud auth print-access-token` and `print-identity-token`, also under
   `application-default`; `az acr credential show`, `az acr login
-  --expose-token`, `az storage account keys list` and `az ad sp
-  create-for-rbac`; `crictl inspect` (a container's environment, reached
-  on a kind node with `docker exec`); and a path of the Secrets API
-  (`/api/v1/secrets`, `/api/v1/namespaces/NAME/secrets`) anywhere in a
-  command, which is how `kubectl proxy` with `curl` would read them.
+  --expose-token`, `az storage account keys list`, `az ad sp
+  create-for-rbac` and `az ad sp credential reset`; `crictl inspect` (a
+  container's environment, reached on a kind node with `docker exec`); and
+  a path of the Secrets API (`/api/v1/secrets`,
+  `/api/v1/namespaces/NAME/secrets`) anywhere in a command, which is how
+  `kubectl proxy` with `curl` would read them. A printer asks wherever it
+  stands: after a blank, at the end, before a separator, a closing bracket,
+  a quote or a backtick, so `$(gh auth token)`, `` `gh auth token` ``,
+  `TOKEN=$(gcloud auth print-access-token)` and `gh auth token|wc -c` ask as
+  `gh auth token` does.
   `helm get notes` and `helm get metadata` pass: metadata prints the
   chart's name, version and status, and notes prints `NOTES.txt`, which
   this chart does not have (a chart that renders a value into its notes
@@ -353,9 +384,15 @@ that for every shape (the first ones were measured on one-word segments
 only); the watchdog does. The hook arms it before it reads the command: at
 5 of the 10 seconds it answers `ask`, saying that the guard ran out of time
 and the command was NOT read. It cannot interrupt a command in flight, one
-regex match: the slowest single match at 8192 bytes took 0.23 to 0.27 s
-on 2026-10-06 at a load average of 3 and of 18 (about 1 s at 16384), and
-1.5 s at the slowdown a loaded machine showed, inside the margin of 5 s.
+regex match: the slowest single match at 8192 bytes took 0.23 to 0.42 s
+on 2026-10-06 (0.23 to 0.27 s at a load average of 3 and of 18, 0.25 to
+0.42 s in the third review; about 1 s at 16384), and 1.5 s at the slowdown
+a loaded machine showed, inside the margin of 5 s. One shape was found
+slower in the last round and closed there: a tool's name repeated about
+2000 times before a verb it reads (`aws aws … secretsmanager
+get-secret-value`) took 17 to 24 s of CPU, in the cut of the text after the
+match, not in the match; a match over 256 bytes now counts as not helped
+and the same inputs take 0.4 s or less.
 A test holds the two numbers together by reading the timeout from
 `.claude/settings.json`. A command the watchdog cannot answer in time
 still goes through unread: that is a way through the guard that no rule
@@ -384,10 +421,25 @@ Not seen:
   the Write tool and then `bash`. `bash x.sh` is read as that line, and
   the lines in the file are not: `infra/kind/*.sh` run `kubectl exec …
   psql` and `kubectl get --raw` that way. A heredoc body that only writes
-  a file is not read; one fed to a shell, an interpreter, `. file` or
-  `source` is, and so is the body of an unquoted delimiter that holds
-  `$(` or a backtick. `$(cat <<'EOF' … )` used as a command is the one
-  that passes though its body runs.
+  a file is not read; one fed to a shell, to an interpreter the hook
+  lists (`bash`, `sh`, `ksh`, `python`, `node`, `perl`, `ruby`, `awk`,
+  `ssh`, `env`, `xargs`, `eval` and a few more), to `. file` or `source`
+  is, and so is the body of an unquoted delimiter that holds `$(` or a
+  backtick. A heredoc whose delimiter the hook cannot read whole
+  (`END-OF-DATA`, `EOF.txt`) opens no body, so what follows it is read.
+  `$(cat <<'EOF' … )` used as a command passes though its body runs.
+- A heredoc piped into an interpreter that is not on that list: `gawk`,
+  `nodejs` and `deno` are three of them (`bun`, `Rscript` and `make -f -`
+  are others). Its body is taken for a file write and dropped.
+- Quote kinds mixed in the head of a heredoc: whether a `<<` is inside a
+  quote is decided by counting quote characters before it, which is a
+  parity and not a parse. `cat '"' "<<EOF"` and `echo '"'; cat "<<EOF"`
+  fool it, and the body that follows is dropped as a file write.
+- A hook file overwritten by a redirect or a heredoc
+  (`cat <<'EOF' >.git/hooks/pre-commit`): `rm`, `mv`, `chmod` and
+  `truncate` of those paths are denied, writing one is not.
+- A secret-shaped variable whose name matches nothing in the list above
+  (`REDIS_PW`, `PW`, `LANGFUSE_SK`, `GITHUB_PAT`): `printenv NAME` passes.
 - An interpreter in the pod: `kubectl exec … -- python -c "import os;
   …"` of the environment, `awk` printing it, or an application's own
   debug endpoint. (A mounted path named in any exec is denied, as above;
