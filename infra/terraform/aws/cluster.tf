@@ -1,10 +1,23 @@
 # The two IAM roles EKS needs before the cluster and its nodes exist (ADR 6,
 # "What a Terraform module needs on AWS").
 
+# Every AWS-managed policy this module attaches is read by NAME and attached by
+# the ARN that comes back, never by a typed ARN: two AWS pages disagree on the
+# path of the EBS CSI policy's ARN (with and without service-role/), and a wrong
+# one fails the apply with the cluster and the database already billing. A wrong
+# name fails at plan, which is free. validate does not read a data source, so
+# it still needs no account.
+data "aws_iam_policy" "cluster" {
+  name = "AmazonEKSClusterPolicy"
+}
+
+# The cluster role's trust is sts:AssumeRole alone, as the EKS page "Amazon EKS
+# cluster IAM role" shows it. (sts:TagSession was here and had no reason: it is
+# for a principal that passes session tags, which the EKS service does not.)
 data "aws_iam_policy_document" "cluster_trust" {
   statement {
     effect  = "Allow"
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    actions = ["sts:AssumeRole"]
 
     principals {
       type        = "Service"
@@ -20,7 +33,7 @@ resource "aws_iam_role" "cluster" {
 
 resource "aws_iam_role_policy_attachment" "cluster" {
   role       = aws_iam_role.cluster.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  policy_arn = data.aws_iam_policy.cluster.arn
 }
 
 data "aws_iam_policy_document" "node_trust" {
@@ -43,21 +56,31 @@ resource "aws_iam_role" "node" {
 # AmazonEKSWorkerNodePolicy also carries the permission the Pod Identity Agent
 # needs on the node (eks-auth:AssumeRoleForPodIdentity); the ECR pull-only
 # policy lets the kubelet pull images, the built-in add-ons' included.
-resource "aws_iam_role_policy_attachment" "node" {
-  for_each = toset([
-    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
-    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+locals {
+  node_policy_names = toset([
+    "AmazonEKSWorkerNodePolicy",
+    "AmazonEC2ContainerRegistryPullOnly",
     # Not in the ADR's list. The VPC CNI add-on runs as the node's identity
     # unless it is given a role of its own through IRSA or Pod Identity, and
     # then needs this policy on the node role (the EKS page "Amazon EKS node
     # IAM role"); without it the nodes stay NotReady, which validate cannot
     # see. AWS recommends a separate role for the CNI instead: production
     # does that and takes this line out.
-    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+    "AmazonEKS_CNI_Policy",
   ])
+}
+
+data "aws_iam_policy" "node" {
+  for_each = local.node_policy_names
+
+  name = each.value
+}
+
+resource "aws_iam_role_policy_attachment" "node" {
+  for_each = local.node_policy_names
 
   role       = aws_iam_role.node.name
-  policy_arn = each.value
+  policy_arn = data.aws_iam_policy.node[each.value].arn
 }
 
 resource "aws_eks_cluster" "main" {
@@ -174,7 +197,23 @@ resource "aws_eks_addon" "pod_identity_agent" {
 # the IRSA way, which needs an OIDC provider and is not used here. The service
 # account name, ebs-csi-controller-sa, is from that AWS page ("Amazon EBS CSI
 # driver").
-data "aws_iam_policy_document" "pod_identity_trust" {
+# The role trusts the Pod Identity service for ONE service account of ONE
+# cluster. The EKS page "Create IAM role with trust policy required by EKS Pod
+# Identity" says: "You can use these tags in the condition keys in the trust
+# policy to restrict which service accounts, namespaces, and clusters can use
+# this role", and shows the condition "aws:RequestTag/kubernetes-namespace" and
+# "aws:RequestTag/kubernetes-service-account" under "StringEquals". The page's
+# example has no cluster condition, but the list of session tags it points to
+# ("Grant Pods access to AWS resources based on tags") includes
+# eks-cluster-name, so the condition for the cluster's own name is added too:
+# without it any cluster of the account that has a service account of that name
+# in that namespace could take the role. It names the cluster by the literal
+# name, not by an attribute of the cluster, so the role does not depend on the
+# cluster. Whether Pod Identity then hands a pod these credentials is something
+# only an apply shows: the second half checks it (README, the checklist).
+# sts:TagSession stays: the page lists it with sts:AssumeRole in the trust
+# policy, because Pod Identity assumes the role with session tags.
+data "aws_iam_policy_document" "ebs_csi_trust" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRole", "sts:TagSession"]
@@ -183,25 +222,51 @@ data "aws_iam_policy_document" "pod_identity_trust" {
       type        = "Service"
       identifiers = ["pods.eks.amazonaws.com"]
     }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/kubernetes-namespace"
+      values   = ["kube-system"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/kubernetes-service-account"
+      values   = ["ebs-csi-controller-sa"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/eks-cluster-name"
+      values   = [local.name]
+    }
   }
 }
 
 resource "aws_iam_role" "ebs_csi" {
   name               = "${local.name}-ebs-csi"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  assume_role_policy = data.aws_iam_policy_document.ebs_csi_trust.json
 }
 
 # The V2 managed policy is the one the AWS page names today; its predecessor,
-# AmazonEBSCSIDriverPolicy, is being migrated away from.
+# AmazonEBSCSIDriverPolicy, is being migrated away from. Read by name (see the
+# top of this file).
+data "aws_iam_policy" "ebs_csi" {
+  name = "AmazonEBSCSIDriverPolicyV2"
+}
+
 resource "aws_iam_role_policy_attachment" "ebs_csi" {
   role       = aws_iam_role.ebs_csi.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicyV2"
+  policy_arn = data.aws_iam_policy.ebs_csi.arn
 }
 
 # Volumes for the chart's PersistentVolumeClaims (the database on kind is
-# replaced by RDS here, but Loki, Tempo and the rest still want volumes). A
-# volume the driver makes is not in this state: the removal order in the
-# README (Kubernetes objects first) is what keeps one from being left behind.
+# replaced by RDS here, but Loki, Tempo and the rest still want volumes). The
+# module installs nothing into the cluster, so no volume exists through it:
+# one appears only if something installed later asks the driver for it, and
+# that volume is not in this state. When that happens, delete the claims before
+# the removal (the README's removal section says in what order), or the volume
+# is left behind and bills.
 resource "aws_eks_addon" "ebs_csi" {
   cluster_name = aws_eks_cluster.main.name
   addon_name   = "aws-ebs-csi-driver"

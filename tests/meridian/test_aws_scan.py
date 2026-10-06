@@ -15,8 +15,19 @@ import pytest
 from servicesupport import REPO_ROOT
 
 MAKEFILE = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-TRIVYIGNORE = REPO_ROOT / "infra" / "terraform" / "aws" / ".trivyignore"
+MODULE = REPO_ROOT / "infra" / "terraform" / "aws"
+TRIVYIGNORE = MODULE / ".trivyignore"
 TARGETS = ("aws-validate", "aws-scan", "aws-plan", "aws-apply", "aws-destroy")
+# The shortest reason that can say what a check says, why it holds here and what
+# production does: a handful of words.
+REASON_WORDS = 5
+# An entry is a check ID and nothing else: Trivy takes `AWS-0107 exp:2099-12-31`
+# as an expiry, `AWS-0107 file.tf` as the ID alone (for every file), and the
+# older `AVD-AWS-0107` spelling as the same check.
+ENTRY = re.compile(r"AWS-\d{4}")
+# What Trivy reads from the directory it scans, besides .trivyignore, and what
+# can switch a finding off or change the severity and the exit code.
+SCANNER_FILES = ("trivy*.yaml", "trivy*.yml", ".trivy*.yaml", ".trivy*.yml")
 
 
 def recipe(target: str) -> str:
@@ -29,10 +40,30 @@ def help_line(target: str) -> str:
     return line
 
 
+def comment_above(assignment: str) -> str:
+    """The comment lines directly above a Makefile variable's assignment."""
+    lines = MAKEFILE.splitlines()
+    (index,) = [i for i, line in enumerate(lines) if line.startswith(assignment)]
+    found = []
+    for line in reversed(lines[:index]):
+        if not line.startswith("#"):
+            break
+        found.append(line)
+    return "\n".join(reversed(found))
+
+
+def entries(text: str) -> list[str]:
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
 def entries_without_a_reason(text: str) -> list[str]:
-    """The entries of an ignore file whose line above is not a comment that
-    says something. A blank line between a comment and an entry breaks the
-    link, and so does another entry."""
+    """The entries of an ignore file whose line above is not a comment of at
+    least a handful of words. A blank line between a comment and an entry
+    breaks the link, and so does another entry."""
     lines = text.splitlines()
     found = []
     for number, line in enumerate(lines):
@@ -40,9 +71,29 @@ def entries_without_a_reason(text: str) -> list[str]:
         if not entry or entry.startswith("#"):
             continue
         above = lines[number - 1].strip() if number else ""
-        if not above.startswith("#") or not above.lstrip("#").strip():
+        reason = above.lstrip("#").strip() if above.startswith("#") else ""
+        if len(reason.split()) < REASON_WORDS:
             found.append(entry)
     return found
+
+
+def malformed_entries(text: str) -> list[str]:
+    """The entries that are not exactly a check ID of the AWS- and four digits
+    shape: nothing after it (no expiry, no file name), not the older AVD-
+    spelling, no wildcard."""
+    return [entry for entry in entries(text) if not ENTRY.fullmatch(entry)]
+
+
+def inline_ignores(text: str) -> list[str]:
+    """Lines of a Terraform file that carry a Trivy ignore comment, which
+    silences a check for one resource where no reason is asked for."""
+    return [line for line in text.splitlines() if "trivy:ignore" in line.lower()]
+
+
+def scanner_files(directory) -> list[str]:
+    return sorted(
+        path.name for pattern in SCANNER_FILES for path in directory.glob(pattern)
+    )
 
 
 # ── the targets ──────────────────────────────────────────────────────────────
@@ -175,7 +226,7 @@ def test_a_comment_across_a_blank_line_is_not_a_reason() -> None:
 
 
 def test_an_entry_under_another_entry_needs_its_own_reason() -> None:
-    text = "# Public subnets.\nAWS-0164\nAWS-0040\n"
+    text = "# Public subnets: a test lives an hour.\nAWS-0164\nAWS-0040\n"
 
     assert entries_without_a_reason(text) == ["AWS-0040"]
 
@@ -184,3 +235,173 @@ def test_a_comment_with_no_words_is_not_a_reason() -> None:
     text = "#\nAWS-0164\n# \nAWS-0040\n"
 
     assert entries_without_a_reason(text) == ["AWS-0164", "AWS-0040"]
+
+
+def test_a_reason_of_fewer_than_a_handful_of_words_is_not_a_reason() -> None:
+    for text in (
+        "# x\nAWS-0164\n",
+        "# Public subnets.\nAWS-0164\n",
+        "# a b c d\nAWS-0164\n",
+    ):
+        assert entries_without_a_reason(text) == ["AWS-0164"], text
+
+
+def test_a_reason_of_a_handful_of_words_is_a_reason() -> None:
+    text = "# one two three four five\nAWS-0164\n"
+
+    assert entries_without_a_reason(text) == []
+
+
+def test_the_committed_entries_are_each_exactly_a_check_id() -> None:
+    text = TRIVYIGNORE.read_text(encoding="utf-8")
+
+    assert entries(text) != []  # the reader found them
+    assert malformed_entries(text) == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "AWS-0107 exp:2099-12-31",  # an expiry: the entry is dropped when it passes
+        "AWS-0107 cluster.tf",  # trailing text: Trivy keeps the ID, for every file
+        "AWS-0107 # a reason on the line itself",
+        "AVD-AWS-0107",  # the older spelling of the same check
+        "avd-aws-0107",
+        "aws-0107",
+        "AWS-107",
+        "AWS-01070",
+        "AWS-*",
+        "*",
+        "AWS-0107,AWS-0040",
+    ],
+)
+def test_an_entry_that_is_not_exactly_a_check_id_is_found(entry: str) -> None:
+    assert malformed_entries(f"# a reason of enough words here\n{entry}\n") == [entry]
+
+
+def test_an_entry_that_is_exactly_a_check_id_is_not_found() -> None:
+    assert malformed_entries("# a reason of enough words here\nAWS-0107\n") == []
+
+
+# ── what could silence the scan some other way ──────────────────────────────
+
+
+def test_no_terraform_file_of_the_module_carries_an_inline_ignore_comment() -> None:
+    found = {
+        path.name: inline_ignores(path.read_text(encoding="utf-8"))
+        for path in sorted(MODULE.glob("*.tf"))
+    }
+
+    assert {name: lines for name, lines in found.items() if lines} == {}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "  #trivy:ignore:AWS-0107",
+        "# trivy:ignore:AWS-0107:exp:2099-12-31",
+        "  //trivy:ignore:aws-0107",
+        "#TRIVY:IGNORE:AWS-0107",
+    ],
+)
+def test_an_inline_ignore_comment_is_found(line: str) -> None:
+    assert inline_ignores(f'resource "x" "y" {{\n{line}\n}}\n') == [line]
+
+
+def test_an_ordinary_comment_is_not_an_inline_ignore() -> None:
+    assert inline_ignores("# Trivy accepts this, see .trivyignore\n") == []
+
+
+def test_the_module_directory_holds_no_scanner_configuration_or_yaml_ignore_file() -> (
+    None
+):
+    assert scanner_files(MODULE) == []
+
+
+@pytest.mark.parametrize(
+    "name", ["trivy.yaml", "trivy.yml", ".trivyignore.yaml", ".trivyignore.yml"]
+)
+def test_a_scanner_configuration_or_yaml_ignore_file_is_found(
+    tmp_path, name: str
+) -> None:
+    (tmp_path / name).write_text("scan:\n  skip-files: []\n")
+
+    assert scanner_files(tmp_path) == [name]
+
+
+def test_the_clusters_and_subnets_are_held_to_what_the_ignore_reasons_describe() -> (
+    None
+):
+    """AWS-0039 and AWS-0040 are about a cluster, AWS-0164 about a subnet, and an
+    entry in .trivyignore applies to every resource of the directory: a second
+    cluster or subnet block would be accepted unseen."""
+    text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(MODULE.glob("*.tf"))
+    )
+
+    clusters = len(re.findall(r'^resource "aws_eks_cluster" ', text, re.MULTILINE))
+    subnets = len(re.findall(r'^resource "aws_subnet" ', text, re.MULTILINE))
+
+    reasons = (
+        "infra/terraform/aws/.trivyignore accepts AWS-0039 and AWS-0040 for the one "
+        "cluster and AWS-0164 for the one subnet block (two zones, by count) its "
+        "reasons describe, and an ignore entry applies to every resource of the "
+        "directory: a new cluster or subnet is accepted silently. Decide again in "
+        "that file, in the reasons, before changing this number."
+    )
+    assert clusters == 1, reasons
+    assert subnets == 1, reasons
+
+
+def test_the_cluster_reasons_say_what_eks_encrypts_and_who_needs_the_endpoint() -> None:
+    text = TRIVYIGNORE.read_text(encoding="utf-8")
+
+    (secrets,) = re.findall(r"^# (AWS-0039 .+)$", text, re.MULTILINE)
+    (endpoint,) = re.findall(r"^# (AWS-0040 .+)$", text, re.MULTILINE)
+    # EKS 1.28 and later encrypts Kubernetes API data by default, with an
+    # AWS-owned key; the check asks for a customer-managed one.
+    assert "AWS-owned" in secrets
+    assert "customer-managed" in secrets
+    # Terraform needs only the EKS API; the Kubernetes API's public endpoint is
+    # for kubectl (and anything else that talks to the cluster itself).
+    assert "kubectl" in endpoint
+    assert "EKS API" in endpoint
+
+
+def test_the_scan_leaves_out_the_plan_the_record_and_the_state_files() -> None:
+    text = recipe("aws-scan")
+
+    (skipped,) = re.findall(r"--skip-files (\S+)", text)
+    assert set(skipped.split(",")) == {
+        "aws.tfplan",
+        "aws.tfplan.meta",
+        "terraform.tfstate",
+        "terraform.tfstate.backup",
+    }
+
+
+@pytest.mark.parametrize("variable", ["PROMTOOL_IMAGE", "TRIVY_IMAGE"])
+def test_the_comment_on_a_pinned_image_says_a_command_line_can_override_it(
+    variable: str,
+) -> None:
+    comment = " ".join(comment_above(f"{variable} ").replace("#", " ").split())
+
+    assert "does not override" not in comment
+    assert "command line" in comment
+    assert "can override it" in comment.lower()
+
+
+def test_the_removal_target_does_not_claim_more_than_the_terminal_check_does() -> None:
+    line = help_line("aws-destroy")
+
+    assert "no session can run" not in line
+    assert "cannot run" not in line
+    assert "not a session that makes itself a terminal" in line
+
+
+def test_the_readme_says_what_stops_a_session_and_what_does_not() -> None:
+    readme = (MODULE / "README.md").read_text(encoding="utf-8")
+
+    assert "## What stops a session, and what does not" in readme
+    assert "a session cannot run it" not in readme
+    assert "which a session's shell does not have" not in readme

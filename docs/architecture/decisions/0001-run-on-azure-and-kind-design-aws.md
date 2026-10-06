@@ -57,10 +57,10 @@ Amended on 2026-10-06 (S036): a Terraform module for AWS now exists under
 run without an account) and not applied, and nothing about it runs in CI. The
 owner's word of that day: "add the aws template too and we will test it in a
 real aws enviroment and you should go until azure step where we have to spend
-some money on it". That changes the sentence above: the module is no longer
-only validated, because the second half of S036 applies it once in the
-owner's AWS account, after the cost of an hour of it is stated and the owner
-says yes. Until that run the decision stands as written: Azure is the
+some money on it". That changes the sentence above: the module will be
+applied, not only validated, because the second half of S036 applies it once
+in the owner's AWS account, after the cost of an hour of it is stated and the
+owner says yes. Until that run the decision stands as written: Azure is the
 deployed cloud, AWS has no billing account (C-05) and no deployment on AWS
 is claimed.
 

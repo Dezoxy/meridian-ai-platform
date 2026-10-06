@@ -1,5 +1,5 @@
 variable "region" {
-  description = "AWS Region of everything in this module."
+  description = "AWS Region of the module's regional resources (IAM and Budgets are global services, see README.md)."
   type        = string
   default     = "eu-central-1"
 
@@ -9,18 +9,45 @@ variable "region" {
   }
 }
 
+# The one account this module may touch. The provider enforces it
+# (providers.tf: allowed_account_ids), so it holds for a terraform call that
+# does not go through aws.sh too. aws.sh exports it from the local file.
+# Sensitive: a plan prints neither the number nor a rejected value of it.
+variable "expected_account_id" {
+  description = "The twelve-digit AWS account number the provider must be signed in to; any other account is refused. No default."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.expected_account_id))
+    error_message = "expected_account_id must be a twelve-digit AWS account number."
+  }
+}
+
 # EKS API requests from the applying machine only. The nodes do not need this:
 # they reach the API server through the private endpoint (cluster.tf).
+# Sensitive: the address is the owner's, and Terraform prints a variable that is
+# not sensitive in every plan and apply.
 variable "api_access_cidr" {
   description = "The address that may reach the cluster's public API endpoint, as a /32 (for example 203.0.113.7/32). No default: a wrong or open value would expose the API server."
   type        = string
+  sensitive   = true
 
   validation {
     # cidrhost alone accepts an IPv6 prefix that ends in /32, which EKS refuses at
-    # apply; the pattern keeps to a dotted-quad IPv4 address, cidrhost rejects an
-    # octet above 255.
-    condition     = can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$", var.api_access_cidr)) && can(cidrhost(var.api_access_cidr, 0)) && var.api_access_cidr != "0.0.0.0/32"
-    error_message = "api_access_cidr must be one IPv4 address written as a /32, and not 0.0.0.0/32."
+    # apply; the first pattern keeps to a dotted-quad IPv4 address, cidrhost
+    # rejects an octet above 255. The second refuses the ranges that are never a
+    # machine's public address (0/8, 10/8, 100.64/10, 127/8, 169.254/16,
+    # 172.16/12, 192.168/16, and 224/4 and above): such a value would lock the
+    # owner out of kubectl. try() makes a value that is not an address fail this
+    # clause, not stop the plan with an error of Terraform's own.
+    condition = (
+      can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$", var.api_access_cidr)) &&
+      can(cidrhost(var.api_access_cidr, 0)) &&
+      var.api_access_cidr != "0.0.0.0/32" &&
+      !try(can(regex("^(0|10|127)\\.|^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|^169\\.254\\.|^172\\.(1[6-9]|2[0-9]|3[01])\\.|^192\\.168\\.|^(22[4-9]|2[3-5][0-9])\\.", var.api_access_cidr)), true)
+    )
+    error_message = "api_access_cidr must be one public IPv4 address written as a /32, and not 0.0.0.0/32 or a loopback, private, link-local, shared (100.64.0.0/10) or multicast address: the cluster's public endpoint would never see you as one, and you would lock yourself out."
   }
 }
 
@@ -43,14 +70,19 @@ variable "kubernetes_version" {
   }
 }
 
+# A closed list, the default and one step up: a cost ceiling. A stray TF_VAR_
+# or a variable file cannot ask for a machine that costs a hundred times as
+# much, and a budget only alerts, up to three times a day. Widen the list here,
+# in a committed change, when a test needs another type (an Arm type also needs
+# ami_type in cluster.tf).
 variable "node_instance_type" {
-  description = "EC2 instance type of the managed node group."
+  description = "EC2 instance type of the managed node group: t3.large or t3.xlarge."
   type        = string
   default     = "t3.large"
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]*[0-9][a-z0-9-]*\\.[a-z0-9]+$", var.node_instance_type))
-    error_message = "node_instance_type must look like an EC2 instance type, for example t3.large."
+    condition     = contains(["t3.large", "t3.xlarge"], var.node_instance_type)
+    error_message = "node_instance_type must be t3.large or t3.xlarge. The list is a cost ceiling: to allow another type, widen the list in the validation of this variable in infra/terraform/aws/variables.tf, in a committed change."
   }
 }
 
@@ -65,14 +97,15 @@ variable "node_count" {
   }
 }
 
+# A closed list for the same reason as node_instance_type.
 variable "database_instance_class" {
-  description = "RDS instance class of the PostgreSQL instance."
+  description = "RDS instance class of the PostgreSQL instance: db.t4g.small or db.t4g.medium."
   type        = string
   default     = "db.t4g.small"
 
   validation {
-    condition     = can(regex("^db\\.[a-z0-9-]+\\.[a-z0-9]+$", var.database_instance_class))
-    error_message = "database_instance_class must look like an RDS instance class, for example db.t4g.small."
+    condition     = contains(["db.t4g.small", "db.t4g.medium"], var.database_instance_class)
+    error_message = "database_instance_class must be db.t4g.small or db.t4g.medium. The list is a cost ceiling: to allow another class, widen the list in the validation of this variable in infra/terraform/aws/variables.tf, in a committed change."
   }
 }
 
@@ -124,10 +157,12 @@ variable "budget_monthly_limit_usd" {
 }
 
 # The address is the owner's and is never in the repository: pass it with
-# TF_VAR_budget_email or a git-ignored tfvars file.
+# TF_VAR_budget_email or a git-ignored tfvars file. Sensitive, so a plan prints
+# no personal data.
 variable "budget_email" {
   description = "E-mail address that receives the budget alerts. No default."
   type        = string
+  sensitive   = true
 
   validation {
     condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.budget_email))

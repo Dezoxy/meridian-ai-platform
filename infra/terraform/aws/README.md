@@ -22,6 +22,9 @@ installs nothing into the cluster: no Helm release, no Kubernetes provider, so
 no controller makes a load balancer or a volume that Terraform does not know.
 Running the Meridian chart on this cluster is not part of S036.
 
+"One Region" is true of what is regional. Two services are global, and their
+control-plane metadata is homed outside the Region (see "Global services").
+
 - **Network** (`network.tf`). One VPC (`aws_vpc.main`, `10.0.0.0/16`, DNS
   support and host names on) with two public subnets (`aws_subnet.public`) in
   the first two Availability Zones that need no opt-in, an internet gateway
@@ -39,28 +42,32 @@ Running the Meridian chart on this cluster is not part of S036.
   variable accepts only those four), 1.37 reached EKS five days earlier and
   its add-on defaults are unread, and 1.36 stays in standard support until
   2027-08-02. Two IAM roles come first, one for the cluster and one for the
-  nodes; the node role carries `AmazonEKSWorkerNodePolicy`,
-  `AmazonEC2ContainerRegistryPullOnly` and, not in the ADR's list,
-  `AmazonEKS_CNI_Policy`, because the VPC CNI runs as the node's identity
-  unless it has a role of its own (production gives it one and drops the
-  line). Authentication is by access entries alone: the creator is not made
-  administrator implicitly, and an access entry with the cluster-admin access
-  policy is written out for the applying principal (the role behind the
-  session when it is a role session), so who can reach the cluster is in the
-  module. The API endpoint has the private and the public access both on, and
-  the public side admits one address, a /32 given in the local file. Both are
-  needed: nodes in public subnets reach the API server through the public
-  endpoint when the private one is off, and would be refused if it admitted
-  the owner's address alone; a node group that never becomes ready is what
-  `validate` cannot show. Two add-ons: the Pod Identity Agent
-  (`eks-pod-identity-agent`, a DaemonSet that hands a pod the credentials of
-  the role its service account is associated with) and the EBS CSI driver
-  (`aws-ebs-csi-driver`). The driver gets its rights through Pod Identity, not
-  through an OIDC provider: the add-on's `pod_identity_association` block
-  names a role (`meridian-aws-test-ebs-csi`, trusted by
-  `pods.eks.amazonaws.com`, with the managed policy
-  `AmazonEBSCSIDriverPolicyV2`) and the service account
-  `ebs-csi-controller-sa`. That is the way the Terraform provider's
+  nodes. Every AWS-managed policy they carry is **read by name** with a data
+  source and attached by the ARN that comes back, never by a typed ARN: two
+  AWS pages disagree on the path of the EBS CSI policy's ARN, and a wrong one
+  would fail the apply with the cluster and the database already billing. A
+  wrong name fails at `make aws-plan`, which is free; `validate` does not read
+  a data source and still needs no account. The node role carries
+  `AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryPullOnly` and, not
+  in the ADR's list, `AmazonEKS_CNI_Policy`, because the VPC CNI runs as the
+  node's identity unless it has a role of its own (production gives it one and
+  drops the line). Authentication is by access entries alone: the creator is
+  not made administrator implicitly, and an access entry with the
+  cluster-admin access policy is written out for the applying principal (the
+  role behind the session when it is a role session), so who can reach the
+  cluster is in the module. The API endpoint has the private and the public
+  access both on, and the public side admits one address, a /32 given in the
+  local file. Both are needed: nodes in public subnets reach the API server
+  through the public endpoint when the private one is off, and would be
+  refused if it admitted the owner's address alone; a node group that never
+  becomes ready is what `validate` cannot show. Two add-ons: the Pod Identity
+  Agent (`eks-pod-identity-agent`, a DaemonSet that hands a pod the
+  credentials of the role its service account is associated with) and the EBS
+  CSI driver (`aws-ebs-csi-driver`). The driver gets its rights through Pod
+  Identity, not through an OIDC provider: the add-on's
+  `pod_identity_association` block names a role (`meridian-aws-test-ebs-csi`,
+  with the managed policy `AmazonEBSCSIDriverPolicyV2`) and the service
+  account `ebs-csi-controller-sa`. That is the way the Terraform provider's
   `aws_eks_addon` page documents; the AWS page for the driver describes the
   OIDC way. No control-plane logging and no KMS key: a log group would outlive
   the removal and bill, and a KMS key waits at least seven days to be removed.
@@ -104,6 +111,10 @@ Running the Meridian chart on this cluster is not part of S036.
   and the service account `model-gateway`, both variables. Nothing here
   creates the namespace or the service account. No service in the repository
   reads Secrets Manager yet: this is the identity path, not a use of it.
+- **Each Pod Identity role trusts one service account of one cluster.** The
+  EBS CSI role and the workload role each have a trust policy of their own,
+  and each carries three conditions on the session tags Pod Identity adds
+  (see "Who may assume the Pod Identity roles").
 - **Budget** (`budget.tf`). A monthly cost budget
   (`aws_budgets_budget.monthly`) of USD 25 by default (a variable, above 0 and
   at most 500; in USD because the provider's page does not settle whether
@@ -111,7 +122,9 @@ Running the Meridian chart on this cluster is not part of S036.
   to the address in the local file. Credits are not counted
   (`include_credit` is false), so the Free plan's credits do not hide the
   spend until they run out. An alert detects spend; it does not stop it, and
-  AWS updates a budget up to three times a day.
+  AWS updates a budget up to three times a day. The budget covers the whole
+  account, not only this module's resources, although it is named
+  `meridian-aws-test-monthly`.
 - **Region** (`variables.tf`). A variable, `eu-central-1` by default, that
   accepts only the Regions of EU member states ADR 6 names (hard rule 3: EU
   residency): `eu-central-1`, `eu-west-1`, `eu-west-3`, `eu-north-1`,
@@ -119,32 +132,62 @@ Running the Meridian chart on this cluster is not part of S036.
   the account first: `eu-south-1` (Milan) and `eu-south-2` (Spain), and the
   error text says so. A wrong guess there fails at apply, not at `validate`.
   London (`eu-west-2`) and Zurich (`eu-central-2`) are refused.
-- **State.** Local, a file in this directory that git ignores. A module that
-  is applied once and removed needs no bucket; a longer-lived environment
-  does (see below).
+- **The account.** The provider carries `allowed_account_ids` from the
+  variable `expected_account_id`, so Terraform itself refuses any other
+  account on a plan, an apply and a removal, whether or not the call went
+  through `aws.sh`. It is the one pin that holds for a `terraform` command
+  typed by hand.
+- **State.** Local, and not in this directory: the `backend "local" {}` block
+  has no path, and `aws.sh` gives one at init, a file in a directory under the
+  caller's home (see "State"). A module that is applied once and removed needs
+  no bucket; a longer-lived environment does (see below).
+
+### Global services
+
+Two things in this module are not in the Region. **IAM** is global: the roles
+and policies here (their names and the policy documents, which name the one
+secret's ARN) are homed in `us-east-1`, and the AWS General Reference lists
+`iam.amazonaws.com` as the endpoint for every Region. **Budgets** is global
+too: its endpoint is not in the Region (`budgets.us-east-1.api.aws`, the AWS
+General Reference page for Billing and Cost Management endpoints). What that
+holds: the budget's name, its limit, the account's cost data it is measured
+against, and the **owner's e-mail address**, which is personal data of the
+owner. No claim, policy or customer data is in either, because the module
+holds none and holds no model deployment (hard rule 3 is about personal data
+reaching a model deployment, and none exists here).
 
 ### Variables
 
-Eleven, each with a type and a description, and a validation where a wrong
-value costs money or breaks hard rule 3.
+Twelve, each with a type and a description, and a validation where a wrong
+value costs money, locks the owner out or breaks hard rule 3.
 
 | Variable | Default | Notes |
 |---|---|---|
 | `region` | `eu-central-1` | EU Regions only |
-| `api_access_cidr` | none | One IPv4 address as a /32, never `0.0.0.0/32`: the only source the public API endpoint admits |
-| `budget_email` | none | The owner's address; never in the repository |
+| `expected_account_id` | none | Twelve digits. Sensitive. The provider refuses any other account |
+| `api_access_cidr` | none | One public IPv4 address as a /32: never `0.0.0.0/32`, loopback, private (10/8, 172.16/12, 192.168/16), link-local, shared (100.64/10) or multicast, which would lock the owner out. Sensitive. The only source the public API endpoint admits |
+| `budget_email` | none | The owner's address; never in the repository. Sensitive |
 | `kubernetes_version` | `1.36` | Only versions in EKS standard support |
-| `node_instance_type` | `t3.large` | Must look like an EC2 type; an Arm type needs another AMI type |
+| `node_instance_type` | `t3.large` | `t3.large` or `t3.xlarge`: a closed list, a cost ceiling |
 | `node_count` | `2` | Whole number, 1 to 5 |
-| `database_instance_class` | `db.t4g.small` | |
+| `database_instance_class` | `db.t4g.small` | `db.t4g.small` or `db.t4g.medium`: a closed list, a cost ceiling |
 | `database_engine_version` | `17` | `17` or `17.<minor>` |
 | `workload_namespace` | `meridian` | |
 | `workload_service_account` | `model-gateway` | |
 | `budget_monthly_limit_usd` | `25` | Above 0, at most 500 |
 
-`api_access_cidr` and `budget_email` have no default: pass them through
-`TF_VAR_*` or a git-ignored tfvars file, never in the repository. `aws.sh`
-passes them from the local file below.
+The two instance lists exist so that a stray `TF_VAR_` or a variable file
+cannot ask for a machine that costs a hundred times as much: a budget only
+alerts, up to three times a day. The error text says the list is a cost
+ceiling and that it is widened in the validation of the variable in
+`variables.tf`, in a committed change.
+
+`expected_account_id`, `api_access_cidr` and `budget_email` have no default and
+are **sensitive**, so a plan prints `(sensitive value)` for each. A refused
+value of one of them prints the sentence of the validation and not the value
+(checked with `terraform console` on a scratch copy of `variables.tf`; see the
+tests). `aws.sh` passes all three from the local file; pass them through
+`TF_VAR_*` by hand only if you run `terraform` yourself.
 
 ### Outputs
 
@@ -155,32 +198,107 @@ nodes only), `database_port` and `workload_secret_name` (the name, not the ARN,
 which holds the account number). The repository's URL is not an output
 because it begins with the account number
 (`<account>.dkr.ecr.<region>.amazonaws.com/<name>`): `aws ecr
-describe-repositories` or the console gives it, in the owner's session.
+describe-repositories` or the console gives it, in the owner's session. The
+apply's screen shows `<host>` where a redacted host stood: read the outputs
+with `terraform output`, in the owner's own terminal.
+
+### Who may assume the Pod Identity roles
+
+Each of the two roles, the EBS CSI driver's and the workload's, has its own
+trust policy for `pods.eks.amazonaws.com` with `sts:AssumeRole` and
+`sts:TagSession`, and three `StringEquals` conditions on the session tags that
+Pod Identity adds:
+
+| Condition key | EBS CSI role | Workload role |
+|---|---|---|
+| `aws:RequestTag/kubernetes-namespace` | `kube-system` | `workload_namespace` |
+| `aws:RequestTag/kubernetes-service-account` | `ebs-csi-controller-sa` | `workload_service_account` |
+| `aws:RequestTag/eks-cluster-name` | `meridian-aws-test` | `meridian-aws-test` |
+
+AWS's page "Create IAM role with trust policy required by EKS Pod Identity"
+says: "You can use these tags in the condition keys in the trust policy to
+restrict which service accounts, namespaces, and clusters can use this role",
+and shows the first two conditions as `aws:RequestTag/kubernetes-namespace` and
+`aws:RequestTag/kubernetes-service-account` under `StringEquals`. Without them
+anyone who may pass the role could bind it to any service account of any
+cluster of the account. The namespace `kube-system` and the service account
+`ebs-csi-controller-sa` of the first column are from AWS's page for the EBS CSI
+driver.
+
+The page's own example has no condition for the cluster. This module adds one:
+the session tags are listed on the page "Grant Pods access to AWS resources
+based on tags" (`eks-cluster-arn`, `eks-cluster-name`, `kubernetes-namespace`,
+`kubernetes-service-account`, `kubernetes-pod-name`, `kubernetes-pod-uid`), so
+`eks-cluster-name` is a tag the request carries. The condition names the
+cluster by the literal `meridian-aws-test`, not by an attribute of the cluster,
+so that the role does not depend on the cluster (the cluster's ARN would also
+make a cycle through the add-on). That the condition is accepted and that a
+pod really gets credentials under it is something `validate` cannot show: it
+is item 3 of the checklist below, and if it is wrong the cluster condition is
+the line to take out first.
 
 ## Commands
 
 | Command | What it does | Changes AWS | Who runs it |
 |---|---|---|---|
-| `make aws-validate` | `terraform fmt -check`, `init -backend=false`, `validate`. Needs no account and no local file; never calls the `aws` CLI. | No | The session or the owner: free, no credentials |
+| `make aws-validate` | `terraform fmt -check`, `init -backend=false`, `validate`, run with no AWS credential in the environment. Needs no account and no local file; never calls the `aws` CLI. | No | The session or the owner: free, no credentials |
 | `make aws-scan` | Trivy's configuration scan of this directory, from an image pinned by digest, network off, read-only. Fails on a HIGH or CRITICAL finding that `.trivyignore` does not list. Needs Docker. | No | The session or the owner: free |
-| `make aws-plan` | Checks the account, runs `init`, then `plan` into `aws.tfplan` (mode 600). Review it. | No | The owner's session: needs credentials the session does not hold |
-| `make aws-apply` | Checks the account, applies exactly the saved plan, then removes the plan file. Refuses without a saved plan. | Yes, and it costs money | The owner |
-| `make aws-destroy` | Checks the account, then Terraform asks its own question and waits for the owner's `yes`. Refuses unless standard input is a terminal. | Yes, it removes | The owner, in a terminal |
+| `make aws-plan` | Checks the account, runs `init` against the state under home, then `plan` into `aws.tfplan` (mode 600), and records the commit and the time beside it. Review it. | No | The owner's session: needs credentials the session does not hold |
+| `make aws-apply` | Checks the account, applies exactly the saved plan if it is this tree's and fresh, then removes the plan file. Refuses without a saved plan. | Yes, and it costs money | The owner |
+| `make aws-destroy` | Checks the account, runs `init`, refuses over an empty state, then Terraform asks its own question and waits for the owner's `yes`. Refuses unless standard input is a terminal. | Yes, it removes | The owner, in a terminal |
 
 The order is `aws-validate`, `aws-scan`, then, with the owner,
 `aws-plan`, a read of the plan, `aws-apply`, and `aws-destroy` when the test
 is done. All five go through [`aws.sh`](../aws.sh) except the scan.
 
-What stops a session from applying or removing today: it holds no AWS
-credentials, `aws.sh` refuses unless the signed-in account is the pinned one,
-and the removal refuses without a terminal, which a session's shell does not
-have. The command guard has no rule for these targets or for the `aws` CLI
-yet: the rules (ask before `make aws-apply`, deny `make aws-destroy` to a
-session) are S036's third contract and are not in place. Do not read this page
-as saying the guard stops them.
-
 Nothing here runs in CI. Terraform and the scan in the pipeline are S022's.
 The gates are the two local commands above.
+
+## What stops a session, and what does not
+
+The script and the module make an **honest mistake** hard: the wrong account, a
+stray variable file, a stale plan, a leaked address. They do not stop a session
+that means to apply or to remove, and no script can. The security review of
+this step found, for a machine where AWS credentials exist and a session runs:
+
+- A session can plan and apply through `make aws-plan` and `make aws-apply`
+  with no step of the owner's: it makes the plan itself, so a saved plan proves
+  nothing about who read it.
+- A session can remove the environment through a pseudo-terminal (`script`,
+  Python's `pty`): the terminal check in `aws.sh` is `[[ -t 0 ]]`, and any
+  pseudo-terminal satisfies it. The check stops an accident and a plain shell,
+  not a session that makes itself a terminal.
+- A session can call the `aws` CLI itself (delete the cluster, read a secret,
+  make an access key), and `aws.sh` is not in that path at all.
+- Rules in the command guard slow these down and do not close them: a session
+  can reach the same calls through `python3`, `uv`, a container or a copy of a
+  binary.
+
+What does hold is that **no session holds the credentials**. So the second half
+of S036 is run by the owner from a machine or an operating-system user where no
+session runs and no credential is readable by one (no `~/.aws` a session can
+read), with a short sign-in (an SSO session of an hour), and the sign-in is
+removed afterwards (`aws sso logout`). Until then nothing here can spend money,
+because no credentials exist on the machines where sessions run and the
+identity call fails. The command guard has no rule yet for these targets or for
+the `aws` CLI: the rules are a later contract of S036, and nothing on this page
+says the guard stops them.
+
+What the module and the script do, each for a mistake and not for an attack:
+
+- the provider refuses another account (`allowed_account_ids`), the script
+  checks the same account before it starts Terraform, and neither number is
+  printed;
+- the local file is read, not run, and must be the owner's and closed to
+  others;
+- Terraform and the `aws` CLI get an environment the script chose, so a
+  `TF_LOG`, a `TF_WORKSPACE` or an endpoint override left in a shell does not
+  reach them;
+- a variable file or an override file in this directory is refused, and a
+  saved plan is applied only at the commit it was made at, from an unchanged
+  directory, within thirty minutes;
+- two instance types and the endpoint's address come from validated lists and
+  ranges, and three variables are sensitive.
 
 ### The local file
 
@@ -188,8 +306,13 @@ The gates are the two local commands above.
 `infra/terraform/local.env*` covers it; check with `git check-ignore`). The
 hyphen is on purpose: the command guard stops a `cat` of a file whose name
 has `.env` followed by anything but a letter or a dot, and `local.env.aws`
-would have escaped that. The file is shell syntax, no spaces around the `=`,
-and mode 600. It holds four values and the script prints none of them:
+would have escaped that. The file is **read, never run**: `KEY=value` lines
+for the four known keys below, no spaces around the `=`, no quotes, and a value
+of letters, digits and `@ . _ / + -` only; blank lines and lines that start
+with `#` are skipped. Anything else is a refusal that names the line's number
+and nothing of the line. The file must be owned by the user running the script
+and not readable or writable by group or others (`chmod 600`), or the script
+refuses. It holds four values and the script prints none of them:
 
 ```sh
 MERIDIAN_AWS_ACCOUNT_ID=<the twelve-digit account number>
@@ -198,8 +321,8 @@ MERIDIAN_AWS_ENDPOINT_CIDR=<the address that may reach the cluster>/32
 MERIDIAN_AWS_BUDGET_EMAIL=<the address for the budget's alerts>
 ```
 
-The script exports the last three as the module's variables `region`,
-`api_access_cidr` and `budget_email` (`TF_VAR_<name>`), and the Region as
+The script exports them as the module's variables `region`, `api_access_cidr`,
+`budget_email` and `expected_account_id` (`TF_VAR_<name>`), and the Region as
 `AWS_REGION` too. A test reads `variables.tf` and fails when a variable with no
 default is not exported, or when the script exports a name the module does not
 declare. There is no example file: the ignore pattern would ignore it too, and
@@ -213,19 +336,79 @@ prints an account number:
 | Refusal | What to do |
 |---|---|
 | No local file, or a value missing from it | Create it as above |
+| A line that is not one of the four `KEY=value` lines | Fix the line whose number is named |
+| The file is not yours, or group or others can read it | `chmod 600` it, and own it |
 | The account is not twelve digits | Correct `MERIDIAN_AWS_ACCOUNT_ID` |
 | The identity call fails | Sign in, for example `aws sso login`, to the account you mean |
 | The signed-in account is not the pinned one | Sign in to the right account, or correct the pin if it is wrong |
+| A variable file or an override file in this directory | Remove it; give values through the local file |
 | `apply` with no saved plan | `make aws-plan` first |
+| `apply` with a plan that is another commit's, from a changed directory, or older than thirty minutes | `make aws-plan` again (the plan and its record are dropped) |
 | `destroy` with no terminal | Run it yourself, in a terminal |
+| `destroy` over an empty state | See "If the state is lost" |
 
-The script also clears `TF_CLI_ARGS` and `TF_CLI_ARGS_<command>` from the
-environment, because Terraform would read `-auto-approve` from there. What
-Terraform prints goes through `redact` (`../common.sh`), which now knows
-an ARN (`<arn>`), a twelve-digit account number (`<account>`), an access key
-identifier (`<access-key-id>`) and the host of a cluster or a database
-(`<host>`), as well as the Azure shapes. It is a filter, not a guarantee:
-read a plan before pasting it anywhere.
+### What Terraform and the `aws` CLI are given
+
+Each is run with `env -i` and a list the script chose, not the caller's
+environment:
+
+| Names | For | Where the list comes from |
+|---|---|---|
+| `PATH`, `HOME`, `TMPDIR`, `TERM`, `LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES` | both, and `git` | the path, the home (the sign-in cache and the plugin directory are under it), the terminal and the locale |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` | `plan`, `apply`, `destroy` and the identity call; **not** `validate`, `init`, `fmt` or the state's list | the AWS CLI page "Configuring environment variables for the AWS CLI". It names no variable of SSO's own: `aws sso login` works through `AWS_PROFILE` and the home |
+| `AWS_REGION` (from the local file), `AWS_PAGER` (empty) | the same | set by the script |
+| `TF_VAR_region`, `TF_VAR_api_access_cidr`, `TF_VAR_budget_email`, `TF_VAR_expected_account_id` | Terraform's `plan`, `apply` and `destroy` only | the four exports of `load_aws_env`; every other `TF_VAR_*` of the caller is unset first |
+
+So `TF_LOG*`, `TF_WORKSPACE`, `TF_DATA_DIR`, `TF_CLI_CONFIG_FILE`,
+`TF_REATTACH_PROVIDERS`, `TF_PLUGIN_CACHE_DIR`, `TF_INPUT`, `TF_CLI_ARGS*`,
+any other `TF_VAR_*`, `AWS_ENDPOINT_URL*`, `AWS_DEFAULT_REGION`,
+`AWS_CA_BUNDLE`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, the
+metadata-service settings and the proxy variables never reach either (a machine
+behind a proxy adds its variable to the list in `aws.sh`, on purpose). A
+`TF_CLI_ARGS_destroy=-auto-approve` cannot take away Terraform's question. What
+the environment does not close: Terraform still reads `~/.terraformrc` and the
+files in the module's directory that the script does not look for, and `aws`
+reads `~/.aws`.
+
+Shell tracing is off from the first line (`set +x`; `SHELLOPTS` is read-only in
+bash, so it cannot be unset, and `env -i` does not pass it on), `BASH_XTRACEFD`
+and `PS4` are unset, and a test runs the script traced three ways and finds
+none of the four values in the trace. The script sets `umask 077` once, at the
+top, so the plan, its record and the state are written closed to others. Every
+Terraform call passes `-no-color`, so an escape sequence cannot stand between
+`redact` and a number. What Terraform prints goes through `redact`
+(`../common.sh`), which knows an ARN (`<arn>`), a twelve-digit account number
+(`<account>`), an access key or role identifier (`<access-key-id>`), the host of
+a cluster or a database (`<host>`), an e-mail address (`<email>`), an IPv4
+address with or without a prefix length (`<ip>`), a secret access key, a
+session token, a signature and an encoded authorization failure message where
+they follow their label, as well as the Azure shapes. The IPv4 rule has no word
+boundary, so it also hides a four-part version number such as `1.2.3.4` and the
+VPC's own `10.0.0.0/16`: harmless here, where a miss would leak an address. It
+is a filter, not a guarantee: read a plan before pasting it anywhere.
+
+### State
+
+The state is `~/.local/state/meridian-aws/aws.tfstate` (with Terraform's
+`.backup` beside it), in a directory the script makes with mode 700. It is not
+in a checkout because the sessions of this repository work in worktrees that
+are deleted, and a state lost with its checkout leaves a cluster and a database
+billing with nothing to remove them. `aws.sh` passes the path at `init`
+(`-backend-config=path=...`); `validate` inits with no backend and makes no
+directory. A `terraform` command typed by hand with no `-backend-config` puts
+the state next to the `.tf` files, in the checkout: do not do that. Keep the
+state until the console is clean (see "Removal").
+
+### The saved plan
+
+`make aws-plan` writes `aws.tfplan` and, beside it, `aws.tfplan.meta` with the
+commit and the time. `make aws-apply` applies the plan only if that commit is
+the one checked out now, the module's directory has no uncommitted change
+(`git status` of this directory, untracked files included), and the plan is
+less than thirty minutes old: the length of one plan, read and apply sitting.
+Otherwise it drops the plan and says to plan again. A plan made from a
+directory with uncommitted changes can therefore not be applied; `plan` says so
+when it starts.
 
 ## The policy scan
 
@@ -235,22 +418,58 @@ container has no network, a read-only root, no capabilities and a read-only
 mount of this directory. The scan needs no network: Trivy looks for a newer
 bundle of checks first, and with `--skip-check-update` it goes straight to the
 checks compiled into the pinned image. So the checks are those of that image;
-a newer check arrives with a new pin, not by itself.
+a newer check arrives with a new pin, not by itself. The pin is `:=` in the
+Makefile, which an environment variable does not change, but a variable on
+`make`'s command line (`make TRIVY_IMAGE=...`) **can** override: a command line
+that names it deserves a look. The scan skips `aws.tfplan`, `aws.tfplan.meta`,
+`terraform.tfstate` and its backup: a plan file in the directory is read as a
+plan snapshot, and a malformed one is a fatal error.
 
 The scan of this module raises three findings, all accepted in
 [`.trivyignore`](.trivyignore), one check ID a line with its reason in a
-comment on the line directly above, and a test fails on an entry without one.
-They are the session's decisions of 2026-10-06, which the owner sees before
-any apply and may overturn:
+comment on the line directly above. They are the session's decisions of
+2026-10-06, which the owner sees before any apply and may overturn:
 
 | Check | Severity | What it says | Why it holds here | Production |
 |---|---|---|---|---|
-| `AWS-0040` | Critical | Public cluster access is enabled | The public side is open to one address and the private side is on; with the public side off nothing outside the VPC could apply to or look at the cluster, and there is no bastion or VPN | Private access only, through a bastion or a VPN |
-| `AWS-0039` | High | No secret encryption with a customer key | A KMS key waits at least seven days to be removed and bills meanwhile; the environment lives for an hour and stores no Kubernetes Secret | An `encryption_config` with a customer-managed key |
+| `AWS-0040` | Critical | Public cluster access is enabled | The public side is open to one address and the private side is on. Terraform needs only the EKS API, not this endpoint; the public side is for `kubectl`, which with it off would have to come from inside the VPC, and there is no bastion or VPN | Private access only, through a bastion or a VPN |
+| `AWS-0039` | High | No secret encryption with a customer key | EKS encrypts all Kubernetes API data on 1.28 and later with envelope encryption by default, and "every EKS cluster running Kubernetes version 1.28 or later uses an Amazon Web Services owned key" (the EKS page on envelope encryption). The check asks for a customer-managed key, which waits at least seven days to be removed and bills meanwhile; the environment lives for an hour and stores no Kubernetes Secret | An `encryption_config` with a customer-managed key |
 | `AWS-0164` | High | The subnets give public addresses | No NAT gateway, which bills by the hour and survives a half-finished removal; the nodes' security group admits nothing from the internet | Private subnets behind a NAT gateway or VPC endpoints |
 
-A new finding fails the scan until it is fixed in the module or accepted here
-with its reason.
+What keeps these from becoming a way to wave findings through, each held by a
+test: an entry is exactly a check ID of the `AWS-` and four digits shape (no
+expiry, no trailing text, not the older `AVD-` spelling, no wildcard), with a
+reason of at least five words directly above it; no `.tf` file carries an
+inline `trivy:ignore` comment; the directory holds no Trivy configuration file
+and no YAML ignore file (a `trivy.yaml` could skip files or change the exit
+code); and **an entry applies to every resource of the directory, not to one**,
+so the number of `aws_eks_cluster` and `aws_subnet` blocks is held at one each,
+the number the three reasons describe, and a test that fails there sends the
+reader to `.trivyignore`. A new finding fails the scan until it is fixed in the
+module or accepted there with its reason.
+
+Below HIGH the scan raises twelve findings under eight check IDs, none hidden
+by the ignore file (it filters by severity, and these are below it). Nine are
+MEDIUM and three LOW; none is a surprise for an environment that lives an hour:
+
+- `AWS-0038`, five findings (MEDIUM): no control-plane logging for the `api`,
+  `audit`, `authenticator`, `controllerManager` and `scheduler` log types. A
+  log group would outlive the removal and bill; production turns all five on.
+- `AWS-0077` (MEDIUM): RDS backups are kept for one day. They are removed with
+  the instance on purpose; production keeps seven to thirty-five.
+- `AWS-0176` (MEDIUM): RDS IAM authentication is off. The database's own
+  authentication is the barrier, and the chart's roles are not made here;
+  production considers IAM authentication.
+- `AWS-0177` (MEDIUM): the database has no deletion protection. Off on purpose,
+  so the removal is one command; production turns it on.
+- `AWS-0178` (MEDIUM): the VPC has no flow logs. A log group would outlive the
+  removal and bill; production turns flow logs on.
+- `AWS-0133` (LOW): RDS Performance Insights is off; nothing in a test that
+  lives an hour needs it, and production decides what it is worth.
+- `AWS-0098` (LOW): the secret uses the default encryption key explicitly, not
+  a customer-managed one; production names a key.
+- `AWS-0033` (LOW): the ECR repository is encrypted with AES256, not a
+  customer-managed KMS key; production names a key.
 
 ## Cost
 
@@ -297,14 +516,29 @@ backups (the module makes none), ECR images (USD 0.10 a GB-month), secrets
 PersistentVolumeClaims and any load balancer a controller made. The last two
 exist only if someone installed something into the cluster by hand.
 
+**Confirm the account's plan first.** AWS's page on account plans says: "Free
+account plans don't include access to AWS services and features that could
+possibly deplete your credits, or hardware purchases." Whether EKS, RDS and
+`t3.large` are available on a Free plan is **not verified**, and `t3.large` is
+not Free Tier eligible. The owner checks which plan the account is on, and
+upgrades if needed, before the second half starts.
+
 ## Removal
 
-`make aws-destroy` is the owner's: the script refuses without a terminal and
-no variable overrides that, so a session cannot run it. It checks the account,
-then Terraform lists what it would remove and asks for `yes` itself. The
-prompt passes through the redaction line by line, so its last words ("Enter a
-value:") appear only after the answer is typed; the question above them shows
-at once.
+`make aws-destroy` is the owner's, run in a terminal, from the machine and
+sign-in described in "What stops a session, and what does not". The terminal
+check stops an accident and a plain shell; it is not what keeps a session from
+running it. The script checks the account, runs `init` with the state's path,
+and counts what the state holds: over an empty state it **refuses with a
+sentence and prints no "removed"** ("the state holds nothing, so Terraform
+would remove nothing: the file is ..., if the state was lost ... look in the
+console"), because Terraform would remove nothing and say it was done. Then
+Terraform lists what it would remove and asks for `yes` itself. The prompt
+passes through the redaction line by line, so its last words ("Enter a value:")
+appear only after the answer is typed; the question above them shows at once.
+Afterwards the script counts again and prints "removed" only when the state
+holds nothing; if resources remain it says so and exits nonzero, and the
+removal is run again.
 
 One command is enough, with no Kubernetes step first, because nothing is
 installed into the cluster: the state holds everything that exists. **That
@@ -338,13 +572,33 @@ After a removal, look in the console, in the Region of the local file:
    Budgets: no budget; it is a resource of the module and goes with it.
 6. Billing, a day later: no new line.
 
-What is left by design: the state file in this directory (git-ignored; keep it
-until the console is clean, because it is what a second removal reads). The
-VPC's default security group is adopted by the module, not created, and costs
-nothing. Nothing that bills.
+What is left by design: the state file under home (keep it until the console
+is clean, because it is what a second removal reads). The VPC's default
+security group is adopted by the module, not created, and costs nothing.
+Nothing that bills.
 
 A removal that fails half way is run again; Terraform removes what is still in
-the state.
+the state. Expect `DependencyViolation` retries on the subnets and security
+groups: the network interfaces that the VPC CNI and EKS made go a few minutes
+after the node group and the cluster. That is slowness, not a failure.
+
+### If the state is lost
+
+The state is the only list of what the module made. If it is gone (a deleted
+checkout from before the state moved, another machine, another user, or a disk)
+and the environment was applied, it still exists and bills, and `make
+aws-destroy` will refuse because the state holds nothing. Find it by its tags
+instead: everything the module makes in the Region carries `project=meridian`,
+`environment=aws-test` and `managed-by=terraform` (the console's Resource Groups
+Tag Editor can search by tag: not verified here), and the names begin
+`meridian-aws-test`.
+Remove by hand, in this order: the RDS instance (with no final snapshot), the
+ECR repository, the secrets, the EKS node group, the add-ons, then the cluster,
+the load balancers and volumes of anything installed by hand, then the
+network (internet gateway, subnets, the database security group, the VPC), then
+the IAM roles (`meridian-aws-test-` and a suffix) and the budget. Nothing in the
+repository can do this for you, which is why the state is kept out of a
+checkout.
 
 ## What `validate` and the scan cannot see
 
@@ -356,13 +610,19 @@ with it. Neither sees any of this, and the second half of S036 must find out:
 - whether `db.t4g.small` is offered in the Region, and what PostgreSQL 17's
   default minor version is there;
 - the add-on versions that are the defaults for Kubernetes 1.36;
-- whether the policy ARNs exist as typed (`AmazonEBSCSIDriverPolicyV2`,
-  `AmazonEC2ContainerRegistryPullOnly` and the others);
+- whether the five managed-policy names exist as typed
+  (`AmazonEKSClusterPolicy`, `AmazonEKSWorkerNodePolicy`,
+  `AmazonEC2ContainerRegistryPullOnly`, `AmazonEKS_CNI_Policy`,
+  `AmazonEBSCSIDriverPolicyV2`): `make aws-plan` finds out, for free, because
+  each is a data source;
 - whether the Pod Identity way of giving the EBS CSI add-on its role works as
   the provider's page implies: the order of the cluster, the node group, the
   agent add-on, the CSI add-on and the association, and IAM's eventual
   consistency after the roles are made (the `depends_on` chains are the only
   mitigation);
+- whether the three conditions of each Pod Identity trust policy let a pod get
+  credentials, the `eks-cluster-name` one in particular (see "Who may assume
+  the Pod Identity roles");
 - whether an access-entry principal that is an IAM Identity Center role is
   accepted when its ARN carries the path `aws-reserved/sso.amazonaws.com/...`:
   the access-entry pages say only that an ARN with a path is accepted and that
@@ -378,10 +638,43 @@ with it. Neither sees any of this, and the second half of S036 must find out:
 - whether RDS's rotation of the managed secret needs anything else;
 - whether `aws_eks_cluster.main.region` resolves as the `region` output:
   `validate` passes but does not evaluate output values;
-- whether the applying principal has the permissions every resource needs, and
+- whether the applying principal has the permissions every resource needs
+  (including Budgets: whether an IAM user needs billing access enabled), and
   what an account's organisation policies forbid;
 - whether `CREATE EXTENSION vector` works on RDS;
+- whether the chart's `automountServiceAccountToken: false` leaves room for
+  the token volume Pod Identity injects (not S036's, but the second half
+  should look);
 - what the environment costs: the sketch above is list prices.
+
+### What an apply is most likely to trip on
+
+The second half's checklist, most likely first, from the infrastructure review
+of this step (the first item of that review, the EBS CSI policy's ARN, is now
+caught at plan):
+
+1. **The account's plan and limits.** The Free plan point above; Regional vCPU
+   quotas; the instance classes offered in the chosen zones; whether an
+   opt-in Region (`eu-south-*`) is enabled in the account.
+2. **IAM eventual consistency** on the new roles. The association and the
+   add-on depend on the role and its attachment, so the `depends_on` chains are
+   the only mitigation. Expect an intermittent first-run error, and run the
+   plan and apply again.
+3. **The Pod Identity trust conditions and the CSI add-on.** Add-on defaults
+   for Kubernetes 1.36 (`eks-pod-identity-agent`, `aws-ebs-csi-driver`), the
+   `pod_identity_association` block of the CSI add-on, and the three trust
+   conditions. Check that the CSI controller gets credentials; if not, take
+   out the `eks-cluster-name` condition first.
+4. **RDS.** `engine_version = "17"` with the major only (the provider allows a
+   prefix when `auto_minor_version_upgrade` is on), the disabled value of
+   `engine_lifecycle_support`, and `db.t4g.small` in the zone.
+5. **Budgets permissions.** Whether an IAM user needs billing access enabled
+   (an SSO role with budgets permission is expected to be fine).
+6. **The access-entry principal.** An Identity Center principal's ARN carries
+   `aws-reserved/sso.amazonaws.com/...`; AWS says an ARN with a path is
+   accepted, but it is unproven here.
+7. **Slow removal, not a failure.** See "Removal": subnet and security-group
+   deletion waits on interfaces that go minutes after the nodes.
 
 ## What a production environment sets differently
 
@@ -389,6 +682,16 @@ with it. Neither sees any of this, and the second half of S036 must find out:
   Elastic IP at 0.005, in place of the nodes' two public addresses at 0.010: a
   net USD 0.047 an hour more, plus USD 0.052 a GB processed), and a private
   API endpoint.
+- **Cluster administration.** The applying principal is the cluster's only
+  administrator, with the `AmazonEKSClusterAdminPolicy` access policy at
+  cluster scope. Production maps a role or a group per team, and the
+  pipeline's role, with narrower access policies scoped to a namespace, and
+  keeps one break-glass administrator.
+- **The endpoint's address.** One `/32` is the only source of the public
+  endpoint. A shared exit address (an office, a VPN, a carrier's NAT) admits
+  everyone behind it, and an address that changes locks the owner out of
+  `kubectl` until the list is changed through the EKS API. Production has no
+  public endpoint, or a short list of fixed addresses, behind a VPN.
 - A remote state bucket, with versioning and locking, created before
   `terraform init`: ADR 6 names the S3 counterparts of the foundation's state
   account. Local state is lost with the disk.
@@ -401,6 +704,17 @@ with it. Neither sees any of this, and the second half of S036 must find out:
 - Customer-managed keys (the cluster's Secrets, storage, the registry),
   control-plane logging and a firewall in front of the edge. The ADR says what
   AWS WAF does and does not protect.
+- **Two things that are safe by default here and stay so.** The node
+  metadata service: AWS's page on Amazon Linux 2023 nodes says that
+  "when not using a launch template, the default is set to 1. This means that
+  containers won't have access to the node's credentials using IMDS", and this
+  module uses no launch template; a launch template that pins IMDS must set
+  the hop limit explicitly (AWS says a custom AMI in a launch template raises
+  the default to 2). TLS to the database: AWS's page on SSL for RDS for
+  PostgreSQL says that "the rds.force_ssl parameter default value is 1 (on) for
+  RDS for PostgreSQL version 15 and later", and this instance is PostgreSQL 17
+  on the default parameter group; production pins it in a parameter group of its
+  own so that it is a decision and not a default.
 
 ## Deliberately not here
 

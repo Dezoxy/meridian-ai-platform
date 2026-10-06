@@ -42,8 +42,9 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=true
 #
 # aws.sh's output meets the same filter, which also knows AWS's shapes (S036):
 # an ARN becomes <arn>, whole, and runs first so that the account inside it goes
-# with it; an access key identifier (the documented prefixes and sixteen more
-# uppercase letters and digits) becomes <access-key-id>; a host under
+# with it; an access key identifier (the documented prefixes and then sixteen
+# uppercase letters and digits, or seventeen for the 21-character identifier of
+# a role, a user or a group) becomes <access-key-id>; a host under
 # eks.amazonaws.com or rds.amazonaws.com (a cluster's endpoint, a database's)
 # and the cluster's identity issuer (oidc.eks.<region>.amazonaws.com, which has
 # the label order the other way round) become <host>; and a twelve-digit number
@@ -54,14 +55,33 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=true
 # boundary on macOS, so the bounds are captured, and a match consumes the
 # character after it: the account rule runs twice so that two numbers side by
 # side are both found.
+#
+# The credential shapes below are removed only where they follow the label that
+# gives them away (a secret access key after secret_access_key, a session token
+# after session_token or X-Amz-Security-Token, an encoded authorization failure
+# message after its words) or are a parameter of a name (Signature=): a run of
+# letters with no label cannot be told from any other. Terraform prints none of
+# these in a plan; its debug log (TF_LOG, which aws.sh does not pass on) and an
+# AWS error can. An e-mail address becomes <email>. An IPv4 address, with or
+# without a prefix length, becomes <ip>; the rule has no word boundary (sed has
+# none on macOS) so it also hides a four-part version number such as 1.2.3.4 and
+# the VPC's 10.0.0.0/16, which costs a reader of Terraform's and the aws CLI's
+# output nothing, where a miss would leak an address. An ARN may hold commas (a
+# session name can), so one comma followed by more ARN characters stays in it.
 redact() {
   sed -E \
-    -e 's#arn:aws[a-z-]*:[A-Za-z0-9-]+:[a-z0-9-]*:[0-9]*:[^][:space:]"'\''<>,()]+#<arn>#g' \
+    -e 's#arn:aws[a-z-]*:[A-Za-z0-9-]+:[a-z0-9-]*:[0-9]*:[^][:space:]"'\''<>,()]+(,[^][:space:]"'\''<>,()]+)*#<arn>#g' \
+    -e 's#([Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy])([[:space:]=:"'\'']{1,8})[A-Za-z0-9/+=]{16,}#\1\2<secret-access-key>#g' \
+    -e 's#([Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Uu][Rr][Ii][Tt][Yy][_-]?[Tt][Oo][Kk][Ee][Nn])([[:space:]=:"'\'']{1,8})[A-Za-z0-9/+=%_-]{16,}#\1\2<session-token>#g' \
+    -e 's#([Ss]ignature=)[A-Za-z0-9%/+=_-]{16,}#\1<signature>#g' \
+    -e 's#([Ee]ncoded authorization failure message:?[[:space:]]*)[A-Za-z0-9_+/=-]{16,}#\1<encoded-message>#g' \
     -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<guid>/g' \
     -e 's#Y2xpZW50Q29uZmlncy9j[A-Za-z0-9+/]*={0,2}#<client-config-id>#g' \
-    -e 's/(ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)[A-Z0-9]{16}/<access-key-id>/g' \
+    -e 's/(ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)[A-Z0-9]{16,17}/<access-key-id>/g' \
     -e 's#[A-Za-z0-9.-]+\.(eks|rds)\.amazonaws\.com#<host>#g' \
     -e 's#oidc\.eks\.[a-z0-9-]+\.amazonaws\.com(/id/[A-Za-z0-9]+)?#<host>#g' \
+    -e 's#(^|[^0-9.])[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?#\1<ip>#g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/<email>/g' \
     -e 's/(^|[^A-Za-z0-9])[0-9]{12}([^A-Za-z0-9]|$)/\1<account>\2/g' \
     -e 's/(^|[^A-Za-z0-9])[0-9]{12}([^A-Za-z0-9]|$)/\1<account>\2/g'
 }

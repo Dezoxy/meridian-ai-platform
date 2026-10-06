@@ -285,7 +285,6 @@ class AwsShapes(unittest.TestCase):
             "https://sts.eu-central-1.amazonaws.com/\n"
             "https://rds.eu-central-1.amazonaws.com/\n"
             "https://eks.eu-central-1.amazonaws.com/clusters\n"
-            "owner@example.com\n"
         )
 
         self.assertEqual(redact(lines), lines)
@@ -312,6 +311,205 @@ class AwsShapes(unittest.TestCase):
         out = redact(f"{SUBSCRIPTION} {ROLE_ARN}\n")
 
         self.assertEqual(out, "<guid> <arn>\n")
+
+    def test_an_arn_whose_session_name_holds_a_comma_is_removed_whole(self) -> None:
+        arn = f"arn:aws:sts::{ACCOUNT}:assumed-role/Admin/alice,Team-Admin"
+
+        out = redact(f"caller {arn} and {arn}, then {arn}\n")
+
+        self.assertEqual(out, "caller <arn> and <arn>, then <arn>\n")
+
+    def test_a_comma_that_ends_an_arn_is_not_part_of_it(self) -> None:
+        for text, expected in (
+            (f"role {ROLE_ARN}, then", "role <arn>, then"),
+            (f'["{ROLE_ARN}","{ROLE_ARN}"]', '["<arn>","<arn>"]'),
+            (f"{ROLE_ARN},", "<arn>,"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(redact(f"{text}\n"), f"{expected}\n")
+
+    def test_a_unique_identifier_of_twenty_one_characters_is_removed_whole(
+        self,
+    ) -> None:
+        # Roles, users and groups: four letters and seventeen, one more than a
+        # key's sixteen, which used to leave the last character behind.
+        for prefix in ("AROA", "AIDA", "AGPA", "ANPA"):
+            with self.subTest(prefix=prefix):
+                identifier = prefix + "EXAMPLEEXAMPLE12X"
+
+                out = redact(f"UserId: {identifier}\n{identifier}:alice\n")
+
+                self.assertEqual(
+                    out, "UserId: <access-key-id>\n<access-key-id>:alice\n"
+                )
+
+
+# The documentation's own example value for a secret key.
+LABELLED_VALUE = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+LONG_RUN = "IQoJb3JpZ2luX2VjEXAMPLEEXAMPLEEXAMPLE+/abc123EXAMPLE=="
+SIGNED = "5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7"
+
+
+class AwsCredentials(unittest.TestCase):
+    """Credentials that Terraform's debug log or an error can print, where they
+    follow the label that gives them away. A value with no label is left alone:
+    it cannot be told from any other run of letters."""
+
+    def test_a_secret_access_key_after_its_label_is_removed(self) -> None:
+        lines = (
+            f"aws_secret_access_key = {LABELLED_VALUE}\n"
+            f"AWS_SECRET_ACCESS_KEY={LABELLED_VALUE}\n"
+            f'"SecretAccessKey": "{LABELLED_VALUE}",\n'
+            f"secret_access_key: {LABELLED_VALUE}\n"
+            f"secret-access-key = '{LABELLED_VALUE}'\n"
+        )
+
+        out = redact(lines)
+
+        self.assertNotIn(LABELLED_VALUE, out)
+        self.assertNotIn("EXAMPLEKEY", out)
+        self.assertEqual(out.count("<secret-access-key>"), 5)
+        self.assertIn("aws_secret_access_key = <secret-access-key>\n", out)
+        self.assertIn('"SecretAccessKey": "<secret-access-key>",\n', out)
+
+    def test_a_secret_access_key_label_with_nothing_after_it_is_left_alone(
+        self,
+    ) -> None:
+        lines = (
+            "secret_access_key = (sensitive value)\n"
+            "secret_access_key = null\n"
+            "AWS_SECRET_ACCESS_KEY=\n"
+            "the secret access key is rotated every 90 days\n"
+            f"checksum = {LABELLED_VALUE}\n"  # the same run with no label
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_a_session_token_after_its_label_is_removed(self) -> None:
+        lines = (
+            f"aws_session_token = {LONG_RUN}\n"
+            f"AWS_SESSION_TOKEN={LONG_RUN}\n"
+            f'"SessionToken": "{LONG_RUN}"\n'
+            f"X-Amz-Security-Token: {LONG_RUN}\n"
+            f"https://h/?X-Amz-Security-Token={LONG_RUN.replace('+', '%2B')}&x=1\n"
+        )
+
+        out = redact(lines)
+
+        self.assertNotIn("EXAMPLEEXAMPLE", out)
+        self.assertEqual(out.count("<session-token>"), 5)
+        self.assertIn("X-Amz-Security-Token: <session-token>\n", out)
+        self.assertTrue(out.endswith("<session-token>&x=1\n"), out)
+
+    def test_a_token_label_with_a_short_or_missing_value_is_left_alone(self) -> None:
+        lines = (
+            "session_token_ttl = 3600\n"
+            "session token: expired\n"
+            "aws_session_token = (sensitive value)\n"
+            f"nonce = {LONG_RUN}\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_a_signature_parameter_is_removed(self) -> None:
+        lines = (
+            f"https://h/?X-Amz-Signature={SIGNED}&X-Amz-Expires=60\n"
+            "Authorization: AWS4-HMAC-SHA256 "
+            f"Credential={ACCESS_KEY_ID}/20260101/eu-central-1/s3/aws4_request, "
+            f"SignedHeaders=host;x-amz-date, Signature={SIGNED}\n"
+        )
+
+        out = redact(lines)
+
+        self.assertNotIn(SIGNED, out)
+        self.assertNotIn(ACCESS_KEY_ID, out)
+        self.assertIn("X-Amz-Signature=<signature>&X-Amz-Expires=60\n", out)
+        self.assertIn("SignedHeaders=host;x-amz-date, Signature=<signature>\n", out)
+
+    def test_an_encoded_authorization_failure_message_is_removed(self) -> None:
+        message = "JPWjtYlHsEXAMPLEEXAMPLE-_abcdefgh0123456789"
+        text = f"Encoded authorization failure message: {message}\n"
+
+        out = redact(text)
+
+        self.assertEqual(
+            out, "Encoded authorization failure message: <encoded-message>\n"
+        )
+
+
+class AwsPersonalData(unittest.TestCase):
+    """An e-mail address and an IPv4 address, which Terraform prints for a
+    variable that is not sensitive and the cluster's endpoint list prints back."""
+
+    def test_an_email_address_is_removed(self) -> None:
+        lines = (
+            "budget to owner@example.com now\n"
+            '  + subscriber_email_addresses = ["a.b+c@sub.example.co.uk"]\n'
+            "arn user: AROAEXAMPLEEXAMPLE12X:alice@example.com\n"
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            "budget to <email> now\n"
+            '  + subscriber_email_addresses = ["<email>"]\n'
+            "arn user: <access-key-id>:<email>\n",
+        )
+
+    def test_an_email_session_name_inside_an_arn_goes_with_the_arn(self) -> None:
+        arn = f"arn:aws:sts::{ACCOUNT}:assumed-role/Admin/alice@example.com"
+
+        self.assertEqual(redact(f"{arn}\n"), "<arn>\n")
+
+    def test_text_that_only_has_an_at_sign_in_it_is_left_alone(self) -> None:
+        lines = (
+            "git clone git@host\n"
+            "@mention and name@ alone\n"
+            "x@y\n"  # no dot in the domain
+            "registry.terraform.io/hashicorp/aws@6.67.0\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_an_ipv4_address_is_removed_with_or_without_a_prefix_length(self) -> None:
+        lines = (
+            '  ~ public_access_cidrs = ["203.0.113.7/32"]\n'
+            "  + cidr_block = 10.0.0.0/16\n"
+            "ip 198.51.100.23, and 192.0.2.1:443\n"
+            "(203.0.113.9)\n"
+            "203.0.113.10\n"
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            '  ~ public_access_cidrs = ["<ip>"]\n'
+            "  + cidr_block = <ip>\n"
+            "ip <ip>, and <ip>:443\n"
+            "(<ip>)\n"
+            "<ip>\n",
+        )
+
+    def test_a_number_with_fewer_than_four_parts_is_left_alone(self) -> None:
+        lines = (
+            "Installing hashicorp/aws v6.67.0\n"
+            "kubernetes_version = 1.36\n"
+            "version = v1.19.0-eksbuild.1\n"
+            "ratio 3.14159\n"
+            "time 12:00:00.123\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_a_four_part_version_number_is_hidden_too(self) -> None:
+        # The price of an IPv4 rule with no word boundary: harmless here, where
+        # the output is Terraform's and the aws CLI's, and a miss would leak an
+        # address.
+        out = redact("released 1.2.3.4 yesterday\n")
+
+        self.assertEqual(out, "released <ip> yesterday\n")
 
 
 if __name__ == "__main__":

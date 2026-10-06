@@ -1,12 +1,15 @@
 """The commands around the AWS module: ``infra/terraform/aws.sh`` (S036).
 
 The script is copied, with ``common.sh``, into a temporary ``infra/terraform``
-tree that holds a stand-in module directory, so it runs against nothing real:
-its module directory and its local file are resolved from its own location.
-Stub ``terraform`` and ``aws`` programs come first on ``PATH``; they record
-every call and answer from variables the test sets. No credential, account,
-cluster or network is involved. Every account number, address and host here is
-made up: twelve identical digits, a documentation address and ``example.com``.
+tree that holds a stand-in module directory and is a git repository of its own,
+so it runs against nothing real: its module directory and its local file are
+resolved from its own location. Stub ``terraform`` and ``aws`` programs come
+first on ``PATH``; they record every call and answer from a file the test
+writes beside them (``stub.env``): the script runs both with an environment of
+its own choosing, so a variable the test sets in the process would never reach
+them. No credential, account, cluster or network is involved. Every account
+number, address and host here is made up: twelve identical digits, a
+documentation address and ``example.com``.
 
 The stub ``terraform`` prints a line with an ARN and an account number on every
 call, so a test that finds neither in the script's output shows ``redact`` at
@@ -17,11 +20,12 @@ import os
 import pty
 import re
 import select
+import shlex
 import shutil
 import stat
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -33,21 +37,25 @@ OTHER = "222222222222"
 NOISE = "333333333333"  # the account in every line the stub terraform prints
 ENDPOINT_CIDR = "203.0.113.7/32"
 BUDGET_EMAIL = "owner@example.com"
-LOCAL_FILE = "\n".join(
-    [
-        f"MERIDIAN_AWS_ACCOUNT_ID={PINNED}",
-        "MERIDIAN_AWS_REGION=eu-central-1",
-        f"MERIDIAN_AWS_ENDPOINT_CIDR={ENDPOINT_CIDR}",
-        f"MERIDIAN_AWS_BUDGET_EMAIL={BUDGET_EMAIL}",
-        "",
-    ]
-)
+LOCAL_LINES = [
+    f"MERIDIAN_AWS_ACCOUNT_ID={PINNED}",
+    "MERIDIAN_AWS_REGION=eu-central-1",
+    f"MERIDIAN_AWS_ENDPOINT_CIDR={ENDPOINT_CIDR}",
+    f"MERIDIAN_AWS_BUDGET_EMAIL={BUDGET_EMAIL}",
+]
+LOCAL_FILE = "\n".join([*LOCAL_LINES, ""])
 PLAN_FILE = "aws.tfplan"
+META_FILE = "aws.tfplan.meta"
 QUESTION = "Only 'yes' will be accepted to confirm."
+STATE_DIRECTORY = ".local/state/meridian-aws"  # under the caller's home
+PLAN_MAX_AGE_SECONDS = 30 * 60
 
 STUB_TERRAFORM = r"""#!/usr/bin/env bash
+here="$(dirname "${BASH_SOURCE[0]}")"
+. "${here}/stub.env"
 printf '%s\n' "terraform $*" >>"${STUB_LOG}"
-{ env | grep -E '^(TF_|AWS_)' | sort; echo "--"; } >>"${STUB_ENV_LOG}"
+echo "umask=$(umask)" >>"${STUB_LOG}"
+{ env | sort; echo "--"; } >>"${STUB_ENV_LOG}"
 chdir=""
 args=()
 for argument in "$@"; do
@@ -56,7 +64,9 @@ for argument in "$@"; do
     *) args+=("${argument}") ;;
   esac
 done
-echo "stub terraform ${args[0]}: arn:aws:iam::333333333333:role/stub"
+if [[ "${args[0]}" != state ]]; then
+  echo "stub terraform ${args[0]}: arn:aws:iam::333333333333:role/stub"
+fi
 case "${args[0]}" in
   fmt)
     [[ "${STUB_FMT_STATUS:-0}" == 0 ]] || echo "main.tf"
@@ -67,6 +77,21 @@ case "${args[0]}" in
     done
     exit "${STUB_PLAN_STATUS:-0}" ;;
   apply) exit "${STUB_APPLY_STATUS:-0}" ;;
+  state)
+    if [[ "${STUB_STATE_STATUS:-0}" != 0 ]]; then
+      echo "Error: Failed to load state: access denied" >&2
+      exit "${STUB_STATE_STATUS}"
+    fi
+    if [[ "${STUB_STATE_MISSING:-0}" == 1 ]]; then
+      printf '%s\n' "No state file was found!" "" \
+        "State management commands require a state file." >&2
+      exit 1
+    fi
+    [[ -e "${here}/removed" ]] && exit 0
+    count="${STUB_STATE_COUNT:-3}"
+    for ((n = 1; n <= count; n++)); do echo "aws_stub.resource_${n}"; done
+    [[ "${STUB_STATE_DATA:-0}" != 1 ]] || echo "data.aws_stub.caller"
+    exit 0 ;;
   destroy)
     if [[ -t 0 ]]; then
       echo "tty_stdin=yes" >>"${STUB_LOG}"
@@ -79,13 +104,16 @@ case "${args[0]}" in
     printf '  Enter a value: '
     read -r answer
     echo "answer=${answer}" >>"${STUB_LOG}"
+    [[ "${STUB_REMOVAL_KEEPS_STATE:-0}" == 1 ]] || : >"${here}/removed"
     exit 0 ;;
   *) exit 0 ;;
 esac
 """
 
 STUB_AWS = r"""#!/usr/bin/env bash
+. "$(dirname "${BASH_SOURCE[0]}")/stub.env"
 printf '%s\n' "aws $*" >>"${STUB_AWS_LOG}"
+{ env | sort; echo "--"; } >>"${STUB_AWS_ENV_LOG}"
 if [[ "${STUB_AWS_STATUS:-0}" != 0 ]]; then
   echo "An error occurred (ExpiredToken) for account 111111111111" >&2
   exit "${STUB_AWS_STATUS}"
@@ -93,11 +121,79 @@ fi
 echo "${STUB_ACCOUNT}"
 """
 
+# What the script lets through to Terraform and to the aws CLI (aws.sh,
+# ENV_BASE and ENV_AWS), written out here once more so that a name added to the
+# script's list has to be added here too, on purpose.
+BASE_NAMES = {
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TERM",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+}
+AWS_NAMES = {
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+}
+SCRIPT_SETS = {"AWS_REGION", "AWS_PAGER"}
+TF_VAR_NAMES = {
+    "TF_VAR_region",
+    "TF_VAR_api_access_cidr",
+    "TF_VAR_budget_email",
+    "TF_VAR_expected_account_id",
+}
+SHELL_ADDS = {"PWD", "OLDPWD", "SHLVL", "_"}  # what bash itself adds to a child
+
+GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+}
+
+
+def git(root: Path, *args: str) -> str:
+    done = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Owner",
+            "-c",
+            "user.email=owner@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            *args,
+        ],
+        cwd=root,
+        env=GIT_ENV,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def env_names(log: str) -> set[str]:
+    """The names in a stub's environment log (one ``NAME=value`` per line)."""
+    return {
+        line.split("=", 1)[0]
+        for line in log.splitlines()
+        if "=" in line and line != "--"
+    }
+
 
 @dataclass
 class Tree:
     root: Path
     base_env: dict[str, str]
+    stub_env: dict[str, str] = field(default_factory=dict)
 
     @property
     def script(self) -> Path:
@@ -111,7 +207,19 @@ class Tree:
     def local_file(self) -> Path:
         return self.root / "infra" / "terraform" / "local.env-aws"
 
+    @property
+    def state_dir(self) -> Path:
+        return self.root / STATE_DIRECTORY
+
     def calls(self) -> list[str]:
+        log = self.root / "stub.log"
+        return (
+            [c for c in log.read_text().splitlines() if c.startswith("terraform ")]
+            if log.exists()
+            else []
+        )
+
+    def stub_lines(self) -> list[str]:
         log = self.root / "stub.log"
         return log.read_text().splitlines() if log.exists() else []
 
@@ -123,8 +231,33 @@ class Tree:
         log = self.root / "stub-env.log"
         return log.read_text() if log.exists() else ""
 
+    def aws_env(self) -> str:
+        log = self.root / "stub-aws-env.log"
+        return log.read_text() if log.exists() else ""
+
     def terraform_calls(self, subcommand: str) -> list[str]:
-        return [c for c in self.calls() if f" {subcommand}" in c and "terraform" in c]
+        return [c for c in self.calls() if f" {subcommand}" in c]
+
+    def subcommands(self) -> list[str]:
+        return [call.split()[2] for call in self.calls()]
+
+    def write_stub_env(self, extra: dict[str, str]) -> None:
+        merged = {**self.stub_env, **extra}
+        text = "".join(f"{k}={shlex.quote(v)}\n" for k, v in merged.items())
+        (self.root / "stubs" / "stub.env").write_text(text)
+
+    def command(self, *words: str, caller_umask: str | None = None) -> list[str]:
+        command = [str(self.script), *words]
+        if caller_umask is None:
+            return command
+        return [
+            "bash",
+            "-c",
+            'umask "$1"; shift; exec "$@"',
+            "umask",
+            caller_umask,
+            *command,
+        ]
 
     def run(
         self,
@@ -132,10 +265,17 @@ class Tree:
         *,
         terminal: bool = False,
         answer: str = "yes\n",
+        caller_umask: str | None = None,
         **env: str,
     ) -> subprocess.CompletedProcess[str]:
-        full = {**self.base_env, **env}
-        command = [str(self.script), *([subcommand] if subcommand else [])]
+        self.write_stub_env({k: v for k, v in env.items() if k.startswith("STUB_")})
+        full = {
+            **self.base_env,
+            **{k: v for k, v in env.items() if not k.startswith("STUB_")},
+        }
+        command = self.command(
+            *([subcommand] if subcommand else []), caller_umask=caller_umask
+        )
         if not terminal:
             return subprocess.run(
                 command,
@@ -199,7 +339,13 @@ def tree(tmp_path: Path) -> Tree:
     (terraform_dir / "aws").mkdir(parents=True)
     for name in ("aws.sh", "common.sh"):
         shutil.copy2(TERRAFORM_DIR / name, terraform_dir / name)
+    # The real ignore file, so that what the script's checks see as "committed"
+    # is what the repository's own patterns say.
+    shutil.copy2(REPO_ROOT / ".gitignore", tmp_path / ".gitignore")
     (terraform_dir / "aws" / "main.tf").write_text("# a stand-in module\n")
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "a stand-in tree")
     stubs = tmp_path / "stubs"
     stubs.mkdir()
     for name, text in (("terraform", STUB_TERRAFORM), ("aws", STUB_AWS)):
@@ -208,21 +354,34 @@ def tree(tmp_path: Path) -> Tree:
     env = {
         "PATH": f"{stubs}:{os.environ['PATH']}",
         "HOME": str(tmp_path),
+    }
+    stub_env = {
         "STUB_LOG": str(tmp_path / "stub.log"),
         "STUB_AWS_LOG": str(tmp_path / "stub-aws.log"),
         "STUB_ENV_LOG": str(tmp_path / "stub-env.log"),
+        "STUB_AWS_ENV_LOG": str(tmp_path / "stub-aws-env.log"),
         "STUB_ACCOUNT": PINNED,
     }
-    return Tree(tmp_path, env)
+    made = Tree(tmp_path, env, stub_env)
+    made.write_stub_env({})
+    return made
 
 
-def with_local_file(tree: Tree, text: str = LOCAL_FILE) -> Tree:
+def with_local_file(tree: Tree, text: str = LOCAL_FILE, mode: int = 0o600) -> Tree:
     tree.local_file.write_text(text)
+    tree.local_file.chmod(mode)
     return tree
 
 
-def with_saved_plan(tree: Tree) -> Tree:
+def with_saved_plan(
+    tree: Tree, *, age_seconds: int = 0, commit: str | None = None
+) -> Tree:
+    """A saved plan with the record ``plan`` leaves beside it: this tree's
+    commit (or the one given) and the time it was made."""
     (tree.module / PLAN_FILE).write_text("plan")
+    commit = commit or git(tree.root, "rev-parse", "HEAD")
+    made = int(time.time()) - age_seconds
+    (tree.module / META_FILE).write_text(f"commit={commit}\ntime={made}\n")
     return tree
 
 
@@ -271,13 +430,13 @@ def test_validate_checks_the_format_then_initialises_with_no_backend_then_valida
     done = tree.run("validate")
 
     assert done.returncode == 0, done.stderr
-    subcommands = [call.split()[2] for call in tree.calls()]
-    assert subcommands == ["fmt", "init", "validate"]
+    assert tree.subcommands() == ["fmt", "init", "validate"]
     fmt, init, _ = tree.calls()
     assert f"-chdir={tree.module}" in fmt
     assert "-check" in fmt
     assert "-backend=false" in init
     assert "-input=false" in init
+    assert "-backend-config" not in init
 
 
 def test_validate_needs_no_local_file_and_never_calls_the_aws_cli(tree: Tree) -> None:
@@ -297,7 +456,7 @@ def test_validate_stops_at_a_format_difference_and_says_how_to_fix_it(
     assert done.returncode != 0
     assert "fmt" in done.stderr
     assert "terraform -chdir=" in done.stderr
-    assert [call.split()[2] for call in tree.calls()] == ["fmt"]
+    assert tree.subcommands() == ["fmt"]
 
 
 def test_what_terraform_prints_passes_through_redact(tree: Tree) -> None:
@@ -305,6 +464,19 @@ def test_what_terraform_prints_passes_through_redact(tree: Tree) -> None:
 
     assert "stub terraform validate: <arn>" in done.stdout
     assert NOISE not in everything_printed(done)
+
+
+def test_validate_runs_terraform_with_no_aws_credential_at_all(tree: Tree) -> None:
+    done = tree.run(
+        "validate",
+        **CREDENTIALS,
+        AWS_REGION="eu-central-1",
+    )
+
+    assert done.returncode == 0, done.stderr
+    names = env_names(tree.terraform_env())
+    assert {n for n in names if n.startswith("AWS_")} == set()
+    assert "PATH" in names  # the run did reach the stub, and it saw a path
 
 
 # ── the pin: what plan, apply and removal refuse ─────────────────────────────
@@ -416,6 +588,455 @@ def test_the_pinned_account_passes_and_the_identity_is_asked_once(
     assert_no_identifier_printed(done)
 
 
+# ── the local file is read, not run ──────────────────────────────────────────
+
+# Each of these is something the old script, which sourced the file, would have
+# run or exported. The marker name is the one the file would create or print.
+HOSTILE_LINES = [
+    "touch ran-from-the-local-file",
+    "MERIDIAN_AWS_REGION=eu-central-1; touch ran-from-the-local-file",
+    "MERIDIAN_AWS_REGION=$(touch ran-from-the-local-file)",
+    "MERIDIAN_AWS_REGION=`touch ran-from-the-local-file`",
+    "MERIDIAN_AWS_REGION='ran-from-the-local-file'",
+    "export TF_CLI_ARGS_plan=-ran-from-the-local-file",
+    "TF_CLI_ARGS_plan=-ran-from-the-local-file",
+    "TF_CLI_ARGS=-ran-from-the-local-file",
+    "TF_LOG=ran-from-the-local-file",
+    "AWS_ENDPOINT_URL=ran-from-the-local-file",
+    "MERIDIAN_AWS_OTHER=ran-from-the-local-file",
+    "MERIDIAN_AWS_REGION =ran-from-the-local-file",
+    " MERIDIAN_AWS_REGION=ran-from-the-local-file",
+    "2222",
+]
+
+
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize("line", HOSTILE_LINES)
+def test_a_line_that_is_not_a_known_key_is_refused_by_its_number_and_runs_nothing(
+    tree: Tree, subcommand: str, line: str
+) -> None:
+    with_local_file(tree, "\n".join([*LOCAL_LINES, line, ""]))
+
+    done = run_refusing(tree, subcommand)
+
+    printed = everything_printed(done)
+    assert done.returncode == 1, printed
+    assert "line 5" in printed
+    assert "ran-from-the-local-file" not in printed
+    # The sentence names the file, whose path holds the test's own number.
+    assert "2222" not in printed.replace(str(tree.local_file), "")
+    assert not (tree.root / "ran-from-the-local-file").exists()
+    assert tree.calls() == []
+    assert tree.aws_calls() == []
+
+
+def test_the_refusal_names_the_number_of_the_line_it_is_on(tree: Tree) -> None:
+    text = "\n".join(
+        [LOCAL_LINES[0], "", LOCAL_LINES[1], "x y z", *LOCAL_LINES[2:], ""]
+    )
+    with_local_file(tree, text)
+
+    done = run_refusing(tree, "plan")
+
+    assert done.returncode == 1
+    assert "line 4" in done.stderr
+
+
+def test_a_windows_line_ending_is_refused_by_its_number(tree: Tree) -> None:
+    with_local_file(tree, LOCAL_FILE.replace("\n", "\r\n"))
+
+    done = run_refusing(tree, "plan")
+
+    assert done.returncode == 1
+    assert "line 1" in done.stderr
+    assert tree.calls() == []
+
+
+def test_a_key_that_appears_twice_is_refused_by_the_line_of_the_second(
+    tree: Tree,
+) -> None:
+    with_local_file(tree, "\n".join([*LOCAL_LINES, LOCAL_LINES[1], ""]))
+
+    done = run_refusing(tree, "plan")
+
+    assert done.returncode == 1
+    assert "line 5" in done.stderr
+
+
+def test_blank_lines_and_comments_in_the_local_file_are_accepted(tree: Tree) -> None:
+    text = "\n".join(["# the four values", "", *LOCAL_LINES, "", "# end", ""])
+    with_local_file(tree, text)
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+
+
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize("mode", [0o640, 0o644, 0o666, 0o604, 0o660, 0o606])
+def test_a_local_file_that_group_or_others_can_read_or_write_is_refused(
+    tree: Tree, subcommand: str, mode: int
+) -> None:
+    with_local_file(tree, mode=mode)
+
+    done = run_refusing(tree, subcommand)
+
+    assert_refused(tree, done, "mode", subcommand)
+    assert "600" in everything_printed(done)
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o400])
+def test_a_local_file_only_its_owner_can_reach_is_accepted(
+    tree: Tree, mode: int
+) -> None:
+    with_local_file(tree, mode=mode)
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+
+
+# ── what Terraform and the aws CLI are given ─────────────────────────────────
+
+HOSTILE_ENVIRONMENT = {
+    "TF_LOG": "trace",
+    "TF_LOG_PATH": "/nonexistent/a-log",
+    "TF_LOG_CORE": "trace",
+    "TF_LOG_PROVIDER": "trace",
+    "TF_WORKSPACE": "other",
+    "TF_DATA_DIR": "/nonexistent/a-data-dir",
+    "TF_CLI_CONFIG_FILE": "/nonexistent/a-config",
+    "TF_REATTACH_PROVIDERS": "{}",
+    "TF_PLUGIN_CACHE_DIR": "/nonexistent/a-cache",
+    "TF_INPUT": "0",
+    "TF_CLI_ARGS": "-auto-approve",
+    "TF_CLI_ARGS_plan": "-refresh=false",
+    "TF_CLI_ARGS_init": "-upgrade",
+    "TF_VAR_node_instance_type": "p5.48xlarge",
+    "TF_VAR_node_count": "5",
+    "TF_VAR_budget_email": "someone-else@example.com",
+    "AWS_ENDPOINT_URL": "http://127.0.0.1:1",
+    "AWS_ENDPOINT_URL_STS": "http://127.0.0.1:1",
+    "AWS_DEFAULT_REGION": "us-east-1",
+    "AWS_CA_BUNDLE": "/nonexistent/a-ca-bundle",
+    "AWS_ROLE_ARN": "not-a-role",
+    "AWS_WEB_IDENTITY_TOKEN_FILE": "/nonexistent/a-token",
+    "AWS_EC2_METADATA_SERVICE_ENDPOINT": "http://127.0.0.1:1",
+    "SHELLOPTS": "xtrace",
+    "BASH_ENV": "/nonexistent/a-startup-file",
+    "BASH_XTRACEFD": "2",
+    "PS4": "trace ",
+    "HTTPS_PROXY": "http://127.0.0.1:1",
+    "SOMETHING_ELSE": "x",
+}
+CREDENTIALS = {
+    "AWS_ACCESS_KEY_ID": "AKIAIOSFODNN7EXAMPLE",
+    "AWS_SECRET_ACCESS_KEY": "not-a-real-secret",
+    "AWS_SESSION_TOKEN": "not-a-real-token",
+    "AWS_PROFILE": "a-profile",
+    "AWS_CONFIG_FILE": "/nonexistent/a-config-file",
+    "AWS_SHARED_CREDENTIALS_FILE": "/nonexistent/a-credentials-file",
+    "TERM": "xterm",
+    "LANG": "C.UTF-8",
+}
+
+
+def run_with_hostile_environment(tree: Tree, subcommand: str = "plan"):
+    with_local_file(tree)
+    # SHELLOPTS and BASH_ENV would trace or change the script's own shell: leave
+    # them for the test of the trace, and give this one the rest.
+    hostile = {
+        k: v
+        for k, v in HOSTILE_ENVIRONMENT.items()
+        if k not in {"SHELLOPTS", "BASH_ENV", "BASH_XTRACEFD", "PS4"}
+    }
+    return tree.run(subcommand, **hostile, **CREDENTIALS)
+
+
+def test_terraform_sees_only_the_names_the_script_chose(tree: Tree) -> None:
+    done = run_with_hostile_environment(tree)
+
+    assert done.returncode == 0, everything_printed(done)
+    seen = env_names(tree.terraform_env())
+    assert seen - SHELL_ADDS <= BASE_NAMES | AWS_NAMES | SCRIPT_SETS | TF_VAR_NAMES
+    assert seen >= {"PATH", "HOME"} | AWS_NAMES | TF_VAR_NAMES | {"AWS_REGION"}
+
+
+def test_the_aws_cli_sees_only_the_names_the_script_chose_and_no_terraform_variable(
+    tree: Tree,
+) -> None:
+    done = run_with_hostile_environment(tree)
+
+    assert done.returncode == 0, everything_printed(done)
+    seen = env_names(tree.aws_env())
+    assert seen - SHELL_ADDS <= BASE_NAMES | AWS_NAMES | SCRIPT_SETS
+    assert seen >= {"PATH", "HOME"} | AWS_NAMES | {"AWS_REGION"}
+    assert {n for n in seen if n.startswith("TF_")} == set()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "TF_LOG",
+        "TF_LOG_PATH",
+        "TF_LOG_CORE",
+        "TF_LOG_PROVIDER",
+        "TF_WORKSPACE",
+        "TF_DATA_DIR",
+        "TF_CLI_CONFIG_FILE",
+        "TF_REATTACH_PROVIDERS",
+        "TF_PLUGIN_CACHE_DIR",
+        "TF_INPUT",
+        "TF_CLI_ARGS",
+        "TF_CLI_ARGS_plan",
+        "TF_CLI_ARGS_init",
+        "TF_VAR_node_instance_type",
+        "TF_VAR_node_count",
+        "AWS_ENDPOINT_URL",
+        "AWS_ENDPOINT_URL_STS",
+        "AWS_DEFAULT_REGION",
+        "AWS_CA_BUNDLE",
+        "AWS_ROLE_ARN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+        "HTTPS_PROXY",
+        "SOMETHING_ELSE",
+    ],
+)
+def test_a_name_the_script_did_not_choose_never_reaches_either_program(
+    tree: Tree, name: str
+) -> None:
+    run_with_hostile_environment(tree)
+
+    assert name not in env_names(tree.terraform_env())
+    assert name not in env_names(tree.aws_env())
+
+
+def test_the_variables_the_script_exports_win_over_the_callers(tree: Tree) -> None:
+    run_with_hostile_environment(tree)
+
+    seen = tree.terraform_env()
+    assert f"TF_VAR_budget_email={BUDGET_EMAIL}" in seen
+    assert "someone-else@example.com" not in seen
+    assert "AWS_REGION=eu-central-1" in seen
+
+
+@pytest.mark.parametrize("subcommand", ["apply", "destroy"])
+def test_apply_and_removal_get_the_same_chosen_environment(
+    tree: Tree, subcommand: str
+) -> None:
+    with_saved_plan(tree)
+    with_local_file(tree)
+    hostile = {
+        k: v
+        for k, v in HOSTILE_ENVIRONMENT.items()
+        if k not in {"SHELLOPTS", "BASH_ENV", "BASH_XTRACEFD", "PS4"}
+    }
+
+    tree.run(subcommand, terminal=subcommand == "destroy", **hostile, **CREDENTIALS)
+
+    seen = env_names(tree.terraform_env())
+    assert seen - SHELL_ADDS <= BASE_NAMES | AWS_NAMES | SCRIPT_SETS | TF_VAR_NAMES
+    assert {n for n in seen if n.startswith("TF_") and n not in TF_VAR_NAMES} == set()
+
+
+def test_terraform_never_sees_an_argument_a_caller_put_in_the_environment(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+
+    tree.run(
+        "plan",
+        TF_CLI_ARGS="-auto-approve",
+        TF_CLI_ARGS_plan="-destroy",
+        TF_CLI_ARGS_init="-upgrade",
+    )
+
+    assert "TF_CLI_ARGS" not in tree.terraform_env()
+
+
+# ── tracing ──────────────────────────────────────────────────────────────────
+
+
+def run_traced(tree: Tree, how: str) -> tuple[subprocess.CompletedProcess[str], str]:
+    """The plan, run so that the shell would trace it: with -x, with SHELLOPTS
+    in the environment, and with the trace sent to a file of its own."""
+    with_local_file(tree)
+    tree.write_stub_env({})
+    trace_file = tree.root / "trace.log"
+    env = dict(tree.base_env)
+    script = str(tree.script)
+    if how == "bash -x":
+        command = ["bash", "-x", script, "plan"]
+    elif how == "SHELLOPTS":
+        env["SHELLOPTS"] = "xtrace"
+        command = [script, "plan"]
+    else:
+        command = [
+            "bash",
+            "-c",
+            'exec 9>"$1"; BASH_XTRACEFD=9; export BASH_XTRACEFD; '
+            'exec bash -x "$2" plan',
+            "trace",
+            str(trace_file),
+            script,
+        ]
+    done = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tree.root,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    trace = trace_file.read_text() if trace_file.exists() else ""
+    return done, trace
+
+
+@pytest.mark.parametrize("how", ["bash -x", "SHELLOPTS", "BASH_XTRACEFD"])
+def test_a_traced_run_prints_none_of_the_four_values(tree: Tree, how: str) -> None:
+    done, trace = run_traced(tree, how)
+
+    assert done.returncode == 0, everything_printed(done)
+    printed = everything_printed(done) + trace
+    for private in (PINNED, ENDPOINT_CIDR, BUDGET_EMAIL, "eu-central-1"):
+        assert private not in printed
+    # The trace was on when the script started (else this test proves nothing).
+    assert "+ set +x" in printed
+
+
+def test_the_script_switches_tracing_off_before_it_reads_anything() -> None:
+    lines = (TERRAFORM_DIR / "aws.sh").read_text(encoding="utf-8").splitlines()
+    code = [line for line in lines if line.strip() and not line.startswith("#")]
+
+    assert code[0] == "set +x"
+    assert "set -euo pipefail" in code[:3]
+    assert any(line.startswith("umask 077") for line in code[:6])
+
+
+# ── umask ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "apply"])
+def test_everything_terraform_writes_is_written_under_a_private_umask(
+    tree: Tree, subcommand: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    done = tree.run(subcommand, caller_umask="022")
+
+    assert done.returncode == 0, everything_printed(done)
+    umasks = [line for line in tree.stub_lines() if line.startswith("umask=")]
+    assert umasks != []
+    assert set(umasks) == {"umask=0077"}
+
+
+def test_the_removal_runs_terraform_under_a_private_umask_too(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    done = tree.run("destroy", terminal=True)
+
+    assert done.returncode == 0, done.stdout
+    umasks = [line for line in tree.stub_lines() if line.startswith("umask=")]
+    assert umasks != []
+    assert set(umasks) == {"umask=0077"}
+
+
+# ── nothing in the module's directory may change the plan unseen ─────────────
+
+VARIABLE_FILES = [
+    "terraform.tfvars",
+    "terraform.tfvars.json",
+    "mine.auto.tfvars",
+    "mine.auto.tfvars.json",
+]
+OVERRIDE_FILES = [
+    "override.tf",
+    "override.tf.json",
+    "mine_override.tf",
+    "mine_override.tf.json",
+]
+
+
+@pytest.mark.parametrize("subcommand", REFUSING)
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [(n, "variable file") for n in VARIABLE_FILES]
+    + [(n, "override file") for n in OVERRIDE_FILES],
+)
+def test_a_variable_file_or_an_override_file_in_the_module_is_refused_by_its_kind(
+    tree: Tree, subcommand: str, name: str, kind: str
+) -> None:
+    with_local_file(tree)
+    (tree.module / name).write_text("# changes the plan\n")
+
+    done = run_refusing(tree, subcommand)
+
+    assert_refused(tree, done, kind, subcommand)
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize("name", ["other.tfvars", "notes.txt", "my_override_tf.txt"])
+def test_a_file_terraform_does_not_load_by_itself_is_not_refused(
+    tree: Tree, name: str
+) -> None:
+    with_local_file(tree)
+    (tree.module / name).write_text("x\n")
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "override.tf",
+        "x_override.tf",
+        "override.tf.json",
+        "x.tfvars.json",
+        ".terraformrc",
+        "terraform.rc",
+        "tf.log",
+        "aws.tfplan.meta",
+    ],
+)
+def test_the_repository_ignores_the_files_that_could_hold_what_must_not_be_committed(
+    name: str,
+) -> None:
+    done = subprocess.run(
+        ["git", "check-ignore", "-q", f"infra/terraform/aws/{name}"],
+        cwd=REPO_ROOT,
+        env=GIT_ENV,
+        check=False,
+    )
+
+    assert done.returncode == 0, f"{name} is not ignored by .gitignore"
+
+
+# ── colour ───────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("subcommand", ["validate", "plan", "apply", "destroy"])
+def test_every_terraform_call_is_made_without_colour(
+    tree: Tree, subcommand: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.calls() != []
+    for call in tree.calls():
+        assert " -no-color" in call, call
+
+
 # ── plan ─────────────────────────────────────────────────────────────────────
 
 
@@ -424,19 +1045,19 @@ def test_plan_initialises_then_plans_into_a_saved_file_only_the_owner_can_read(
 ) -> None:
     with_local_file(tree)
 
-    done = tree.run("plan")
+    done = tree.run("plan", caller_umask="022")
 
     assert done.returncode == 0, everything_printed(done)
-    subcommands = [call.split()[2] for call in tree.calls()]
-    assert subcommands == ["init", "plan"]
+    assert tree.subcommands() == ["init", "plan"]
     plan_call = tree.terraform_calls("plan")[0]
     assert f"-out={PLAN_FILE}" in plan_call
     assert "-input=false" in plan_call
-    mode = stat.S_IMODE((tree.module / PLAN_FILE).stat().st_mode)
-    assert mode & 0o077 == 0
+    for name in (PLAN_FILE, META_FILE):
+        mode = stat.S_IMODE((tree.module / name).stat().st_mode)
+        assert mode & 0o077 == 0, name
 
 
-def test_plan_hands_terraform_the_region_the_address_and_the_email_not_the_account(
+def test_plan_hands_terraform_the_region_the_address_the_email_and_the_account(
     tree: Tree,
 ) -> None:
     with_local_file(tree)
@@ -447,9 +1068,12 @@ def test_plan_hands_terraform_the_region_the_address_and_the_email_not_the_accou
     assert "TF_VAR_region=eu-central-1" in seen
     assert f"TF_VAR_api_access_cidr={ENDPOINT_CIDR}" in seen
     assert f"TF_VAR_budget_email={BUDGET_EMAIL}" in seen
+    # The module's provider refuses any other account (allowed_account_ids), so
+    # the pinned one goes in as a variable, and nowhere else.
+    assert f"TF_VAR_expected_account_id={PINNED}" in seen
     assert "AWS_REGION=eu-central-1" in seen
     assert "AWS_DEFAULT_REGION" not in seen
-    assert PINNED not in seen
+    assert f"={PINNED}" not in seen.replace(f"TF_VAR_expected_account_id={PINNED}", "")
 
 
 def test_plan_prints_none_of_the_four_values_nor_what_terraform_would_leak(
@@ -470,19 +1094,103 @@ def test_a_failed_plan_fails_the_command(tree: Tree) -> None:
     assert done.returncode == 1
 
 
-def test_terraform_never_sees_an_argument_a_caller_put_in_the_environment(
+def test_a_failed_plan_leaves_no_saved_plan_to_be_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    tree.run("plan", STUB_PLAN_STATUS="1")
+
+    assert not (tree.module / PLAN_FILE).exists()
+    assert not (tree.module / META_FILE).exists()
+
+
+def test_plan_records_this_trees_commit_and_the_time_beside_the_plan(
     tree: Tree,
 ) -> None:
     with_local_file(tree)
+    before = int(time.time())
 
-    tree.run(
-        "plan",
-        TF_CLI_ARGS="-auto-approve",
-        TF_CLI_ARGS_plan="-destroy",
-        TF_CLI_ARGS_init="-upgrade",
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    lines = (tree.module / META_FILE).read_text().splitlines()
+    assert lines[0] == f"commit={git(tree.root, 'rev-parse', 'HEAD')}"
+    assert re.fullmatch(r"time=\d+", lines[1])
+    assert before <= int(lines[1].removeprefix("time=")) <= int(time.time())
+    assert len(lines) == 2
+
+
+# ── the state ────────────────────────────────────────────────────────────────
+
+
+def test_the_state_lives_in_a_directory_under_home_that_only_the_owner_can_enter(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    tree.state_dir.mkdir(parents=True, mode=0o755)
+    tree.state_dir.chmod(0o755)
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    (init,) = tree.terraform_calls("init")
+    path = tree.state_dir / "aws.tfstate"
+    assert f"-backend-config=path={path}" in init
+    assert stat.S_IMODE(tree.state_dir.stat().st_mode) == 0o700
+    assert tree.module not in path.parents  # not in a checkout
+
+
+def test_a_state_directory_that_does_not_exist_is_made_private(tree: Tree) -> None:
+    with_local_file(tree)
+    assert not tree.state_dir.exists()
+
+    tree.run("plan", caller_umask="022")
+
+    assert stat.S_IMODE(tree.state_dir.stat().st_mode) == 0o700
+
+
+def test_validate_makes_no_state_directory_and_names_no_backend_path(
+    tree: Tree,
+) -> None:
+    tree.run("validate")
+
+    assert not tree.state_dir.exists()
+
+
+@pytest.mark.parametrize("subcommand", ["apply", "destroy"])
+def test_apply_and_removal_find_the_same_state(tree: Tree, subcommand: str) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    assert done.returncode == 0, everything_printed(done)
+    inits = tree.terraform_calls("init")
+    if subcommand == "destroy":
+        (init,) = inits
+        assert f"-backend-config=path={tree.state_dir / 'aws.tfstate'}" in init
+
+
+def test_without_a_home_the_state_has_no_place_and_the_script_refuses(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    env = {k: v for k, v in tree.base_env.items() if k != "HOME"}
+
+    done = subprocess.run(
+        [str(tree.script), "plan"],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tree.root,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
     )
 
-    assert "TF_CLI_ARGS" not in tree.terraform_env()
+    assert done.returncode == 1
+    assert "HOME" in done.stderr
+    assert tree.terraform_calls("plan") == []
 
 
 # ── apply ────────────────────────────────────────────────────────────────────
@@ -510,6 +1218,7 @@ def test_apply_applies_exactly_the_saved_plan_and_removes_it(tree: Tree) -> None
     assert call.split()[-1] == PLAN_FILE
     assert "-auto-approve" not in call
     assert not (tree.module / PLAN_FILE).exists()
+    assert not (tree.module / META_FILE).exists()
     assert_no_identifier_printed(done)
 
 
@@ -524,6 +1233,7 @@ def test_apply_removes_the_plan_when_it_fails_and_says_to_plan_again(
     assert done.returncode == 1
     assert "make aws-plan" in done.stderr
     assert not (tree.module / PLAN_FILE).exists()
+    assert not (tree.module / META_FILE).exists()
 
 
 def test_apply_to_another_account_leaves_the_saved_plan_for_the_right_one(
@@ -536,6 +1246,135 @@ def test_apply_to_another_account_leaves_the_saved_plan_for_the_right_one(
 
     assert done.returncode == 1
     assert (tree.module / PLAN_FILE).exists()
+
+
+# ── a saved plan is applied only if it is this tree's and fresh ──────────────
+
+
+def assert_plan_refused_and_dropped(tree: Tree, done, sentence: str) -> None:
+    assert done.returncode == 1, everything_printed(done)
+    assert sentence in done.stderr
+    assert "make aws-plan" in done.stderr
+    assert tree.terraform_calls("apply") == []
+    assert tree.aws_calls() == []
+    assert not (tree.module / PLAN_FILE).exists()
+    assert not (tree.module / META_FILE).exists()
+
+
+def test_a_plan_with_no_record_beside_it_is_not_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / META_FILE).unlink()
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "record")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "commit=not-a-commit\ntime=1\n",
+        "time=1\n",
+        "commit=0123456789abcdef0123456789abcdef01234567\n",
+        "commit=0123456789abcdef0123456789abcdef01234567\ntime=soon\n",
+        "commit=0123456789abcdef0123456789abcdef01234567\ntime=1\nextra\n",
+    ],
+)
+def test_a_record_that_is_not_a_commit_and_a_time_is_not_trusted(
+    tree: Tree, text: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / META_FILE).write_text(text)
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "record")
+
+
+def test_a_plan_made_at_another_commit_is_not_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / "main.tf").write_text("# changed and committed\n")
+    git(tree.root, "commit", "-q", "-am", "a change after the plan")
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "commit")
+
+
+def test_a_tracked_file_changed_in_the_module_since_the_plan_is_not_applied(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / "main.tf").write_text("# changed, not committed\n")
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "uncommitted")
+
+
+def test_a_new_file_in_the_module_since_the_plan_is_not_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / "extra.tf").write_text("# a new resource\n")
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "uncommitted")
+
+
+def test_a_change_outside_the_module_is_not_the_modules_business(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.root / "notes.md").write_text("not in the module\n")
+
+    done = tree.run("apply")
+
+    assert done.returncode == 0, everything_printed(done)
+
+
+def test_a_plan_older_than_the_bound_is_not_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree, age_seconds=PLAN_MAX_AGE_SECONDS + 60)
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "old")
+
+
+def test_a_plan_a_little_younger_than_the_bound_is_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree, age_seconds=PLAN_MAX_AGE_SECONDS - 60)
+
+    done = tree.run("apply")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.terraform_calls("apply") != []
+
+
+def test_a_plan_dated_in_the_future_is_not_applied(tree: Tree) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree, age_seconds=-3600)
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "old")
+
+
+def test_planning_in_a_module_with_uncommitted_changes_warns_that_it_cannot_be_applied(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    (tree.module / "main.tf").write_text("# not committed\n")
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert "uncommitted" in done.stdout
 
 
 # ── removal ──────────────────────────────────────────────────────────────────
@@ -588,7 +1427,7 @@ def test_removal_with_a_terminal_lets_terraform_ask_its_own_question(
     # The question reached the terminal (the test types its answer only then),
     # and what was typed reached Terraform on a standard input that is one.
     assert QUESTION in done.stdout
-    calls = tree.calls()
+    calls = tree.stub_lines()
     assert "tty_stdin=yes" in calls
     assert "answer=yes" in calls
     (call,) = tree.terraform_calls("destroy")
@@ -606,6 +1445,72 @@ def test_removal_with_a_terminal_still_checks_the_account_first(tree: Tree) -> N
     assert done.returncode == 1
     assert "not the one pinned in" in done.stdout
     assert tree.terraform_calls("destroy") == []
+
+
+def test_removal_initialises_first_counts_what_the_state_holds_and_then_removes(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, STUB_STATE_COUNT="4")
+
+    assert done.returncode == 0, done.stdout
+    assert tree.subcommands() == ["init", "state", "destroy", "state"]
+    assert "4 resources" in done.stdout
+    assert "removed" in done.stdout.splitlines()[-1]
+
+
+@pytest.mark.parametrize(
+    "how", [{"STUB_STATE_COUNT": "0"}, {"STUB_STATE_MISSING": "1"}]
+)
+def test_removal_over_an_empty_state_refuses_with_a_sentence_and_never_says_removed(
+    tree: Tree, how: dict[str, str]
+) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, **how)
+
+    assert done.returncode == 1, done.stdout
+    assert "holds nothing" in done.stdout
+    assert "removed." not in done.stdout
+    assert "lost" in done.stdout  # says what to do if the state was lost
+    assert "README" in done.stdout
+    assert tree.terraform_calls("destroy") == []
+
+
+def test_a_state_that_holds_only_data_sources_holds_nothing_to_remove(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, STUB_STATE_COUNT="0", STUB_STATE_DATA="1")
+
+    assert done.returncode == 1, done.stdout
+    assert "holds nothing" in done.stdout
+    assert tree.terraform_calls("destroy") == []
+
+
+def test_removal_that_cannot_read_the_state_refuses_and_says_so(tree: Tree) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, STUB_STATE_STATUS="1")
+
+    assert done.returncode == 1, done.stdout
+    assert "cannot read the state" in done.stdout
+    assert "Failed to load state" not in done.stdout  # terraform's words stay out
+    assert tree.terraform_calls("destroy") == []
+
+
+def test_removal_does_not_say_removed_while_the_state_still_holds_resources(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, STUB_REMOVAL_KEEPS_STATE="1")
+
+    assert done.returncode == 1, done.stdout
+    assert "removed." not in done.stdout
+    assert "still holds" in done.stdout
 
 
 # ── the script and the module agree on the variables' names ─────────────────
@@ -641,7 +1546,11 @@ def variables_the_script_exports() -> set[str]:
 def test_the_script_exports_every_module_variable_that_has_no_default() -> None:
     needed = variables_without_a_default()
 
-    assert needed >= {"api_access_cidr", "budget_email"}  # the reader found them
+    assert needed >= {
+        "api_access_cidr",
+        "budget_email",
+        "expected_account_id",
+    }  # the reader found them
     assert needed - variables_the_script_exports() == set()
 
 
@@ -650,3 +1559,313 @@ def test_the_script_exports_no_name_the_module_does_not_declare() -> None:
 
     assert exported - variables_declared() == set()
     assert exported >= {"region", "budget_email"}  # the reader found them
+
+
+def test_the_names_the_tests_expect_the_script_to_export_are_the_names_it_does() -> (
+    None
+):
+    assert {f"TF_VAR_{n}" for n in variables_the_script_exports()} == TF_VAR_NAMES
+
+
+# ── the module's own rules (what the two reviews asked of the .tf files) ─────
+
+MODULE_DIR = TERRAFORM_DIR / "aws"
+
+
+def module_text() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(MODULE_DIR.glob("*.tf"))
+    )
+
+
+def variable_block(name: str) -> str:
+    text = MODULE_VARIABLES.read_text(encoding="utf-8")
+    declared = re.split(r'^variable "(\w+)" \{$', text, flags=re.MULTILINE)
+    return dict(zip(declared[1::2], declared[2::2], strict=True))[name]
+
+
+def test_no_aws_managed_policy_arn_is_typed_anywhere_in_the_module() -> None:
+    assert "arn:aws:iam::aws:policy" not in module_text()
+
+
+def test_each_managed_policy_is_read_by_name_and_attached_by_the_arn_it_returns() -> (
+    None
+):
+    text = (MODULE_DIR / "cluster.tf").read_text(encoding="utf-8")
+
+    lookups = re.findall(r'^data "aws_iam_policy" "(\w+)"', text, flags=re.MULTILINE)
+    attachments = re.findall(
+        r'^resource "aws_iam_role_policy_attachment" "\w+" \{\n(.*?)^\}$',
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert sorted(lookups) == ["cluster", "ebs_csi", "node"]
+    for name in (
+        "AmazonEKSClusterPolicy",
+        "AmazonEKSWorkerNodePolicy",
+        "AmazonEC2ContainerRegistryPullOnly",
+        "AmazonEKS_CNI_Policy",
+        "AmazonEBSCSIDriverPolicyV2",
+    ):
+        assert f'"{name}"' in text
+    assert len(attachments) == 3
+    for body in attachments:
+        assert re.search(r"policy_arn\s*=\s*data\.aws_iam_policy\.", body)
+
+
+def test_the_provider_refuses_every_account_but_the_expected_one() -> None:
+    providers = (MODULE_DIR / "providers.tf").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"allowed_account_ids\s*=\s*\[var\.expected_account_id\]", providers
+    )
+    block = variable_block("expected_account_id")
+    assert "default" not in re.sub(r"#.*", "", block).replace("No default", "")
+    assert re.search(r"^  sensitive\s*=\s*true", block, re.MULTILINE)
+    assert "12" in block  # twelve digits
+
+
+@pytest.mark.parametrize(
+    "name", ["expected_account_id", "api_access_cidr", "budget_email"]
+)
+def test_a_variable_that_holds_an_account_an_address_or_an_email_is_sensitive(
+    name: str,
+) -> None:
+    assert re.search(r"^  sensitive\s*=\s*true", variable_block(name), re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    ("name", "default"),
+    [
+        ("node_instance_type", "t3.large"),
+        ("database_instance_class", "db.t4g.small"),
+    ],
+)
+def test_an_instance_type_comes_from_a_short_list_that_holds_its_default(
+    name: str, default: str
+) -> None:
+    block = variable_block(name)
+
+    (listed,) = re.findall(rf"contains\(\[([^\]]*)\], var\.{name}\)", block)
+    options = re.findall(r'"([^"]+)"', listed)
+    assert default in options
+    assert 2 <= len(options) <= 3
+    assert f'default     = "{default}"' in block
+    assert "cost ceiling" in block
+    assert "variables.tf" in block  # says where to widen it
+
+
+def test_each_pod_identity_role_trusts_one_service_account_of_one_cluster() -> None:
+    text = module_text()
+    documents = re.findall(
+        r'^data "aws_iam_policy_document" "(\w+)" \{\n(.*?)^\}$',
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+    pod_identity = {
+        name: body for name, body in documents if "pods.eks.amazonaws.com" in body
+    }
+    assert sorted(pod_identity) == ["ebs_csi_trust", "workload_trust"]
+    for body in pod_identity.values():
+        for tag in (
+            "aws:RequestTag/kubernetes-namespace",
+            "aws:RequestTag/kubernetes-service-account",
+            "aws:RequestTag/eks-cluster-name",
+        ):
+            assert f'variable = "{tag}"' in body
+        assert 'test     = "StringEquals"' in body
+    assert 'values   = ["kube-system"]' in pod_identity["ebs_csi_trust"]
+    assert 'values   = ["ebs-csi-controller-sa"]' in pod_identity["ebs_csi_trust"]
+    assert "var.workload_namespace" in pod_identity["workload_trust"]
+    assert "var.workload_service_account" in pod_identity["workload_trust"]
+
+
+def test_the_two_pod_identity_roles_do_not_share_a_trust_document() -> None:
+    text = module_text()
+
+    assert "pod_identity_trust" not in text
+    assert "ebs_csi_trust.json" in text
+    assert "workload_trust.json" in text
+
+
+def test_the_cluster_role_trusts_the_eks_service_for_assume_role_alone() -> None:
+    text = (MODULE_DIR / "cluster.tf").read_text(encoding="utf-8")
+    (body,) = re.findall(
+        r'^data "aws_iam_policy_document" "cluster_trust" \{\n(.*?)^\}$',
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+    assert 'actions = ["sts:AssumeRole"]' in body
+    assert "TagSession" not in body
+
+
+def test_the_module_keeps_its_state_out_of_its_own_directory() -> None:
+    versions = (MODULE_DIR / "versions.tf").read_text(encoding="utf-8")
+
+    assert re.search(r'^  backend "local" \{\}$', versions, re.MULTILINE)
+    assert "path" not in re.sub(r"#.*", "", versions)  # the script gives the path
+
+
+# What `terraform console` says of each value: the validations run when it
+# starts, with no provider and no account. Skipped where Terraform is not
+# installed (the pipeline has none yet, S022).
+needs_terraform = pytest.mark.skipif(
+    shutil.which("terraform") is None, reason="terraform is not installed"
+)
+VALID = {
+    "budget_email": BUDGET_EMAIL,
+    "api_access_cidr": ENDPOINT_CIDR,
+    "expected_account_id": PINNED,
+}
+
+
+def evaluate(tmp_path: Path, name: str, value: str) -> str:
+    """Everything `terraform console` prints for var.<name> set to the value,
+    the other required variables valid. The scratch copy holds variables.tf and
+    nothing else."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(exist_ok=True)
+    shutil.copy2(MODULE_VARIABLES, scratch / "variables.tf")
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        **{f"TF_VAR_{k}": v for k, v in {**VALID, name: value}.items()},
+    }
+    done = subprocess.run(
+        ["terraform", f"-chdir={scratch}", "console", "-no-color"],
+        input=f"var.{name}\n",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    return done.stdout + done.stderr
+
+
+REFUSED = "Invalid value for variable"
+
+
+@needs_terraform
+@pytest.mark.parametrize(
+    "value",
+    [
+        "203.0.113.7/32",
+        "100.63.255.255/32",
+        "126.255.255.255/32",
+        "128.0.0.1/32",
+        "169.253.1.1/32",
+        "172.15.255.255/32",
+        "172.32.0.1/32",
+        "192.167.1.1/32",
+        "223.255.255.255/32",
+        "11.0.0.1/32",
+    ],
+)
+def test_a_public_ipv4_address_as_a_slash_32_is_accepted(
+    tmp_path: Path, value: str
+) -> None:
+    assert REFUSED not in evaluate(tmp_path, "api_access_cidr", value)
+
+
+@needs_terraform
+@pytest.mark.parametrize(
+    "value",
+    [
+        "127.0.0.1/32",
+        "10.0.0.1/32",
+        "10.255.255.255/32",
+        "100.64.0.1/32",
+        "100.127.255.255/32",
+        "169.254.169.254/32",
+        "172.16.0.1/32",
+        "172.31.255.255/32",
+        "192.168.1.1/32",
+        "0.0.0.0/32",
+        "0.1.2.3/32",
+        "224.0.0.1/32",
+        "255.255.255.255/32",
+        "203.0.113.0/24",
+        "203.0.113.7",
+        "999.1.1.1/32",
+        "2001:db8::1/32",
+        "not-an-address",
+        "",
+    ],
+)
+def test_an_address_that_would_lock_the_owner_out_or_open_the_api_is_refused(
+    tmp_path: Path, value: str
+) -> None:
+    printed = evaluate(tmp_path, "api_access_cidr", value)
+
+    assert REFUSED in printed
+    assert "api_access_cidr must be one public IPv4 address" in printed
+    assert "Error: Invalid condition" not in printed  # the message is ours
+
+
+@needs_terraform
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("node_instance_type", "t3.large"),
+        ("node_instance_type", "t3.xlarge"),
+        ("database_instance_class", "db.t4g.small"),
+        ("database_instance_class", "db.t4g.medium"),
+        ("expected_account_id", "123456789012"),
+        ("budget_email", "someone@example.com"),
+    ],
+)
+def test_the_values_the_module_allows_are_accepted(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    assert REFUSED not in evaluate(tmp_path, name, value)
+
+
+@needs_terraform
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("node_instance_type", "p5.48xlarge"),
+        ("node_instance_type", "t3.2xlarge"),
+        ("node_instance_type", "t3.small"),
+        ("node_instance_type", ""),
+        ("database_instance_class", "db.x2iedn.32xlarge"),
+        ("database_instance_class", "db.t4g.large"),
+        ("database_instance_class", "db.t3.small"),
+        ("expected_account_id", "12345678901"),
+        ("expected_account_id", "1234567890123"),
+        ("expected_account_id", "12345678901a"),
+        ("expected_account_id", ""),
+        ("budget_email", "owner-at-example"),
+        ("budget_email", ""),
+    ],
+)
+def test_a_value_the_module_does_not_allow_is_refused_with_its_own_sentence(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    printed = evaluate(tmp_path, name, value)
+
+    assert REFUSED in printed
+    assert f"{name} must" in printed
+    if name.endswith(("_type", "_class")):
+        assert "cost ceiling" in printed
+
+
+@needs_terraform
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("api_access_cidr", "10.1.2.3/32"),
+        ("expected_account_id", "98765432101"),
+        ("budget_email", "owner-at-example"),
+    ],
+)
+def test_a_refused_value_of_a_sensitive_variable_is_not_printed_back(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    printed = evaluate(tmp_path, name, value)
+
+    assert REFUSED in printed
+    assert value not in printed

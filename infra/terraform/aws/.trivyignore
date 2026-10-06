@@ -3,16 +3,20 @@
 # the session's decisions of 2026-10-06: the owner sees them before any apply
 # and may overturn any of them.
 #
-# One Trivy check ID per line, and on the line directly above it the reason:
-# what the check says, why it holds here, and what a production environment
-# would do instead. An entry with no comment directly above it fails
-# tests/meridian/test_aws_scan.py. A finding fixed in the module is deleted
-# from here; nothing is ignored by file or by line.
+# One Trivy check ID per line, exactly `AWS-` and four digits and nothing after
+# it (no expiry, no file name, no wildcard, not the older AVD- spelling), and on
+# the line directly above it the reason: what the check says, why it holds here,
+# and what a production environment would do instead, in a handful of words at
+# least. tests/meridian/test_aws_scan.py fails on an entry that breaks any of
+# this, on an inline ignore comment in a .tf file, on a Trivy configuration or
+# YAML ignore file in this directory, and on a second cluster or subnet block:
+# an entry here applies to EVERY resource of the directory, not to one. A
+# finding fixed in the module is deleted from here.
 
-# AWS-0040 (critical), "Public cluster access is enabled": the public endpoint is open to one address, the applying machine's /32, and the private endpoint is on as well. With the public side off nothing outside the VPC could apply to or look at the cluster, and this environment has no bastion and no VPN. Production: private access only, reached through a bastion or a VPN.
+# AWS-0040 (critical), "Public cluster access is enabled": the public endpoint is open to one address, the applying machine's /32, and the private endpoint is on as well. Terraform itself needs only the EKS API (the AWS API, reached with the owner's credentials), not this endpoint; the public side is there for kubectl and anything else that talks to the cluster itself, which with it off would have to come from inside the VPC or a connected network, and this environment has no bastion and no VPN. Production: private access only, reached through a bastion or a VPN.
 AWS-0040
 
-# AWS-0039 (high), "Cluster does not have secret encryption enabled": no encryption_config with a customer-managed key. A KMS key waits at least seven days to be removed and bills meanwhile, the environment lives for an hour, and nothing in this module stores a Kubernetes Secret. Production: an encryption_config with a customer-managed KMS key.
+# AWS-0039 (high), "Cluster does not have secret encryption enabled": the check asks for an encryption_config with a customer-managed KMS key. EKS already encrypts all Kubernetes API data on a cluster at Kubernetes 1.28 or later (this one is at 1.36) with envelope encryption by default, and the key is AWS-owned. A customer-managed key waits at least seven days to be removed and bills meanwhile, the environment lives for an hour, and nothing in this module stores a Kubernetes Secret. Production: an encryption_config with a customer-managed KMS key.
 AWS-0039
 
 # AWS-0164 (high), "Subnet associates public IP address": the subnets give their instances public addresses. The design has no NAT gateway, because one bills by the hour and survives a removal that stops half way; the nodes' security group admits nothing from the internet. Production: private subnets behind a NAT gateway or VPC endpoints.

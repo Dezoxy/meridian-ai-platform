@@ -51,14 +51,17 @@ PYTEST_WORKERS      ?= 10
 # kube-prometheus-stack chart in infra/kind/pins.env runs (chart 91.8.2 runs
 # v3.15.0), so a rule is checked by the parser that will load it. The digest is
 # the multi-arch index's, so the same line pulls on a laptop and on CI's runner;
-# := so a command line does not override it. .github/renovate.json reads it as
-# it reads PYTEST_DB_IMAGE.
+# := so an environment variable does not change it, but a variable on make's
+# command line (make PROMTOOL_IMAGE=...) CAN override it: only `override` would
+# stop that. .github/renovate.json reads it as it reads PYTEST_DB_IMAGE.
 PROMTOOL_IMAGE      := quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
 # Trivy's configuration scan for `make aws-scan` (S036): 0.75.0, read on
 # 2026-10-06. The digest is the multi-arch index's (`docker buildx imagetools
 # inspect` shows an OCI index; `docker pull` of the tag prints the same digest);
-# := so a command line does not override it, and .github/renovate.json reads it
-# as it reads PROMTOOL_IMAGE. The scan needs no network: Trivy looks for a newer
+# := so an environment variable does not change it, but a variable on make's
+# command line (make TRIVY_IMAGE=...) CAN override it: only `override` would
+# stop that, so a command line that names it deserves a look. .github/renovate.json
+# reads it as it reads PROMTOOL_IMAGE. The scan needs no network: Trivy looks for a newer
 # bundle of checks at mirror.gcr.io first, and with the network off and without
 # --skip-check-update it waits, fails and falls back to the checks compiled into
 # the image; with that flag it goes straight to those checks. So the checks are
@@ -325,7 +328,7 @@ aws-validate:
 ## aws-scan        Trivy's configuration scan of the AWS module from the pinned image, network off, read-only; fails on a HIGH or CRITICAL finding that infra/terraform/aws/.trivyignore does not list; changes nothing in AWS (needs Docker)
 aws-scan:
 	@ls "$(CURDIR)"/infra/terraform/aws/*.tf >/dev/null 2>&1 || { echo "aws-scan: no .tf file in infra/terraform/aws, nothing to scan" >&2; exit 1; }
-	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/aws",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --severity HIGH,CRITICAL --exit-code 1 .
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/aws",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --skip-files aws.tfplan,aws.tfplan.meta,terraform.tfstate,terraform.tfstate.backup --severity HIGH,CRITICAL --exit-code 1 .
 
 ## aws-plan        sign-in check against the pinned account, terraform init and plan of the AWS module into aws.tfplan; changes nothing in AWS
 aws-plan:
@@ -335,6 +338,6 @@ aws-plan:
 aws-apply:
 	infra/terraform/aws.sh apply
 
-## aws-destroy     REMOVES the AWS environment: Terraform asks its own question and the script refuses without a terminal; the owner runs it, in a terminal
+## aws-destroy     REMOVES the AWS environment: Terraform asks its own question; the owner runs it, in a terminal, from a sign-in no session can read (the terminal check stops an accident and a plain shell, not a session that makes itself a terminal)
 aws-destroy:
 	infra/terraform/aws.sh destroy

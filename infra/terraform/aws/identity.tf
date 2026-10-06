@@ -15,9 +15,42 @@ resource "aws_secretsmanager_secret" "workload" {
   recovery_window_in_days = 0
 }
 
+# Trusted for the one service account the association below names, in this
+# cluster, and no other (the conditions and the AWS page they come from are
+# explained above the EBS CSI role's trust document in cluster.tf).
+data "aws_iam_policy_document" "workload_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/kubernetes-namespace"
+      values   = [var.workload_namespace]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/kubernetes-service-account"
+      values   = [var.workload_service_account]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/eks-cluster-name"
+      values   = [local.name]
+    }
+  }
+}
+
 resource "aws_iam_role" "workload" {
   name               = "${local.name}-workload"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  assume_role_policy = data.aws_iam_policy_document.workload_trust.json
 }
 
 # Read this one secret and nothing else. DescribeSecret is a read of the same
