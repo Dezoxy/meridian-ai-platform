@@ -28,7 +28,7 @@ TRAIL_COLUMNS = (
     "event",
     "outcome",
     "reason",  # appended by 0014
-    "seq",  # appended by 0017
+    "seq",  # appended by 0019 (the column itself is 0017's)
 )
 INSERT_CLAIM = (
     "INSERT INTO claims.claims (claim_id, tenant, submission) VALUES (%s, %s, '{}')"

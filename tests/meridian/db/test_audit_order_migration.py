@@ -20,19 +20,6 @@ from meridian.platform.migrations.runner import migration_files
 NAME = "0017_audit_order.sql"
 FORGED_SEQ = 10**12
 ROWS_PER_TRANSACTION = 12
-TENANT = "development"
-CLAIM_ID = "CLM-0170"
-TRAIL_COLUMNS = (
-    "claim_id",
-    "tenant",
-    "recorded_at",
-    "db_role",
-    "service",
-    "event",
-    "outcome",
-    "reason",
-    "seq",  # appended by 0017
-)
 PLANT = (
     "INSERT INTO audit.events (service, event, outcome) "
     "SELECT %s, 'planted-' || n, 'ok' FROM generate_series(1, %s) AS n"
@@ -359,82 +346,6 @@ def test_a_service_role_cannot_update_the_seq(
         run(migrated_database, role, "UPDATE audit.events SET seq = 1")
 
 
-# ── audit.claim_trail ───────────────────────────────────────────────────────
-def test_the_view_has_the_columns_it_had_and_seq_last(
-    migrated_database: DatabaseHandle,
-) -> None:
-    rows = run(
-        migrated_database,
-        OWNER,
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = 'audit' AND table_name = 'claim_trail' "
-        "ORDER BY ordinal_position",
-    )
-
-    assert tuple(name for (name,) in rows) == TRAIL_COLUMNS
-
-
-def test_the_view_is_still_a_security_barrier_that_only_the_claims_api_reads(
-    migrated_database: DatabaseHandle,
-) -> None:
-    options = run(
-        migrated_database,
-        OWNER,
-        "SELECT reloptions FROM pg_class WHERE oid = 'audit.claim_trail'::regclass",
-    )
-    grants = run(
-        migrated_database,
-        OWNER,
-        "SELECT grantee, privilege_type FROM information_schema.role_table_grants "
-        "WHERE table_schema = 'audit' AND table_name = 'claim_trail' "
-        "AND grantee <> %s ORDER BY grantee, privilege_type",
-        (OWNER,),
-    )
-    others = run(
-        migrated_database,
-        OWNER,
-        "SELECT r, has_any_column_privilege(r, 'audit.claim_trail', 'SELECT') "
-        "FROM unnest(%s::text[]) AS r",
-        ([role for role in SERVICE_ROLES if role != "claims_api"],),
-    )
-
-    assert options == [(["security_barrier=true"],)]
-    assert grants == [("claims_api", "SELECT")]
-    assert all(not can_read for _, can_read in others)
-
-
-def test_the_trail_shows_the_seq_of_the_event_and_orders_two_events_of_a_transaction(
-    migrated_database: DatabaseHandle,
-) -> None:
-    run(
-        migrated_database,
-        "claims_api",
-        "INSERT INTO claims.claims (claim_id, tenant, submission) "
-        "VALUES (%s, %s, '{}')",
-        (CLAIM_ID, TENANT),
-    )
-    with connect(migrated_database.dsn("claims_api"), "test") as conn:
-        for event in ("claim.zulu", "claim.alpha"):
-            conn.execute(
-                "INSERT INTO audit.events (service, event, outcome, tenant, reference) "
-                "VALUES ('claims-api', %s, 'ok', %s, %s)",
-                (event, TENANT, CLAIM_ID),
-            )
-        conn.commit()
-
-    trail = run(
-        migrated_database,
-        "claims_api",
-        "SELECT event, seq FROM audit.claim_trail WHERE claim_id = %s "
-        "ORDER BY recorded_at, seq",
-        (CLAIM_ID,),
-    )
-    events = run(
-        migrated_database,
-        OWNER,
-        "SELECT event, seq FROM audit.events WHERE reference = %s ORDER BY seq",
-        (CLAIM_ID,),
-    )
-
-    assert [event for event, _ in trail] == ["claim.zulu", "claim.alpha"]
-    assert trail == events
+# The view that shows seq (audit.claim_trail) is replaced by 0019, and its tests
+# are in test_audit_trail_seq_migration.py. The locks and the deadlocks of this
+# file are in test_audit_order_migration_locks.py.

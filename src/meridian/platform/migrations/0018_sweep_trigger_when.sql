@@ -44,12 +44,22 @@
 -- Nothing is scanned or rewritten: a trigger is a catalog row, and the
 -- transaction holds the locks for the milliseconds of four catalog changes, not
 -- for any time that grows with the tables. Two things can lengthen it. A
--- transaction that holds either table open makes the migration wait for it (the
--- runner's connection stops a statement after 10 seconds, which rolls the whole
--- migration back with nothing changed; run it again). And a transaction that
--- holds runtime.runs and asks for claims.claims, while this one holds claims
--- and asks for runs, is a deadlock that PostgreSQL ends by aborting one of the
--- two after a second; if it is this one, nothing has changed either.
+-- transaction that holds either table open makes the migration wait for it, and
+-- a request for ACCESS EXCLUSIVE does not wait alone: it queues behind that
+-- transaction and every NEW reader and writer of the table queues behind the
+-- request, so a transaction open for 10 seconds (the runner's statement
+-- timeout, common/db.py) would stall claims.claims or runtime.runs, the Claims
+-- API's and the runtime's own tables, for 10 seconds although these four
+-- statements take milliseconds. The file therefore starts with
+-- SET LOCAL lock_timeout = '3s': it stops waiting for a lock after 3 seconds,
+-- which is the most it can hold anyone up, and fails with "canceling statement
+-- due to lock timeout"; the transaction rolls back with nothing changed and the
+-- file is simply run again. And a transaction that holds runtime.runs and asks
+-- for claims.claims, while this one holds claims and asks for runs, is a
+-- deadlock that PostgreSQL ends by aborting one of the two after a second; if
+-- it is this one, nothing has changed either.
+
+SET LOCAL lock_timeout = '3s';
 
 DROP TRIGGER claims_confine_sweep ON claims.claims;
 

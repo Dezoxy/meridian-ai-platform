@@ -1,9 +1,11 @@
 -- 0017: the audit rows of one transaction can be ordered (S065, T-25, T-71).
 --
 -- Run by the owner role (meridian_owner), which owns everything created here.
--- The migration adds one column and one sequence to audit.events, replaces one
--- trigger function and one view, and changes no grant, no other column and no
--- row's value (it cannot: see "Existing rows"). Nothing is deleted.
+-- The migration adds one column and one sequence to audit.events and replaces
+-- one trigger function. It changes no grant, no other column, no view and no
+-- row's value (it cannot: see "Existing rows"). Nothing is deleted. The view
+-- that shows the new column, audit.claim_trail, is replaced by 0019, in a file
+-- of its own (see "Lock").
 --
 -- Why. recorded_at is stamped with now(), the time the transaction began, so
 -- every row of one transaction has the same recorded_at, and event_id is a
@@ -44,7 +46,13 @@
 --     explicitly: a larger cache hands each session a block, and the numbers
 --     would then not follow the order of insertion across sessions). Nothing
 --     is granted on it: no service role holds USAGE, SELECT or UPDATE, and
---     none can call nextval or setval.
+--     none can call nextval or setval. Two facts about PostgreSQL sequences
+--     bear on the numbers. It writes a sequence's value to the WAL 32 ahead of
+--     the last one handed out, so a crash or a failover can skip up to 32
+--     numbers: a gap, never a reorder. And logical replication does not carry a
+--     sequence's value, so a logical replica of this table would have to have
+--     its sequence set past the highest seq (setval) before anything writes to
+--     it; physical replication carries it.
 --   - audit.stamp_event() becomes SECURITY DEFINER, so the owner, not the
 --     writer, takes the nextval and no service role needs a new privilege. Its
 --     search_path stays pinned to pg_catalog and the sequence is named with its
@@ -72,27 +80,82 @@
 -- Tried on 600,000 rows in four transactions (111 MB with its indexes, one
 -- machine, PostgreSQL 17): every row's seq was its rank by (recorded_at,
 -- event_id), the numbers were 1 to 600,000 with none missing, and the file
--- took about 1.3 s.
+-- took about 1.3 s. That the numbering follows the order of the CLUSTER rests
+-- on behaviour the PostgreSQL manual does not promise: that the table rewrite
+-- of ADD COLUMN reads the heap in block order, and so in the order CLUSTER
+-- wrote it. It held for 500,000 shuffled rows in the review of this file, and
+-- test_rows_written_before_the_migration_get_distinct_seq_in_time_then_id_order
+-- (tests/meridian/db/test_audit_order_migration.py) pins it on every run: two
+-- transactions of twelve rows each, written with random ids, come out in order.
 --
--- Lock. CLUSTER and ADD COLUMN with a volatile default each rewrite
--- audit.events, and each takes an ACCESS EXCLUSIVE lock on it, held to the end
--- of the migration's transaction: every insert into the audit log (every
--- service waits on it) and every read of the trail waits for as long as both
--- rewrites and the rebuild of the table's indexes take, which grows with the
--- table. CREATE OR REPLACE FUNCTION and CREATE OR REPLACE VIEW take brief locks
--- on the function and the view. That is the price of this change on a large
--- audit table. Adding the column nullable and filling it in batches is not
--- available on an insert-only table (the batches would be UPDATEs), so a
--- production deployment with a large table would take the other way: a new
--- table with the column, the old rows copied in the order above, and a switch
--- (a view or a rename in one transaction). That is out of scope here, as is
--- retention (the owner's decision is that it stays open).
+-- Lock. The file sets lock_timeout to 3 seconds and takes ACCESS EXCLUSIVE on
+-- audit.events with its second statement, LOCK TABLE, and holds that lock to
+-- the commit: the CLUSTER, the rewrite for the column and the rebuild of the
+-- table's indexes all run under it. Every insert into the audit log (every
+-- service waits on it) and every read of audit.events waits for as long as
+-- those take, which grows with the table. The file takes no lock on the trail
+-- view or on the tables behind it (tests/meridian/db/
+-- test_audit_order_migration_locks.py reads pg_locks to show it);
+-- CREATE OR REPLACE FUNCTION takes a brief lock on the function.
 --
--- audit.claim_trail (0014) is replaced with the same eight columns in the same
--- order and seq after them; its filters, its two branches and security_barrier
--- are as they were, and CREATE OR REPLACE keeps the grants (SELECT to
--- claims_api and no one else). seq is the event's: a reader orders by
--- recorded_at and then seq.
+-- Why the lock comes first. Without it the file took SHARE for CREATE INDEX
+-- and then upgraded to ACCESS EXCLUSIVE for CLUSTER, and a transaction that
+-- had read the table and then inserted into it deadlocked with the upgrade
+-- (PostgreSQL ended one of the two after deadlock_timeout; the review made it
+-- happen). Asking for the strongest lock at the start leaves nothing to
+-- upgrade: such a transaction waits behind the request and goes first, since
+-- it holds a lock the request waits for.
+--
+-- Why lock_timeout, and why 3 seconds. A request for ACCESS EXCLUSIVE queues
+-- behind every open transaction that has touched the table, and every NEW
+-- reader and writer queues behind the request: a transaction that stays open
+-- for 10 seconds, the statement timeout of the runner's connection
+-- (common/db.py), stalls the audit table for 10 seconds, although the file
+-- itself would take milliseconds. With the timeout the file stops waiting after
+-- 3 seconds, which is the most it can hold anyone up, and fails with the
+-- error "canceling statement due to lock timeout": the transaction rolls back,
+-- nothing is left (no column, no sequence, no index, no ledger row; a test
+-- shows each), and the file is simply run again, by running meridian db
+-- migrate again. The timeout counts the wait for a lock and nothing else. The
+-- services' transactions are short, so 3 seconds is long enough for the
+-- ones that are open to end and short enough to be felt as a delay and not as
+-- an outage.
+--
+-- Size. The 10-second statement timeout applies to each statement and the
+-- runner cannot change it. Measured on PostgreSQL 17.11 with rows of about 250
+-- bytes on a server whose data directory is in memory: at 500,000 rows CREATE
+-- INDEX took 0.13 s, CLUSTER 0.89 s and ADD COLUMN 0.89 s; at 1,500,000 rows
+-- 0.34 s, 2.4 s and 2.2 s. CLUSTER or ADD COLUMN would therefore pass the
+-- timeout at roughly 5 to 6 million rows (sooner on a disk), and as the
+-- timeout is set in connect() every run would fail the same way: above that
+-- size the runner cannot apply this file at all. It fails closed (at 1,000,000
+-- rows with a timeout of 300 ms nothing was left behind). The way out is the
+-- new table below, or running this file once on a connection with a longer
+-- statement timeout; which of the two is the owner's decision, and it is not
+-- made here. Both rewrites write the table again, so the file writes about
+-- twice the table in WAL (352 MB for a table of 156 MB) and needs free disk for
+-- two more copies of the table and its indexes, one per rewrite, as the old
+-- files are removed only when the transaction commits.
+--
+-- That is the price of this change on a large audit table. Adding the column
+-- nullable and filling it in batches is not available on an insert-only table
+-- (the batches would be UPDATEs), so a production deployment with a large
+-- table would take the other way: a new table with the column, the old rows
+-- copied in the order above, and a switch (a view or a rename in one
+-- transaction). That is out of scope here, as is retention (the owner's
+-- decision is that it stays open).
+--
+-- The view. audit.claim_trail (0014) shows seq from 0019 on, not from this
+-- file, and the reason is a deadlock: a reader of the trail holds ACCESS
+-- SHARE on the view and waits for audit.events, which this file holds, and a
+-- CREATE OR REPLACE VIEW in this file would need ACCESS EXCLUSIVE on the view
+-- and wait for that reader. Between this file and 0019 the view has the eight
+-- columns it had. meridian db migrate applies every packaged file in one run,
+-- in name order, and the deploy runs that Job before the services of the new
+-- image start, so the application never meets the gap.
+
+SET LOCAL lock_timeout = '3s';
+LOCK TABLE audit.events IN ACCESS EXCLUSIVE MODE;
 
 CREATE SEQUENCE audit.events_seq AS bigint CACHE 1;
 
@@ -121,52 +184,3 @@ BEGIN
     RETURN NEW;
 END
 $$;
-
-CREATE OR REPLACE VIEW audit.claim_trail WITH (security_barrier = true) AS
-SELECT
-    t.claim_id,
-    t.tenant,
-    t.recorded_at,
-    t.db_role,
-    t.service,
-    t.event,
-    t.outcome,
-    t.reason,
-    t.seq
-FROM (
-    SELECT
-        c.claim_id,
-        c.tenant,
-        e.recorded_at,
-        e.db_role,
-        e.service,
-        e.event,
-        e.outcome,
-        e.reason,
-        e.seq
-    FROM claims.claims AS c
-    JOIN audit.events AS e
-        ON e.db_role IN ('claims_api', 'claims_sweep')
-            AND e.reference = c.claim_id
-            AND e.tenant = c.tenant
-    UNION ALL
-    SELECT
-        c.claim_id,
-        c.tenant,
-        e.recorded_at,
-        e.db_role,
-        e.service,
-        e.event,
-        e.outcome,
-        e.reason,
-        e.seq
-    FROM claims.claims AS c
-    JOIN runtime.runs AS r
-        ON r.reference = c.claim_id
-            AND r.tenant = c.tenant
-            AND r.agent = 'claims-triage'
-    JOIN audit.events AS e ON e.run_id = r.run_id
-    WHERE e.db_role NOT IN ('claims_api', 'claims_sweep')
-        OR e.reference IS DISTINCT FROM c.claim_id
-        OR e.tenant IS DISTINCT FROM c.tenant
-) AS t;
