@@ -236,6 +236,9 @@ def test_a_denied_request_is_a_pass_that_names_the_reason_and_is_deleted_after_t
     (deleted,) = deletes(run)
     assert run.asked.index(deleted) > run.asked.index(reads(run)[-1])
     assert deleted.startswith(f"-n {NAMESPACE} delete certificaterequest {PREFIX}")
+    # Nothing is waited for (a request has no finalizer), and one that is
+    # already gone is not an error.
+    assert deleted.endswith(" --ignore-not-found --wait=false")
     assert run.temporary_files == []
 
 

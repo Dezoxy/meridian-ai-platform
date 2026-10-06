@@ -852,6 +852,7 @@ def run_identity_check(
             'skip() { echo "SKIP  $*"; }',
             "sleep() { :; }",
             re.search(r"^readonly IDENTITY_.*?\n\n", SMOKE_SH, re.M | re.S).group(0),
+            *re.findall(r"^readonly PSQL_OPTIONS=.*$", SMOKE_SH, re.M),
             script_function(SMOKE_SH, "clean_lines"),
             "kctl() {",
             f'  echo "$*" >>"{asked}"',

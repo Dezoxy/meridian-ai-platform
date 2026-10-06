@@ -55,10 +55,14 @@ DEPLOYED = "deployment.apps/claims-api"
 POLICY = "networkpolicy.networking.k8s.io/default-deny"
 PART_OF = "app.kubernetes.io/part-of"
 PROBE_POD_NAME_LABEL = "meridian-sweep"
+# The label of smoke's own that the probe Pod carries and the next run finds a
+# leftover by, as the refused request has meridian-smoke=refused-request.
+SMOKE_LABEL = "meridian-smoke=network-probe"
 LABEL_ATTEMPTS = int(
     re.findall(r"^readonly NETWORK_LABEL_ATTEMPTS=(\d+)$", SMOKE_SH, re.M)[0]
 )
 CHECK_FUNCTIONS = (
+    "network_sweep_leftovers",
     "network_probe",
     "network_expect",
     "network_pod_spec",
@@ -139,6 +143,10 @@ kctl() {
   # made in a pipeline whose two kctl calls log at the same time.
   printf '%s\n' "${*//$'\n'/ }" >>"${ASKED}"
   case "$*" in
+    *" get pod -l "*)
+      [[ "${LISTING:-ok}" != FAIL ]] || { echo "error: refused" >&2; return 1; }
+      [[ "${LISTING:-ok}" != GARBAGE ]] || { echo "not json"; return 0; }
+      printf "%s" "${LEFTOVER_PODS:-}" ;;
     *" exec "*)
       key="${@: -2:1}:${@: -1}"
       file="${STATE}/answer-${key}"
@@ -227,6 +235,8 @@ def run_network_policy_check(
     wait_status: int = 0,
     label_status: int = 0,
     leftover_pod: str | None = None,
+    leftover_pods: list[dict[str, object]] | None = None,
+    listing: str = "ok",
 ) -> tuple[list[str], str]:
     """``check_network_policy`` from smoke.sh in bash against a stub ``kctl``.
     ``deployed`` and ``policy`` are what the two lookups print (empty: absent;
@@ -236,7 +246,9 @@ def run_network_policy_check(
     on each try after (the last repeats). ``failing`` maps a target, or ``pod``,
     to the exit status and stderr of its probe; the other statuses are those of
     ``kctl create``, ``wait`` and ``label``. With ``leftover_pod`` the function
-    run is ``cleanup`` with that pod name left over. Returns the output lines and
+    run is ``cleanup`` with that pod name left over. ``leftover_pods`` are the
+    Pods with smoke's label that the list at the start of the check prints
+    (``listing``: ``ok``, ``FAIL`` or ``GARBAGE``). Returns the output lines and
     what ``kctl`` was asked, one call per line."""
     state = tmp_path / "state"
     state.mkdir()
@@ -266,6 +278,8 @@ def run_network_policy_check(
             "CREATE_STATUS": str(create_status),
             "WAIT_STATUS": str(wait_status),
             "LABEL_STATUS": str(label_status),
+            "LISTING": listing,
+            "LEFTOVER_PODS": json.dumps({"items": leftover_pods or []}),
         },
     )
 
@@ -586,7 +600,7 @@ def test_the_exit_trap_deletes_nothing_when_no_pod_was_started(tmp_path: Path) -
     assert asked == ""
 
 
-def test_the_probe_pod_is_the_claims_apis_image_and_posture_and_carries_one_label(
+def test_the_probe_pod_is_the_claims_apis_image_and_posture_and_carries_two_labels(
     tmp_path: Path,
 ) -> None:
     run_network_policy_check(tmp_path)
@@ -598,8 +612,10 @@ def test_the_probe_pod_is_the_claims_apis_image_and_posture_and_carries_one_labe
     assert pod["metadata"]["namespace"] == "meridian"
     assert re.fullmatch(r"smoke-network-\d+", pod["metadata"]["name"])
     # The name label of the sweep, whose policy lets a pod reach DNS and the
-    # database, and not the label the database admits (added later, to the one pod).
-    assert pod["metadata"]["labels"] == {NAME_LABEL: PROBE_POD_NAME_LABEL}
+    # database, and not the label the database admits (added later, to the one
+    # pod); and the label of smoke's own, which only the next run's sweep reads.
+    key, value = SMOKE_LABEL.split("=")
+    assert pod["metadata"]["labels"] == {NAME_LABEL: PROBE_POD_NAME_LABEL, key: value}
     assert container["image"] == claims["containers"][0]["image"]
     assert container["imagePullPolicy"] == "Never"
     assert pod["spec"]["securityContext"] == claims["securityContext"]
@@ -725,7 +741,8 @@ def test_the_denied_paths_are_denied_by_the_policies_the_check_reasons_from() ->
 
 def test_the_probe_pod_is_selected_by_the_sweeps_policy_and_default_deny_only() -> None:
     policies = rendered_policies()
-    probe_labels = {NAME_LABEL: PROBE_POD_NAME_LABEL}
+    key, value = SMOKE_LABEL.split("=")
+    probe_labels = {NAME_LABEL: PROBE_POD_NAME_LABEL, key: value}
 
     selecting = [
         name

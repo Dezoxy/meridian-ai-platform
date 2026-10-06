@@ -77,9 +77,21 @@ def test_the_identity_check_passes_with_this_runs_audit_row_and_says_what_it_fou
     # primary pod.
     assert len(clock_queries(asked)) == 1
     assert len(audit_queries(asked)) == 1
-    assert "exec platform-db-1 -c postgres -- psql" in asked
+    assert "exec platform-db-1 -c postgres -- env PGOPTIONS=" in asked
     # The other lines are the probe's, from the runtime's pod.
     assert asked.count("exec deploy/agent-runtime") == PROBE_RUNS
+
+
+def test_the_clock_and_the_audit_row_are_read_with_the_statement_and_lock_timeouts(
+    tmp_path: Path,
+) -> None:
+    _, asked = run_identity_check(tmp_path, answers=GOOD, audit="6|t")
+    (options,) = re.findall(r"^readonly PSQL_OPTIONS='(.*)'$", SMOKE_SH, re.MULTILINE)
+
+    reads = psql_calls(asked)
+    assert len(reads) == 2
+    for call in reads:
+        assert f" -- env PGOPTIONS={options} psql -d meridian -tAc " in call
 
 
 def test_the_clock_is_read_before_the_probe_that_causes_the_row(

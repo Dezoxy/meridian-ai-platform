@@ -88,7 +88,9 @@ def run_stores_check(
             function_definition(SMOKE_SH, "store_line"),
             function_definition(SMOKE_SH, "check_stores"),
             *re.findall(rf"^readonly (?:{SQL_NAMES})=.*$", SMOKE_SH, re.M),
-            *re.findall(r"^readonly QUERY_ERROR_LENGTH=.*$", SMOKE_SH, re.M),
+            *re.findall(
+                r"^readonly (?:QUERY_ERROR_LENGTH|PSQL_OPTIONS)=.*$", SMOKE_SH, re.M
+            ),
             "check_stores platform-db-1",
         ]
     )
@@ -289,6 +291,60 @@ def test_a_failed_read_of_the_database_keeps_its_message_cleaned_and_cut(
         assert "x" * 40 in line  # cut, not dropped
         assert "x" * 161 not in line
     assert verdicts(counted) == ["PASS", "FAIL", "PASS"]
+
+
+def psql_options() -> str:
+    (value,) = re.findall(r"^readonly PSQL_OPTIONS='(.*)'$", SMOKE_SH, re.M)
+    return value
+
+
+def logical_lines(script: str) -> list[str]:
+    """The script's lines with each backslash continuation joined to its line,
+    and the comments left out."""
+    joined = re.sub(r"\\\n\s*", "", script)
+    return [line for line in joined.splitlines() if not line.lstrip().startswith("#")]
+
+
+def test_every_read_of_the_database_carries_a_statement_timeout_and_a_lock_timeout(
+    tmp_path: Path,
+) -> None:
+    _, asked = run_stores_check(tmp_path)
+
+    reads = [call for call in asked.splitlines() if " exec " in call]
+    assert len(reads) == 4  # the probe, the two counts and the ledger's name
+    for call in reads:
+        assert f" -- env PGOPTIONS={psql_options()} psql -d meridian -tAc " in call
+
+
+def test_the_options_bound_a_statement_and_a_wait_for_a_lock_to_a_few_seconds() -> None:
+    found = re.fullmatch(
+        r"-c statement_timeout=(\d+)s -c lock_timeout=(\d+)s", psql_options()
+    )
+
+    assert found
+    statement, lock = (int(seconds) for seconds in found.groups())
+    assert 1 <= lock <= statement <= 10
+
+
+def test_no_psql_of_the_script_runs_without_the_options() -> None:
+    sites = [line for line in logical_lines(SMOKE_SH) if "psql -d" in line]
+
+    # The pgvector reads of check 2, the stores' reads, the ledger's, the cost
+    # series', the clock of check 9 and its audit row: five places in the source.
+    assert len(sites) == 5
+    for line in sites:
+        assert 'env "PGOPTIONS=${PSQL_OPTIONS}" psql -d' in line
+
+
+def test_a_statement_that_times_out_is_that_lines_fail_with_the_message_of_psql(
+    tmp_path: Path,
+) -> None:
+    error = "ERROR:  canceling statement due to statement timeout"
+
+    lines, _ = run_stores_check(tmp_path, policies="FAIL", error=error)
+
+    assert verdicts(lines) == ["FAIL", "PASS", "PASS"]
+    assert error in lines[0]
 
 
 def test_the_stores_check_fails_one_line_when_one_query_fails(tmp_path: Path) -> None:

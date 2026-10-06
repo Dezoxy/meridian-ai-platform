@@ -230,11 +230,15 @@ node image, Kubernetes components and the platform).
    store's FAIL, naming the table, and an answer of the probe that is not in
    its form is one FAIL. A failed read of the database keeps its message,
    cleaned and cut to 160 characters, in the FAIL line: it names relations and
-   roles, never a row. A count above zero says the seed and the ingestion wrote
-   something, not what or how much, and not that the chunks are the running
-   image's (the ingestion Job of the image's tag, which `make deploy` keeps,
-   is that proof); the claims and runs tables are not read, because
-   `make demo` fills them.
+   roles, never a row. Every `psql` smoke runs has a statement timeout of 5
+   seconds and a lock timeout of 3 seconds (`PGOPTIONS` in the exec), so a
+   migration that holds a lock while smoke runs fails that line with psql's
+   message instead of hanging it (the two pgvector lines keep no message: they
+   say the extension is not installed). A count above zero says the seed and
+   the ingestion wrote something, not what or how much, and not that the chunks
+   are the running image's (the ingestion Job of the image's tag, which
+   `make deploy` keeps, is that proof); the claims and runs tables are not
+   read, because `make demo` fills them.
 3. **Tools.** One call per tool server through the runtime's own client, run
    inside the Agent Runtime's pod (`python -m meridian.runtime.toolprobe`), so
    with the addresses the runtime itself was given. The call names a run that
@@ -321,8 +325,15 @@ node image, Kubernetes components and the platform).
    that the sweep's policy lets it reach DNS and the database, and not
    `app.kubernetes.io/part-of=meridian`, which the database's ingress admits by),
    cannot reach `platform-db-rw.meridian.svc:5432` until the same pod is given
-   that label, and then can. The allowed paths are also the tool check's proof
-   (line 3). It fails when the NetworkPolicy `default-deny` is missing. Before
+   that label, and then can. The pod also carries
+   `meridian-smoke=network-probe`, which no policy, Service or Deployment
+   selects. A run that is killed hard (SIGKILL, a power cut) leaves the pod as
+   a Failed object with the labels the policies select on, so the check starts
+   by listing the pods with that label and deletes by name those older than 300
+   seconds (a younger one is another run's; a list that cannot be read is not
+   an error). SIGHUP, SIGINT and SIGTERM each run the exit trap, which deletes
+   the pod. The allowed paths are also the tool check's proof (line 3). It
+   fails when the NetworkPolicy `default-deny` is missing. Before
    `make deploy` one line prints SKIP in place of the four. It adds about 20
    seconds. What it does not prove, and stays by hand (S019): that a pod of
    another namespace cannot reach the database, and that an address outside the

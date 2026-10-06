@@ -94,6 +94,26 @@ target serves.
 {{- end -}}
 
 {{- /*
+documentsDeadlineDays: sweep.documentsDeadlineDays as the text both workloads
+get, or the render fails with the value in the message. The Claims API and the
+sweep read it with deadline_days_of
+(src/meridian/workloads/claims_triage/lifecycle.py), which refuses anything but
+one to four ASCII digits that make a whole number from 1 to 365 when the
+process starts, so a bad value would crash-loop the Claims API. The two bounds
+are literals here: tests/meridian/test_helm_documents_deadline.py reads the
+code's and fails when they differ. A number from a values file arrives as a
+float and one from --set as an integer: toString makes both the digits that
+were written.
+*/ -}}
+{{- define "meridian.documentsDeadlineDays" -}}
+{{- $text := toString .Values.sweep.documentsDeadlineDays -}}
+{{- if not (and (regexMatch "^[0-9]{1,4}$" $text) (ge (atoi $text) 1) (le (atoi $text) 365)) -}}
+{{- fail (printf "sweep.documentsDeadlineDays is %q, which is not a whole number of days from 1 to 365 (the Claims API and the sweep refuse anything else when they start, so the Claims API would crash-loop: deadline_days_of in src/meridian/workloads/claims_triage/lifecycle.py)" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+
+{{- /*
 envItem: one variable of a values `env` list; takes root, item. The item has
 one of value, serviceUrl, serviceHost, serviceMap or documentsDeadlineDays
 (values.yaml says which). documentsDeadlineDays takes the sweep's value of the
@@ -104,7 +124,7 @@ same name, so the Claims API and the sweep's CronJob read one value.
 {{- if hasKey .item "value" }}
   value: {{ .item.value | quote }}
 {{- else if hasKey .item "documentsDeadlineDays" }}
-  value: {{ .root.Values.sweep.documentsDeadlineDays | quote }}
+  value: {{ include "meridian.documentsDeadlineDays" .root | quote }}
 {{- else if hasKey .item "serviceUrl" }}
   value: {{ include "meridian.url" (dict "root" .root "name" .item.serviceUrl) | quote }}
 {{- else if hasKey .item "serviceHost" }}
@@ -307,11 +327,13 @@ name (the value's, for the message) and value. Go's duration syntax has more
 units (cert-manager reads them); the chart reads these two so that it can
 compare one duration with another, and fails on any other text, an empty one
 included. The pattern is anchored, so a value with a line break cannot reach a
-Certificate.
+Certificate. A number has at most nine digits: the policy's cap in minutes
+(129600) has six, and a longer one would overflow the parse and wrap into range
+instead of being refused.
 */ -}}
 {{- define "meridian.minutes" -}}
 {{- $text := toString .value -}}
-{{- $pattern := "^(?:([0-9]{1,5})h)?(?:([0-9]{1,5})m)?$" -}}
+{{- $pattern := "^(?:([0-9]{1,9})h)?(?:([0-9]{1,9})m)?$" -}}
 {{- if or (not $text) (not (regexMatch $pattern $text)) -}}
 {{- fail (printf "%s is %q, which is not a duration of hours and minutes, like 2160h or 1h30m (cert-manager reads more units; the chart reads these two so that it can compare the lifetime with the policy's cap and with renewBefore)" .name $text) -}}
 {{- end -}}

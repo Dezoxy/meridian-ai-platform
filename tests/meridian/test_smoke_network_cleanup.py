@@ -9,11 +9,14 @@ fails too. The harness is that of ``test_smoke_network_policy.py``, with a
 """
 
 import json
+import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import test_smoke_network_policy as network
-from test_kind_manifests import requires_jq
+from chartsupport import rendered_chart
+from test_kind_manifests import SMOKE_SH, requires_jq
 
 pytestmark = requires_jq
 
@@ -61,6 +64,155 @@ def run_calls(
 
 def deletes(asked: str) -> list[str]:
     return [call for call in asked.splitlines() if " delete pod " in call]
+
+
+def constant(name: str) -> str:
+    (value,) = re.findall(rf"^readonly {name}=(\S+)$", SMOKE_SH, re.MULTILINE)
+    return value
+
+
+def leftover(name: str, age_seconds: int) -> dict[str, object]:
+    """A Pod with smoke's label, as ``get pod -l -o json`` lists it, made
+    ``age_seconds`` ago by this machine's clock."""
+    made = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    return {
+        "metadata": {
+            "name": name,
+            "creationTimestamp": made.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    }
+
+
+def leftover_deletes(asked: str) -> list[str]:
+    return [call for call in asked.splitlines() if " delete pod leftover-" in call]
+
+
+@pytest.mark.parametrize(
+    "deployed", [network.DEPLOYED, ""], ids=["deployed", "skipped"]
+)
+def test_the_run_lists_the_pods_with_smokes_label_before_it_looks_at_anything_else(
+    tmp_path: Path, deployed: str
+) -> None:
+    _, asked = network.run_network_policy_check(tmp_path, deployed=deployed)
+
+    # Before the lookup that skips the check too: a Pod a lost trap left is
+    # there whether or not the services are deployed now.
+    label = network.SMOKE_LABEL
+    assert asked.splitlines()[0] == f"-n meridian get pod -l {label} -o json"
+    assert constant("NETWORK_POD_SMOKE_LABEL") == label
+    # No delete by label: another run's young Pod is its own.
+    assert not any(" delete pod -l" in call for call in asked.splitlines())
+
+
+def test_a_pod_older_than_the_limit_is_deleted_by_name_before_the_new_pod_is_made(
+    tmp_path: Path,
+) -> None:
+    age = int(constant("NETWORK_LEFTOVER_AGE"))
+
+    lines, asked = network.run_network_policy_check(
+        tmp_path, leftover_pods=[leftover("leftover-old", age + 60)]
+    )
+
+    (deleted,) = leftover_deletes(asked)
+    assert deleted == (
+        "-n meridian delete pod leftover-old --ignore-not-found --wait=false"
+    )
+    calls = asked.splitlines()
+    assert calls.index(deleted) < min(i for i, c in enumerate(calls) if " create " in c)
+    assert [line.split()[0] for line in lines] == ["PASS"] * 4
+
+
+def test_a_pod_younger_than_the_limit_is_another_runs_and_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    # Two runs at once: the other one's Pod lives seconds, and is not this run's
+    # to delete. Both sides of the limit, in one list.
+    age = int(constant("NETWORK_LEFTOVER_AGE"))
+
+    lines, asked = network.run_network_policy_check(
+        tmp_path,
+        leftover_pods=[
+            leftover("leftover-young", age - 60),
+            leftover("leftover-old", age + 60),
+            leftover("leftover-new", 2),
+        ],
+    )
+
+    (deleted,) = leftover_deletes(asked)
+    assert "leftover-old" in deleted
+    assert "leftover-young" not in asked
+    assert "leftover-new" not in asked
+    assert [line.split()[0] for line in lines] == ["PASS"] * 4
+
+
+def test_the_limit_for_a_leftover_pod_is_a_few_minutes() -> None:
+    assert 120 <= int(constant("NETWORK_LEFTOVER_AGE")) <= 900
+
+
+@pytest.mark.parametrize("listing", ["FAIL", "GARBAGE"])
+def test_a_list_of_leftover_pods_that_cannot_be_read_is_not_an_error(
+    tmp_path: Path, listing: str
+) -> None:
+    lines, asked = network.run_network_policy_check(
+        tmp_path, listing=listing, leftover_pods=[leftover("leftover-old", 3600)]
+    )
+
+    assert [line.split()[0] for line in lines] == ["PASS"] * 4
+    assert leftover_deletes(asked) == []
+
+
+def test_nothing_selects_a_pod_by_smokes_own_label_so_it_changes_nothing_they_see() -> (
+    None
+):
+    key = network.SMOKE_LABEL.split("=")[0]
+    policies = network.rendered_policies().values()
+    selectors = [json.dumps(policy["spec"]) for policy in policies]
+    selectors.append(json.dumps(network.database_policy()["spec"]))
+    for document in rendered_chart():
+        if document["kind"] == "Service":
+            selectors.append(json.dumps(document["spec"].get("selector", {})))
+        if document["kind"] in {"Deployment", "StatefulSet"}:
+            selectors.append(json.dumps(document["spec"]["selector"]))
+
+    assert selectors
+    assert not [selector for selector in selectors if key in selector]
+
+
+def test_the_probe_pod_has_the_bounds_the_header_promises(tmp_path: Path) -> None:
+    network.run_network_policy_check(tmp_path)
+
+    pod = network.created_pod(tmp_path)
+    (container,) = pod["spec"]["containers"]
+    # The memory the probe may use, and the CPU and memory it asks for.
+    assert container["resources"] == {
+        "requests": {"cpu": "10m", "memory": "32Mi"},
+        "limits": {"memory": "128Mi"},
+    }
+    assert constant("NETWORK_POD_LIFETIME") == "300"
+    assert pod["spec"]["activeDeadlineSeconds"] == 300
+
+
+def test_the_timeouts_and_tries_are_the_ones_the_header_states(
+    tmp_path: Path,
+) -> None:
+    _, asked = network.run_network_policy_check(tmp_path)
+
+    assert constant("NETWORK_PROBE_TIMEOUT") == "4"
+    assert constant("NETWORK_POD_READY_TIMEOUT") == "60s"
+    assert constant("NETWORK_LABEL_ATTEMPTS") == "4"
+    (wait,) = [c for c in asked.splitlines() if " wait " in c]
+    assert wait.endswith(" --timeout=60s")
+    header = SMOKE_SH.split("set -euo pipefail")[0]
+    eighth = header.split("8. network policy: four lines")[1].split("9. service")[0]
+    flat = " ".join(line.removeprefix("#").strip() for line in eighth.splitlines())
+    (each,) = re.findall(r"three timeouts of (\d+) s", flat)
+    (ready,) = re.findall(r"at most (\d+) s for the Pod to be Ready", flat)
+    (tries,) = re.findall(r"and (\d+) s for the label's tries", flat)
+    # "about 20 s ... 60 s ... 16 s": the constants' own, and what they come to.
+    assert int(each) == int(constant("NETWORK_PROBE_TIMEOUT"))
+    assert int(ready) == int(constant("NETWORK_POD_READY_TIMEOUT").removesuffix("s"))
+    assert int(tries) == int(constant("NETWORK_PROBE_TIMEOUT")) * network.LABEL_ATTEMPTS
+    assert "Adds about 20 s" in flat
 
 
 @pytest.mark.usefixtures("failing_delete")

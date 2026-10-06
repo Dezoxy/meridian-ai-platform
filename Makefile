@@ -248,7 +248,7 @@ deploy:
 images:
 	infra/kind/images.sh
 
-## demo           deploy, post a synthetic claim at http://claims.meridian.localhost:8088, find its trace across the five services that triage it in Tempo and, when it is referred to an adjuster, decide it and find that trace too (make demo DECISION=reject; approve, reject or request_documents)
+## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088, find its trace across the five services that triage it in Tempo and, when it is referred to an adjuster, decide it and find that trace too (make demo DECISION=reject; approve, reject or request_documents)
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 

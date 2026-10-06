@@ -6,7 +6,11 @@
 # the certificate policy check (unique name, a request the issuer must refuse,
 # deleted as soon as it is read and again by the EXIT trap) and, at most once
 # per throttle window per tool server, the refusal's audit row that the tool
-# check below causes.
+# check below causes. The service identity check (9) also leaves two refusal
+# rows in the audit table on each run (a 401's and a 403's, which the gateway
+# throttles to one a minute per reason) and puts a throwaway key in the probe
+# pod's /tmp, which the probe removes when it ends; and the checks that read
+# Grafana (4, 5 and 11) read its admin Secret, never printing it.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
 #   2. database:  pgvector is installed in platform-db, in the `app` database and
 #                 in the `meridian` database; and three lines for the stores of
@@ -131,11 +135,24 @@
 #                   network plugin takes a moment): it is the control, one pod
 #                   with and without the label. No Service or Deployment selects
 #                   the name label of the sweep, so the pod takes no traffic.
-#                 The Pod is deleted when the check ends and by the EXIT trap
-#                 (a delete that failed is not forgotten: the trap tries again
+#                 The Pod carries one label of smoke's own as well,
+#                 meridian-smoke=network-probe, which no policy, Service or
+#                 Deployment selects, so it changes nothing they see. A Pod
+#                 that a lost trap left (a run killed with SIGKILL, or a power
+#                 cut) stays as a Failed object once its five minutes have
+#                 passed, with the labels the policies select on; so the check
+#                 starts by listing the Pods with that label, even when it will
+#                 skip, and deletes by name those older than 300 s (a younger
+#                 one is another run's, which two runs at once leave to each
+#                 other; a list that cannot be read is not an error).
+#                 The Pod is deleted when the check ends and by the EXIT trap,
+#                 which also runs on SIGHUP, SIGINT and SIGTERM (each has a trap
+#                 that exits, as the Makefile's pytest-db recipe does: bash does
+#                 not reliably run the EXIT trap on a hang-up without it). A
+#                 delete that failed is not forgotten: the trap tries again
 #                 and says on stderr, with the command to run by hand, when it
-#                 fails too), ends on its own after five minutes, and is not
-#                 created when the control failed. The check fails when the
+#                 fails too. The Pod ends on its own after five minutes, and is
+#                 not created when the control failed. The check fails when the
 #                 policy `default-deny` does not exist.
 #                 Skipped, one line instead of four, while the Claims API is not
 #                 deployed (`make deploy`). What it does not prove: that
@@ -361,6 +378,14 @@ readonly LEDGER_NEWEST_SQL='SELECT name FROM public.meridian_migrations ORDER BY
 # table and the knowledge table. QUERY_ERROR_LENGTH cuts the message of a
 # failed read of the database (meridian_query) where a FAIL line carries it.
 readonly QUERY_ERROR_LENGTH=160
+# Every psql this script runs gets these server settings, through PGOPTIONS in
+# the exec (`env`: kubectl exec runs no shell, and a `SET` in the same -c would
+# print a line of its own): a statement that runs longer than five seconds, or
+# waits longer than three for a lock (a migration that holds one while smoke
+# runs), is cancelled, and psql's message ends in the FAIL line of that check
+# instead of the line hanging (the pgvector lines of check 2 keep no message:
+# they read "not installed").
+readonly PSQL_OPTIONS='-c statement_timeout=5s -c lock_timeout=3s'
 # The connections the network-policy check (8) tries, as host:port. The Agent
 # Runtime is the control: the Claims API's policy and its own name each other. The
 # Model Gateway is a Service which only the Agent Runtime, the knowledge tool
@@ -376,6 +401,12 @@ readonly NETWORK_DATABASE=platform-db-rw.meridian.svc:5432
 # and no Service or Deployment selects it), a sleep that ends on its own, and how
 # long to wait for it and for the network plugin to see the label added to it.
 readonly NETWORK_POD_NAME_LABEL=meridian-sweep
+# The label of smoke's own that the Pod carries as well (no policy, Service or
+# Deployment selects by it, so it changes nothing they see): the next run lists
+# the Pods with it and deletes by name those older than NETWORK_LEFTOVER_AGE
+# seconds, as it does for check 10's request (REFUSED_LEFTOVER_AGE).
+readonly NETWORK_POD_SMOKE_LABEL=meridian-smoke=network-probe
+readonly NETWORK_LEFTOVER_AGE=300
 readonly NETWORK_POD_LIFETIME=300
 readonly NETWORK_POD_READY_TIMEOUT=60s
 readonly NETWORK_LABEL_ATTEMPTS=4
@@ -685,7 +716,7 @@ platform_db_primary() {
 meridian_query() {
   local answer err_file reason
   err_file="$(mktemp)"
-  if answer="$(kctl -n meridian exec "$1" -c postgres -- psql -d meridian -tAc "$2" 2>"${err_file}")"; then
+  if answer="$(kctl -n meridian exec "$1" -c postgres -- env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "$2" 2>"${err_file}")"; then
     rm -f "${err_file}"
     printf '%s' "${answer}"
     return 0
@@ -795,7 +826,7 @@ check_database() {
   fi
   for database in app meridian; do
     version="$(kctl -n meridian exec "${primary}" -c postgres -- \
-      psql -d "${database}" -tAc "SELECT extversion FROM pg_extension WHERE extname='vector'" \
+      env "PGOPTIONS=${PSQL_OPTIONS}" psql -d "${database}" -tAc "SELECT extversion FROM pg_extension WHERE extname='vector'" \
       2>/dev/null || true)"
     version="$(clean_lines "${version}")"
     if [[ -n "${version}" ]]; then
@@ -1234,7 +1265,7 @@ check_cost_series() {
     return
   fi
   if ! answer="$(kctl -n meridian exec "${primary}" -c postgres -- \
-    psql -d meridian -tAc "SELECT count(*) || '|' || coalesce(floor(extract(epoch FROM min(closed_at)))::bigint::text, '') FROM gateway.usage WHERE state = 'settled' AND closed_at > '${started}'" \
+    env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "SELECT count(*) || '|' || coalesce(floor(extract(epoch FROM min(closed_at)))::bigint::text, '') FROM gateway.usage WHERE state = 'settled' AND closed_at > '${started}'" \
     2>"${err_file}")"; then
     detail="$(clean_lines "$(<"${err_file}")")"
     rm -f "${err_file}"
@@ -1585,6 +1616,28 @@ check_sweep() {
 # that the paths they do not allow are closed, and that its probe can tell. Skipped
 # like it, when the Claims API is not deployed.
 
+# network_sweep_leftovers: at the start of check 8, delete by name the Pods with
+# NETWORK_POD_SMOKE_LABEL that are older than NETWORK_LEFTOVER_AGE seconds: what
+# a run whose trap was lost (SIGKILL, a power cut) left. A Pod that passed its
+# activeDeadlineSeconds stays as a Failed object, with the labels the policies
+# select on. A younger one is another run's that is under way, and is its own to
+# delete. The age is this machine's clock against the Pod's creationTimestamp
+# (the API server's), so a skewed clock only delays the sweep. A list that cannot
+# be read is not an error: the check goes on, and the leftover waits.
+network_sweep_leftovers() {
+  local json names leftover
+  json="$(kctl -n meridian get pod -l "${NETWORK_POD_SMOKE_LABEL}" \
+    -o json 2>/dev/null)" || return 0
+  names="$(jq -r --argjson age "${NETWORK_LEFTOVER_AGE}" '
+    .items[] | select(now - (.metadata.creationTimestamp | fromdateiso8601) > $age)
+    | .metadata.name' <<<"${json}" 2>/dev/null)" || return 0
+  while IFS= read -r leftover; do
+    [[ -n "${leftover}" ]] || continue
+    kctl -n meridian delete pod "${leftover}" \
+      --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  done <<<"${names}"
+}
+
 # network_probe WHERE TARGET: the probe from WHERE (deploy/claims-api, or the name
 # of the probe Pod) to TARGET (host:port), its answer in ${network_answer}:
 # "reached", "blocked", or "error: ..." with what it wrote on stderr when it failed
@@ -1621,14 +1674,19 @@ network_expect() {
 
 # network_pod_spec: the probe Pod as JSON, from the Claims API's Deployment: its
 # image, pull policy and security contexts, so the Pod runs what is on the node
-# under the same restrictions, and a sleep that ends on its own. The one label is
-# the sweep's name label and not part-of (see the header).
+# under the same restrictions, and a sleep that ends on its own. Its labels are
+# the sweep's name label (and not part-of: see the header) and smoke's own, which
+# the next run's sweep finds a leftover by.
 network_pod_spec() {
   kctl -n meridian get deployment claims-api -o json | jq --arg name "${network_pod}" \
-    --arg label "${NETWORK_POD_NAME_LABEL}" --argjson lifetime "${NETWORK_POD_LIFETIME}" '
+    --arg label "${NETWORK_POD_NAME_LABEL}" --argjson lifetime "${NETWORK_POD_LIFETIME}" \
+    --arg smoke_key "${NETWORK_POD_SMOKE_LABEL%%=*}" --arg smoke_value "${NETWORK_POD_SMOKE_LABEL#*=}" '
     .spec.template.spec as $pod | $pod.containers[0] as $container | {
       apiVersion: "v1", kind: "Pod",
-      metadata: {name: $name, namespace: "meridian", labels: {"app.kubernetes.io/name": $label}},
+      metadata: {
+        name: $name, namespace: "meridian",
+        labels: {"app.kubernetes.io/name": $label, ($smoke_key): $smoke_value}
+      },
       spec: {
         restartPolicy: "Never", automountServiceAccountToken: false,
         activeDeadlineSeconds: $lifetime, securityContext: $pod.securityContext,
@@ -1705,6 +1763,7 @@ check_network_database() {
 
 check_network_policy() {
   local found policy
+  network_sweep_leftovers
   if ! found="$(kctl -n meridian get deployment claims-api -o name --ignore-not-found)"; then
     fail "network policy: could not look for deployment/claims-api (kubectl's error is above)"
     return
@@ -1803,7 +1862,7 @@ identity_mark_start() {
     identity_primary=""
     identity_mark_problem="no primary pod found for platform-db to read the audit row of the 403${detail:+ (kubectl said: ${detail})}"
   elif ! answer="$(kctl -n meridian exec "${identity_primary}" -c postgres -- \
-    psql -d meridian -tAc "${IDENTITY_CLOCK_SQL}" 2>"${err_file}")"; then
+    env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "${IDENTITY_CLOCK_SQL}" 2>"${err_file}")"; then
     detail="$(clean_lines "$(<"${err_file}")")"
     identity_mark_problem="could not read the database's clock in ${identity_primary} before the probe${detail:+ (kubectl said: ${detail})}"
   elif ! [[ "$(clean_lines "${answer}")" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -1842,7 +1901,7 @@ check_gateway_refusal_row() {
   err_file="$(mktemp)"
   for ((attempt = 1; attempt <= IDENTITY_AUDIT_ATTEMPTS; attempt++)); do
     if ! answer="$(kctl -n meridian exec "${identity_primary}" -c postgres -- \
-      psql -d meridian -tAc "SELECT floor(extract(epoch FROM now() - recorded_at))::bigint, extract(epoch FROM recorded_at) >= ${identity_mark} FROM audit.events WHERE service = '${IDENTITY_GATEWAY_SERVICE}' AND event = 'model.call' AND outcome = 'refused' AND reason = '${IDENTITY_AUDIT_REASON}' AND reference = '${IDENTITY_CALLER}' AND tenant = '${IDENTITY_FOREIGN_TENANT}' AND recorded_at > to_timestamp(${identity_mark}) - interval '${IDENTITY_AUDIT_THROTTLE} seconds' ORDER BY recorded_at DESC LIMIT 1" \
+      env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "SELECT floor(extract(epoch FROM now() - recorded_at))::bigint, extract(epoch FROM recorded_at) >= ${identity_mark} FROM audit.events WHERE service = '${IDENTITY_GATEWAY_SERVICE}' AND event = 'model.call' AND outcome = 'refused' AND reason = '${IDENTITY_AUDIT_REASON}' AND reference = '${IDENTITY_CALLER}' AND tenant = '${IDENTITY_FOREIGN_TENANT}' AND recorded_at > to_timestamp(${identity_mark}) - interval '${IDENTITY_AUDIT_THROTTLE} seconds' ORDER BY recorded_at DESC LIMIT 1" \
       2>"${err_file}")"; then
       detail="$(clean_lines "$(<"${err_file}")")"
       rm -f "${err_file}"
@@ -2348,7 +2407,14 @@ check_alert_rules() {
   check_dashboard "${HEALTH_DASHBOARD_UID}" "${HEALTH_DASHBOARD_FILE}"
 }
 
+# The EXIT trap deletes what a run made. Bash does not reliably run it when a
+# signal ends the script (SIGHUP: an SSH session that drops, a closed terminal),
+# so each signal has a trap that exits with 128 plus its number, which runs the
+# EXIT trap; the `pytest-db` recipe of the Makefile does the same.
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 check_edge
 check_database
 check_tools

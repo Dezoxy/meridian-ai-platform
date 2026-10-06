@@ -2247,7 +2247,7 @@ def run_cost_panel(
             'skip() { echo "SKIP  $*"; }',
             *re.findall(
                 r"^readonly (?:DASHBOARD_UID|DASHBOARD_FILE|COST_SERIES|POLL_TIMEOUT"
-                r"|GRAFANA_ACCOUNT)=.*$",
+                r"|GRAFANA_ACCOUNT|PSQL_OPTIONS)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
@@ -3626,6 +3626,7 @@ def run_sweep_check(
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
             *re.findall(r"^readonly (?:SWEEP|QUERY_ERROR)_\w+=.*$", SMOKE_SH, re.M),
+            *re.findall(r"^readonly PSQL_OPTIONS=.*$", SMOKE_SH, re.M),
             one_line_function(SMOKE_SH, "clean_lines"),
             "kctl() {",
             f'  echo "$*" >>"{asked}"',
@@ -3929,10 +3930,11 @@ def test_the_sweep_check_says_which_clock_it_asked_for_a_cronjob_not_scheduled_y
     assert "120 s ago by the database's clock" in line
     assert "no server-side clock" not in line
     # The clock is the primary's `now()`, read as a whole number of seconds.
-    assert (
-        "exec platform-db-1 -c postgres -- psql -d meridian -tAc "
-        "SELECT floor(extract(epoch FROM now()))::bigint"
-    ) in asked
+    options = re.search(r"^readonly PSQL_OPTIONS='(.*)'$", SMOKE_SH, re.M)
+    assert options
+    exec_psql = f"exec platform-db-1 -c postgres -- env PGOPTIONS={options.group(1)} "
+    assert exec_psql + "psql -d meridian -tAc " in asked
+    assert "-tAc SELECT floor(extract(epoch FROM now()))::bigint" in asked
 
 
 @requires_jq

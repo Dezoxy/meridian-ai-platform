@@ -142,6 +142,51 @@ def test_the_charts_cap_is_the_policys_cap() -> None:
     assert f"above {hours}h" in outside
 
 
+def test_the_cap_in_minutes_renders_and_a_minute_above_it_meets_the_caps_message() -> (
+    None
+):
+    # The cap is 129600 minutes, six digits: the parse must not stop at five.
+    cap = policy_cap_minutes()
+    assert cap == 129600
+
+    at_the_cap = certificates(f"certificate.duration={cap}m")
+    above = refusal(f"certificate.duration={cap + 1}m")
+
+    assert len(at_the_cap) == CERTIFICATES
+    for certificate in at_the_cap:
+        assert certificate["spec"]["duration"] == f"{cap}m"
+    assert "certificate.duration is" in above
+    assert f"above {cap // 60}h" in above
+    assert "certificate-policy.yaml" in above
+    assert "not a duration" not in above
+
+
+def test_a_renew_before_in_minutes_of_six_digits_is_read_as_a_number() -> None:
+    found = certificates("certificate.renewBefore=100000m")
+
+    for certificate in found:
+        assert certificate["spec"]["renewBefore"] == "100000m"
+
+
+@pytest.mark.parametrize(
+    "duration",
+    [
+        "99999999999999999999h",
+        "9223372036854775807m",
+        "1000000000m",
+        # The hours clamp to the largest integer, which times 60 wraps to -60:
+        # with 129660 minutes added that is the cap, exactly.
+        "99999999999999999999h129660m",
+    ],
+)
+def test_a_number_too_long_to_parse_is_refused_and_not_wrapped_into_range(
+    duration: str,
+) -> None:
+    message = refusal(f"certificate.duration={duration}")
+
+    assert "certificate.duration" in message
+
+
 @pytest.mark.parametrize("duration", ["59m", "30m", "0h", "1m"])
 def test_a_duration_below_cert_managers_minimum_fails_and_names_the_value(
     duration: str,
