@@ -32,7 +32,7 @@ address range: the peers are pods. The kubelet's probes are not blocked by a
 policy. The Model Gateway has no rule for a provider: on kind it runs in replay
 mode and calls nothing outside the cluster. The rule for Azure OpenAI and Key
 Vault belongs with the provider (S020).
-tests/meridian/test_helm_chart.py states these rules.
+tests/meridian/test_helm_network_policy.py states these rules.
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
