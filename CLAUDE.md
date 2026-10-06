@@ -16,6 +16,11 @@ step list (S000…), the session protocol and the open questions.
   worktree; one session runs up to three at a time (the plan's Part A).
 - Read the plan's Part A before starting; it says what to read, how to
   delegate, which gates to run and how to close the step.
+- Before running steps or implementers side by side, read "Working fast on
+  the virtual machine" in
+  [docs/development-environment.md](docs/development-environment.md): what
+  things cost there, how each implementer gets a worktree and a test
+  database of its own, and which worker counts to pass.
 - Record decisions and evidence in the step's Part C section, not in chat.
 - Private context (job targeting, owner notes) is in the gitignored
   `.context/` folder. Read it only when a step needs it; never copy it into
