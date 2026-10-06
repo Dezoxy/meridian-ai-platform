@@ -77,6 +77,7 @@ readable, so the other services are named under what the view omits.
 - [0003 Build a thin model gateway instead of adopting LiteLLM](decisions/0003-build-a-thin-model-gateway.md)
 - [0004 Prove a service's identity with mutual TLS and cert-manager](decisions/0004-prove-service-identity-with-mutual-tls.md)
 - [0005 Split an agent into workers routed by code, with their own tool lists](decisions/0005-split-an-agent-into-workers-routed-by-code.md)
+- [0006 Map the Azure platform to AWS](decisions/0006-map-the-azure-platform-to-aws.md)
 
 New ADR: copy [templates/adr.md](templates/adr.md) to
 `decisions/NNNN-short-title.md`. Keep this index current; there is
@@ -90,13 +91,15 @@ every `.md` file in that folder.
 | Narrative (opens the tab and the PDF) | [01 overview](overview/01-meridian-ai-platform.md) · [02 scope](overview/02-scope.md) · [03 glossary](overview/03-glossary.md) |
 | Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
 | Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
+| Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, and the residency rule in words no cloud owns |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
 symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,
-`22-data-classification.md`, `23-threat-model.md`). The security and quality
-registers came before the code they govern, so later steps cite their IDs
-instead of inventing them. Add other concern documents when there is
-something true to say: deployment and reliability when something runs.
+`22-data-classification.md`, `23-threat-model.md`, `30-azure-platform.md`).
+The security and quality registers came before the code they govern, so later
+steps cite their IDs instead of inventing them. Add other concern documents
+when there is something true to say: reliability when something runs, and
+the deployment of each cloud when there is something to place.
 
 ## Diagrams
 
