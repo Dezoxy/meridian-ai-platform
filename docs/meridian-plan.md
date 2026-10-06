@@ -12124,7 +12124,12 @@ backlog (S070); nothing else changed.
   alone (158 passed); the backlog row says which. `ruff`, the format check
   and `lint-imports` were clean in each report (five contracts kept before
   the merge of `main`, six after it).
-- **The whole suite on the final tree:** FINAL-SUITE-RESULT.
+- **The whole suite on the final tree:** 15,616 passed, 8 skipped in 4 min
+  31 s, alone, with six workers, on 628b028 (the commit before this line was
+  written; `main` was merged in at 4c85951, where the suite was 15,606
+  passed, and the ten more are D3's pins). Before it, on the same commit: the
+  two stack files of the evaluation and of the injection cases, whole (24
+  passed, 2 skipped), and the free replay ("eval compare: passed" twice).
 - **The reviews:** the security and the first Python review (no critical
   finding; the security one found no privacy regression and one high, the
   availability of the name's pattern; the Python one a high on the capital
