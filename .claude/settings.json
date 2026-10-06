@@ -196,6 +196,11 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/node/run-with-flags.js\" stop:session-end hooks/node/session-end.js minimal,standard,strict",
             "timeout": 10,
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-lanes.sh\"",
+            "timeout": 5
           }
         ]
       }

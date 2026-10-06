@@ -196,6 +196,12 @@ known.
 - **Several steps at once, each in a worktree of its own** (the plan's
   Part A). Three steps ran side by side on 2026-10-06, with seven
   implementers at the peak.
+- **A board of lanes, and a hook that reads it.** The session keeps
+  `.claude/lanes.md` (not tracked): `Target: N` and a table `Lane | Step | Out
+  now | Idle because | Next`. The `Stop` hook `check-lanes.sh` blocks the stop
+  once, naming a lane with nothing out and no reason, or saying fewer than
+  `Target` run (a lane with a reason does not count as running). It reads
+  that file only and cannot tell a true "out now" from a false one.
 - **Several implementers inside one step when their files do not
   overlap.** Four contracts of one step ran at once, each on a branch cut
   from the step's branch; each finished contract was rebased onto the

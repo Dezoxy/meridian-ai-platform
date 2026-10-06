@@ -210,7 +210,11 @@ A change that violates one is wrong even if it works.
   session files. The ECC plugin stays disabled here so no gate fires twice.
   Codex runs the shell hooks through `.codex/hooks.json`; GateGuard, the session
   hooks and the slash commands are Claude Code only. Open `/hooks` once
-  after a fresh clone to activate them.
+  after a fresh clone to activate them. `check-lanes.sh`, a synchronous
+  `Stop` hook, blocks the stop once when the untracked board
+  `.claude/lanes.md` shows a lane idle with no reason or fewer lanes running
+  than its `Target`; it checks what the session wrote on the board, not
+  whether an agent is really out.
 - Slash commands in `.claude/commands/`: `/save-session`, `/resume-session`
   and `/test-coverage`.
 - MCP: `.mcp.json` declares `chrome-devtools` (Lighthouse audits,
