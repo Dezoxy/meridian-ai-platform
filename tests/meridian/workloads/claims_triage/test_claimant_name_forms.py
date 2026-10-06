@@ -456,7 +456,9 @@ def test_a_name_part_of_under_three_letters_is_still_never_replaced(
 def test_every_placeholder_stays_whole_next_to_a_name_that_is_its_word(
     placeholder: str,
 ) -> None:
-    word = placeholder.strip("[]")
+    # The first word of the placeholder's own text: "[national-id]" holds two,
+    # and a name is split on a hyphen, so the whole text is not one name part.
+    word = placeholder.strip("[]").split("-")[0]
     # Capitalised since C4b: a form with an ending is a name only when capitalised.
     text = f"{placeholder} and {word.capitalize()}nak and {placeholder}nak"
 
