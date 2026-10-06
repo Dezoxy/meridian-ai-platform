@@ -828,6 +828,7 @@ that day; the rest stand as their step recorded them.
 | The three brief routes have no sign-in (T-69, T-94): whoever reaches the Claims API starts, decides and reads a brief | S037 | open | S021 |
 | A migration that is not applied fails one statement of the sweep (0023: the leftover walk; 0024: the abandoned-run list), so the LangGraph cleanup or the triage's run end goes down with it; how the chart orders the migrate Job against the sweep and the pods was not read | S037 (database review) | open | S073 |
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | open | S074 |
+| `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | open; seen once, under load | S074 |
 | Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
 
 ## Part C — Step details
@@ -10893,9 +10894,13 @@ earlier consultation had seen (Part A, step 4).
 
 - **The whole suite, alone on a quiet machine:** 12,856 passed before
   `main` was merged in, and 13,535 passed, 8 skipped, on the merged tree
-  (the one the cluster run used).
+  (the one the cluster run used). Run once more on the final tree, where
+  only documents had changed since, while other steps' tests held the
+  machine at a load of about 24: 13,534 passed and one failed, a tool
+  call that timed out in the triage's stack test; that file passed alone
+  right after (10 passed). The row is in the backlog (S074).
 - **The evaluation's free replay** passed twice on the step's tip before
-  that merge (`eval compare: passed`): no baseline, recording or golden
+  that merge and twice on the final tree (`eval compare: passed`): no baseline, recording or golden
   file of the triage moved, and the `tools` fingerprint of `claims-triage`
   is pinned unchanged (`tests/meridian/registry/test_hosts.py`). The
   claim brief's evaluation is published and empty (its golden set holds no
