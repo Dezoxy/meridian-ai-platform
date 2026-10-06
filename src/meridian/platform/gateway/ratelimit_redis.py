@@ -24,10 +24,36 @@ keeps entries counted for longer than their window, and the key's expiry (which
 refusals do not extend) bounds how long. A key's expiry always runs on the
 server's clock, which a hand-moved clock does not move.
 
+Members nobody but the script wrote. The gateway's Redis user may ``ZADD`` to any
+key under the prefix without the script, so a window can hold a member the script
+did not write (the cluster reviews measured both). A member whose count is not
+digits before a colon is read as no tokens (it still counts as one request, for as
+long as its score is inside the window). The script writes an entry scored at its
+own ``now``, which is the largest score a legitimate member can have, so a member
+scored later than ``now`` plus the token window is removed in the same call (a
+step backwards of the server's clock by more than a window does the same to real
+entries: the tenant is counted less, never locked out). A member scored inside
+that margin is kept and counted, so it can make a tenant wait: at most 70 s for
+the request window and at most two token windows (120 s) for the token window,
+which is the longest wait the script can compute from what it keeps and the
+ceiling ``_refusal`` puts on one (a longer wait is not the script's). Both end
+with the member's own score passing out of the window.
+
+Rolling update. A pod of the previous image and one of this one share the keys and
+each loads its own script, which the server keeps under its own hash, so neither
+replaces the other. Both write the same member (a digit string, a colon, 16 hex
+digits, scored at the script's ``now`` in milliseconds) and both read the other's
+(a count read from digits before a colon, a score read as a number), so the
+windows are one whatever the mix. What differs is only how they treat a member
+nobody wrote: the new script tolerates and removes it, the old one raises on an
+unreadable one and counts a future one, so a plant made during the overlap bites
+the old pod's calls for that tenant until a call of the new pod removes it.
+
 Failure. A server that cannot be reached, that answers an error, that answers a
-reply the client library cannot read or that is not the script's, or that does not
-answer in time raises ``RateStoreUnavailable``, whose message holds no address, no
-credential and nothing the server sent. What the gateway does with it is the
+reply the client library cannot read or that is not the script's (a wait over
+two token windows is not), or that does not answer in time raises
+``RateStoreUnavailable``, whose message holds no address, no credential and
+nothing the server sent. What the gateway does with it is the
 caller's decision (it refuses the call, ``app.py``); this module never falls back
 to anything. The client's timeouts and its no-retry rule are set where the client
 is made (``rate_store.py``), not here. A tenant that is not a registry ID and a
@@ -69,6 +95,13 @@ DEFAULT_PREFIX = "meridian:rate"
 
 _TENANT_ID = re.compile(ENTITY_ID_PATTERN)
 _ADMITTED, _REQUEST_RATE, _TOKEN_RATE = 0, 1, 2
+_TOKEN_WINDOW_MS = round(TOKEN_WINDOW_SECONDS * 1000)
+# The longest wait the script can compute from what it keeps. It keeps members
+# scored up to one token window after its own now (the margin below), and a kept
+# one leaves the token window a token window after its score: twice the window
+# (the request window's longest, 70 s, is shorter). A larger wait cannot come
+# from the script, so it is an answer of an unknown shape.
+_LONGEST_WAIT_MS = 2 * _TOKEN_WINDOW_MS
 _REFUSALS: dict[int, RateRefusalReason] = {
     _REQUEST_RATE: "tenant-request-rate",
     _TOKEN_RATE: "tenant-token-rate",
@@ -95,13 +128,26 @@ local tokens = tonumber(ARGV[4])
 local request_window = tonumber(ARGV[6])
 local token_window = tonumber(ARGV[7])
 
+-- A member this script did not write may be in the key (the gateway's Redis
+-- user can ZADD to it): one whose count is not digits before a colon is read as
+-- no tokens, not an error that fails every call of the tenant.
+local function tokens_of(member)
+  return tonumber(string.match(member, '^(%d+):') or '0')
+end
+
 local oldest_to_keep = string.format('%.0f', now - token_window)
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', oldest_to_keep)
+-- This script scores an entry at its own now, so none is ever later than the
+-- now of a call that follows; one scored after now plus the longer window was
+-- not written by it (or the clock stepped back by more than a window) and goes,
+-- or it would count for as long as it takes the clock to reach it.
+local latest_to_keep = string.format('%.0f', now + token_window)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '(' .. latest_to_keep, '+inf')
 local entries = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
 
 local requests, oldest, used = 0, nil, 0
 for i = 1, #entries, 2 do
-  used = used + tonumber(string.match(entries[i], '^(%d+):'))
+  used = used + tokens_of(entries[i])
   if now - tonumber(entries[i + 1]) < request_window then
     requests = requests + 1
     oldest = oldest or tonumber(entries[i + 1])
@@ -113,7 +159,7 @@ if requests >= max_requests then
 end
 if used + tokens > max_tokens then
   for i = 1, #entries, 2 do
-    used = used - tonumber(string.match(entries[i], '^(%d+):'))
+    used = used - tokens_of(entries[i])
     if used + tokens <= max_tokens then
       return {2, tonumber(entries[i + 1]) + token_window - now}
     end
@@ -175,7 +221,7 @@ class RedisRateLimiter:
                     tokens,
                     f"{tokens}:{secrets.token_hex(8)}",
                     round(REQUEST_WINDOW_SECONDS * 1000),
-                    round(TOKEN_WINDOW_SECONDS * 1000),
+                    _TOKEN_WINDOW_MS,
                 ],
             )
         except (redis.RedisError, ValueError, OverflowError) as exc:
@@ -200,6 +246,10 @@ class RedisRateLimiter:
             if type(outcome) is int and type(wait_ms) is int:
                 if outcome == _ADMITTED:
                     return None
-                if outcome in _REFUSALS:
+                # A wait the script cannot compute from what it keeps (see
+                # _LONGEST_WAIT_MS) is a shape of answer it does not know (a
+                # member planted in the future gave one of thousands of years),
+                # so it is the store's failure and not a tenant's rate.
+                if outcome in _REFUSALS and wait_ms <= _LONGEST_WAIT_MS:
                     return RateRefusal(_REFUSALS[outcome], retry_after(wait_ms / 1000))
         raise RateStoreUnavailable("the rate store gave an answer of an unknown shape")

@@ -18,7 +18,10 @@ import redis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
 
-from meridian.platform.gateway.ratelimit import RateStoreUnavailable
+from meridian.platform.gateway.ratelimit import (
+    TOKEN_WINDOW_SECONDS,
+    RateStoreUnavailable,
+)
 from meridian.platform.gateway.ratelimit_redis import RedisRateLimiter
 from meridian.platform.registry.models import TenantLimits
 
@@ -128,6 +131,47 @@ def test_the_replies_of_the_script_are_still_read() -> None:
 
     assert refusal is not None
     assert (refusal.reason, refusal.retry_after_seconds) == ("tenant-request-rate", 3)
+
+
+# ── a wait no legitimate window can give ────────────────────────────────────
+# The script keeps members scored up to one token window ahead, and a kept one
+# leaves the token window a token window after its score: twice the window.
+CEILING_MS = 2 * round(TOKEN_WINDOW_SECONDS * 1000)
+
+
+@pytest.mark.parametrize("outcome", [1, 2], ids=["request-window", "token-window"])
+def test_a_wait_of_exactly_the_ceiling_is_still_the_tenants_rate(
+    outcome: int,
+) -> None:
+    reply = f"*2\r\n:{outcome}\r\n:{CEILING_MS}\r\n".encode()
+
+    with store_that_answers(reply) as port:
+        refusal = limiter_on(port).admit(TENANT, LIMITS, 1)
+
+    assert refusal is not None
+    assert refusal.retry_after_seconds == 120
+
+
+@pytest.mark.parametrize("outcome", [1, 2], ids=["request-window", "token-window"])
+@pytest.mark.parametrize(
+    "wait_ms",
+    [CEILING_MS + 1, 3_600_000, 98_208_712_268_000],
+    ids=["a-millisecond-over", "an-hour", "thousands-of-years"],
+)
+def test_a_wait_over_the_ceiling_is_the_stores_failure_not_a_rate(
+    outcome: int, wait_ms: int
+) -> None:
+    # Nothing the script can compute from what it keeps is longer: a larger
+    # number is a shape of answer it does not know, so the call is refused as the
+    # store's failure (a 503 and an audit row), not as a 429 that tells the
+    # caller to come back in a year.
+    reply = f"*2\r\n:{outcome}\r\n:{wait_ms}\r\n".encode()
+
+    with store_that_answers(reply) as port, pytest.raises(RateStoreUnavailable) as e:
+        limiter_on(port).admit(TENANT, LIMITS, 1)
+
+    assert "unknown shape" in str(e.value)
+    assert str(wait_ms) not in str(e.value)
 
 
 # ── a call it must not send ─────────────────────────────────────────────────
