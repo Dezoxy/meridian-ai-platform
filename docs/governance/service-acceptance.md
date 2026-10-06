@@ -27,8 +27,8 @@ Azure.
 The maintainer decides, as there is one (C-01), and a pull request needs no
 review (T-35). A session prepares the applied document and the evidence; it
 does not decide. The checks and this checklist are the gate. Where an item
-needs a legal judgement (a retention period, the lawfulness of a use of
-personal data), it is the insurer's legal function's to answer, and this
+needs a legal judgement (a retention period, whether personal data may be
+used for a purpose), it is the insurer's legal function's to answer, and this
 project records it as open.
 
 ## The process

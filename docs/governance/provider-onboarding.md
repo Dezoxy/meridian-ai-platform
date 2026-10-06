@@ -118,6 +118,11 @@ An item has one of four statuses in an applied document:
 - **Not applicable**: the item does not apply to this provider; the note says
   why.
 
+When a threat-model row that an item cites says "implemented in part", the
+item is at most partly met: the register owns that label and this document
+follows it. The one exception is written in the item's own note: the row's
+residual is not what the item asks, and the note says what it is.
+
 Declared configuration is not live behaviour. A row that rests on a file in
 the repository says so; a row about Azure's own state needs `make azure-smoke`
 or `make registry-snapshot`, which only the owner runs.
@@ -138,17 +143,22 @@ retirement date must be checked again, and no check reads the age of a
 
 `retires` is required on every Azure deployment and nothing reads it: a
 deployment past its date still routes (the plan's follow-up backlog, home
-S030). Each Azure deployment pins its version with `NoAutoUpgrade`, so it
-stops answering once the provider retires it; the gateway then walks on to
-the next candidate and counts a failure (the
+S030). Each Azure deployment declares `NoAutoUpgrade` in Terraform (a pin
+declared there and not read back from Azure), so it should stop answering
+once the provider retires it; the gateway then walks on to the next
+candidate and counts a failure (the
 [provider outage runbook](../operations/runbooks/provider-outage.md) reads a
 404 as `unavailable`).
 
 So the replacement has to come before the date, by hand: onboard the
 successor, move the route to it, re-run the evaluation, and only then remove
 the old deployment from Terraform and from the registry in one pull request.
-The registry check refuses a deployed model that is not registered, so the two
-removals cannot be split silently (T-12).
+The registry check compares the registry with the committed snapshot of
+Terraform's outputs, not with live Terraform. It refuses a registry that no
+longer lists a deployment the snapshot still lists. The other direction, a
+deployment removed from Terraform and still in the registry, shows only when
+the owner refreshes the snapshot with `make registry-snapshot` (T-12's
+residual).
 
 ## Removing a provider
 
@@ -160,7 +170,10 @@ removals cannot be split silently (T-12).
 3. Remove its infrastructure. That is Terraform, and the owner's command: see
    "Removal" in the [Terraform README](../../infra/terraform/README.md). There
    is no `make` target for it, on purpose. Remove any secret it held; the
-   Azure foundation holds none today.
+   Azure foundation holds none today. Then refresh the snapshot with `make
+   registry-snapshot`: the registry check reads the committed snapshot, not
+   live Terraform, so a removal the snapshot does not yet show goes unseen
+   until the owner refreshes it (T-12's residual).
 4. Remove its adapter, its settings and its SDK dependency in the same change
    as the registry edit, so no code names a deployment that is gone.
 5. Update the threat-model rows that name it, and mark the applied document
@@ -185,22 +198,22 @@ skips it.
 | PO-06 | The label against the live provider | The registry's SKU, region and version are those the provider reports, not only those Terraform declares | CI compares the registry with a committed snapshot of Terraform's outputs; the comparison with the provider is `make registry-snapshot` and `make azure-smoke`, by the owner (T-12) |
 | PO-07 | Data classes | Each deployment lists the data classes it may see, none beyond what its label allows: personal data never reaches `global`, and `special` reaches no deployment (hard rule 3, T-11) | `meridian registry validate` (the ceiling is fixed in the validator's code); a test keeps `policies.yaml` equal to the data classification table |
 | PO-08 | Retention and abuse monitoring | What the provider keeps of a prompt and a completion, for how long, whether that can be switched off, and whether it is acceptable for the data class (T-20). The insurer's legal function answers; this project records the answer, or that it is open | A person |
-| PO-09 | Sub-processors and transfers | Who else processes the prompts, and where. The insurer's legal function answers; this project records it as open when nobody has | A person |
-| PO-10 | Agreement | The contractual basis for sending personal data to the provider, and any assessment of a transfer. The insurer's legal function's to answer; this project records it as open and does not answer it | A person |
+| PO-09 | Sub-processors and where prompts go | Who else processes the prompts, and where. The insurer's legal function answers; this project records it as open when nobody has | A person |
+| PO-10 | Agreement | Whether an agreement with the provider covers sending personal data to it, and whether where the data goes has been checked. The insurer's legal function's to answer; this project records it as open and does not answer it | A person |
 | PO-11 | Network exposure | How the provider's account is reached and how the gateway reaches it: public endpoint, private endpoint, address rules, egress (T-19) | A person; on kind a network policy gives a workload no egress outside the cluster (T-84) |
 | PO-12 | Adapter lives in the gateway only | The adapter is under `src/meridian/platform/gateway/providers/`, and no other package imports the SDK, directly or through another module (hard rule 4, ADR 3, T-19) | import-linter, in `make lint` in CI, for the SDKs the two contracts name; a test plants violations. A new SDK must be added to both lists by hand |
 | PO-13 | Adapter behaviour | A provider error maps to the gateway's failure kinds, its text never reaches a response, a span or an audit row, there is no redirect, no proxy and no hidden retry, and a token count the request cannot explain is refused (T-18, T-43, T-45, T-47) | Tests of the adapter and the gateway |
 | PO-14 | Price | Each deployment has a price per million tokens with its source and the date it was checked (C-04) | The schema requires `source` and `checked`; nothing compares the value with the provider or reads the date's age |
-| PO-15 | Rate limits | Each deployment states the limits the provider reports, and the tenants' limits fit inside them (T-45) | `meridian registry validate`: the limits against Terraform's capacity, and the tenants' sums against the smallest candidate |
-| PO-16 | Version pin | The exact model version is pinned in the registry and at the provider, with no automatic upgrade | `meridian registry validate` compares model, version, SKU and region with Terraform's outputs; Terraform pins the upgrade option |
-| PO-17 | Retirement | Each deployment has a retirement date from the provider with its source, and a plan for the day it passes | The schema requires the date; nothing reads it, and a deployment past it still routes |
+| PO-15 | Rate limits | Each deployment states the limits the provider reports, and the tenants' limits fit inside them (T-45) | `meridian registry validate`: `tokens_per_minute` against Terraform's capacity (`requests_per_10_seconds` is not compared), and the tenants' sums against the smallest candidate |
+| PO-16 | Version pin | The exact model version is pinned in the registry, and the pin at the provider (no automatic upgrade) is declared in Terraform | `meridian registry validate` compares model, version, SKU and region with Terraform's outputs; Terraform declares the upgrade option, and nothing reads it back from Azure |
+| PO-17 | Retirement | Each deployment has a retirement date from the provider with its source, and a plan for the day it passes | The validator requires the date for Azure deployments (`AZURE_REQUIRED` in `checks.py`); the schema does not. Nothing reads it, and a deployment past it still routes |
 | PO-18 | Fallback and outage | What the route does when this deployment fails or its region is down, which other candidate answers, which data class that candidate may see (T-44), and what the operator does (T-17, T-46) | Tests of the gateway's walk and filter; the runbook is a person's, and has not been exercised |
 | PO-19 | Evaluation when the model changes | A change of the model behind a route is graded again: the evaluation is re-run or re-recorded and the diff of the baseline is read (T-72) | `meridian eval compare` in CI, for what it fingerprints; the model behind a route is not one of those fingerprints |
 | PO-20 | Cost budget | The tenants that may reach the deployment have a monthly cost quota, the subscription has a budget, and the two together fit the constraint (C-04) | The ledger refuses a call past a tenant's quota; the sum of the quotas against C-04 is a person's check |
 | PO-21 | Audit and metrics | A call to the deployment leaves an audit row with the provider, the deployment, its SKU, region and label, and its metrics carry registry IDs only (T-12, T-14, T-49) | Tests of the gateway |
 | PO-22 | One pull request | The Terraform change, the registry snapshot, the registry edit and the applied document land together | CI compares the registry with the snapshot; that all four travel together is a person's check |
 | PO-23 | Threat-model rows | The provider's threats are rows in the register, written before the code (T-18 to T-20 and T-43 to T-46 for Azure OpenAI) | `make docs` checks that a cited `T-NN` exists; the rest a person |
-| PO-24 | Exit | How the provider is removed is written down, and the registry refuses a half removal | `meridian registry validate` refuses a deployed model that is not registered and a route that names a missing deployment; the rest is this document |
+| PO-24 | Exit | How the provider is removed is written down, and the registry and the Terraform snapshot are refreshed together | `meridian registry validate` compares the registry with the committed snapshot, not with live Terraform: it refuses a registry that drops a deployment the snapshot still lists, and a route that names a missing deployment. The other direction depends on the owner refreshing the snapshot with `make registry-snapshot`; the rest is this document |
 
 ## Which source owns what
 

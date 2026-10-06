@@ -11,7 +11,7 @@ and every other item rests on a person reading the document.
 | Document | What it holds | Status |
 |---|---|---|
 | [Provider onboarding](provider-onboarding.md) | The process for adding, changing, retiring and removing a model provider or a deployment of one, and a checklist of 24 items (`PO-01` to `PO-24`) | Designed |
-| [Provider onboarding applied to Azure OpenAI](provider-onboarding-azure-openai.md) | The checklist applied to the one real provider: 10 met, 9 partly met, 5 not met | Designed, applied once on paper |
+| [Provider onboarding applied to Azure OpenAI](provider-onboarding-azure-openai.md) | The checklist applied to the one real provider: 8 met, 11 partly met, 5 not met | Designed, applied once on paper |
 | [Service acceptance](service-acceptance.md) | The process by which a workload is called accepted, and a checklist of 30 items (`SA-01` to `SA-30`) | Designed |
 | [Service acceptance applied to claims triage](service-acceptance-claims-triage.md) | The checklist applied to the reference workload: 9 met, 15 partly met, 6 not met | Designed, applied once on paper; the workload is not called accepted |
 
@@ -40,9 +40,9 @@ copying it.
 The regulatory statements of this repository are in the constraints (C-02),
 the [scope](../architecture/overview/02-scope.md) and the data
 classification. These documents add none. Where an item needs a legal
-judgement (what a provider retains, an agreement, a transfer, a retention
-period), it is the insurer's legal function's to answer, and the applied
-documents record it as open.
+judgement (what a provider retains, an agreement, where data goes, a
+retention period), it is the insurer's legal function's to answer, and the
+applied documents record it as open.
 
 ## Where they are not yet used
 
