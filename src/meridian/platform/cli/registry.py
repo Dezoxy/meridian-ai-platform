@@ -15,6 +15,7 @@ from meridian.platform.registry.schemas import (
     stale_schemas,
     write_schemas,
 )
+from meridian.platform.registry.service_checks import unlisted_runtime_agents
 from meridian.platform.registry.terraform import (
     azure_deployments,
     compare_with_terraform,
@@ -77,6 +78,11 @@ def validate(
             ]
         )
     )
+    for agent in unlisted_runtime_agents(registry):
+        typer.echo(
+            f"NOTE: the Agent Runtime may name agent {agent!r} and no tenant "
+            "lists it, so no run of it is admitted until a tenant does"
+        )
     if terraform_outputs is None:
         return
     try:

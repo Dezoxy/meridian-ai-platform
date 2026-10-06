@@ -197,6 +197,12 @@ on a cluster): the runtime's tool client and each tool server.
   the agent's own list. A server's span for the call names the worker
   (`meridian.worker`) once it is one of the agent's.
 
+`meridian workload new` writes an agent with no worker and does not write a
+supervisor with workers: one workload declares workers, and a generated second
+example would be a second graph to keep true with no workload asking for it
+(S076). Workers are an edit a person makes afterwards in `agents.yaml`, as in
+the example below.
+
 The reasons, in the order a tool server checks them for an agent with workers
 (the runtime's client makes the last four; it has no tenant or key form to
 check):
