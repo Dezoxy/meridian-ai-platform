@@ -426,12 +426,15 @@ def run_in_threads(work: Callable[[int], None], count: int = 8) -> None:
 
 def test_misses_and_hits_are_counted_exactly_under_threads() -> None:
     provider = RecordedProvider(recording_of({request_key(REQUEST): answer()}))
+    # One registry load, shared: a deployment is frozen, and the provider
+    # does not read it; loading it per call cost 800 loads of the registry.
+    shared = deployment()
 
     def work(index: int) -> None:
         for n in range(50):
             with contextlib.suppress(ProviderError):
-                ask(provider, request_with(f"{index}-{n}"))
-            ask(provider)
+                provider.chat(shared, request_with(f"{index}-{n}"), timeout_seconds=5.0)
+            provider.chat(shared, REQUEST, timeout_seconds=5.0)
 
     run_in_threads(work)
 
@@ -560,12 +563,11 @@ def test_the_returned_recording_is_a_copy() -> None:
 
 def test_a_recording_made_under_threads_holds_every_key() -> None:
     provider = RecordingProvider(Inner())
+    shared = deployment()
 
     def work(index: int) -> None:
         for n in range(25):
-            provider.chat(
-                deployment(), request_with(f"{index}-{n}"), timeout_seconds=5.0
-            )
+            provider.chat(shared, request_with(f"{index}-{n}"), timeout_seconds=5.0)
 
     run_in_threads(work)
 

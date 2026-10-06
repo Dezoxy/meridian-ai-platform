@@ -4,11 +4,11 @@ import hashlib
 import json
 import random
 import re
-import time
 import uuid
 from collections.abc import Callable
 
 import pytest
+from cputime import MAX_GROWTH, growth
 
 from meridian.platform.guardrails import (
     CARD_PLACEHOLDER,
@@ -25,14 +25,9 @@ IBANS = ["GB82 WEST 1234 5698 7654 32", "HU42 1177 3016 1111 1018 0000 0000"]
 UNSPACED_IBAN = "GB82WEST12345698765432"
 CARDS = ["4111 1111 1111 1111", "5555 5555 5555 4444"]
 PHONES = ["+44 20 7946 0958", "+1 (202) 555-0123", "+36301234567"]
-# A linear redaction takes four times as long on a text four times as long; a
-# quadratic one sixteen times. The limit sits between them, at twice the linear
-# growth, so that timer noise does not fail a linear run. The best of RUNS
-# runs is taken at each size.
+# The two lengths of the linear-time test; cputime says how they are compared.
 SMALL_LENGTH = 10_000
 LARGE_LENGTH = 40_000
-MAX_GROWTH = 8
-RUNS = 5
 
 VALID = {
     "email": (
@@ -585,18 +580,6 @@ ADVERSARIAL: dict[str, list[Shape]] = {
 }
 
 
-def _best_time(text: str) -> float:
-    # The thread's CPU time, not the wall clock: under parallel workers (S054)
-    # the wall clock also counts the time this test waited for a CPU, which
-    # measured a linear run at 9 to 11 times.
-    best = float("inf")
-    for _ in range(RUNS):
-        started = time.thread_time()
-        redact(text)
-        best = min(best, time.thread_time() - started)
-    return best
-
-
 @pytest.mark.parametrize(
     "shape",
     [
@@ -610,6 +593,6 @@ def test_an_adversarial_text_is_redacted_in_linear_time(shape: Shape) -> None:
     assert len(small) >= SMALL_LENGTH - 20
     assert len(large) >= LARGE_LENGTH - 20
 
-    growth = _best_time(large) / _best_time(small)
+    grown = growth(redact, small, large)
 
-    assert growth < MAX_GROWTH
+    assert grown < MAX_GROWTH
