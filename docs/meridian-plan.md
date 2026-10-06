@@ -9141,3 +9141,15 @@ repository holds.
   and not called accepted. Every applied row was checked against its
   evidence before the close. Both are designed. One new backlog row, for
   S030.
+- **v0.48, 2026-10-06:** `docs/development-environment.md` has "Working
+  fast on the virtual machine": what things cost there, measured; what
+  makes a step faster (steps and implementers side by side, each in a
+  worktree of its own with a test database of its own; every contract
+  written up front; reviewers at once; a pull request merged by hand on
+  green) and what does not (more than ten workers, more cores, a CI
+  runner on the machine). The page's older parts say what the machine
+  showed where they said what the laptop made us expect. `CLAUDE.md` and
+  `AGENTS.md` point at it, and gain "Read before you touch": five
+  pointers, each for an action (the cluster, the registry, what the
+  evaluation gate fingerprints, a provider or an accepted workload,
+  something broken) to the page that holds its rules.
