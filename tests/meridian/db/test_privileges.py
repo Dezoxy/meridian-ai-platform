@@ -612,6 +612,8 @@ def test_the_audit_log_has_no_content_columns(
         "purpose",
         # 0017: the order of the rows, stamped by the trigger.
         "seq",
+        # 0021: the worker of the agent that made a tool call.
+        "worker",
     }
 
 

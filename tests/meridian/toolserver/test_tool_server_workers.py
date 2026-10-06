@@ -218,6 +218,21 @@ class Case:
     key: str | None = None
 
 
+# The refusals that come before the server accepts the worker's name: the row
+# of each names none, whatever the call sent (a name that is no worker of the
+# run's agent is never written). A later refusal names the worker, as the span.
+BEFORE_THE_WORKER_IS_KNOWN = {
+    "tenant-not-allowed",
+    "invalid-worker",
+    "worker-missing",
+    "worker-unknown",
+}
+
+
+def worker_of_row(case: Case) -> str | None:
+    return None if case.reason in BEFORE_THE_WORKER_IS_KNOWN else case.worker
+
+
 NEW_REFUSALS = [
     pytest.param(
         Case("worker-missing", tool="policy_lookup"),
@@ -331,6 +346,7 @@ def test_each_new_refusal_answers_its_reason_audits_it_and_runs_no_handler(
         case.reason,
         case.tool,
     )
+    assert row["worker"] == worker_of_row(case)
     assert row["call_id"] == uuid.UUID(result.meta[META_CALL_ID])
     assert (row["tenant"], row["agent"], row["run_id"], row["reference"]) == (
         TENANT,
@@ -355,6 +371,7 @@ def test_a_call_naming_the_worker_that_holds_the_tool_reaches_the_handler(
     assert (call.binding.tenant, call.binding.agent) == (TENANT, AGENT)
     (row,) = audit_rows(world.db)
     assert (row["outcome"], row["tool"]) == ("completed", "claim_history")
+    assert row["worker"] == "intake"
 
 
 def test_an_agent_without_workers_is_checked_as_before_and_names_none(
@@ -369,6 +386,8 @@ def test_an_agent_without_workers_is_checked_as_before_and_names_none(
 
     assert result.is_error is False
     assert len(spy.calls) == 1
+    (row,) = audit_rows(world.db)
+    assert (row["outcome"], row["worker"]) == ("completed", None)
 
 
 def test_an_agent_without_workers_still_refuses_a_tool_it_does_not_list(
@@ -485,6 +504,8 @@ def test_the_checks_of_an_agent_with_workers_come_in_one_order(
     )
 
     assert_refused(result, case.reason)
+    (row,) = audit_rows(world.db)
+    assert row["worker"] == worker_of_row(case)
 
 
 def test_an_agent_without_workers_checks_the_key_before_the_agents_list(
@@ -575,6 +596,8 @@ def test_a_name_that_is_no_worker_of_the_agent_reaches_no_span_row_or_text(
     assert result.is_error is True
     (span,) = [s for s in exporter.get_finished_spans() if s.name == "tool.call"]
     assert "meridian.worker" not in span.attributes
+    (row,) = audit_rows(world.db)
+    assert row["worker"] is None
     everything = [
         text_of(result),
         str(dict(span.attributes)),

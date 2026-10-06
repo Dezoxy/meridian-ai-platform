@@ -378,6 +378,9 @@ class Pipeline:
             call_id=call.call_id,
             suppressed=suppressed,
             tool=call.tool,
+            # Only once the name is a worker of the run's agent (``_allowlist``
+            # sets it): what the caller sent is never written as it came.
+            worker=call.worker,
         )
 
     def _claim(self, call: Call, reason: str) -> _Claim | None:

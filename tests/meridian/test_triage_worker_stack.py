@@ -115,6 +115,14 @@ def failed_events(db: DatabaseHandle, run_id: uuid.UUID) -> list[tuple[Any, ...]
     ]
 
 
+def refusal_workers(db: DatabaseHandle, run_id: uuid.UUID) -> list[str | None]:
+    return [
+        e["worker"]
+        for e in audit_events(db, run_id)
+        if e["event"] == "tool.call" and e["outcome"] == "refused"
+    ]
+
+
 def test_every_tool_call_of_a_triage_and_its_decision_names_the_worker_that_holds_it(
     fresh_database: DatabaseHandle,
 ) -> None:
@@ -136,6 +144,15 @@ def test_every_tool_call_of_a_triage_and_its_decision_names_the_worker_that_hold
         for s in servers
     ] == WHOLE_RUN
     assert {s.attributes["meridian.tool_outcome"] for s in servers} == {"completed"}
+    # The audit log says the same: each row a tool server wrote names the worker.
+    rows = [
+        e
+        for e in audit_events(fresh_database, uuid.UUID(posted.json()["run_id"]))
+        if e["event"] == "tool.call"
+    ]
+    assert [(r["tool"], r["worker"]) for r in rows] == WHOLE_RUN
+    assert {(r["outcome"], r["reason"]) for r in rows} == {("completed", None)}
+    assert {r["service"] for r in rows} == {"policy-mcp", "knowledge-mcp", "claims-mcp"}
 
 
 def test_a_node_that_calls_through_the_wrong_worker_is_refused_by_the_runtime_alone(
@@ -166,6 +183,8 @@ def test_a_node_that_calls_through_the_wrong_worker_is_refused_by_the_runtime_al
         ),
         ("claims-api", "claim.triage_failed", None, "triage_failed", "triage-failed"),
     ]
+    # The runtime's row names the view's worker: the one the graph asked for.
+    assert refusal_workers(fresh_database, run_id) == ["terms"]
     # Nothing reached a tool server: no row of theirs, no span of theirs.
     assert tool_spans(stack, "tool.call", TOOL_SERVERS) == []
     assert owner_rows(
@@ -197,6 +216,9 @@ def test_a_call_that_bypasses_the_runtimes_view_is_refused_by_the_tool_server_al
         ("agent-runtime", "run.failed", "policy_lookup", "failed", "tool-refused"),
         ("claims-api", "claim.triage_failed", None, "triage_failed", "triage-failed"),
     ]
+    # The row of the tool server names the worker it was sent and accepted as
+    # one of the agent's.
+    assert refusal_workers(fresh_database, run_id) == ["terms"]
     # The runtime refused nothing: its client was never asked.
     assert tool_spans(stack, "runtime.tool", {"agent-runtime"}) == []
     (span,) = tool_spans(stack, "tool.call", TOOL_SERVERS)

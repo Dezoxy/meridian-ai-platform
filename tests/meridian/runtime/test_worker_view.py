@@ -51,16 +51,20 @@ SEARCH = {"query": "storm damage", "product": "HOME-PLUS"}
 
 
 class Audited:
-    """What the client told the runtime to audit: (tool, reason), in order."""
+    """What the client told the runtime to audit: (tool, reason), in order, and
+    the worker each refusal named (``workers``, one for each row)."""
 
     def __init__(self) -> None:
         self.rows: list[tuple[str | None, str]] = []
+        self.workers: list[str | None] = []
 
     def allowlist(self, tool: str | None) -> None:
         self.rows.append((tool, "tool-not-allowed"))
+        self.workers.append(None)
 
-    def worker(self, tool: str | None, reason: str) -> None:
+    def worker(self, tool: str | None, reason: str, worker: str | None) -> None:
         self.rows.append((tool, reason))
+        self.workers.append(worker)
 
 
 @pytest.fixture
@@ -170,6 +174,7 @@ def test_a_view_refuses_a_tool_of_another_worker_audits_it_and_sends_nothing(
     assert raised.value.reason == "worker-tool-not-allowed"
     assert failure_reason(raised.value) == "worker-tool-not-allowed"
     assert audited.rows == [("add_claim_note", "worker-tool-not-allowed")]
+    assert audited.workers == ["assessor"]
     assert stand_in.calls == []
     assert exporter.get_finished_spans() == ()
 
@@ -209,6 +214,9 @@ def test_a_view_refuses_a_tool_that_is_no_tool_of_the_agent_as_the_agents_refusa
     assert raised.value.reason == "tool-not-allowed"
     assert failure_reason(raised.value) == "tool-not-allowed"
     assert audited.rows == [("claim_history", "tool-not-allowed")]
+    # The tool server writes the worker on this refusal too (it has accepted the
+    # name before it reads the agent's list).
+    assert audited.workers == ["intake"]
     assert stand_in.calls == []
 
 
@@ -224,6 +232,7 @@ def test_a_made_up_tool_through_a_view_is_never_stored(
     assert raised.value.tool is None
     assert CANARY not in str(raised.value)
     assert audited.rows == [(None, "tool-not-allowed")]
+    assert audited.workers == ["intake"]
 
 
 def test_a_worker_the_agent_does_not_declare_is_refused_at_once_and_audited(
@@ -239,6 +248,8 @@ def test_a_worker_the_agent_does_not_declare_is_refused_at_once_and_audited(
     assert raised.value.reason == "worker-unknown"
     assert failure_reason(raised.value) == "worker-unknown"
     assert audited.rows == [(None, "worker-unknown")]
+    # The name the graph asked for is no worker of the agent: the row has none.
+    assert audited.workers == [None]
     assert CANARY.lower() not in str(raised.value)
 
 
@@ -265,6 +276,7 @@ def test_an_agent_without_workers_has_no_view_to_make(
 
     assert raised.value.reason == "worker-unknown"
     assert audited.rows == [(None, "worker-unknown")]
+    assert audited.workers == [None]
 
 
 def test_a_view_does_not_make_a_view(
@@ -295,6 +307,7 @@ def test_the_bare_client_of_an_agent_with_workers_refuses_every_tool(
         ("policy_lookup", "worker-missing"),
         ("wording_search", "worker-missing"),
     ]
+    assert audited.workers == [None, None]
     assert stand_in.calls == []
 
 
@@ -406,6 +419,7 @@ def test_a_call_a_view_refuses_counts_toward_the_limit(
         view.call("policy_lookup", LOOKUP)
 
     assert audited.rows == [("policy_lookup", "worker-tool-not-allowed")] * 2
+    assert audited.workers == ["assessor"] * 2
 
 
 def test_a_view_made_after_the_limit_was_reached_has_none_left(
@@ -494,6 +508,9 @@ def test_the_runtime_audits_each_worker_refusal_under_its_own_reason(
         ("refused", "worker-missing", "policy_lookup"),
         ("refused", "worker-unknown", None),
     ]
+    # The view's refusal names its worker; the bare client has none to name and
+    # the name the graph asked for in the last is no worker of the agent.
+    assert [r["worker"] for r in rows] == ["assessor", None, None]
     assert {(r["service"], r["tenant"], r["agent"]) for r in rows} == {
         ("agent-runtime", TENANT, AGENT)
     }
@@ -518,3 +535,32 @@ def test_one_tool_refused_for_two_reasons_leaves_a_row_for_each_and_one_for_a_re
         ("worker-tool-not-allowed", "policy_lookup"),
         ("worker-missing", "policy_lookup"),
     ]
+    assert [r["worker"] for r in rows] == ["assessor", None]
+
+
+def test_a_view_refusal_of_a_tool_the_agent_does_not_hold_names_the_worker_in_its_row(
+    world: World, registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    planted = registry.model_copy(
+        update={
+            "agents": tuple(
+                agent.model_copy(
+                    update={
+                        "tools": tuple(t for t in agent.tools if t != "claim_history")
+                    }
+                )
+                for agent in registry.agents
+            )
+        }
+    )
+    tools = database_client(world, planted, exporter)
+    with pytest.raises(ToolNotAllowed):
+        tools.for_worker("intake").call("claim_history", LOOKUP)
+
+    (row,) = refusal_rows(world)
+
+    assert (row["reason"], row["tool"], row["worker"]) == (
+        "tool-not-allowed",
+        "claim_history",
+        "intake",
+    )

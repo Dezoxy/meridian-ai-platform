@@ -523,6 +523,7 @@ def test_an_embedding_call_is_answered_audited_and_traced(replay: Gateway) -> No
             "provider_model": "replay-embedding",
             "suppressed": None,
             "tool": None,
+            "worker": None,  # the gateway's rows name no worker (S031)
         }
     ]
     assert dict(replay.span().attributes) == {

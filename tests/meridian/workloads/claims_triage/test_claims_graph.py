@@ -1602,7 +1602,7 @@ def real_client(worker: str) -> ToolClient:
         run_id=uuid.uuid4(),
         tracer=tracer_of(InMemorySpanExporter()),
         on_refusal=lambda tool: None,
-        on_worker_refusal=lambda tool, reason: None,
+        on_worker_refusal=lambda tool, reason, worker: None,
         max_calls=16,
     )
     return client.for_worker(worker)

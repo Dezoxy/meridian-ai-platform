@@ -298,9 +298,10 @@ class ToolClient:
     registry ID, or ``None``, before a call the allowlist refuses; it writes the
     runtime's audit row, and an exception from it propagates. A refusal that
     comes of a worker (S031: ``worker-tool-not-allowed``, ``worker-missing``,
-    ``worker-unknown``) goes to ``on_worker_refusal`` with the tool or ``None``
-    and the reason word, the same way; a client built without it reports such a
-    refusal to ``on_refusal``, as the allowlist's. ``max_calls``
+    ``worker-unknown``), and any refusal made through a worker's view, goes to
+    ``on_worker_refusal`` with the tool or ``None``, the reason word and the
+    view's worker or ``None``, the same way; a client built without it reports
+    such a refusal to ``on_refusal``, as the allowlist's. ``max_calls``
     bounds the calls of this client, so of one run: every call counts, a refused
     one too, and the one past it raises ``ToolCallLimit`` before the allowlist.
     The calls of a worker's view (``for_worker``) count here too.
@@ -322,7 +323,7 @@ class ToolClient:
         max_calls: int,
         verify: ssl.SSLContext | bool = True,
         transport: "ToolTransport | None" = None,
-        on_worker_refusal: Callable[[str | None, str], None] | None = None,
+        on_worker_refusal: Callable[[str | None, str, str | None], None] | None = None,
     ) -> None:
         prepare_sdk()
         self._verify = verify
@@ -448,11 +449,20 @@ class ToolClient:
         return spec
 
     def _refuse(self, tool: str | None, reason: str) -> NoReturn:
-        """Audit a refusal the runtime's own allowlist makes, then raise it."""
-        if reason == "tool-not-allowed" or self._on_worker_refusal is None:
+        """Audit a refusal the runtime's own allowlist makes, then raise it.
+
+        The agent's own refusal of a tool, from the client with no worker, goes to
+        ``on_refusal``. Every other goes to ``on_worker_refusal`` with the worker
+        the row names: this view's, as the tool server's row names the worker it
+        accepted, and none for ``worker-unknown`` (the name the graph asked for
+        is no worker of the agent) and for the client that has none."""
+        if self._on_worker_refusal is None or (
+            reason == "tool-not-allowed" and self._worker is None
+        ):
             self._on_refusal(tool)
         else:
-            self._on_worker_refusal(tool, reason)
+            named = None if reason == "worker-unknown" else self._worker
+            self._on_worker_refusal(tool, reason, named)
         raise ToolNotAllowed(tool, reason)
 
     def _idempotency_key(self, spec: Tool, step: str | None) -> str | None:
