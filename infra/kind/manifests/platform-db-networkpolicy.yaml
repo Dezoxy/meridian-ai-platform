@@ -14,16 +14,35 @@
 #         seconds (measured on the owner's cluster); with it, it stayed healthy
 #   any   from the pods of the same Cluster: a replica or a join Job, none today
 #
-# Egress, three rules and nothing else; the database pod cannot open a
-# connection to the internet (measured on the owner's cluster: 443 and 80 timed
-# out, the API server's Service answered, the Cluster stayed healthy):
+# Egress, three rules and nothing else, each with a peer; the database pod
+# cannot open a connection to the internet (measured on the owner's cluster:
+# 443 and 80 timed out, the API server's Service answered, the Cluster stayed
+# healthy):
 #   53    DNS: the cluster's DNS pods (UDP and TCP)
-#   6443  TCP to any address. The instance manager calls the Kubernetes API
-#         server, and 6443 is the API server's own port on the node. The policy
-#         is evaluated after the Service's address is translated to the node's,
-#         and that address changes when the cluster is re-created, so no ipBlock
-#         can name it: the rule names the port and no address
+#   6443  TCP to the API server's address alone (S063). The instance manager
+#         calls the Kubernetes API server, and 6443 is the API server's own
+#         port on the node. The policy is evaluated after the Service's address
+#         is translated to the node's, and that address changes when the
+#         cluster is re-created, so this file does not hold it: it holds a
+#         placeholder that is not a CIDR (the API server refuses the file as it
+#         stands, so a plain `kubectl apply -f` of it cannot install a policy
+#         with a wrong address), and `make up` reads the addresses of the
+#         `kubernetes` EndpointSlice in `default`, validates each as an IPv4
+#         address and applies this policy with one ipBlock of /32 for each, on
+#         every run. If the address changes under a running cluster (Docker
+#         restarted), the database loses the API server until `make up` runs
+#         again: `make deploy` and `make smoke` compare the policy's CIDRs with
+#         the endpoint's addresses and say "the API server's address changed:
+#         run make up"
 #   any   the pods of the same Cluster: a replica or a join Job, none today
+#
+# What a test proves, and what it does not: the tests render this file with
+# addresses against a stub kubectl and compare it with the endpoint, and they
+# prove that no rule lacks a peer. That kindnet enforces an ipBlock egress rule
+# after the Service's address is translated to the node's is not proved by a
+# test, nor is that the connection to the API server's own address is let
+# through while one to another pod's address on 6443 is not: that is proved by
+# hand on the cluster, once, and the plan's S063 section records it when it is.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -71,7 +90,8 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    - ports:
+    - to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]
+      ports:
         - port: 6443
           protocol: TCP
     - to:

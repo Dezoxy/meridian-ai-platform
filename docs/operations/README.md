@@ -168,19 +168,21 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 39 of 39 lines (S055 added three, for service
+7. `make smoke` passes, 40 of 40 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
    the issuer must refuse; S063 one for the collector, which only the pods of
    `meridian` may push to, two for the telemetry's TLS, the authority's
    ConfigMap and a push in clear text that must not be accepted, and one for
-   kube-state-metrics' rights, which may not read Secrets, tested
+   kube-state-metrics' rights, which may not read Secrets, and one for the
+   database's policy, which must name the API server's address (a FAIL says
+   "run make up"), tested
    without a cluster until they have run on one: the 35 below are S062's
-   count); 27 after `make up` alone, with SKIP lines for
+   count); 28 after `make up` alone, with SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   27 is edge 1, database 3, tools 1, telemetry 6, cost panel 4, adjuster
+   28 is edge 1, database 4, tools 1, telemetry 6, cost panel 4, adjuster
    pages 1, sweep 1, network policy 1, service identity 1, certificate policy 4
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster

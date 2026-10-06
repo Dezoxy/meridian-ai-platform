@@ -387,8 +387,16 @@ node image, Kubernetes components and the platform).
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
    and Envoy.
-2. **Database.** Five lines. `pg_extension` lists `vector` in the `app`
-   database and in the `meridian` database. Then three lines for the stores of
+2. **Database.** Six lines. The first (S063) reads two objects and prints
+   after `make up` alone: the CIDRs of the rule for port 6443 in the
+   NetworkPolicy `platform-db` are exactly the addresses of the `kubernetes`
+   Service's EndpointSlice in `default` (see "The database pod and the API
+   server's address" below). A difference is a FAIL that says "the API
+   server's address changed: run make up"; a read that failed is a FAIL that
+   says so and never says "changed". It does not prove that the path is closed
+   to every other address, which is by hand. Then `pg_extension` lists
+   `vector` in the `app` database and in the `meridian` database. Then three
+   lines for the stores of
    the `meridian` database, read in the primary's pod: `policy.policies` holds
    policies (the seed Job writes them), `knowledge.chunks` holds chunks (the
    query is the one `make deploy` counts with, in `common.sh`), and the
@@ -984,12 +992,14 @@ applied by `make up`. It admits the Meridian pods on 5432 and the
 CloudNativePG operator on 8000 (without that rule the operator reported
 `Instance Status Extraction Error` within 40 seconds, measured in S019). The
 database pod itself may reach DNS, the pods of its own Cluster and TCP port
-6443 at any address: its instance manager calls the API server, whose
-address is the node's own and changes with every new cluster, so the rule
-names the port and no address. From the database pod a connection to the
-internet timed out, and 40 of 40 to the API server were made (S019). That
-stays by hand; `make smoke` (line 8, passed on the cluster on 2026-10-06) tries the
-other direction of that policy: a pod without the `part-of` label on 5432.
+6443 at the API server's address alone (S063; below): its instance manager
+calls the API server, whose address is the node's own and changes with every
+new cluster, so the file holds a placeholder and `make up` fills in the
+address it reads. From the database pod a connection to the internet timed
+out, and 40 of 40 to the API server were made (S019, when the rule named no
+address). That stays by hand; `make smoke` (line 8, passed on the cluster on
+2026-10-06) tries the other direction of that policy: a pod without the
+`part-of` label on 5432.
 
 What the policies do not do:
 
@@ -997,8 +1007,9 @@ What the policies do not do:
   is admitted as that service; who may create pods there is the cluster's
   access control. Proving which service calls is S055's mutual TLS (below).
 - DNS and the collector are open to the pods that use them, and either
-  could carry data out slowly. The database pod may reach port 6443 at any
-  address, not only the API server's.
+  could carry data out slowly. The database pod may reach port 6443 at the
+  API server's address alone since S063, which no test proves is enforced
+  (above); the address must be read again when it changes (`make up`).
 - They are not enforced by admission. The namespaces warn about and audit
   a pod below their Pod Security level (`restricted`, and `baseline` for
   `observability`; [`manifests/namespaces.yaml`](manifests/namespaces.yaml));
@@ -1014,6 +1025,70 @@ export KUBECONFIG=$PWD/infra/kind/kubeconfig
 helm -n meridian status meridian
 kubectl -n meridian get networkpolicy,poddisruptionbudget
 ```
+
+### The database pod and the API server's address (S063)
+
+Until S063 the rule for port 6443 had no peer, so the database pod could open
+a connection to port 6443 of any address. Now the rule names the API server's
+address alone. **Tested without a cluster** (the scripts against a stub
+`kubectl`, the manifest as YAML), until `make up` and `make smoke` have run on
+one and the proof by hand below has been made.
+
+- `make up` reads the addresses of the `kubernetes` EndpointSlice in `default`
+  (not the deprecated `Endpoints`), refuses anything that is not an IPv4
+  address (the text goes into YAML), and applies the policy with one `ipBlock`
+  of `/32` for each. It does so on every run, so a cluster whose node was
+  given another address by a Docker restart is repaired by `make up`.
+  `make up` stops before it changes the policy when the answer is empty or
+  not an address.
+- The manifest holds the placeholder `API-SERVER-ADDRESS/32`, which is not a
+  CIDR: a plain `kubectl apply -f` of the file is refused by the API server
+  and cannot install a wrong policy. No address is in any tracked file.
+- If the address changes under a running cluster, the database loses the API
+  server and CloudNativePG marks the Cluster unhealthy (S019 saw 40 seconds)
+  until `make up` runs. `make deploy` refuses to start and the first line of
+  smoke's database check fails, both with "the API server's address changed:
+  run make up". Both are reads and prove nothing about the path being closed.
+- What no test proves, and what stays by hand: that kindnet enforces an
+  `ipBlock` egress rule after the Service's address is translated to the
+  node's (the manifest's header says why the rule names the endpoint's
+  address and not the Service's), and that a connection from the database pod
+  to port 6443 of another pod is dropped. The commands follow, from a
+  checkout with the cluster's credentials in the environment, against two
+  throwaway Pods in `default` (a namespace with no policy) that use the image
+  the Claims API runs, which is on the node.
+
+```sh
+IMAGE="$(kubectl -n meridian get deployment claims-api -o jsonpath='{.spec.template.spec.containers[0].image}')"
+PRIMARY="$(kubectl -n meridian get pod -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary -o jsonpath='{.items[0].metadata.name}')"
+API="$(kubectl -n default get endpointslices -l kubernetes.io/service-name=kubernetes -o jsonpath='{.items[0].endpoints[0].addresses[0]}')"
+kubectl -n meridian get cluster platform-db        # before: "Cluster in healthy state"
+kubectl -n default run listener-6443 --image="$IMAGE" --image-pull-policy=Never --restart=Never --command -- python -c "import socket, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', 6443)); s.listen(8); time.sleep(600)"
+kubectl -n default run prober-6443 --image="$IMAGE" --image-pull-policy=Never --restart=Never --command -- python -c "import time; time.sleep(600)"
+kubectl -n default wait --for=condition=Ready pod/listener-6443 pod/prober-6443 --timeout=60s
+LISTENER="$(kubectl -n default get pod listener-6443 -o jsonpath='{.status.podIP}')"
+# 1. the control: a pod with no policy reaches the listener (prints: reached)
+kubectl -n default exec prober-6443 -- python -c "import socket; socket.create_connection(('$LISTENER', 6443), 3); print('reached')"
+# 2. the database pod to the listener: must time out (rc=124; 0 would mean
+#    the rule still lets any address through, 1 a refusal)
+kubectl -n meridian exec "$PRIMARY" -c postgres -- timeout 3 bash -c "</dev/tcp/$LISTENER/6443"; echo "rc=$?"
+# 3. the database pod to the API server's own address: must connect (rc=0)
+kubectl -n meridian exec "$PRIMARY" -c postgres -- timeout 3 bash -c "</dev/tcp/$API/6443"; echo "rc=$?"
+# 4. the database pod to the API server's Service, which the node's address
+#    replaces on the way (this is the translation the rule relies on): rc=0
+kubectl -n meridian exec "$PRIMARY" -c postgres -- timeout 3 bash -c "</dev/tcp/kubernetes.default.svc/443"; echo "rc=$?"
+# 5. after about a minute: still "Cluster in healthy state"
+kubectl -n meridian get cluster platform-db
+# 6. the file as committed is refused by the API server and changes nothing
+kubectl apply --dry-run=server -f infra/kind/manifests/platform-db-networkpolicy.yaml
+# clean-up
+kubectl -n default delete pod listener-6443 prober-6443 --ignore-not-found --wait=false
+```
+
+A "reached" in 1 shows that a timeout in 2 is the policy and not the Pods'
+network. If 3 or 4 time out, the plugin evaluates the rule before the
+translation or the address differs from the node's: revert the change and
+record that in the plan.
 
 ### The namespaces outside `meridian` (S063)
 

@@ -13,7 +13,10 @@
 # pod's /tmp, which the probe removes when it ends; and the checks that read
 # Grafana (4, 5 and 11) read its admin Secret, never printing it.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
-#   2. database:  pgvector is installed in platform-db, in the `app` database and
+#   2. database:  the database's NetworkPolicy names the API server's address
+#                 (S063, first line, read from two objects and run even when no
+#                 primary is found); pgvector is installed in platform-db, in
+#                 the `app` database and
 #                 in the `meridian` database; and three lines for the stores of
 #                 the `meridian` database, read in the primary's pod: the policy
 #                 store holds policies (policy.policies, which the seed Job
@@ -37,6 +40,23 @@
 #                 ingestion Job of the image's tag, kept by deploy.sh, is that
 #                 proof); and the ledger shows which migrations were applied,
 #                 not that the services run the code that matches them.
+#                 The address line (S063) compares the CIDRs of the policy
+#                 platform-db's rule for port 6443 with the addresses of the
+#                 `kubernetes` EndpointSlice in `default`, the two reads `make
+#                 up` and `make deploy` use (common.sh): equal is a PASS; a
+#                 difference is a FAIL that says "the API server's address
+#                 changed: run make up" (Docker restarted, the node got another
+#                 address, and the database loses the API server until then);
+#                 a read that failed, a policy that is missing and an endpoint
+#                 with no IPv4 address are FAIL lines that say so and never say
+#                 "changed". It prints after `make up` alone, as the policy and
+#                 the endpoint exist then. What it does not prove: that the path
+#                 is closed to every other address, or that the network plugin
+#                 enforces an ipBlock rule after the Service's address is
+#                 translated to the node's (kindnet; a probe of it is by hand,
+#                 see infra/kind/README.md: it needs a listener on 6443 that
+#                 smoke does not start); and not that the instance manager is
+#                 healthy (the Cluster's status says that).
 #   3. tools:    one call per MCP tool server through the runtime's own client,
 #                 run in the agent-runtime pod (so with the addresses the runtime
 #                 was given), with a run ID that does not exist: each server must
@@ -959,10 +979,29 @@ check_stores() {
   fi
 }
 
-# One line per database: `app` (the platform's own) and `meridian` (the services'),
-# then the stores of `meridian` (check_stores) with the primary found here.
+# The database's policy names the API server's address (S063): the CIDRs of its
+# rule for port 6443 are the addresses of the `kubernetes` Service's endpoint.
+# A read of two objects, nothing is started and nothing is changed. The reading
+# and the comparison are common.sh's, the ones `make up` and `make deploy` use.
+# One FAIL line says "run make up" when they differ, and says what could not be
+# read when a read failed (it never says "changed" for that). It does not prove
+# that the path is closed to every other address (see the header).
+check_database_api_server() {
+  local shown
+  if api_server_matches_policy; then
+    shown="$(paste -sd ',' - <<<"${api_server_addresses}")"
+    pass "database: the NetworkPolicy platform-db lets its pod reach TCP 6443 at the API server's address alone (${shown}, the endpoint of the kubernetes Service)"
+  else
+    fail "database: $(clean_lines "${api_server_problem}")"
+  fi
+}
+
+# One line for the policy's address (check_database_api_server), one per database:
+# `app` (the platform's own) and `meridian` (the services'), then the stores of
+# `meridian` (check_stores) with the primary found here.
 check_database() {
   local primary database version
+  check_database_api_server
   primary="$(kctl -n meridian get pod \
     -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"

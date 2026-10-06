@@ -1153,9 +1153,10 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
         {"from": [{"podSelector": {"matchLabels": peer["podLabels"]}}]},
     ]
     assert [p["port"] for p in peer["ports"]] == [5432]
-    # Egress is exactly three rules: DNS, the API server's port on the node (no
-    # address: the node's own changes with the cluster) and the Cluster's own
-    # pods. The database pod cannot open a connection to the internet.
+    # Egress is exactly three rules: DNS, the API server's port on the node (to
+    # the address `make up` reads, S063: the file holds a placeholder that is not
+    # a CIDR; test_kind_database_policy_address.py pins it) and the Cluster's
+    # own pods. The database pod cannot open a connection to the internet.
     dns_rule = {
         "to": [
             {
@@ -1170,17 +1171,21 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
             {"port": 53, "protocol": "TCP"},
         ],
     }
-    api_server_rule = {"ports": [{"port": 6443, "protocol": "TCP"}]}
+    api_server_rule = {
+        "to": [{"ipBlock": {"cidr": "API-SERVER-ADDRESS/32"}}],
+        "ports": [{"port": 6443, "protocol": "TCP"}],
+    }
     cluster_rule = {"to": [{"podSelector": {"matchLabels": peer["podLabels"]}}]}
     assert spec["egress"] == [dns_rule, api_server_rule, cluster_rule]
     assert {} not in spec["egress"]  # an empty rule allows everything
-    # The only rule without a destination is the one for port 6443: a rule
-    # without `to` allows its ports to any address.
-    assert [r for r in spec["egress"] if "to" not in r] == [api_server_rule]
+    # No rule is without a destination: a rule without `to` allows its ports to
+    # any address, which is what the rule for port 6443 was until S063.
+    assert [r for r in spec["egress"] if "to" not in r] == []
     header = DB_POLICY_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
     assert "6443" in header
     assert "translated" in header
     assert "internet" in header
+    assert "any address" not in header
 
 
 PSA = "pod-security.kubernetes.io/"
@@ -1238,11 +1243,9 @@ def test_up_applies_the_database_policy_before_the_database_is_installed() -> No
     (namespaces,) = [
         i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
     ]
-    (applied,) = [
-        i
-        for i, line in enumerate(lines)
-        if "manifests/platform-db-networkpolicy.yaml" in line
-    ]
+    # Since S063 the file is applied through `apply_database_policy`, with the
+    # API server's address (test_kind_database_policy_address.py).
+    (applied,) = [i for i, line in enumerate(lines) if line == "apply_database_policy"]
     (operator,) = [
         i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
     ]
@@ -1253,7 +1256,6 @@ def test_up_applies_the_database_policy_before_the_database_is_installed() -> No
     ]
 
     assert namespaces < applied < operator < database
-    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
     assert lines[applied - 1].startswith("log ")
     assert DB_POLICY_FILE.is_file()
 
@@ -1268,6 +1270,8 @@ def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
             "NAMESPACE=meridian; DATABASE_ROLES=()",
             'die() { echo "error: $*" >&2; exit 1; }',
             "database_roles_reconciled() { return 0; }",
+            # The address check has its own tests, with the real function.
+            "api_server_matches_policy() { return 0; }",
             "kctl() {",
             '  case "$*" in',
             '    *"get database"*) printf true ;;',

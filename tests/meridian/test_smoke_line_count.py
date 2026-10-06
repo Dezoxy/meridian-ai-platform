@@ -20,6 +20,7 @@ import pytest
 from test_certificate_refused_request import run_check as run_refused_request_check
 from test_certificate_smoke import run_policy_check
 from test_helm_identity import GOOD, run_identity_check
+from test_kind_database_policy_address import run_database_policy_check
 from test_kind_manifests import (
     SMOKE_SH,
     SWEEP_FINISHED,
@@ -78,7 +79,11 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
     healthy_sweep = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
     return {
         "check_edge": pass_sites("check_edge"),
-        "check_database": pgvector_lines() + all_pass(lines_of(run_stores_check)),
+        # The pgvector lines, the three of the stores and, since S063, the
+        # policy's address line: the last two have harnesses apart.
+        "check_database": pgvector_lines()
+        + all_pass(lines_of(run_stores_check))
+        + all_pass(lines_of(run_database_policy_check)),
         "check_tools": pass_sites("check_tools"),
         # Four lines and, since S063, the two TLS lines that open the check:
         # their harnesses are apart.

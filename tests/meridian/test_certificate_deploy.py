@@ -125,7 +125,8 @@ def run_deploy(
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
         '  *"get database"*) printf true ;;\n'
-        '  *"get networkpolicy"*) ;;\n'
+        f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
+        f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
         '  *"get secret"*) ;;\n'
         + (
             '  *"get configmap telemetry-ca"*) ;;\n'
@@ -157,6 +158,26 @@ def run_deploy(
         timeout=SECONDS,
     )
     return done, calls.read_text(encoding="utf-8")
+
+
+# What the stub kubectl answers to the two reads `require_database` makes of the
+# API server's address (S063): the endpoint's one address, from the
+# documentation range, and the database policy's rule that names it.
+API_SERVER_SLICE = json.dumps(
+    {"items": [{"addressType": "IPv4", "endpoints": [{"addresses": ["192.0.2.10"]}]}]}
+)
+DATABASE_POLICY = json.dumps(
+    {
+        "spec": {
+            "egress": [
+                {
+                    "to": [{"ipBlock": {"cidr": "192.0.2.10/32"}}],
+                    "ports": [{"port": 6443, "protocol": "TCP"}],
+                }
+            ]
+        }
+    }
+)
 
 
 def roles_json() -> str:

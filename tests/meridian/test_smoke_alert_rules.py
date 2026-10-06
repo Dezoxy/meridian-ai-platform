@@ -53,10 +53,11 @@ RULE_COUNT = 13
 # check prints when all is well, so a 40th ``pass`` there fails that test. S063
 # added the fifth line of the network policy check (the collector), the two
 # TLS lines that open the telemetry check (the authority's ConfigMap, a push in
-# clear text) and the fourth line of the cost panel check (kube-state-metrics'
-# rights): 35 before.
-SMOKE_LINES_AFTER_DEPLOY = 39
-# Counted from the checks' own skip lines, not measured: edge 1, database 2 and
+# clear text), the fourth line of the cost panel check (kube-state-metrics'
+# rights) and the first line of the database check (its policy names the API
+# server's address): 35 before.
+SMOKE_LINES_AFTER_DEPLOY = 40
+# Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 6, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP
 # (the collector's line is skipped with the other four: it is part of the same
@@ -65,8 +66,9 @@ SMOKE_LINES_AFTER_DEPLOY = 39
 # more than the 23 the checks print. S063's two telemetry lines make it 26: the
 # authority's Secret and the collector exist after `make up`, and the services
 # are not needed. The kube-state-metrics line makes it 27: it reads the stack's
-# RBAC, which `make up` makes.
-SMOKE_LINES_AFTER_UP = 27
+# RBAC, which `make up` makes. The database policy's line makes it 28: it reads
+# the policy and the endpoint, which `make up` makes.
+SMOKE_LINES_AFTER_UP = 28
 
 
 def tree_groups() -> list[dict]:

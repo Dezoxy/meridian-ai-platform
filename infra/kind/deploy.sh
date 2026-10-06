@@ -2,7 +2,9 @@
 # Put the walking skeleton on the local platform: `make deploy`. Safe to run
 # again; it converges. Needs `make up` first.
 #   0. the preconditions, before anything is built or run: the Database, its
-#      NetworkPolicy, its roles and their Secrets from `make up`, and the
+#      NetworkPolicy (which must name the API server's address as the cluster
+#      has it now, or `make up` is run again, S063), its roles and their
+#      Secrets from `make up`, and the
 #      ConfigMap `telemetry-ca` (S063: the public certificate of the authority
 #      that signed the collector's certificate, which the services mount to
 #      verify it); and the
@@ -18,9 +20,10 @@
 #      cluster made before S056 does not know the policy kind: the same refusal
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
-#   2. the migration Job, then the policy seed Job, each as the database owner
-#      role and run to completion (every time: the runner skips what is
-#      applied and the seed mirrors its source, so a rerun takes seconds). The
+#   2. the migration Job, as the database owner role, then the policy seed Job,
+#      as the role `policy_seed`, each run to completion (every time: the
+#      runner skips what is applied and the seed mirrors its source, so a rerun
+#      takes seconds; the ingestion of step 5 runs as `knowledge_ingest`). The
 #      seed comes before the services: a claim that met an empty policy table
 #      would get a stored proposal "policy not found", which is final.
 #   3. the Helm release `meridian` (infra/helm/meridian, with kind's values in
@@ -118,6 +121,9 @@ require_database() {
   # (it admits the operator and the services) the Cluster would go unhealthy.
   kctl -n "${NAMESPACE}" get networkpolicy platform-db >/dev/null 2>&1 ||
     die "the NetworkPolicy 'platform-db' is missing, and the chart's default-deny would cut the database off from its operator; run 'make up' first"
+  # The policy names the API server's address (S063), which changes when Docker
+  # restarts the node; the database would then be cut off from the API server.
+  api_server_matches_policy || die "${api_server_problem}"
   # The public certificate of the authority that signed the collector's
   # certificate (S063): `make up` writes it, and the services mount it to verify
   # the collector. Without it their pods would not start, after the Jobs had run.

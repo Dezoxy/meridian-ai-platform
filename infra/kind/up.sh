@@ -2,7 +2,10 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
-#      the edge Gateway: the database's, those of cert-manager and observability
+#      the edge Gateway: the database's (applied with the API server's address,
+#      read from the `kubernetes` EndpointSlice in `default` on every run, so a
+#      cluster whose node got another address is repaired by running this
+#      again), those of cert-manager and observability
 #      and the one for smoke's telemetrygen Jobs, all before the releases they
 #      guard,
 #      cert-manager (its own approver off), approver-policy with the policies
@@ -11,9 +14,10 @@
 #      signs the collector's certificate (its public certificate goes into the
 #      ConfigMap telemetry-ca in `meridian`, on every run)
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
-#      the database "meridian" and its nine roles (the owner, six services, the
-#      scheduled sweep's and the gateway's ledger upkeep's); their password
-#      Secrets are created first, only if absent
+#      the database "meridian" and its eleven roles (the owner, six services, the
+#      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
+#      the knowledge ingestion's); their password Secrets are created first,
+#      only if absent
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
@@ -35,6 +39,11 @@ readonly POLICY_INTERVAL=3
 # certificate, so verify-full checks it. The CA reaches each pod at this path.
 readonly DATABASE_HOST=platform-db-rw.meridian.svc
 readonly DATABASE_CA_PATH=/etc/meridian/db-ca/ca.crt
+# The database's NetworkPolicy and the text in it that stands for the API
+# server's addresses (S063). The placeholder is not a CIDR, so the API server
+# refuses the file as it stands; a test keeps this string equal to the file's.
+readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.yaml"
+readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
 # REPO is empty for an OCI chart. Helm's output is shown only when it fails.
@@ -75,6 +84,41 @@ create_cluster() {
   log "creating kind cluster ${CLUSTER_NAME} (first run pulls the node image)"
   kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" \
     --config "${KIND_DIR}/cluster.yaml" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s
+}
+
+# database_policy_manifest PEERS: the database's policy file with PEERS (the
+# text of a flow-style list of ipBlocks) in place of the placeholder, on stdout.
+# Stops when the file does not hold the placeholder exactly once: a file that
+# lost it would be applied as it stands, and one that holds it twice would be
+# half filled. The text is cut and joined with bash's own expansions, not sed or
+# a pattern, so nothing in PEERS can be read as an expression.
+database_policy_manifest() {
+  local manifest before after
+  manifest="$(<"${DATABASE_POLICY_FILE}")"
+  [[ "${manifest}" == *"${API_SERVER_PEERS_PLACEHOLDER}"* ]] ||
+    die "${DATABASE_POLICY_FILE} does not hold the placeholder ${API_SERVER_PEERS_PLACEHOLDER}"
+  before="${manifest%%"${API_SERVER_PEERS_PLACEHOLDER}"*}"
+  after="${manifest#*"${API_SERVER_PEERS_PLACEHOLDER}"}"
+  [[ "${after}" != *"${API_SERVER_PEERS_PLACEHOLDER}"* ]] ||
+    die "${DATABASE_POLICY_FILE} holds the placeholder ${API_SERVER_PEERS_PLACEHOLDER} more than once"
+  printf '%s%s%s\n' "${before}" "to: [${1}]" "${after}"
+}
+
+# Apply the database's NetworkPolicy with the API server's address (S063), on
+# every run: a cluster whose node was given another address by a Docker restart
+# is repaired by running `make up` again. The address is read and checked first
+# (read_api_server_addresses, common.sh), so a bad answer stops here with the
+# policy as it was, and the manifest is rendered whole before kubectl sees it.
+apply_database_policy() {
+  local address peers="" manifest
+  read_api_server_addresses ||
+    die "${api_server_problem}; the database's NetworkPolicy was not changed"
+  while IFS= read -r address; do
+    peers+="${peers:+, }{ipBlock: {cidr: ${address}/32}}"
+  done <<<"${api_server_addresses}"
+  manifest="$(database_policy_manifest "${peers}")" || exit 1
+  kctl apply --server-side --force-conflicts -f - <<<"${manifest}" >/dev/null
+  log "network: the database's pod may reach TCP 6443 at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
 }
 
 # Apply the policies for approver-policy, trying again until the API server
@@ -207,8 +251,8 @@ create_cluster
 log "namespaces"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.yaml" >/dev/null
 
-log "network: the database's NetworkPolicy (before the database exists)"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/platform-db-networkpolicy.yaml" >/dev/null
+log "network: the database's NetworkPolicy, with the API server's address (before the database exists)"
+apply_database_policy
 
 log "network: cert-manager's NetworkPolicies (before cert-manager is installed)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml" >/dev/null
