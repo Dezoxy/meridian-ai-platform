@@ -36,11 +36,24 @@ WRITES = frozenset({"request_approval", "add_claim_note"})
 FACTORY = build
 
 
+BRIEF_INPUT_FIELDS = (
+    "claim_id",
+    "policy_number",
+    "reported_on",
+    "loss_date",
+    "peril",
+    "claimed_amount",
+)
+
+
 def claim_input(**changes: Any) -> dict[str, Any]:
     """The run's input, as the Claims Triage App sends it: ``{"claim": facts}``
-    with the facts of a triage (the claim of claims.json without its claimant)
-    and ``changes`` laid over them."""
-    facts = {k: v for k, v in claim_with_id(CLAIM).items() if k != "claimant"}
+    with the fields the workflow reads of the claim of claims.json (no claimant,
+    no description, no city, no document name: only how many documents there
+    are) and ``changes`` laid over them."""
+    claim = claim_with_id(CLAIM)
+    facts = {name: claim[name] for name in BRIEF_INPUT_FIELDS}
+    facts["documents_received"] = len(claim["documents"])
     return {"claim": {**facts, **changes}}
 
 

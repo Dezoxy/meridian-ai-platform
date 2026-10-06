@@ -158,7 +158,10 @@ def test_no_free_text_of_the_input_or_of_a_tool_result_reaches_the_model(
         "history-note": "canary-history-note-e4f1",
         "history-comment": "canary-history-comment-2b97",
     }
+    # The Claims API sends none of the free text any more (the routes' own test
+    # holds that); a caller that did send it still gets none of it to the model.
     run_input = claim_input(
+        documents_received=2,
         description=planted["description"],
         documents=[planted["document"], "photos"],
         loss_location={"city": planted["city"], "country": "AT"},

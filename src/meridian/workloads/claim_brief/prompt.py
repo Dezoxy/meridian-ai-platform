@@ -84,7 +84,7 @@ _PROBE_CLAIM = read_claim(
             "loss_date": "2000-01-01",
             "peril": "storm",
             "claimed_amount": 1,
-            "documents": ["probe"],
+            "documents_received": 1,
         }
     }
 )

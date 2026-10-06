@@ -18,8 +18,9 @@ before it is written out, so no string passes through as it came.
 * ``claim.claimed_amount``: the input, an integer from 1 to 1,000,000;
 * ``claim.loss_date`` and ``claim.reported_on``: the input, parsed as dates and
   written as ISO dates;
-* ``claim.documents_received``: the input's documents, only counted (the names
-  are the claimant's);
+* ``claim.documents_received``: the input's count of documents, an integer from
+  0 to 20 (the Claims API counts them and sends no name: the names are the
+  claimant's, and the input stays in the run's checkpoint rows while it lives);
 * ``policy.found``: ``policy_lookup``, a boolean. When it is false the policy
   object holds nothing else;
 * ``policy.status``: ``policy_lookup``, ``active`` or ``lapsed`` (an enum in the
@@ -101,7 +102,9 @@ class ClaimInput(_Read):
     loss_date: date
     peril: Peril
     claimed_amount: Annotated[int, Field(ge=1, le=1_000_000, strict=True)]
-    documents: list[Any] = Field(max_length=MAX_DOCUMENTS)
+    # How many documents arrived, never their names: the Claims API sends only
+    # this (the names are the claimant's), and a caller that sent more is ignored.
+    documents_received: Annotated[int, Field(ge=0, le=MAX_DOCUMENTS, strict=True)]
 
 
 class PolicyRecord(_Read):
@@ -162,7 +165,7 @@ def read_claim(run_input: Mapping[str, Any]) -> Claim:
             "claimed_amount": claim.claimed_amount,
             "loss_date": claim.loss_date.isoformat(),
             "reported_on": claim.reported_on.isoformat(),
-            "documents_received": len(claim.documents),
+            "documents_received": claim.documents_received,
         },
     )
 

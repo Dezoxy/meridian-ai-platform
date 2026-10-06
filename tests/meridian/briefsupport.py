@@ -90,6 +90,42 @@ class Runtime:
         return httpx.Response(status, json=body)
 
 
+def record_statements(
+    monkeypatch: pytest.MonkeyPatch, module: Any
+) -> list[tuple[int, str]]:
+    """Have ``module``'s ``connect`` record every statement it runs, in order, as
+    ``(number of the connection, text)`` with the first connection numbered 1.
+    The list fills as the test runs."""
+    real_connect = module.connect
+    statements: list[tuple[int, str]] = []
+    opened: list[Any] = []
+
+    class Recording:
+        def __init__(self, conn: Any) -> None:
+            self.conn = conn
+            opened.append(self)
+
+        def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+            statements.append((len(opened), str(statement)))
+            return self.conn.execute(statement, *args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.conn, name)
+
+    class Wrapped:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.inner = real_connect(*args, **kwargs)
+
+        def __enter__(self) -> Recording:
+            return Recording(self.inner.__enter__())
+
+        def __exit__(self, *exc: Any) -> Any:
+            return self.inner.__exit__(*exc)
+
+    monkeypatch.setattr(module, "connect", Wrapped)
+    return statements
+
+
 def make_client(
     dsn: str = UNUSED_DSN,
     runtime: Runtime | None = None,
@@ -118,6 +154,45 @@ def add_claim(
         (claim_id, tenant, Jsonb(claim), state),
     )
     return claim
+
+
+PLANTED = {
+    "description": "canary-description-6b1f",
+    "city": "canary-city-93d4",
+    "submitted document": "canary-submitted-document-02ac",
+    "arrived document": "canary-arrived-document-71e8",
+    "claimant name": "canary-claimant-name-5e70",
+    "claimant e-mail": "canary-address@example.com",
+}
+
+
+def plant_canaries(db: DatabaseHandle, claim_id: str = CLAIM_ID) -> dict[str, str]:
+    """Put a canary in every text field of a stored claim, as the owner: the
+    description, the city, the claimant's name and e-mail address, a document
+    named in the submission (beside ``photos``) and one that arrived after it.
+    Returns ``{field: canary}``."""
+    ((submission,),) = owner_rows(
+        db, "SELECT submission FROM claims.claims WHERE claim_id = %s", (claim_id,)
+    )
+    submission["description"] = PLANTED["description"]
+    submission["loss_location"] = {"city": PLANTED["city"], "country": "AT"}
+    submission["claimant"] = {
+        "name": PLANTED["claimant name"],
+        "email": PLANTED["claimant e-mail"],
+    }
+    submission["documents"] = [PLANTED["submitted document"], "photos"]
+    owner_rows(
+        db,
+        "UPDATE claims.claims SET submission = %s WHERE claim_id = %s RETURNING 1",
+        (Jsonb(submission), claim_id),
+    )
+    owner_rows(
+        db,
+        "INSERT INTO claims.claim_documents (claim_id, name) "
+        "VALUES (%s, %s) RETURNING 1",
+        (claim_id, PLANTED["arrived document"]),
+    )
+    return dict(PLANTED)
 
 
 def add_brief(

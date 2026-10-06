@@ -36,6 +36,7 @@ from briefsupport import (
     failed,
     make_client,
     paused,
+    plant_canaries,
 )
 from briefsupport import world as world  # a fixture: pytest finds it here
 from dbsupport import DatabaseHandle
@@ -49,6 +50,7 @@ from servicesupport import (
     owner_rows,
 )
 
+from meridian.workloads.claim_brief.facts import ClaimInput
 from meridian.workloads.claims_triage import briefs
 from meridian.workloads.claims_triage.briefs import (
     BRIEF_AGENT,
@@ -95,7 +97,7 @@ def test_a_brief_is_started_drafted_and_answered_201_awaiting_its_decision(
     assert brief_rows(world) == [("awaiting_decision", run_id, BRIEF_TEXT)]
 
 
-def test_the_run_is_started_for_the_claim_brief_agent_with_the_facts_and_no_claimant(
+def test_the_run_is_started_for_the_claim_brief_agent_with_what_the_workflow_reads(
     world: DatabaseHandle,
 ) -> None:
     runtime = Runtime(paused(uuid.uuid4()))
@@ -109,11 +111,53 @@ def test_the_run_is_started_for_the_claim_brief_agent_with_the_facts_and_no_clai
         "agent": BRIEF_AGENT,
         "tenant": "claims-triage",
         "reference": CLAIM_ID,
-        "input": {"claim": {k: v for k, v in claim.items() if k != "claimant"}},
+        "input": {
+            "claim": {
+                "claim_id": CLAIM_ID,
+                "policy_number": claim["policy_number"],
+                "reported_on": claim["reported_on"],
+                "loss_date": claim["loss_date"],
+                "peril": claim["peril"],
+                "claimed_amount": claim["claimed_amount"],
+                "documents_received": len(claim["documents"]),
+            }
+        },
     }
     assert BRIEF_AGENT == "claim-brief"
-    assert claim["claimant"]["name"] not in request.content.decode()
-    assert claim["claimant"]["email"] not in request.content.decode()
+
+
+def test_the_input_is_what_the_workflow_validates_and_nothing_it_does_not_read(
+    world: DatabaseHandle,
+) -> None:
+    runtime = Runtime(paused(uuid.uuid4()))
+
+    client_of(world, runtime).post(URL, json={})
+
+    (request,) = runtime.requests
+    sent = json.loads(request.content)["input"]["claim"]
+    assert set(sent) == set(ClaimInput.model_fields)
+    assert ClaimInput.model_validate(sent).claim_id == CLAIM_ID
+
+
+def test_no_free_text_of_the_claim_is_in_the_runs_input(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # Every text field of the claim holds a canary: the description, the city,
+    # each document's name (one in the submission, one that arrived later) and
+    # the claimant's name and e-mail address.
+    add_claim(fresh_database, CLAIM_ID)
+    planted = plant_canaries(fresh_database)
+    runtime = Runtime(paused(uuid.uuid4()))
+
+    response = client_of(fresh_database, runtime).post(URL, json={})
+
+    assert response.status_code == 201
+    (request,) = runtime.requests
+    for field, canary in planted.items():
+        assert canary not in request.content.decode(), f"{field} is in the input"
+    sent = json.loads(request.content)["input"]["claim"]
+    # Two documents of the submission and one that arrived, each name once.
+    assert sent["documents_received"] == 3
 
 
 def test_the_briefs_row_is_committed_as_drafting_before_the_run_starts(

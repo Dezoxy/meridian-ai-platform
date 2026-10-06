@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 import pytest
+from briefsupport import plant_canaries
 from dbsupport import DatabaseHandle
 from servicesupport import GATEWAY_REPLY, audit_events, owner_rows
 from stacksupport import (
@@ -65,12 +66,16 @@ class Models:
     def __init__(self) -> None:
         self.triage = ScriptedModel(replay_sentence)
         self.briefs = 0
+        # What each brief's request said, whole (the system message is checked
+        # to dispatch; the user message is what a test reads).
+        self.brief_requests: list[str] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         messages = json.loads(request.content)["messages"]
         if messages[0]["content"] != SYSTEM_MESSAGE:
             return self.triage(request)
         self.briefs += 1
+        self.brief_requests.append(request.content.decode("utf-8"))
         reply = {
             **GATEWAY_REPLY,
             "output": {"text": MODELS_TEXT, "finish_reason": "stop"},
@@ -136,6 +141,24 @@ def checkpoints(db: DatabaseHandle, table: str, run_id: uuid.UUID) -> int:
     sql = f"SELECT count(*) FROM {table} WHERE thread_id = %s"  # noqa: S608
     ((count,),) = owner_rows(db, sql, (thread,))
     return int(count)
+
+
+def recorded_decisions(db: DatabaseHandle, run_id: uuid.UUID) -> list[str]:
+    """The words recorded for one run, which is what the run reads."""
+    rows = owner_rows(
+        db, "SELECT decision FROM claims.decisions WHERE run_id = %s", (run_id,)
+    )
+    return [decision for (decision,) in rows]
+
+
+def checkpoint_text(db: DatabaseHandle, run_id: uuid.UUID) -> str:
+    """Every checkpoint row of the brief's run as one text: what the second host
+    keeps while the run lives."""
+    ((thread,),) = owner_rows(
+        db, "SELECT thread_id::text FROM runtime.runs WHERE run_id = %s", (run_id,)
+    )
+    sql = f"SELECT body::text FROM {WORKFLOW_TABLE} WHERE thread_id = %s"  # noqa: S608
+    return " ".join(body for (body,) in owner_rows(db, sql, (thread,)))
 
 
 def tools_called(db: DatabaseHandle, run_id: uuid.UUID) -> list[str]:
@@ -206,27 +229,42 @@ def test_a_triage_paused_beside_a_brief_is_decided_after_it_and_completes(
     assert set(notes(fresh_database)) == {triage_run, brief_run}
 
 
-def test_a_triage_decided_while_a_brief_waits_leaves_the_brief_waiting_and_decidable(
-    stack: Stack, fresh_database: DatabaseHandle
+@pytest.mark.parametrize(
+    ("triage_decision", "claim_state"),
+    [("approve", "approved"), ("reject", "rejected")],
+)
+def test_a_brief_approved_after_its_claim_closed_files_no_note_and_is_closed_rejected(
+    stack: Stack, fresh_database: DatabaseHandle, triage_decision: str, claim_state: str
 ) -> None:
+    # The security review's sequence: a brief started while the claim is open, the
+    # claim closed by the triage's own decision, then the brief approved.
     triage_run = triage_paused(stack)
     started = start_brief(stack)
     brief_run = uuid.UUID(started["run_id"])
 
-    triage_decided = stack.decide(CLAIM, "approve")
+    triage_decided = stack.decide(CLAIM, triage_decision)
     waiting = stack.client.get(BRIEF_URL)
     run_while_waiting = runs(fresh_database)[brief_run]
     brief_decided = decide_brief(stack, started["run_id"], "approve")
+    read = stack.client.get(BRIEF_URL)
 
     assert triage_decided.status_code == 200, triage_decided.text
+    assert triage_decided.json()["state"] == claim_state
     assert waiting.json()["state"] == "awaiting_decision"
     assert run_while_waiting == ("claim-brief", "AwaitingApproval")
     assert brief_decided.status_code == 200, brief_decided.text
-    assert brief_decided.json()["state"] == "filed"
+    assert brief_decided.json()["state"] == "rejected"
+    assert read.json()["state"] == "rejected"
     assert runs(fresh_database) == {
         triage_run: ("claims-triage", "Completed"),
         brief_run: ("claim-brief", "Completed"),
     }
+    # The run read the word recorded for it, which is a rejection, and wrote
+    # nothing: the only note is the triage's own.
+    assert brief_run not in notes(fresh_database)
+    assert "add_claim_note" not in tools_called(fresh_database, brief_run)
+    assert recorded_decisions(fresh_database, brief_run) == ["reject"]
+    assert checkpoints(fresh_database, WORKFLOW_TABLE, brief_run) == 0
 
 
 def test_a_rejected_brief_writes_no_note_and_leaves_the_claim_as_it_was(
@@ -319,3 +357,78 @@ def test_a_brief_is_audited_under_its_own_agent_and_run(
 
     assert brief_agents - {None} == {"claim-brief"}
     assert triage_agents - {None} == {"claims-triage"}
+
+
+def users_document(models: Models) -> dict[str, Any]:
+    """The document in the user message of the one brief request seen."""
+    (body,) = models.brief_requests
+    system, user = json.loads(body)["messages"]
+    assert system == {"role": "system", "content": SYSTEM_MESSAGE}
+    assert user["role"] == "user"
+    document: dict[str, Any] = json.loads(user["content"])
+    return document
+
+
+def test_the_model_is_sent_the_claims_facts_and_none_of_the_claimants_text(
+    stack: Stack, models: Models
+) -> None:
+    claim = CLAIMS[CLAIM]
+    triage_paused(stack)
+
+    start_brief(stack)
+
+    document = users_document(models)
+    assert set(document) == {"claim", "policy", "history"}
+    assert document["claim"] == {
+        "peril": claim["peril"],
+        "claimed_amount": claim["claimed_amount"],
+        "loss_date": claim["loss_date"],
+        "reported_on": claim["reported_on"],
+        "documents_received": len(claim["documents"]),
+    }
+    assert document["policy"]["found"] is True
+    sent = models.brief_requests[0]
+    texts = {
+        "claimant name": claim["claimant"]["name"],
+        "claimant e-mail": claim["claimant"]["email"],
+        "description": claim["description"],
+        "city": claim["loss_location"]["city"],
+        "document": claim["documents"][0],
+        "claim id": claim["claim_id"],
+        "policy number": claim["policy_number"],
+    }
+    for field, text in texts.items():
+        assert text not in sent, f"{field} is in the model's request"
+
+
+def test_no_text_of_the_claim_is_in_the_runs_checkpoints_or_the_models_request(
+    stack: Stack, fresh_database: DatabaseHandle, models: Models
+) -> None:
+    # The claim is posted and triaged as it is, then every text field of the
+    # stored claim is overwritten with a canary, and a document arrives under a
+    # canary name: the brief is started from that row.
+    triage_paused(stack)
+    planted = plant_canaries(fresh_database, CLAIM)
+    ((stored,),) = owner_rows(
+        fresh_database,
+        "SELECT submission::text FROM claims.claims WHERE claim_id = %s",
+        (CLAIM,),
+    )
+    ((arrived,),) = owner_rows(
+        fresh_database, "SELECT string_agg(name, ' ') FROM claims.claim_documents"
+    )
+
+    started = start_brief(stack)
+    brief_run = uuid.UUID(started["run_id"])
+    held = checkpoint_text(fresh_database, brief_run)
+
+    # The controls: the canaries are in the claim the brief was started from, and
+    # the rows read are the run's own, with its input (the first message).
+    in_submission = {f: c for f, c in planted.items() if f != "arrived document"}
+    assert all(canary in stored for canary in in_submission.values())
+    assert planted["arrived document"] in arrived
+    assert CLAIM in held
+    assert "documents_received" in held
+    for field, canary in planted.items():
+        assert canary not in held, f"{field} is in the checkpoint rows"
+        assert canary not in models.brief_requests[0], f"{field} is in the request"
