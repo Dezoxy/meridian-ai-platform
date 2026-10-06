@@ -611,8 +611,10 @@ database; nothing else unless its environment names it.
 
 {{- /*
 job: a Job, its ServiceAccount and its NetworkPolicy, each Job its own account
-and policy; takes root, name (migrate, seed or ingest) and job (its values). A Job
-that calls a service mounts the Secret of its Certificate (certificates.yaml,
+and policy; takes root, name (migrate, seed or ingest), job (its values), databaseUrl
+(the variable its command reads) and secret (the Secret of the database role that
+variable holds: the owner's for the migration alone, the seed's and the
+ingestion's own roles for the other two, S063). A Job that calls a service mounts the Secret of its Certificate (certificates.yaml,
 rendered in the release, which holds no Job: the Secret exists before the Job). The
 Job's name ends in the tag, or in the digest's first twelve digits; the policy's
 does not, so a later deploy replaces it instead of adding one. It lives here,
@@ -680,7 +682,7 @@ spec:
           command:
             {{- toYaml $job.command | nindent 12 }}
           env:
-            {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_MIGRATIONS_DATABASE_URL" "secret" $root.Values.database.ownerSecret) | nindent 12 }}
+            {{- include "meridian.secretEnv" (dict "name" .databaseUrl "secret" .secret) | nindent 12 }}
             {{- range $job.env }}
             {{- include "meridian.envItem" (dict "root" $root "item" .) | nindent 12 }}
             {{- end }}

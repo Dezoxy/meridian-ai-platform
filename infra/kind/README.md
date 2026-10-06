@@ -231,21 +231,27 @@ extension is enabled declaratively by a `Database` resource. The image ships
 PostgreSQL 17.11 with pgvector 0.8.6 (read from the image on 2026-10-02).
 
 For the walking skeleton `make up` also declares a second database,
-`meridian`, owned by the role `meridian_owner`, and eight more roles:
+`meridian`, owned by the role `meridian_owner`, and ten more roles:
 `claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
 `policy_mcp` and `claims_mcp`, for the knowledge server (S046)
-`knowledge_mcp`, for the scheduled sweep (S052, below) `claims_sweep` and for
-the upkeep of the gateway's ledger (S066) `gateway_upkeep`. All nine can log in
-and nothing more (no superuser, createdb, createrole, bypassrls or
-replication, and a member of no role: migration 0020 refuses
-`gateway_upkeep` otherwise). The sweep's role may hold at most 4 connections:
-its job runs one pod at a time and holds one connection at a time, a run by
-hand beside the scheduled one makes two pods, and each may open a second
-connection while it replaces a broken one. The upkeep role may hold at most 2:
-the command opens one connection for milliseconds. That bounds what a holder
-of the credential can hold open; it does not stop one session from sitting in
-an open transaction. Only an operator uses `gateway_upkeep`, from a terminal
-(the runbook
+`knowledge_mcp`, for the scheduled sweep (S052, below) `claims_sweep`, for
+the upkeep of the gateway's ledger (S066) `gateway_upkeep` and for the seed
+and the ingestion Jobs (S063) `policy_seed` and `knowledge_ingest`. All eleven
+can log in and nothing more (no superuser, createdb, createrole, bypassrls or
+replication, and a member of no role: migrations 0020 and 0022 refuse the
+three newest otherwise). The seed Job runs as `policy_seed`, which holds the
+two policy tables and nothing else, and the ingestion Job as
+`knowledge_ingest`, which holds the knowledge chunks and an insert on the
+audit log: only the migration Job holds the owner's Secret, and each of the
+other two Jobs alone holds its role's. Those two roles have no connection
+limit, as the owner's Jobs had none. The sweep's role may hold at most 4
+connections: its job runs one pod at a time and holds one connection at a
+time, a run by hand beside the scheduled one makes two pods, and each may open
+a second connection while it replaces a broken one. The upkeep role may hold at
+most 2: the command opens one connection for milliseconds. That bounds what a
+holder of the credential can hold open; it does not stop one session from
+sitting in an open transaction. Only an operator uses `gateway_upkeep`, from a
+terminal (the runbook
 [budget exhaustion](../../docs/operations/runbooks/budget-exhaustion.md#the-upkeep-command)
 says how); no workload of the chart holds its Secret `gateway-upkeep-db`, and a
 test keeps it so. The three tool-server roles may each hold at most 20
@@ -262,8 +268,8 @@ first; `make smoke` looks for the extension in both databases. Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
-`claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db` and
-`gateway-upkeep-db`. `make up` creates
+`claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db`, `gateway-upkeep-db`,
+`policy-seed-db` and `knowledge-ingest-db`. `make up` creates
 a Secret only if it is absent, before the
 `platform-db` release installs (CloudNativePG cannot reconcile a role whose
 Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
@@ -279,9 +285,9 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian \
 Rotating a password is the owner's call and `make up` never overwrites a
 Secret. Both `password` and `uri` (it embeds the password) must change
 together, CloudNativePG then applies the new password to the role, and the
-Deployment that uses the role must restart to read it; the Jobs read the
-owner's Secret afresh on every `make deploy`, and the sweep's every run reads
-its own:
+Deployment that uses the role must restart to read it; the Jobs read their
+Secrets (the owner's, the seed's and the ingestion's) afresh on every
+`make deploy`, and the sweep's every run reads its own:
 
 ```sh
 kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
@@ -292,7 +298,7 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 PostgreSQL itself enforces the database boundary, with `pg_hba` rules in
 [`values/platform-db.yaml`](values/platform-db.yaml) that CloudNativePG places
 before its default catch-all, after its own local, replication and pooler
-rules: a connection without TLS is rejected; the nine roles may log in to
+rules: a connection without TLS is rejected; the eleven roles may log in to
 `meridian` over TLS with a SCRAM password and to no other database; no other
 role may log in to `meridian`. A client that asks for `sslmode=disable`, or a
 service that is pointed at the `app` or `postgres` database, is refused by the
@@ -785,8 +791,10 @@ In order, `make deploy`:
    marks and the printed command were seen on the cluster on 2026-10-06; this
    refusal was tested against stub commands and not run on a cluster.)
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
-   `meridian-seed-<tag>` with `meridian db seed-policies`, both as
-   `meridian_owner`. Only the three Jobs read that Secret. The script renders
+   `meridian-seed-<tag>` with `meridian db seed-policies`, the first as
+   `meridian_owner` and the second as `policy_seed` (S063: the seed reads
+   `MERIDIAN_SEED_DATABASE_URL` and has no fallback to the owner's variable).
+   Only the migration Job reads the owner's Secret. The script renders
    each Job from the chart (`helm template --show-only`, with that Job's flag
    on) and applies it with its ServiceAccount and its NetworkPolicy; the
    release itself never holds a Job. Both must finish
@@ -809,7 +817,8 @@ In order, `make deploy`:
    `values.yaml` and [`values/meridian.yaml`](values/meridian.yaml). Helm
    does not wait for the rollouts; the next steps do.
 5. Waits for the Model Gateway, then runs a Job `meridian-ingest-<tag>` with
-   `meridian knowledge ingest`, which embeds the 85 clauses of the four
+   `meridian knowledge ingest` as `knowledge_ingest` (its audit row names that
+   role), which embeds the 85 clauses of the four
    wordings through the gateway and replaces the knowledge store in one
    transaction. Once per image: the finished Job has no expiry and is the
    record that this image's corpus is in the store, so the next deploy of

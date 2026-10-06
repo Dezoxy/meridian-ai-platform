@@ -10,7 +10,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from dbsupport import OWNER, DatabaseHandle
+from dbsupport import OWNER, SEED_ROLE, DatabaseHandle
 from servicesupport import REPO_ROOT
 
 from meridian.platform.common.db import connect
@@ -65,8 +65,8 @@ def source(tmp_path: Path) -> Source:
 
 
 def seed(db: DatabaseHandle, directory: Path) -> SeedCounts:
-    """Seed in one transaction of the owner role and commit, as the CLI does."""
-    with connect(db.dsn(OWNER), "test-seed") as conn:
+    """Seed in one transaction of the seed's own role and commit, as the CLI does."""
+    with connect(db.dsn(SEED_ROLE), "test-seed") as conn:
         counts = seed_policies(conn, directory)
         conn.commit()
         return counts
@@ -485,7 +485,7 @@ def test_a_history_row_for_an_unknown_policy_is_refused_and_rolls_back(
 
     with (
         pytest.raises(psycopg.errors.ForeignKeyViolation),
-        connect(fresh_database.dsn(OWNER), "test-seed") as conn,
+        connect(fresh_database.dsn(SEED_ROLE), "test-seed") as conn,
     ):
         seed_policies(conn, directory)
 

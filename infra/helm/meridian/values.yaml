@@ -93,9 +93,16 @@ telemetry:
 database:
   # The Secrets Kubernetes reads, created out of band (infra/kind/up.sh). A
   # service's own is under `services` below, with the key `uri`. The owner's is
-  # for the three Jobs alone: the six services get a role that can neither
-  # create nor alter anything (T-25).
+  # for the migration Job alone: the six services get a role that can neither
+  # create nor alter anything, and the seed and the ingestion Jobs get a role of
+  # their own each, which holds what their statements need and no more (T-25,
+  # S063).
   ownerSecret: meridian-owner-db
+  # The seed Job's role (policy_seed): the policy tables, nothing else.
+  seedSecret: policy-seed-db
+  # The ingestion Job's role (knowledge_ingest): the knowledge chunks, and one
+  # insert-only row of the audit log.
+  ingestSecret: knowledge-ingest-db
   # The CA that signed the database's certificate. The Secret also holds the
   # CA's private key, so the pods mount only ca.crt.
   caSecret: platform-db-ca
@@ -347,8 +354,9 @@ route:
   # (SMALL_BODY_LIMIT_BYTES); the app still enforces it for chunked bodies.
   requestBufferLimit: 64Ki
 
-# The Jobs run to completion as the database owner role. deploy.sh renders and
-# runs them one at a time (a Job's spec cannot change, so each image gets its
+# The Jobs run to completion: the migration as the database owner role, the seed
+# and the ingestion each as a role of their own (database.*Secret above).
+# deploy.sh renders and runs them one at a time (a Job's spec cannot change, so each image gets its
 # own, named with the tag); the release never holds one, so each is off here
 # and deploy.sh turns on the one it renders.
 jobs:
@@ -372,8 +380,9 @@ jobs:
   # `meridian db seed-policies`. deploy.sh runs it on every deploy, after the
   # migrations and before the services start: the load mirrors its source, so a
   # rerun changes nothing, and a claim that met an empty policy table would get
-  # a stored proposal "policy not found", which is final. Only the owner's
-  # Secret can write the store; the tool servers' roles cannot.
+  # a stored proposal "policy not found", which is final. Only the seed's own
+  # role (database.seedSecret) and the owner can write the store; the tool
+  # servers' roles cannot.
   seed:
     enabled: false
     command:

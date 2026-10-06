@@ -36,7 +36,11 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Metric, Sum
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.cli import app as meridian_cli
-from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
+from meridian.platform.cli.db import (
+    INGEST_DATABASE_URL_ENV,
+    MIGRATIONS_DATABASE_URL_ENV,
+    SEED_DATABASE_URL_ENV,
+)
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
@@ -83,6 +87,11 @@ KIND_DIR = REPO_ROOT / "infra" / "kind"
 SWEEP_MODULE = "meridian.workloads.claims_triage.sweep"
 SWEEP_ROLE = "claims_sweep"
 UPKEEP_ROLE = "gateway_upkeep"
+# The roles of the seed and the ingestion Jobs (S063), and the Secret of each.
+SEED_ROLE = "policy_seed"
+INGEST_ROLE = "knowledge_ingest"
+SEED_SECRET = "policy-seed-db"  # noqa: S105 (a Secret name, not a password)
+INGEST_SECRET = "knowledge-ingest-db"  # noqa: S105 (a Secret name, not a password)
 TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
 SERVER_PORT = 8000
 # The tenant whose limits the ingestion's embedding calls count against.
@@ -117,6 +126,8 @@ KNOWN_ENV = {
     IDENTITY_PREFIX_ENV,
     DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
+    SEED_DATABASE_URL_ENV,
+    INGEST_DATABASE_URL_ENV,
     RUNTIME_URL_ENV,
     GATEWAY_URL_ENV,
     TOOL_SERVERS_ENV,
@@ -539,13 +550,25 @@ def test_traces_go_to_the_collectors_http_port() -> None:
         assert url.path in ("", "/")
 
 
-def test_only_the_three_jobs_reference_the_owner_credentials() -> None:
+def test_only_the_migrate_job_references_the_owner_credentials() -> None:
     for workload in pod_workloads():
         owner = OWNER_SECRET in secrets_referenced_by(pod_spec(workload))
-        assert owner == (workload["kind"] == "Job"), workload["metadata"]["name"]
+        name = workload["metadata"]["name"]
+        assert owner == name.startswith("meridian-migrate-"), name
     for document in all_documents():
         if document not in pod_workloads():
             assert OWNER_SECRET not in yaml.dump(document), document["kind"]
+
+
+def test_the_seed_and_the_ingest_job_each_hold_their_own_roles_secret_alone() -> None:
+    for name, secret in (("seed", SEED_SECRET), ("ingest", INGEST_SECRET)):
+        pod = pod_spec(job_named(name))
+
+        # A role's Secret is named <role>-db; the CA's and the certificate's are
+        # not, and the Job may mount them.
+        role_secrets = {s for s in secrets_referenced_by(pod) if s.endswith("-db")}
+
+        assert role_secrets == {secret}, name
 
 
 def only_container(job: dict) -> dict:
@@ -553,21 +576,26 @@ def only_container(job: dict) -> dict:
     return container
 
 
-@pytest.mark.parametrize("name", ["migrate", "seed", "ingest"])
-def test_each_job_runs_once_with_the_owner_credentials_and_its_own_account(
-    name: str,
+@pytest.mark.parametrize(
+    ("name", "variable", "secret"),
+    [
+        ("migrate", MIGRATIONS_DATABASE_URL_ENV, OWNER_SECRET),
+        ("seed", SEED_DATABASE_URL_ENV, SEED_SECRET),
+        ("ingest", INGEST_DATABASE_URL_ENV, INGEST_SECRET),
+    ],
+)
+def test_each_job_runs_once_with_its_own_credentials_and_its_own_account(
+    name: str, variable: str, secret: str
 ) -> None:
     job = job_named(name)
-    reference = env_of(only_container(job))[MIGRATIONS_DATABASE_URL_ENV]["valueFrom"][
-        "secretKeyRef"
-    ]
+    reference = env_of(only_container(job))[variable]["valueFrom"]["secretKeyRef"]
     accounts = {
         d["metadata"]["name"]: d
         for d in documents_of("ServiceAccount")
         if d["metadata"]["name"] == f"meridian-{name}"
     }
 
-    assert reference == {"name": OWNER_SECRET, "key": "uri"}
+    assert reference == {"name": secret, "key": "uri"}
     assert job["spec"]["template"]["spec"]["restartPolicy"] == "Never"
     assert job["spec"]["backoffLimit"] <= 3
     assert job["spec"]["activeDeadlineSeconds"] > 0
@@ -611,7 +639,7 @@ def test_the_seed_job_loads_the_policies_from_the_images_synthetic_data() -> Non
         synthetic_destination(),
     ]
     assert cli_command_words(container["command"][1:]) == ["db", "seed-policies"]
-    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV}
+    assert set(env_of(container)) == {SEED_DATABASE_URL_ENV}
     assert job["spec"]["ttlSecondsAfterFinished"] > 0
 
 
@@ -631,7 +659,7 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
     ]
     assert cli_command_words(container["command"][1:]) == ["knowledge", "ingest"]
     assert set(env_of(container)) == {
-        MIGRATIONS_DATABASE_URL_ENV,
+        INGEST_DATABASE_URL_ENV,
         GATEWAY_URL_ENV,
         *TLS_ENV,
     }
@@ -886,6 +914,8 @@ def test_the_database_declares_its_roles_with_login_only() -> None:
         "knowledge_mcp",
         SWEEP_ROLE,
         UPKEEP_ROLE,
+        SEED_ROLE,
+        INGEST_ROLE,
     }
     for name, role in roles.items():
         assert role["login"] is True
@@ -942,6 +972,24 @@ def test_the_sweep_role_is_in_both_pg_hba_lines_of_the_meridian_roles() -> None:
     listed = {r["name"] for r in PLATFORM_DB["cluster"]["roles"]}
     assert set(accept.split()[2].split(",")) == listed
     assert set(refuse.split()[2].split(",")) == listed
+
+
+@pytest.mark.parametrize("role", [SEED_ROLE, INGEST_ROLE])
+def test_a_job_role_is_in_both_pg_hba_lines_and_carries_no_connection_limit(
+    role: str,
+) -> None:
+    rules = PLATFORM_DB["cluster"]["postgresql"]["pg_hba"]
+    (accept,) = [r for r in rules if r.startswith("hostssl meridian ") and "scram" in r]
+    (refuse,) = [
+        r for r in rules if r.startswith("hostssl all ") and r.endswith("reject")
+    ]
+    (declared,) = [r for r in PLATFORM_DB["cluster"]["roles"] if r["name"] == role]
+
+    assert role in accept.split()[2].split(",")
+    assert role in refuse.split()[2].split(",")
+    # No limit, as the owner's Jobs had none: S063 gives these two roles no bound
+    # until a reason for one is shown (the sweep's and the upkeep's have one).
+    assert "connectionLimit" not in declared
 
 
 def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> None:

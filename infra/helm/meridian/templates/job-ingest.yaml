@@ -1,3 +1,3 @@
 {{- if .Values.jobs.ingest.enabled }}
-{{- include "meridian.job" (dict "root" . "name" "ingest" "job" .Values.jobs.ingest) }}
+{{- include "meridian.job" (dict "root" . "name" "ingest" "job" .Values.jobs.ingest "databaseUrl" "MERIDIAN_INGEST_DATABASE_URL" "secret" .Values.database.ingestSecret) }}
 {{- end }}

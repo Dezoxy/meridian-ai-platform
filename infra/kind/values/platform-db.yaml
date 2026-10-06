@@ -5,7 +5,8 @@
 #
 # The walking skeleton (S041) adds the database "meridian" and four roles; the
 # three tool servers (S013, S046) add three more, the scheduled sweep (S052)
-# one and the gateway's ledger upkeep (S066) one. Their passwords are in Secrets that up.sh creates before this
+# one, the gateway's ledger upkeep (S066) one, and the seed and ingestion Jobs
+# (S063) one each. Their passwords are in Secrets that up.sh creates before this
 # release installs (CloudNativePG cannot reconcile a role whose Secret is
 # missing); nothing secret is written here.
 # The "app" database, role and Secret are untouched: changing initdb would not
@@ -43,16 +44,17 @@ cluster:
     pg_hba:
       # Plain-text connections are refused outright, not only by client sslmode.
       - hostnossl all all all reject
-      # The nine Meridian roles log in to the meridian database over TLS.
-      - hostssl meridian meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp,claims_sweep,gateway_upkeep all scram-sha-256
+      # The eleven Meridian roles log in to the meridian database over TLS.
+      - hostssl meridian meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp,claims_sweep,gateway_upkeep,policy_seed,knowledge_ingest all scram-sha-256
       # ... and reach no other database.
-      - hostssl all meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp,claims_sweep,gateway_upkeep all reject
+      - hostssl all meridian_owner,claims_api,agent_runtime,model_gateway,policy_mcp,claims_mcp,knowledge_mcp,claims_sweep,gateway_upkeep,policy_seed,knowledge_ingest all reject
       # No other role (the app role, for one) reaches meridian.
       - hostssl meridian all all reject
   # login is off by default in the operator; no role gets superuser, createdb,
   # createrole or replication. meridian_owner runs the migrations and owns the
-  # database; the other eight are the roles the migrations grant to: six
-  # services, the scheduled sweep and the gateway's ledger upkeep.
+  # database; the other ten are the roles the migrations grant to: six
+  # services, the scheduled sweep, the gateway's ledger upkeep and the roles of
+  # the seed and ingestion Jobs.
   roles:
     - name: meridian_owner
       ensure: present
@@ -124,6 +126,24 @@ cluster:
       connectionLimit: 2
       passwordSecret:
         name: gateway-upkeep-db
+    # The chart's seed Job (S063, migration 0022): the policy tables and nothing
+    # else, in place of the owner's rights over every schema. Its Secret is read
+    # by that Job alone. Plain login role, a member of no role, as the migration
+    # checks, and no connection limit (a Job holds one connection at a time; a
+    # bound is left out until a reason for one is shown).
+    - name: policy_seed
+      ensure: present
+      login: true
+      passwordSecret:
+        name: policy-seed-db
+    # The chart's ingestion Job (S063, migration 0022): the knowledge chunks and
+    # one insert-only row of the audit log. Its Secret is read by that Job alone.
+    # The same shape as policy_seed, for the same reason.
+    - name: knowledge_ingest
+      ensure: present
+      login: true
+      passwordSecret:
+        name: knowledge-ingest-db
 
 # Enable pgvector declaratively (CloudNativePG Database resource). The
 # extension ships in the "standard" image.
