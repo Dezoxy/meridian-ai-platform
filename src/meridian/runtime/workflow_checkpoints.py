@@ -106,6 +106,16 @@ class CodecRefusal(ValueError):
         self.reason = reason
 
 
+class CheckpointUnreadable(WorkflowCheckpointException):
+    """A stored checkpoint was read from the database and the codec refuses it.
+
+    Raised by ``_read`` and by nothing else. It is the one failure of a read that
+    trying again cannot cure: the row is what it is, and the code's types are
+    what they are. A store that could not be reached raises the framework's own
+    ``WorkflowCheckpointException`` with no subclass, so the host can tell the
+    two by class and never by text."""
+
+
 def _require_storable_text(text: str) -> None:
     """Refuse a string PostgreSQL's ``jsonb`` refuses (a NUL: sqlstate 22P05) and
     one the driver cannot encode (a lone surrogate: an unwrapped
@@ -505,7 +515,7 @@ class PostgresCheckpointStore:
             return self._codec.from_document(document)
         except Exception as error:  # the class name is all that is kept
             failure = _refusal_text(error)
-        raise WorkflowCheckpointException(f"cannot read a checkpoint: {failure}")
+        raise CheckpointUnreadable(f"cannot read a checkpoint: {failure}")
 
     async def _query(
         self, what: str, statement: str, params: tuple[Any, ...]

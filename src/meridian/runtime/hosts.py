@@ -18,8 +18,8 @@ thread is given a copy of the caller's context, so a client's span and the
 trace header stay under whichever span is current where the face is awaited.
 
 This module imports no agent framework (a test holds that in a fresh
-interpreter), and the run types are imported for the type checker only:
-``runtime.runs`` loads LangGraph.
+interpreter), and the run types are imported for the type checker only: the
+protocol names them in annotations and nothing else.
 """
 
 import asyncio
@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     from meridian.runtime.runs import RunIdentity, RunOutcome
 
 logger = logging.getLogger(__name__)
+
+
+class FactoryRefused(TypeError):
+    """A host's check of an entry point refuses it. The text is the host's own
+    fixed sentence (it may name a class), never a factory's or a framework's
+    message: the wiring puts it in a start-up error as it is."""
 
 
 @runtime_checkable
@@ -82,8 +88,11 @@ class Host(Protocol):
 
     def forget(self, identity: "RunIdentity") -> None:
         """Delete every checkpoint of the run's thread. The caller records the
-        run as ended first: the second host's delete skips a thread whose run is
-        still ``Running`` or ``AwaitingApproval`` (the sweep removes the rest)."""
+        run as ended first, which every host may rely on: a host whose delete is
+        guarded by the run's status (the second host's skips a thread whose run
+        is still ``Running`` or ``AwaitingApproval``, and the sweep removes the
+        rest) needs it, and one whose delete is not (LangGraph's) does not mind.
+        A failure is the host's to log; the caller changes no answer for it."""
         ...
 
 

@@ -13,7 +13,7 @@ import psycopg
 import pytest
 from agent_framework import Executor, WorkflowContext, handler, response_handler
 from dbsupport import OWNER, DatabaseHandle
-from hostflows import Dials, brief_factory, yield_factory
+from hostflows import Dials, brief_factory, chain_factory, yield_factory
 from hostsupport import CLAIM, BriefWorld, in_leg_thread, make_world
 from psycopg.types.json import Jsonb
 from servicesupport import owner_rows
@@ -457,3 +457,102 @@ def test_a_step_with_any_other_name_is_refused_whichever_end_of_an_edge_it_is(
 
         # The name is not copied into the error: it could be data.
         assert name not in str(raised.value)
+
+
+# ── a resume that can never succeed (F3r, the security review's high) ───────
+# A release that changes a workflow's state types or its graph while a brief
+# waits makes every later resume of that run fail the same way. Each of the two
+# has a word of its own, which ends the run (see ``runs.RESUME_CANNOT_SUCCEED``);
+# a store that cannot be reached keeps ``checkpoint-not-read``, which pauses it
+# again, because the next attempt may reach it.
+FORGED_TEXT = "claimant-text-in-a-forged-field"
+
+
+def add_a_field_to_the_pending_request(body: dict[str, Any]) -> None:
+    """The state type of the stored request has a field more than the code's
+    (what a release that took one away leaves behind)."""
+    ((_, wrapped),) = body["pending_request_info_events"].items()
+    wrapped["__event__"]["data"]["fields"]["extra"] = FORGED_TEXT
+
+
+def drop_a_field_of_the_pending_request(body: dict[str, Any]) -> None:
+    ((_, wrapped),) = body["pending_request_info_events"].items()
+    del wrapped["__event__"]["data"]["fields"]["brief"]
+
+
+def retype_the_pending_request_as_a_type_the_code_does_not_have(
+    body: dict[str, Any],
+) -> None:
+    ((_, wrapped),) = body["pending_request_info_events"].items()
+    wrapped["__event__"]["data"]["__dataclass__"] = "hostflows:Renamed"
+
+
+@pytest.mark.parametrize(
+    "forge",
+    [
+        add_a_field_to_the_pending_request,
+        drop_a_field_of_the_pending_request,
+        retype_the_pending_request_as_a_type_the_code_does_not_have,
+    ],
+    ids=["a-field-more", "a-field-less", "a-type-renamed"],
+)
+def test_a_stored_state_type_the_code_no_longer_has_ends_the_resume_with_its_word(
+    world: BriefWorld, forge: Callable[[dict[str, Any]], None], caplog: Any
+) -> None:
+    dials = Dials()
+    host = host_over(world, brief_factory(dials))
+    start(host, world)
+    forge_latest(world, forge)
+    ran = dict(dials.counts)
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(GraphFailure) as raised:
+        resume(host, world)
+
+    assert raised.value.code == "checkpoint-refused"
+    assert failure_reason(raised.value) == "checkpoint-refused"
+    assert str(raised.value) == "checkpoint-refused"
+    assert dict(dials.counts) == ran
+    assert FORGED_TEXT not in caplog.text
+
+
+def chain_host(world: BriefWorld, *, before: int, after: int) -> AgentFrameworkHost:
+    return host_over(world, chain_factory(Dials(), before=before, after=after))
+
+
+@pytest.mark.parametrize(
+    ("paused_with", "resumed_with"),
+    [
+        pytest.param((1, 0), (1, 1), id="a-step-added-after-the-pause"),
+        pytest.param((1, 0), (2, 0), id="a-step-added-before-the-pause"),
+        pytest.param((2, 0), (1, 0), id="a-step-removed"),
+    ],
+)
+def test_a_workflow_whose_graph_changed_while_the_run_waited_ends_the_resume(
+    world: BriefWorld,
+    paused_with: tuple[int, int],
+    resumed_with: tuple[int, int],
+) -> None:
+    start(chain_host(world, before=paused_with[0], after=paused_with[1]), world)
+    changed = Dials()
+    host = host_over(
+        world, chain_factory(changed, before=resumed_with[0], after=resumed_with[1])
+    )
+
+    with pytest.raises(GraphFailure) as raised:
+        resume(host, world)
+
+    assert raised.value.code == "workflow-changed"
+    assert failure_reason(raised.value) == "workflow-changed"
+    assert dict(changed.counts) == {}
+
+
+def test_a_workflow_whose_graph_did_not_change_resumes_as_before(
+    world: BriefWorld,
+) -> None:
+    start(chain_host(world, before=1, after=1), world)
+    dials = Dials()
+    host = host_over(world, chain_factory(dials, before=1, after=1))
+
+    outcome = resume(host, world)
+
+    assert outcome.status == "Completed"

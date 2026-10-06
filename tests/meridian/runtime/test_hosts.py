@@ -402,6 +402,46 @@ def test_importing_hosts_loads_no_agent_framework_in_a_fresh_interpreter() -> No
     assert json.loads(done.stdout) == []
 
 
+def loaded_by(module: str, frameworks: tuple[str, ...]) -> list[str]:
+    code = (
+        "import json, sys\n"
+        f"import {module}\n"
+        f"print(json.dumps([m for m in {frameworks!r} if m in sys.modules]))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=PROCESS_SECONDS,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "meridian.runtime.runs",
+        "meridian.runtime.settling",
+        "meridian.runtime.agent_framework_host",
+    ],
+)
+def test_the_neutral_modules_and_the_second_host_load_no_langgraph(
+    module: str,
+) -> None:
+    assert loaded_by(module, ("langgraph", "langchain_core")) == []
+
+
+def test_importing_the_first_host_loads_langgraph_and_not_the_second_framework() -> (
+    None
+):
+    loaded = loaded_by("meridian.runtime.langgraph_host", FRAMEWORKS)
+
+    assert "langgraph" in loaded
+    assert "agent_framework" not in loaded
+
+
 def test_hosts_has_no_framework_import_of_its_own() -> None:
     tree = ast.parse(HOSTS_SOURCE.read_text(encoding="utf-8"))
     imported: set[str] = set()

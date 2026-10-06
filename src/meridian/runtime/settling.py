@@ -91,12 +91,13 @@ def _record_end(
     outcome: RunOutcome,
 ) -> tuple[RunOutcome, bool, psycopg.Error | None]:
     """Write how a leg ended. Returns the outcome to answer with (a resumed leg
-    that failed leaves its run paused again), whether the write moved the run,
-    and the last error if it could not be written."""
+    that failed leaves its run paused again, unless its reason is one a resume
+    can never get past: ``runs.RESUME_CANNOT_SUCCEED``, which ends the run), whether
+    the write moved the run, and the last error if it could not be written."""
     if failure is None:
         moved, unsaved = _finish(dsn, identity, outcome.status)
         return outcome, moved, unsaved
-    if leg == "resumed" and failure_reason(failure) not in runs.NOTHING_TO_RESUME:
+    if leg == "resumed" and failure_reason(failure) not in runs.RESUME_CANNOT_SUCCEED:
         moved, unsaved = _pause_again(
             dsn, identity, failure_reason(failure), tool_of(failure)
         )

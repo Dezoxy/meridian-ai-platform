@@ -6,9 +6,11 @@ agent when it starts and keeps it for the life of the service (see
 ``HostScope``), and it refuses to start when an agent's entry point is not what
 its host runs: a LangGraph agent whose factory returns a workflow definition, or
 an agent-framework agent whose factory returns a graph. The refusal names the
-agent and the host and says what the factory returned. It never copies a
-factory's own message (it could hold anything) or chains the framework's
-traceback.
+agent and the host and says what the factory returned. It is made of the host's
+own sentence (``FactoryRefused``) and nothing else: a factory's or the
+framework's own message could hold anything, and neither is chained. An error of
+any other kind, a bug in the wiring or in a host, is not turned into a refusal
+and propagates with its traceback.
 
 The check calls each factory once, with clients that are never used: for the
 second host, faces over clients that refuse every call (``check_factory``); for
@@ -33,7 +35,7 @@ from meridian.runtime.agent_framework_host import (
     check_factory,
 )
 from meridian.runtime.graphs import AgentFactory, GraphFactory, GraphLoadError
-from meridian.runtime.hosts import HostScope
+from meridian.runtime.hosts import FactoryRefused, HostScope
 from meridian.runtime.langgraph_host import (
     SaverScope,
     check_graph_factory,
@@ -113,7 +115,9 @@ def _scope_of(
         model, tools = probe(agent.id)
         check_graph_factory(factory, model, tools)
         return langgraph_scope(cast(GraphFactory, factory), saver_scope)
-    except TypeError as error:
+    except FactoryRefused as error:
+        # Only the host's own refusals: a ``TypeError`` from anywhere else (a
+        # host whose constructor changed, say) is a bug and keeps its traceback.
         raise HostRefused(
             f"agent {agent.id!r} is on host {agent.host!r}, and its entry point "
             f"is not one that host runs: {error}"

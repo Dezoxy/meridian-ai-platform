@@ -39,8 +39,23 @@ output.
 * A checkpoint is read as what the database holds, not as what the host wrote: a
   step count that is not an integer in range, and a message or request that names
   a step the workflow does not have, are ``checkpoint-not-read``.
-* The framework's own telemetry stays off. It reads the global tracer provider,
-  and the platform sets none. The step spans are made here from its events.
+* A resume that can never succeed ends the run, one that may succeed pauses it
+  again (``runs.RESUME_CANNOT_SUCCEED``). A stored document the codec read and
+  refuses (a state type that is not the code's any more) is ``checkpoint-refused``,
+  and a checkpoint made by another graph than this workflow's (steps or edges
+  changed while the run waited) is ``workflow-changed``; both end the run, which
+  would otherwise stay paused for ever. A store that cannot be reached stays
+  ``checkpoint-not-read``. The two are told apart by the store's exception class
+  (``CheckpointUnreadable``), the graph by comparing signature hashes: never by
+  a message. The framework raises one ``WorkflowCheckpointException`` for both a
+  changed graph and a failed restore, so it cannot be caught by class for either.
+* Every step is a workload's own subclass of ``Executor`` (``check_definition``):
+  a step the framework defines would call a model with a chat client of its own,
+  outside the Model Gateway.
+* The framework's own telemetry stays off: ``meridian.runtime`` sets its two
+  environment variables before it is imported, it reads the global tracer
+  provider and the platform sets none, and its loggers are held at WARNING
+  (``HELD_AT_WARNING``). The step spans are made here from its events.
 
 Nothing here logs an exception's text: the framework's and the store's can quote
 claim content, so a log line has the run, a class name or a fixed word.
@@ -72,18 +87,21 @@ from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 from meridian.platform.common.telemetry import set_span_attributes
 from meridian.runtime.failures import GraphFailure
-from meridian.runtime.hosts import AsyncModelClient, AsyncToolClient
+from meridian.runtime.hosts import AsyncModelClient, AsyncToolClient, FactoryRefused
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.runs import (
+    CHECKPOINT_REFUSED,
     NO_PENDING_PAUSE,
     RECURSION_LIMIT,
     SEVERAL_PENDING_PAUSES,
+    WORKFLOW_CHANGED,
     RunIdentity,
     RunOutcome,
 )
 from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.workflow_checkpoints import (
     CheckpointCodec,
+    CheckpointUnreadable,
     PostgresCheckpointStore,
 )
 
@@ -105,6 +123,12 @@ STEP_NAME = re.compile(r"[a-z][a-z0-9_-]{0,47}")
 # The most steps a checkpoint may say a run has taken. A leg takes ten and a run
 # a handful of legs; a row that says more was not written by this host.
 MAX_RESTORED_STEPS = 1000
+# The framework's top-level package and its adapters (``agent_framework_openai``
+# and the rest) all begin with this.
+FRAMEWORK_PACKAGE = "agent_framework"
+# The classes ``Executor`` stands on: a step may inherit these and no other class
+# the framework defines.
+PLAIN_EXECUTOR_BASES = frozenset(Executor.__mro__)
 
 
 @dataclass
@@ -158,29 +182,62 @@ def executors_of(definition: WorkflowDefinition) -> tuple[Executor, ...]:
     return tuple({id(step): step for step in every}.values())
 
 
+def _is_framework_class(cls: type) -> bool:
+    """Whether the framework (or one of its adapter packages) defines ``cls``."""
+    return cls.__module__.split(".")[0].startswith(FRAMEWORK_PACKAGE)
+
+
+def _is_workloads_own(step: Executor) -> bool:
+    """Whether ``step`` is a workload's own subclass of ``Executor``: no class in
+    its MRO is one the framework defines, except the ones ``Executor`` itself
+    stands on. The MRO and not only the step's own module, because a workload's
+    subclass of the framework's agent executor is still the framework's agent."""
+    return all(
+        cls in PLAIN_EXECUTOR_BASES or not _is_framework_class(cls)
+        for cls in type(step).__mro__
+    )
+
+
 def check_definition(value: object) -> WorkflowDefinition:
-    """``value`` when it is a ``WorkflowDefinition``, else a ``TypeError`` that
-    names its type: a factory of the other framework returns a graph builder, a
-    mistake returns nothing. Its state types must be ones the checkpoint codec
-    can register (plain data, see ``CheckpointCodec``), or the codec's
-    ``TypeError`` says why. Every step's ID must be a plain word
+    """``value`` when it is a ``WorkflowDefinition``, else a ``FactoryRefused``
+    that names its type: a factory of the other framework returns a graph
+    builder, a mistake returns nothing. Its state types must be ones the
+    checkpoint codec can register (plain data, see ``CheckpointCodec``), or the
+    codec's sentence says why. Every step's ID must be a plain word
     (``STEP_NAME``): it becomes a span's name and attribute, so no text that
-    came from data can reach one. The ID is not copied into the error."""
+    came from data can reach one. The ID is not copied into the error.
+
+    Every step must be a workload's own subclass of ``Executor``. A step the
+    framework defines (its agent executor, a nested workflow, a function
+    executor) would call a model, or run a workflow, from inside the leg with a
+    chat client of the framework's own: that call would not pass the Model
+    Gateway (hard rule 4). A workload calls a model through the one client it is
+    given."""
     if not isinstance(value, WorkflowDefinition):
-        raise TypeError(
+        raise FactoryRefused(
             "an agent-framework agent's factory must return a "
             f"WorkflowDefinition, not {type(value).__name__}"
         )
     for step in executors_of(value):
+        if not _is_workloads_own(step):
+            raise FactoryRefused(
+                "every step of an agent-framework agent must be its own "
+                "subclass of Executor: a step the framework defines would call "
+                "a model outside the Model Gateway"
+            )
         if STEP_NAME.fullmatch(str(step.id)) is None:
-            raise TypeError(
+            raise FactoryRefused(
                 "a step name must be lower-case words, digits, hyphens and "
                 "underscores, starting with a letter, at most 48 characters"
             )
     # The state types are registered as a leg registers them: one the codec
     # cannot check, two of one name, or one with a constructor that runs code is
-    # refused here and not when a row is read.
-    CheckpointCodec((*value.state_types, ResumeMarker))
+    # refused here and not when a row is read. The codec's sentences are fixed
+    # words of this module's own.
+    try:
+        CheckpointCodec((*value.state_types, ResumeMarker))
+    except TypeError as error:
+        raise FactoryRefused(str(error)) from None
     return value
 
 
@@ -196,7 +253,7 @@ def check_factory(factory: object) -> WorkflowDefinition:
     that is refused when the first checkpoint holding it is saved.
     """
     if not callable(factory):
-        raise TypeError("an agent-framework agent's entry point must be a factory")
+        raise FactoryRefused("an agent-framework agent's entry point must be a factory")
     faces = (
         AsyncModelClient(cast(ModelClient, _NoClient())),
         AsyncToolClient(cast(ToolClient, _NoClient())),
@@ -204,15 +261,18 @@ def check_factory(factory: object) -> WorkflowDefinition:
     try:
         value = factory(*faces)
     except Exception as error:
-        raise TypeError(
+        raise FactoryRefused(
             "the entry point could not be called with the second host's two "
             f"clients: {type(error).__name__}"
-        ) from error
+        ) from None
     definition = check_definition(value)
     try:
         _build(definition, "check", None, RECURSION_LIMIT)
     except Exception as error:
-        raise TypeError(f"the workflow definition does not build: {error}") from error
+        # The framework's message can quote what the workload gave it.
+        raise FactoryRefused(
+            f"the workflow definition does not build: {type(error).__name__}"
+        ) from None
     return definition
 
 
@@ -313,18 +373,46 @@ class _Leg:
 
 async def _latest(leg: _Leg) -> WorkflowCheckpoint | None:
     """The latest checkpoint of the run's thread, or ``None`` when it has none.
-    A store or a stored document that cannot be read is ``checkpoint-not-read``;
-    only the class name is logged, as the store's text can quote a row."""
+
+    Two kinds of failure, told apart by the store's exception class and never by
+    its text. A stored document the codec read and refuses
+    (``CheckpointUnreadable``: a state type that is not the code's any more) is
+    ``checkpoint-refused``, which no later attempt can cure and which ends the
+    run. A store that cannot be reached (any other ``WorkflowCheckpointException``)
+    is ``checkpoint-not-read``, which pauses the run again: the next attempt may
+    reach it. Only the class name is logged, as the store's text can quote a
+    row."""
     try:
         return await leg.store.get_latest(workflow_name=leg.identity.agent)
+    except CheckpointUnreadable:
+        word, name = CHECKPOINT_REFUSED, CheckpointUnreadable.__name__
     except WorkflowCheckpointException:
-        pass
+        word, name = CHECKPOINT_NOT_READ, WorkflowCheckpointException.__name__
     logger.error(
-        "run %s: its checkpoints could not be read: %s",
+        "run %s: its checkpoints could not be read: %s (%s)",
         leg.identity.run_id,
-        WorkflowCheckpointException.__name__,
+        name,
+        word,
     )
-    raise GraphFailure(CHECKPOINT_NOT_READ)
+    raise GraphFailure(word)
+
+
+def _require_same_workflow(leg: _Leg, latest: WorkflowCheckpoint) -> None:
+    """Refuse a checkpoint made by another graph than this workflow's: a release
+    that changed the steps or the edges while the run waited. The framework makes
+    the same comparison when it restores, but raises the one
+    ``WorkflowCheckpointException`` it raises for a missing checkpoint and a
+    failed restore too, which cannot be told from a store that failed by class;
+    so the host compares the two hashes itself, first, and the framework's own
+    refusal stays a backstop. The word ends the run (``runs.WORKFLOW_CHANGED``):
+    the graph does not change back."""
+    built = _build(leg.definition, leg.identity.agent, None, RECURSION_LIMIT)
+    if built.graph_signature_hash != latest.graph_signature_hash:
+        logger.error(
+            "run %s: its checkpoint was made by another graph than this workflow's",
+            leg.identity.run_id,
+        )
+        raise GraphFailure(WORKFLOW_CHANGED)
 
 
 def _restored_steps(leg: _Leg, latest: WorkflowCheckpoint) -> int:
@@ -391,6 +479,9 @@ async def _plan_resume(leg: _Leg) -> _Plan:
     latest = await _latest(leg)
     if latest is None:
         raise GraphFailure(NO_PENDING_PAUSE)
+    # First, before anything reads what the checkpoint names: a graph that
+    # changed names steps the workflow may not have, and the graph is the cause.
+    _require_same_workflow(leg, latest)
     pending = latest.pending_request_info_events
     _require_known_steps(leg, latest)
     bound = _restored_steps(leg, latest) + RECURSION_LIMIT

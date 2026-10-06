@@ -294,6 +294,8 @@ def test_a_stored_document_that_names_a_pickle_is_refused_and_nothing_loads_it(
     with pytest.raises(GraphFailure) as raised:
         resume(host_over(world, brief_factory(dials)), world)
 
-    assert raised.value.code == "checkpoint-not-read"
+    # A document the codec refuses is read and refused for good: its own word,
+    # which ends the run, and not the unreachable store's, which pauses it again.
+    assert raised.value.code == "checkpoint-refused"
     assert not sentinel.exists()
     assert dict(dials.counts) == {}

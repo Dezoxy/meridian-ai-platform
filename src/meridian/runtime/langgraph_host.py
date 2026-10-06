@@ -1,10 +1,13 @@
 """The Agent Runtime's host for LangGraph (ADR 2, S037).
 
-The code that ``runs.execute`` and the ``_delete_checkpoints`` of ``app.py``
-held, behind the ``Host`` protocol with no change of behaviour: compile the
-workload's graph with the saver, bound it to ``RECURSION_LIMIT`` steps, run it
-with ``durability="sync"`` under one span per node (``NodeSpans``), pause by
-``interrupt``, answer with the graph's ``output`` and forget a run's thread.
+What the runtime did with LangGraph before the hosts, behind the ``Host``
+protocol with no change of behaviour: compile the workload's graph with the
+saver, bound it to ``RECURSION_LIMIT`` steps, run it with ``durability="sync"``
+under one span per node (``NodeSpans``), pause by ``interrupt``, answer with the
+graph's ``output`` and forget a run's thread. A graph that changed while a run
+waited has no pending pause (``resume_command`` raises ``no-pending-pause``,
+which ends the run): LangGraph's own answer, which the second host's
+``workflow-changed`` matches.
 
 A host is bound to one checkpoint saver, and a saver is per request (a
 connection of its own, S015), so the service keeps a scope for each agent
@@ -20,17 +23,20 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 from opentelemetry.trace import Tracer
 
+from meridian.runtime.failures import GraphFailure
 from meridian.runtime.graphs import GraphFactory
-from meridian.runtime.hosts import HostScope, log_forget_failure
+from meridian.runtime.hosts import FactoryRefused, HostScope, log_forget_failure
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.models import RunState
 from meridian.runtime.runs import (
+    NO_PENDING_PAUSE,
     RECURSION_LIMIT,
+    SEVERAL_PENDING_PAUSES,
     RunIdentity,
     RunOutcome,
-    _resume_command,
 )
 from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.tracing import NodeSpans
@@ -69,11 +75,11 @@ class LangGraphHost:
         value: dict[str, Any],
     ) -> RunOutcome:
         """The graph continues its paused thread and its one pending pause reads
-        ``value`` verbatim (see ``_resume_command``); a thread with no pending
+        ``value`` verbatim (see ``resume_command``); a thread with no pending
         pause, or with several, raises a ``GraphFailure`` before any node runs."""
         graph = self._factory(model, tools).compile(checkpointer=self._saver)
         config = _config(identity, tracer)
-        return _invoke(graph, config, _resume_command(graph, config, value))
+        return _invoke(graph, config, resume_command(graph, config, value))
 
     def forget(self, identity: RunIdentity) -> None:
         """Drop the run's thread; a failure is logged and changes no answer. A
@@ -107,6 +113,24 @@ def langgraph_scope(factory: GraphFactory, saver_scope: SaverScope) -> HostScope
     return scope
 
 
+def resume_command(
+    graph: CompiledStateGraph, config: dict[str, Any], value: dict[str, Any]
+) -> Command:
+    """Address ``value`` to the one pending pause by its interrupt ID.
+
+    LangGraph reads a bare dict whose keys all look like interrupt IDs as a map
+    from IDs to values, an empty dict included (it is vacuously true), so a
+    caller's ``{}`` would resume nothing. Keyed by the pause's own ID, the value
+    reaches the pause verbatim whatever its keys. Raises before any node runs.
+    """
+    pending = graph.get_state(config).interrupts
+    if not pending:
+        raise GraphFailure(NO_PENDING_PAUSE)
+    if len(pending) > 1:
+        raise GraphFailure(SEVERAL_PENDING_PAUSES)
+    return Command(resume={pending[0].id: value})
+
+
 def _config(identity: RunIdentity, tracer: Tracer) -> dict[str, Any]:
     return {
         "recursion_limit": RECURSION_LIMIT,
@@ -132,19 +156,19 @@ def check_graph_factory(factory: object, model: ModelClient, tools: ToolClient) 
     leg's two clients (built for the check, never used) and require the
     ``StateGraph`` the host compiles. A workflow definition of the second host, a
     function that returns nothing and a factory that raises are each a
-    ``TypeError`` with a clear sentence; the factory's own message is never
+    ``FactoryRefused`` with a clear sentence; the factory's own message is never
     copied, because it could hold anything."""
     if not callable(factory):
-        raise TypeError("a langgraph agent's entry point must be a factory")
+        raise FactoryRefused("a langgraph agent's entry point must be a factory")
     try:
         value = factory(model, tools)
     except Exception as error:
-        raise TypeError(
+        raise FactoryRefused(
             "the entry point could not be called with a model client and a tool "
             f"client: {type(error).__name__}"
         ) from None
     if not isinstance(value, StateGraph):
-        raise TypeError(
+        raise FactoryRefused(
             "a langgraph agent's factory must return a StateGraph, not "
             f"{type(value).__name__}"
         )

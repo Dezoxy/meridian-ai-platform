@@ -447,9 +447,11 @@ def create_app(
         failure logged, the status and its audit event written, the checkpoints
         forgotten unless the run is paused, the answer built. A resumed leg that
         fails leaves the run paused, its pause still pending in the checkpoints,
-        so a later resume can finish it; only a resume with nothing to resume
-        ends it ``Failed``. The leg's two clients, with their limits, are the
-        neutral code's and the host's workload gets nothing else."""
+        so a later resume can finish it; only a resume that can never succeed
+        ends it ``Failed`` (``runs.RESUME_CANNOT_SUCCEED``: nothing to resume, a
+        checkpoint the host refuses, a graph that changed). The leg's two
+        clients, with their limits, are the neutral code's and the host's
+        workload gets nothing else."""
         failure: Exception | None = None
         leg: Leg = "first" if resume is None else "resumed"
         try:
@@ -615,6 +617,11 @@ def create_app(
                 if current is None:
                     raise HTTPException(status_code=404, detail=NO_SUCH_RUN)
                 return RunResponse(run_id=run_id, status=current.status, output=None)
+            # The host was taken from the read, which had to come before the
+            # claim (the scope opens the saver first). The claimed row is the
+            # authority: a leg never runs on another agent's host.
+            if identity.agent != found.agent:
+                raise RuntimeError("the claimed run is not the run that was read")
             return run_leg(host, span, identity, response, {}, body.input)
 
     @app.get(
