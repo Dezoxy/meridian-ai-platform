@@ -6,7 +6,8 @@ this base shipped overview documents titled with `#`, so every one of them
 rendered with its section titles missing -- while the PDF, which normalises
 heading levels, looked correct. These tests pin the rule that catches it.
 
-check_mermaid and the agent prose-width exemption are pinned below too.
+check_mermaid, check_split_tables and the agent prose-width exemption are pinned
+below too.
 
 Run: python3 -m unittest discover -s tests
 """
@@ -608,6 +609,176 @@ class AgentPromptWidth(TreeCase):
         self.assertEqual(self.failures(), [])
 
 
+class SplitTables(TreeCase):
+    """check_split_tables: a blank line ends a table, and the rows after it vanish.
+
+    Markdown renders a row that follows a blank line as prose, so every row
+    below the blank line leaves the table while the source still looks like
+    one. A row followed by a delimiter row is the header of a new table.
+    """
+
+    TABLE = "| a | b |\n|---|---|\n| 1 | 2 |\n"
+
+    def failures(self):
+        return self.run_check(self.check.check_split_tables)
+
+    def test_a_blank_line_inside_a_table_is_reported_with_the_cut_row(self):
+        self.write("docs/notes.md", f"{self.TABLE}\n| 3 | 4 |\n")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:5", found[0])
+
+    def test_the_message_names_the_row_it_was_cut_from(self):
+        self.write("docs/notes.md", f"{self.TABLE}\n| 3 | 4 |\n")
+        self.assertIn("line 3", self.failures()[0])
+
+    def test_two_tables_a_blank_line_apart_are_fine(self):
+        self.write("docs/notes.md", f"{self.TABLE}\n{self.TABLE}")
+        self.assertEqual(self.failures(), [])
+
+    def test_a_delimiter_row_may_carry_alignment_colons(self):
+        for delimiter in ("|:--|--:|", "| :---: | --- |", "|-|-|", "|---|"):
+            with self.subTest(delimiter=delimiter):
+                self.write(
+                    "docs/notes.md",
+                    f"{self.TABLE}\n| c | d |\n{delimiter}\n| 5 | 6 |\n",
+                )
+                self.assertEqual(self.failures(), [])
+
+    def test_a_row_followed_by_something_that_is_not_a_delimiter_row_is_cut_off(self):
+        for second in ("| --- | x |", "| text | --- |", "| |", "| 5 | 6 |", "prose"):
+            with self.subTest(second=second):
+                self.write("docs/notes.md", f"{self.TABLE}\n| c | d |\n{second}\n")
+                found = self.failures()
+                self.assertEqual(len(found), 1, found)
+                self.assertIn("docs/notes.md:5", found[0])
+
+    def test_a_table_inside_a_fence_is_not_checked(self):
+        for fence in ("```", "~~~", "````"):
+            with self.subTest(fence=fence):
+                self.write(
+                    "docs/notes.md", f"{fence}\n{self.TABLE}\n| 3 | 4 |\n{fence}\n"
+                )
+                self.assertEqual(self.failures(), [])
+
+    def test_a_shorter_fence_inside_a_longer_one_does_not_end_it(self):
+        self.write("docs/notes.md", f"````\n```\n{self.TABLE}\n| 3 | 4 |\n````\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_the_fence_ends_and_the_check_resumes_after_it(self):
+        self.write("docs/notes.md", f"```\ncode\n```\n\n{self.TABLE}\n| 3 | 4 |\n")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:9", found[0])
+
+    def test_a_row_after_a_fence_that_follows_a_table_is_not_cut_off(self):
+        # The line above the blank line is a fence marker, not a table row.
+        self.write("docs/notes.md", f"{self.TABLE}```\ncode\n```\n\n| 3 | 4 |\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_a_table_at_the_end_of_a_file_passes(self):
+        for tail in ("", "\n", "\n\n"):
+            with self.subTest(tail=repr(tail)):
+                table = self.TABLE.rstrip("\n")
+                self.write("docs/notes.md", f"text\n\n{table}{tail}")
+                self.assertEqual(self.failures(), [])
+
+    def test_a_cut_row_on_the_last_line_is_reported(self):
+        self.write("docs/notes.md", f"{self.TABLE}\n| 3 | 4 |")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:5", found[0])
+
+    def test_an_indented_table_in_a_list_item_is_checked(self):
+        self.write(
+            "docs/notes.md",
+            """
+            - an item with a table
+
+              | a | b |
+              |---|---|
+              | 1 | 2 |
+
+              | 3 | 4 |
+            """,
+        )
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:7", found[0])
+
+    def test_an_indented_row_followed_by_an_indented_delimiter_row_is_a_new_table(self):
+        self.write(
+            "docs/notes.md",
+            """
+            - an item
+
+              | a | b |
+              |---|---|
+              | 1 | 2 |
+
+              | c | d |
+              |---|---|
+              | 3 | 4 |
+            """,
+        )
+        self.assertEqual(self.failures(), [])
+
+    def test_several_blank_lines_count_as_one_gap(self):
+        self.write("docs/notes.md", f"{self.TABLE}\n\n\n| 3 | 4 |\n")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:7", found[0])
+
+    def test_a_blank_line_of_spaces_is_still_a_blank_line(self):
+        self.write("docs/notes.md", f"{self.TABLE}   \n\t\n| 3 | 4 |\n")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:6", found[0])
+
+    def test_the_rows_after_the_gap_are_one_finding_not_one_each(self):
+        self.write("docs/notes.md", f"{self.TABLE}\n| 3 | 4 |\n| 5 | 6 |\n| 7 | 8 |\n")
+        found = self.failures()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md:5", found[0])
+
+    def test_two_cuts_in_one_document_are_two_findings(self):
+        self.write(
+            "docs/notes.md",
+            f"{self.TABLE}\n| 3 | 4 |\n\n| 5 | 6 |\n",
+        )
+        found = self.failures()
+        self.assertEqual(len(found), 2, found)
+        self.assertIn("docs/notes.md:5", found[0])
+        self.assertIn("docs/notes.md:7", found[1])
+
+    def test_prose_between_a_table_and_a_later_row_is_not_a_cut(self):
+        # The row after the prose has no table above it to be cut from.
+        self.write("docs/notes.md", f"{self.TABLE}\nA paragraph.\n\n| 3 | 4 |\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_a_row_without_a_table_above_it_is_not_a_cut(self):
+        self.write("docs/notes.md", "Text.\n\n| 3 | 4 |\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_a_line_that_only_starts_or_only_ends_with_a_pipe_is_not_a_row(self):
+        for line in ("| not closed", "not opened |", "a | b"):
+            with self.subTest(line=line):
+                self.write("docs/notes.md", f"{self.TABLE}\n{line}\n")
+                self.assertEqual(self.failures(), [])
+
+    def test_a_table_without_blank_lines_passes(self):
+        self.write("docs/notes.md", f"{self.TABLE}| 3 | 4 |\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_every_document_the_checker_reads_is_checked(self):
+        self.write("README.md", f"{self.TABLE}\n| 3 | 4 |\n")
+        self.write(".claude/notes/extra.md", f"{self.TABLE}\n| 3 | 4 |\n")
+        found = self.failures()
+        self.assertEqual(len(found), 2, found)
+        self.assertTrue(any("README.md:5" in d for d in found), found)
+        self.assertTrue(any(".claude/notes/extra.md:5" in d for d in found), found)
+
+
 class Twins(TreeCase):
     """check_twins: the two instruction files are one text, or neither exists."""
 
@@ -658,6 +829,16 @@ class ShippedExamples(unittest.TestCase):
         check = load_checker()
         f = check.Failures()
         check.check_mermaid(f)
+        self.assertEqual([d for _, d in f], [])
+
+    def test_split_table_check_runs_with_the_others(self):
+        check = load_checker()
+        self.assertIn(check.check_split_tables, check.CHECKS)
+
+    def test_repository_tables_are_not_split(self):
+        check = load_checker()
+        f = check.Failures()
+        check.check_split_tables(f)
         self.assertEqual([d for _, d in f], [])
 
 

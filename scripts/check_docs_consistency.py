@@ -3,8 +3,9 @@
 
 The mechanical half of the /docs-sync audit (.claude/skills/docs-sync/SKILL.md).
 It only checks claims derivable from the repo: mirrored files, resolvable
-links, indexes, ADR format, the view register, cross-referenced IDs and Mermaid
-blocks. A green run means "nothing provably false", not "docs are good".
+links, indexes, ADR format, the view register, cross-referenced IDs, Mermaid
+blocks and tables a blank line has split in two. A green run means "nothing
+provably false", not "docs are good".
 
 Every check whose subject is missing is skipped, not failed, so a repository
 adopts them as it grows: no docs index, no view register, no speaker notes and
@@ -738,6 +739,56 @@ def check_mermaid(f: Failures) -> None:
                     )
 
 
+TABLE_ROW = re.compile(r"^\|.*\|$")
+# `|---|`, `|:--|--:|`: every cell is hyphens, with a colon at either end allowed.
+DELIMITER_ROW = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+$")
+
+
+def check_split_tables(f: Failures) -> None:
+    """A blank line inside a table ends it, and every row below it leaves it.
+
+    Markdown renders a row that follows a blank line as a paragraph, so the
+    source still looks like one table while the page shows a short one and a
+    run of stray lines. Nothing else here notices: a cut row still reads as
+    defined to check_ids, which is how a register's later entries once sat
+    outside its table for a whole milestone.
+
+    A row (a line that, stripped, starts and ends with `|`) that follows blank
+    lines which follow another row is cut off, unless the line after it is a
+    delimiter row: then it is the header of a new table, and two tables a
+    blank line apart are fine. An indented table, inside a list item, is
+    checked the same way; a fenced block is code and is left alone. The
+    finding names the first row below the gap, once, however many rows follow.
+    """
+    for src in markdown_files():
+        text = read(src)
+        lines = text.split("\n")
+        fenced: set[int] = set()
+        for block in fences(text)[0]:
+            end = len(lines) if block.end is None else block.end
+            fenced.update(range(block.start, end + 1))
+        last_row: int | None = None  # the row above, with nothing but blanks since
+        gap = False
+        for number, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if number in fenced:
+                last_row, gap = None, False
+            elif not stripped:
+                gap = gap or last_row is not None
+            elif TABLE_ROW.match(stripped):
+                following = lines[number].strip() if number < len(lines) else ""
+                if gap and not DELIMITER_ROW.match(following):
+                    f.add(
+                        "tables",
+                        f"{rel(src)}:{number}: a blank line cuts this row off "
+                        f"from the table above (its last row is line "
+                        f"{last_row}); remove the blank line",
+                    )
+                last_row, gap = number, False
+            else:
+                last_row, gap = None, False
+
+
 CHECKS = (
     check_twins,
     check_skill_mirror,
@@ -752,6 +803,7 @@ CHECKS = (
     check_speaker_notes,
     check_ids,
     check_mermaid,
+    check_split_tables,
 )
 
 
