@@ -321,7 +321,10 @@ callers' URIs start with. No container without the mount gets any of them.
 {{- end }}
 {{- end -}}
 
-{{- /* telemetryCaDirectory: where a service reads the collector's authority. A literal. */ -}}
+{{- /*
+telemetryCaDirectory: where a pod reads the collector's authority (a service's,
+and the sweep's, S064). A literal.
+*/ -}}
 {{- define "meridian.telemetryCaDirectory" -}}
 /etc/meridian/telemetry-ca
 {{- end -}}
@@ -358,6 +361,46 @@ sends nothing, so no name is needed or mounted.
 {{- if hasPrefix "https://" $endpoint -}}
 {{- $name -}}
 {{- end -}}
+{{- end -}}
+
+{{- /*
+telemetryEnv, telemetryCaMount, telemetryCaVolume: what a pod that sends
+telemetry gets, written once for the six services and the sweep (S064); each
+takes the root and renders nothing when its value is empty. The env items are
+the SDK's address and, when the address is https, the file that verifies it.
+The mount and the volume are the ConfigMap's one key, read-only, at
+telemetryCaDirectory. Each calls telemetryCa, so the refusals above apply to
+every pod that includes one.
+*/ -}}
+{{- define "meridian.telemetryEnv" -}}
+{{- $telemetryCa := include "meridian.telemetryCa" . -}}
+{{- with .Values.telemetry.otlpEndpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+{{- if $telemetryCa }}
+- name: OTEL_EXPORTER_OTLP_CERTIFICATE
+  value: {{ include "meridian.telemetryCaDirectory" . }}/ca.crt
+{{- end }}
+{{- end -}}
+
+{{- define "meridian.telemetryCaMount" -}}
+{{- if include "meridian.telemetryCa" . }}
+- name: telemetry-ca
+  mountPath: {{ include "meridian.telemetryCaDirectory" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "meridian.telemetryCaVolume" -}}
+{{- with include "meridian.telemetryCa" . }}
+- name: telemetry-ca
+  configMap:
+    name: {{ . }}
+    items:
+      - key: ca.crt
+        path: ca.crt
+{{- end }}
 {{- end -}}
 
 {{- /*

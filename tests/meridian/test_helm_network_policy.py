@@ -284,9 +284,10 @@ def test_only_pods_that_set_the_collectors_address_may_reach_the_collector() -> 
             item["name"] for item in container.get("env", [])
         }
         assert reaches(policies[name], "egress", collector) == sets_address, name
-    assert {n for n, p in policies.items() if reaches(p, "egress", collector)} == set(
-        SERVICES
-    )
+    assert {n for n, p in policies.items() if reaches(p, "egress", collector)} == {
+        *SERVICES,
+        SWEEP,  # sends its last pass's findings (S064)
+    }
     # The rule's port is the address's own.
     assert [p["port"] for p in collector["ports"]] == [endpoint.port]
 
@@ -353,21 +354,43 @@ def test_every_egress_rule_is_dns_the_database_the_collector_or_a_called_service
     ] == [GATEWAY]
 
 
-def test_the_sweep_and_the_migration_and_the_seed_reach_dns_and_the_database_only() -> (
-    None
-):
+def test_the_migration_and_the_seed_reach_dns_and_the_database_only() -> None:
     policies = policies_of(list(rendered_chart()))
     expected = [
         reaches_rule(peers()["dns"]),
         reaches_rule(peers()["database"]),
     ]
 
-    for name in (SWEEP, "meridian-migrate", "meridian-seed"):
+    for name in ("meridian-migrate", "meridian-seed"):
         assert rules(policies[name], "egress") == expected, name
         assert not rules(policies[name], "ingress"), name
     # The ingestion adds the gateway, and nothing else.
     assert rules(policies["meridian-ingest"], "egress")[:2] == expected
     assert len(rules(policies["meridian-ingest"], "egress")) == 3
+
+
+def test_the_sweep_reaches_dns_the_database_and_the_collector_on_its_one_port() -> None:
+    policy = policies_of(list(rendered_chart()))[SWEEP]
+    collector = peers()["collector"]
+
+    assert rules(policy, "egress") == [
+        reaches_rule(peers()["dns"]),
+        reaches_rule(peers()["database"]),
+        reaches_rule(collector),
+    ]
+    assert [p["port"] for p in collector["ports"]] == [4318]
+    assert not rules(policy, "ingress")
+
+
+def test_the_sweep_without_an_address_reaches_dns_and_the_database_only() -> None:
+    documents = render([*helm_arguments(), "--set-string", "telemetry.otlpEndpoint="])
+    policy = policies_of(documents)[SWEEP]
+
+    assert rules(policy, "egress") == [
+        reaches_rule(peers()["dns"]),
+        reaches_rule(peers()["database"]),
+    ]
+    assert not rules(policy, "ingress")
 
 
 def reaches_rule(peer: dict) -> dict:

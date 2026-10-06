@@ -173,11 +173,12 @@ lint:
 pytest:
 	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
-## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests (needs Docker and uv)
+## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests and the cost dashboard's gap tests (needs Docker and uv)
 alerts:
 	uv run python scripts/alert_rules.py extract .alerts
+	uv run python scripts/cost_dashboard_gap.py write .alerts
 	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
-	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
 
 ## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping
 pytest-db:

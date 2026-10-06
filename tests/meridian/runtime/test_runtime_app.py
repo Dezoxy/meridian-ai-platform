@@ -21,6 +21,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -32,6 +33,7 @@ from servicesupport import (
     assert_spans_hold_no_exception_and_no_canary,
     audit_events,
     database_error,
+    metric_points,
     owner_rows,
 )
 from toolsupport import POLICY, policy_server, seed_world
@@ -40,6 +42,7 @@ import meridian.runtime as meridian_runtime
 from meridian.platform.common import audit
 from meridian.platform.common.db import connect
 from meridian.platform.common.env import SettingsError
+from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.runtime import app as runtime_app
@@ -142,6 +145,7 @@ def make_client(
     settings_servers: Mapping[str, str] | None = None,
     clock: Callable[[], float] = time.monotonic,
     registry_dir: Path = REGISTRY_DIR,
+    meters: InMemoryMetricReader | None = None,
 ) -> TestClient:
     dsn = db.dsn("agent_runtime") if db else "postgresql://agent_runtime@db.invalid/x"
     settings = RuntimeSettings(
@@ -153,6 +157,9 @@ def make_client(
     app = create_app(
         settings,
         tracer_provider=make_tracer_provider("agent-runtime", exporter),
+        meter_provider=(
+            None if meters is None else make_meter_provider("agent-runtime", meters)
+        ),
         http_client=(gateway or Gateway()).client,
         checkpointer=checkpointer,
         tool_servers=tool_servers,
@@ -191,7 +198,8 @@ def test_a_run_completes_is_stored_audited_and_readable(
     register(monkeypatch, ok_factory)
     gateway = Gateway()
     exporter = InMemorySpanExporter()
-    client = make_client(fresh_database, gateway, exporter)
+    meters = InMemoryMetricReader()
+    client = make_client(fresh_database, gateway, exporter, meters=meters)
 
     response = start(client)
 
@@ -200,6 +208,13 @@ def test_a_run_completes_is_stored_audited_and_readable(
     run_id = uuid.UUID(body["run_id"])
     assert body["status"] == "Completed"
     assert body["output"] == {"text": "drafted", "echo": 7}
+    ledger = {"meridian.tenant": "claims-triage", "meridian.agent": "claims-triage"}
+    assert metric_points(meters, "meridian.runtime.runs") == [
+        ({"meridian.outcome": "completed"} | ledger, 1)
+    ]
+    assert metric_points(meters, "meridian.runtime.model_calls") == [
+        ({"meridian.outcome": "completed"} | ledger, 1)
+    ]
     ((row_run, thread, agent, tenant, reference, status),) = run_rows(fresh_database)
     assert (row_run, agent, tenant, reference, status) == (
         run_id,
@@ -355,9 +370,10 @@ def test_a_graph_failure_names_its_code_in_the_audit_row_and_the_log(
         return graph_of(work)
 
     register(monkeypatch, failing)
+    meters = InMemoryMetricReader()
 
     with caplog.at_level(logging.ERROR, logger=runtime_app.__name__):
-        response = start(make_client(fresh_database))
+        response = start(make_client(fresh_database, meters=meters))
 
     assert response.status_code == 502
     assert response.json()["status"] == "Failed"
@@ -366,6 +382,14 @@ def test_a_graph_failure_names_its_code_in_the_audit_row_and_the_log(
     assert "some-code" in caplog.text
     assert response.json()["run_id"] in caplog.text
     assert "some-code" not in response.text  # the caller is not told
+    # The code is the workload's text: the series has one word for all of them.
+    ((attributes, count),) = metric_points(meters, "meridian.runtime.runs")
+    assert (attributes["meridian.outcome"], attributes["meridian.reason"]) == (
+        "failed",
+        "graph-failure",
+    )
+    assert count == 1
+    assert "some-code" not in str(metric_points(meters, "meridian.runtime.runs"))
 
 
 def test_a_gateway_refusal_fails_the_run(
@@ -1975,7 +1999,8 @@ def test_a_resumed_graph_that_raises_leaves_the_run_paused_with_502(
         raise RuntimeError(f"boom {CLAIM_TEXT}")
 
     register(monkeypatch, resumable(after=raising))
-    client = make_client(fresh_database)
+    meters = InMemoryMetricReader()
+    client = make_client(fresh_database, meters=meters)
     run_id = paused_run(client)
     thread = the_only_thread(fresh_database)
 
@@ -1988,6 +2013,13 @@ def test_a_resumed_graph_that_raises_leaves_the_run_paused_with_502(
         "status": "AwaitingApproval",
         "output": None,
     }
+    # Two legs, each counted once: the first paused, the resumed one failed,
+    # though the run is paused again.
+    counted = {
+        (a["meridian.outcome"], a.get("meridian.reason")): v
+        for a, v in metric_points(meters, "meridian.runtime.runs")
+    }
+    assert counted == {("paused", None): 1, ("failed", "unexpected"): 1}
     assert CLAIM_TEXT not in response.text
     assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
     events = audit_events(fresh_database, uuid.UUID(run_id))

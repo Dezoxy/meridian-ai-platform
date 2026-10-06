@@ -46,30 +46,47 @@ GROUPS = [
     "meridian.gateway",
     "meridian.workloads",
     "meridian.certificates",
+    "meridian.telemetry",
 ]
-# The file holds 13 alert rules and 1 recording rule.
-RULE_COUNT = 14
+# The file holds 17 alert rules and 3 recording rules (S064: two of them are in
+# the group `meridian.telemetry`, with four alerts, the fourth (G1) about the log
+# agent's DaemonSet; S066 added one alert, on the gateway's group).
+RULE_COUNT = 20
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
 # check prints when all is well, so a ``pass`` beyond this count fails that test. S063
 # added the fifth line of the network policy check (the collector), the two
 # TLS lines that open the telemetry check (the authority's ConfigMap, a push in
 # clear text), the fourth line of the cost panel check (kube-state-metrics'
 # rights) and the first line of the database check (its policy names the API
-# server's address): 35 before. S066 added the sixth line of the network policy
-# check (the Claims API cannot reach the rate store): 40 before.
-SMOKE_LINES_AFTER_DEPLOY = 41
+# server's address): 35 before. S064 added the telemetry check's seventh line
+# (the Claims API's own access line found in Loki, shipped by the log agent) and
+# the sweep check's second (the six findings of the sweep's last pass found in
+# Prometheus). G1 added two to the telemetry check: the log agent's live pod (its
+# shape, before the Claims API's line) and the streams Loki must not hold (after
+# it). S066 added the sixth line of the network policy check (a pod that is not
+# the Model Gateway's cannot reach the rate store): 40 before S064 and S066, 44
+# with S064's four, 45 with both.
+SMOKE_LINES_AFTER_DEPLOY = 45
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
-# one SKIP for its stores, tools 1 SKIP, telemetry 6, cost panel 3 and one SKIP
-# for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP
-# (the collector's line is skipped with the other four: it is part of the same
-# check, which stops at the Claims API), service identity 1 SKIP, certificate
+# one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
+# for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the
+# findings' line, which skips when no pass has finished), network policy 1 SKIP
+# (the collector's and, since S066, the rate store's lines are skipped with the
+# other four: they are part of the same check, which stops at the Claims API),
+# service identity 1 SKIP, certificate
 # policy 4, alert rules 4. This held 29 before the refused request was added: six
 # more than the 23 the checks print. S063's two telemetry lines make it 26: the
 # authority's Secret and the collector exist after `make up`, and the services
 # are not needed. The kube-state-metrics line makes it 27: it reads the stack's
 # RBAC, which `make up` makes. The database policy's line makes it 28: it reads
-# the policy and the endpoint, which `make up` makes.
-SMOKE_LINES_AFTER_UP = 28
+# the policy and the endpoint, which `make up` makes. S064's telemetry line makes
+# it 29: after `make up` alone it is one SKIP (the services are not deployed).
+# The sweep's findings line makes it 30: after `make up` alone it is a second
+# SKIP (no pass of the sweep has finished). G1's two make it 32: the agent's
+# DaemonSet exists after `make up`, so its shape is read and passes, and the
+# streams line is a SKIP (the Claims API's line above it did not pass, so an
+# empty answer would prove nothing).
+SMOKE_LINES_AFTER_UP = 32
 
 
 def tree_groups() -> list[dict]:
@@ -359,9 +376,9 @@ def test_the_check_prints_three_rule_lines_and_the_dashboard_line_when_all_is_we
 
     assert verdicts(lines) == ["PASS"] * 4
     assert lines[:3] == [
-        "PASS  alert rules: the 4 groups of infra/kind/alerts/meridian.yaml are "
+        "PASS  alert rules: the 5 groups of infra/kind/alerts/meridian.yaml are "
         f"loaded in Prometheus and all {RULE_COUNT} rules in them are healthy",
-        "PASS  alert rules: the loaded rules are the file's: the same 4 groups "
+        "PASS  alert rules: the loaded rules are the file's: the same 5 groups "
         f"and {RULE_COUNT} rule names",
         "PASS  alert rules: no Meridian alert is firing (none pending)",
     ]
@@ -775,7 +792,8 @@ def test_the_readmes_say_what_the_files_hold_and_that_smoke_reads_them() -> None
 
     assert "five alerts on it and three on the workloads" not in kind
     assert "six on the gateway, three on the workloads and four on the" in kind
-    assert "13 alert rules and one recording rule" in kind
+    assert "four on missing telemetry" in kind
+    assert "17 alert rules and three recording rules" in kind
     assert "Neither the rules nor the health dashboard has been applied" not in kind
     assert "`make smoke` checks neither" not in kind
     assert "It does not check the rules or the new dashboard" not in operations

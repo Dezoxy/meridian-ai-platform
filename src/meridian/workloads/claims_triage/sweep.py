@@ -21,6 +21,8 @@ thread's alone: it is logged by its ID, the exception's class and the sqlstate
 (a message could hold claimant text, T-03), and the pass goes on. A pass is
 bounded in the number of items it takes. Exit codes: 0 for a clean pass, 1 when
 any item or the connection failed, 2 for a setting that is missing or invalid.
+After a pass it sends the counts as gauges (``sweep_meters``), when the
+collector's address is set; that changes neither the exit code nor the summary.
 """
 
 import logging
@@ -38,6 +40,7 @@ import psycopg
 
 from meridian.platform.common.db import DATABASE_URL_ENV, connect
 from meridian.platform.common.env import SettingsError, require_env
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.runtime.sweep import (
     RUNNING_LEASE_SECONDS,
@@ -75,7 +78,6 @@ MAX_THREADS_PER_PASS = 100
 EXIT_CLEAN = 0
 EXIT_FAILED = 1
 EXIT_SETTINGS = 2
-LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 FAILURE_LOG = "%s %s: the sweep could not finish it: %s (sqlstate %s)"
 SUMMARY_LOG = (
     "sweep pass: %d claims referred as overdue, %d claims failed as not started, "
@@ -382,7 +384,7 @@ def run_pass(conn: psycopg.Connection, documents_deadline_days: int) -> PassResu
 def main(environ: Mapping[str, str] = os.environ) -> int:
     """Run one pass and return the exit code."""
     install_log_redaction()
-    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
+    configure_logging(SERVICE_NAME)
     try:
         settings = read_settings(environ)
     except SettingsError as exc:
@@ -405,6 +407,15 @@ def main(environ: Mapping[str, str] = os.environ) -> int:
         # stderr, are outside the redacted log line and can hold anything.
         logger.error("the sweep pass could not run: %s", type(exc).__name__)
         return EXIT_FAILED
+    # Imported here, not at the top: its provider module loads a web stack that
+    # this job otherwise does not (a test holds that). The import and the call
+    # are one guard: neither may change the pass's exit code or print a traceback.
+    try:
+        from meridian.workloads.claims_triage.sweep_meters import report_pass
+
+        report_pass(result)
+    except Exception as exc:
+        logger.warning("the sweep's metrics were not sent: %s", type(exc).__name__)
     return EXIT_CLEAN if result.failures == 0 else EXIT_FAILED
 
 

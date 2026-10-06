@@ -537,6 +537,34 @@ def test_the_provider_the_app_made_is_shut_down_with_the_lifespan(
     assert closed == ["closed"]
 
 
+def test_the_tracer_provider_is_shut_down_even_when_close_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    made = SpyProvider()
+    monkeypatch.setattr(http, "make_tracer_provider", lambda name: made)
+
+    def close() -> None:
+        raise RuntimeError("a shutdown that fails")
+
+    service = create_service_app(
+        title="Test",
+        description="A test service.",
+        service_name="test-service",
+        tracer_name="meridian.test",
+        max_body_bytes=LIMIT,
+        close=close,
+        environ={},
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="a shutdown that fails"),
+        TestClient(service.app),
+    ):
+        pass
+
+    assert made.shutdowns == 1
+
+
 def test_an_injected_provider_is_left_running() -> None:
     injected = SpyProvider()
 

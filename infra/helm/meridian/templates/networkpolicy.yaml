@@ -17,7 +17,9 @@ helper meridian.job), because deploy.sh applies the Job outside the release.
                 (meridian.callers), plus the edge for the Claims API when the
                 route is on. A service nobody calls has no ingress rule: its
                 policy still names Ingress, so nothing reaches it
-  the sweep     DNS and the database, no ingress
+  the sweep     DNS and the database, and the collector when it is given the
+                address (S064: it sends its last pass's findings), no ingress.
+                The three Jobs send nothing and keep DNS and the database
   the rate      (S066, rate-store.yaml, with the store and only when
   store         rateStore.enabled) its policy is in its own template: ingress
                 from the Model Gateway's pods on its port, no egress. The
@@ -100,5 +102,5 @@ spec:
       app.kubernetes.io/name: meridian-sweep
   policyTypes: [Ingress, Egress]
   egress:
-    {{- include "meridian.egress" (dict "root" . "env" (list) "collector" false) | nindent 4 }}
+    {{- include "meridian.egress" (dict "root" . "env" (list) "collector" $collector) | nindent 4 }}
 {{- end }}
