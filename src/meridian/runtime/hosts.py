@@ -23,9 +23,12 @@ interpreter), and the run types are imported for the type checker only:
 """
 
 import asyncio
-from collections.abc import Mapping
+import logging
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+import psycopg
 from opentelemetry.trace import Tracer
 
 from meridian.platform.registry.models import DataClass
@@ -34,6 +37,8 @@ from meridian.runtime.tool_client import ToolClient, ToolResult
 
 if TYPE_CHECKING:
     from meridian.runtime.runs import RunIdentity, RunOutcome
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -80,6 +85,27 @@ class Host(Protocol):
         run as ended first: the second host's delete skips a thread whose run is
         still ``Running`` or ``AwaitingApproval`` (the sweep removes the rest)."""
         ...
+
+
+# What the service keeps for each agent: a way to get the agent's host for one
+# request. The request enters the scope before its run's row is written and
+# leaves it after the answer is built. The second host is one object for the
+# life of the service (a definition is used once per host, so it must be kept);
+# the first host holds a checkpoint saver, which is per request (a connection of
+# its own, S015), so its scope opens a saver and yields a host bound to it.
+type HostScope = Callable[[], AbstractContextManager[Host]]
+
+
+def log_forget_failure(identity: "RunIdentity", error: Exception) -> None:
+    """The one line a failed ``forget`` leaves, for either host: the run, the
+    exception's class and the SQLSTATE when there is one. A message could hold
+    claim text, so it is never logged."""
+    logger.error(
+        "run %s: its checkpoints were not deleted: %s (sqlstate %s)",
+        identity.run_id,
+        type(error).__name__,
+        (error.sqlstate if isinstance(error, psycopg.Error) else None) or "none",
+    )
 
 
 class AsyncModelClient:

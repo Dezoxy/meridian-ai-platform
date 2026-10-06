@@ -1,4 +1,5 @@
-"""Run bookkeeping in ``runtime.runs`` and the graph execution itself.
+"""Run bookkeeping in ``runtime.runs``. The graph's execution is its host's
+(``meridian.runtime.langgraph_host``, ``agent_framework_host``, S037).
 
 The runtime issues random run IDs and keeps them apart from LangGraph's thread
 IDs, which callers never see. Rows and audit events hold identifiers and
@@ -11,22 +12,15 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
-from opentelemetry.trace import Tracer
 
 from meridian.platform.common.audit import AuditEvent, record_event
 from meridian.platform.common.db import connect
 from meridian.runtime import SERVICE_NAME
 from meridian.runtime.failures import GraphFailure
-from meridian.runtime.graphs import GraphFactory
-from meridian.runtime.model_client import CallObserver, ModelClient
 from meridian.runtime.models import RunState, RunStatus
 from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
-from meridian.runtime.tool_client import ToolClient
-from meridian.runtime.tracing import NodeSpans
 
 RECURSION_LIMIT = 10
 # What one run may spend (T-15, T-62). The recursion limit bounds the graph's
@@ -89,55 +83,6 @@ def _resume_command(
     if len(pending) > 1:
         raise GraphFailure(SEVERAL_PENDING_PAUSES)
     return Command(resume={pending[0].id: value})
-
-
-def execute(
-    factory: GraphFactory,
-    saver: BaseCheckpointSaver,
-    http: httpx.Client,
-    tools: ToolClient,
-    tracer: Tracer,
-    identity: RunIdentity,
-    run_input: dict[str, Any],
-    *,
-    resume: dict[str, Any] | None = None,
-    on_model_call: CallObserver | None = None,
-) -> RunOutcome:
-    """Compile the workload's graph with the runtime's checkpointer and run it.
-
-    ``tools`` is this run's tool client, built by the caller for the run. With
-    ``resume`` the graph continues its paused thread and its one pending pause
-    reads that value verbatim (see ``_resume_command``), and ``run_input`` is
-    not used; a thread with no pending pause, or with several, raises a
-    ``GraphFailure`` before any node runs. A run that pauses answers
-    ``AwaitingApproval`` with the graph's output so far, if it has one.
-    ``on_model_call`` is told of each call the graph asks of the model client.
-    Raises whatever the graph raises; the caller records the failure.
-    """
-    model = ModelClient(
-        http,
-        tenant=identity.tenant,
-        agent=identity.agent,
-        run_id=identity.run_id,
-        max_calls=MAX_MODEL_CALLS_PER_RUN,
-        on_call=on_model_call,
-    )
-    graph = factory(model, tools).compile(checkpointer=saver)
-    config = {
-        "recursion_limit": RECURSION_LIMIT,
-        "configurable": {"thread_id": str(identity.thread_id)},
-        "callbacks": [NodeSpans(tracer, run_id=identity.run_id, agent=identity.agent)],
-    }
-    graph_input = (
-        run_input if resume is None else _resume_command(graph, config, resume)
-    )
-    graph.invoke(graph_input, config, durability="sync")
-    snapshot = graph.get_state(config)
-    output = snapshot.values.get("output")
-    if output is not None and not isinstance(output, dict):
-        raise TypeError("a graph's output must be an object")
-    state: RunState = "AwaitingApproval" if snapshot.interrupts else "Completed"
-    return RunOutcome(state, output)
 
 
 def _audit(

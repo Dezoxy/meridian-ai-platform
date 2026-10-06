@@ -83,12 +83,12 @@ from meridian.workloads.claims_triage.moves import (
 from meridian.workloads.claims_triage.triaging import (
     HTTP_GATEWAY_TIMEOUT,
     RuntimeCallError,
-    _call_runtime,
     answer,
     arrived_documents,
     claim_database_failure,
     facts_for_run,
     resume_run,
+    start_run,
 )
 
 logger = logging.getLogger(__name__)
@@ -403,16 +403,7 @@ def start_brief(
             mark_error(span, exc)
             return DecisionFailure(500, INTERNAL_ERROR)
         try:
-            run = _call_runtime(
-                http,
-                "/runs",
-                {
-                    "agent": BRIEF_AGENT,
-                    "tenant": tenant,
-                    "reference": claim_id,
-                    "input": {"claim": taken.facts},
-                },
-            )
+            run = start_run(http, tenant, claim_id, taken.facts, agent=BRIEF_AGENT)
             output = _output_of(run, resumed=False)
         except RuntimeCallError as exc:
             return _fail_first_leg(dsn, span, claim_id, taken.brief_id, exc)

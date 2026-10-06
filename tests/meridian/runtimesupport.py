@@ -30,14 +30,38 @@ class FakeEntryPoint:
     class dist:
         name = "meridian"
 
-    def __init__(self, factory: GraphFactory, name: str = AGENT_UNDER_TEST) -> None:
+    def __init__(
+        self,
+        factory: GraphFactory,
+        name: str = AGENT_UNDER_TEST,
+        module: str | None = None,
+    ) -> None:
         self.factory = factory
         self.name = name
-        self.module = f"meridian.workloads.{name.replace('-', '_')}.graph"
+        # An agent whose module is not ``graph`` (the second host's workloads
+        # publish a ``workflow``) names the module its entry point claims.
+        self.module = module or f"meridian.workloads.{name.replace('-', '_')}.graph"
         self.value = f"{self.module}:build"
 
     def load(self) -> GraphFactory:
         return self.factory
+
+
+def register_agents(monkeypatch: pytest.MonkeyPatch, *entries: FakeEntryPoint) -> None:
+    """Publish each of ``entries`` for the next ``make_client``: a test of two
+    agents publishes both in one call, as the next call would replace the
+    first's. Every other name keeps the entry point the installed package really
+    publishes (see ``register`` for the loader's checks)."""
+    names = {entry.name for entry in entries}
+
+    def entry_points(*, group: str) -> Iterable[object]:
+        real = importlib.metadata.entry_points(group=group)
+        return [*entries, *(e for e in real if e.name not in names)]
+
+    monkeypatch.setattr(graphs, "entry_points", entry_points)
+    for entry in entries:
+        importlib.import_module(entry.module)
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 def register(
@@ -53,12 +77,4 @@ def register(
     the real module is imported so that the loader finds it loaded; the check
     itself is tested in test_graphs.py.
     """
-    entry = FakeEntryPoint(factory, agent)
-
-    def entry_points(*, group: str) -> Iterable[object]:
-        real = importlib.metadata.entry_points(group=group)
-        return [entry, *(e for e in real if e.name != agent)]
-
-    monkeypatch.setattr(graphs, "entry_points", entry_points)
-    importlib.import_module(entry.module)
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
+    register_agents(monkeypatch, FakeEntryPoint(factory, agent))
