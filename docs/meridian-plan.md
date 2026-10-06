@@ -411,7 +411,7 @@ and Pydantic, at the cost of one dependency.
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
-| S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | todo | S007, S019 |
+| S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | done | S007, S019 |
 | S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | todo | S007, S019 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
@@ -771,6 +771,9 @@ that day; the rest stand as their step recorded them.
 | `platform/common/telemetry.py` loads the web framework, so the sweep imports its meters late to stay a job with no web stack; `runtime/app.py` and `claims_triage/triaging.py` stand at 799 lines and `test_toolserver_meters.py` at 832 | S064 | open | S074 |
 | A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | open; the first is the owner's to overturn | S069 |
 | Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | open | S069 |
+| The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
+| The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
+| The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
 
 ## Part C — Step details
 
@@ -10185,6 +10188,121 @@ had been read by a reviewer or put to a consultation (Part A, step 4).
   decision to overturn; so is shipping the services and the sweep alone
   and leaving the Jobs' output on the node.
 
+### S025 — AWS mapping
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** an AWS deployment view and a decision record that maps every
+Azure service Meridian uses or designs to its AWS equivalent, written
+against the designed Azure platform and before Azure's environment
+exists (the owner, 2026-10-06). Documents and the architecture model
+only: nothing is built, applied or paid for.
+
+**Decisions** (the main session's unless marked; the owner may
+overturn any):
+
+- **The Azure side is written down once, as a document, and both clouds
+  map from it**: `docs/architecture/deployment/azure-platform.md` holds
+  the table of every Azure service the platform uses or designs (29
+  rows, each with its status and where the repository says so) and the
+  residency rule in words no cloud owns. It is a description S020 keeps
+  true, not a choice, so it is not an ADR. The mapping is ADR 6, one
+  record per cloud (S077 writes Google Cloud's), because each cloud's
+  mapping changes on its own schedule and S036 and S078 each amend their
+  own.
+- **Every equivalent has a source and the date it was read**, from the
+  vendor's own pages; a cell without one says "not verified", and the
+  ADR lists the open questions that matter to S036.
+- **The deployment view places only what the cloud changes**: the edge,
+  the Model Gateway, the Platform Database, the secret store and the
+  model provider. A probe showed that six services cannot be one box,
+  that an instance left out of every view fails `make check`, and that
+  the full placement cannot be read. The chart's other services would
+  run in the same cluster unchanged; the cluster's description says so
+  and the register lists them as omitted. The container registry is not
+  drawn: an arrow from a deployment node validates and cannot be laid
+  out, and a registry with no arrow fails an inspection.
+- **The edge stays Envoy Gateway behind a Network Load Balancer**, so
+  the chart is the same on every cluster and cert-manager keeps issuing
+  the certificate the edge serves (ADR 4). The cost, stated in the ADR
+  and the register: AWS WAF protects Application Load Balancers, not
+  Network Load Balancers, so T-02's firewall has no counterpart in this
+  form. The Application Load Balancer through the AWS Load Balancer
+  Controller is the managed alternative, not taken. S036 may correct it.
+- **The Region for the test is `eu-central-1` (Frankfurt)**, the Region
+  the repository already names; the test of S036 is of infrastructure,
+  not of a model call. The research preferred `eu-west-1` (5 to 8 %
+  cheaper on the large lines, and the only one of the two with a call
+  that can be labelled `eu-region` for Claude, on an endpoint without
+  structured outputs); the ADR weighs it. The owner may overturn it.
+- **EKS Pod Identity over IAM roles for service accounts**, and Amazon
+  Bedrock AgentCore Gateway named as the managed alternative ADR 3 said
+  the mapping would name, not taken: nothing read says it refuses a call
+  by data class and residency label.
+- **No Azure deployment view in this step**: it is S020's, when there is
+  something to place.
+
+**Advisor:** consulted once, before the first contracts of this step, of
+S077 and of S075 together (about 12:55 UTC). The record shows a probe
+contract written right after it, which built the model's first
+deployment environment as a skeleton before anything was filled; what
+else it changed was not written down. Not consulted before the pull
+request: documents and the model alone (Part A, step 4).
+
+**Work log:**
+
+- **A read-only map of the repository** (no deployment environment, node
+  or view existed in the model, for kind or for Azure; the Azure
+  platform was designed in a plan row and in technology strings), **and
+  a research report** of the AWS equivalents with sources, a region
+  comparison and a cost sketch.
+- **Four contracts to the `implementer`**: the probe; the Azure document
+  and the mapping ADR; the filled view; and one that brought the view's
+  texts in line with what the ADR had decided meanwhile.
+- No reviewer agent: no code, chart, Terraform or registry entry
+  changed. The main session read each diff and the exported picture.
+
+**Result / verification:**
+
+- **What the mapping found that changes what the repository said:** no
+  current Claude model has in-Region inference in Frankfurt, so Claude
+  on Bedrock from Frankfurt is `eu-zone` through the `eu.` geographic
+  profile, not `eu-region` (ADR 3 has a dated note); that profile is
+  `eu-zone` only when called from a Region of an EU member state;
+  Mistral Large 3 has no European Region on its Bedrock model card, so
+  S023's second provider has no like-for-like counterpart there; on
+  Bedrock the label is a function of the model ID's prefix and the
+  Region called, not of a SKU, so the registry's derivation is
+  Azure-shaped.
+- **What the test would cost, as a sketch from list prices read on
+  2026-10-06:** about USD 0.44 an hour and 3.53 for eight hours in
+  `eu-central-1`, without model tokens, tax or conversion; a NAT gateway
+  left behind is about USD 42 a month. The amount is stated again from
+  fresh prices before any apply, and nothing is applied without the
+  owner's yes (S036).
+- **The view**: `DeploymentAws`, 10 boxes and 4 arrows inside the budget
+  of 12 and 8, every node and instance tagged `Designed`. Exported and
+  read at full size on 2026-10-06: every label legible; two recorded
+  flaws (the gateway's arrow to the secret store clips a corner of the
+  database's box, and two arrows cross). The Ingress keeps the red
+  border of `Internet-exposed`, which wins over the faded look of
+  `Designed`; it stays dotted.
+- **Gates:** `make check` (no ERROR line), `make docs` and `make test`,
+  each exit 0, on the branch with `main` merged in.
+- **Not done, by design:** no Terraform, no account, no call to AWS; the
+  equivalents are read from documentation and may be wrong on the day
+  they are applied.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the registry's residency
+  derivation and provider kind are Azure-shaped (S023); the threat
+  model's rows on the edge's firewall, residency, egress and retention
+  speak of Azure alone (S036); the Ingress container's technology string
+  names Azure's Application Gateway while both mappings keep Envoy
+  Gateway (S020).
+- For the owner: the Region (`eu-central-1` or `eu-west-1`), and the
+  edge without a managed firewall in front, are the session's decisions
+  to overturn.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -10630,3 +10748,9 @@ had been read by a reviewer or put to a consultation (Part A, step 4).
   dashboard survives a gap. Proved by four runs on the cluster. Seven
   backlog rows closed, three in part and re-homed, one re-homed, six
   new.
+- **v0.59, 2026-10-06:** S025: the Azure platform is written down as a
+  table with the residency rule in words no cloud owns, ADR 6 maps it to
+  AWS with a source for every equivalent, and the model has its first
+  deployment view, of AWS and designed. Claude on Bedrock from Frankfurt
+  is `eu-zone`, not `eu-region`. Nothing is built or applied. Three
+  backlog rows new.

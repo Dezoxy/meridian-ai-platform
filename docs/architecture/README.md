@@ -36,8 +36,10 @@ used everywhere: implemented, simulated, designed.
 
 - Stakeholder: SystemContext, ClaimsTriage, the scope page.
 - Engineer: Containers, ClaimsTriage, ClaimsApproval, the ADRs.
-- Operator: Governance; deployment and observability views arrive with
-  milestone M2.
+- Architect: Containers, Governance, DeploymentAws (designed), the ADRs.
+- Operator: Governance, DeploymentAws (designed: nothing runs on AWS). The
+  deployment views of kind and of Azure and the observability views arrive
+  with milestone M2.
 - To see it run: the [demo script](../demo.md).
 
 ## View register
@@ -49,6 +51,7 @@ used everywhere: implemented, simulated, designed.
 | Governance | CTO, operators, security | How are models, policies, budgets and evidence governed? | Gateway, registry, Key Vault, database, evaluation, observability, providers, runtime | Workload containers; the tool servers' registry reads and audit writes (the Containers view has them) | Compared with the code on 2026-10-04 (S018). Implemented: the registry loaded at startup, the usage ledger and audit rows, traces from every service and metrics from the gateway only (no service exports logs yet), the cost dashboard on kind. Since S064 (2026-10-06, on kind): the runtime, the tool servers and the Claims Triage App export metrics too, and an agent on the node ships the services' output to Loki; no service exports its logs itself. The Evaluation Harness runs in tests, CI and from the command line, on CI's own database, and is not deployed. Designed, drawn dotted: the gateway's read of Key Vault (on kind the Secrets hold database passwords only, and Azure OpenAI is called without a key) and Mistral (S023); alerts and SLOs (S024) | Policy, provider or evidence flow changes | Yes, PNG export of 2026-10-04 |
 | ClaimsTriage | Stakeholders, engineers | What happens from claim submission to a paused proposal? | One runtime scenario, eight steps | Fraud rules tool, guardrail internals; the Claims Triage App storing the claim, its proposal and each state change; the embedding of every search query through the gateway; the approval request the run records before it pauses | Compared with the triage graph and the Claims API on 2026-10-04 (S018), in tests and on kind (laptop only, `make demo`): the policy, retrieval and model steps match the graph of S014 and the pause matches S015; the prompt is redacted and screened since S047. Step 6 happens only when the rules need the model's answer, and step 8's pause only for a claim referred to an adjuster. Step 7 is simulated on kind (the replay provider answers; nothing leaves the cluster) and was run against Azure from a laptop. Compared again on 2026-10-06 (S031, ADR 5): the graph is a supervisor and four workers, and the view's eight steps stand, because they name the containers a run calls and not the graph's nodes; steps 4 and 5 are the `intake` and `terms` workers, step 6 the `assessor` and the rules, step 8 the `approvals` worker's request and the supervisor's pause | Graph steps or failure handling change | Yes, PNG export of 2026-10-04 |
 | ClaimsApproval | Stakeholders, engineers | What happens when an adjuster decides? | One runtime scenario, six steps | Notification of the claimant; the runtime marking the run resumed before it loads the checkpoint | Compared with the code on 2026-10-04 (S018), in tests and on kind (laptop only, `make demo`): the Claims Triage App records the decision and its audit event in one transaction, and the run reads the recorded decision from the claims tool server instead of being given it (S015). Designed: the adjuster's identity on the decision (S021); no decision row names a person yet | Approval semantics change | Yes, PNG export of 2026-10-04 |
+| DeploymentAws | Architects, operators | Where would the platform run on AWS, and which infrastructure would it share? | One designed deployment environment (`AwsDesigned`) in the Region `eu-central-1` (Frankfurt): a managed Kubernetes node (Amazon EKS) holding the Ingress and the Model Gateway, a managed PostgreSQL node (Amazon RDS for PostgreSQL with pgvector) holding the Platform Database, a secret store node (AWS Secrets Manager) holding the Key Vault container, and two infrastructure nodes: the load balancer in front of the Ingress and the model provider (Amazon Bedrock). Only what the cloud changes is placed | The Agent Runtime, the three tool servers, the Claims Triage App and the Observability Stack, which would run in the same cluster from the same chart as on kind and reach nothing of AWS's (the Containers view shows them); the Platform Registry and Evaluation Harness containers; the container registry (Amazon ECR), whose true arrow, the cluster's nodes pulling images from it, validates but makes the renderer collapse the view, so the registry is not in the model; the network's subnets and zones, IAM roles, the private endpoints, the state bucket, the second provider, instance counts and failure domains (the mapping ADR's text covers the network and the roles); the Application Load Balancer with AWS WAF, which the mapping ADR names as the managed alternative to the Network Load Balancer drawn and does not take | Designed only (S025): no AWS account exists (C-05) and nothing is built or applied. Every node and instance is tagged `Designed` and drawn dotted, and the title says DESIGNED. The Ingress keeps the red border of its `Internet-exposed` tag, which wins over the faded look of `Designed` (it is still dotted). The arrows between instances are the container relationships the instances inherit, so the gateway's arrow to the database is solid because kind runs it, and its arrow to the secret store is dotted because that read is designed; the two arrows written in the view (load balancer to Ingress, gateway to the model provider) are tagged `Designed`. The Ingress is Envoy Gateway on kind, and its technology string still names the Azure edge, because the container is not changed here. The load balancer is a Network Load Balancer in front of Envoy Gateway, as on kind, so the certificate is cert-manager's and AWS WAF, which does not protect a Network Load Balancer, has no place in front of it: T-02's firewall has no counterpart in this view. The equivalents, their sources and the date each was read are in the ADR "Map the Azure platform to AWS" | The mapping ADR "Map the Azure platform to AWS" is amended by S036 or S020; S036 builds the environment; a container the view places changes | Yes, PNG export of 2026-10-06, exported again after the load balancer's text changed, top to bottom (10 boxes and 4 arrows; read at full size, every label legible, the load balancer's text fits its box, no arrow through an element; two flaws, both still there: the gateway's arrow to the secret store crosses the border of the managed PostgreSQL node, and the load balancer's arrow crosses the gateway's arrow to the model provider) |
 
 Sizes on 2026-10-04, as boxes and arrows: SystemContext 8 and 9, Containers
 12 and 18, Governance 11 and 14, ClaimsTriage 9 and 8, ClaimsApproval 6 and
@@ -60,7 +63,12 @@ the long label of the Claims Triage App's database arrow, which lies across
 the workload plane's border in the Containers view. Containers is the view
 to split first, by plane, when a container is added. Each view's key is a
 separate file in the export (`<Key>-key.png`); it shows the dotted, faded
-style of `Designed`.
+style of `Designed`. DeploymentAws, added on 2026-10-06 as a designed
+environment, is 10 boxes and 4 arrows, inside the deployment budget of 12
+boxes and 8 arrows, boundary boxes counted. It places only what the cloud
+changes: a probe the same day found that placing all twelve containers made
+14 boxes and 15 arrows and a picture of 3680 by 5936 pixels that was not
+readable, so the other services are named under what the view omits.
 
 ## Key decisions
 
@@ -69,6 +77,7 @@ style of `Designed`.
 - [0003 Build a thin model gateway instead of adopting LiteLLM](decisions/0003-build-a-thin-model-gateway.md)
 - [0004 Prove a service's identity with mutual TLS and cert-manager](decisions/0004-prove-service-identity-with-mutual-tls.md)
 - [0005 Split an agent into workers routed by code, with their own tool lists](decisions/0005-split-an-agent-into-workers-routed-by-code.md)
+- [0006 Map the Azure platform to AWS](decisions/0006-map-the-azure-platform-to-aws.md)
 
 New ADR: copy [templates/adr.md](templates/adr.md) to
 `decisions/NNNN-short-title.md`. Keep this index current; there is
@@ -82,13 +91,15 @@ every `.md` file in that folder.
 | Narrative (opens the tab and the PDF) | [01 overview](overview/01-meridian-ai-platform.md) · [02 scope](overview/02-scope.md) · [03 glossary](overview/03-glossary.md) |
 | Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
 | Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
+| Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, and the residency rule in words no cloud owns |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
 symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,
-`22-data-classification.md`, `23-threat-model.md`). The security and quality
-registers came before the code they govern, so later steps cite their IDs
-instead of inventing them. Add other concern documents when there is
-something true to say: deployment and reliability when something runs.
+`22-data-classification.md`, `23-threat-model.md`, `30-azure-platform.md`).
+The security and quality registers came before the code they govern, so later
+steps cite their IDs instead of inventing them. Add other concern documents
+when there is something true to say: reliability when something runs, and
+the deployment of each cloud when there is something to place.
 
 ## Diagrams
 
