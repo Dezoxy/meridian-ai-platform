@@ -75,6 +75,12 @@ waits when it is deployed: release it when none waits, or make it compatible.
 Two tests (`test_brief_stored_shapes.py`) pin the graph's signature and the
 state types' fields, so such a change has to touch them on purpose.
 
+A bump of `agent-framework-core` is such a change: Renovate gives it a pull
+request of its own, which needs those two tests green and the release notes
+read, and which is deployed only when no brief waits, that is, when
+`claims.briefs` has no row in state `awaiting_decision` (or `drafting`, a run
+still under way).
+
 ## What it may import
 
 Four names of the framework (`Executor`, `WorkflowContext`, `handler`,

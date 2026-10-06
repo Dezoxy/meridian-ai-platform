@@ -135,6 +135,24 @@
       "groupName": "python"
     },
     {
+      "description": "The second agent framework (S037, threat rows T-97 and T-98) and any adapter a release pulls in (the import contracts forbid them) leave the monthly python group for a pull request of their own, with a note on what a bump can break. This rule comes after the 'python' one so that its group wins; the manager tells the Python package from anything else of the same name. The week's wait above still applies. Renovate merges nothing here, so the note and the label are what mark an update that green checks do not clear.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchPackageNames": [
+        "agent-framework",
+        "agent-framework-*"
+      ],
+      "groupName": "agent framework",
+      "addLabels": [
+        "agent-framework"
+      ],
+      "prBodyNotes": [
+        "This is the second agent framework, and green checks do not clear it. A release can build the workflow graph's signature differently or change a step's types, which ends every claim brief that waits for a decision on its first resume (T-98); `tests/meridian/workloads/claim_brief/test_brief_stored_shapes.py` pins the signature and the state types, so a failure there is the finding, not a pin to update. The framework's telemetry and its `.env` behaviour were checked for 1.19.0 only (T-97); `tests/meridian/test_agent_framework_dependency.py` checks them again for the new release, and `tests/meridian/test_import_contracts.py` fails when a release pulls in an adapter package.",
+        "Not merged on green checks alone, and a major or minor release not before its release notes are read for those two things. Release it when no brief waits: the workload's README (`src/meridian/workloads/claim_brief/README.md`) says how to see that none does."
+      ]
+    },
+    {
       "description": "One pull request for the Dockerfile's base images.",
       "matchManagers": [
         "dockerfile"

@@ -13,6 +13,7 @@ _VERSION) needs a line there as well as a reader.
 import fnmatch
 import json
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -125,6 +126,48 @@ def unguarded_images(pins: str, makefile: str, config: dict) -> list[str]:
         if name not in NOT_A_CHARTS_TAG
         and not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
     )
+
+
+def python_package_names(pyproject: str) -> list[str]:
+    """The name of every Python package pyproject.toml's tables depend on."""
+    data = tomllib.loads(pyproject)
+    specs = list(data["project"].get("dependencies", []))
+    for extra in data["project"].get("optional-dependencies", {}).values():
+        specs.extend(extra)
+    for group in data.get("dependency-groups", {}).values():
+        specs.extend(spec for spec in group if isinstance(spec, str))
+    names = (re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", spec) for spec in specs)
+    return sorted({match.group().lower() for match in names if match})
+
+
+def agent_framework_rule(config: dict) -> dict:
+    """The package rule that gives the second agent framework a pull request."""
+    (rule,) = [
+        rule
+        for rule in config["packageRules"]
+        if "agent-framework-core" in matched_names(rule, ["agent-framework-core"])
+    ]
+    return rule
+
+
+def matched_names(rule: dict, names: list[str]) -> list[str]:
+    """The names a rule's matchPackageNames patterns select (globs, as Renovate)."""
+    patterns = rule.get("matchPackageNames", [])
+    return [n for n in names if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
+
+
+def unwatched_framework_pins(pyproject: str, config: dict) -> list[str]:
+    """Pinned agent-framework packages the framework's rule does not match."""
+    framework = [
+        name
+        for name in python_package_names(pyproject)
+        if name.startswith("agent-framework")
+    ]
+    try:
+        rule = agent_framework_rule(config)
+    except ValueError:  # no rule, or more than one
+        return framework
+    return sorted(set(framework) - set(matched_names(rule, framework)))
 
 
 def pinned_files() -> list[tuple[str, str]]:
@@ -473,6 +516,104 @@ class Readers(unittest.TestCase):
             with self.subTest(group=group):
                 self.assertIn("by hand", note)
                 self.assertNotIn("A tag Renovate proposes", note)
+
+    def test_the_agent_framework_arrives_in_a_pull_request_of_its_own(self) -> None:
+        rules = self.config["packageRules"]
+        rule = agent_framework_rule(self.config)
+        (python,) = [r for r in rules if r.get("groupName") == "python"]
+
+        self.assertTrue(rule["groupName"])
+        self.assertNotEqual(rule["groupName"], python["groupName"])
+        self.assertEqual(
+            [r["groupName"] for r in rules if r.get("groupName") == rule["groupName"]],
+            [rule["groupName"]],
+        )
+        # A later rule wins, so the framework's group must come after the python one.
+        self.assertGreater(rules.index(rule), rules.index(python))
+        # Told from another ecosystem's package by its manager, as the python
+        # group is (an image or an npm package of the same name is not its).
+        self.assertEqual(rule["matchManagers"], python["matchManagers"])
+        self.assertEqual(rule["matchManagers"], ["pep621"])
+        self.assertTrue(rule["addLabels"])
+
+    def test_the_agent_framework_rule_matches_the_pin_and_no_other_package(
+        self,
+    ) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        names = python_package_names(pyproject)
+        rule = agent_framework_rule(self.config)
+
+        self.assertIn("agent-framework-core", names)
+        self.assertRegex(pyproject, r'"agent-framework-core==\d+\.\d+\.\d+"')
+        # Every other Python package, among them the first framework and the
+        # clients that look alike, stays in the python group.
+        self.assertIn("langgraph", names)
+        self.assertEqual(
+            matched_names(rule, names),
+            [n for n in names if n.startswith("agent-framework")],
+        )
+        # An adapter a later release pulls in is seen too; a look-alike is not.
+        adapters = ["agent-framework-anthropic", "agent-framework-a2a"]
+        self.assertEqual(matched_names(rule, adapters), adapters)
+        for other in ("langgraph", "agent-frameworks", "my-agent-framework-core"):
+            self.assertEqual(matched_names(rule, [other]), [])
+
+    def test_a_pinned_framework_package_the_rule_does_not_match_is_reported(
+        self,
+    ) -> None:
+        pyproject = (
+            '[project]\nname = "x"\n'
+            'dependencies = ["agent-framework-core==1.19.0", '
+            '"agent-framework-newadapter[extra]==0.1.0", "httpx==0.28.1"]\n'
+            '[dependency-groups]\ndev = ["agent-framework-devtools==0.2.0"]\n'
+        )
+        narrow = json.loads(json.dumps(self.config))
+        agent_framework_rule(narrow)["matchPackageNames"] = ["agent-framework-core"]
+        without = json.loads(json.dumps(self.config))
+        without["packageRules"].remove(agent_framework_rule(without))
+
+        self.assertEqual(unwatched_framework_pins(pyproject, self.config), [])
+        self.assertEqual(
+            unwatched_framework_pins(pyproject, narrow),
+            ["agent-framework-devtools", "agent-framework-newadapter"],
+        )
+        self.assertEqual(
+            unwatched_framework_pins(pyproject, without),
+            [
+                "agent-framework-core",
+                "agent-framework-devtools",
+                "agent-framework-newadapter",
+            ],
+        )
+
+    def test_the_agent_framework_note_names_what_a_bump_can_break_and_its_tests(
+        self,
+    ) -> None:
+        rule = agent_framework_rule(self.config)
+        note = " ".join(rule["prBodyNotes"])
+        tests = (
+            "tests/meridian/workloads/claim_brief/test_brief_stored_shapes.py",
+            "tests/meridian/test_agent_framework_dependency.py",
+            "tests/meridian/test_import_contracts.py",
+        )
+
+        for words in ("T-97", "T-98", "no brief waits", "green checks alone", *tests):
+            with self.subTest(words=words):
+                self.assertIn(words, note)
+        for path in tests:
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file())
+        for row in ("T-97", "T-98"):
+            threats = ROOT / "docs/architecture/security/threat-model.md"
+            self.assertIn(f"| {row} |", threats.read_text(encoding="utf-8"))
+
+    def test_the_workload_readme_says_how_to_see_that_no_brief_waits(self) -> None:
+        readme = ROOT / "src/meridian/workloads/claim_brief/README.md"
+        text = " ".join(readme.read_text(encoding="utf-8").split())
+
+        self.assertIn("claims.briefs", text)
+        self.assertIn("awaiting_decision", text)
+        self.assertIn("agent-framework-core", text)
 
     def test_the_expressions_stay_within_what_renovate_s_engine_reads(self) -> None:
         # RE2 has no lookaround and no backreference; Python would accept both.
