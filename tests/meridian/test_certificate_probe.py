@@ -105,6 +105,27 @@ def test_the_probe_compiles_and_has_no_single_quote_that_would_end_its_string() 
     assert "foreign-ca" in PROBE
 
 
+def read_request(tls: ssl.SSLSocket) -> None:
+    """Read one HTTP request whole (its headers, then ``Content-Length`` bytes
+    of body) from ``tls`` and close it, so that nothing unread turns the close
+    into a reset: the server has taken the request and says nothing."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        data += received(tls)
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = int(re.search(rb"(?i)content-length: (\d+)", head).group(1))
+    while len(body) < length:
+        body += received(tls)
+    tls.close()
+
+
+def received(tls: ssl.SSLSocket) -> bytes:
+    chunk = tls.recv(65536)
+    if not chunk:
+        raise ConnectionError("the client went away before its request was whole")
+    return chunk
+
+
 def serve_raw_tls(
     pki: Pki, behaviour: str, max_version: ssl.TLSVersion | None = None
 ) -> tuple[socket.socket, str]:
@@ -113,7 +134,9 @@ def serve_raw_tls(
     ``behaviour`` is ``alert`` (a client certificate from ``pki.ca`` is
     required, so another CA's gets the TLS alert for an unknown CA),
     ``mismatch`` (no cipher in common: a handshake_failure alert, whatever the
-    client sends) or ``close`` (accept and close at once, no TLS at all)."""
+    client sends), ``close`` (accept and close at once, no TLS at all) or
+    ``accept-and-close`` (any client certificate is accepted, the request is
+    read whole, and the connection is closed without an answer)."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(pki.server.cert), str(pki.server.key))
     if max_version is not None:
@@ -135,7 +158,9 @@ def serve_raw_tls(
             except OSError:  # the listener was closed
                 return
             try:
-                if behaviour != "close":
+                if behaviour == "accept-and-close":
+                    read_request(context.wrap_socket(connection, server_side=True))
+                elif behaviour != "close":
                     context.wrap_socket(connection, server_side=True).close()
             except (ssl.SSLError, OSError):  # the handshake failed, as meant
                 pass
@@ -210,6 +235,26 @@ def test_the_foreign_ca_mode_prints_reset_when_the_server_closes_without_tls(
 
     assert done.stdout.strip() == "reset", done.stderr
     assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize(
+    "max_version", [None, ssl.TLSVersion.TLSv1_2], ids=["tls-1.3", "tls-1.2"]
+)
+def test_a_server_that_takes_a_foreign_certificates_request_and_closes_is_no_reset(
+    pki: Pki, max_version: ssl.TLSVersion | None
+) -> None:
+    # A reset before any request is a refusal; a close after the request went
+    # out is what a server that accepted the certificate does when it then
+    # hangs up without an answer (RemoteDisconnected is a ConnectionResetError).
+    before = leftovers()
+    done = probe_raw_server(pki, "accept-and-close", max_version=max_version)
+
+    assert done.stdout.strip() == "closed-after-request", done.stderr
+    assert done.returncode == 0, done.stderr
+    assert done.stderr == ""
+    assert "reset" not in done.stdout
+    assert "PRIVATE KEY" not in done.stdout + done.stderr
+    assert leftovers() == before
 
 
 def test_an_alert_that_is_not_the_unknown_ca_is_a_traceback_not_a_refusal(

@@ -160,14 +160,25 @@
 #                 none came after it, the line is a SKIP, not a PASS ("the
 #                 gateway wrote this minute's refusal row for an earlier run;
 #                 run again in a minute"), and with no row at all it is a FAIL.
+#                 What the row proves is a refusal by the identity rule, for
+#                 that reason, caller and tenant, at or after the mark; not
+#                 that it is this run's own 403: two runs that overlap can
+#                 share one row (another run's 403, written after this run's
+#                 mark while this run's own is throttled, passes this line),
+#                 so the PASS says "recorded at or after this run's mark".
 #                 The fifth presents a certificate of another
 #                 CA: the probe makes a throwaway key and a self-signed
 #                 certificate with the runtime's own URI (the right name, the
 #                 wrong CA), and the gateway must end the connection before any
 #                 answer, with the TLS alert for an unknown CA (`refused`,
 #                 ssl.SSLError with reason TLSV1_ALERT_UNKNOWN_CA) or with no
-#                 alert at all (`reset`), worded apart; a status is a FAIL, and
-#                 so is any other TLS error. The tools check above is a
+#                 alert at all (`reset`: the connection ended before any
+#                 request was sent), worded apart; a status is a FAIL, and so
+#                 is any other TLS error, and so is a connection that ended
+#                 after the request went out (`closed-after-request`: the
+#                 gateway took the request and closed without answering, which
+#                 is also what a gateway that accepted the certificate does).
+#                 The tools check above is a
 #                 further proof: its calls run over TLS with the runtime's
 #                 certificate. The two refusals (the 401 and the 403) leave two
 #                 refusal rows in the audit table on each run, one per reason
@@ -183,6 +194,10 @@
 #                 that died in that second would end the connection the same
 #                 way (the three requests before it were answered by the same
 #                 gateway). Only `refused`, the alert, names the unknown CA.
+#                 The price of `closed-after-request`: the probe reads for one
+#                 second before it sends, so a gateway slower than that to end
+#                 the connection turns a refusal into this FAIL; it fails
+#                 closed, and a run again tells.
 #  10. certificate policy: four lines (S056, S062), run after the first
 #                 nine and never skipped: its objects exist after `make up`, so
 #                 a missing one is a FAIL. The first three lines read only: the
@@ -212,18 +227,42 @@
 #                 of meridian-services does not list default, and the policy
 #                 meridian-deny-unlisted, which selects the issuer from every
 #                 namespace, permits nothing. It passes when the request is
-#                 Denied (the line says the reason and the approver's message,
-#                 cut to 120 characters). It fails when the request is
-#                 Approved or carries a certificate (the issuer signed a
-#                 request it must refuse), and when neither condition is there
+#                 Denied and the approver's whole message, judged before it
+#                 is cut, names meridian-deny-unlisted as a policy that
+#                 evaluated the request and does not name meridian-services
+#                 as one (the line says the reason, cut to 60 characters, and
+#                 the message, cut to 120). The form it matches is the one
+#                 approver-policy v0.28.0 wrote on the cluster: "No policy
+#                 approved this request: [meridian-deny-unlisted:
+#                 [spec.allowed.uris: Invalid value: ...", a policy's name
+#                 after "[", "]" or "," and before a colon, so that
+#                 meridian-services-ca and the issuer's name do not count.
+#                 The check depends on
+#                 approver-policy's wording at the pinned version. A Denied
+#                 request whose message names meridian-services as a policy
+#                 is a FAIL (that policy selected a request from another
+#                 namespace), and so is one whose message has neither form
+#                 (the line says the approver's message is not in the form
+#                 this check reads, and prints it cut). It fails when the
+#                 request is Approved or carries a certificate (the issuer
+#                 signed a request it must refuse; with both conditions true
+#                 the request is Approved, whatever their order), and when
+#                 neither condition is there
 #                 after 30 s (the approver did not answer; a request nobody
 #                 approves or denies would also be what a policy that can no
 #                 longer be used by the requester leaves). The request is
 #                 deleted as soon as it is read, by the EXIT trap when the run
 #                 ends first (an error, a FAIL, an interrupt) and, for a run
-#                 that was killed, at the start of the next one by its label
-#                 meridian-smoke=refused-request; a failed delete is a FAIL
-#                 that names the request. A CertificateRequest makes no
+#                 that was killed, at the start of the next one, which lists
+#                 the requests with the label meridian-smoke=refused-request
+#                 and deletes by name those older than 300 s (a request lives
+#                 two seconds): the age is the creationTimestamp read with jq
+#                 against this machine's clock, so a skewed clock only delays
+#                 the sweep, and a younger request is another run's, which two
+#                 runs at once leave to each other; a list that cannot be read
+#                 is not an error. A failed delete, judged by kubectl's exit
+#                 status and not by what it wrote, is a FAIL that names the
+#                 request. A CertificateRequest makes no
 #                 Secret: the certificate an issuer signed would be in the
 #                 request's own status, which is deleted with it and never
 #                 printed. openssl makes the key and writes it to /dev/null:
@@ -350,13 +389,22 @@ except TimeoutError:
 #                   TLS 1.3 the alert follows the handshake, and a request sent
 #                   first can lose it to a reset; under 1.2 it comes inside the
 #                   handshake, so the connection is opened inside the same
-#                   try), and prints one of three answers, in this mode only:
+#                   try), and prints one of four answers, in this mode only:
 #                   "refused", when the server sent the TLS alert for an
 #                   unknown CA (ssl.SSLError, reason TLSV1_ALERT_UNKNOWN_CA);
-#                   "reset", when the connection ended with no TLS alert (a
-#                   reset, a broken pipe, an abort, or an EOF in violation of
-#                   protocol: ssl.SSLEOFError); and the status when an answer
-#                   came, which is a FAIL. Measured against the test server
+#                   "reset", when the connection ended with no TLS alert
+#                   before any request was sent (a reset, a broken pipe, an
+#                   abort, or an EOF in violation of protocol:
+#                   ssl.SSLEOFError); "closed-after-request", when it ended
+#                   the same way after the request went out, which is what a
+#                   server that accepted the certificate and then closed
+#                   without answering does (http.client.RemoteDisconnected is
+#                   a ConnectionResetError), so it is a FAIL, not a refusal;
+#                   and the status when an answer came, which is a FAIL. The
+#                   price: the one-second read is all the server has to end
+#                   the connection, so a gateway slower than that turns a
+#                   refusal into `closed-after-request`; it fails closed.
+#                   Measured against the test server
 #                   that has the services' uvicorn flags, the alert never
 #                   arrives: a reset under TLS 1.3, an EOF under 1.2, so `reset`
 #                   is the answer expected of the gateway (not yet seen on the
@@ -369,7 +417,7 @@ except TimeoutError:
 # name, the reason the identity rule writes for a name the caller may not use
 # (a test keeps it equal to NAME_REFUSAL_REASON), the calling service, which is
 # the deployment the probe runs in, the database's clock (read before the 403's
-# request: a row recorded at or after it is this run's), how far before it to
+# request: a row recorded at or after it counts for this run), how far before it to
 # look for the row of an earlier run (the gateway's REFUSAL_AUDIT_SECONDS: a
 # test keeps it equal) and how long to wait for this run's own.
 readonly IDENTITY_HOST=model-gateway.meridian.svc
@@ -391,6 +439,7 @@ mode, host, port, tenant = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[
 context = ssl.create_default_context(cafile=os.environ["MERIDIAN_TLS_CA_FILE"])
 def answer():
     connection = http.client.HTTPSConnection(host, port, context=context, timeout=10)
+    sent = False
     try:
         connection.connect()
         if mode == "foreign-ca":
@@ -400,6 +449,7 @@ def answer():
                     return "reset"
             except TimeoutError:
                 connection.sock.settimeout(10)
+        sent = True
         if mode == "health":
             connection.request("GET", "/healthz")
         else:
@@ -415,12 +465,12 @@ def answer():
         if mode == "foreign-ca" and "TLSV1_ALERT_UNKNOWN_CA" in (error.reason or ""):
             return "refused"
         if mode == "foreign-ca" and isinstance(error, ssl.SSLEOFError):
-            return "reset"
+            return "closed-after-request" if sent else "reset"
         raise
     except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
         if mode != "foreign-ca":
             raise
-        return "reset"
+        return "closed-after-request" if sent else "reset"
 if mode == "foreign-ca":
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "foreign-ca probe")])
@@ -467,8 +517,13 @@ readonly POLICY_BUILTIN_OFF_ARG=--controllers=-certificaterequests-approver
 # nothing about the request's shape refuses it, only its namespace (a test keeps
 # these equal to certificate-policy.yaml's). The name is
 # REFUSED_NAME_PREFIX and a suffix, the label is what the next run finds a
-# leftover by, and the answer is read for up to REFUSED_ATTEMPTS tries,
-# REFUSED_INTERVAL seconds apart (the approver answers in about a second).
+# leftover by (only one older than REFUSED_LEFTOVER_AGE seconds is deleted), and
+# the answer is read for up to REFUSED_ATTEMPTS tries, REFUSED_INTERVAL seconds
+# apart (the approver answers in about a second). The reason is cut to
+# REFUSED_REASON_LENGTH characters and the message to REFUSED_MESSAGE_LENGTH for
+# the line; a Denied request passes when the whole message names
+# REFUSED_DENYING_POLICY and not REFUSED_SELECTING_POLICY as a policy (a test
+# keeps both equal to certificate-policy.yaml's names).
 readonly REFUSED_NAMESPACE=default
 readonly REFUSED_ISSUER=meridian-services
 readonly REFUSED_LABEL=meridian-smoke=refused-request
@@ -478,6 +533,10 @@ readonly REFUSED_DURATION=1h0m0s
 readonly REFUSED_ATTEMPTS=15
 readonly REFUSED_INTERVAL=2
 readonly REFUSED_MESSAGE_LENGTH=120
+readonly REFUSED_REASON_LENGTH=60
+readonly REFUSED_LEFTOVER_AGE=300
+readonly REFUSED_SELECTING_POLICY=meridian-services
+readonly REFUSED_DENYING_POLICY=meridian-deny-unlisted
 
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
@@ -527,6 +586,7 @@ refused_problem="" # set by refused_read: why it could not read the request
 refused_verdict="" # set by refused_wait: Approved, Denied or Issued, or empty
 refused_reason=""  # set by refused_wait: the verdict's reason, cleaned
 refused_message="" # set by refused_wait: the verdict's message, cleaned and cut
+refused_message_full="" # set by refused_wait: the same message, cleaned, not cut
 poll_error=""      # what the last failed poll attempt saw
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
@@ -1575,15 +1635,17 @@ expect_identity_status() {
 
 # expect_foreign_ca: the fifth line. The probe's answer for a certificate of
 # another CA is "refused" (the TLS alert for an unknown CA) or "reset" (the
-# connection ended with no alert, which is how uvicorn, the services' server,
-# ends it); both pass, in words that tell them apart. A status or an error is a
-# FAIL.
+# connection ended with no alert before any request was sent, which is how
+# uvicorn, the services' server, ends it); both pass, in words that tell them
+# apart. "closed-after-request" (the connection ended after the request went
+# out), a status or an error is a FAIL.
 expect_foreign_ca() {
   local what="POST /v1/chat with a certificate of the Agent Runtime's own name from another CA"
   identity_status foreign-ca
   case "${identity_answer}" in
     refused) pass "service identity: ${what} -> refused (the TLS alert for an unknown CA)" ;;
-    reset) pass "service identity: ${what} -> reset (the connection ended with no TLS alert: uvicorn ends an unknown CA's connection so, and a gateway that died in that second would too)" ;;
+    reset) pass "service identity: ${what} -> reset (the connection ended with no TLS alert, before any request was sent: uvicorn ends an unknown CA's connection so, and a gateway that died in that second would too)" ;;
+    closed-after-request) fail "service identity: ${what}: the gateway took the request of a certificate from another CA and closed without answering: it may have accepted the certificate" ;;
     *) fail "service identity: ${what}: expected refused or reset, got ${identity_answer}" ;;
   esac
 }
@@ -1591,7 +1653,7 @@ expect_foreign_ca() {
 # identity_mark_start: before the request that causes the audit row below: the
 # database's primary pod and its clock, in ${identity_primary} and
 # ${identity_mark} (seconds since the epoch, with the fraction). A row recorded
-# at or after the mark is this run's. When either cannot be had, ${identity_mark}
+# at or after the mark counts for this run. When either cannot be had, ${identity_mark}
 # stays empty and ${identity_mark_problem} says why: the probes still run, and
 # check_gateway_refusal_row prints the FAIL. The mark goes into SQL later, so it
 # is kept only when it is a number.
@@ -1629,9 +1691,10 @@ identity_mark_start() {
 # gateway writes in a worker thread and at most one such row per reason, tenant
 # and minute, so a second run inside that minute causes no row of its own. The
 # query therefore asks for the newest row since ${identity_mark} less one
-# throttle window, and says whether it was recorded at or after the mark (this
-# run's: PASS) or before it (the gateway wrote this minute's row for an earlier
-# run: SKIP, not PASS); no row at all is a FAIL. It never asks for a count that
+# throttle window, and says whether it was recorded at or after the mark (PASS,
+# in those words: another run's 403 written after the mark is such a row too) or
+# before it (the gateway wrote this minute's row for an earlier run: SKIP, not
+# PASS); no row at all is a FAIL. It never asks for a count that
 # went up, and runs again for about ten seconds while it finds no row of this
 # run's, because the gateway writes in a worker thread. Every value in the SQL
 # is a constant of this script, or the mark, which identity_mark_start kept
@@ -1661,7 +1724,7 @@ check_gateway_refusal_row() {
   if [[ -z "${answer}" ]]; then
     fail "service identity: the gateway's audit log has no row for ${what} since this run started or in the ${IDENTITY_AUDIT_THROTTLE} s before it, after ${IDENTITY_AUDIT_ATTEMPTS} tries: the 403 was not recorded, or was not the identity rule's"
   elif [[ "${answer}" =~ ^([0-9]+)\|t$ ]]; then
-    pass "service identity: the gateway's audit log has ${what}, ${BASH_REMATCH[1]} s old, recorded after this run started"
+    pass "service identity: the gateway's audit log has ${what}, ${BASH_REMATCH[1]} s old, recorded at or after this run's mark"
   elif [[ "${answer}" =~ ^([0-9]+)\|f$ ]]; then
     skip "service identity: the gateway wrote this minute's refusal row for an earlier run (the newest row for ${what} is ${BASH_REMATCH[1]} s old, and none came after this run started), so this run's 403 left none of its own; run again in a minute"
   else
@@ -1756,7 +1819,8 @@ check_builtin_approver_off() {
 # one selects, so it must be Denied. Approved, or carrying a certificate, is a
 # FAIL: the issuer signed a request it must refuse. The request is deleted
 # right after it is read, by the EXIT trap when the run ends first, and, when a
-# run was killed, at the start of the next one by its label.
+# run was killed, at the start of the next one by name, from a list of the
+# requests with its label that are older than REFUSED_LEFTOVER_AGE.
 
 # refused_make_csr: a signing request in PEM on stdout. openssl makes the key
 # and writes it to /dev/null: this script never wants the certificate, so the key
@@ -1795,7 +1859,8 @@ refused_read() {
     return 1
   fi
   if ! refused_state="$(jq -r '
-    ([(.status.conditions // [])[] | select((.type == "Approved" or .type == "Denied") and .status == "True")] | .[0] // {}) as $verdict
+    [(.status.conditions // [])[] | select(.status == "True")] as $held
+    | (([$held[] | select(.type == "Approved")] + [$held[] | select(.type == "Denied")]) | .[0] // {}) as $verdict
     | [$verdict.type // "", ((.status.certificate // "") != "" | tostring),
        ($verdict.reason // "" | gsub("[|\r\n]"; " ")), ($verdict.message // "" | gsub("[\r\n]+"; " "))]
     | join("|")' <<<"${json}" 2>/dev/null)"; then
@@ -1815,13 +1880,61 @@ refused_wait() {
     refused_read || return 1
     IFS='|' read -r refused_verdict issued refused_reason refused_message <<<"${refused_state}"
     refused_reason="$(clean_lines "${refused_reason}")"
-    refused_message="$(clean_lines "${refused_message}")"
-    refused_message="${refused_message:0:REFUSED_MESSAGE_LENGTH}"
+    refused_reason="${refused_reason:0:REFUSED_REASON_LENGTH}"
+    refused_message_full="$(clean_lines "${refused_message}")"
+    refused_message="${refused_message_full:0:REFUSED_MESSAGE_LENGTH}"
     [[ "${issued}" != true ]] || refused_verdict=Issued
     [[ -z "${refused_verdict}" ]] || return 0
     ((attempt == REFUSED_ATTEMPTS)) || sleep "${REFUSED_INTERVAL}"
   done
   return 2
+}
+
+# refused_names_policy NAME: succeeds when the approver's whole message
+# (${refused_message_full}) names the policy NAME as one that evaluated the
+# request. The form it matches is the one approver-policy v0.28.0 wrote on the
+# cluster (2026-10-06): "No policy approved this request: [<policy>: [<errors>"
+# with the next policy, if any, after a "]" or a ",". A policy's name is the
+# word after "[", "]" or "," (and at most one space) and before ":", so that
+# meridian-services-ca, the issuer's name after "name: ", a URI that ends in
+# the name and a longer name do not count. It depends on that wording at the
+# pinned version.
+refused_names_policy() {
+  local before='(\[|\]|,) ?'
+  [[ "${refused_message_full}" =~ ${before}$1: ]]
+}
+
+# refused_denial_cause: why the Denied request was denied, from the approver's
+# whole message (before it is cut for the line), one word on stdout: "namespace"
+# when it names the denying policy and not the one that selects `meridian` (the
+# claim of the line: the namespace refuses), "selected" when it names that one,
+# and "unreadable" when it names neither as a policy.
+refused_denial_cause() {
+  if refused_names_policy "${REFUSED_SELECTING_POLICY}"; then
+    echo selected
+  elif refused_names_policy "${REFUSED_DENYING_POLICY}"; then
+    echo namespace
+  else
+    echo unreadable
+  fi
+}
+
+# refused_report_denied WHERE LEFT: the line of a Denied request, for the
+# request WHERE names; LEFT is what is left of it when it could not be deleted.
+refused_report_denied() {
+  local where=$1 left=$2 verdict="was Denied (${refused_reason}: ${refused_message})"
+  case "$(refused_denial_cause)" in
+    selected)
+      fail "certificate policy: the policy ${REFUSED_SELECTING_POLICY} selected a request from another namespace: ${where} ${verdict}, and the message names that policy; its namespace selector must not list ${REFUSED_NAMESPACE}${left}" ;;
+    unreadable)
+      fail "certificate policy: ${where} ${verdict}, but the approver's message is not in the form this check reads (the policy ${REFUSED_DENYING_POLICY}, named as a policy of the request's evaluation); approver-policy's wording may have changed${left}" ;;
+    *)
+      if [[ -n "${left}" ]]; then
+        fail "certificate policy: ${where} ${verdict}${left}"
+      else
+        pass "certificate policy: a request for the issuer ${REFUSED_ISSUER} from the namespace ${REFUSED_NAMESPACE}, with a URI under the Meridian prefix, ${verdict}, and deleted"
+      fi ;;
+  esac
 }
 
 # refused_report NAME WAIT_STATUS DELETE_PROBLEM: the one line of the fourth
@@ -1833,12 +1946,7 @@ refused_report() {
   [[ -z "${delete_problem}" ]] ||
     left="; it could not be deleted (kubectl said: ${delete_problem}): kubectl -n ${REFUSED_NAMESPACE} delete certificaterequest ${name}"
   case "${waited}:${refused_verdict}" in
-    0:Denied)
-      if [[ -n "${left}" ]]; then
-        fail "certificate policy: ${where} was Denied (${refused_reason}: ${refused_message})${left}"
-      else
-        pass "certificate policy: a request for the issuer ${REFUSED_ISSUER} from the namespace ${REFUSED_NAMESPACE}, with a URI under the Meridian prefix, was Denied (${refused_reason}: ${refused_message}), and deleted"
-      fi ;;
+    0:Denied) refused_report_denied "${where}" "${left}" ;;
     0:*)
       fail "certificate policy: the issuer signed a request it must refuse: ${where} was ${refused_verdict} (${refused_reason}: ${refused_message})${left:-; smoke deleted it}; check cert-manager's own approver and the selectors of the policies (make up)" ;;
     1:*) fail "certificate policy: ${refused_problem}${left}" ;;
@@ -1846,10 +1954,31 @@ refused_report() {
   esac
 }
 
+# refused_sweep_leftovers: at the start of a run, delete by name the requests
+# with REFUSED_LABEL that are older than REFUSED_LEFTOVER_AGE seconds: what a
+# killed run left (a request lives two seconds). A younger one is another run's
+# that is under way (two sessions on one machine do happen), and is its own to
+# delete. The age is this machine's clock against the request's
+# creationTimestamp (the API server's), so a skewed clock only delays the
+# sweep: the request stays, and a later run deletes it. A list that cannot be
+# read is not an error: the check goes on, and the leftover waits.
+refused_sweep_leftovers() {
+  local json names leftover
+  json="$(kctl -n "${REFUSED_NAMESPACE}" get certificaterequest -l "${REFUSED_LABEL}" \
+    -o json 2>/dev/null)" || return 0
+  names="$(jq -r --argjson age "${REFUSED_LEFTOVER_AGE}" '
+    .items[] | select(now - (.metadata.creationTimestamp | fromdateiso8601) > $age)
+    | .metadata.name' <<<"${json}" 2>/dev/null)" || return 0
+  while IFS= read -r leftover; do
+    [[ -n "${leftover}" ]] || continue
+    kctl -n "${REFUSED_NAMESPACE}" delete certificaterequest "${leftover}" \
+      --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  done <<<"${names}"
+}
+
 refused_check() {
   local csr manifest detail name waited=0 delete_problem=""
-  kctl -n "${REFUSED_NAMESPACE}" delete certificaterequest -l "${REFUSED_LABEL}" \
-    --ignore-not-found --wait=false >/dev/null 2>&1 || true # a killed run's leftover
+  refused_sweep_leftovers
   if ! csr="$(refused_make_csr 2>"${refused_err_file}")"; then
     fail "certificate policy: openssl could not make the request that the issuer must refuse: $(clean_lines "$(<"${refused_err_file}")")"
     return
@@ -1864,8 +1993,10 @@ refused_check() {
     return
   fi
   refused_wait || waited=$?
-  refused_delete_request "${refused_err_file}" ||
+  if ! refused_delete_request "${refused_err_file}"; then # the exit status decides
     delete_problem="$(clean_lines "$(<"${refused_err_file}")")"
+    delete_problem="${delete_problem:-kubectl exited non-zero with no message}"
+  fi
   refused_report "${name}" "${waited}" "${delete_problem}"
 }
 

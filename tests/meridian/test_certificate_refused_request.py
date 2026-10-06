@@ -17,8 +17,10 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -41,13 +43,10 @@ DENIED_MESSAGE = (
 )
 
 
-def condition(kind: str, message: str = "") -> dict[str, str]:
-    return {
-        "type": kind,
-        "status": "True",
-        "reason": "policy.cert-manager.io",
-        "message": message,
-    }
+def condition(
+    kind: str, message: str = "", reason: str = "policy.cert-manager.io"
+) -> dict[str, str]:
+    return {"type": kind, "status": "True", "reason": reason, "message": message}
 
 
 DENIED = {"status": {"conditions": [condition("Denied", DENIED_MESSAGE)]}}
@@ -80,13 +79,18 @@ def run_check(
     read: str = "ok",
     delete: str = "ok",
     openssl: str = "ok",
+    leftovers: list[dict[str, object]] | None = None,
+    listing: str = "ok",
 ) -> Run:
     """``check_refused_request`` from smoke.sh in bash against a stub ``kctl``
     and a stub ``openssl``, under the script's own ``cleanup`` trap. ``answer``
     is the request as ``get -o json`` prints it after ``pending_reads`` reads
     that print a request with no condition; ``create``, ``delete`` and
-    ``openssl`` are ``ok`` or ``FAIL`` (that command fails), ``read`` is ``ok``,
-    ``FAIL`` or ``INTERRUPT`` (the script is sent SIGTERM during the read).
+    ``openssl`` are ``ok`` or ``FAIL`` (that command fails), ``delete`` may
+    also be ``SILENT`` (it exits non-zero and writes nothing), ``read`` is
+    ``ok``, ``FAIL`` or ``INTERRUPT`` (the script is sent SIGTERM during the
+    read). ``leftovers`` are the requests with the label that the list at the
+    start of the run prints (``listing``: ``ok``, ``FAIL`` or ``GARBAGE``).
     The exit status is 1 when a FAIL line was printed. ``sleep`` does nothing."""
     asked, created, openssl_log = (tmp_path / name for name in ("asked", "in", "ssl"))
     temporary = tmp_path / "tmp"
@@ -123,7 +127,14 @@ def run_check(
             "kctl() {",
             f'  echo "$*" >>"{asked}"',
             '  case "$*" in',
-            '    *" delete certificaterequest -l "*) return 0 ;;',
+            '    *" get certificaterequest -l "*)',
+            '      if [[ "${LISTING}" == FAIL ]]; then',
+            '        echo "error: connection refused" >&2; return 1',
+            "      fi",
+            '      if [[ "${LISTING}" == GARBAGE ]]; then',
+            '        echo "not json"; return 0',
+            "      fi",
+            '      printf "%s" "${LEFTOVERS}" ;;',
             '    *" create -f -"*)',
             f'      cat >>"{created}"',
             '      if [[ "${CREATE}" == FAIL ]]; then',
@@ -135,13 +146,14 @@ def run_check(
             '        echo "error: connection refused" >&2; return 1',
             "      fi",
             '      if [[ "${READ}" == INTERRUPT ]]; then kill -TERM $$; return 1; fi',
-            f'      reads="$(grep -c " get certificaterequest " "{asked}")"',
+            f'      reads="$(grep -c " get certificaterequest {PREFIX}" "{asked}")"',
             '      if ((reads <= PENDING_READS)); then printf "%s" "${NO_CONDITION}"',
             '      else printf "%s" "${ANSWER}"; fi ;;',
             '    *" delete certificaterequest "*)',
             '      if [[ "${DELETE}" == FAIL ]]; then',
             '        echo "Error from server: forbidden" >&2; return 1',
-            "      fi ;;",
+            "      fi",
+            '      if [[ "${DELETE}" == SILENT ]]; then return 1; fi ;;',
             '    *) echo "stub kctl: unexpected $*" >&2; return 99 ;;',
             "  esac",
             "}",
@@ -155,7 +167,11 @@ def run_check(
                     "refused_manifest",
                     "refused_read",
                     "refused_wait",
+                    "refused_names_policy",
+                    "refused_denial_cause",
+                    "refused_report_denied",
                     "refused_report",
+                    "refused_sweep_leftovers",
                     "refused_check",
                     "check_refused_request",
                 )
@@ -181,6 +197,8 @@ def run_check(
             "READ": read,
             "DELETE": delete,
             "OPENSSL": openssl,
+            "LISTING": listing,
+            "LEFTOVERS": json.dumps({"items": leftovers or []}),
         },
         timeout=SECONDS,
     )
@@ -199,7 +217,7 @@ def deletes(run: Run) -> list[str]:
 
 
 def reads(run: Run) -> list[str]:
-    return [call for call in run.asked if " get certificaterequest " in call]
+    return [call for call in run.asked if f" get certificaterequest {PREFIX}" in call]
 
 
 def test_a_denied_request_is_a_pass_that_names_the_reason_and_is_deleted_after_the_read(
@@ -264,15 +282,91 @@ def test_the_request_is_one_the_meridian_policy_would_approve_in_meridian_but_no
     assert fnmatch("meridian-services", denying["issuerRef"]["name"])
 
 
-def test_a_leftover_of_an_interrupted_run_is_deleted_by_its_label_before_a_new_request(
+def leftover(name: str, age_seconds: int) -> dict[str, object]:
+    """A request with the label, as ``get -l -o json`` lists it, made
+    ``age_seconds`` ago by this machine's clock."""
+    made = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    return {
+        "metadata": {
+            "name": name,
+            "creationTimestamp": made.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    }
+
+
+def leftover_deletes(run: Run) -> list[str]:
+    marker = " delete certificaterequest leftover-"
+    return [call for call in run.asked if marker in call]
+
+
+def test_the_run_lists_the_requests_with_its_label_before_it_makes_its_own(
     tmp_path: Path,
 ) -> None:
     run = run_check(tmp_path)
 
-    assert run.asked[0].startswith(
-        f"-n {NAMESPACE} delete certificaterequest -l {LABEL} --ignore-not-found"
-    )
+    assert run.asked[0] == (f"-n {NAMESPACE} get certificaterequest -l {LABEL} -o json")
     assert any(call.startswith("-n default create -f -") for call in run.asked[1:])
+    # No delete by label any more: another run's young request is its own.
+    assert not any("delete certificaterequest -l" in call for call in run.asked)
+
+
+def test_a_leftover_older_than_the_limit_is_deleted_by_name_before_a_new_request(
+    tmp_path: Path,
+) -> None:
+    age = int(constant("REFUSED_LEFTOVER_AGE"))
+
+    run = run_check(tmp_path, leftovers=[leftover("leftover-old", age + 60)])
+
+    (deleted,) = leftover_deletes(run)
+    assert deleted == (
+        f"-n {NAMESPACE} delete certificaterequest leftover-old "
+        "--ignore-not-found --wait=false"
+    )
+    assert run.asked.index(deleted) < min(
+        i for i, call in enumerate(run.asked) if " create -f -" in call
+    )
+    assert verdicts(run.lines) == ["PASS"]
+
+
+def test_a_leftover_younger_than_the_limit_is_another_runs_and_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    # Two runs at once: the other one's request lives two seconds, and is not
+    # this run's to delete. Both sides of the limit, in one list.
+    age = int(constant("REFUSED_LEFTOVER_AGE"))
+
+    run = run_check(
+        tmp_path,
+        leftovers=[
+            leftover("leftover-young", age - 60),
+            leftover("leftover-old", age + 60),
+            leftover("leftover-new", 2),
+        ],
+    )
+
+    (deleted,) = leftover_deletes(run)
+    assert "leftover-old" in deleted
+    assert not any("leftover-young" in call for call in run.asked[1:])
+    assert not any("leftover-new" in call for call in run.asked[1:])
+    assert verdicts(run.lines) == ["PASS"]
+
+
+def test_the_limit_for_a_leftover_is_a_few_minutes() -> None:
+    assert 120 <= int(constant("REFUSED_LEFTOVER_AGE")) <= 900
+
+
+@pytest.mark.parametrize("listing", ["FAIL", "GARBAGE"])
+def test_a_list_of_leftovers_that_cannot_be_read_is_not_an_error(
+    tmp_path: Path, listing: str
+) -> None:
+    run = run_check(
+        tmp_path, listing=listing, leftovers=[leftover("leftover-old", 3600)]
+    )
+
+    assert verdicts(run.lines) == ["PASS"]
+    assert run.returncode == 0
+    assert leftover_deletes(run) == []
+    assert any(call.startswith("-n default create -f -") for call in run.asked)
 
 
 @pytest.mark.parametrize("answer", [APPROVED, ISSUED_WITHOUT_A_CONDITION])
@@ -380,6 +474,209 @@ def test_a_denied_request_whose_delete_fails_is_a_fail_naming_what_is_left(
     assert PREFIX in run.lines[0]
     assert "Denied" in run.lines[0]
     assert len(deletes(run)) == 2  # after the read, and the trap's
+
+
+def test_a_denied_request_whose_delete_fails_in_silence_is_a_fail_not_a_deleted(
+    tmp_path: Path,
+) -> None:
+    # The exit status decides, not what kubectl wrote: a delete that exits
+    # non-zero with no message must not print "and deleted".
+    run = run_check(tmp_path, answer=DENIED, delete="SILENT")
+
+    assert verdicts(run.lines) == ["FAIL"]
+    assert "could not be deleted" in run.lines[0]
+    assert "kubectl exited non-zero with no message" in run.lines[0]
+    assert PREFIX in run.lines[0]
+    assert "and deleted" not in run.lines[0]
+    assert len(deletes(run)) == 2
+
+
+def test_a_request_that_is_both_approved_and_denied_is_approved_and_fails(
+    tmp_path: Path,
+) -> None:
+    # cert-manager's webhook forbids both at once; with no certificate yet, the
+    # first of the two in the list used to decide, and Denied passed.
+    both = {
+        "status": {
+            "conditions": [
+                condition("Denied", DENIED_MESSAGE),
+                condition("Approved", "Approved by a policy"),
+            ]
+        }
+    }
+
+    run = run_check(tmp_path, answer=both)
+
+    assert verdicts(run.lines) == ["FAIL"]
+    assert "signed a request it must refuse" in run.lines[0]
+    assert "was Approved" in run.lines[0]
+
+
+def test_a_request_with_the_conditions_the_other_way_round_is_approved_too(
+    tmp_path: Path,
+) -> None:
+    both = {
+        "status": {
+            "conditions": [
+                condition("Approved", "Approved by a policy"),
+                condition("Denied", DENIED_MESSAGE),
+            ]
+        }
+    }
+
+    run = run_check(tmp_path, answer=both)
+
+    assert verdicts(run.lines) == ["FAIL"]
+    assert "was Approved" in run.lines[0]
+
+
+PREFIX_OF_THE_REAL_MESSAGE = "No policy approved this request: "
+REAL_DENIAL = (
+    PREFIX_OF_THE_REAL_MESSAGE
+    + "[meridian-deny-unlisted: [spec.allowed.uris: Invalid value: "
+    '["spiffe://meridian.kind/ns/meridian/sa/meridian-smoke-refused"]: '
+    "no URI is allowed]]"
+)
+
+
+def denied_with(message: str, reason: str = "policy.cert-manager.io") -> dict[str, Any]:
+    return {"status": {"conditions": [condition("Denied", message, reason)]}}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        DENIED_MESSAGE,
+        REAL_DENIAL,
+        # The deny policy beside meridian-services-ca (another policy, not the
+        # one that selects `meridian`), in either order.
+        PREFIX_OF_THE_REAL_MESSAGE
+        + "[meridian-deny-unlisted: [spec.allowed.uris: Forbidden] "
+        "meridian-services-ca: [spec.allowed.isCA: Invalid value]]",
+        PREFIX_OF_THE_REAL_MESSAGE
+        + "[meridian-services-ca: [spec.allowed.isCA: Invalid value], "
+        "meridian-deny-unlisted: [spec.allowed.uris: Forbidden]]",
+        # The issuer's name, and a URI that ends in it, are not a policy's.
+        PREFIX_OF_THE_REAL_MESSAGE
+        + "[meridian-deny-unlisted: [spec.issuerRef.name: meridian-services: "
+        "Forbidden, spec.allowed.uris: Invalid value: "
+        '["spiffe://x/sa/meridian-services"]]]',
+    ],
+    ids=["short", "real", "ca-after", "ca-before", "issuer-name"],
+)
+def test_a_denial_that_names_the_deny_policy_and_not_meridian_services_is_a_pass(
+    tmp_path: Path, message: str
+) -> None:
+    run = run_check(tmp_path, answer=denied_with(message))
+
+    assert verdicts(run.lines) == ["PASS"]
+    assert "meridian-deny-unlisted" in run.lines[0]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        PREFIX_OF_THE_REAL_MESSAGE
+        + "[meridian-services: [spec.allowed.dnsNames: Forbidden] "
+        "meridian-deny-unlisted: [spec.allowed.uris: Forbidden]]",
+        PREFIX_OF_THE_REAL_MESSAGE
+        + "[meridian-deny-unlisted: [spec.allowed.uris: Forbidden], "
+        "meridian-services: [spec.allowed.usages: Invalid value]]",
+        PREFIX_OF_THE_REAL_MESSAGE
+        + "[meridian-services: [spec.allowed.usages: Invalid value]]",
+    ],
+    ids=["first", "second", "alone"],
+)
+def test_a_denial_that_names_meridian_services_as_a_policy_is_a_fail(
+    tmp_path: Path, message: str
+) -> None:
+    # The claim of the line is that the namespace refuses: a policy that
+    # selects a request from `default` has been given a request it must not see.
+    run = run_check(tmp_path, answer=denied_with(message))
+
+    assert verdicts(run.lines) == ["FAIL"]
+    assert run.returncode == 1
+    assert "the policy meridian-services selected a request" in run.lines[0]
+    assert "from another namespace" in run.lines[0]
+    assert len(deletes(run)) == 1  # still deleted
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "",
+        "denied by an administrator",
+        "No policy approved this request: no policies",
+        # A name inside a value, not in a policy's place.
+        "No policy approved this request: [other: [spec.x: Invalid value: "
+        '"meridian-deny-unlisted: y"]]',
+        "meridian-deny-unlistedly: x",
+    ],
+    ids=["empty", "other-words", "no-name", "inside-a-value", "longer-name"],
+)
+def test_a_denial_in_a_form_the_check_does_not_read_is_a_fail_that_prints_it_cut(
+    tmp_path: Path, message: str
+) -> None:
+    run = run_check(tmp_path, answer=denied_with(message))
+
+    assert verdicts(run.lines) == ["FAIL"]
+    assert "not in the form this check reads" in run.lines[0]
+    assert "approver" in run.lines[0]
+    assert message[: int(constant("REFUSED_MESSAGE_LENGTH"))] in run.lines[0]
+    assert len(deletes(run)) == 1
+
+
+def test_the_whole_message_is_judged_before_it_is_cut_for_the_line(
+    tmp_path: Path,
+) -> None:
+    length = int(constant("REFUSED_MESSAGE_LENGTH"))
+    far = (
+        f"{PREFIX_OF_THE_REAL_MESSAGE}[meridian-other: [spec.{'x' * (2 * length)}] "
+        "meridian-deny-unlisted: [y]]"
+    )
+    services_far = far.replace("meridian-deny-unlisted", "meridian-services")
+    (tmp_path / "deny").mkdir()
+    (tmp_path / "services").mkdir()
+
+    passed = run_check(tmp_path / "deny", answer=denied_with(far))
+    failed = run_check(tmp_path / "services", answer=denied_with(services_far))
+
+    # The policy's name is past the cut, and still decides; the line is cut.
+    assert verdicts(passed.lines) == ["PASS"]
+    assert "meridian-deny-unlisted" not in passed.lines[0]
+    assert verdicts(failed.lines) == ["FAIL"]
+    assert "selected a request from another namespace" in failed.lines[0]
+    assert "x" * (2 * length) not in failed.lines[0]
+
+
+def test_the_two_policy_names_are_the_ones_the_policy_file_applies() -> None:
+    names = {
+        document["metadata"]["name"]
+        for document in yaml.safe_load_all(
+            (KIND_DIR / "manifests" / "certificate-policy.yaml").read_text("utf-8")
+        )
+        if document and document["kind"] == "CertificateRequestPolicy"
+    }
+
+    assert constant("REFUSED_SELECTING_POLICY") in names
+    assert constant("REFUSED_DENYING_POLICY") in names
+    assert constant("REFUSED_SELECTING_POLICY") == constant("REFUSED_ISSUER")
+
+
+def test_a_long_reason_is_cleaned_and_cut_to_a_bound_of_its_own(
+    tmp_path: Path,
+) -> None:
+    length = int(constant("REFUSED_REASON_LENGTH"))
+    reason = "r" * (length + 80) + "\nPASS  fake\x1b[31m"
+
+    run = run_check(tmp_path, answer=denied_with(DENIED_MESSAGE, reason))
+
+    assert len(run.lines) == 1
+    assert "r" * length in run.lines[0]
+    assert "r" * (length + 1) not in run.lines[0]
+    assert "\x1b" not in run.lines[0]
+    assert "fake" not in run.lines[0]
+    assert 0 < length <= 80
 
 
 def test_the_private_key_goes_nowhere_it_could_be_read_from(tmp_path: Path) -> None:
@@ -504,5 +801,12 @@ def test_the_header_says_what_check_ten_creates_removes_and_does_not_prove() -> 
         "What it does not prove",
         "cluster-admin",
         "namespace selector",
+        # S062 review: what judges a denial, what a sweep leaves, what a
+        # delete is judged by.
+        "approver-policy's wording at the pinned version",
+        "names meridian-deny-unlisted",
+        "creationTimestamp",
+        "a skewed clock only delays the sweep",
+        "exit status",
     ):
         assert words in tenth, words

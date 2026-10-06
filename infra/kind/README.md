@@ -333,21 +333,33 @@ node image, Kubernetes components and the platform).
    the line is then a SKIP, not a PASS, when the newest row is from the minute
    before this run started ("the gateway wrote this minute's refusal row for
    an earlier run; run again in a minute"); with no row at all it is a FAIL.
+   What the row proves is a refusal by the identity rule, for that reason,
+   caller and tenant, at or after the mark; not that it is this run's own 403.
+   Two runs that overlap can share one row (another run's 403, written after
+   this run's mark while this run's own is throttled, passes this line), so the
+   PASS says "recorded at or after this run's mark".
    The fifth line presents a certificate of another CA: the probe makes a
    throwaway key and a self-signed certificate that carries the runtime's own
    URI (the right name, the wrong CA) in a directory under `/tmp` that is
    removed when the probe ends, and the gateway must end the connection
    before it answers: a status is a FAIL. The probe reads before it writes, so
    that under TLS 1.3, where the alert follows the handshake, it is the first
-   thing read, and it tells two endings apart. `refused` is the TLS alert for
+   thing read, and it tells three endings apart. `refused` is the TLS alert for
    an unknown CA (Python's `ssl` reports `TLSV1_ALERT_UNKNOWN_CA`); `reset` is
-   a connection that ended with no alert. uvicorn, which the services run
+   a connection that ended with no alert before any request was sent.
+   uvicorn, which the services run
    under, ends an unknown CA's connection without delivering the alert (a
    reset under TLS 1.3 and an EOF under 1.2, measured against the test server
    that has the services' flags, not yet seen on the cluster), so `reset` is
    the ending expected of the gateway, and the line passes it, in other words
    than `refused`. It is wider than a refusal for the unknown CA: a gateway
-   that died in that second would end the connection the same way. Any other
+   that died in that second would end the connection the same way. A
+   connection that ends after the request went out is a third answer,
+   `closed-after-request`, and a FAIL: it is what a gateway that accepted the
+   certificate and then closed without answering does, so the line says the
+   gateway may have accepted it. The price is that a gateway slower than the
+   probe's one-second read to end the connection turns a refusal into that
+   FAIL; it fails closed. Any other
    TLS error (another alert, say) is a FAIL. The key is never printed, passed
    as an argument or kept. The probe checks the gateway's certificate against
    the CA and its DNS name; a traceback (a name that does not resolve, a
@@ -374,10 +386,22 @@ node image, Kubernetes components and the platform).
     duration that policy allows, so that only its namespace refuses it: the
     namespace selector of `meridian-services` does not list `default`, and
     `meridian-deny-unlisted`, which selects the issuer from every namespace,
-    permits nothing. It passes when the request is Denied (the line says the
-    reason and the approver's message, cut to 120 characters). It fails when
-    the request is Approved or carries a certificate (the issuer signed a
-    request it must refuse), and when neither condition is there after 30
+    permits nothing. It passes when the request is Denied and the approver's
+    whole message, judged before it is cut, names `meridian-deny-unlisted` as a
+    policy that evaluated the request and does not name `meridian-services` as
+    one (the line says the reason, cut to 60 characters, and the message, cut
+    to 120). The form it matches is the one approver-policy v0.28.0 wrote on
+    the cluster, `No policy approved this request: [meridian-deny-unlisted:
+    [spec.allowed.uris: Invalid value: ...`: a policy's name after `[`, `]` or
+    `,` and before a colon, so `meridian-services-ca` and the issuer's name do
+    not count. The check depends on approver-policy's wording at the pinned
+    version. A Denied request whose message names `meridian-services` as a
+    policy is a FAIL (that policy selected a request from another namespace),
+    and so is one whose message has neither form (the line says the approver's
+    message is not in the form this check reads, and prints it cut). It fails
+    when the request is Approved or carries a certificate (the issuer signed a
+    request it must refuse; with both conditions true the request is Approved,
+    whatever their order), and when neither condition is there after 30
     seconds (the approver did not answer; a request that no policy the
     requester may use selects is left the same way). The request is a
     `CertificateRequest` and not a `Certificate` so that the key is made on
@@ -387,9 +411,16 @@ node image, Kubernetes components and the platform).
     request's own status, is never printed and is deleted with it. The request
     is deleted as soon as it is read, by the script's EXIT trap when the run
     ends first (an error, a FAIL, an interrupt) and, after a run that was
-    killed, at the start of the next one by its label
-    `meridian-smoke=refused-request`; a delete that fails is a FAIL that names
-    the request. Approved: the line says the issuer signed it, and smoke
+    killed, at the start of the next one, which lists the requests with the
+    label `meridian-smoke=refused-request` and deletes by name those older than
+    300 seconds (a request lives two seconds). The age is the request's
+    `creationTimestamp` read with `jq` against this machine's clock, so a
+    skewed clock only delays the sweep, and a younger request is another
+    run's, which two runs at once leave to each other; a list that cannot be
+    read is not an error. A delete that fails, judged by `kubectl`'s exit
+    status and not by what it wrote, is a FAIL that names the request (with
+    "kubectl exited non-zero with no message" when it wrote nothing).
+    Approved: the line says the issuer signed it, and smoke
     deleted it. What it does not prove: the request is made by whoever runs
     smoke (kind's cluster-admin, which may use every policy), not by
     cert-manager's account, so it shows what the namespace selector and the

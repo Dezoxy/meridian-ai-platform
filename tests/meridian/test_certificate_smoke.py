@@ -220,6 +220,48 @@ def test_the_foreign_ca_line_passes_on_the_alert_and_on_a_reset_in_different_wor
     assert "died" in reset[4]
 
 
+def test_the_foreign_ca_line_fails_when_the_connection_ended_after_the_request(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_identity_check(
+        tmp_path,
+        answers=(
+            "health=200 anonymous=401 foreign-tenant=403 "
+            "foreign-ca=closed-after-request"
+        ),
+    )
+
+    # The certificate may have been accepted: not a refusal, not a PASS.
+    assert verdicts(lines) == ["PASS", "PASS", "PASS", "PASS", "FAIL"]
+    assert "took the request of a certificate from another CA" in lines[4]
+    assert "closed without answering" in lines[4]
+    assert "it may have accepted the certificate" in lines[4]
+    assert "PASS" not in lines[4]
+
+
+def test_a_reset_says_that_the_connection_ended_before_any_request_was_sent(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_identity_check(
+        tmp_path,
+        answers="health=200 anonymous=401 foreign-tenant=403 foreign-ca=reset",
+    )
+
+    assert verdicts(lines)[4] == "PASS"
+    assert "before any request was sent" in lines[4]
+
+
+def test_the_audit_line_says_what_it_knows_a_row_at_or_after_this_runs_mark(
+    tmp_path: Path,
+) -> None:
+    lines, _ = run_identity_check(tmp_path, answers=GOOD, audit="6|t")
+
+    assert verdicts(lines)[3] == "PASS"
+    assert "recorded at or after this run's mark" in lines[3]
+    # Another run's 403, written after the mark, would pass here too.
+    assert "recorded after this run started" not in lines[3]
+
+
 def test_the_audit_query_asks_for_the_gateways_refusal_of_the_runtime_by_the_dbs_clock(
     tmp_path: Path,
 ) -> None:
@@ -548,6 +590,7 @@ def test_the_comments_say_what_two_lines_of_the_identity_check_do_not_prove() ->
     # The audit line is this run's row, or a SKIP that says why it cannot be;
     # `reset` is wider than the alert for an unknown CA, and says so.
     assert "recorded at or after this run's start" in header
+    assert "two runs that overlap can share one row" in header
     assert "a SKIP, not a PASS" in header
     assert "the gateway wrote this minute's refusal row for an earlier run" in header
     assert "an earlier run wrote in the last 120 seconds" not in header
@@ -564,6 +607,15 @@ def test_the_comments_say_what_two_lines_of_the_identity_check_do_not_prove() ->
     assert "any TLS error or reset after the server's certificate verified" not in (
         probe_comment
     )
+    # `reset` is a connection that ended before any request was sent; one that
+    # ended after it is a third answer, a FAIL, and its price is said.
+    for words in (
+        "before any request was sent",
+        "closed-after-request",
+        "fails closed",
+    ):
+        assert words in header, words
+        assert words in probe_comment, words
     # The deploy header says what approves the Certificates.
     deploy_header = " ".join(
         line.removeprefix("#").strip()
