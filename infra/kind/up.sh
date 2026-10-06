@@ -31,6 +31,11 @@
 #      of the collector's chart, the contrib build, as a DaemonSet in `logging`
 #      that sends the output of `meridian`'s pods to the collector
 # Every version is pinned in pins.env.
+# Who holds the cluster (S075, common.sh): on a cluster that exists, another
+# holder stops this before it changes anything unless TAKE_CLUSTER=1; the record
+# is written with state `changing` as soon as the cluster answers and the check has
+# passed, and with state `ok` as the last step, when the run ended well, so a run
+# that fails or is interrupted leaves `changing`.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -111,11 +116,17 @@ create_cluster() {
     log "kind cluster ${CLUSTER_NAME} exists"
     # Refresh the credentials file (missing or stale); still nothing global.
     kind export kubeconfig --name "${CLUSTER_NAME}" --kubeconfig "${KUBECONFIG_FILE}"
+    # Who holds it (S075): before anything below changes the cluster.
+    check_cluster_holder "make up"
+    # From here on a failed run leaves the record saying `changing`.
+    record_cluster_holder changing
     return
   fi
   log "creating kind cluster ${CLUSTER_NAME} (first run pulls the node image)"
   kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" \
     --config "${KIND_DIR}/cluster.yaml" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s
+  # The cluster answers now: nobody held it, and this run does.
+  record_cluster_holder changing
 }
 
 # api_server_policy_manifest FILE PEERS: the policy file FILE with PEERS (the
@@ -489,4 +500,7 @@ kctl -n envoy-gateway-system wait --for=condition=Available deployment \
   -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m >/dev/null ||
   die "the wait for the edge's proxy Deployment to be Available ended without the condition (it waits up to 5m; kubectl's own message above says whether the time ran out or the wait failed at once, for instance with not found): look at its pods (kubectl -n envoy-gateway-system get pods -l gateway.envoyproxy.io/owning-gateway-name=edge; describe the one that is not ready) and at the controller's log (kubectl -n envoy-gateway-system logs deploy/envoy-gateway)"
 
+# Every wait above ended well: only now is the cluster claimed (S075). A run that
+# stopped earlier leaves the record as it was.
+record_cluster_holder ok
 log "done. Next: make smoke | make grafana | export KUBECONFIG=${KUBECONFIG_FILE}"

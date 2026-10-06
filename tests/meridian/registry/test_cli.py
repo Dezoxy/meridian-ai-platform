@@ -2,10 +2,19 @@
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
-from directorysupport import CANARY, FAILURES, Failure, make_unreadable
+from directorysupport import (
+    CANARY,
+    FAILURES,
+    WRITE_FAILURES,
+    Failure,
+    WriteFailure,
+    make_unreadable,
+    make_unwritable,
+)
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
@@ -13,6 +22,7 @@ from meridian.platform.cli import registry as cli_registry
 from meridian.platform.registry import load_registry
 
 runner = CliRunner()
+FIX_AND_RERUN = "fix the directory, then run `meridian registry schemas` again"
 SUMMARY = re.compile(
     r"registry OK: \d+ providers?, \d+ deployments?, \d+ tools?, \d+ agents?, "
     r"\d+ tenants?, \d+ services?"
@@ -36,9 +46,39 @@ def test_validate_passes_on_the_committed_registry_with_the_snapshot(
     )
 
     assert result.exit_code == 0, result.output
-    summary, terraform = result.stdout.splitlines()
-    assert SUMMARY.fullmatch(summary), summary
-    assert terraform == f"terraform outputs OK: {len(snapshot)} deployments match"
+    # Read by content: a NOTE line (an agent the runtime may name and no tenant
+    # lists) may sit between the two, and none of them is this test's business.
+    lines = result.stdout.splitlines()
+    assert len([line for line in lines if SUMMARY.fullmatch(line)]) == 1, lines
+    terraform = [line for line in lines if line.startswith("terraform outputs")]
+    assert terraform == [f"terraform outputs OK: {len(snapshot)} deployments match"]
+
+
+def test_a_note_between_the_summary_and_the_terraform_line_is_not_a_failure(
+    real_registry: Path, snapshot_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli_registry, "unlisted_runtime_agents", lambda registry: ("fraud-review",)
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "registry",
+            "validate",
+            "--registry-dir",
+            str(real_registry),
+            "--terraform-outputs",
+            str(snapshot_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert len(lines) == 3, lines
+    assert len([line for line in lines if SUMMARY.fullmatch(line)]) == 1, lines
+    assert len([line for line in lines if line.startswith("NOTE: ")]) == 1, lines
+    assert len([line for line in lines if line.startswith("terraform outputs OK")]) == 1
 
 
 def test_validate_without_terraform_outputs_prints_only_the_summary(
@@ -49,7 +89,9 @@ def test_validate_without_terraform_outputs_prints_only_the_summary(
     )
 
     assert result.exit_code == 0, result.output
-    assert SUMMARY.fullmatch(result.stdout.strip()), result.stdout
+    lines = result.stdout.splitlines()
+    assert len([line for line in lines if SUMMARY.fullmatch(line)]) == 1, lines
+    assert not [line for line in lines if line.startswith("terraform outputs")]
 
 
 def test_validate_prints_every_error_to_stderr_and_exits_1(registry_copy: Path) -> None:
@@ -176,6 +218,233 @@ def test_schemas_without_check_rewrites_the_stale_file(registry_copy: Path) -> N
 
     assert written.exit_code == 0, written.output
     assert checked.exit_code == 0, checked.output
+
+
+def test_schemas_without_check_prints_how_many_files_it_changed(
+    registry_copy: Path,
+) -> None:
+    (registry_copy / "schemas" / "models.schema.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "schemas written: 1 changed\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("failure", WRITE_FAILURES)
+def test_schemas_that_cannot_be_written_end_in_an_error_line_not_a_traceback(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch, failure: WriteFailure
+) -> None:
+    (registry_copy / "schemas" / "models.schema.json").unlink()
+    make_unwritable(monkeypatch, registry_copy / "schemas", failure)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"PermissionError; {FIX_AND_RERUN}\n"
+    )
+    assert result.stdout == ""
+    assert CANARY not in result.output
+    assert not isinstance(result.exception, PermissionError)
+
+
+def test_a_schemas_path_that_is_a_file_ends_in_an_error_line_not_a_traceback(
+    registry_copy: Path,
+) -> None:
+    shutil.rmtree(registry_copy / "schemas")
+    (registry_copy / "schemas").write_text("not a directory\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"FileExistsError; {FIX_AND_RERUN}\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, OSError)
+
+
+def test_a_schema_file_that_cannot_be_read_is_not_called_a_write_failure(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_read_text = Path.read_text
+    schemas = registry_copy / "schemas"
+
+    def unreadable(self: Path, *args: object, **kwargs: object) -> str:
+        if self.parent == schemas:
+            raise PermissionError(13, CANARY)
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {schemas}: schemas cannot be updated: "
+        f"PermissionError; {FIX_AND_RERUN}\n"
+    )
+    assert "written" not in result.stderr
+    assert CANARY not in result.output
+
+
+UNDECODABLE = b"\xff\xfe"
+
+
+def test_a_schema_file_that_is_not_text_is_stale_and_the_check_names_it(
+    registry_copy: Path,
+) -> None:
+    broken = registry_copy / "schemas" / "models.schema.json"
+    broken.write_bytes(UNDECODABLE)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "schemas/models.schema.json is out of date" in result.stderr
+    assert not isinstance(result.exception, ValueError)
+    assert broken.read_bytes() == UNDECODABLE
+
+
+def test_a_schema_file_that_is_not_text_is_repaired_by_the_write(
+    registry_copy: Path,
+) -> None:
+    (registry_copy / "schemas" / "models.schema.json").write_bytes(UNDECODABLE)
+
+    written = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+    checked = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert written.exit_code == 0, written.output
+    assert written.stdout == "schemas written: 1 changed\n"
+    assert written.stderr == ""
+    assert checked.exit_code == 0, checked.output
+
+
+def linked_to_a_file_outside(registry_copy: Path, outside: Path) -> Path:
+    """Replace one schema file by a symbolic link to ``outside``, which holds the
+    schema's own text (so the link's target would not differ) or other text."""
+    link = registry_copy / "schemas" / "models.schema.json"
+    link.unlink()
+    link.symlink_to(outside)
+    return link
+
+
+def test_a_schema_path_that_is_a_link_is_refused_and_the_target_is_not_written(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside, not a schema\n")
+    link = linked_to_a_file_outside(registry_copy, outside)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"SchemaPathIsALink; {FIX_AND_RERUN}\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, OSError)
+    assert outside.read_bytes() == b"outside, not a schema\n"
+    assert link.is_symlink()
+    assert str(outside) not in result.output
+
+
+def test_a_link_refuses_the_whole_write_before_any_other_file_is_written(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside, not a schema\n")
+    linked_to_a_file_outside(registry_copy, outside)
+    other = registry_copy / "schemas" / "tools.schema.json"
+    other.write_text("{}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert other.read_text(encoding="utf-8") == "{}\n"
+
+
+def test_the_check_names_a_link_as_out_of_date_even_when_its_target_is_right(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes((registry_copy / "schemas" / "models.schema.json").read_bytes())
+    linked_to_a_file_outside(registry_copy, outside)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "schemas/models.schema.json is out of date" in result.stderr
+    assert str(outside) not in result.output
+
+
+def test_a_link_to_nothing_is_refused_and_nothing_is_created_at_its_target(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    missing = tmp_path / "not-there.json"
+    linked_to_a_file_outside(registry_copy, missing)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "SchemaPathIsALink" in result.stderr
+    assert not missing.exists()
+
+
+def test_a_write_that_fails_part_way_says_to_run_the_command_again(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("models", "tools"):
+        (registry_copy / "schemas" / f"{name}.schema.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+    make_unwritable(monkeypatch, registry_copy / "schemas", "write", let_through=1)
+
+    failed = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+    monkeypatch.undo()
+    checked = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+    repaired = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert failed.exit_code == 1, failed.output
+    assert FIX_AND_RERUN in failed.stderr
+    assert checked.exit_code == 1
+    assert checked.stderr.count("is out of date") == 1
+    assert repaired.exit_code == 0, repaired.output
+    assert repaired.stdout == "schemas written: 1 changed\n"
 
 
 def test_no_arguments_prints_help() -> None:

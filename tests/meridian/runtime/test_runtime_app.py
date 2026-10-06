@@ -547,7 +547,7 @@ def test_a_graph_agent_without_a_published_graph_still_stops_the_start(
         )
     )
 
-    with pytest.raises(GraphLoadError, match=r"no graph is published.*ghost-graph"):
+    with pytest.raises(GraphLoadError, match=r"ghost-graph.*no graph is published"):
         make_client(None, registry_dir=directory)
 
 

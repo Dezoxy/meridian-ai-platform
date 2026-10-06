@@ -460,13 +460,11 @@ def test_an_entry_that_fails_to_import_is_refused_without_its_message(
     assert "secret-path" not in str(refused.value)
 
 
-def test_the_import_error_is_the_cause_of_the_refusal_though_not_its_text(
+def test_the_class_of_the_import_error_is_the_cause_of_the_refusal_not_the_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    failure = ImportError("secret-path-in-the-message")
-
     def broken() -> object:
-        raise failure
+        raise ImportError("secret-path-in-the-message")
 
     publish(monkeypatch, entry(loads=broken))
 
@@ -474,7 +472,8 @@ def test_the_import_error_is_the_cause_of_the_refusal_though_not_its_text(
         load_evaluation("claims-triage")
 
     assert str(refused.value) == workload.UNLOADABLE
-    assert refused.value.__cause__ is failure
+    assert str(refused.value.__cause__) == "ImportError"
+    assert not isinstance(refused.value.__cause__, ImportError)
 
 
 def test_a_refusal_the_wording_does_not_know_is_an_error_not_silence() -> None:

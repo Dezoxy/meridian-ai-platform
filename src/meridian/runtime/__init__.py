@@ -1,4 +1,5 @@
-"""The Agent Runtime: hosts LangGraph graphs behind the platform's run API."""
+"""The Agent Runtime: hosts LangGraph graphs and Microsoft Agent Framework
+workflows, each in its own host, behind the platform's run API (ADR 9)."""
 
 import os
 

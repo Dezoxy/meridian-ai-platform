@@ -128,6 +128,26 @@ def check_runtime_names_the_graph_agents(registry: Registry) -> list[str]:
     ]
 
 
+def unlisted_runtime_agents(registry: Registry) -> tuple[str, ...]:
+    """The graph agents the runtime lists and no tenant lists, in the order of
+    ``agents.yaml`` (S076, T-81). Not a check: the scaffold writes the runtime's
+    right to name a new agent before a tenant lists it (S061), so the registry
+    refuses nothing here and ``meridian registry validate`` only says so. A job
+    is not the runtime's to name (it loads no graph for one and refuses a run
+    that names one), so a job in the runtime's list is not found."""
+    runtime = registry.service(RUNTIME_SERVICE)
+    if runtime is None:
+        return ()
+    listed = {a for tenant in registry.tenants for a in tenant.agents}
+    return tuple(
+        agent.id
+        for agent in registry.agents
+        if agent.kind == "graph"
+        and agent.id in runtime.agents
+        and agent.id not in listed
+    )
+
+
 def check_servers_are_services(registry: Registry) -> list[str]:
     return [
         f"{TOOLS}: servers[{i}]: server {server.id!r} has no entry in {SERVICES}"

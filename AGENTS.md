@@ -143,8 +143,9 @@ A change that violates one is wrong even if it works.
   merges none. A line added to `infra/kind/pins.env`, an `_IMAGE` variable
   in the `Makefile` or a `_VERSION` value in a workflow needs a reader
   there, and `make test` fails without one; a pin of another shape needs a
-  line in `tests/test_renovate_config.py` too. The plan's Part A says which
-  of Renovate's pull requests green checks do not prove.
+  line in `tests/test_renovate_config.py` too. A chart's image tags move in
+  the chart's pull request, by hand. The plan's Part A says which of
+  Renovate's pull requests green checks do not prove.
 - Prose in Markdown wraps at 80 columns; tables, fences and single long
   tokens are exempt. Do not use a Markdown formatter to enforce it.
 
@@ -196,9 +197,13 @@ A change that violates one is wrong even if it works.
 - Hooks in `.claude/settings.json`: `guard-bash.sh` denies destructive
   commands and git hook bypasses, and asks before a command that deletes,
   costs money, leaves the machine, merges past failing checks or would
-  change a cluster it cannot tell is the local one (heredoc bodies are
-  ignored, so documentation that mentions a dangerous command is not
-  blocked for the mention); `check-py.sh`, `check-iac.sh`,
+  change a cluster it cannot tell is the local one (the body of a heredoc
+  that is only written to a file is ignored, so documentation that mentions
+  a dangerous command is not blocked for the mention; a command over 16384
+  bytes typed, 8192 bytes read or 1000 parts asks unread, as does one the
+  guard cannot finish reading in five seconds, and the secret-rotation
+  runbook lists what it does not see);
+  `check-py.sh`, `check-iac.sh`,
   `check-docs.sh` and `check-boundary.sh` inject advisory findings after an
   edit. GateGuard, vendored from ECC under `.claude/hooks/node/` and
   `.claude/hooks/lib/`, denies the first edit of each file and destructive
@@ -211,7 +216,17 @@ A change that violates one is wrong even if it works.
   session files. The ECC plugin stays disabled here so no gate fires twice.
   Codex runs the shell hooks through `.codex/hooks.json`; GateGuard, the session
   hooks and the slash commands are Claude Code only. Open `/hooks` once
-  after a fresh clone to activate them.
+  after a fresh clone to activate them. `check-lanes.sh`, a synchronous
+  `Stop` hook (Claude Code only: `.codex/hooks.json` has no `Stop` entry),
+  blocks the stop once per turn when the untracked board `.claude/lanes.md`
+  shows a lane idle with no reason, fewer lanes running than its `Target`,
+  or a table it cannot read (a cell may not hold `|`); it checks what the
+  session wrote on the board, not whether an agent is really out, and a
+  session in a fresh worktree has no board and so no check.
+  `check-shell-edits.sh`, an advisory
+  `PostToolUse` hook on Bash, names the tracked files a shell command
+  rewrote outside the Edit and Write tools, which the edit hooks never
+  see (it needs `bashEditDiffEnabled` in the user settings, not here).
 - Slash commands in `.claude/commands/`: `/save-session`, `/resume-session`
   and `/test-coverage`.
 - MCP: `.mcp.json` declares `chrome-devtools` (Lighthouse audits,

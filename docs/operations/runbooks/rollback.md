@@ -16,7 +16,11 @@ exercises this runbook; the game day (S028) exercises it again.
 - `MeridianGatewayRefusingByPolicy` after a registry change: calls are
   refused with `no-route`, `no-allowed-deployment`, `agent-not-allowed`
   or `unknown-tenant`.
-- `make deploy` or `make smoke` fails after a change that passed CI.
+- `make deploy` or `make smoke` fails after a change that passed CI. A
+  `make deploy` that failed leaves the cluster's record saying `changing`
+  (`make cluster-holder` prints it): look at what failed, in the pods' logs
+  and the audit rows, before deleting the cluster, because on kind its
+  database is the only copy of the audit log.
 
 `MeridianGatewayRefusingByPolicy` could be raised by a caller on purpose
 before S055, with five requests that name an unknown tenant; now a caller
@@ -123,7 +127,9 @@ process. A gateway pod that stops with calls in flight leaves their reservations
 objects, with the image tag they named; the image is still on the node.
 It runs no Job and touches no schema. It puts back that revision's
 network policies too, so read `helm get values meridian --revision <n>`
-first: a revision from before a policy existed removes it. No script
+first (the command guard asks before it, since a release's values can
+hold Secret data; confirm it): a revision from before a policy existed
+removes it. No script
 uses it and it has not been tried here, so prefer the path above; it is
 the owner's to run. It does not wait for the rollouts: check them with
 `kubectl rollout status`.

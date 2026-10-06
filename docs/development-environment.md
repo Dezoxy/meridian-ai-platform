@@ -117,8 +117,10 @@ For the virtual machine both are recorded below.
   with 4 workers (the default until then), 2 min 03 s with 8 and
   1 min 55 s with 10. Ten is the Makefile's default since 2026-10-06,
   the owner's decision; CI sets 4 for its four-core runner, and a step
-  that runs beside others passes 4. Beside the deployed cluster the
-  suite took 3 min 10 s with 4 workers, with 5.5 GB still available.
+  that runs beside others passes 4 (an implementer 3, and the session's own
+  suite 6, while the cluster is up: the plan's Part A). Beside the deployed
+  cluster the suite took 3 min 10 s with 4 workers, with 5.5 GB still
+  available.
 - **An unattended session runs in the Remote Control service on the
   machine, in tmux, not in a desktop session over SSH.** On the night of
   2026-10-05 a desktop session stood still for six hours while its
@@ -146,11 +148,37 @@ For the virtual machine both are recorded below.
   when it does (`CLAUDE.md`, hard rule 8). What still asks is what costs
   money, leaves the machine or cannot be made again from the repository:
   Azure, Terraform, a Helm uninstall, an image push, a release, and a `gh
-  pr merge --admin`, which merges past failing checks. A known limit,
-  older than this change: the hook has ten seconds, and with the machine
-  loaded (a load average near 70) a command that carries a 70 KB heredoc,
-  or one of 4,000 segments, takes it that long (1.3 s when idle). Write a
-  long script with the Write tool and run the file.
+  pr merge --admin`, which merges past failing checks. Since S075 it
+  also asks before `psql`, `pg_dump`, `pg_dumpall` or `pg_restore`
+  through `kubectl exec`, `run` or `debug`, before `kubectl cnpg psql`
+  and before `helm get manifest`, `values`, `hooks` or `all`, before
+  `make gateway-upkeep` when it can change a tenant's budget ledger
+  (`credit`, `close`, `expire --confirm`), and before the commands that
+  print a credential, also inside `$(…)`, backticks and quotes; it denies
+  the other ways to a Secret's value (the secret-rotation runbook lists
+  them, and what the guard does not see: it is a guard for habits, and
+  the session can edit the guard's own files, which is the owner's to
+  decide). A known limit, older than this
+  change: the hook has ten seconds, and with the machine loaded (a load
+  average near 70) a command that carries a 70 KB heredoc, or one of
+  4,000 segments, took it that long (1.3 s when idle), and Claude Code
+  does not block a call whose hook ran out of time. So the hook arms a
+  watchdog first: after 5 of its 10 seconds it answers `ask`, saying it
+  ran out of time and did NOT read the command. The watchdog runs
+  between commands and cannot stop one regex match in flight, so three
+  bounds ask before the rules run: a command typed over 16384 bytes, a
+  command whose text is over 8192 bytes once heredoc bodies written to a
+  file are dropped (the slowest single match at 8192 bytes took 0.23 to
+  0.42 s on 2026-10-06, on the shapes that cost most, at a load average
+  of 3 to 18; it was about 1 s at 16384, which is why the bound is
+  8192), and one of more than 1000 parts (split on newlines, `;`, `&&`,
+  `||` and `|`; the cost follows the parts, 3 s of CPU for 8192 of them,
+  0.25 s for 1000). The pass that drops heredoc bodies runs before the
+  first two bounds and costs 0.04 s of CPU on its worst shape at 16384
+  bytes (a heredoc marker followed by 16 KB of dots; it was 1.5 s until
+  the second security pass), a test holds it under 0.5 s. A command of
+  this repository's own has a handful of parts. Write a long script with
+  the Write tool and run the file.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.
@@ -196,6 +224,29 @@ known.
 - **Several steps at once, each in a worktree of its own** (the plan's
   Part A). Three steps ran side by side on 2026-10-06, with seven
   implementers at the peak.
+- **A board of lanes, and a hook that reads it.** The session keeps
+  `.claude/lanes.md` (not tracked): `Target: N` and a table `Lane | Step | Out
+  now | Idle because | Next`. The `Stop` hook `check-lanes.sh` blocks the stop
+  once, naming a lane with nothing out and no reason, or saying fewer than
+  `Target` run (a lane with a reason does not count as running), or saying
+  the board is not one it can read (a cell may not hold `|`). It reads that
+  file only and cannot tell a true "out now" from a false one. It is Claude
+  Code's only (Codex's hooks file has no `Stop` entry), it checks once per
+  turn (a second stop in the same turn passes), and a session started in a
+  fresh worktree has no board and so no check.
+- **A hook that names files a shell command rewrote.** The edit gate and
+  the lint, boundary and docs hooks see only what the Edit and Write tools
+  change, and an implementer told to use them sometimes used `sed -i` or a
+  heredoc instead. `check-shell-edits.sh`, an advisory `PostToolUse` hook
+  on Bash, reads the changed-file list that Claude Code delivers when
+  `bashEditDiffEnabled` is on and prints one line naming each tracked file
+  the command rewrote, except `uv.lock` and what `ruff format` or
+  `terraform fmt` formatted. The list is "best effort and in public beta".
+  Claude Code 2.1.289 reads that setting from the user, flag and policy
+  sources only: a trial showed that the repository's `.claude/settings.json`
+  cannot turn it on, so the hook stays silent until `"bashEditDiffEnabled":
+  true` stands in `~/.claude/settings.json` (or `claude --settings` passes
+  it, or `CLAUDE_CODE_BASH_EDIT_DIFF=1` is set where Claude Code starts).
 - **Several implementers inside one step when their files do not
   overlap.** Four contracts of one step ran at once, each on a branch cut
   from the step's branch; each finished contract was rebased onto the
@@ -212,6 +263,23 @@ known.
 - **Cluster commands run from a separate checkout** of the step's branch,
   with credentials exported into it by `kind export kubeconfig`, so
   `make deploy` never reads a script that an implementer is editing.
+- **The cluster says who holds it** (S075). One step uses it at a time,
+  and `make up`, `make deploy` and `make down` now read a record of the
+  holder, in a ConfigMap in `kube-system`: a name, a short commit, a UTC
+  time and a state. Another holder is named and the command stops before it
+  changes anything; `TAKE_CLUSTER=1` in front of the same command takes the
+  cluster (`TAKE_CLUSTER=1 make deploy`). `make up` and `make deploy` write
+  the record when they start to change the cluster (state `changing`) and
+  when they end well (`ok`), so a run that failed leaves `changing`, which
+  stops another holder until someone has looked at what failed; the same
+  holder may run again. `make cluster-holder` prints it. The holder
+  is the checkout's branch. A session that runs from a detached checkout,
+  as the main session does, sets `CLUSTER_HOLDER` (letters, digits, `.`,
+  `_`, `/` and `-`, at most 100) to a name of its own, so that its commands
+  and the cluster's record agree on who it is. It is a notice for an honest
+  mistake, not a lock: two commands started in the same second both pass.
+  `infra/kind/README.md` says which commands read the record and which do
+  not.
 - **Each test run has a database of its own**: `PYTEST_DB_CONTAINER` and
   `PYTEST_DB_PORT` per step, and per implementer when several of one
   step run at once. `make pytest-db` removes the container of its name
@@ -224,9 +292,13 @@ known.
   A contract's own files take seconds; the whole suite is the main
   session's, alone, at the end.
 - **Ten workers alone, four beside others.** The whole suite alone uses
-  the default of ten. A run beside the cluster or beside other steps
-  passes `PYTEST_WORKERS=4`: three runs of ten would be thirty processes
-  on twelve cores.
+  the default of ten. A run beside other steps passes `PYTEST_WORKERS=4`:
+  three runs of ten would be thirty processes on twelve cores. While the
+  cluster is up the session passes six and tells implementers three (a
+  suite beside four implementers' test runs and a fresh cluster pushed the
+  machine into swap twice on 2026-10-06), and before a whole suite it counts
+  the test databases that are running and waits until at most one
+  implementer is testing with a database.
 - **Reviewers at once, and early.** A step's reviewers read the same
   commits and change nothing, so they run together, and they start when
   the last contract that changes product code is in, not when the last
@@ -254,7 +326,8 @@ known.
 
 ### What to keep to
 
-- One whole suite at a time beside the cluster, with four workers.
+- One whole suite at a time beside the cluster, with six workers, and an
+  implementer's run beside it with three.
 - A test database's port outside Linux's ephemeral range (32768 to
   60999). On 2026-10-06 a run on port 55638 failed to bind because another
   process had been given that port as a source port; this session's later
@@ -264,7 +337,10 @@ known.
   cases placed where they had to fail; a fingerprint that left out the
   code it was for).
 - An unattended stretch runs in the Remote Control service in tmux.
-- The cluster is deleted on the owner's word only. It frees about 3.3 GiB
+- The session may delete the local cluster and make it again when a test
+  needs it, and says so when it does; never to clear a fault nobody has
+  looked at, because the cluster's database is the only copy of the audit
+  log (hard rule 8; the owner, 2026-10-06). Deleting it frees about 3.3 GiB
   when the steps that need it are done.
 
 A test database is a copy of one migrated template since S065, not a

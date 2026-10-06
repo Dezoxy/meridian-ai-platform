@@ -226,11 +226,15 @@ a finding in an early commit is not fixed by a later one.
   Do not rely on the harness to stop it. Its hook denies a `get` of a
   Secret with any output format but `name` and `wide`, with a namespace
   flag in front or behind a shell function too, as every command on this
-  page is; it asks before `psql` through `kubectl exec` and before
-  `make grafana-password`. It reads only the command a session types: a
-  script's inside, a file a pod mounts and a pod's environment it does
-  not see, and a person's terminal never meets it. The rule is the
-  operator's to keep.
+  page is; it denies the other ways to a value (the list is in
+  [what the guard does not see](#what-the-command-guard-does-not-see));
+  it asks before `psql`, `pg_dump`, `pg_dumpall` or `pg_restore` through
+  `kubectl exec`, `kubectl run` or `kubectl debug`, before `kubectl cnpg
+  psql`, before `helm get manifest`, `values`, `hooks` and `all`, before
+  `make grafana-password`, before `make gateway-upkeep` when it can
+  change a tenant's budget ledger, and before the other printers of a
+  credential listed below. It reads only the command a session types.
+  The rule is the operator's to keep.
 - **Do not edit `password` without `uri`**, or the other way round. The
   services read `uri`; CloudNativePG reads `password`.
 - **Do not rotate while the database is down.** CloudNativePG cannot
@@ -239,6 +243,241 @@ a finding in an early commit is not fixed by a later one.
 - **Do not turn on key authentication** for Azure OpenAI to get past a
   refused identity. A key is a secret this platform is built not to
   hold (T-18).
+
+## What the command guard does not see
+
+The guard (`.claude/hooks/guard-bash.sh`) is a pattern on the command a
+session types, a guard for habits and not a boundary (T-87): it stops a
+session from doing by reflex what it should stop and think about, and it
+does not stop one that means to get past it. This is what it does about
+secrets as of S075, and what it leaves. A backslash-newline is deleted
+before any rule reads the command, as the shell deletes it, so a word
+broken across two lines is read whole.
+
+Denied, with a message that says what to do instead:
+
+- `kubectl exec … -- env` and `-- printenv` (with options, `-u X`,
+  `-C dir`, a redirect such as `2>&1`, a comment, a quoted name, a wrapper
+  such as `timeout 5`, `sudo` or `sudo -u name`, and a line break or
+  backtick after it), `set` and `export -p`, also inside `sh -c "…"`,
+  `bash -c` and `ash -c` (with options before `-c`, such as `-o pipefail`
+  or `--norc`; after `do`, `then`, `else`, `if` or `!`; in a nested `sh -c`,
+  with quotes of its own, such as `sh -c 'sh -c "env"'`, to three levels;
+  and past an escaped quote or a quote that touches the next word);
+  `kubectl debug` is read the same way as `exec`. `env VAR=x some-command`
+  passes. `printenv NAME` of one name passes unless the name looks secret
+  (it holds `secret`, `pass`, `token`, `key`, `cred`, `auth`, `uri`, `url`,
+  `dsn`, `conn`, `database`, `private`, `cert`, `sign` or `salt`), so
+  `printenv HOME` passes and `printenv DATABASE_URL` is denied;
+  `printenv` alone, with two names or with a `$` in a name is denied. A
+  name outside that list that holds a secret passes: the rule reads the
+  name, not the value;
+- `kubectl exec … -- <anything>` (and `debug`) that names a mounted
+  Secret path, `/var/run/secrets`, `/run/secrets`, `/etc/secrets`, the
+  chart's own mounts (`/etc/meridian`, which holds the services' TLS key
+  and the database CA, and `/etc/redis-acl`, the rate store's ACL file) or
+  `/proc/…/environ`, whatever the reader: `grep`, `tar`, `find -exec`,
+  `awk`, `sed`, `od`, `dd`, `python` and the rest. It passes when the
+  command is `ls`, `stat` or `test` (also as the whole body of an
+  `sh -c`), which show a name and no content, or `redis-cli` (the rate
+  store runbook's probe names its certificate and key files and prints
+  none of them); `ls /proc/…/environ` is
+  still denied, by the rule for that file. Every ` -- ` of the call is
+  tried, so `ls -- /etc/secrets` is denied for its second one (a false
+  deny, left), and `/etc/meridian` also covers a ConfigMap of public
+  certificates (`/etc/meridian/telemetry-ca`), another one. A test reads
+  the chart's templates and fails when a Secret is mounted at a path the
+  hook does not name, so the next mount is not forgotten;
+- `kubectl exec … -- cat` (also `head`, `tail`, `less`, `base64`, `xxd`,
+  `strings`) of a path under those directories, of a path with `secret`,
+  `credential`, `password`, `.key`, or `token` or `creds` as a word
+  (`tokenizer.json` passes); in an `sh -c` body, a reader and a mounted
+  path anywhere in it, in either order;
+- `kubectl get secret` with a verbosity of 8 or more (`-v=8`, `-v 9`,
+  before or after `get`), which makes kubectl log the response body. This
+  comes from kubectl's documented behaviour; nobody ran it against a
+  cluster for this rule;
+- `kubectl get --raw` of an API path that holds `/secrets`, the flag and
+  the path in either order, also with a percent-encoded `secrets` and with
+  an encoded separator before it (`%26`, `%3B`, `%7C` and `%0A` are read as
+  plain characters, not as the end of the command); a path with more than
+  20 distinct escapes asks instead, since the guard decodes 20 and does
+  not read the rest;
+- `kubectl config view --raw` and `--flatten`;
+- `kubectl create token`, with other flags between the two words
+  (`create secret generic token` is another command and passes);
+- `kubectl cp` in either direction when the pod path is of the kinds
+  above;
+- `az containerapp secret show` and `az containerapp secret list` with
+  `--show-values`, `gcloud secrets versions access`,
+  `aws secretsmanager get-secret-value` and `batch-get-secret-value`, and
+  `aws ssm get-parameter`, `get-parameters`, `get-parameters-by-path` or
+  `get-parameter-history` with `--with-decryption`;
+- reading a kind node's `admin.conf` or any `kubeconfig` with `cat`,
+  `less`, `bat`, `more`, `head`, `tail`, `echo`, `printf`, `xxd`,
+  `base64` or `strings`, also inside a quoted `sh -c` body, in brackets,
+  after an equals sign or behind a backslash (`\cat .env`, which skips an
+  alias).
+
+A secret reader followed by `--help` as an argument in the same command part
+passes (`aws secretsmanager get-secret-value --help`, `helm get values
+--help`, `kubectl create token --help`): that prints usage, no value. So
+does `-h`, except for `gh`, where `-h` is `--hostname` and `gh auth token -h
+github.com` prints the token (it asks). A `--help` or `-h` inside a quoted
+value (`--query 'a --help b'`) or after a `#` is no argument and does not
+count, and neither does one in a later command of the line. A second read
+in the same line, without `--help`, still counts.
+
+Asked: the database forms, `helm get manifest|values|hooks|all` (options
+may stand before the verb; a verb on the next line is not part of it, a
+backslash-newline continuation is) and `kind get kubeconfig` (write it to
+a file with `kind export kubeconfig` instead). Also:
+
+- `make gateway-upkeep` (also `gmake` and `gnumake`) and
+  `infra/kind/upkeep.sh`, when the command can change a tenant's budget
+  ledger: `credit`, `close` and `expire` with `--confirm`. The script is
+  read when it is run: at the start of a command or a bracket, after
+  `VAR=value` words, `env`, `time`, `nohup`, `exec`, `command` or `sudo`,
+  after an interpreter with flags (`bash -x upkeep.sh`; `bash -n` only
+  checks the syntax and passes), after `source` or `.`, and in the body of
+  a `bash -c '…'`. `cat`, `shellcheck`, `git diff` and `grep` of its name
+  pass. It fails closed: it asks unless the command shows exactly one
+  `ARGS=` whose first word is `reservations` or `expire`, with no
+  `--confirm`. So `reservations` and a dry-run `expire` pass; a variable, an
+  `ARGS` that holds a `$` or a backtick anywhere (make and the shell expand
+  it, even in single quotes, into a word the guard cannot read), any other
+  word, an `ARGS` set by `export` in an earlier part of the line and a bare
+  `make gateway-upkeep` ask. Two such commands in one line are judged one by
+  one, and a deny in another part of the line still wins;
+- `kubectl run` with `--overrides` or `--env`: the pod holds none of the
+  workload's own environment, but these can put a Secret into it
+  (`secretKeyRef`, `envFrom`, a volume), and its command prints it.
+  `kubectl run` without them passes, and so do `docker run --env` and `uv
+  run`;
+- the other printers of a credential, as `az account get-access-token`
+  already asks: `kubectl create --raw …/serviceaccounts/NAME/token`;
+  `aws sts get-session-token`, `get-federation-token` and `assume-role`
+  (also with SAML or web identity), `aws configure export-credentials`,
+  `aws configure get` of `aws_secret_access_key` or `aws_session_token`,
+  `aws ecr get-login-password` and `get-authorization-token`, and `aws eks
+  get-token`; `gh auth token` and `gh auth status --show-token` (or `-t`);
+  `gcloud auth print-access-token` and `print-identity-token`, also under
+  `application-default`; `az acr credential show`, `az acr login
+  --expose-token`, `az storage account keys list`, `az ad sp
+  create-for-rbac` and `az ad sp credential reset`; `crictl inspect` (a
+  container's environment, reached on a kind node with `docker exec`); and
+  a path of the Secrets API (`/api/v1/secrets`,
+  `/api/v1/namespaces/NAME/secrets`) anywhere in a command, which is how
+  `kubectl proxy` with `curl` would read them. A printer asks wherever it
+  stands: after a blank, at the end, before a separator, a closing bracket,
+  a quote or a backtick, so `$(gh auth token)`, `` `gh auth token` ``,
+  `TOKEN=$(gcloud auth print-access-token)` and `gh auth token|wc -c` ask as
+  `gh auth token` does.
+  `helm get notes` and `helm get metadata` pass: metadata prints the
+  chart's name, version and status, and notes prints `NOTES.txt`, which
+  this chart does not have (a chart that renders a value into its notes
+  would print it; that is a fact about this chart, not about Helm).
+
+Timeouts. A hook that runs past its timeout does not block the call, so
+the guard cannot be allowed to run long. The bounds below do not prevent
+that for every shape (the first ones were measured on one-word segments
+only); the watchdog does. The hook arms it before it reads the command: at
+5 of the 10 seconds it answers `ask`, saying that the guard ran out of time
+and the command was NOT read. It cannot interrupt a command in flight, one
+regex match: the slowest single match at 8192 bytes took 0.23 to 0.42 s
+on 2026-10-06 (0.23 to 0.27 s at a load average of 3 and of 18, 0.25 to
+0.42 s in the third review; about 1 s at 16384), and 1.5 s at the slowdown
+a loaded machine showed, inside the margin of 5 s. One shape was found
+slower in the last round and closed there: a tool's name repeated about
+2000 times before a verb it reads (`aws aws … secretsmanager
+get-secret-value`) took 17 to 24 s of CPU, in the cut of the text after the
+match, not in the match; a match over 256 bytes now counts as not helped
+and the same inputs take 0.4 s or less.
+A test holds the two numbers together by reading the timeout from
+`.claude/settings.json`. A command the watchdog cannot answer in time
+still goes through unread: that is a way through the guard that no rule
+closes, and the list below has the others.
+
+Three bounds ask before the rules run, and each ask says that the command
+was NOT read and may hold a form the guard would deny: more than 16384
+bytes typed; more than 8192 bytes of command once heredoc bodies written
+to a file are dropped; more than 1000 parts (split on newlines, `;`, `&&`,
+`||` and `|`, the way the rules read it). Write the script with the Write
+tool and run the file. A long command that holds a denied form therefore
+asks, it does not deny.
+
+Not seen:
+
+- A script's inside. `bash x.sh` is read as that line; the lines in the
+  file are not. `infra/kind/*.sh` run `kubectl exec … psql` and `kubectl
+  get --raw` that way, and so does anything a session writes and runs.
+- Quoting inside a word: `e''nv`, `secr''ets`, `get-secret-"value"`. The
+  shell joins the pieces; the guard reads the pieces.
+- A variable that holds the verb or the path (`$P`, `K=kind; $K get …`),
+  and brace expansion (`{env,}`, `{secrets,}`).
+- An alias for a tool (`alias a=aws`), and a command put together by
+  `eval`.
+- A file written and then run: a heredoc to a file and `bash` on it, or
+  the Write tool and then `bash`. `bash x.sh` is read as that line, and
+  the lines in the file are not: `infra/kind/*.sh` run `kubectl exec …
+  psql` and `kubectl get --raw` that way. A heredoc body that only writes
+  a file is not read; one fed to a shell, to an interpreter the hook
+  lists (`bash`, `sh`, `ksh`, `python`, `node`, `perl`, `ruby`, `awk`,
+  `ssh`, `env`, `xargs`, `eval` and a few more), to `. file` or `source`
+  is, and so is the body of an unquoted delimiter that holds `$(` or a
+  backtick. A heredoc whose delimiter the hook cannot read whole
+  (`END-OF-DATA`, `EOF.txt`) opens no body, so what follows it is read.
+  `$(cat <<'EOF' … )` used as a command passes though its body runs.
+- A heredoc piped into an interpreter that is not on that list: `gawk`,
+  `nodejs` and `deno` are three of them (`bun`, `Rscript` and `make -f -`
+  are others). Its body is taken for a file write and dropped.
+- Quote kinds mixed in the head of a heredoc: whether a `<<` is inside a
+  quote is decided by counting quote characters before it, which is a
+  parity and not a parse. `cat '"' "<<EOF"` and `echo '"'; cat "<<EOF"`
+  fool it, and the body that follows is dropped as a file write.
+- A hook file overwritten by a redirect or a heredoc
+  (`cat <<'EOF' >.git/hooks/pre-commit`): `rm`, `mv`, `chmod` and
+  `truncate` of those paths are denied, writing one is not.
+- A secret-shaped variable whose name matches nothing in the list above
+  (`REDIS_PW`, `PW`, `LANGFUSE_SK`, `GITHUB_PAT`): `printenv NAME` passes.
+- An interpreter in the pod: `kubectl exec … -- python -c "import os;
+  …"` of the environment, `awk` printing it, or an application's own
+  debug endpoint. (A mounted path named in any exec is denied, as above;
+  the environment has no path to name.)
+- A value echoed by name: `sh -c "echo \$DATABASE_URL"` (the name is not
+  `printenv`'s), and a command piped into a shell in the pod (`echo
+  printenv | kubectl exec -i pod -- sh`), `kubectl exec pod env` without
+  `--`, and a wrapper verb the rule does not list.
+- A proxy and `curl`: `kubectl proxy` and then `curl` on a path that a
+  variable builds. A literal path of the Secrets API in any command
+  asks; one assembled in a variable is not seen.
+- A local secret file read by a reader that is not on the list (`grep`,
+  `awk`, `jq`, `cp`, `docker cp`) or named by a glob (`cat .en*`):
+  `docker exec <kind node> cat /etc/kubernetes/admin.conf` is denied as a
+  read of `admin.conf`; any other way to the kind node's credentials is
+  not seen. A text that only mentions such a file in an `echo` is denied
+  all the same, and so is `ls /proc/1/environ` in a pod (known false
+  positives, left).
+- A backslash-newline inside single quotes is deleted too, as in every
+  other place: `echo 'git push --for\<newline>ce'` is denied though the
+  shell would keep it. A path with more than 20 distinct percent-escapes
+  asks. Quote parity decides whether a `<<` opens a heredoc, so a file
+  name with an apostrophe in it (`cat > "it's.txt" <<EOF`) makes its body
+  be read.
+- `docker exec <container> psql` and `pg_dump`: the tests' own database
+  container is reached that way, so these pass. A container that holds
+  anything else is not covered.
+- A tool's own API call, a browser (Grafana, a port-forward) and a
+  person's terminal.
+- Anything that is not typed as a command: a file the harness reads, a
+  tool call that is not Bash.
+- The guard's own files. The permission rules allow `Edit` and `Write`
+  on `.claude/hooks/guard-bash.sh` and `.claude/settings.json` (only
+  `.env` and `*.tfvars` are denied), so a session can change or switch
+  off the guard. A deny rule on them is the owner's decision; it is
+  recorded here and not built.
+- The cloud consoles, and the cloud CLI's other ways to a value than
+  the ones listed.
 
 ## Designed, not built
 
