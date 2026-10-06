@@ -275,7 +275,11 @@ def test_a_refusal_with_a_made_up_reason_prints_unknown_and_nothing_of_it(
 def test_a_server_none_of_whose_tools_is_on_an_allowlist_is_no_tool(
     plant: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    registry_dir = plant(("agents.yaml", "      - wording_search\n", ""))
+    # The tool leaves the agent's list and the list of its worker (S031).
+    registry_dir = plant(
+        ("agents.yaml", "      - wording_search\n", ""),
+        ("agents.yaml", "tools:\n          - wording_search\n", "tools: []\n"),
+    )
     stand_in = StandIn()
     targets = {server: stand_in.server for server, _ in PAIRS}
 

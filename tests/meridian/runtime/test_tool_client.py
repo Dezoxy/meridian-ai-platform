@@ -237,7 +237,10 @@ def test_a_tool_outside_the_agents_allowlist_is_refused_audited_and_not_sent(
 ) -> None:
     Unused.used = False
     planted = load_registry(
-        plant(("agents.yaml", "      - policy_lookup\n", ""))  # one tool removed
+        plant(  # one tool removed from the agent's list and its worker's
+            ("agents.yaml", "      - policy_lookup\n", ""),
+            ("agents.yaml", "          - policy_lookup\n", ""),
+        )
     )
     tools = with_database(world, {"policy-mcp": Unused()}, exporter, registry=planted)
 

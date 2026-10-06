@@ -217,7 +217,7 @@ def test_an_agents_list_in_flow_style_is_refused_with_its_line(root: Path) -> No
     agents = yaml.safe_load(text)["agents"]
     path.write_text(head + "agents: " + json.dumps(agents) + "\n", encoding="utf-8")
     line = len(head.split("\n"))
-    assert line == 3
+    assert line == 6
     before = snapshot(root)
 
     message = refusal(root)

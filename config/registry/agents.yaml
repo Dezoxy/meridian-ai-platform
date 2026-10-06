@@ -1,5 +1,8 @@
 # yaml-language-server: $schema=schemas/agents.schema.json
-# Agents and the tools each may call; anything not listed is refused.
+# Agents and the tools each may call; anything not listed is refused. A worker
+# is a part of one agent with a tool list of its own: its tools are the agent's
+# and the workers' lists together are the agent's list (declared and checked;
+# not yet enforced at run time).
 agents:
   - id: claims-triage
     description: Triages a new claim and prepares it for an adjuster.
@@ -11,6 +14,25 @@ agents:
       - add_claim_note
       - request_approval
       - approval_outcome
+    workers:
+      - id: intake
+        description: Looks up the claim's policy and the claimant's earlier claims.
+        tools:
+          - policy_lookup
+          - claim_history
+      - id: terms
+        description: Searches the wording of the claim's own policy.
+        tools:
+          - wording_search
+      - id: assessor
+        description: Asks the model the one question and reads its proposal; it calls no tool.
+        tools: []
+      - id: approvals
+        description: Asks an adjuster for approval, reads the outcome and writes the claim note.
+        tools:
+          - request_approval
+          - approval_outcome
+          - add_claim_note
   - id: knowledge-ingestion
     description: Embeds policy wordings for the knowledge store; it calls no tool.
     kind: job

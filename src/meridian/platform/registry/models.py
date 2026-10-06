@@ -13,7 +13,14 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+)
 
 ResidencyLabel = Literal["eu-region", "eu-zone", "global"]
 DataClass = Literal["synthetic", "internal", "personal", "special"]
@@ -47,6 +54,14 @@ MAX_EMBEDDING_DIMENSIONS = 2000
 
 class RegistryModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class UnknownAgentError(LookupError):
+    """``Registry.worker`` was asked about an agent the registry does not hold."""
+
+
+class UnknownWorkerError(LookupError):
+    """The agent exists but declares no such worker (or declares none)."""
 
 
 class Provider(RegistryModel):
@@ -144,6 +159,20 @@ class ToolsFile(RegistryModel):
     tools: tuple[Tool, ...]
 
 
+class Worker(RegistryModel):
+    """A part of one agent, with a tool list of its own (S031).
+
+    Not an agent: the run, the tenant's list, the gateway and the budgets all
+    know the agent. ``worker_checks.py`` holds a worker's tools to a subset of
+    its agent's, and the workers' lists together to the agent's list.
+    """
+
+    id: EntityId
+    description: NonEmptyStr
+    # May be empty: a worker that only asks the model.
+    tools: tuple[ToolId, ...]
+
+
 class Agent(RegistryModel):
     id: EntityId
     description: NonEmptyStr
@@ -156,6 +185,23 @@ class Agent(RegistryModel):
     # The agent may send the Model Gateway a response schema; the gateway
     # refuses one from an agent that does not declare it.
     structured_outputs: bool = False
+    # The parts the agent's graph is split into, each with its own tools; empty
+    # for an agent that is not split. worker_checks.py refuses a job's workers.
+    workers: tuple[Worker, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_workers(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """An agent without workers dumps as it did before the key existed, so
+        the evaluation's ``tools`` fingerprint of such an agent does not move."""
+        data: dict[str, Any] = handler(self)
+        if not self.workers:
+            data.pop("workers", None)
+        return data
+
+    def worker(self, worker_id: str) -> Worker | None:
+        return next((w for w in self.workers if w.id == worker_id), None)
 
 
 class AgentsFile(RegistryModel):
@@ -282,6 +328,18 @@ class Registry(RegistryModel):
 
     def agent(self, agent_id: str) -> Agent | None:
         return next((a for a in self.agents if a.id == agent_id), None)
+
+    def worker(self, agent_id: str, worker_id: str) -> Worker:
+        """The agent's worker, or ``UnknownAgentError`` when the registry has no
+        such agent, or ``UnknownWorkerError`` when the agent declares no such
+        worker (an agent without workers declares none)."""
+        agent = self.agent(agent_id)
+        if agent is None:
+            raise UnknownAgentError(agent_id)
+        worker = agent.worker(worker_id)
+        if worker is None:
+            raise UnknownWorkerError(f"{agent_id}/{worker_id}")
+        return worker
 
     def data_class(self, class_id: str) -> DataClassPolicy | None:
         return next((c for c in self.data_classes if c.id == class_id), None)

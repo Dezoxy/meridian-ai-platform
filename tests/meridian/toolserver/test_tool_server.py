@@ -299,13 +299,21 @@ PLANT_NO_AGENTS = (
 PLANT_NO_SERVICE_TENANTS = (
     ("services.yaml", "tenants: [claims-triage]", "tenants: []"),
 ) * 4
-PLANT_NO_HISTORY = ("agents.yaml", "      - claim_history\n", "")
+# The tool leaves the agent's list and the list of the worker that holds it
+# (S031): the second edit lands on the worker's line, which sits further in.
+PLANT_NO_HISTORY = (
+    ("agents.yaml", "      - claim_history\n", ""),
+    ("agents.yaml", "          - claim_history\n", ""),
+)
 PLANT_APPROVAL = (
     "tools.yaml",
     "    scope: claims:note:write\n",
     "    scope: claims:note:write\n    approval_required: true\n",
 )
-PLANT_NO_WORDING = ("agents.yaml", "      - wording_search\n", "")
+PLANT_NO_WORDING = (
+    ("agents.yaml", "      - wording_search\n", ""),
+    ("agents.yaml", "tools:\n          - wording_search\n", "tools: []\n"),
+)
 # A search of a claim whose policy has no row: what each refusal that comes
 # before the policy is read must still answer.
 UNKNOWN_POLICY = {
@@ -366,7 +374,7 @@ REFUSALS = [
         Refusal(
             "tool-not-allowed",
             tool="claim_history",
-            edits=(PLANT_NO_HISTORY,),
+            edits=PLANT_NO_HISTORY,
         ),
         id="agent-lacks-tool",
     ),
@@ -495,7 +503,7 @@ REFUSALS = [
         Refusal(
             "tool-not-allowed",
             arguments=SEARCH,
-            edits=(PLANT_NO_WORDING,),
+            edits=PLANT_NO_WORDING,
             **UNKNOWN_POLICY,
         ),
         id="agent-lacks-search-and-policy-has-no-row",
@@ -546,7 +554,7 @@ def test_each_refusal_answers_its_reason_audits_it_and_runs_no_handler(
 def test_a_tool_that_is_not_allowlisted_is_refused_before_its_arguments_are_read(
     world: World, plant: Callable[..., Path]
 ) -> None:
-    registry_dir = plant(PLANT_NO_HISTORY)
+    registry_dir = plant(*PLANT_NO_HISTORY)
     app = spy_app(world.db, "claim_history", Spy(), registry_dir=registry_dir)
 
     result = run_call(
@@ -2154,7 +2162,7 @@ def test_a_call_with_its_time_up_that_the_allowlist_refuses_is_still_that_refusa
         "claim_history",
         custom("claim_history", lambda conn, call: FOUND_NOTHING)
         + other_handler("claim_history"),
-        registry_dir=plant(PLANT_NO_HISTORY),
+        registry_dir=plant(*PLANT_NO_HISTORY),
     )
 
     finished = finish(pipeline, world, "claim_history", LOOKUP, LAPSED)
