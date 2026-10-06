@@ -410,7 +410,7 @@ pinned images resolve there.
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | todo | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
-| S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | todo | S058, S065 |
+| S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | doing: the command, its role and the runbook are done (2026-10-06); the shared rate windows wait for the cluster lane | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
 
 ### M3 — Reliability and operations
@@ -460,7 +460,7 @@ that day; the rest stand as their step recorded them.
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
 | A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
-| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows | none |
+| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows. S066 (2026-10-06) built the mechanism for the ledger: `meridian gateway expire` removes whole past months when an operator names the month, and nothing schedules it; the period is still the owner's to choose, and audit rows are not expired | none |
 | A connection pool (a request opens about three connections) | S011 | open | S027 |
 | An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open; left by S019 (not in its "done when") | S021 |
 | `create_app` cut into a handler class | S011 | declined in S011, with reasons | none |
@@ -608,7 +608,7 @@ that day; the rest stand as their step recorded them.
 | Alerts on the rate an error budget burns at, which need measured targets | S024 | open | S027 |
 | A metric for a caller that cannot reach the gateway, and for the knowledge server's empty-store and stale-vector warnings (S046's hand-off): the runtime and the tool servers export traces only | S046, S024 | open; left by S024 (their code, held by S055) | S064 |
 | A metric of the assessment's outcomes by reason word, so a jump in `special-data`, `injection-suspected` or `filtered` is seen (S047's hand-off) | S047, S024 | open; left by S024 (the triage graph, which only one session changes at a time) | S064 |
-| Nothing credits a tenant, closes a reservation a dead process left `reserved`, or expires old ledger rows (S011's hand-off): the budget runbook says wait for the period or raise the limit by pull request, and forbids editing the ledger by hand; a command of the gateway's own, with its role and an audit row, is the fix | S011, S024 | open; left by S024 (the gateway's code) | S066 |
+| Nothing credits a tenant, closes a reservation a dead process left `reserved`, or expires old ledger rows (S011's hand-off): the budget runbook says wait for the period or raise the limit by pull request, and forbids editing the ledger by hand; a command of the gateway's own, with its role and an audit row, is the fix | S011, S024 | closed by S066: `meridian gateway` under the role `gateway_upkeep`, through three database functions that hold the rules and write the audit row; tested against PostgreSQL, the migration applied on kind, the command itself not yet run on a cluster | S066 |
 | The cost dashboard's queries take a series as new after a gap in the data longer than five minutes (a laptop that slept) and show its lifetime total as the selected range; S024's review found the same form in the new rules, which carry the fix (the earlier value is looked for 24 hours back) as does the health dashboard | S043, S024 | open | S064 |
 | The runbooks are written from the code and none is exercised: the rollback is S022's, the provider outage, the used-up budget and the database failure are the game day's; the secret rotation has no step, and its database-password procedure (delete the Secret, `make up`, restart) should first run on a cluster that can be thrown away | S024 | open | S022, S028 |
 | CloudNativePG issues and renews the database's certificates; the repository records no expiry, and whether a renewed certificate authority needs the services restarted is not known | S024 | open | S063 |
@@ -667,6 +667,11 @@ that day; the rest stand as their step recorded them.
 | The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open; each needs something broken on purpose on a cluster | none |
 | A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | open | none |
 | The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | open | none |
+| A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | open | none |
+| Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open | S064 |
+| `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | open; the step's second half | S066 |
+| `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | open | none |
+| `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | none |
 
 ## Part C — Step details
 
@@ -9397,6 +9402,157 @@ rule of that day answers.
   alert was kept (above); say so if smoke should pass while a budget
   alert fires.
 
+### S066 — Gateway ledger upkeep
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** a command of the gateway's own, under a role of its own and
+with an audit row, credits a tenant, closes a reservation a dead
+process left open and expires old ledger rows; and the rate windows
+are shared between gateway processes.
+
+**Decisions:**
+
+- **Two halves, two pull requests.** The database and the command
+  first (this record, the database lane), the shared rate windows
+  second, on the cluster, when the cluster lane is free. The step's
+  row stays open until the second. Started as the third step beside
+  S062 and S038 on the owner's question of 2026-10-06 ("We work on
+  just two steps… why not Three?").
+- **The store for the shared rate windows is Redis, the owner's choice
+  (2026-10-06)**, against the main session's recommendation of
+  PostgreSQL (no new component). Its price is the second half's: a
+  chart, a pin with a Renovate reader, a network policy, TLS, a
+  password out of band, a runbook, and a managed Redis in Azure later
+  (cost, an EU region).
+- **Before any code: the threat-model note.** What is worth
+  protecting: budgets and quotas, the ledger as the record of a call,
+  and that the database, not the command, says who changed a budget.
+  Nine threats, the first of which decided the design.
+- **The upkeep role can write no table.** It may execute three
+  functions that run with the owner's rights, with a pinned search
+  path, each holding its own rule and writing its own audit row in the
+  transaction of its change, and it may read eight columns of the
+  ledger and one each of the counters and the credits. Rejected:
+  table privileges for the role, which would make its credential a
+  master key to budgets (zero any counter, delete any row) and leave
+  the audit row to a client that can crash or choose not to write it.
+  The price: the rules live in SQL, in a migration, and not in Python.
+- **A credit is a row, and the rule the runbook checks changes with
+  it.** `gateway.credits` holds each credit; a counter equals the
+  charges of its period less the credits. Rejected: a bare update of
+  the counter, which is exactly the drift the reconciliation reports;
+  a negative usage row, which the table's checks refuse. Only the
+  current period can be credited, and never more than the counter
+  holds beyond open reservations.
+- **A dead reservation is closed as `kept` unless the operator asks
+  for `released`**, and never younger than ten minutes (the gateway's
+  own deadline for a call is 25 seconds). `kept` changes no counter:
+  the call may have been billed (T-47). The room comes back through a
+  credit, with its reason.
+- **Expiry removes whole past months, and the month is the operator's
+  to name.** The usage rows, the counters of both kinds and the
+  credits of those months go together, never the current month, and
+  not while a row of those months is still reserved. No default and no
+  schedule: the owner left retention open on 2026-10-05, and the
+  command prints what it would remove and removes nothing without
+  `--confirm`.
+- **The audit row of an upkeep change names no run.** The adjuster's
+  trail shows every audit row of a claim's run, and an operator's
+  upkeep is not part of a claim's story. The row carries the tenant,
+  the reason (a slug: no free text reaches the audit table) and, since
+  the reviews, the amounts.
+- **0020 was corrected in place after the reviews**, as S065 corrected
+  0017: it had reached no database but a test's.
+
+**Advisor:** consulted at 05:28 UTC on the traps of this design (the
+import contract, a login role and not `SET ROLE`, the reconciliation
+under expiry, the shape of a credit, `kept` against `released`) before
+the first contract was written, and before the pull request.
+
+**Work log:**
+
+- **Mapping first** (an Explore subagent), which found that "expires
+  old ledger rows" met the owner's open retention decision, that a
+  credit had no shape in the schema, and that the role must exist on
+  the cluster before the migration can be applied there.
+- **Four contracts to the `implementer`**, each in a worktree of its
+  own: the role, the credits table and the functions (migration 0020);
+  the command and the runbook; the two reviews' findings; the role on
+  the kind cluster.
+- **Reviews, at once**, on the first two commits: `database-reviewer`
+  on a PostgreSQL of its own with real connections, and
+  `security-reviewer`, which also read the import boundary. No
+  critical finding, and two defects of the design:
+  - an expiry could orphan a reservation: one that commits between
+    the expiry's check and its delete of the counters survived
+    without its counters, its settle then failed for good and the
+    reconciliation did not see it. The function now counts the
+    reserved rows again after its deletes and undoes itself;
+  - a credit taken while a call was in flight broke that call's
+    settle (found by both): what open reservations hold is not
+    creditable now.
+  Also from the reviews: the audit row of a credit carried no amount
+  and the credit's own row is later expired; an expiry that removes
+  nothing wrote an audit row, 3,700 a second in a loop; the role could
+  read every column; the migration ran for a superuser and then
+  belonged to it; the runbook's audit query trusted a label the writer
+  chooses. No deadlock and no drift in a stress run of twelve threads,
+  and 87 attempts to hijack the functions through temporary objects
+  changed nothing.
+
+**Result / verification:**
+
+- **A command of the gateway's own, under a role of its own and with an
+  audit row, credits a tenant, closes a reservation a dead process left
+  open and expires old ledger rows.** `meridian gateway reservations`,
+  `close`, `credit` and `expire`, over three functions of migration
+  0020, as the role `gateway_upkeep`. Tested against PostgreSQL: the
+  role can write no table and execute nothing else, and no other role
+  can execute the three; each function changes exactly what it should
+  and writes one audit row that names the role and carries the amounts,
+  and a function that raises leaves neither; each refusal by its code;
+  the reconciliation holds after a mixed sequence of gateway calls and
+  upkeep.
+- **The two defects the reviews found are reproduced and gone**: a
+  reservation that commits while an expiry waits is not orphaned (two
+  connections, the wait read from `pg_locks`); a credit of the whole
+  counter is refused while a reservation holds part of it, and the
+  gateway's later settle and release succeed with no drift.
+- **The budget runbook names it**, with the commands, a query that reads
+  the upkeep's audit rows by the database's own role column, and a
+  second reconciliation query for a usage row without its counter. A
+  test holds the runbook's command lines to the commands and options
+  that exist.
+- **On the kind cluster (2026-10-06):** `make up` on the running cluster
+  made the role and its Secret in 1 min 23 s (CloudNativePG reports the
+  nine roles reconciled); `make deploy` applied
+  `0020_gateway_upkeep.sql`, which itself refuses a role with any
+  privilege beyond login; `make demo` passed; `make smoke` 35 PASS, its
+  migrations line naming 0020. The command itself was NOT run on the
+  cluster: no workload holds the role's Secret, and how an operator runs
+  it there is the second half's.
+- **Gates, run by the main session with `main` merged in:** the whole
+  suite, 10,680 passed, 8 skipped, exit 0 (in 8 min 48 s under a machine
+  load of about 50: the cluster was coming up and three other
+  implementers were testing); `make lint` (5 contracts kept), `make
+  registry`, `make helm-lint`, `make docs`, `make test`, `make check`
+  (no ERROR line) and `make secret-scan`, each exit 0.
+- **Not done:** the rate windows shared between gateway processes (the
+  second half, in Redis by the owner's choice); a way to run the command
+  on a cluster; an alert on a credit.
+
+**Follow-ups:**
+
+- In the backlog: a holder of the upkeep credential can stall the
+  gateway for a tenant by holding a counter's row lock in an open
+  transaction (none; the limit of two sessions on kind bounds it);
+  nothing alerts on a credit, and a refused call leaves no audit row
+  (S064); who ran the command is not recorded (S021); an expiry at a
+  large size runs under one statement timeout and is not batched (none);
+  two test files of the step are over 800 lines (none).
+- For the owner: the retention month for the ledger (the command takes
+  it and has no default); and whether the second half's Redis should
+  wait for S063 to release the cluster or run beside it.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9782,3 +9938,13 @@ rule of that day answers.
   alone, 35 PASS after the deploy). Part A: the advisor at three fixed
   points, recorded per step; the checkpoint no longer asks the owner to
   compact by hand. Thirteen backlog rows closed, eight new.
+- **v0.53, 2026-10-06:** S066, first half: the gateway's ledger has an
+  upkeep command, `meridian gateway`, under a role that can write no
+  table: three database functions close a dead reservation, credit a
+  tenant and remove whole past months, each with its own rule and its
+  own audit row (migration 0020). Two reviews found two defects of the
+  design before it merged (an expiry could orphan a reservation; a
+  credit could break the settle of a call in flight); both are
+  reproduced by tests and gone. The step stays open for its second
+  half, the rate windows shared in Redis. One backlog row closed, five
+  new.

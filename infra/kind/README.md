@@ -119,15 +119,24 @@ extension is enabled declaratively by a `Database` resource. The image ships
 PostgreSQL 17.11 with pgvector 0.8.6 (read from the image on 2026-10-02).
 
 For the walking skeleton `make up` also declares a second database,
-`meridian`, owned by the role `meridian_owner`, and seven more roles:
+`meridian`, owned by the role `meridian_owner`, and eight more roles:
 `claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
 `policy_mcp` and `claims_mcp`, for the knowledge server (S046)
-`knowledge_mcp` and for the scheduled sweep (S052, below) `claims_sweep`. All
-eight can log in and nothing more (no superuser, createdb or createrole). The
-sweep's role may hold at most 4 connections: its job runs one pod at a time
-and holds one connection at a time, a run by hand beside the scheduled one
-makes two pods, and each may open a second connection while it replaces a
-broken one. The three tool-server roles may each hold at most 20
+`knowledge_mcp`, for the scheduled sweep (S052, below) `claims_sweep` and for
+the upkeep of the gateway's ledger (S066) `gateway_upkeep`. All nine can log in
+and nothing more (no superuser, createdb, createrole, bypassrls or
+replication, and a member of no role: migration 0020 refuses
+`gateway_upkeep` otherwise). The sweep's role may hold at most 4 connections:
+its job runs one pod at a time and holds one connection at a time, a run by
+hand beside the scheduled one makes two pods, and each may open a second
+connection while it replaces a broken one. The upkeep role may hold at most 2:
+the command opens one connection for milliseconds. That bounds what a holder
+of the credential can hold open; it does not stop one session from sitting in
+an open transaction. Only an operator uses `gateway_upkeep`, from a terminal
+(the runbook
+[budget exhaustion](../../docs/operations/runbooks/budget-exhaustion.md#the-upkeep-command)
+says how); no workload of the chart holds its Secret `gateway-upkeep-db`, and a
+test keeps it so. The three tool-server roles may each hold at most 20
 connections: a tool server runs at most eight calls at once, one connection
 each and one more for a failure's audit row, and during a rollout two of its
 pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
@@ -141,7 +150,8 @@ first; `make smoke` looks for the extension in both databases. Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
-`claims-mcp-db`, `knowledge-mcp-db` and `claims-sweep-db`. `make up` creates
+`claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db` and
+`gateway-upkeep-db`. `make up` creates
 a Secret only if it is absent, before the
 `platform-db` release installs (CloudNativePG cannot reconcile a role whose
 Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
@@ -170,7 +180,7 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 PostgreSQL itself enforces the database boundary, with `pg_hba` rules in
 [`values/platform-db.yaml`](values/platform-db.yaml) that CloudNativePG places
 before its default catch-all, after its own local, replication and pooler
-rules: a connection without TLS is rejected; the eight roles may log in to
+rules: a connection without TLS is rejected; the nine roles may log in to
 `meridian` over TLS with a SCRAM password and to no other database; no other
 role may log in to `meridian`. A client that asks for `sslmode=disable`, or a
 service that is pointed at the `app` or `postgres` database, is refused by the
