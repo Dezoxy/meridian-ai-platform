@@ -111,6 +111,12 @@ an estimate from the registry's list prices at a dated planning rate; the
 invoice is the provider's. The tenant is still the caller's word until
 sign-in exists (T-08, T-48).
 
+Amended on 2026-10-06 (S066): the rate windows are no longer kept in the
+process. They are kept in Redis, so two gateway processes count into one
+window, and a call the gateway cannot count is refused. The decision record
+"Share the gateway's rate windows in Redis", in the ADR index, says where and
+why. The text above stands as it was decided.
+
 ## Consequences
 
 Positive:
