@@ -128,10 +128,29 @@ For the virtual machine both are recorded below.
   GitHub's auto-merge was set on two pull requests that night and fired
   on neither.
 - **A step that owns the cluster needed a person within reach on the
-  laptop**: the command guard asks before every change to it, and an
-  unattended session waited at that question. On the virtual machine
-  those questions did not stop a session on 2026-10-06; what stands is
-  that the owner is asked, in chat, before the cluster is deleted.
+  laptop**: the command guard asked before every change to it, and an
+  unattended session waited at that question. It now asks before a
+  `kubectl delete`, before `kubectl apply --prune` or `--force`, and
+  before a `kubectl apply`, `scale` or `rollout restart` that does not
+  name the local cluster (another context or kubeconfig asks too); the
+  other kubectl verbs never asked. A call names the local cluster with
+  `--kubeconfig infra/kind/kubeconfig` (given as a path, or as a variable
+  the same command assigned that path) or `--context kind-<name>`, on
+  every `kubectl` of the command; where the command mentions `KUBECONFIG`
+  only `--kubeconfig` counts, and a command over 8192 characters asks
+  without being read. Deleting the kind cluster no longer asks either, for
+  `make down`, `infra/kind/down.sh` and `kind delete cluster --name
+  meridian`; a bare `kind delete` or one that names another cluster still
+  asks. On 2026-10-06 the owner allowed the session to delete the local
+  cluster and make it again when a test needs it, and the session says so
+  when it does (`CLAUDE.md`, hard rule 8). What still asks is what costs
+  money, leaves the machine or cannot be made again from the repository:
+  Azure, Terraform, a Helm uninstall, an image push, a release, and a `gh
+  pr merge --admin`, which merges past failing checks. A known limit,
+  older than this change: the hook has ten seconds, and with the machine
+  loaded (a load average near 70) a command that carries a 70 KB heredoc,
+  or one of 4,000 segments, takes it that long (1.3 s when idle). Write a
+  long script with the Write tool and run the file.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.

@@ -120,10 +120,12 @@ k get certificaterequestpolicy
    <namespace>` asks again now, where `cmctl` is installed.
 4. The certificate was renewed but a service still serves the old one:
    a Deployment loads its certificate once, when it starts. Restart it
-   with `kubectl -n meridian rollout restart deploy/<service>`, which is
-   the owner's to run, and watch it with `rollout status`. The health
-   check restarts a service on its own a day before the end; do not wait
-   for it.
+   with `kubectl -n meridian rollout restart deploy/<service>` and watch
+   it with `rollout status`. In a session the command guard asks first,
+   unless the call names the local kind cluster (`--kubeconfig
+   infra/kind/kubeconfig`); on any other cluster it is the owner's to
+   run. The health check restarts a service on its own a day before the
+   end; do not wait for it.
 
 ## What not to do
 
@@ -164,7 +166,8 @@ procedure before step 5.
    them to be Ready.
 2. The services still hold the certificates they loaded, which last 90 days,
    and a service reads its file again only near the end of the one it
-   loaded. Restart them once, which is the owner's to run:
+   loaded. Restart them once (`k` names the local cluster's credentials
+   file, so the command guard does not ask):
    `k -n meridian rollout restart deployment`.
 3. Watch, counting from the issuance. About 30 minutes in cert-manager
    renews (a new CertificateRequest, Approved; the Certificate's
