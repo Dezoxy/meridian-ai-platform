@@ -15,7 +15,10 @@ run by then, whatever the check decides; only the module itself waits for it.
 ``load_trusted_entry_point`` does these checks, in that order, and returns the
 loaded object or raises ``EntryPointRefused`` with a closed reason. Each caller
 turns the reason into its own error; ``fixed_text`` gives both the same words,
-which hold nothing a foreign package chose. What the loaded object must be
+which hold nothing a foreign package chose, except that a refusal for a name
+nobody published lists the names the trusted distribution did publish, and a
+name is listed only when it is shaped like a registry ID and short, and only
+the first few are. What the loaded object must be
 (callable, a protocol) is the caller's to check.
 
 This module imports the standard library and ``meridian`` only, so it brings in
@@ -32,6 +35,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import meridian
+from meridian.platform.registry.models import ENTITY_ID_MAX_LENGTH, ENTITY_ID_PATTERN
 
 GRAPHS_GROUP = "meridian.graphs"
 EVALUATIONS_GROUP = "meridian.evaluations"
@@ -40,6 +44,19 @@ TRUSTED_VALUE_PREFIX = "meridian.workloads."
 # The directory of the installed package. Tests that load a stand-in from
 # outside it point their loader's own ``TRUSTED_ROOT`` at their own directory.
 TRUSTED_ROOT = Path(meridian.__file__).resolve().parent
+# A name in a refusal's ``known`` list must be one the registry would accept as
+# an ID (the pattern is the registry's own, imported, as ``common/identity.py``
+# does; ``registry`` imports nothing of ``common``, so there is no cycle). A
+# directory that calls itself the trusted distribution can publish an entry
+# point under any name, and a name that is no ID is never printed. At most
+# ``MAX_KNOWN_LISTED`` names are listed, the rest as a count.
+_LISTABLE_NAME = re.compile(ENTITY_ID_PATTERN)
+MAX_KNOWN_LISTED = 10
+# What a class's name becomes when it is not a short identifier or cannot be
+# read: a class every refusal's cause can honestly be called.
+_UNREADABLE_CLASS_NAME = "Exception"
+_CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+_CLASS_NAME_OF_TYPE = type.__dict__["__name__"]
 
 EntryPoints = Callable[..., Iterable[EntryPoint]]
 
@@ -65,12 +82,44 @@ class LoadFailure(Exception):
     failing module wrote."""
 
 
+def safe_class_name(exc: BaseException) -> str:
+    """The name of ``type(exc)`` when it is a short identifier, else
+    ``"Exception"``. A foreign class chooses its own name: a metaclass can make
+    ``__name__`` raise, and the name can hold a newline and a sentence. The name
+    is read from the type's own slot, which runs none of the class's code, and
+    only an ASCII identifier of at most 64 characters is kept (an exact ``str``,
+    never a subclass with methods of its own). Not run: the class's ``__new__``
+    and ``__init__`` (the exception exists already) and ``type(exc)`` itself,
+    which reads the object's type and nothing else."""
+    try:
+        name = _CLASS_NAME_OF_TYPE.__get__(type(exc))
+        if isinstance(name, str) and _CLASS_NAME.fullmatch(name):
+            return str.__str__(name)
+    except Exception:
+        return _UNREADABLE_CLASS_NAME
+    return _UNREADABLE_CLASS_NAME
+
+
+def _listable_names(names: Iterable[str]) -> tuple[tuple[str, ...], int]:
+    """The names that may be printed (``ENTITY_ID_PATTERN`` in full, at most
+    ``ENTITY_ID_MAX_LENGTH`` characters), at most ``MAX_KNOWN_LISTED`` of them,
+    and how many more were left out."""
+    listable = tuple(
+        name
+        for name in names
+        if len(name) <= ENTITY_ID_MAX_LENGTH and _LISTABLE_NAME.fullmatch(name)
+    )
+    return listable[:MAX_KNOWN_LISTED], max(0, len(listable) - MAX_KNOWN_LISTED)
+
+
 class EntryPointRefused(Exception):
     """Why an entry point was not loaded. ``distribution`` is the name of the
     distribution that published it (for ``OTHER_DISTRIBUTION``), ``known`` the
     sorted names the trusted distribution published in the group (for
-    ``NOT_PUBLISHED``). For ``UNLOCATABLE`` and ``FAILED_TO_IMPORT`` the cause is
-    a ``LoadFailure`` that names the class of the error and holds nothing of it:
+    ``NOT_PUBLISHED``), reduced to the names the registry would accept as IDs
+    and capped, with ``known_more`` the count of those left out. For
+    ``UNLOCATABLE`` and ``FAILED_TO_IMPORT`` the cause is a ``LoadFailure`` that
+    names the class of the error (``safe_class_name``) and holds nothing of it:
     the refusal is raised outside the ``except`` block that caught the error, so
     the error is neither its cause nor its context, and a traceback in a log
     cannot quote the failing module's message, its frames or its source lines.
@@ -86,7 +135,7 @@ class EntryPointRefused(Exception):
         super().__init__(reason.value)
         self.reason = reason
         self.distribution = distribution
-        self.known = known
+        self.known, self.known_more = _listable_names(known)
 
 
 _CANNOT_LOAD = "the workload's {subject} cannot be loaded"
@@ -96,8 +145,9 @@ _NOT_FROM_THE_PACKAGE = (
 # The fixed words of each reason, with the caller's word for what it loads in
 # place of ``{subject}``: the evaluations' words (T-80), shared so that the
 # graphs' loader can say the same. Reasons an operator cannot act on differently
-# share a sentence. Every reason has a text (a test fails when one lacks), and
-# no text holds anything a foreign package chose.
+# share a sentence. Every reason has a text (checked when this module is
+# imported), and no text holds anything a foreign package chose; ``fixed_text``
+# adds only names of the shape the registry accepts for an ID, a few of them.
 _TEXTS: dict[Refusal, str] = {
     Refusal.PUBLISHED_TWICE: "the workload's {subject} is published more than once",
     Refusal.NOT_PUBLISHED: "no {subject} is published for this workload",
@@ -108,6 +158,16 @@ _TEXTS: dict[Refusal, str] = {
     Refusal.OUTSIDE_ROOT: _NOT_FROM_THE_PACKAGE,
     Refusal.MOVED_OUTSIDE_ROOT: _NOT_FROM_THE_PACKAGE,
 }
+
+
+def _require_a_text_for_every_reason(texts: dict[Refusal, str]) -> None:
+    """Raise when a ``Refusal`` member has no text, so a member added later
+    fails when this module is imported, not at the first refusal it causes."""
+    if set(texts) != set(Refusal) or not all(texts.values()):
+        raise AssertionError("every refusal reason needs a fixed text")
+
+
+_require_a_text_for_every_reason(_TEXTS)
 
 
 def reason_text(reason: Refusal, subject: str) -> str:
@@ -123,11 +183,13 @@ def fixed_text(refused: EntryPointRefused, subject: str) -> str:
     """What a caller may say about a refusal, in the shared fixed words. It
     quotes neither the distribution nor the entry point's value nor an error's
     message; ``NOT_PUBLISHED`` adds the names the trusted distribution did
-    publish (or "none")."""
+    publish that the registry would accept as IDs (or "none"), at most
+    ``MAX_KNOWN_LISTED`` of them and the rest as a count."""
     text = reason_text(refused.reason, subject)
     if refused.reason is Refusal.NOT_PUBLISHED:
         known = ", ".join(refused.known) if refused.known else "none"
-        return f"{text}; known: {known}"
+        more = f" and {refused.known_more} more" if refused.known_more else ""
+        return f"{text}; known: {known}{more}"
     return text
 
 
@@ -164,7 +226,7 @@ def _located_in(root: Path, module: str) -> bool:
     try:
         spec = importlib.util.find_spec(module)
     except Exception as exc:
-        failure = LoadFailure(type(exc).__name__)
+        failure = LoadFailure(safe_class_name(exc))
     else:
         if spec is None or not spec.has_location:
             return False
@@ -209,7 +271,7 @@ def load_trusted_entry_point(
     try:
         loaded = entry.load()
     except Exception as exc:
-        failure = LoadFailure(type(exc).__name__)
+        failure = LoadFailure(safe_class_name(exc))
     else:
         if not _loaded_in(trusted_root, module):
             raise EntryPointRefused(Refusal.MOVED_OUTSIDE_ROOT)

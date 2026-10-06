@@ -19,24 +19,35 @@ def render_schemas() -> dict[str, str]:
     }
 
 
+def _differs(path: Path, text: str) -> bool:
+    """Whether the file is absent, is not UTF-8 text or holds other text."""
+    if not path.is_file():
+        return True
+    try:
+        return path.read_text(encoding="utf-8") != text
+    except UnicodeDecodeError:
+        return True
+
+
 def stale_schemas(registry_dir: Path) -> tuple[str, ...]:
-    """Names of committed schema files that differ from the models or are absent."""
+    """Names of committed schema files that differ from the models, are absent
+    or cannot be decoded as text (the write replaces such a file)."""
     target = registry_dir / SCHEMAS_SUBDIR
-    stale = []
-    for name, text in render_schemas().items():
-        path = target / name
-        if not path.is_file() or path.read_text(encoding="utf-8") != text:
-            stale.append(name)
-    return tuple(stale)
+    return tuple(
+        name for name, text in render_schemas().items() if _differs(target / name, text)
+    )
 
 
 def unwritable_schemas(registry_dir: Path, exc: OSError) -> str:
-    """The problem of a schemas directory the process cannot write into: the
+    """The problem of a schemas directory the process cannot update (the write
+    reads each file before it replaces it, so the failure may be either): the
     error's class, never its text (which holds a path). The write is not
-    all-or-nothing, so the line says to run the command again."""
+    all-or-nothing, and a rerun repairs only what a failure that has passed left
+    behind, so the line says to fix the directory first."""
     return (
-        f"{registry_dir / SCHEMAS_SUBDIR}: schemas cannot be written: "
-        f"{type(exc).__name__}; run `meridian registry schemas` again"
+        f"{registry_dir / SCHEMAS_SUBDIR}: schemas cannot be updated: "
+        f"{type(exc).__name__}; "
+        "fix the directory, then run `meridian registry schemas` again"
     )
 
 

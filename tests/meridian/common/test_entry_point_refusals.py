@@ -6,6 +6,7 @@ refusal is the error's class and nothing else.
 """
 
 import importlib
+import importlib.util
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -32,9 +33,11 @@ GROUP = "meridian.test-group"
 runner = CliRunner()
 
 
-def entry(loads: Callable[[], object]) -> SimpleNamespace:
+def entry(
+    loads: Callable[[], object] = lambda: None, *, name: str = "claims-triage"
+) -> SimpleNamespace:
     return SimpleNamespace(
-        name="claims-triage",
+        name=name,
         value=REAL_VALUE,
         dist=SimpleNamespace(name="meridian"),
         load=loads,
@@ -48,6 +51,14 @@ def refusal_of(entry_point: SimpleNamespace, **options: Any) -> EntryPointRefuse
             "claims-triage",
             entry_points=lambda *, group: [entry_point],
             **options,
+        )
+    return refused.value
+
+
+def refusal_of_named(entries: list[SimpleNamespace]) -> EntryPointRefused:
+    with pytest.raises(EntryPointRefused) as refused:
+        load_trusted_entry_point(
+            GROUP, "missing", entry_points=lambda *, group: entries
         )
     return refused.value
 
@@ -180,3 +191,203 @@ def test_the_command_prints_no_message_of_the_import_error(
     assert workload.UNLOADABLE in result.stderr
     assert CANARY not in result.output
     assert "/opt/somewhere" not in result.output
+
+
+def raise_from(cls: type[BaseException]) -> Callable[..., object]:
+    def loads(*_args: object) -> object:
+        raise cls("canary-in-the-message")
+
+    return loads
+
+
+def error_class_with_a_newline_in_its_name() -> type[BaseException]:
+    cls = type("Boom", (Exception,), {})
+    cls.__name__ = "Boom\nERROR planted=hunter2 /etc/passwd"
+    return cls
+
+
+def error_class_whose_name_raises() -> type[BaseException]:
+    class RaisingName(type):
+        @property
+        def __name__(cls) -> str:  # type: ignore[override]
+            raise ValueError("planted-message-from-name")
+
+    return RaisingName("Boom", (Exception,), {})
+
+
+# The class, and the name the cause carries: a name that is no identifier is
+# the fixed word; a metaclass's property is never run, so the type's own name
+# is read.
+HOSTILE_CLASSES = [
+    pytest.param(
+        error_class_with_a_newline_in_its_name, "Exception", id="newline-in-the-name"
+    ),
+    pytest.param(error_class_whose_name_raises, "Boom", id="a-name-that-raises"),
+]
+HOSTILE_TEXT = ("hunter2", "/etc/passwd", "planted-message-from-name", "ERROR")
+
+
+def assert_nothing_hostile_is_left(refused: EntryPointRefused, name: str) -> None:
+    logged = "".join(traceback.format_exception(refused))
+    for text in (str(refused), repr(refused.__cause__), logged):
+        for hostile in HOSTILE_TEXT:
+            assert hostile not in text
+    assert str(refused.__cause__) == name
+    assert refused.__context__ is None
+    assert refused.__suppress_context__
+
+
+@pytest.mark.parametrize(("make_class", "name"), HOSTILE_CLASSES)
+def test_a_class_name_the_loaded_code_chose_is_not_text_of_a_load_refusal(
+    make_class: Callable[[], type[BaseException]], name: str
+) -> None:
+    refused = refusal_of(entry(raise_from(make_class())))
+
+    assert refused.reason is Refusal.FAILED_TO_IMPORT
+    assert_nothing_hostile_is_left(refused, name)
+
+
+@pytest.mark.parametrize(("make_class", "name"), HOSTILE_CLASSES)
+def test_a_class_name_the_finder_chose_is_not_text_of_a_locate_refusal(
+    make_class: Callable[[], type[BaseException]],
+    name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(importlib.util, "find_spec", raise_from(make_class()))
+    calls: list[int] = []
+
+    refused = refusal_of(entry(lambda: calls.append(1)))
+
+    assert refused.reason is Refusal.UNLOCATABLE
+    assert calls == []
+    assert_nothing_hostile_is_left(refused, name)
+
+
+def test_the_class_name_is_read_without_running_the_classs_own_code() -> None:
+    hostile = error_class_whose_name_raises()
+
+    with pytest.raises(ValueError, match="planted-message-from-name"):
+        hostile.__name__  # noqa: B018 - the property is what the helper must not run
+
+    assert shared.safe_class_name(ImportError("x")) == "ImportError"
+    assert shared.safe_class_name(hostile("x")) == "Boom"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Boom\nsecond line", "two words", "", "1Boom", "Bööm", "x" * 65, "a.b", "a\n"],
+)
+def test_a_class_name_that_is_not_a_short_identifier_is_a_fixed_word(
+    name: str,
+) -> None:
+    cls = type("Boom", (Exception,), {})
+    cls.__name__ = name
+
+    assert shared.safe_class_name(cls("x")) == "Exception"
+
+
+def test_an_identifier_of_the_longest_length_is_kept() -> None:
+    cls = type("Boom", (Exception,), {})
+    cls.__name__ = "_" + "x" * 63
+
+    assert shared.safe_class_name(cls("x")) == "_" + "x" * 63
+
+
+def test_a_name_that_is_a_str_subclass_with_its_own_methods_is_a_plain_str() -> None:
+    class Loud(str):
+        def __str__(self) -> str:
+            return "ERROR planted=hunter2"
+
+    cls = type("Boom", (Exception,), {})
+    cls.__name__ = Loud("Boom")
+
+    name = shared.safe_class_name(cls("x"))
+
+    assert name == "Boom"
+    assert type(name) is str
+
+
+NAMES = [f"workload-{number:02d}" for number in range(15)]
+
+
+def test_only_names_the_registry_would_accept_as_ids_are_listed_as_known() -> None:
+    hostile = [
+        "INJECTED ERROR planted",
+        "Upper",
+        "x" * 65,
+        "with\nnewline",
+        "trailing-newline\n",
+        "",
+        "-leading-dash",
+        "under_score",
+    ]
+    published = [entry(name=name) for name in (*hostile, "good-one", "x" * 64)]
+
+    refused = refusal_of_named(published)
+
+    assert refused.known == ("good-one", "x" * 64)
+    text = shared.fixed_text(refused, "evaluation")
+    assert text.endswith(f"; known: good-one, {'x' * 64}")
+    assert "INJECTED" not in text
+
+
+def test_the_names_listed_are_capped_and_the_rest_is_a_count() -> None:
+    refused = refusal_of_named([entry(name=name) for name in NAMES])
+
+    text = shared.fixed_text(refused, "evaluation")
+    assert len(refused.known) == shared.MAX_KNOWN_LISTED
+    assert refused.known == tuple(NAMES[: shared.MAX_KNOWN_LISTED])
+    assert text.endswith(f" and {len(NAMES) - shared.MAX_KNOWN_LISTED} more")
+    assert NAMES[-1] not in text
+
+
+def test_names_exactly_at_the_cap_are_listed_with_no_count() -> None:
+    names = NAMES[: shared.MAX_KNOWN_LISTED]
+
+    refused = refusal_of_named([entry(name=name) for name in names])
+
+    text = shared.fixed_text(refused, "evaluation")
+    assert refused.known == tuple(names)
+    assert "more" not in text
+
+
+def test_a_refusal_built_with_hostile_names_lists_none_of_them() -> None:
+    refused = EntryPointRefused(
+        Refusal.NOT_PUBLISHED, known=("INJECTED ERROR planted", "fine")
+    )
+
+    assert shared.fixed_text(refused, "evaluation").endswith("; known: fine")
+
+
+def test_a_directory_that_calls_itself_the_trusted_distribution_cannot_write_a_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist = tmp_path / "MERIDIAN-9.dist-info"
+    dist.mkdir()
+    (dist / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: MERIDIAN\nVersion: 9\n", encoding="utf-8"
+    )
+    (dist / "entry_points.txt").write_text(
+        f"[{GROUP}]\nINJECTED ERROR planted = evil.mod:X\nother = evil.mod:Y\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(EntryPointRefused) as refused:
+        load_trusted_entry_point(GROUP, "claims-triage-x")
+
+    text = shared.fixed_text(refused.value, "evaluation")
+    assert "INJECTED" not in text
+    assert "INJECTED" not in repr(refused.value.known)
+    assert text.endswith("; known: other")
+
+
+def test_a_reason_with_no_text_is_found_when_the_table_is_checked() -> None:
+    texts = dict(shared._TEXTS)
+    del texts[Refusal.OUTSIDE_ROOT]
+
+    with pytest.raises(AssertionError):
+        shared._require_a_text_for_every_reason(texts)
+
+    shared._require_a_text_for_every_reason(shared._TEXTS)

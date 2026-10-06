@@ -22,6 +22,7 @@ from meridian.platform.cli import registry as cli_registry
 from meridian.platform.registry import load_registry
 
 runner = CliRunner()
+FIX_AND_RERUN = "fix the directory, then run `meridian registry schemas` again"
 SUMMARY = re.compile(
     r"registry OK: \d+ providers?, \d+ deployments?, \d+ tools?, \d+ agents?, "
     r"\d+ tenants?, \d+ services?"
@@ -216,8 +217,8 @@ def test_schemas_that_cannot_be_written_end_in_an_error_line_not_a_traceback(
 
     assert result.exit_code == 1, result.output
     assert result.stderr == (
-        f"ERROR {registry_copy / 'schemas'}: schemas cannot be written: "
-        "PermissionError; run `meridian registry schemas` again\n"
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"PermissionError; {FIX_AND_RERUN}\n"
     )
     assert result.stdout == ""
     assert CANARY not in result.output
@@ -236,11 +237,74 @@ def test_a_schemas_path_that_is_a_file_ends_in_an_error_line_not_a_traceback(
 
     assert result.exit_code == 1, result.output
     assert result.stderr == (
-        f"ERROR {registry_copy / 'schemas'}: schemas cannot be written: "
-        "FileExistsError; run `meridian registry schemas` again\n"
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"FileExistsError; {FIX_AND_RERUN}\n"
     )
     assert result.stdout == ""
     assert not isinstance(result.exception, OSError)
+
+
+def test_a_schema_file_that_cannot_be_read_is_not_called_a_write_failure(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_read_text = Path.read_text
+    schemas = registry_copy / "schemas"
+
+    def unreadable(self: Path, *args: object, **kwargs: object) -> str:
+        if self.parent == schemas:
+            raise PermissionError(13, CANARY)
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {schemas}: schemas cannot be updated: "
+        f"PermissionError; {FIX_AND_RERUN}\n"
+    )
+    assert "written" not in result.stderr
+    assert CANARY not in result.output
+
+
+UNDECODABLE = b"\xff\xfe"
+
+
+def test_a_schema_file_that_is_not_text_is_stale_and_the_check_names_it(
+    registry_copy: Path,
+) -> None:
+    broken = registry_copy / "schemas" / "models.schema.json"
+    broken.write_bytes(UNDECODABLE)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "schemas/models.schema.json is out of date" in result.stderr
+    assert not isinstance(result.exception, ValueError)
+    assert broken.read_bytes() == UNDECODABLE
+
+
+def test_a_schema_file_that_is_not_text_is_repaired_by_the_write(
+    registry_copy: Path,
+) -> None:
+    (registry_copy / "schemas" / "models.schema.json").write_bytes(UNDECODABLE)
+
+    written = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+    checked = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert written.exit_code == 0, written.output
+    assert written.stdout == "schemas written: 1 changed\n"
+    assert written.stderr == ""
+    assert checked.exit_code == 0, checked.output
 
 
 def test_a_write_that_fails_part_way_says_to_run_the_command_again(
@@ -264,7 +328,7 @@ def test_a_write_that_fails_part_way_says_to_run_the_command_again(
     )
 
     assert failed.exit_code == 1, failed.output
-    assert "run `meridian registry schemas` again" in failed.stderr
+    assert FIX_AND_RERUN in failed.stderr
     assert checked.exit_code == 1
     assert checked.stderr.count("is out of date") == 1
     assert repaired.exit_code == 0, repaired.output

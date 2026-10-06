@@ -67,12 +67,15 @@ flags, in the order they are tried. Not covered:
   judge's (`assessment.py`, `evaluation/judge.py`), and the redaction that
   runs before them (`guardrails/redaction.py`);
 - the code that runs: the source is read from the file at the time of the
-  call, so a process that outlives an edit of `screening.py` fingerprints the
-  new text while it still runs the old code.
+  call, so a process that outlives an edit of `screening.py` fingerprints
+  whatever now sits at the old line numbers of the file, while it still runs
+  the old code.
 
-The digest is not widened to the interpreter's Unicode version and `re`: that
-would tie both baselines to one Python patch release, and every image bump
-would become a baseline change. It does not hash code objects either: a
+The digest is not widened to the interpreter's Unicode version and `re`: the
+Unicode database changes with the interpreter's minor release, not its patch
+release, so that would tie both baselines to one Python minor release, and
+every move to the next one would become a baseline change. It does not hash
+code objects either: a
 changed comment would then ask for no new baseline, and asking is the safe
 direction (T-72).
 
