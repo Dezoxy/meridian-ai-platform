@@ -144,5 +144,175 @@ class EverythingElse(unittest.TestCase):
         self.assertEqual(redact(lines), lines)
 
 
+ACCOUNT = "111111111111"
+OTHER_ACCOUNT = "222222222222"
+ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/meridian-test"
+# The documentation's own example identifier and three of its sister prefixes.
+ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+EKS_ENDPOINT = "ABCDEF0123456789ABCDEF0123456789.gr7.eu-central-1.eks.amazonaws.com"
+EKS_ISSUER = "oidc.eks.eu-central-1.amazonaws.com/id/ABCDEF0123456789ABCDEF0123456789"
+RDS_ENDPOINT = "meridian-test.abc123xyz.eu-central-1.rds.amazonaws.com"
+
+
+class AwsShapes(unittest.TestCase):
+    """What the AWS script prints: ARNs, account numbers, access key
+    identifiers and the host names of a cluster and a database."""
+
+    def test_an_arn_is_removed_whole_with_the_account_inside_it(self) -> None:
+        line = f"aws_iam_role.pods: Refreshing state... arn={ROLE_ARN}\n"
+
+        out = redact(line)
+
+        self.assertEqual(out, "aws_iam_role.pods: Refreshing state... arn=<arn>\n")
+
+    def test_an_arn_ends_at_the_quote_or_bracket_that_closes_the_value(self) -> None:
+        lines = (
+            f'  + role_arn = "{ROLE_ARN}"\n'
+            f"[id={ROLE_ARN}] done\n"
+            f'"Resource": ["arn:aws:s3:::meridian-test/*", "{ROLE_ARN}"]\n'
+            f"arn:aws-cn:iam::{ACCOUNT}:root, and arn:aws-us-gov:s3:::b\n"
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            '  + role_arn = "<arn>"\n'
+            "[id=<arn>] done\n"
+            '"Resource": ["<arn>", "<arn>"]\n'
+            "<arn>, and <arn>\n",
+        )
+
+    def test_a_bare_twelve_digit_number_that_is_a_whole_token_is_an_account(
+        self,
+    ) -> None:
+        lines = (
+            f"Account: {ACCOUNT}\n"
+            f'"AWS": "{ACCOUNT}"\n'
+            f"{ACCOUNT}\n"
+            f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/meridian\n"
+            f"tfstate-{ACCOUNT}-eu\n"
+            f"({ACCOUNT})\n"
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            "Account: <account>\n"
+            '"AWS": "<account>"\n'
+            "<account>\n"
+            "<account>.dkr.ecr.eu-central-1.amazonaws.com/meridian\n"
+            "tfstate-<account>-eu\n"
+            "(<account>)\n",
+        )
+
+    def test_numbers_side_by_side_are_each_an_account(self) -> None:
+        for text, expected in (
+            (f"{ACCOUNT} {OTHER_ACCOUNT}", "<account> <account>"),
+            (
+                f"{ACCOUNT} {OTHER_ACCOUNT} {ACCOUNT}",
+                "<account> <account> <account>",
+            ),
+            (
+                f"{ACCOUNT},{OTHER_ACCOUNT},{ACCOUNT},{OTHER_ACCOUNT}",
+                "<account>,<account>,<account>,<account>",
+            ),
+        ):
+            with self.subTest(text=text):
+                out = redact(f"{text}\n")
+
+                self.assertEqual(out, f"{expected}\n")
+
+    def test_a_number_that_is_not_twelve_digits_or_not_a_whole_token_is_left(
+        self,
+    ) -> None:
+        lines = (
+            "created_at = 1700000000000\n"  # a timestamp in milliseconds: 13 digits
+            "size = 11111111111\n"  # 11 digits
+            "id = i-111111111111a\n"  # a letter touches the digits
+            "id = vol111111111111\n"
+            "sha256:" + "ab12" * 16 + "\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_an_access_key_identifier_is_removed_for_each_documented_prefix(
+        self,
+    ) -> None:
+        for prefix in ("AKIA", "ASIA", "AROA", "AIDA", "AGPA", "ANPA"):
+            with self.subTest(prefix=prefix):
+                identifier = prefix + ACCESS_KEY_ID[4:]
+
+                out = redact(f"access_key = {identifier}\nid: {identifier},\n")
+
+                self.assertEqual(
+                    out, "access_key = <access-key-id>\nid: <access-key-id>,\n"
+                )
+
+    def test_a_string_that_only_looks_like_an_access_key_identifier_is_left(
+        self,
+    ) -> None:
+        lines = (
+            f"{ACCESS_KEY_ID[:-1]}\n"  # fifteen after the prefix
+            f"{ACCESS_KEY_ID.lower()}\n"
+            "AKIB" + ACCESS_KEY_ID[4:] + "\n"  # not a documented prefix
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_the_host_of_a_cluster_and_of_a_database_is_removed(self) -> None:
+        lines = (
+            f'  + endpoint = "https://{EKS_ENDPOINT}"\n'
+            f'  + address  = "{RDS_ENDPOINT}"\n'
+            f"psql -h {RDS_ENDPOINT} -p 5432\n"
+            f'  + issuer   = "https://{EKS_ISSUER}"\n'
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            '  + endpoint = "https://<host>"\n'
+            '  + address  = "<host>"\n'
+            "psql -h <host> -p 5432\n"
+            '  + issuer   = "https://<host>"\n',
+        )
+
+    def test_other_hosts_are_left_alone(self) -> None:
+        lines = (
+            "Installing hashicorp/aws from registry.terraform.io\n"
+            "https://sts.eu-central-1.amazonaws.com/\n"
+            "https://rds.eu-central-1.amazonaws.com/\n"
+            "https://eks.eu-central-1.amazonaws.com/clusters\n"
+            "owner@example.com\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_nothing_of_an_aws_plan_survives_the_filter(self) -> None:
+        plan = (
+            f"aws_eks_cluster.main: Refreshing state... [id=meridian-test]\n"
+            f'  ~ arn      = "arn:aws:eks:eu-central-1:{ACCOUNT}:cluster/x"\n'
+            f'  ~ endpoint = "https://{EKS_ENDPOINT}"\n'
+            f'  ~ issuer   = "https://{EKS_ISSUER}"\n'
+            f'  ~ address  = "{RDS_ENDPOINT}:5432"\n'
+            f'  ~ repo     = "{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/meridian"\n'
+            f'  ~ key      = "{ACCESS_KEY_ID}"\n'
+            f"data.aws_caller_identity.current: Read complete [id={ACCOUNT}]\n"
+        )
+
+        out = redact(plan)
+
+        for leaked in (ACCOUNT, ACCESS_KEY_ID, "gr7", "abc123xyz", "ABCDEF0123456789"):
+            self.assertNotIn(leaked, out)
+        self.assertIn("meridian-test]", out)
+
+    def test_an_azure_guid_and_an_arn_in_one_line_are_both_removed(self) -> None:
+        out = redact(f"{SUBSCRIPTION} {ROLE_ARN}\n")
+
+        self.assertEqual(out, "<guid> <arn>\n")
+
+
 if __name__ == "__main__":
     unittest.main()

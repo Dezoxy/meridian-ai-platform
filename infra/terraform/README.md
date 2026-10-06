@@ -4,7 +4,8 @@
 shows what the foundation would create, `make azure-apply` creates it and
 `make azure-smoke` proves it works. Status: **implemented** (S007) and applied
 only after the owner has reviewed the plan and confirmed it. The ephemeral
-platform environment (AKS, PostgreSQL, ACR) is S020, not here.
+platform environment (AKS, PostgreSQL, ACR) is S020, not here. The AWS module,
+checked and not applied, is described in [aws/README.md](aws/README.md).
 
 The foundation is the part of Azure that stays up between demo sessions.
 Idle cost is about EUR 0 (expected, not yet measured): Azure OpenAI Standard

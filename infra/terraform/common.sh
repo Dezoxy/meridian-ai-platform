@@ -39,10 +39,31 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=true
 # Terraform prints it on every plan and apply ("Read complete ... [id=...]").
 # The second pattern starts with the base64 of "clientConfigs/c", which is the
 # same whatever follows, and takes the rest of the base64 run.
+#
+# aws.sh's output meets the same filter, which also knows AWS's shapes (S036):
+# an ARN becomes <arn>, whole, and runs first so that the account inside it goes
+# with it; an access key identifier (the documented prefixes and sixteen more
+# uppercase letters and digits) becomes <access-key-id>; a host under
+# eks.amazonaws.com or rds.amazonaws.com (a cluster's endpoint, a database's)
+# and the cluster's identity issuer (oidc.eks.<region>.amazonaws.com, which has
+# the label order the other way round) become <host>; and a twelve-digit number
+# that is a whole token, which is an account number, becomes <account>. A whole
+# token is bounded by anything but a letter or a digit, so a thirteen-digit
+# timestamp in milliseconds is left alone and any other twelve-digit integer in
+# the output is hidden too, which costs a reader nothing. sed has no word
+# boundary on macOS, so the bounds are captured, and a match consumes the
+# character after it: the account rule runs twice so that two numbers side by
+# side are both found.
 redact() {
   sed -E \
+    -e 's#arn:aws[a-z-]*:[A-Za-z0-9-]+:[a-z0-9-]*:[0-9]*:[^][:space:]"'\''<>,()]+#<arn>#g' \
     -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<guid>/g' \
-    -e 's#Y2xpZW50Q29uZmlncy9j[A-Za-z0-9+/]*={0,2}#<client-config-id>#g'
+    -e 's#Y2xpZW50Q29uZmlncy9j[A-Za-z0-9+/]*={0,2}#<client-config-id>#g' \
+    -e 's/(ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)[A-Z0-9]{16}/<access-key-id>/g' \
+    -e 's#[A-Za-z0-9.-]+\.(eks|rds)\.amazonaws\.com#<host>#g' \
+    -e 's#oidc\.eks\.[a-z0-9-]+\.amazonaws\.com(/id/[A-Za-z0-9]+)?#<host>#g' \
+    -e 's/(^|[^A-Za-z0-9])[0-9]{12}([^A-Za-z0-9]|$)/\1<account>\2/g' \
+    -e 's/(^|[^A-Za-z0-9])[0-9]{12}([^A-Za-z0-9]|$)/\1<account>\2/g'
 }
 
 log() { printf '==> %s\n' "$*"; }

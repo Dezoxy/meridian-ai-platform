@@ -54,6 +54,16 @@ PYTEST_WORKERS      ?= 10
 # := so a command line does not override it. .github/renovate.json reads it as
 # it reads PYTEST_DB_IMAGE.
 PROMTOOL_IMAGE      := quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
+# Trivy's configuration scan for `make aws-scan` (S036): 0.75.0, read on
+# 2026-10-06. The digest is the multi-arch index's (`docker buildx imagetools
+# inspect` shows an OCI index; `docker pull` of the tag prints the same digest);
+# := so a command line does not override it, and .github/renovate.json reads it
+# as it reads PROMTOOL_IMAGE. The scan needs no network: Trivy looks for a newer
+# bundle of checks at mirror.gcr.io first, and with the network off and without
+# --skip-check-update it waits, fails and falls back to the checks compiled into
+# the image; with that flag it goes straight to those checks. So the checks are
+# those of the pinned image, and a new image is the only way they change.
+TRIVY_IMAGE         := ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
@@ -77,7 +87,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -302,3 +312,29 @@ gateway-live:
 registry-snapshot:
 	infra/terraform/foundation.sh outputs > $(REGISTRY_SNAPSHOT).tmp || { rm -f $(REGISTRY_SNAPSHOT).tmp; exit 1; }
 	mv $(REGISTRY_SNAPSHOT).tmp $(REGISTRY_SNAPSHOT)
+
+# ── AWS module (checked, applied once by the owner) ──────────────────────────
+# infra/terraform/aws/README.md says what these do. They use the account pinned
+# in infra/terraform/local.env-aws (gitignored). Needs terraform, and for plan,
+# apply and destroy the aws CLI signed in. Nothing here runs in CI (S022).
+
+## aws-validate    terraform fmt -check, init with no backend and validate of the AWS module; needs no account and changes nothing in AWS
+aws-validate:
+	infra/terraform/aws.sh validate
+
+## aws-scan        Trivy's configuration scan of the AWS module from the pinned image, network off, read-only; fails on a HIGH or CRITICAL finding that infra/terraform/aws/.trivyignore does not list; changes nothing in AWS (needs Docker)
+aws-scan:
+	@ls "$(CURDIR)"/infra/terraform/aws/*.tf >/dev/null 2>&1 || { echo "aws-scan: no .tf file in infra/terraform/aws, nothing to scan" >&2; exit 1; }
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/aws",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --severity HIGH,CRITICAL --exit-code 1 .
+
+## aws-plan        sign-in check against the pinned account, terraform init and plan of the AWS module into aws.tfplan; changes nothing in AWS
+aws-plan:
+	infra/terraform/aws.sh plan
+
+## aws-apply       SPENDS MONEY: applies the saved plan of the AWS module (EKS, RDS, ECR, network, budget; it bills by the hour until aws-destroy, see the module's README); the owner runs it, after reading the plan
+aws-apply:
+	infra/terraform/aws.sh apply
+
+## aws-destroy     REMOVES the AWS environment: Terraform asks its own question and the script refuses without a terminal; the owner runs it, in a terminal
+aws-destroy:
+	infra/terraform/aws.sh destroy

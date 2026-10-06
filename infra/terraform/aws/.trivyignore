@@ -1,0 +1,10 @@
+# Findings of `make aws-scan` that the owner accepts for this module, which is a
+# test environment applied once and removed within hours (S036).
+#
+# One Trivy check ID per line, and on the line directly above it the reason:
+# what the check says, why it holds here, and what a production environment
+# would do instead. An entry with no comment directly above it fails
+# tests/meridian/test_aws_scan.py. A finding fixed in the module is deleted
+# from here; nothing is ignored by file or by line.
+#
+# No entry yet: the scan of the real module has not run.
