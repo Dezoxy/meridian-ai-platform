@@ -31,6 +31,8 @@ def test_the_allowlist_holds_exactly_the_named_keys() -> None:
                 "gen_ai.token.type",
                 "meridian.outcome",
                 "meridian.reason",
+                "meridian.tool",
+                "meridian.finding",
             }
         )
         == METRIC_ATTRIBUTE_KEYS

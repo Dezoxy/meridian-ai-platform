@@ -6,10 +6,10 @@ graph code neither sets headers nor knows the gateway's address (T-08).
 
 import threading
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import httpx
 from opentelemetry import propagate
@@ -25,6 +25,19 @@ DATA_CLASS_HEADER = "X-Meridian-Data-Class"
 # refusal by the provider's filter.
 REFUSAL_HEADER = "X-Meridian-Refusal"
 REFUSAL_CONTENT_FILTER = "content-filter"
+# How a call to the gateway ended, for the runtime's metric: the closed set of
+# words a call's reason comes from. ``unreachable`` is no answer at all (a
+# transport error that is not a timeout), ``refused`` a 429 or a 403,
+# ``filtered`` the provider's content filter, ``error`` any other status or an
+# answer outside the contract, ``limit`` a call the run's own limit stopped
+# before it was sent. The words are the metric's: the run's failure word is
+# still the one ``failure_reason`` gives.
+CallOutcome = Literal["completed", "failed"]
+CallReason = Literal["unreachable", "timeout", "refused", "filtered", "error", "limit"]
+CALL_REASONS: frozenset[str] = frozenset(get_args(CallReason))
+# Told once for each call ``chat`` is asked to make, with the reason of a failure.
+CallObserver = Callable[[CallOutcome, CallReason | None], None]
+REFUSED_STATUSES = frozenset({HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.FORBIDDEN})
 
 
 class ModelCallError(Exception):
@@ -118,7 +131,8 @@ class ModelClient:
     """Built per run, over an injected client whose base URL is the gateway.
 
     ``max_calls`` bounds the calls of this client, so of one run; an attempt
-    counts whether or not the gateway answers it."""
+    counts whether or not the gateway answers it. ``on_call`` is told once of
+    each call ``chat`` is asked to make, a call the limit stops included."""
 
     def __init__(
         self,
@@ -128,9 +142,11 @@ class ModelClient:
         agent: str,
         run_id: uuid.UUID,
         max_calls: int,
+        on_call: CallObserver | None = None,
     ) -> None:
         self._http = http
         self._max_calls = max_calls
+        self._on_call = on_call
         self._calls = 0
         self._lock = threading.Lock()
         self._headers = {
@@ -138,6 +154,10 @@ class ModelClient:
             "X-Meridian-Agent": agent,
             "X-Meridian-Run": str(run_id),
         }
+
+    def _observe(self, outcome: CallOutcome, reason: CallReason | None = None) -> None:
+        if self._on_call is not None:
+            self._on_call(outcome, reason)
 
     def chat(
         self,
@@ -159,9 +179,12 @@ class ModelClient:
         for it. The answer is still text, and the caller still reads it: the
         schema is not checked here."""
         with self._lock:  # a graph's parallel nodes share this client
-            if self._calls >= self._max_calls:
-                raise ModelCallLimitError
-            self._calls += 1
+            over_limit = self._calls >= self._max_calls
+            if not over_limit:
+                self._calls += 1
+        if over_limit:
+            self._observe("failed", "limit")
+            raise ModelCallLimitError
         body: dict[str, Any] = {"messages": messages}
         if max_output_tokens is not None:
             body["max_output_tokens"] = max_output_tokens
@@ -175,20 +198,27 @@ class ModelClient:
             response = self._http.post(CHAT_PATH, json=body, headers=headers)
         except httpx.TimeoutException:
             # Neither the transport's message nor its cause is kept.
+            self._observe("failed", "timeout")
             raise ModelCallTimeoutError from None
         except httpx.HTTPError:
+            self._observe("failed", "unreachable")
             raise ModelCallError(0) from None
         if (
             response.status_code == HTTPStatus.BAD_REQUEST
             and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
         ):
+            self._observe("failed", "filtered")
             raise ModelCallFilteredError from None
         if not 200 <= response.status_code < 300:
+            refused = response.status_code in REFUSED_STATUSES
+            self._observe("failed", "refused" if refused else "error")
             raise ModelCallError(response.status_code)
         try:
             reply = _Reply.model_validate(response.json())
         except (ValueError, ValidationError):
+            self._observe("failed", "error")
             raise ModelCallError(0) from None
+        self._observe("completed")
         return ChatResult(
             text=reply.output.text,
             deployment=reply.deployment,

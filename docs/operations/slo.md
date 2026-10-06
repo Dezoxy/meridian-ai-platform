@@ -38,7 +38,7 @@ would be watched while the platform runs.
 | `certificate-validity` | Each certificate that identifies a service, and the CA that signs them, is renewed before it ends (S056) | Time until each certificate's end and whether it is Ready, from cert-manager's metrics | No certificate under 21 days from its end for an hour, none not Ready for 15 minutes; the metrics reach Prometheus and cert-manager and approver-policy run | Implemented on kind (S056); the first two alerts seen loaded and inactive, the other two not seen, unmeasured |
 | `triage-latency` | A claim's triage drafts a proposal quickly (QA-01) | The duration of a triage run, as a histogram | p95 under 10 s with the replay provider, under 30 s with `gpt-4o` | Designed: no service records a duration metric; S027 measures it with a load test |
 | `gateway-overhead` | The gateway adds little to a model call (QA-02) | The gateway's own time per call, excluding the provider's | p95 under 50 ms | Designed: the time is in the gateway's spans only |
-| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Designed: the Agent Runtime records no metric; its run table holds the answer |
+| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented in tests, not run on a cluster (S064): the Agent Runtime counts each leg of a run by outcome, `meridian_runtime_runs_total`; no rule or dashboard reads it yet, and the run table holds the answer |
 
 The proposed window is 28 days, for the Azure environment (S020), where the
 metrics would be kept that long. On kind, Prometheus keeps 24 hours, so no
@@ -184,9 +184,23 @@ namespace; Meridian's file does not repeat them.
 - **A call that never reached the gateway.** The counter counts requests
   that reached the gateway's handler. When the Agent Runtime or the
   knowledge server cannot reach the gateway at all, nothing is counted, so
-  `model-calls` stays where it was. That failure has no metric (the tool
-  servers and the runtime export traces only); `MeridianServiceUnavailable`
-  is the nearest signal.
+  `model-calls` stays where it was. The runtime now counts its own calls
+  (S064, implemented in tests, not run on a cluster): the OTLP counter
+  `meridian.runtime.model_calls` reaches Prometheus as
+  `meridian_runtime_model_calls_total`, by `meridian_outcome` (`completed`
+  or `failed`) and, for a failure, `meridian_reason`: `unreachable` (no
+  answer at all), `timeout`, `refused` (a 429 or a 403), `filtered` (the
+  provider's content filter), `error` (any other status, or an answer
+  outside the contract) and `limit` (a call the run's own limit stopped
+  before it was sent). The runs have `meridian_runtime_runs_total`, one
+  count for each leg of a run (a start and each resume), by
+  `meridian_outcome` (`completed`, `paused`, `failed`) and, for a failed
+  leg, a `meridian_reason` word of the runtime's own closed set; every
+  failure a workload's graph names is the one word `graph-failure`. Both
+  carry `meridian_tenant` and `meridian_agent`. No rule reads either yet.
+  The tool servers still export traces only, so the knowledge server's
+  `gateway-unavailable` has no metric; `MeridianServiceUnavailable` is the
+  nearest signal there.
 - **A gateway that has served nothing.** After a restart the gateway has no
   series until its first call, so the share is absent, not 100 %.
 - **Replay mode.** On kind the gateway answers from the simulated `replay`

@@ -17,7 +17,8 @@ from opentelemetry.sdk.resources import Resource
 from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
 
 # The only attribute keys our code may put on a metric: registry identifiers and
-# fixed words, never a caller-supplied value.
+# fixed words, never a caller-supplied value. ``meridian.tool`` is a registry
+# tool's ID, ``meridian.finding`` a fixed word of the code that counts it.
 METRIC_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
     {
         "meridian.tenant",
@@ -27,6 +28,8 @@ METRIC_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
         "gen_ai.token.type",
         "meridian.outcome",
         "meridian.reason",
+        "meridian.tool",
+        "meridian.finding",
     }
 )
 

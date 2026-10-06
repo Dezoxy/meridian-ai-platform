@@ -141,10 +141,13 @@ stays quiet. What it cannot answer:
 
 ## Not built
 
-- A metric for a caller that cannot reach the gateway at all. The Agent
-  Runtime and the knowledge server export traces only; the knowledge
-  server reports `gateway-unavailable` as a failed tool call. The nearest
-  alert is `MeridianServiceUnavailable`.
+- An alert on a caller that cannot reach the gateway at all. The Agent
+  Runtime counts its model calls (S064: `meridian_runtime_model_calls_total`
+  with `meridian_reason="unreachable"`, `timeout`, `refused`, `filtered`,
+  `error` or `limit`; implemented in tests, not run on a cluster), and no
+  rule reads it yet. The knowledge server exports traces only; it reports
+  `gateway-unavailable` as a failed tool call. The nearest alert is
+  `MeridianServiceUnavailable`.
 - The second region, and Mistral as a second provider (S023).
 - A time window on a circuit's failure count: three failures days apart
   open it (the plan's backlog, S027).

@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.serde import _msgpack
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer
 
@@ -46,6 +47,7 @@ from meridian.platform.common.identity import (
     install_caller_check,
 )
 from meridian.platform.common.logredaction import install_log_redaction
+from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -58,6 +60,7 @@ from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import failure_reason
 from meridian.runtime.graphs import GraphFactory, load_graph_factory
+from meridian.runtime.meters import RuntimeMeters
 from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
 from meridian.runtime.models import (
     Reference,
@@ -427,6 +430,7 @@ def create_app(
     settings: RuntimeSettings,
     *,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     http_client: httpx.Client | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     tool_servers: Mapping[str, ToolTarget] | None = None,
@@ -438,7 +442,9 @@ def create_app(
 
     ``tool_servers`` (tests) replaces the settings' addresses with targets the
     SDK's client accepts, such as an in-process server. ``clock`` times the
-    audit throttle of the runtime's own tool refusals."""
+    audit throttle of the runtime's own tool refusals. A ``meter_provider`` is
+    its caller's to shut down; without one the app builds its own, which it
+    shuts down with the app."""
     _refuse_to_start_if_unsafe()
     # At start, not on the first run: the SDK's log routing and its models.
     prepare_sdk()
@@ -467,6 +473,11 @@ def create_app(
     # at shutdown, with the gateway client when the app made that itself.
     tool_transport = ToolTransport(verify)
     dsn = settings.database_url
+    owns_meter_provider = meter_provider is None
+    app_meter_provider = (
+        make_meter_provider(SERVICE_NAME) if meter_provider is None else meter_provider
+    )
+    meters = RuntimeMeters(app_meter_provider)
 
     # An injected checkpointer (tests) serves every request; otherwise each
     # request opens the PostgreSQL saver on a connection of its own (S015).
@@ -474,13 +485,17 @@ def create_app(
         return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
 
     def close() -> None:
-        # The gateway client is closed only when the app made it: an injected
-        # one is its owner's.
+        # The gateway client and the meter provider are closed only when the
+        # app made them: an injected one is its owner's.
         try:
             tool_transport.close()
         finally:
-            if http_client is None:
-                http.close()
+            try:
+                if http_client is None:
+                    http.close()
+            finally:
+                if owns_meter_provider:
+                    app_meter_provider.shutdown()
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -589,12 +604,23 @@ def create_app(
                 transport=tool_transport,
             )
             outcome = runs.execute(
-                factory, saver, http, tools, tracer, identity, run_input, resume=resume
+                factory,
+                saver,
+                http,
+                tools,
+                tracer,
+                identity,
+                run_input,
+                resume=resume,
+                on_model_call=meters.model_call_observer(identity),
             )
         except Exception as exc:
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
+        # Counted here, once, from what the leg itself did and before _settle
+        # may answer for another writer (the sweep) or fail to write.
+        meters.leg_ended(identity, outcome, failure)
         outcome, failure, unsaved = _settle(dsn, identity, leg, failure, outcome)
         if outcome.status != "AwaitingApproval":
             # The checkpoint holds the claim; a finished run needs none,
