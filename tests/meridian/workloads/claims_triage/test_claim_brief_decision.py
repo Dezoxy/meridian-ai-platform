@@ -402,7 +402,9 @@ def a_recorded_decision_that_did_not_complete(
             id="a run that is still paused",
         ),
         pytest.param(
-            lambda run: answering(run, "Failed", None), 502, id="a run that says Failed"
+            lambda run: answering(run, "AwaitingApproval", None),
+            502,
+            id="a run that is paused again with no output",
         ),
         pytest.param(
             lambda run: (200, {"unexpected": True}), 502, id="outside the contract"
@@ -445,7 +447,6 @@ def test_a_run_another_request_is_applying_is_a_409_and_the_brief_waits(
 @pytest.mark.parametrize(
     "output",
     [
-        pytest.param(None, id="no output"),
         pytest.param({}, id="no brief"),
         pytest.param({"brief": ""}, id="an empty brief"),
         pytest.param({"brief": "x" * 4001, "filed": True}, id="a brief too long"),

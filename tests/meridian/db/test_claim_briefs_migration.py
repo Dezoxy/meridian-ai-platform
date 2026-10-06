@@ -30,6 +30,7 @@ from sweepmigrationsupport import (
 from meridian.platform.common.db import connect
 from meridian.platform.migrations import runner
 from meridian.platform.migrations.runner import migration_files
+from meridian.workloads.claims_triage import briefs
 
 SUFFIX = "_claim_briefs.sql"
 TABLE = "claims.briefs"
@@ -63,6 +64,13 @@ INSERT_BRIEF = (
     "INSERT INTO claims.briefs (brief_id, claim_id, tenant, state) "
     "VALUES (%s, %s, %s, %s)"
 )
+INSERT_FULL_BRIEF = (
+    "INSERT INTO claims.briefs (brief_id, claim_id, tenant, state, run_id, brief) "
+    "VALUES (%s, %s, %s, %s, %s, %s)"
+)
+# The states that need a run and a text: a row in one of them with neither waits
+# for ever (X2, the database review's L2).
+NEEDS_RUN_AND_TEXT = ("awaiting_decision", "filed", "rejected")
 
 # What each role holds on the table: the rows the privilege snapshot reports.
 API_HOLDS = frozenset(
@@ -102,8 +110,13 @@ def add_brief(
     claim_id: str = CLAIM_ID,
     role: str = API,
 ) -> uuid.UUID:
+    """A brief in ``state``; a state that needs a run and a text gets both."""
     brief_id = uuid.uuid4()
-    run(db, role, INSERT_BRIEF, (brief_id, claim_id, TENANT, state))
+    if state in NEEDS_RUN_AND_TEXT:
+        values = (brief_id, claim_id, TENANT, state, uuid.uuid4(), "a brief")
+        run(db, role, INSERT_FULL_BRIEF, values)
+    else:
+        run(db, role, INSERT_BRIEF, (brief_id, claim_id, TENANT, state))
     return brief_id
 
 
@@ -255,7 +268,12 @@ def test_a_claim_cannot_have_a_second_open_brief(
     add_brief(claims, first)
 
     sqlstate = refused(
-        claims, API, INSERT_BRIEF, (uuid.uuid4(), CLAIM_ID, TENANT, second)
+        claims,
+        API,
+        INSERT_FULL_BRIEF,
+        (uuid.uuid4(), CLAIM_ID, TENANT, second, uuid.uuid4(), "a brief")
+        if second in NEEDS_RUN_AND_TEXT
+        else (uuid.uuid4(), CLAIM_ID, TENANT, second, None, None),
     )
 
     assert sqlstate == UNIQUE_VIOLATION
@@ -315,6 +333,137 @@ def test_the_open_briefs_index_is_partial_and_unique_and_the_latest_one_is_index
     assert "awaiting_decision" in open_only[0]
     latest = [d for d in definitions if "claim_id, created_at" in d]
     assert len(latest) == 1
+
+
+# ── a state that needs a run and a text has both ────────────────────────────
+@pytest.mark.parametrize("state", NEEDS_RUN_AND_TEXT)
+@pytest.mark.parametrize(
+    ("run_id", "text"),
+    [
+        pytest.param(None, None, id="neither"),
+        pytest.param(uuid.uuid4(), None, id="a run and no text"),
+        pytest.param(None, "a brief", id="a text and no run"),
+        pytest.param(uuid.uuid4(), "", id="a run and an empty text"),
+    ],
+)
+def test_a_state_that_needs_a_run_and_a_text_is_refused_without_both(
+    claims: DatabaseHandle, state: str, run_id: uuid.UUID | None, text: str | None
+) -> None:
+    sqlstate = refused(
+        claims,
+        API,
+        INSERT_FULL_BRIEF,
+        (uuid.uuid4(), CLAIM_ID, TENANT, state, run_id, text),
+    )
+
+    assert sqlstate == CHECK_VIOLATION
+    assert run(claims, OWNER, "SELECT count(*) FROM claims.briefs") == [(0,)]
+
+
+@pytest.mark.parametrize("state", NEEDS_RUN_AND_TEXT)
+def test_a_state_that_needs_a_run_and_a_text_is_accepted_with_both(
+    claims: DatabaseHandle, state: str
+) -> None:
+    add_brief(claims, state)
+
+    assert run(claims, OWNER, "SELECT state FROM claims.briefs") == [(state,)]
+
+
+@pytest.mark.parametrize("state", ["drafting", "failed"])
+def test_a_drafting_or_failed_brief_may_have_neither_a_run_nor_a_text(
+    claims: DatabaseHandle, state: str
+) -> None:
+    add_brief(claims, state)
+
+    assert run(claims, OWNER, "SELECT run_id, brief FROM claims.briefs") == [
+        (None, None)
+    ]
+
+
+@pytest.mark.parametrize("state", NEEDS_RUN_AND_TEXT)
+def test_a_drafting_brief_cannot_be_moved_to_a_state_that_needs_what_it_lacks(
+    claims: DatabaseHandle, state: str
+) -> None:
+    brief_id = add_brief(claims)
+
+    sqlstate = refused(
+        claims,
+        API,
+        "UPDATE claims.briefs SET state = %s WHERE brief_id = %s",
+        (state, brief_id),
+    )
+
+    assert sqlstate == CHECK_VIOLATION
+
+
+@pytest.mark.parametrize("state", ["drafting", "failed"])
+def test_an_empty_text_is_refused_in_any_state(
+    claims: DatabaseHandle, state: str
+) -> None:
+    brief_id = add_brief(claims, state)
+
+    sqlstate = refused(
+        claims,
+        API,
+        "UPDATE claims.briefs SET brief = '' WHERE brief_id = %s",
+        (brief_id,),
+    )
+
+    assert sqlstate == CHECK_VIOLATION
+
+
+def write(db: DatabaseHandle, statement: str, params: tuple) -> list[tuple]:
+    """One of the routes' own statements, run as the Claims API."""
+    return run(db, API, statement, params)
+
+
+def start_brief(db: DatabaseHandle, claim_id: str = CLAIM_ID) -> uuid.UUID:
+    brief_id = uuid.uuid4()
+    write(db, briefs.INSERT_BRIEF_SQL, (brief_id, claim_id, TENANT))
+    return brief_id
+
+
+def states(db: DatabaseHandle) -> list[tuple]:
+    return run(db, OWNER, "SELECT state, run_id, brief FROM claims.briefs")
+
+
+@pytest.mark.parametrize("closing", ["filed", "rejected"])
+def test_the_routes_start_store_and_close_pass_the_constraints_in_their_order(
+    claims: DatabaseHandle, closing: str
+) -> None:
+    brief_id = start_brief(claims)
+    run_id = uuid.uuid4()
+
+    write(claims, briefs.STORE_BRIEF_SQL, (run_id, "a brief", brief_id))
+    write(claims, briefs.CLOSE_BRIEF_SQL, (closing, run_id, CLAIM_ID, TENANT))
+
+    assert states(claims) == [(closing, run_id, "a brief")]
+
+
+def test_the_routes_failure_writes_pass_the_constraints_in_every_order_they_happen(
+    claims: DatabaseHandle,
+) -> None:
+    run_id = uuid.uuid4()
+    # a first leg that failed before the run was named, then one that named it
+    write(claims, briefs.FAIL_BRIEF_SQL, (None, start_brief(claims)))
+    write(claims, briefs.FAIL_BRIEF_SQL, (run_id, start_brief(claims)))
+    # a brief the lease lapsed
+    write(claims, briefs.LAPSE_SQL, (start_brief(claims),))
+    # one that paused and was closed as failed by an ended run
+    paused_run = uuid.uuid4()
+    paused = start_brief(claims)
+    write(claims, briefs.STORE_BRIEF_SQL, (paused_run, "a brief", paused))
+    write(claims, briefs.CLOSE_BRIEF_SQL, ("failed", paused_run, CLAIM_ID, TENANT))
+
+    assert sorted(states(claims), key=lambda row: str(row[1])) == sorted(
+        [
+            ("failed", None, None),
+            ("failed", run_id, None),
+            ("failed", None, None),
+            ("failed", paused_run, "a brief"),
+        ],
+        key=lambda row: str(row[1]),
+    )
 
 
 # ── what each role holds ────────────────────────────────────────────────────

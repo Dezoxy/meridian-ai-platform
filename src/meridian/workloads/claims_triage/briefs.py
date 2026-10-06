@@ -10,12 +10,27 @@ per brief, apart from the claim's own ``run_id`` and state.
 
 - ``POST /claims/{claim_id}/brief`` inserts the brief as ``drafting`` and commits
   before the run starts, so a request that dies leaves a row the runtime's lease
-  covers; it then stores the run's ID and text. One open brief per claim.
+  covers; it then stores the run's ID and text. One open brief per claim. A claim
+  that is ``approved``, ``rejected`` or ``withdrawn`` has no brief started (409),
+  and neither has one that has had ``MAX_BRIEFS_PER_CLAIM`` (409): both are
+  decided in the transaction that locks the claim's row, because the routes have
+  no sign-in (T-69) and each brief costs a model call.
 - ``POST /claims/{claim_id}/brief/decision`` records the decision for the
   brief's own run in ``claims.decisions`` and resumes the run. The resume carries
   no decision: the workload reads the recorded one through ``approval_outcome``,
-  so the Claims API records it and the run only reads it (T-31).
+  so the Claims API records it and the run only reads it (T-31). The recorded
+  decision is also the authority when the close was lost: a run the runtime says
+  has ended, with a status and no output, closes the brief by the decision
+  (``Completed``) or as ``failed`` (``Failed``), so a brief never waits for ever
+  and a new one may start; an output that contradicts the decision is a 502 and
+  the brief waits.
 - ``GET /claims/{claim_id}/brief`` reads the claim's latest brief.
+
+The answers carry no ``Cache-Control``, as the triage's JSON routes carry none
+(only the adjuster's pages say ``no-store``). The decision's audit event
+(``brief.decided``) names the claim and so is in the claim's trail, on purpose; the
+sweep's event for an abandoned run of the brief's agent names no claim, so it is
+not (``runtime/sweep.py``).
 
 The routes take what the JSON decision route beside them takes: no sign-in and
 no same-origin check (T-69; the pages carry that one), a JSON body that a browser
@@ -82,7 +97,18 @@ BriefState = Literal["drafting", "awaiting_decision", "filed", "rejected", "fail
 BriefDecisionWord = Literal["approve", "reject"]
 # The bound of the text, in characters: the table's CHECK says the same.
 MAX_BRIEF_CHARS = 4000
+# How many briefs a claim may have had, whatever state each ended in: each is a
+# model call, tool calls and, on approve, a note from the shared tenant's budget,
+# and the routes have no sign-in (T-69). The triages per claim are bounded the
+# same way (``MAX_TRIAGES_PER_CLAIM``, T-38).
+MAX_BRIEFS_PER_CLAIM = 5
+# The claim's states nothing more happens in, so a brief of it has no use: the
+# lifecycle has no edge out of them. The others can still move (``triage_failed``
+# is referred, ``documents_requested`` takes documents) or are in flight.
+CLOSED_CLAIM_STATES = frozenset({"approved", "rejected", "withdrawn"})
 
+CLAIM_CLOSED_DETAIL = "the claim is closed; no brief can be started for it"
+BRIEF_LIMIT_DETAIL = "the claim has had as many briefs as it may have"
 NO_SUCH_BRIEF_DETAIL = "the claim has no brief"
 BRIEF_AWAITING_DETAIL = "the claim has a brief that waits for a decision"
 BRIEF_DRAFTING_DETAIL = "the claim's brief is being drafted"
@@ -105,7 +131,11 @@ BRIEF_DECIDED_REASON = "adjuster-decision"
 # columns of the view in the same order: claim, state, text, run, two times.
 CLAIM_SQL = "SELECT 1 FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 LOCK_CLAIM_SQL = (
-    "SELECT 1 FROM claims.claims WHERE claim_id = %s AND tenant = %s FOR NO KEY UPDATE"
+    "SELECT state FROM claims.claims "
+    "WHERE claim_id = %s AND tenant = %s FOR NO KEY UPDATE"
+)
+COUNT_BRIEFS_SQL = (
+    "SELECT count(*) FROM claims.briefs WHERE claim_id = %s AND tenant = %s"
 )
 OPEN_BRIEF_SQL = (
     "SELECT brief_id, state, "
@@ -223,10 +253,29 @@ def _reply[Success](
 
 def _require_claim(
     conn: psycopg.Connection, tenant: str, claim_id: str, statement: str = CLAIM_SQL
-) -> None:
-    """A claim of this tenant (another tenant's is none), else 404."""
-    if conn.execute(statement, (claim_id, tenant)).fetchone() is None:
+) -> tuple[Any, ...]:
+    """A claim of this tenant (another tenant's is none), else 404; the row the
+    statement selected."""
+    row = conn.execute(statement, (claim_id, tenant)).fetchone()
+    if row is None:
         raise HTTPException(404, NO_SUCH_CLAIM_DETAIL)
+    return row
+
+
+def _refuse_closed_claim(state: str) -> None:
+    """Refuse (409) a claim in a state nothing more happens in."""
+    if state in CLOSED_CLAIM_STATES:
+        raise HTTPException(409, CLAIM_CLOSED_DETAIL)
+
+
+def _refuse_too_many_briefs(
+    conn: psycopg.Connection, tenant: str, claim_id: str
+) -> None:
+    """Refuse (409) a claim that has had ``MAX_BRIEFS_PER_CLAIM`` briefs, counted
+    in the caller's transaction, which holds the claim's row lock."""
+    row = conn.execute(COUNT_BRIEFS_SQL, (claim_id, tenant)).fetchone()
+    if row is not None and row[0] >= MAX_BRIEFS_PER_CLAIM:
+        raise HTTPException(409, BRIEF_LIMIT_DETAIL)
 
 
 def _refuse_open_brief(conn: psycopg.Connection, tenant: str, claim_id: str) -> None:
@@ -248,8 +297,10 @@ def _take_brief(dsn: str, tenant: str, claim_id: str) -> _Taken:
     """Insert the claim's brief as ``drafting`` and commit it, with the facts the
     run is sent (a triage's, with no claimant). A refusal is an ``HTTPException``."""
     with connect(dsn, SERVICE_NAME) as conn:
-        _require_claim(conn, tenant, claim_id, LOCK_CLAIM_SQL)
+        (state,) = _require_claim(conn, tenant, claim_id, LOCK_CLAIM_SQL)
+        _refuse_closed_claim(state)
         _refuse_open_brief(conn, tenant, claim_id)
+        _refuse_too_many_briefs(conn, tenant, claim_id)
         facts = facts_for_run(
             _submission(conn, claim_id), arrived_documents(conn, claim_id)
         )
@@ -404,33 +455,64 @@ def _record_decision(dsn: str, tenant: str, claim_id: str, body: BriefDecision) 
         )
 
 
-def _close_brief(
-    dsn: str, tenant: str, claim_id: str, body: BriefDecision, run: RunResponse
-) -> BriefView | DecisionFailure:
-    """The resumed run ended: a valid output whose ``filed`` agrees with the
-    decision closes the brief, anything else leaves it waiting (the decision
-    stays recorded, and posting it again resumes again)."""
+def _state_to_close_with(
+    claim_id: str, body: BriefDecision, run: RunResponse
+) -> BriefState | None:
+    """The state the resume's answer closes the brief in, or ``None`` when the
+    brief must wait. The recorded decision is the authority (T-31): a run the
+    runtime says ended, with a status and NO output (it answers so for any run
+    that ended before this resume, whatever lost the first close), closes the
+    brief by the decision when it completed and as ``failed`` when it did not,
+    so a brief cannot wait for ever. An output is trusted only when it is a brief
+    whose ``filed`` agrees with the decision: one that contradicts it, or is not
+    a brief, is a fault to look at, and the brief waits."""
+    if run.output is None and run.status in ("Completed", "Failed"):
+        logger.warning(
+            "resume of run %s for claim %s: the run had ended (%s) and answered no "
+            "output; the brief is closed by the recorded decision",
+            body.run,
+            claim_id,
+            run.status,
+        )
+        if run.status == "Failed":
+            return "failed"
+        return STATE_BY_DECISION[body.decision]
     try:
         output = _output_of(run, resumed=True)
     except RuntimeCallError as exc:
         logger.error(
             "resume of run %s for claim %s: %s", body.run, claim_id, type(exc).__name__
         )
-        return DecisionFailure(502, RESUME_FAILED_DETAIL, body.run)
+        return None
     if output.filed is not FILED_BY_DECISION[body.decision]:
         logger.error(
             "resume of run %s for claim %s: filed disagrees with the decision",
             body.run,
             claim_id,
         )
+        return None
+    return STATE_BY_DECISION[body.decision]
+
+
+def _close_brief(
+    dsn: str, tenant: str, claim_id: str, body: BriefDecision, run: RunResponse
+) -> BriefView | DecisionFailure:
+    """The resumed run answered: close the brief in the state the answer allows
+    (``_state_to_close_with``). A run that failed closes it ``failed`` and the
+    answer is the failure's, so a new brief may start; any other answer that does
+    not fit leaves it waiting (the decision stays recorded, and posting it again
+    resumes again)."""
+    state = _state_to_close_with(claim_id, body, run)
+    if state is None:
         return DecisionFailure(502, RESUME_FAILED_DETAIL, body.run)
     with connect(dsn, SERVICE_NAME) as conn:
         row = conn.execute(
-            CLOSE_BRIEF_SQL,
-            (STATE_BY_DECISION[body.decision], body.run, claim_id, tenant),
+            CLOSE_BRIEF_SQL, (state, body.run, claim_id, tenant)
         ).fetchone()
     if row is None:
         return DecisionFailure(409, BRIEF_NOT_WAITING_DETAIL, body.run)
+    if state == "failed":
+        return DecisionFailure(502, RESUME_FAILED_DETAIL, body.run)
     return _view(row)
 
 

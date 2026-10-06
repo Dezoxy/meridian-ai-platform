@@ -49,13 +49,15 @@ def add_brief(
     age_seconds: float,
     tenant: str = "development",
 ) -> None:
-    """A brief in ``state`` since ``age_seconds`` ago, naming ``run_id``."""
+    """A brief in ``state`` since ``age_seconds`` ago, naming ``run_id``; a state
+    that needs a text (the table's CHECK) holds one."""
+    text = "a brief" if state in ("awaiting_decision", "filed", "rejected") else None
     owner_rows(
         db,
-        "INSERT INTO claims.briefs (claim_id, tenant, run_id, state, "
+        "INSERT INTO claims.briefs (claim_id, tenant, run_id, state, brief, "
         "state_changed_at) "
-        "VALUES (%s, %s, %s, %s, now() - make_interval(secs => %s)) RETURNING 1",
-        (claim_id, tenant, run_id, state, float(age_seconds)),
+        "VALUES (%s, %s, %s, %s, %s, now() - make_interval(secs => %s)) RETURNING 1",
+        (claim_id, tenant, run_id, state, text, float(age_seconds)),
     )
 
 

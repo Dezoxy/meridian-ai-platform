@@ -22,7 +22,8 @@
 --          filed              approved, and the run wrote its note
 --          rejected           rejected, and nothing was written
 --          failed             the run did not give a brief
---   brief  the model's plain text, at most 4,000 characters, null until drafted.
+--   brief  the model's plain text, 1 to 4,000 characters (never the empty
+--          string), null until drafted.
 --          It is the one column that holds anything a model wrote: only the
 --          Claims API reads it (and returns it from its own route); the sweep
 --          cannot (T-03).
@@ -33,7 +34,20 @@
 -- one of the five words. A partial unique index allows one brief per claim in
 -- drafting or awaiting_decision, so two requests that start a brief for one claim
 -- cannot both succeed: the second is refused by the database whatever the app
--- checks first. A second index serves "the claim's latest brief".
+-- checks first. A second index serves "the claim's latest brief". A brief in
+-- awaiting_decision, filed or rejected has a run and a text (a CHECK): a row in
+-- one of those states with neither would wait for a decision that no run can
+-- take, and the partial unique index would refuse every later brief of the
+-- claim, so the table refuses it. drafting and failed may have neither. The
+-- routes' own writes pass in the order they happen: the row is inserted drafting
+-- with neither; one statement then names the run, stores the text and moves it
+-- to awaiting_decision; closing only changes the state. What the table does not
+-- check is the direction of a state change (any role that may update the column
+-- may move it either way, as claims.claims allows) or that tenant is the
+-- claim's: the app keeps both (a later file may add a key on the claim and its
+-- tenant). The wait that is left, an awaiting_decision brief nobody decides,
+-- ends when a decision is posted again: the Claims API closes the brief by the
+-- recorded decision when the runtime says the run has ended.
 --
 -- Grants, nothing to PUBLIC, column-level where a table holds more than a role
 -- needs:
@@ -98,9 +112,15 @@ CREATE TABLE claims.briefs (
             state IN ('drafting', 'awaiting_decision', 'filed', 'rejected', 'failed')
         ),
     brief text
-        CONSTRAINT briefs_brief_is_bounded CHECK (char_length(brief) <= 4000),
+        CONSTRAINT briefs_brief_is_bounded CHECK (
+            char_length(brief) BETWEEN 1 AND 4000
+        ),
     created_at timestamptz NOT NULL DEFAULT now(),
-    state_changed_at timestamptz NOT NULL DEFAULT now()
+    state_changed_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT briefs_state_has_what_it_needs CHECK (
+        state NOT IN ('awaiting_decision', 'filed', 'rejected')
+        OR (run_id IS NOT NULL AND brief IS NOT NULL)
+    )
 );
 
 CREATE UNIQUE INDEX briefs_one_open_per_claim_idx

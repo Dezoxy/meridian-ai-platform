@@ -340,7 +340,11 @@ def end_run_unless_kept(conn: psycopg.Connection, run_id: UUID) -> bool:
     ).fetchone()
     if kept is not None and kept[0]:
         return False
-    return end_abandoned_run(conn, run_id, service=SERVICE_NAME)
+    # A brief run's event names no claim: the claim's trail takes every event of
+    # this role that does, and the adjuster's page would read it as the triage's.
+    return end_abandoned_run(
+        conn, run_id, service=SERVICE_NAME, unreferenced_agents=(BRIEF_AGENT,)
+    )
 
 
 def _sweep_runs(conn: psycopg.Connection, tally: Counter[str]) -> None:

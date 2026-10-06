@@ -15,6 +15,7 @@ one transaction. Rows and audit events hold identifiers and fixed words only
 """
 
 import uuid
+from collections.abc import Collection
 
 import psycopg
 from psycopg import sql
@@ -220,12 +221,22 @@ def leftover_threads(
 
 
 def end_abandoned_run(
-    conn: psycopg.Connection, run_id: uuid.UUID, *, service: str
+    conn: psycopg.Connection,
+    run_id: uuid.UUID,
+    *,
+    service: str,
+    unreferenced_agents: Collection[str] = (),
 ) -> bool:
     """Move an unfinished run, idle past ``RUNNING_LEASE_SECONDS``, to ``Failed``;
     write its ``run.failed`` event with the reason ``abandoned``; delete its
     thread's checkpoints. Returns ``False``, and changes nothing, when the run is
     not in that state any more (finished, or freshened by a resume).
+
+    The event carries the run's reference (a claim's ID) unless the run's agent is
+    one of ``unreferenced_agents``: then it carries none, and the run's own ID
+    on the row is what ties it to the run. A claim's trail takes every event of
+    the sweep's role that names the claim, and an agent that is not the claim's
+    triage must not appear in it as the triage's end (S037).
 
     The caller decides that nothing keeps the run, and holds its row lock
     (``FOR UPDATE``) while it does; without the lock this statement waits for
@@ -253,7 +264,7 @@ def end_abandoned_run(
             tenant=tenant,
             agent=agent,
             run_id=run_id,
-            reference=reference,
+            reference=None if agent in unreferenced_agents else reference,
         ),
     )
     delete_thread_checkpoints(conn, str(thread_id))
