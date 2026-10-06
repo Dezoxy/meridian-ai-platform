@@ -239,5 +239,8 @@ known.
 - The cluster is deleted on the owner's word only. It frees about 3.3 GiB
   when the steps that need it are done.
 
-Still to measure: what a test database copied from a template saves over
-one built from every migration (S065), alone and in CI.
+A test database is a copy of one migrated template since S065, not a
+database built from every migration. Measured on 2026-10-06 beside the
+deployed cluster, the whole suite: 3 min 00 s before and 2 min 11 s after
+with 4 workers, and 1 min 52 s after with 10, which is what the suite took
+alone before. Still to measure: what it saves in CI.
