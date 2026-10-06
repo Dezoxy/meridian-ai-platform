@@ -137,6 +137,22 @@ numbers of the line are also the gauge `meridian_sweep_last_pass`
 until it is given the collector's address), so the log line stays the
 place to read a pass until it is.
 
+A pass whose numbers did not arrive leaves no series, and the exit code
+does not say so: the gauge is sent after the pass and a failed send is
+never the pass's failure. The evidence is in the output of the last Jobs,
+which the cluster keeps for a day, in the logger
+`opentelemetry.exporter.otlp.proto.http.metric_exporter`:
+
+```sh
+k logs job/<the newest job's name> | grep metric_exporter
+```
+
+A collector that is refused shows `Transient error` warnings that name its
+host and port, then one error, "Failed to export metrics batch", that
+names no address. The sweep's own warning, "the sweep's metrics were not
+sent", names only a class. A rule on the gauge's absence is the detector;
+none exists yet.
+
 | What the log or the CronJob shows | Cause |
 |---|---|
 | A connection error | The database, above; or the sweep's password no longer matches its role: [secret rotation](secret-rotation.md) |

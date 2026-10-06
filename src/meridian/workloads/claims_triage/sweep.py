@@ -408,10 +408,14 @@ def main(environ: Mapping[str, str] = os.environ) -> int:
         logger.error("the sweep pass could not run: %s", type(exc).__name__)
         return EXIT_FAILED
     # Imported here, not at the top: its provider module loads a web stack that
-    # this job otherwise does not (a test holds that). It never raises.
-    from meridian.workloads.claims_triage.sweep_meters import report_pass
+    # this job otherwise does not (a test holds that). The import and the call
+    # are one guard: neither may change the pass's exit code or print a traceback.
+    try:
+        from meridian.workloads.claims_triage.sweep_meters import report_pass
 
-    report_pass(result)
+        report_pass(result)
+    except Exception as exc:
+        logger.warning("the sweep's metrics were not sent: %s", type(exc).__name__)
     return EXIT_CLEAN if result.failures == 0 else EXIT_FAILED
 
 

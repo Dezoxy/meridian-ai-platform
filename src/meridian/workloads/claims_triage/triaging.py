@@ -51,7 +51,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     Transition,
     move_claim,
 )
-from meridian.workloads.claims_triage.meters import ClaimsMeters
+from meridian.workloads.claims_triage.meters import ClaimsMeters, TriageFailure
 from meridian.workloads.claims_triage.models import (
     Claimant,
     ClaimFacts,
@@ -278,7 +278,7 @@ class RuntimeCallError(Exception):
     Carries the HTTP status it answered (0: none, it timed out, was unreachable
     or answered outside its contract) and its run ID when it named one. The
     message is fixed text: neither the runtime's body nor the claim is kept.
-    """
+    ``failure`` is the word the triage's metric counts it under (``meters.py``)."""
 
     def __init__(
         self,
@@ -287,11 +287,13 @@ class RuntimeCallError(Exception):
         status_code: int = 0,
         run_id: UUID | None = None,
         timed_out: bool = False,
+        failure: TriageFailure = "runtime-failed",
     ) -> None:
         super().__init__(reason)
         self.status_code = status_code
         self.run_id = run_id
         self.timed_out = timed_out or status_code == HTTP_GATEWAY_TIMEOUT
+        self.failure: TriageFailure = failure
 
 
 def _run_id_in(response: httpx.Response) -> UUID | None:
@@ -316,9 +318,13 @@ def _call_runtime(
     try:
         response = http.post(path, json=body, headers=headers, **options)
     except httpx.TimeoutException:
-        raise RuntimeCallError("the runtime timed out", timed_out=True) from None
+        raise RuntimeCallError(
+            "the runtime timed out", timed_out=True, failure="runtime-timeout"
+        ) from None
     except httpx.HTTPError:
-        raise RuntimeCallError("the runtime is unreachable") from None
+        raise RuntimeCallError(
+            "the runtime is unreachable", failure="runtime-unreachable"
+        ) from None
     if not 200 <= response.status_code < 300:
         raise RuntimeCallError(
             "the runtime answered an error",
@@ -328,7 +334,9 @@ def _call_runtime(
     try:
         return RunResponse.model_validate(response.json())
     except (ValueError, ValidationError):
-        raise RuntimeCallError("the runtime answered outside its contract") from None
+        raise RuntimeCallError(
+            "the runtime answered outside its contract", failure="bad-output"
+        ) from None
 
 
 def start_run(
@@ -404,12 +412,16 @@ def triage_outcome(run: RunResponse) -> tuple[TriageProposal, Transition]:
         proposal = TriageProposal.model_validate(run.output)
     except ValidationError:
         raise RuntimeCallError(
-            "the runtime's output is not a triage proposal", run_id=run.run_id
+            "the runtime's output is not a triage proposal",
+            run_id=run.run_id,
+            failure="bad-output",
         ) from None
     transition = RUN_OUTCOMES.get((run.status, proposal.route))
     if transition is None:
         raise RuntimeCallError(
-            "the runtime's answer does not fit its proposal", run_id=run.run_id
+            "the runtime's answer does not fit its proposal",
+            run_id=run.run_id,
+            failure="bad-output",
         )
     return proposal, transition
 
@@ -705,9 +717,27 @@ def run_taken_triage(
     text and the run's ID when there is one); a triage taken over by another
     request is a 409 raised as ``HTTPException``. ``span`` is the caller's open
     span; the run's ID is set on it. Every triage passes here, whichever route
-    took it, so this is where ``meters`` counts the proposal: once, after
-    ``close_triage`` has committed it, and never for a proposal that was not
-    stored (a failed run, a lost write, a triage taken over)."""
+    took it, so this is where ``meters`` counts it, once, by how it ended (the
+    words are in ``meters.py``); a failure no branch expected is counted
+    ``unexpected`` and raised, the 409 excepted: it is counted where it is raised."""
+    try:
+        return _run_triage(dsn, tenant, http, span, claim_id, facts, taken_at, meters)
+    except Exception as exc:
+        if meters is not None and not isinstance(exc, HTTPException):
+            meters.triage_failed("unexpected")
+        raise
+
+
+def _run_triage(
+    dsn: str,
+    tenant: str,
+    http: httpx.Client,
+    span: Span,
+    claim_id: str,
+    facts: dict[str, Any],
+    taken_at: datetime,
+    meters: ClaimsMeters | None,
+) -> ClaimResponse | DecisionFailure:
     try:
         run = start_run(http, tenant, claim_id, facts)
         proposal, transition = triage_outcome(run)
@@ -721,6 +751,8 @@ def run_taken_triage(
         )
         mark_error(span, exc)
         fail_triage(dsn, tenant, claim_id, exc.run_id, taken_at)
+        if meters is not None:
+            meters.triage_failed(exc.failure)
         return DecisionFailure(
             HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502,
             RUN_TIMEOUT_DETAIL if exc.timed_out else RUN_FAILED_DETAIL,
@@ -743,6 +775,8 @@ def run_taken_triage(
         )
         mark_error(span, exc)
         fail_triage(dsn, tenant, claim_id, run.run_id, taken_at)
+        if meters is not None:
+            meters.triage_failed("proposal-lost")
         return DecisionFailure(503, PROPOSAL_LOST_DETAIL, run.run_id)
     if not closed:
         logger.warning(
@@ -750,13 +784,16 @@ def run_taken_triage(
             claim_id,
             run.run_id,
         )
+        if meters is not None:
+            meters.triage_taken_over()
         raise HTTPException(409, TAKEN_OVER_DETAIL)
-    if meters is not None:
-        meters.proposal_stored(proposal)
-    return ClaimResponse(
+    response = ClaimResponse(
         claim_id=claim_id,
         state=transition.target,
         run_id=run.run_id,
         run_status=run.status,
         proposal=ProposalSummary(route=proposal.route, drafted_by=proposal.drafted_by),
     )
+    if meters is not None:
+        meters.proposal_stored(proposal)
+    return response

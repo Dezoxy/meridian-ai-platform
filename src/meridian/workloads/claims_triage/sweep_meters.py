@@ -12,19 +12,35 @@ them.
 ``report_pass`` is called by the sweep's ``main`` after the pass, on a provider
 of its own (``make_meter_provider``), flushes it and shuts it down. It never
 raises, and the sweep's exit code and its summary line are what they were
-whatever happens. The sweep's own WARNING (one) is for what the SDK raises: a
-provider that cannot be built, a reader that fails the flush or the shutdown. An
-export the collector refuses or does not answer is not one of them: the SDK's
-reader catches it and its exporter logs it itself (at ERROR, with the collector's
-address), so the flush still returns. A pass that could not run (the database
-was unreachable) has no result and reports nothing; the series then goes quiet.
-Without ``OTEL_EXPORTER_OTLP_ENDPOINT`` the provider has no reader and nothing
-is sent.
+whatever happens (``main`` also guards the import of this module and the call,
+with one WARNING of its own that names a class). The sweep's own WARNING here
+(one) is for what the SDK raises: a provider that cannot be built, a reader that
+fails the flush or the shutdown; it names only a class (the SDK raises a bare
+``Exception`` whose text can quote the exporter's error). An export the
+collector refuses or does not answer is not one of them: the SDK's reader
+catches it and its exporter logs it itself, so the flush still returns. A pass
+that could not run (the database was unreachable) has no result and reports
+nothing; the series then goes quiet. Without ``OTEL_EXPORTER_OTLP_ENDPOINT``
+the provider has no reader and nothing is sent.
+
+Where the evidence of a send that failed is: the exporter's logger,
+``opentelemetry.exporter.otlp.proto.http.metric_exporter``, in the Job's pod
+output (``kubectl -n meridian logs job/<name>``; a finished Job is kept for a
+day, ``ttlSecondsAfterFinished``, then its output is gone). Measured against
+the real exporter (the default deadline of 10 s, no
+``OTEL_EXPORTER_OTLP_TIMEOUT``): a collector that accepts the connection and
+never answers cost about 15 s and a refused connection about 12 s in all,
+because the pass is sent twice, once by the flush and again by the reader's own
+shutdown. The last line of a refused connection is an ERROR that names no
+address ("Failed to export metrics batch due to timeout, max retries or
+shutdown."); the ``Transient error`` WARNINGs before it do (host, port and path,
+never a credential). The chart sets 5 s for one export
+(``OTEL_EXPORTER_OTLP_TIMEOUT``, in seconds), which cuts each of the two sends
+at 5 s, not measured again here. Nothing but a rule on the gauge's absence turns
+an unsent pass into an alert.
 
 The bounds below cap the provider's loop over its readers and the join of the
-reader's thread. What caps an export is the exporter's own deadline
-(``OTEL_EXPORTER_OTLP_TIMEOUT``, 10 s by default, retries inside it): a
-collector that does not answer cost about 12 s in all, measured once.
+reader's thread. What caps an export is the exporter's own deadline.
 
 This module is imported by ``main`` when the pass is done, not by the module
 that holds ``main``: ``make_meter_provider`` lives in a module that loads
@@ -54,8 +70,8 @@ logger = logging.getLogger(__name__)
 
 METER_NAME = "meridian.sweep"
 # Each bound is far inside the CronJob's 120 s for a pass. The exporter keeps its
-# own deadline (``OTEL_EXPORTER_OTLP_TIMEOUT``, 10 s by default), which these do
-# not cut (see the docstring above).
+# own deadline (``OTEL_EXPORTER_OTLP_TIMEOUT``, 10 s by default, 5 s in the
+# chart), which these do not cut (see the docstring above).
 FLUSH_TIMEOUT_MILLIS = 5_000
 SHUTDOWN_TIMEOUT_MILLIS = 5_000
 

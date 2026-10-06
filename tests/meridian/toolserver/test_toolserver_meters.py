@@ -7,19 +7,27 @@ real calls through the kit over PostgreSQL (``make pytest-db``), and the third
 the meter provider's life with each of the three servers.
 """
 
+import logging
+import threading
 import uuid
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, get_args
 
 import anyio
 import httpx
+import mcp_types as types
 import psycopg
 import pytest
 from dbsupport import DatabaseHandle
+from exportsupport import record_exports
 from mcp.shared.exceptions import MCPError
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from servicesupport import REGISTRY_DIR, metric_points
 from toolsupport import (
     AGENT,
@@ -38,6 +46,7 @@ from toolsupport import (
 
 from meridian.platform.common import metrics as common_metrics
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS
+from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
 from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
@@ -63,7 +72,7 @@ from meridian.platform.toolserver.meters import (
 from meridian.platform.toolserver.pipeline import Call, FailureReason, Finished
 from meridian.platform.toolserver.server import create_tool_app
 from meridian.platform.toolserver.settings import ToolServerSettings
-from meridian.platform.toolserver.wire import RefusalReason
+from meridian.platform.toolserver.wire import META_RUN, META_WORKER, RefusalReason
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
@@ -75,6 +84,9 @@ NOTE = {"claim_id": CLAIM, "note": "Phone call with the claimant."}
 # The words the kit itself fails a call with, and the one a handler may add.
 KIT_FAILURES = {"invalid-result", "database-unavailable", "unexpected"}
 HANDLER_FAILURES = {"gateway-unavailable", "timed-out"}
+# The word of a call whose caller gave up before it ran (the server's own, in
+# ``on_call_tool``; the pipeline never fails a call with it).
+CANCELLED = "cancelled"
 
 
 # ── the meter, on calls built by hand ───────────────────────────────────────
@@ -112,8 +124,8 @@ def test_the_outcomes_are_the_four_the_kit_can_end_a_call_in() -> None:
     assert set(OUTCOMES) == {"completed", "replayed", "refused", "failed"}
 
 
-def test_the_failure_words_are_the_kits_and_the_handlers_and_no_others() -> None:
-    assert set(FAILURE_REASONS) == KIT_FAILURES | HANDLER_FAILURES
+def test_the_failure_words_are_the_kits_the_handlers_and_the_cancelled_call() -> None:
+    assert set(FAILURE_REASONS) == KIT_FAILURES | HANDLER_FAILURES | {CANCELLED}
     assert set(get_args(ToolFailedReason)) == HANDLER_FAILURES
     in_the_type = {
         word for part in get_args(FailureReason) for word in (get_args(part) or (part,))
@@ -130,7 +142,7 @@ def test_the_refusal_words_are_the_literal_of_the_wire() -> None:
         "gateway-busy",
         "gateway-refused",
     } <= REFUSAL_REASONS
-    assert {"gateway-unavailable", "timed-out"} <= FAILURE_REASONS
+    assert {"gateway-unavailable", "timed-out", CANCELLED} <= FAILURE_REASONS
 
 
 @pytest.mark.parametrize("outcome", ["completed", "replayed"])
@@ -155,7 +167,9 @@ def test_each_refusal_reason_of_the_kit_is_a_label_of_its_own(reason: str) -> No
     assert value == 1
 
 
-@pytest.mark.parametrize("reason", sorted(KIT_FAILURES | HANDLER_FAILURES))
+@pytest.mark.parametrize(
+    "reason", sorted(KIT_FAILURES | HANDLER_FAILURES | {CANCELLED})
+)
 def test_each_failure_reason_is_a_label_of_its_own(reason: str) -> None:
     finished = Finished(a_call(), "failed", reason)
 
@@ -523,6 +537,160 @@ def test_a_run_that_is_not_running_is_refused_under_its_own_tenant_and_agent(
     assert attributes["meridian.tenant"] == TENANT
 
 
+# ── a counter that raises does not fail the call it counts ──────────────────
+class ExplodingCounter:
+    def add(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError(CANARY)
+
+
+class ExplodingMeter:
+    def create_counter(self, *args: object, **kwargs: object) -> ExplodingCounter:
+        return ExplodingCounter()
+
+
+class ExplodingProvider:
+    def get_meter(self, *args: object, **kwargs: object) -> ExplodingMeter:
+        return ExplodingMeter()
+
+
+def test_a_counter_that_raises_is_one_warning_with_a_class_and_nothing_else(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = load_registry(REGISTRY_DIR)
+    meters = ToolServerMeters(ExplodingProvider(), registry, SERVER_TOOLS)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        meters.call_ended(Finished(a_call(), "completed", None))
+
+    (record,) = [r for r in caplog.records if r.name == common_metrics.__name__]
+    assert "RuntimeError" in record.getMessage()
+    assert "ToolServerMeters.call_ended" in record.getMessage()
+    assert CANARY not in caplog.text
+
+
+def test_a_tool_call_that_completed_is_answered_as_completed_when_its_counter_raises(
+    world: World,
+) -> None:
+    app = create_policy_app(
+        settings_for(world.db, "policy_mcp"),
+        meter_provider=ExplodingProvider(),  # type: ignore[arg-type]
+    )
+
+    result = run_call(app.server, TOOL, LOOKUP, run_id=world.run_id)
+
+    assert result.is_error is False
+    assert result.structured_content is not None
+
+
+# ── a call that is cancelled is counted (S064) ──────────────────────────────
+SLOTS = server_module.MAX_CONCURRENT_CALLS
+WAIT_SECONDS = 30
+PARAMS = types.CallToolRequestParams(name=TOOL, arguments=LOOKUP)
+
+
+class Held:
+    """Handlers that hold their slot until ``gate`` is set. ``first`` is set
+    when one is inside, ``full`` when as many are as the server has slots."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.entered = 0
+        self.gate = threading.Event()
+        self.first = threading.Event()
+        self.full = threading.Event()
+
+    def run(self, conn: psycopg.Connection, call: ToolCall) -> Completed:
+        with self.lock:
+            self.entered += 1
+            self.first.set()
+            if self.entered >= SLOTS:
+                self.full.set()
+        assert self.gate.wait(timeout=WAIT_SECONDS)
+        return Completed({"found": False})
+
+    def handlers(self) -> list[ToolHandler]:
+        others = failing_with(RuntimeError("not called"))[1:]
+        return [
+            ToolHandler(
+                tool=TOOL,
+                scope="policy:read",
+                bound_argument="policy_number",
+                bound_to="policy_number",
+                run=self.run,
+            ),
+            *others,
+        ]
+
+
+def tools_call(server: Any) -> Callable[..., Any]:
+    """The server's own ``tools/call`` handler, the one the SDK runs, so that a
+    test can cancel the task that runs it."""
+    entry = server.get_request_handler("tools/call")
+    assert entry is not None
+    return entry.handler
+
+
+def call_context(world: World) -> Any:
+    meta = {META_RUN: str(world.run_id), META_WORKER: worker_holding(TOOL)}
+    return SimpleNamespace(meta=meta)
+
+
+async def until(event: threading.Event) -> None:
+    with anyio.fail_after(WAIT_SECONDS):
+        assert await anyio.to_thread.run_sync(event.wait, WAIT_SECONDS)
+
+
+def test_a_call_cancelled_while_it_waits_for_a_slot_is_one_cancelled_failure(
+    world: World,
+) -> None:
+    reader = InMemoryMetricReader()
+    held = Held()
+    handle = tools_call(policy_over(world, reader, held.handlers()))
+
+    async def drive() -> None:
+        async with anyio.create_task_group() as holders:
+            for _ in range(SLOTS):
+                holders.start_soon(handle, call_context(world), PARAMS)
+            await until(held.full)
+            async with anyio.create_task_group() as ninth:
+                ninth.start_soon(handle, call_context(world), PARAMS)
+                # Every other task is in a thread or waiting: the ninth is
+                # waiting for a slot, none being free.
+                await anyio.wait_all_tasks_blocked()
+                ninth.cancel_scope.cancel()
+            held.gate.set()
+
+    anyio.run(drive)
+
+    completed = {"meridian.tool": TOOL, "meridian.outcome": "completed"}
+    cancelled = {"meridian.outcome": "failed", "meridian.reason": CANCELLED}
+    assert held.entered == SLOTS
+    assert points(reader) == {
+        series(**completed, **RUN_LABELS): SLOTS,
+        series(**cancelled): 1,
+    }
+
+
+def test_a_call_cancelled_while_its_thread_runs_is_counted_by_what_the_thread_did(
+    world: World,
+) -> None:
+    reader = InMemoryMetricReader()
+    held = Held()
+    handle = tools_call(policy_over(world, reader, held.handlers()))
+
+    async def drive() -> None:
+        async with anyio.create_task_group() as group:
+            group.start_soon(handle, call_context(world), PARAMS)
+            await until(held.first)
+            group.cancel_scope.cancel()
+            held.gate.set()
+
+    anyio.run(drive)
+
+    completed = {"meridian.tool": TOOL, "meridian.outcome": "completed"}
+    assert points(reader) == {series(**completed, **RUN_LABELS): 1}
+
+
 # ── the meter provider of each server ───────────────────────────────────────
 class ShutdownSpy(MeterProvider):
     def __init__(self) -> None:
@@ -646,3 +814,19 @@ def test_without_the_collectors_address_nothing_is_exported_and_nothing_fails(
     serve_and_stop(build(None))
 
     assert built == []
+
+
+def test_a_server_built_with_no_meter_provider_sends_its_series_to_the_collector(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = record_exports(monkeypatch)
+    app = create_policy_app(
+        settings_for(world.db, "policy_mcp"),
+        tracer_provider=make_tracer_provider("policy-mcp", InMemorySpanExporter()),
+    )
+    run_call(app.server, TOOL, LOOKUP, run_id=world.run_id)
+
+    serve_and_stop(app)  # the reader exports once more as the provider closes
+
+    completed = {"meridian.tool": TOOL, "meridian.outcome": "completed"}
+    assert recorder.points(CALLS) == [("policy-mcp", completed | RUN_LABELS, 1)]

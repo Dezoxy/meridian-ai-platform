@@ -131,12 +131,16 @@ def selected(expr: str) -> list[tuple[str, dict[str, str], int]]:
     names one."""
     (name,) = set(re.findall(r"\b(meridian_gateway_\w+)\{", expr))
     token_type = re.search(r'gen_ai_token_type="(\w+)"', expr)
-    return [
+    chosen = [
         (metric, labels, step)
         for metric, labels, step in SERIES
         if metric == name
         and (token_type is None or labels.get("gen_ai_token_type") == token_type[1])
     ]
+    if not chosen:
+        read = name if token_type is None else f"{name} of token type {token_type[1]}"
+        raise ValueError(f"a query reads {read}, which SERIES does not hold")
+    return chosen
 
 
 def expected_sample(expr: str, units: int) -> dict:

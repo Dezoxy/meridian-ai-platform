@@ -8,6 +8,8 @@ summary line.
 """
 
 import logging
+import sys
+from collections.abc import Callable
 
 import pytest
 from dbsupport import DatabaseHandle
@@ -47,6 +49,7 @@ from meridian.workloads.claims_triage.sweep_meters import (
 )
 
 SERIES = "meridian.sweep.last_pass"
+CANARY = "claimant-text-canary-74"
 METERS_LOGGER = "meridian.workloads.claims_triage.sweep_meters"
 PLANTED = PassResult(
     overdue=1, not_started=2, abandoned=3, runs_ended=4, threads_cleaned=5, failures=6
@@ -439,6 +442,67 @@ def test_a_flush_that_fails_changes_neither_the_exit_code_nor_the_summary_line(
         "0 claims failed as abandoned, 0 runs ended, 0 threads cleaned, 0 failures"
     ]
     assert len(warnings_of(caplog)) == 1
+
+
+def an_import_that_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A ``None`` in ``sys.modules`` makes the import raise ``ImportError``.
+    monkeypatch.setitem(sys.modules, sweep_meters.__name__, None)
+
+
+def a_call_that_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode(result: PassResult) -> None:
+        raise RuntimeError(CANARY)
+
+    monkeypatch.setattr(sweep_meters, "report_pass", explode)
+
+
+@pytest.mark.parametrize(
+    ("break_reporting", "word"),
+    [
+        pytest.param(an_import_that_fails, "ModuleNotFoundError", id="import-fails"),
+        pytest.param(a_call_that_raises, "RuntimeError", id="call-raises"),
+    ],
+)
+def test_reporting_that_breaks_is_one_warning_with_a_class_and_the_pass_stands(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    break_reporting: Callable[[pytest.MonkeyPatch], None],
+    word: str,
+) -> None:
+    planted_pass(fresh_database)
+    break_reporting(monkeypatch)
+    caplog.set_level(logging.INFO)
+
+    code = main(environ_of(fresh_database))
+
+    assert code == 0
+    messages = [r.getMessage() for r in caplog.records if r.name == LOGGER]
+    assert messages[-2:] == [
+        "sweep pass: 0 claims referred as overdue, 1 claims failed as not started, "
+        "0 claims failed as abandoned, 0 runs ended, 0 threads cleaned, 0 failures",
+        f"the sweep's metrics were not sent: {word}",
+    ]
+    assert CANARY not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "break_reporting",
+    [an_import_that_fails, a_call_that_raises],
+    ids=["import", "call"],
+)
+def test_reporting_that_breaks_leaves_the_exit_code_of_a_pass_with_a_failed_item(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    break_reporting: Callable[[pytest.MonkeyPatch], None],
+) -> None:
+    planted_pass(fresh_database)
+    monkeypatch.setattr(
+        sweep, "move_claim", breaking(sweep.move_claim, "CLM-5001", "claim_id")
+    )
+    break_reporting(monkeypatch)
+
+    assert main(environ_of(fresh_database)) == 1
 
 
 def test_a_pass_with_a_failed_item_is_reported_and_still_exits_one(

@@ -329,7 +329,16 @@ def create_app(
                 http.close()
         finally:
             if owns_meter_provider:
-                app_meter_provider.shutdown()
+                try:
+                    app_meter_provider.shutdown()
+                except Exception as exc:
+                    # The SDK raises a bare Exception when a reader fails, with
+                    # the exporter's text: the class only. The lifespan goes on
+                    # to flush the tracer provider, whose spans would be lost.
+                    logger.warning(
+                        "the meter provider did not shut down cleanly: %s",
+                        type(exc).__name__,
+                    )
 
     service = create_service_app(
         title="Meridian Claims API",

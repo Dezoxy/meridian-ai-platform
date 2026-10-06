@@ -38,7 +38,7 @@ would be watched while the platform runs.
 | `certificate-validity` | Each certificate that identifies a service, and the CA that signs them, is renewed before it ends (S056) | Time until each certificate's end and whether it is Ready, from cert-manager's metrics | No certificate under 21 days from its end for an hour, none not Ready for 15 minutes; the metrics reach Prometheus and cert-manager and approver-policy run | Implemented on kind (S056); the first two alerts seen loaded and inactive, the other two not seen, unmeasured |
 | `triage-latency` | A claim's triage drafts a proposal quickly (QA-01) | The duration of a triage run, as a histogram | p95 under 10 s with the replay provider, under 30 s with `gpt-4o` | Designed: no service records a duration metric; S027 measures it with a load test |
 | `gateway-overhead` | The gateway adds little to a model call (QA-02) | The gateway's own time per call, excluding the provider's | p95 under 50 ms | Designed: the time is in the gateway's spans only |
-| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented in tests, not run on a cluster (S064): the Agent Runtime counts each leg of a run by outcome, `meridian_runtime_runs_total`; no rule or dashboard reads it yet, and the run table holds the answer |
+| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented in tests, not run on a cluster (S064): the Claims API counts every triage it takes once, by how it ended, `meridian_claims_triages_total` (`stored`, `failed` with a reason, `taken-over`), so a call that never reached the runtime and an answer it could not use are series; the Agent Runtime's `meridian_runtime_runs_total` counts each leg inside the runtime and calls `completed` a run the Claims API may then fail to use, so it is not this share; no rule or dashboard reads either yet, and the run table holds the answer |
 
 The proposed window is 28 days, for the Azure environment (S020), where the
 metrics would be kept that long. On kind, Prometheus keeps 24 hours, so no
@@ -242,16 +242,27 @@ namespace; Meridian's file does not repeat them.
   of the log line, under `meridian_finding` (`documents-overdue`,
   `triage-not-started`, `triage-abandoned`, `runs-ended`, `threads-cleaned`
   and `failures`), set once from the last pass and sent before the sweep
-  exits, within about 12 seconds of a collector that does not answer (the
-  exit code is the pass's, whatever the flush does). The chart gives the
-  CronJob the collector's address, its authority and a network rule to
-  reach it (S064, tested without a cluster, not run on one), and bounds
-  one export at 5 seconds (`sweep.telemetryTimeoutSeconds`); with no
-  `telemetry.otlpEndpoint` it sends nothing. A pass that could
-  not run, because the database was unreachable, has no numbers and sends
-  none. No rule reads the gauge yet. Prometheus keeps a series for five
-  minutes after its last sample and the CronJob runs every five, so a rule
-  over it must look back over several passes, not one.
+  exits (the exit code is the pass's, whatever the send does: a failure to
+  import or call the sending is one warning that names a class). Measured
+  with the exporter's default deadline, a collector that accepts the
+  connection and never answers cost about 15 seconds and a refused
+  connection about 12, because the pass is sent twice, by the flush and
+  again by the reader's shutdown. The chart gives the CronJob the
+  collector's address, its authority and a network rule to reach it (S064,
+  tested without a cluster, not run on one), and bounds one export at 5
+  seconds (`sweep.telemetryTimeoutSeconds`); with no
+  `telemetry.otlpEndpoint` it sends nothing. A pass that could not run,
+  because the database was unreachable, has no numbers and sends none.
+  No rule reads the gauge yet. Prometheus keeps a series for five minutes
+  after its last sample and the CronJob runs every five, so a rule over it
+  must look back over several passes, not one. A send that failed leaves
+  no series and no alert: the evidence is the output of the last Jobs
+  (`kubectl -n meridian logs job/<name>`; a finished Job is kept for a
+  day), in the exporter's logger,
+  `opentelemetry.exporter.otlp.proto.http.metric_exporter`, whose last
+  line for a refused connection names no address (the warnings before it
+  do). A rule on the gauge's absence is the detector, and it is a later
+  contract's.
 - **The assessment's outcomes.** The Claims Triage App counts each stored
   proposal once (S064, implemented in tests, not run on a cluster):
   `meridian_claims_assessments_total`, by `meridian_outcome`
@@ -260,10 +271,22 @@ namespace; Meridian's file does not repeat them.
   `truncated`, `not-json`, `not-the-format`, `unknown-clause`, `unsure`,
   `too-long`, `special-data`, `injection-suspected` or `filtered`. A jump
   in the last three shows in the series, not only in a warning in the
-  runtime's output. A triage that stores no proposal (a failed run, an
-  answer that is not a proposal, a write that was lost, a triage another
-  request took over) counts nothing here; the runtime's
-  `meridian_runtime_runs_total` has the failed run. No rule reads it yet.
+  runtime's output. A triage that stores no proposal counts nothing there.
+  It is counted by the second counter, `meridian_claims_triages_total`,
+  once for every triage the Claims API takes, by `meridian_outcome`:
+  `stored` (the same moment as the assessment), `taken-over` (another
+  request took the triage over: the 409) or `failed`, with a
+  `meridian_reason`: `runtime-unreachable` (no answer at all),
+  `runtime-timeout` (the Claims API stopped waiting), `runtime-failed`
+  (the runtime answered an error status, a 504 of its own included: the
+  hop worked), `bad-output` (an answer that is not a run, a run that is not
+  a proposal, or a proposal its status does not fit), `proposal-lost` (the
+  database refused the write) and `unexpected` (an exception no branch
+  expected, a bug, counted and raised). The runtime's
+  `meridian_runtime_runs_total` does not stand in for it: a call that never
+  reached the runtime is nowhere in it, and a run it counts `completed` can
+  still end here as `bad-output` or `proposal-lost`. No rule reads either
+  yet.
 - **Logs.** No service exports its logs to Loki, so no rule reads one. The
   warnings for an empty knowledge store and for stale vectors stay in the
   knowledge server's own output as well, and are also counted since S064

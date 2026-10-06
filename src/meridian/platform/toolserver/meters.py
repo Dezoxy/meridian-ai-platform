@@ -5,7 +5,13 @@ which reaches Prometheus as ``meridian_toolserver_calls_total`` under the
 server's own ``job`` (``policy-mcp``, ``claims-mcp``, ``knowledge-mcp``). It is
 added once for every ``tools/call`` that reaches the kit, where the call's span
 gets its attributes (``server._span_attributes``): the one place every end of a
-call passes, a refusal, a failure and a handler's own words alike.
+call passes, a refusal, a failure and a handler's own words alike. A call whose
+caller gave up while it waited for a slot ends nowhere else, so ``on_call_tool``
+counts it from a ``finally``, as a failure with the word ``cancelled`` (and
+neither tool, tenant nor agent: nothing had read them). A call cancelled while
+its thread runs is not cancelled in that sense: the thread is not interrupted,
+the call ends as the thread ended it and is counted so. ``call_ended`` is wrapped
+by ``counted_safely``: a counter that raises is one WARNING, never a failed call.
 
 Every label is a registry ID or a word of a closed set the code defines (T-03,
 T-49, T-86):
@@ -14,7 +20,8 @@ T-49, T-86):
   sent that is not one is never a label (the call is counted without it).
 - ``meridian.outcome``: ``Outcome``, the four words the kit ends a call in.
 - ``meridian.reason``: for a refused call a word of ``RefusalReason``, for a
-  failed one a word of ``FailureReason``. A handler may pass any text in a
+  failed one a word of ``FailureReason`` or ``cancelled``. A handler may pass
+  any text in a
   ``Refused`` or a ``ToolFailed`` (the types are not enforced at run time), so
   a word outside the set of its outcome is the one word ``unlisted``. A call
   that completed has no reason.
@@ -27,11 +34,11 @@ ID, the idempotency key.
 """
 
 from collections.abc import Collection
-from typing import Any, get_args
+from typing import Any, Final, get_args
 
 from opentelemetry.sdk.metrics import MeterProvider
 
-from meridian.platform.common.metrics import metric_attributes
+from meridian.platform.common.metrics import counted_safely, metric_attributes
 from meridian.platform.registry import Registry
 from meridian.platform.toolserver.pipeline import FailureReason, Finished, Outcome
 from meridian.platform.toolserver.wire import RefusalReason
@@ -41,6 +48,10 @@ CALLS = "meridian.toolserver.calls"
 # The one word for a reason a handler made up: text outside the closed set of
 # its call's outcome.
 UNLISTED = "unlisted"
+# The word of a call whose caller gave up before the kit had run it (it was
+# waiting for a slot), which only ``server.on_call_tool`` can tell: the pipeline
+# never ends a call with it, so it is not in ``FailureReason``.
+CANCELLED: Final = "cancelled"
 
 
 def _words(alias: Any) -> frozenset[str]:
@@ -52,7 +63,7 @@ def _words(alias: Any) -> frozenset[str]:
 
 OUTCOMES = _words(Outcome)
 REFUSAL_REASONS = _words(RefusalReason)
-FAILURE_REASONS = _words(FailureReason)
+FAILURE_REASONS = _words(FailureReason) | {CANCELLED}
 
 
 def _reason(finished: Finished) -> str | None:
@@ -89,6 +100,7 @@ class ToolServerMeters:
             ),
         )
 
+    @counted_safely
     def call_ended(self, finished: Finished) -> None:
         call = finished.call
         attributes = {"meridian.outcome": finished.outcome}

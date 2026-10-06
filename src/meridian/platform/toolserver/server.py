@@ -58,7 +58,7 @@ from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
 from meridian.platform.toolserver.contracts import tool_listing
 from meridian.platform.toolserver.handlers import TIMED_OUT, Deadline, ToolHandler
-from meridian.platform.toolserver.meters import ToolServerMeters
+from meridian.platform.toolserver.meters import CANCELLED, ToolServerMeters
 from meridian.platform.toolserver.pipeline import (
     Call,
     Finished,
@@ -302,13 +302,18 @@ def create_tool_app(
         call = Call(uuid.uuid4())
         parent = _caller_context(meta)
         token = context.attach(parent) if parent is not None else None
+        finished: Finished | None = None
         try:
             with start_span(tracer, SPAN_NAME) as span:
                 finished = await runner.run(call, params, meta, deadline)
                 set_span_attributes(span, _span_attributes(finished))
-                meters.call_ended(finished)
                 return _answer(finished)
         finally:
+            # Once for every call that reached here. A call cancelled while it
+            # waited for a slot has no ``finished``: its caller gave up before
+            # the kit ran it, and it is counted as that (a call cancelled while
+            # its thread runs is ended by the thread, which no cancel stops).
+            meters.call_ended(finished or Finished(call, "failed", CANCELLED))
             if token is not None:
                 context.detach(token)
 

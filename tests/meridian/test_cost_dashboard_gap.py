@@ -8,12 +8,15 @@ its own documented test, and that the Makefile runs both. That promtool agrees
 with the figures is `make alerts`' business.
 """
 
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
+import pytest
 import yaml
 from servicesupport import REPO_ROOT
 
@@ -122,6 +125,91 @@ def test_after_a_gap_the_two_forms_expect_the_range_and_the_lifetime_total(
     assert stat_at_59m_over_30m(bare)["exp_samples"] == [
         {"labels": "{}", "value": 59 * 3}
     ]
+
+
+def load_script() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("cost_dashboard_gap", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_query_of_a_series_the_script_does_not_know_is_a_value_error_naming_it() -> (
+    None
+):
+    query = 'sum(last_over_time(meridian_gateway_unheard_of_total{job="x"}[60s]))'
+
+    with pytest.raises(ValueError, match="meridian_gateway_unheard_of_total"):
+        load_script().expected_sample(query, 1)
+
+
+def test_a_token_type_the_script_does_not_know_is_a_value_error_naming_it() -> None:
+    query = (
+        "sum(last_over_time("
+        'meridian_gateway_tokens_total{job="x", gen_ai_token_type="reasoning"}[60s]))'
+    )
+
+    with pytest.raises(ValueError, match="reasoning"):
+        load_script().expected_sample(query, 1)
+
+
+def test_a_dashboard_that_reads_an_unknown_series_is_refused_in_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = load_script()
+    text = DASHBOARD_FILE.read_text(encoding="utf-8")
+    changed = tmp_path / "gateway-cost.json"
+    changed.write_text(
+        text.replace("meridian_gateway_cost_EUR_total", "meridian_gateway_nope_total"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(script, "DASHBOARD", changed)
+
+    code = script.main(["write", str(tmp_path / "out")])
+
+    assert code == 1
+    error = capsys.readouterr().err
+    assert "meridian_gateway_nope_total" in error
+    assert "Traceback" not in error
+    assert not (tmp_path / "out" / GENERATED).exists()
+
+
+def table_columns() -> dict[str, str]:
+    """The table panel's columns by their title, each with the query that
+    fills it: the title is the transformation's rename of ``Value #<refId>``."""
+    dashboard = json.loads(DASHBOARD_FILE.read_text(encoding="utf-8"))
+    (table,) = [p for p in dashboard["panels"] if p["type"] == "table"]
+    (organize,) = [t for t in table["transformations"] if t["id"] == "organize"]
+    titles = organize["options"]["renameByName"]
+    return {titles[f"Value #{t['refId']}"]: t["expr"] for t in table["targets"]}
+
+
+def test_each_column_of_the_table_selects_its_own_token_type_or_the_cost() -> None:
+    columns = table_columns()
+    script = load_script()
+
+    assert set(columns) == {"Input tokens", "Output tokens", "Cost (EUR)"}
+    tokens = {
+        title: set(re.findall(r'gen_ai_token_type="(\w+)"', expr))
+        for title, expr in columns.items()
+    }
+    assert tokens == {
+        "Input tokens": {"input"},
+        "Output tokens": {"output"},
+        "Cost (EUR)": set(),
+    }
+    assert "meridian_gateway_cost_EUR_total" in columns["Cost (EUR)"]
+    for title in ("Input tokens", "Output tokens"):
+        assert "meridian_gateway_tokens_total" in columns[title]
+        assert "meridian_gateway_cost_EUR_total" not in columns[title]
+    # The script's own series step for each: a column that read the other token
+    # type's series would show the other figure (the steps differ on purpose).
+    figures = {
+        title: script.expected_sample(expr, 1)["value"]
+        for title, expr in columns.items()
+    }
+    assert figures == {"Input tokens": 1, "Output tokens": 2, "Cost (EUR)": 3}
 
 
 def test_the_makefile_writes_the_file_after_the_extraction_and_runs_it() -> None:
