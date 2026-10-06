@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Print who holds the kind cluster: `make cluster-holder` (S075). It only reads:
-# the three values of the ConfigMap meridian-cluster-holder in kube-system (the
-# holder, its commit and the time of its last `make up` or `make deploy` that
-# ended well), or that there is no record, or that there is no cluster. It
+# the four values of the ConfigMap meridian-cluster-holder in kube-system (the
+# holder, its commit, the time its last `make up` or `make deploy` started or
+# ended, and the state: `ok`, or `changing` while one runs or after one that did
+# not end well), or that there is no record, or that there is no cluster. It
 # changes nothing on the cluster; it refreshes the gitignored credentials file
 # (`kind export kubeconfig`, as `make up` does) so that a checkout that did not
 # make the cluster can ask. A cluster that does not answer is an error.
@@ -25,3 +26,8 @@ if [[ "${holder_state}" == none ]]; then
   exit 0
 fi
 printf 'holder: %s\ncommit: %s\ntime:   %s\n' "${holder_name}" "${holder_commit}" "${holder_time}"
+if [[ "${holder_last_run}" == changing ]]; then
+  printf 'state:  changing (a make up or make deploy is running, or the last one did not end well; look at what failed before anything is deleted)\n'
+else
+  printf 'state:  ok\n'
+fi

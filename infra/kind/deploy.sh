@@ -61,8 +61,9 @@
 # image, which is a pin and not a build.
 # Nothing here prints a Secret's value, or a connection string of a Job's log.
 # Who holds the cluster (S075, common.sh): another holder stops this before step
-# 0 unless TAKE_CLUSTER=1, and the record is written as the last step, when the
-# run ended well.
+# 0 unless TAKE_CLUSTER=1; the record is written with state `changing` right after
+# that check, and with state `ok` as the last step, when the run ended well, so a
+# run that fails or is interrupted leaves `changing`.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -117,8 +118,12 @@ require_local_docker
 need_cluster
 docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
 # Who holds the cluster (S075): another holder stops this, before anything is
-# built or run, unless TAKE_CLUSTER=1.
+# built or run, unless TAKE_CLUSTER=1. Then the record says `changing` until the
+# last line of this script: a run that fails or is interrupted leaves it so. It is
+# written before the prerequisites below, which only read: one that fails ("run
+# make up first") leaves `changing` too, which costs the same holder nothing.
 check_cluster_holder "make deploy"
+record_cluster_holder changing
 
 # The database, its roles and the role Secrets come from `make up`.
 require_database() {
@@ -478,5 +483,5 @@ ingest_corpus
 wait_for_other_rollouts
 wait_for_route
 wait_for_token_window
-record_cluster_holder
+record_cluster_holder ok
 log "done. Next: make demo"

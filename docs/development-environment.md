@@ -262,11 +262,14 @@ known.
   `make deploy` never reads a script that an implementer is editing.
 - **The cluster says who holds it** (S075). One step uses it at a time,
   and `make up`, `make deploy` and `make down` now read a record of the
-  holder, in a ConfigMap in `kube-system`: a name, a short commit and a UTC
-  time. Another holder is named and the command stops before it changes
-  anything; `TAKE_CLUSTER=1` in front of the same command takes the cluster
-  (`TAKE_CLUSTER=1 make deploy`). `make up` and `make deploy` write the
-  record when they end well, and `make cluster-holder` prints it. The holder
+  holder, in a ConfigMap in `kube-system`: a name, a short commit, a UTC
+  time and a state. Another holder is named and the command stops before it
+  changes anything; `TAKE_CLUSTER=1` in front of the same command takes the
+  cluster (`TAKE_CLUSTER=1 make deploy`). `make up` and `make deploy` write
+  the record when they start to change the cluster (state `changing`) and
+  when they end well (`ok`), so a run that failed leaves `changing`, which
+  stops another holder until someone has looked at what failed; the same
+  holder may run again. `make cluster-holder` prints it. The holder
   is the checkout's branch. A session that runs from a detached checkout,
   as the main session does, sets `CLUSTER_HOLDER` (letters, digits, `.`,
   `_`, `/` and `-`, at most 100) to a name of its own, so that its commands

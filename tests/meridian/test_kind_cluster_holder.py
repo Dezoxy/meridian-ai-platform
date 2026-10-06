@@ -34,6 +34,9 @@ KIND_README = (KIND_DIR / "README.md").read_text(encoding="utf-8")
 DEVELOPMENT_ENVIRONMENT = (REPO_ROOT / "docs" / "development-environment.md").read_text(
     encoding="utf-8"
 )
+ROLLBACK_RUNBOOK = (
+    REPO_ROOT / "docs" / "operations" / "runbooks" / "rollback.md"
+).read_text(encoding="utf-8")
 SCRIPTS = ("common.sh", "pins.env", "up.sh", "deploy.sh", "down.sh", "holder.sh")
 
 ME = "s075-m2"
@@ -353,24 +356,119 @@ def test_a_record_with_no_holder_is_another_holder_not_no_record(
     assert "held by" in done.stderr
 
 
+# ── the state of the last run ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("record", "state"),
+    [
+        (RECORD, "ok"),
+        (f"{RECORD}|", "ok"),
+        (f"{RECORD}|ok", "ok"),
+        (f"{RECORD}|changing", "changing"),
+        (f"{RECORD}|bogus", "changing"),
+        (f"{RECORD}|\x1b[31mok", "changing"),
+    ],
+)
+def test_the_state_of_the_record_reads_ok_when_it_is_ok_or_missing_else_changing(
+    tmp_path: Path, record: str, state: str
+) -> None:
+    done, _, _, _ = run_functions(
+        tmp_path, 'read_cluster_holder; echo "${holder_last_run}"', record=record
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [state]
+
+
+def test_the_same_holder_goes_on_after_a_failed_run_and_is_told_in_one_line(
+    tmp_path: Path,
+) -> None:
+    done, _, _, _ = run_functions(
+        tmp_path,
+        'check_cluster_holder "make deploy"',
+        record=f"{ME}|{COMMIT}|{TIME}|changing",
+    )
+
+    assert done.returncode == 0, done.stderr
+    (line,) = done.stdout.splitlines()
+    assert line == (
+        f"==> the cluster is held by {ME}, and its last run did not end well "
+        "(the record says changing); going on"
+    )
+
+
+def test_another_holder_is_told_the_last_run_did_not_end_well_and_is_stopped(
+    tmp_path: Path,
+) -> None:
+    done, _, _, _ = run_functions(
+        tmp_path,
+        'check_cluster_holder "make down"',
+        record=f"{RECORD}|changing",
+    )
+
+    assert done.returncode == 1
+    assert done.stdout == ""
+    assert done.stderr == (
+        f"error: the cluster is held by {OTHER} (commit {COMMIT}, since {TIME}), "
+        "whose last run did not end well: look at what failed before anything is "
+        f"deleted; it is not held by {ME}, nothing was changed, and TAKE_CLUSTER=1 "
+        "in front of the same command (TAKE_CLUSTER=1 make down) takes it\n"
+    )
+
+
+def test_take_cluster_one_takes_a_cluster_whose_last_run_did_not_end_well(
+    tmp_path: Path,
+) -> None:
+    done, _, _, _ = run_functions(
+        tmp_path,
+        'check_cluster_holder "make down"',
+        record=f"{RECORD}|changing",
+        environment={"TAKE_CLUSTER": "1"},
+    )
+
+    assert done.returncode == 0, done.stderr
+    (line,) = done.stdout.splitlines()
+    assert "taking" in line
+    assert OTHER in line
+    assert "last run did not end well" in line
+
+
+def test_a_holder_whose_last_run_ended_well_is_not_said_to_have_failed(
+    tmp_path: Path,
+) -> None:
+    done, _, _, _ = run_functions(
+        tmp_path, 'check_cluster_holder "make up"', record=f"{RECORD}|ok"
+    )
+
+    assert done.returncode == 1
+    assert "did not end well" not in done.stderr
+
+
 # ── writing the record ───────────────────────────────────────────────────────
 
 
-def test_the_record_is_three_values_and_nothing_else(tmp_path: Path) -> None:
+def literals_of(create: str) -> dict[str, str]:
+    return dict(
+        literal.split("=", 1) for literal in re.findall(r"--from-literal=(\S+)", create)
+    )
+
+
+def test_the_record_is_four_values_and_nothing_else(tmp_path: Path) -> None:
     done, calls, applied, short = run_functions(
         tmp_path,
-        "record_cluster_holder",
+        "record_cluster_holder ok",
         environment={"CLUSTER_HOLDER": "s075-m2"},
     )
 
     assert done.returncode == 0, done.stderr
     (create,) = [call for call in calls if " create configmap " in f" {call} "]
-    literals = re.findall(r"--from-literal=(\S+)", create)
-    keys = [literal.split("=", 1)[0] for literal in literals]
-    values = dict(literal.split("=", 1) for literal in literals)
-    assert keys == ["holder", "commit", "time"]
+    keys = re.findall(r"--from-literal=([^=\s]+)=", create)
+    values = literals_of(create)
+    assert keys == ["holder", "commit", "time", "state"]
     assert values["holder"] == "s075-m2"
     assert values["commit"] == short
+    assert values["state"] == "ok"
     assert TIME_FORMAT.match(values["time"])
     assert f"-n kube-system create configmap {CONFIGMAP} " in create + " "
     for forbidden in (str(tmp_path), "@", "http", "ssh"):
@@ -380,7 +478,7 @@ def test_the_record_is_three_values_and_nothing_else(tmp_path: Path) -> None:
 
 
 def test_the_record_is_applied_to_kube_system_server_side(tmp_path: Path) -> None:
-    done, calls, _, _ = run_functions(tmp_path, "record_cluster_holder")
+    done, calls, _, _ = run_functions(tmp_path, "record_cluster_holder ok")
 
     assert done.returncode == 0, done.stderr
     # The two ends of a pipeline log in either order: look at all the calls.
@@ -388,11 +486,49 @@ def test_the_record_is_applied_to_kube_system_server_side(tmp_path: Path) -> Non
     assert ME in done.stdout
 
 
+def test_the_record_written_at_the_start_says_changing_and_says_so(
+    tmp_path: Path,
+) -> None:
+    done, calls, _, _ = run_functions(tmp_path, "record_cluster_holder changing")
+
+    assert done.returncode == 0, done.stderr
+    (create,) = [call for call in calls if " create configmap " in f" {call} "]
+    assert literals_of(create)["state"] == "changing"
+    (line,) = done.stdout.splitlines()
+    assert ME in line
+    assert "changing" in line
+
+
+@pytest.mark.parametrize("state", ["", "done", "OK", "changing "])
+def test_the_record_is_written_only_with_one_of_its_two_states(
+    tmp_path: Path, state: str
+) -> None:
+    done, calls, _, _ = run_functions(tmp_path, f"record_cluster_holder '{state}'")
+
+    assert done.returncode == 1
+    assert "changing or ok" in done.stderr
+    assert calls == []
+
+
 def test_a_record_that_cannot_be_written_stops_the_command(tmp_path: Path) -> None:
-    done, _, _, _ = run_functions(tmp_path, "record_cluster_holder", apply_status=1)
+    done, _, _, _ = run_functions(tmp_path, "record_cluster_holder ok", apply_status=1)
 
     assert done.returncode == 1
     assert "could not record" in done.stderr
+    assert "the cluster was changed" in done.stderr
+
+
+def test_a_record_that_cannot_be_written_at_the_start_stops_the_run_there(
+    tmp_path: Path,
+) -> None:
+    done, _, _, _ = run_functions(
+        tmp_path, "record_cluster_holder changing", apply_status=1
+    )
+
+    assert done.returncode == 1
+    assert "could not record" in done.stderr
+    assert "this run went no further" in done.stderr
+    assert "the cluster was changed" not in done.stderr
 
 
 # ── the scripts, whole, against stubs ────────────────────────────────────────
@@ -466,6 +602,10 @@ def run_script(
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
         f'  *"get configmap {CONFIGMAP}"*) {answer} ;;\n'
+        # Writing the record (S075): `create --dry-run=client | jq | apply`.
+        f'  *"create configmap {CONFIGMAP}"*) '
+        'echo \'{"metadata":{"name":"x"}}\' ;;\n'
+        '  *"-n kube-system apply --server-side"*) cat >/dev/null ;;\n'
         '  *) echo "stub kubectl: unexpected $*" >&2; exit 99 ;;\n'
         "esac",
     )
@@ -500,6 +640,82 @@ def changed_something(calls: list[str]) -> bool:
         if tool == "kind" and words & {"create", "delete"}:
             return True
     return False
+
+
+def record_writes(calls: list[str]) -> list[tuple[int, str]]:
+    """The calls that write the record, as (index, state)."""
+    return [
+        (index, literals_of(call)["state"])
+        for index, call in enumerate(calls)
+        if call.startswith("kubectl") and f"create configmap {CONFIGMAP} " in call + " "
+    ]
+
+
+def is_record_call(call: str) -> bool:
+    return f"create configmap {CONFIGMAP} " in call + " " or (
+        "-n kube-system apply --server-side --force-conflicts -f -" in call
+    )
+
+
+def test_deploy_writes_changing_after_the_check_and_before_anything_else(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_script(tmp_path, "deploy.sh", environment={"TAKE_CLUSTER": "1"})
+
+    ((index, state),) = record_writes(calls)
+    assert state == "changing"
+    # The stub stops the run at its first read of the database: it failed after
+    # the record was written, so the record is what is left.
+    assert done.returncode != 0
+    assert not changed_something([c for c in calls[:index] if not is_record_call(c)])
+    assert any("get configmap" in call for call in calls[:index])
+    assert any("get database" in call for call in calls[index:])
+    assert "ok" not in [state for _, state in record_writes(calls)]
+
+
+def test_deploy_that_another_holder_refuses_writes_no_record(tmp_path: Path) -> None:
+    done, calls = run_script(tmp_path, "deploy.sh")
+
+    assert done.returncode == 1
+    assert record_writes(calls) == []
+
+
+def test_up_writes_changing_after_the_check_and_before_the_first_change(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_script(tmp_path, "up.sh", environment={"TAKE_CLUSTER": "1"})
+
+    ((index, state),) = record_writes(calls)
+    assert state == "changing"
+    assert done.returncode != 0
+    before = [c for c in calls[:index] if not is_record_call(c)]
+    assert not changed_something(before)
+    assert any("get configmap" in call for call in calls[:index])
+    after = [c for c in calls[index + 1 :] if not is_record_call(c)]
+    assert any("apply" in call for call in after)
+
+
+def test_up_that_another_holder_refuses_writes_no_record(tmp_path: Path) -> None:
+    done, calls = run_script(tmp_path, "up.sh")
+
+    assert done.returncode == 1
+    assert record_writes(calls) == []
+
+
+def test_up_on_a_machine_with_no_cluster_writes_changing_as_soon_as_it_exists(
+    tmp_path: Path,
+) -> None:
+    _, calls = run_script(
+        tmp_path, "up.sh", clusters="No kind clusters found.", kubeconfig=False
+    )
+
+    ((index, state),) = record_writes(calls)
+    created = next(i for i, c in enumerate(calls) if c.startswith("kind create"))
+    assert state == "changing"
+    assert created < index
+    assert not changed_something(
+        [c for c in calls[created + 1 : index] if not is_record_call(c)]
+    )
 
 
 def test_deploy_stops_before_it_changes_anything_when_another_holder_has_the_cluster(
@@ -553,7 +769,12 @@ def test_deploy_names_the_holder_the_session_chose_not_the_branch(
 
     assert "held by main-session" in done.stdout
     assert any("get database" in call for call in calls)
-    assert not any(call.startswith("git ") for call in calls)
+    # The branch is not read for the name; the record's commit is (rev-parse --short).
+    assert not any("--abbrev-ref" in call for call in calls if call.startswith("git "))
+    ((_, state),) = record_writes(calls)
+    assert state == "changing"
+    (create,) = [c for c in calls if f"create configmap {CONFIGMAP} " in c + " "]
+    assert literals_of(create)["holder"] == "main-session"
 
 
 def test_up_stops_before_it_changes_anything_when_another_holder_has_the_cluster(
@@ -637,6 +858,41 @@ def test_down_deletes_the_cluster_of_its_own_holder_and_of_no_record(
     assert any(call.startswith("kind delete cluster") for call in none_calls)
 
 
+def test_down_stops_at_the_cluster_of_a_run_that_did_not_end_well_of_another_holder(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_script(tmp_path, "down.sh", record=f"{RECORD}|changing")
+
+    assert done.returncode == 1
+    assert "whose last run did not end well: look at what failed" in done.stderr
+    assert "before anything is deleted" in done.stderr
+    assert "TAKE_CLUSTER=1 make down" in done.stderr
+    assert not any(call.startswith("kind delete") for call in calls)
+
+
+def test_down_goes_on_for_its_own_holder_after_a_run_that_did_not_end_well(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_script(
+        tmp_path, "down.sh", record=f"{ME}|{COMMIT}|{TIME}|changing"
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert "last run did not end well" in done.stdout
+    assert any(call.startswith("kind delete cluster") for call in calls)
+    assert record_writes(calls) == []
+
+
+def test_down_deletes_the_cluster_of_a_record_that_has_no_state_as_before(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_script(tmp_path, "down.sh", record=f"{ME}|{COMMIT}|{TIME}")
+
+    assert done.returncode == 0, done.stderr
+    assert "did not end well" not in done.stdout
+    assert any(call.startswith("kind delete cluster") for call in calls)
+
+
 def test_down_stops_at_a_cluster_that_does_not_answer_as_it_cannot_tell_who_holds_it(
     tmp_path: Path,
 ) -> None:
@@ -674,7 +930,9 @@ def test_down_with_no_cluster_reads_no_record(tmp_path: Path) -> None:
 # ── make cluster-holder ──────────────────────────────────────────────────────
 
 
-def test_cluster_holder_prints_the_three_values(tmp_path: Path) -> None:
+def test_cluster_holder_prints_the_four_values_and_a_record_without_state_is_ok(
+    tmp_path: Path,
+) -> None:
     done, calls = run_script(tmp_path, "holder.sh")
 
     assert done.returncode == 0, done.stderr
@@ -682,6 +940,23 @@ def test_cluster_holder_prints_the_three_values(tmp_path: Path) -> None:
         f"holder: {OTHER}",
         f"commit: {COMMIT}",
         f"time:   {TIME}",
+        "state:  ok",
+    ]
+    assert not changed_something(calls)
+
+
+def test_cluster_holder_says_in_a_sentence_when_the_last_run_did_not_end_well(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_script(tmp_path, "holder.sh", record=f"{RECORD}|changing")
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [
+        f"holder: {OTHER}",
+        f"commit: {COMMIT}",
+        f"time:   {TIME}",
+        "state:  changing (a make up or make deploy is running, or the last one "
+        "did not end well; look at what failed before anything is deleted)",
     ]
     assert not changed_something(calls)
 
@@ -746,10 +1021,27 @@ def test_up_writes_the_record_last_after_every_wait_that_can_fail() -> None:
     tail = UP_SH.rstrip().splitlines()[-3:]
     waits = UP_SH.index("wait --for=condition=Available deployment")
 
-    assert tail[1] == "record_cluster_holder"
+    assert tail[1] == "record_cluster_holder ok"
     assert tail[2].startswith('log "done. Next:')
-    assert UP_SH.count("record_cluster_holder") == 1
-    assert waits < UP_SH.index("record_cluster_holder")
+    assert UP_SH.count("record_cluster_holder ok") == 1
+    assert waits < UP_SH.index("record_cluster_holder ok")
+
+
+def test_up_writes_changing_in_both_branches_of_create_cluster() -> None:
+    body = UP_SH[position(UP_SH, "create_cluster() {") :]
+    body = body[: body.index("\n}\n")]
+
+    assert UP_SH.count("record_cluster_holder changing") == 2
+    assert body.count("record_cluster_holder changing") == 2
+    # The cluster that exists: after the check, before the return.
+    assert body.index('check_cluster_holder "make up"') < body.index(
+        "record_cluster_holder changing"
+    )
+    assert body.index("record_cluster_holder changing") < body.index("return")
+    # The cluster made here: once kind create has returned, which waits for it.
+    assert body.index("kind create cluster") < body.rindex(
+        "record_cluster_holder changing"
+    )
 
 
 def test_deploy_checks_the_record_after_the_cluster_is_known_and_before_anything_else(
@@ -767,9 +1059,21 @@ def test_deploy_writes_the_record_after_the_last_wait_and_before_it_says_done() 
     tail = DEPLOY_SH.rstrip().splitlines()[-3:]
 
     assert tail[0] == "wait_for_token_window"
-    assert tail[1] == "record_cluster_holder"
+    assert tail[1] == "record_cluster_holder ok"
     assert tail[2] == 'log "done. Next: make demo"'
-    assert DEPLOY_SH.count("record_cluster_holder") == 1
+    assert DEPLOY_SH.count("record_cluster_holder ok") == 1
+
+
+def test_deploy_writes_changing_right_after_the_check_and_before_a_prerequisite() -> (
+    None
+):
+    check = position(DEPLOY_SH, 'check_cluster_holder "make deploy"')
+
+    assert DEPLOY_SH.count("record_cluster_holder changing") == 1
+    assert check < DEPLOY_SH.index("record_cluster_holder changing")
+    assert DEPLOY_SH.index("record_cluster_holder changing") < DEPLOY_SH.index(
+        "\nrequire_database\n"
+    )
 
 
 def test_the_record_is_named_in_common_sh_alone_and_its_functions_are_there_once() -> (
@@ -813,7 +1117,27 @@ def test_the_readme_has_a_section_that_says_it_is_a_notice_and_not_a_lock() -> N
     assert "make cluster-holder" in body
 
 
+def test_the_readme_says_what_the_record_shows_after_a_run_that_failed() -> None:
+    body = " ".join(section(KIND_README, "\n## Who holds the cluster").split())
+
+    assert "changing" in body
+    assert "did not end well" in body
+    assert "look" in body
+    # The one case nothing protects: a cluster from before the record.
+    assert "nothing protects" in body
+    assert "no record" in body
+
+
+def test_the_runbook_for_a_failed_deploy_says_to_look_before_deleting() -> None:
+    runbook = " ".join(ROLLBACK_RUNBOOK.split())
+
+    assert "make cluster-holder" in runbook
+    assert "changing" in runbook
+    assert "before deleting" in runbook
+
+
 def test_the_development_environment_says_how_a_session_names_itself() -> None:
     assert "CLUSTER_HOLDER" in DEVELOPMENT_ENVIRONMENT
     assert "TAKE_CLUSTER=1" in DEVELOPMENT_ENVIRONMENT
     assert "make cluster-holder" in DEVELOPMENT_ENVIRONMENT
+    assert "changing" in DEVELOPMENT_ENVIRONMENT

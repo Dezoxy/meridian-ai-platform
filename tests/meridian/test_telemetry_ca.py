@@ -35,7 +35,7 @@ from certpolicysupport import (
     verdict,
 )
 from certscriptsupport import SECONDS
-from test_certificate_deploy import run_deploy
+from test_certificate_deploy import run_deploy, without_the_record
 from test_certificate_policy_up import (
     line_containing,
     line_index,
@@ -808,7 +808,7 @@ def test_deploy_stops_before_the_image_when_the_authoritys_configmap_is_missing(
     assert "docker build" not in calls
     assert "kind load" not in calls
     assert "helm" not in calls
-    assert " apply " not in calls
+    assert " apply " not in without_the_record(calls)
 
 
 def test_deploy_goes_on_to_the_image_when_the_configmap_is_there(

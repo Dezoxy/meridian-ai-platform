@@ -16,7 +16,11 @@ exercises this runbook; the game day (S028) exercises it again.
 - `MeridianGatewayRefusingByPolicy` after a registry change: calls are
   refused with `no-route`, `no-allowed-deployment`, `agent-not-allowed`
   or `unknown-tenant`.
-- `make deploy` or `make smoke` fails after a change that passed CI.
+- `make deploy` or `make smoke` fails after a change that passed CI. A
+  `make deploy` that failed leaves the cluster's record saying `changing`
+  (`make cluster-holder` prints it): look at what failed, in the pods' logs
+  and the audit rows, before deleting the cluster, because on kind its
+  database is the only copy of the audit log.
 
 `MeridianGatewayRefusingByPolicy` could be raised by a caller on purpose
 before S055, with five requests that name an unknown tenant; now a caller

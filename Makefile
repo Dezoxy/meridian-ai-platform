@@ -292,7 +292,7 @@ grafana-password:
 helm-lint:
 	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
 
-## cluster-holder  print who holds the kind cluster (the holder, its commit and the time of its last make up or make deploy), or that there is no record or no cluster; make up, deploy and down stop when another holder has it unless TAKE_CLUSTER=1 is in front of the command (CLUSTER_HOLDER=<name> names a checkout that is not on a branch); a notice, not a lock
+## cluster-holder  print who holds the kind cluster (the holder, its commit, the time and the state: changing after a make up or make deploy that did not end well), or that there is no record or no cluster; make up, deploy and down stop when another holder has it unless TAKE_CLUSTER=1 is in front of the command (CLUSTER_HOLDER=<name> names a checkout that is not on a branch); a notice, not a lock
 cluster-holder:
 	infra/kind/holder.sh
 
