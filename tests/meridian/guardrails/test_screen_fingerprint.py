@@ -1,8 +1,10 @@
 """The digest of what the screens match: a changed screen must change it."""
 
+import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +20,13 @@ PRINT_IT = (
     "from meridian.platform.guardrails import screen_fingerprint; "
     "print(screen_fingerprint())"
 )
+
+
+COMMITTED_BASELINES = [
+    pytest.param("claims-triage-baseline.json", id="golden-set"),
+    pytest.param("claims-triage-injection-baseline.json", id="injection-suite"),
+]
+BASELINE_DIRECTORY = Path(__file__).parents[3] / "data" / "evaluation"
 
 
 def fingerprint_in_a_fresh_interpreter(hash_seed: str) -> str:
@@ -47,6 +56,17 @@ def test_another_interpreter_gives_the_same_fingerprint() -> None:
 
     assert first == here
     assert second == here
+
+
+@pytest.mark.parametrize("name", COMMITTED_BASELINES)
+def test_the_fingerprint_is_the_one_both_committed_baselines_carry(
+    name: str,
+) -> None:
+    """A change to the documents, or to a comment outside the three screened
+    functions, must move no digest: it would move both baselines (S076)."""
+    committed = json.loads((BASELINE_DIRECTORY / name).read_text(encoding="utf-8"))
+
+    assert committed["fingerprints"]["screen"] == screen_fingerprint()
 
 
 def test_a_changed_pattern_of_the_model_screen_changes_the_fingerprint(
