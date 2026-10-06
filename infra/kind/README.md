@@ -375,7 +375,15 @@ In order, `make deploy`:
    the issuer is Ready without them, but with cert-manager's own approver off
    nothing would approve the chart's Certificates, and the deploy would die at
    its wait for them, right after the release, with the Jobs already run. It
-   names every one that is wrong, and `make up` installs them.
+   names every one that is wrong, and `make up` installs them. A policy that
+   is wrong is refused at once. When only the add-on has no available
+   replica, the script looks again every 5 seconds for 60 before it refuses:
+   right after a cold `make up` the add-on lost its leader election, exited
+   and was back in twenty seconds. The refusal then says the add-on "was not
+   available for 60s" and gives both remedies: `make up` for a cluster that
+   predates S056, a look at the pod (`kubectl -n cert-manager get pods`) for
+   one that has it and shows it restarting. (Tested against stub commands;
+   not yet seen on a cluster.)
 2. Builds and loads the image.
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
@@ -416,9 +424,16 @@ In order, `make deploy`:
    tokens in five requests, so a claim posted in the first seconds would be
    refused, and only two would fit in that minute. The wait makes a deploy
    end with the limits clear. A deploy that is interrupted after the
-   ingestion and run again within that minute does not wait. Whether
-   ingestion should spend a workload's budget at all is an open registry
-   decision (threat model T-60).
+   ingestion and run again within that minute finds the Job succeeded, does
+   not run the ingestion and does not wait: the script's only clock is its
+   own, and it reads no Kubernetes timestamp, so it cannot know how long ago
+   the Job finished and does not guess. It prints one line that says the
+   wait was skipped because this run did not run the ingestion (a repeat
+   deploy of the same image prints it too). A first request refused for the
+   tenant's token limit within a minute of an interrupted deploy is that
+   window: wait a minute and run it again. (Tested against stub commands;
+   not yet seen on a cluster.) Whether ingestion should spend a workload's
+   budget at all is an open registry decision (threat model T-60).
 
 Each pod gets its own role's connection string from its Secret, and the
 cluster CA's public certificate (`ca.crt` only, not the CA's private key that
@@ -768,7 +783,11 @@ Rerunning `make up` is the first thing to try. If a release is stuck in a
 `make up` again.
 
 If `make up` times out waiting for the Gateway to be programmed while the
-edge's proxy pod is ready, the condition is stale. Seen twice, with the edge
+edge's proxy pod is ready, the condition is stale. The script stops with
+"the Gateway edge was not Programmed in 5m", says the edge may be serving
+all the same, and prints the three commands below. (The wait after it, for
+the proxy Deployment to be `Available`, stops with the pods and the
+controller's log to look at.) Seen twice, with the edge
 serving routes both times: `AddressNotAssigned` on 2026-10-01, on a cluster
 that had run for 18 hours, and `NoResources` ("Envoy replicas unavailable")
 on 2026-10-04, on one that had run for two. `kubectl -n envoy-gateway-system
@@ -781,6 +800,9 @@ $K rollout restart deploy/envoy-gateway
 $K rollout status deploy/envoy-gateway
 $K annotate gateway edge meridian.local/reconcile-nudge="$(date -u +%FT%TZ)" --overwrite
 ```
+
+Then run `make up` again. The message is tested without a cluster; it has
+not yet been seen on one.
 
 ## Ports
 

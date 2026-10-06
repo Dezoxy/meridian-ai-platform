@@ -1511,6 +1511,83 @@ def test_deploy_waits_out_the_token_window_the_ingestion_opens() -> None:
     assert "completionTime" not in DEPLOY_SH
 
 
+def run_ingest_then_token_window(
+    *, job: str, chunks: str
+) -> subprocess.CompletedProcess[str]:
+    """``ingest_corpus`` and then ``wait_for_token_window`` of deploy.sh in bash
+    against stubs: ``kctl`` finds the ingestion Job unless ``job`` is
+    ``absent``, ``job_state`` says ``job`` (``succeeded`` or ``absent``),
+    ``stored_chunk_count`` prints ``chunks``, ``run_job`` and ``sleep`` only
+    say that they ran, and ``log`` prints its words on stdout."""
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
+            'log() { printf "log: %s\\n" "$*"; }',
+            'sleep() { printf "sleep %s\\n" "$1"; }',
+            'run_job() { printf "run_job %s\\n" "$1"; }',
+            f'job_state() {{ printf "%s" "{job}"; }}',
+            f'stored_chunk_count() {{ printf "%s" "{chunks}"; }}',
+            "kctl() {",
+            '  case "$*" in',
+            f'    *"get job"*) [[ "{job}" == absent ]] || echo job.batch/stub ;;',
+            "  esac",
+            "}",
+            "NAMESPACE=meridian tag=abc image=stub:abc",
+            *re.findall(r"^readonly TOKEN_WINDOW_SECONDS=\d+$", DEPLOY_SH, re.M),
+            'ingested_at=""',
+            function_definition(DEPLOY_SH, "ingest_corpus"),
+            function_definition(DEPLOY_SH, "wait_for_token_window"),
+            "ingest_corpus",
+            "wait_for_token_window",
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_deploy_says_it_skipped_the_token_window_when_the_ingestion_was_not_run() -> (
+    None
+):
+    done = run_ingest_then_token_window(job="succeeded", chunks="85")
+
+    assert done.returncode == 0, done.stderr
+    message = " ".join(done.stdout.split())
+    assert "run_job" not in done.stdout
+    # No wait, and one line that says so and why: this run did not run it.
+    assert "sleep" not in done.stdout
+    assert "did not run the ingestion" in message
+    assert "skipped" in message
+    # What the reader may meet, and the remedy.
+    assert "token" in message
+    assert "wait a minute" in message
+    assert "run it again" in message
+    # One line, not a stack of them.
+    assert len([line for line in done.stdout.splitlines() if "skipped" in line]) == 1
+
+
+@pytest.mark.parametrize(
+    ("job", "chunks"), [("succeeded", "0"), ("succeeded", ""), ("absent", "")]
+)
+def test_deploy_waits_as_before_and_prints_no_skip_when_this_run_ran_the_ingestion(
+    job: str, chunks: str
+) -> None:
+    done = run_ingest_then_token_window(job=job, chunks=chunks)
+
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert any(line.startswith("run_job meridian-ingest-abc") for line in lines)
+    assert any(line.startswith("log: waiting ") for line in lines)
+    assert any(line.startswith("sleep ") for line in lines)
+    assert "skipped" not in done.stdout
+    assert "did not run the ingestion" not in done.stdout
+
+
 def test_the_ingest_job_is_not_retried_and_ends_after_the_ingestions_longest_wait() -> (
     None
 ):

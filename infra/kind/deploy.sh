@@ -66,6 +66,12 @@ readonly ISSUER_NAME=meridian-services
 readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted)
 readonly APPROVER_NAMESPACE=cert-manager
 readonly APPROVER_DEPLOYMENT=cert-manager-approver-policy
+# How long require_approval looks for an available replica of the add-on, and
+# the pause between two looks. Right after a cold `make up` approver-policy lost
+# its leader election, exited and was back in twenty seconds; a minute covers a
+# restart and ends before it hides a real fault. The tests put a sleep that only logs on PATH.
+readonly APPROVER_WAIT_SECONDS=60
+readonly APPROVER_INTERVAL=5
 # One list: each service is a Deployment of the same name, and each has a
 # Secret <service>-db (tests/meridian/test_kind_manifests.py checks the
 # chart against it). The role Secrets come from DATABASE_ROLES (common.sh).
@@ -139,21 +145,37 @@ require_issuer() {
 # see this; the deploy would build, run its Jobs and die at the wait for the
 # Certificates. A cluster made before S056 does not know the policy kind, and
 # kubectl then fails: that is the same refusal, with its own error left out.
-# Every one that is wrong is named, not the first.
+# Every policy that is wrong is named, not the first, and the add-on is named
+# with them. A policy that is missing or not Ready is not what a restart
+# explains, so the refusal is at once. When the policies are fine and only the
+# add-on has no replica, it is looked at again, every APPROVER_INTERVAL seconds
+# for APPROVER_WAIT_SECONDS: right after a cold `make up` it left and came back
+# within twenty seconds, and "run 'make up'" was not the remedy for that.
+approver_available() {
+  local available
+  available="$(kctl -n "${APPROVER_NAMESPACE}" get deployment "${APPROVER_DEPLOYMENT}" \
+    -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" || available=""
+  [[ "${available}" =~ ^[0-9]+$ ]] && ((10#${available} > 0))
+}
+
 require_approval() {
-  local policy ready available wrong=""
+  local policy ready look looks wrong=""
   for policy in "${CERTIFICATE_POLICIES[@]}"; do
     ready="$(kctl get certificaterequestpolicy "${policy}" \
       -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" || ready=""
     [[ "${ready}" == True ]] || wrong+="; the CertificateRequestPolicy '${policy}' is missing or not Ready"
   done
-  available="$(kctl -n "${APPROVER_NAMESPACE}" get deployment "${APPROVER_DEPLOYMENT}" \
-    -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" || available=""
-  if ! [[ "${available}" =~ ^[0-9]+$ ]] || ((10#${available} == 0)); then
-    wrong+="; the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} has no available replica"
-  fi
-  [[ -z "${wrong}" ]] ||
+  if [[ -n "${wrong}" ]]; then
+    approver_available ||
+      wrong+="; the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} has no available replica"
     die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then${wrong} (a cluster made before S056 does not know the policy kind); run 'make up' first"
+  fi
+  looks=$((APPROVER_WAIT_SECONDS / APPROVER_INTERVAL + 1))
+  for ((look = 1; look <= looks; look++)); do
+    approver_available && return 0
+    ((look == looks)) || sleep "${APPROVER_INTERVAL}"
+  done
+  die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then: the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} was not available for ${APPROVER_WAIT_SECONDS}s. A cluster that predates S056 does not have it: run 'make up' first. A cluster that has it and shows it restarting or not ready needs a look at the pod instead (kubectl -n ${APPROVER_NAMESPACE} get pods; logs deploy/${APPROVER_DEPLOYMENT}); run 'make deploy' again when it is Running"
 }
 
 # Build the image and tag it by content. Sets ${image} and ${tag}. Docker's
@@ -335,9 +357,15 @@ wait_for_route() {
 # When an ingestion ran in this deploy, wait until its token reservation has
 # left the window. The time is the script's own clock (SECONDS): the node's
 # clock is not the laptop's, so no Kubernetes timestamp is compared with it.
+# When this run did not run the ingestion (its Job had already succeeded, as
+# after a deploy that was interrupted and run again) there is no moment of the
+# script's own to count from, and it does not guess: it says that it skipped.
 wait_for_token_window() {
   local remaining
-  [[ -n "${ingested_at}" ]] || return 0
+  if [[ -z "${ingested_at}" ]]; then
+    log "the wait for the claims-triage tenant's token window is skipped: this run did not run the ingestion, so it cannot tell when the ingestion's tokens were reserved. If a first request is refused for the tenant's token limit within a minute of a deploy that was interrupted, that is the window: wait a minute and run it again"
+    return 0
+  fi
   remaining=$((ingested_at + TOKEN_WINDOW_SECONDS - SECONDS))
   ((remaining > 0)) || return 0
   log "waiting ${remaining}s: the ingestion reserved about 7,700 of the claims-triage tenant's 10,000 tokens a minute, so until that minute has passed a triage that asks the model can be refused"
