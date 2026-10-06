@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=schemas/agents.schema.json
 # Agents and the tools each may call; anything not listed is refused. A worker
 # is a part of one agent with a tool list of its own: its tools are the agent's
-# and the workers' lists together are the agent's list (declared and checked;
-# not yet enforced at run time).
+# and the workers' lists together are the agent's list (checked here; enforced
+# by the runtime's tool client and again by each tool server).
 agents:
   - id: claims-triage
     description: Triages a new claim and prepares it for an adjuster.
@@ -25,7 +25,7 @@ agents:
         tools:
           - wording_search
       - id: assessor
-        description: Asks the model the one question and reads its proposal; it calls no tool.
+        description: Asks the model the one question and reads its answer; it calls no tool.
         tools: []
       - id: approvals
         description: Asks an adjuster for approval, reads the outcome and writes the claim note.

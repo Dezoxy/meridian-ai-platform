@@ -5,7 +5,11 @@ reaches a model only through the ``ModelClient``. The client holds the rules
 that belong to the caller, and the server checks the same rules again:
 
 * a tool must be in the registry and in the agent's allowlist, or nothing is
-  sent and the runtime audits the refusal (hard rule 6);
+  sent and the runtime audits the refusal (hard rule 6). An agent that declares
+  workers (S031) calls through the view of one worker, ``for_worker``: the tool
+  must also be on that worker's list, and the call names the worker so the
+  server checks the same. The client itself, with no worker, calls nothing for
+  such an agent;
 * the key that makes a write happen once is derived here from the run, the tool
   and a label the graph's code gives the call site, so a model can neither mint
   nor reuse one (T-23);
@@ -31,6 +35,7 @@ each server that outlive the call, so calls share a connection. Without one
 test's in-process server) each call drives the SDK with ``anyio.run``.
 """
 
+import copy
 import hashlib
 import logging
 import re
@@ -40,7 +45,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, NoReturn, get_args
 
 import anyio
 import httpx2
@@ -69,6 +74,7 @@ from meridian.platform.toolserver.wire import (
     META_REFUSAL,
     META_RUN,
     META_TIMEOUT_MS,
+    META_WORKER,
     MILLISECONDS_PER_SECOND,
     RefusalReason,
 )
@@ -143,10 +149,18 @@ class ToolError(Exception):
 
 
 class ToolNotAllowed(ToolError):
-    """The runtime's own allowlist refused the call; nothing was sent."""
+    """The runtime's own allowlist refused the call; nothing was sent.
 
-    def __init__(self, tool: str | None) -> None:
+    ``reason`` is the word the audit row and the failed run carry: the agent's
+    allowlist (``tool-not-allowed``), or one of three worker words (S031):
+    ``worker-tool-not-allowed`` (the agent's tool, not this worker's),
+    ``worker-missing`` (a call with no worker, for an agent that has workers)
+    and ``worker-unknown`` (a worker the agent does not declare; ``tool`` is
+    None then)."""
+
+    def __init__(self, tool: str | None, reason: str = "tool-not-allowed") -> None:
         super().__init__(tool, "tool not allowed")
+        self.reason = reason
 
 
 class ToolCallLimit(ToolError):
@@ -267,14 +281,29 @@ async def _exchange(
             return await send_call(client, tool, arguments, meta)
 
 
+class _Counter:
+    """The calls of one run's leg, shared by its client and every worker's view
+    of it, so the limit is the run's and not each worker's."""
+
+    def __init__(self, maximum: int) -> None:
+        self.maximum = maximum
+        self.calls = 0
+        self.lock = threading.Lock()
+
+
 class ToolClient:
     """Built per run. ``servers`` maps a registry server ID to what the SDK's
     ``Client`` accepts: a base URL (``/mcp`` is appended) or, in tests, a
     connected in-process server. ``on_refusal`` is called with the tool's
     registry ID, or ``None``, before a call the allowlist refuses; it writes the
-    runtime's audit row, and an exception from it propagates. ``max_calls``
+    runtime's audit row, and an exception from it propagates. A refusal that
+    comes of a worker (S031: ``worker-tool-not-allowed``, ``worker-missing``,
+    ``worker-unknown``) goes to ``on_worker_refusal`` with the tool or ``None``
+    and the reason word, the same way; a client built without it reports such a
+    refusal to ``on_refusal``, as the allowlist's. ``max_calls``
     bounds the calls of this client, so of one run: every call counts, a refused
     one too, and the one past it raises ``ToolCallLimit`` before the allowlist.
+    The calls of a worker's view (``for_worker``) count here too.
     ``verify`` is how a call to an address is made over TLS (S055): the context
     of the runtime's own certificate and CA, or the default verification, never
     off. ``transport`` (S059) is the runtime's kept HTTP client for each
@@ -293,20 +322,45 @@ class ToolClient:
         max_calls: int,
         verify: ssl.SSLContext | bool = True,
         transport: "ToolTransport | None" = None,
+        on_worker_refusal: Callable[[str | None, str], None] | None = None,
     ) -> None:
         prepare_sdk()
         self._verify = verify
         self._transport = transport
-        self._max_calls = max_calls
-        self._calls = 0
-        self._lock = threading.Lock()
+        self._counter = _Counter(max_calls)
         self._servers = dict(servers)
         self._registry = registry
         self._agent = agent
         self._run_id = run_id
         self._tracer = tracer
         self._on_refusal = on_refusal
+        self._on_worker_refusal = on_worker_refusal
         self._validators: dict[str, Draft202012Validator] = {}
+        # Set on a worker's view only (``for_worker``).
+        self._worker: str | None = None
+
+    def for_worker(self, worker_id: str) -> "ToolClient":
+        """The view of this client for one of the agent's workers (S031).
+
+        It is a ``ToolClient`` of the same run with the same ``call``: a tool
+        off the worker's list is refused before anything is sent, the worker's
+        ID goes with every call, and the count is this client's (all the workers
+        of a leg together make at most ``max_calls`` calls). The idempotency key
+        does not know the worker (see ``_idempotency_key``).
+
+        A worker the agent does not declare (and any worker, for an agent that
+        declares none) is a bug in the graph: it is audited as a refusal and
+        raises ``ToolNotAllowed`` with reason ``worker-unknown``, and counts no
+        call. A view makes no view: ``ValueError``.
+        """
+        if self._worker is not None:
+            raise ValueError("a worker's view makes no view of another worker")
+        agent = self._registry.agent(self._agent)
+        if agent is None or agent.worker(worker_id) is None:
+            self._refuse(None, "worker-unknown")
+        view = copy.copy(self)
+        view._worker = worker_id
+        return view
 
     def call(
         self, tool: str, arguments: Mapping[str, Any], *, step: str | None = None
@@ -339,6 +393,8 @@ class ToolClient:
             set_span_attributes(
                 span, {"meridian.tool": spec.id, "meridian.tool_server": spec.server}
             )
+            if self._worker is not None:
+                set_span_attributes(span, {"meridian.worker": self._worker})
             try:
                 outcome = self._attempt(span, spec, target, arguments, key)
             except ToolUnavailable:
@@ -361,23 +417,43 @@ class ToolClient:
         return outcome
 
     def _count(self, tool: str) -> None:
-        with self._lock:  # a graph's parallel nodes share this client
-            if self._calls >= self._max_calls:
+        counter = self._counter
+        with counter.lock:  # a graph's parallel nodes share this client
+            if counter.calls >= counter.maximum:
                 # The ID of a registry tool only: a made-up name is never kept.
                 spec = self._registry.tool(tool)
                 raise ToolCallLimit(spec.id if spec is not None else None)
-            self._calls += 1
+            counter.calls += 1
 
     def _allowed(self, tool: str) -> Tool:
+        """The tool when the agent, and for an agent with workers this client's
+        worker, may call it; else the refusal is audited and raised. The order
+        is the tool servers': the worker's presence, the agent's list, the
+        worker's list."""
         spec = self._registry.tool(tool)
         agent = self._registry.agent(self._agent)
-        if spec is not None and agent is not None and spec.id in agent.tools:
-            return spec
         # A name that is no registry tool is never stored: a model may have
         # made it up, and it could hold anything.
         known = spec.id if spec is not None else None
-        self._on_refusal(known)
-        raise ToolNotAllowed(known)
+        if agent is not None and agent.workers and self._worker is None:
+            self._refuse(known, "worker-missing")
+        if spec is None or agent is None or spec.id not in agent.tools:
+            self._refuse(known, "tool-not-allowed")
+        if agent.workers:
+            worker = agent.worker(self._worker or "")
+            if worker is None:  # the view's worker is the agent's: never so
+                self._refuse(known, "worker-unknown")
+            if spec.id not in worker.tools:
+                self._refuse(known, "worker-tool-not-allowed")
+        return spec
+
+    def _refuse(self, tool: str | None, reason: str) -> NoReturn:
+        """Audit a refusal the runtime's own allowlist makes, then raise it."""
+        if reason == "tool-not-allowed" or self._on_worker_refusal is None:
+            self._on_refusal(tool)
+        else:
+            self._on_worker_refusal(tool, reason)
+        raise ToolNotAllowed(tool, reason)
 
     def _idempotency_key(self, spec: Tool, step: str | None) -> str | None:
         if not spec.idempotency_key_required:
@@ -389,6 +465,8 @@ class ToolClient:
                 "a write tool needs a step: 1 to 64 characters of a-z, 0-9, _, . "
                 "and -, starting with a letter or digit"
             )
+        # The worker is not part of the key: a replayed step finds its earlier
+        # call whichever view sends it (S031).
         return hashlib.sha256(f"{self._run_id}:{spec.id}:{step}".encode()).hexdigest()
 
     def _attempt(
@@ -401,6 +479,8 @@ class ToolClient:
     ) -> ToolResult | ToolRefused:
         """The call and the reading of its answer; raises ``ToolUnavailable``."""
         meta: dict[str, Any] = {META_RUN: str(self._run_id)}
+        if self._worker is not None:
+            meta[META_WORKER] = self._worker
         if key is not None:
             meta[META_IDEMPOTENCY_KEY] = key
         # The SDK does not carry the trace; the server reads it from ``_meta``.

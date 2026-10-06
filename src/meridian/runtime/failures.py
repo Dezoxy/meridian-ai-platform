@@ -58,7 +58,7 @@ def failure_reason(error: BaseException) -> str:
     if isinstance(error, ToolCallLimit):
         return "tool-call-limit"
     if isinstance(error, ToolNotAllowed):
-        return "tool-not-allowed"
+        return error.reason
     if isinstance(error, ToolRefused):
         return "tool-refused"
     if isinstance(error, ToolUnavailable):

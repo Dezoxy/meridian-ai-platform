@@ -8,6 +8,10 @@ in an order where each step needs only what the steps before it established:
     scope, bound argument, idempotency key, the handler, the result, the audit
     row.
 
+The allowlist is the agent's, and for an agent that declares workers (S031) the
+worker's too: the key's form, the worker's name, the agent's list, the worker's
+list, in that order (``Pipeline._allowlist``).
+
 The policy's scope (its product and wording version) is read only for a tool
 bound to the product, and after every check that decides whether the caller may
 use the tool at all: the claims role has no grant on ``policy.policies``.
@@ -63,8 +67,10 @@ from meridian.platform.toolserver.validation import build_validator, fits, stora
 from meridian.platform.toolserver.wire import (
     IDEMPOTENCY_KEY_PATTERN,
     META_IDEMPOTENCY_KEY,
+    InvalidWorker,
     RefusalReason,
     run_id_of,
+    worker_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,6 +108,8 @@ class Call:
     tenant: str | None = None
     agent: str | None = None
     reference: str | None = None
+    # The worker the call named, once it is a worker of the run's agent (S031).
+    worker: str | None = None
 
     def read(
         self,
@@ -226,8 +234,9 @@ class Pipeline:
                 )
                 return Refused(binding.reason)
             call.read(binding.run_id, binding.tenant, binding.agent, binding.claim_id)
-            if (reason := self._screen(entry, binding, arguments)) is not None:
-                return Refused(reason)
+            screened = self._screen(call, entry, binding, arguments, meta)
+            if screened is not None:
+                return Refused(screened)
             if entry.handler.bound_to == "product":
                 scoped = with_policy_scope(conn, binding)
                 if isinstance(scoped, BindingRefused):
@@ -249,22 +258,62 @@ class Pipeline:
             return self._complete(conn, call, entry, answer, deadline)
 
     def _screen(
-        self, entry: _Entry, binding: RunBinding, arguments: Mapping[str, Any]
+        self,
+        call: Call,
+        entry: _Entry,
+        binding: RunBinding,
+        arguments: Mapping[str, Any],
+        meta: Mapping[str, Any],
     ) -> RefusalReason | None:
         """The checks of whether this caller may use this tool with these
         arguments, before the bound argument is compared."""
         tool = entry.tool
         if not self.registry.tenant_may_run(binding.tenant, binding.agent):
             return "tenant-not-allowed"
-        agent = self.registry.agent(binding.agent)
-        if agent is None or tool.id not in agent.tools:
-            return "tool-not-allowed"
+        if (reason := self._allowlist(call, tool, binding.agent, meta)) is not None:
+            return reason
         if tool.approval_required:  # approvals arrive in S015
             return "approval-required"
         # Storable second: it walks the arguments, which the schema has bounded.
         if not fits(entry.arguments, arguments) or not storable(arguments):
             return "invalid-arguments"
         return None
+
+    def _allowlist(
+        self, call: Call, tool: Tool, agent_id: str, meta: Mapping[str, Any]
+    ) -> RefusalReason | None:
+        """Whether the run's agent, and for an agent that declares workers the
+        worker the call names, may call the tool (S031).
+
+        The agent is the run row's: the caller names a worker and nothing else.
+        The name only narrows. It is accepted when it is a worker of that agent,
+        and then allows that worker's tools; so what any name can reach is the
+        agent's own list. In order: the key's form, the agent's workers (a call
+        names none for an agent without workers, one for an agent with them),
+        the worker's name, the agent's list, the worker's list. The worker goes
+        on the call (and so its span) once it is one of the agent's, never as
+        the caller wrote it.
+        """
+        try:
+            named = worker_of(meta)
+        except InvalidWorker:
+            return "invalid-worker"
+        agent = self.registry.agent(agent_id)
+        if agent is None:
+            return "tool-not-allowed"
+        if not agent.workers:
+            if named is not None:
+                return "worker-unknown"
+            return None if tool.id in agent.tools else "tool-not-allowed"
+        if named is None:
+            return "worker-missing"
+        worker = agent.worker(named)
+        if worker is None:
+            return "worker-unknown"
+        call.worker = worker.id
+        if tool.id not in agent.tools:
+            return "tool-not-allowed"
+        return None if tool.id in worker.tools else "worker-tool-not-allowed"
 
     def _refusal(
         self,

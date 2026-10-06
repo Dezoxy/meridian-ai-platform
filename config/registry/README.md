@@ -182,8 +182,39 @@ and the workers' lists together are the agent's list, each tool on exactly
 one worker, so "who may call this tool" has one answer. An agent without the
 key has no workers and is checked as before. Status: **declared and
 checked** (`make registry`, and the `tools` fingerprint of the evaluation's
-baselines covers it); **not yet enforced at run time**, where nothing reads
-a worker until the runtime's tool client and the tool servers do.
+baselines covers it) and **enforced twice** (implemented, in tests; not run
+on a cluster): the runtime's tool client and each tool server.
+
+- **Runtime.** An agent with workers calls through the view of one worker,
+  `ToolClient.for_worker(id)`: a tool off that worker's list is refused before
+  anything is sent, and the view counts against the run's one limit of sixteen.
+  The client itself, with no worker, calls nothing for such an agent. The
+  worker is not part of the idempotency key.
+- **Tool server.** The call carries the worker in `_meta` (`meridian/worker`).
+  The server still reads tenant, agent and claim from the run's own row and
+  nothing else from the caller (T-22); the name only narrows, since it is
+  accepted only as a worker of that row's agent, so what any name can reach is
+  the agent's own list. A server's span for the call names the worker
+  (`meridian.worker`) once it is one of the agent's.
+
+The reasons, in the order a tool server checks them for an agent with workers
+(the runtime's client makes the last four; it has no tenant or key form to
+check):
+
+| Reason | A call is refused when |
+|---|---|
+| `tenant-not-allowed` | the tenant may not run the agent (as before) |
+| `invalid-worker` | the key is there and is not a worker ID (another type, empty, over 64 characters, outside `a-z0-9-`) |
+| `worker-missing` | the agent has workers and the call names none |
+| `worker-unknown` | the name is not a worker of the run's agent; also any name for an agent with no workers (the runtime's `ToolClient.for_worker`, for a worker the agent does not declare) |
+| `tool-not-allowed` | the tool is not the agent's (as before) |
+| `worker-tool-not-allowed` | the tool is the agent's but not on the named worker's list |
+
+For an agent without workers the order is as before (`invalid-worker` and
+`worker-unknown` for a key, then `tool-not-allowed`). In the runtime the
+reasons are also the failure word of a run that made the call (`run.failed`),
+and each is audited with the tool when it is a registry tool; the audit row
+has no column for the worker yet.
 
 ```yaml
 - id: claims-triage

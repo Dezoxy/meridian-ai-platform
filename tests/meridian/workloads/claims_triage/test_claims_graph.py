@@ -184,10 +184,27 @@ class StubTools:
         self.tamper = tamper
         self.recorded = recorded
         self.searches = 0
+        # (worker, tool) of every call, in order (S031).
+        self.workers: list[tuple[str, str]] = []
+
+    def for_worker(self, worker_id: str) -> "StubWorkerView":
+        return StubWorkerView(self, worker_id)
 
     def call(
         self, tool: str, arguments: dict[str, Any], *, step: str | None = None
     ) -> ToolResult:
+        """What the real client does for an agent with workers: nothing."""
+        raise AssertionError("a call with no worker: the graph names its worker")
+
+    def call_as(
+        self,
+        worker: str,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        step: str | None = None,
+    ) -> ToolResult:
+        self.workers.append((worker, tool))
         if tool in WRITE_ANSWERS:
             self.writes.append((tool, dict(arguments), step))
         else:
@@ -241,6 +258,19 @@ class StubTools:
 
     def names(self) -> list[str]:
         return [tool for tool, _ in self.calls]
+
+
+class StubWorkerView:
+    """What ``StubTools.for_worker`` returns: the same calls, said as a worker."""
+
+    def __init__(self, tools: StubTools, worker: str) -> None:
+        self._tools = tools
+        self._worker = worker
+
+    def call(
+        self, tool: str, arguments: dict[str, Any], *, step: str | None = None
+    ) -> ToolResult:
+        return self._tools.call_as(self._worker, tool, arguments, step=step)
 
 
 def compiled(
@@ -1066,6 +1096,37 @@ def test_a_decision_is_noted_with_its_fixed_text_and_the_run_completes(
     assert snapshot.values["decision"] == decision
     assert snapshot.values["request_id"] == REQUEST_ID
     assert snapshot.values["output"] == output
+
+
+def test_each_tool_is_called_through_the_worker_that_holds_it() -> None:
+    registry = load_registry(REGISTRY_DIR)
+    graph, tools = paused()
+    tools.recorded = "withdrawn"
+
+    resume(graph, {})
+
+    # The whole path: the two reads, four searches, the request, the outcome
+    # and the note, each through its worker, which the registry says holds it.
+    assert [worker for worker, _ in tools.workers] == [
+        "intake",
+        "intake",
+        "terms",
+        "terms",
+        "terms",
+        "terms",
+        "approvals",
+        "approvals",
+        "approvals",
+    ]
+    for worker, tool in tools.workers:
+        assert tool in registry.worker("claims-triage", worker).tools
+
+
+def test_a_call_site_that_names_no_worker_would_be_refused() -> None:
+    tools = StubTools()
+
+    with pytest.raises(AssertionError, match="no worker"):
+        tools.call("policy_lookup", {"policy_number": "POL-0049"})
 
 
 def test_the_five_notes_are_different_fixed_texts() -> None:

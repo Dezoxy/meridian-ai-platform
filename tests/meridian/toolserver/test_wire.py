@@ -1,9 +1,9 @@
 """What a tool server and its client agree on (S059): how long a call may take,
-and the run it names.
+and the run and worker it names.
 
 The caller sends the time it has left in ``_meta``; the server reads it with
 ``call_budget_seconds`` and never trusts more than its own maximum. The run's
-ID is read with ``run_id_of``.
+ID is read with ``run_id_of`` and the worker's (S031) with ``worker_of``.
 """
 
 import math
@@ -17,8 +17,11 @@ from meridian.platform.toolserver.wire import (
     MAX_CALL_SECONDS,
     META_RUN,
     META_TIMEOUT_MS,
+    META_WORKER,
+    InvalidWorker,
     call_budget_seconds,
     run_id_of,
+    worker_of,
 )
 
 MAX_MILLISECONDS = 10_000
@@ -104,6 +107,42 @@ def test_the_run_a_call_names_is_read_when_it_is_a_uuid() -> None:
 )
 def test_anything_that_is_not_a_uuid_string_names_no_run(meta: dict[str, Any]) -> None:
     assert run_id_of(meta) is None
+
+
+def test_the_worker_a_call_names_is_read_when_it_is_of_the_ids_form() -> None:
+    assert META_WORKER == "meridian/worker"
+    assert worker_of({META_WORKER: "intake"}) == "intake"
+    assert worker_of({META_WORKER: "a" * 64}) == "a" * 64
+
+
+def test_a_call_that_names_no_worker_has_none() -> None:
+    assert worker_of({}) is None
+    assert worker_of({META_RUN: str(uuid.uuid4())}) is None
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("a" * 65, id="over-the-bound"),
+        pytest.param("Intake", id="upper-case"),
+        pytest.param("intake\n", id="trailing-newline"),
+        pytest.param("two words", id="a-space"),
+        pytest.param("-intake", id="leading-hyphen"),
+        pytest.param("in_take", id="underscore"),
+        pytest.param(4900, id="a-number"),
+        pytest.param(True, id="a-bool"),
+        pytest.param(["intake"], id="a-list"),
+        pytest.param({"id": "intake"}, id="a-mapping"),
+        pytest.param(b"intake", id="bytes"),
+    ],
+)
+def test_a_worker_key_of_another_type_or_form_is_refused_and_not_ignored(
+    sent: Any,
+) -> None:
+    with pytest.raises(InvalidWorker):
+        worker_of({META_WORKER: sent})
 
 
 def test_the_maximum_is_read_when_the_budget_is_read(

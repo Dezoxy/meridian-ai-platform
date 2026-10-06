@@ -55,6 +55,7 @@ from toolsupport import (
     tracer_of,
     with_client,
     without_output_schema,
+    worker_holding,
 )
 
 from meridian.platform.common.env import SettingsError
@@ -95,6 +96,7 @@ from meridian.platform.toolserver.wire import (
     META_REFUSAL,
     META_RUN,
     META_TIMEOUT_MS,
+    META_WORKER,
     RefusalReason,
 )
 from meridian.runtime.tool_client import ToolClient, ToolUnavailable
@@ -1055,6 +1057,7 @@ def test_the_span_carries_the_identifiers_and_no_value(
         "meridian.run_id": str(world.run_id),
         "meridian.tenant": TENANT,
         "meridian.agent": AGENT,
+        "meridian.worker": "intake",
     }
 
 
@@ -1437,7 +1440,9 @@ def test_no_more_than_the_limit_of_handlers_run_at_once(world: World) -> None:
         async def one() -> None:
             answers.append(
                 await client.call_tool(
-                    "policy_lookup", LOOKUP, meta={META_RUN: str(world.run_id)}
+                    "policy_lookup",
+                    LOOKUP,
+                    meta={META_RUN: str(world.run_id), META_WORKER: "intake"},
                 )
             )
 
@@ -1520,7 +1525,9 @@ async def try_call(client: Client, run_id: uuid.UUID, **meta: Any) -> Any:
     with anyio.fail_after(CALL_WAIT_SECONDS):
         try:
             return await client.call_tool(
-                "policy_lookup", LOOKUP, meta={META_RUN: str(run_id), **meta}
+                "policy_lookup",
+                LOOKUP,
+                meta={META_RUN: str(run_id), META_WORKER: "intake", **meta},
             )
         except MCPError as error:
             return error
@@ -1882,7 +1889,11 @@ def test_a_shed_call_that_names_no_registry_tool_writes_a_row_with_no_tool(
                     await client.call_tool(
                         CANARY,
                         LOOKUP,
-                        meta={META_RUN: str(world.run_id), META_TIMEOUT_MS: 5},
+                        meta={
+                            META_RUN: str(world.run_id),
+                            META_WORKER: "intake",
+                            META_TIMEOUT_MS: 5,
+                        },
                     )
                 except MCPError as error:
                     assert_shed(error)
@@ -1968,7 +1979,7 @@ def test_a_call_the_server_shed_reaches_the_runtimes_tool_client_as_unavailable(
             tracer=tracer_of(InMemorySpanExporter()),
             on_refusal=lambda tool: None,
             max_calls=2,
-        )
+        ).for_worker("intake")
 
     with serve(app.app) as base:
         threads = [
@@ -2044,6 +2055,8 @@ def finish(
     key: str | None = None,
 ) -> Finished:
     meta = {META_RUN: str(world.run_id)}
+    if (worker := worker_holding(tool)) is not None:
+        meta[META_WORKER] = worker
     if key is not None:
         meta[META_IDEMPOTENCY_KEY] = key
     return pipeline.run(Call(uuid.uuid4()), tool, arguments, meta, deadline)

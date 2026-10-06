@@ -26,6 +26,12 @@ MAX_CODE = "a" * 40
         (ModelCallLimitError(), "model-call-limit"),
         (ToolCallLimit("wording_search"), "tool-call-limit"),
         (ToolNotAllowed(None), "tool-not-allowed"),
+        (
+            ToolNotAllowed("add_claim_note", "worker-tool-not-allowed"),
+            "worker-tool-not-allowed",
+        ),
+        (ToolNotAllowed(None, "worker-unknown"), "worker-unknown"),
+        (ToolNotAllowed("policy_lookup", "worker-missing"), "worker-missing"),
         (ToolRefused("policy_lookup", "outside-claim"), "tool-refused"),
         (ToolRefused("policy_lookup", "unknown"), "tool-refused"),
         (ToolUnavailable("policy_lookup"), "tool-unavailable"),

@@ -84,8 +84,15 @@ def call_once(
         verify=verify,
     )
     step = STEP if tool.idempotency_key_required else None
+    # An agent with workers calls through the view of the worker that holds the
+    # tool (the registry gives every tool of such an agent one), as a graph does
+    # (S031); the client itself would refuse the call before it was sent.
+    declared = registry.agent(agent)
+    workers = declared.workers if declared is not None else ()
+    holder = next((w.id for w in workers if tool.id in w.tools), None)
+    caller = client if holder is None else client.for_worker(holder)
     try:
-        client.call(tool.id, {}, step=step)
+        caller.call(tool.id, {}, step=step)
     except ToolRefused as refusal:
         return Answer(server, tool.id, refusal.reason)
     except ToolError:

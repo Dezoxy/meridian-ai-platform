@@ -22,6 +22,7 @@ from toolsupport import (
     CANARY,
     CLAIM,
     POLICY,
+    Routed,
     World,
     add_run,
     application_log,
@@ -192,16 +193,18 @@ def tools_for(
     run_id: uuid.UUID,
     transport: ToolTransport | None,
     exporter: InMemorySpanExporter | None = None,
-) -> ToolClient:
-    return ToolClient(
-        {server: address},
-        registry=load_registry(REGISTRY_DIR),
-        agent="claims-triage",
-        run_id=run_id,
-        tracer=tracer_of(exporter or InMemorySpanExporter()),
-        on_refusal=lambda tool: None,
-        max_calls=8,
-        transport=transport,
+) -> Routed:
+    return Routed(
+        ToolClient(
+            {server: address},
+            registry=load_registry(REGISTRY_DIR),
+            agent="claims-triage",
+            run_id=run_id,
+            tracer=tracer_of(exporter or InMemorySpanExporter()),
+            on_refusal=lambda tool: None,
+            max_calls=8,
+            transport=transport,
+        )
     )
 
 

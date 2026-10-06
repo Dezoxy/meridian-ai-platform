@@ -375,8 +375,10 @@ def tool_client_for(
     way. The tenant is a key because ``create_run`` has checked it against the
     registry, so the throttle's map is bounded."""
 
-    def audit_refusal(tool: str | None) -> None:
-        key = f"{tool or '-'}/{REFUSAL_REASON}"
+    def audit_refusal(tool: str | None, reason: str = REFUSAL_REASON) -> None:
+        # A window per tool and reason: a worker's refusal of a tool does not
+        # use up the window of the agent's refusal of it (S031).
+        key = f"{tool or '-'}/{reason}"
         carried = throttle.due(identity.tenant, key)
         if carried is None:
             return
@@ -387,7 +389,7 @@ def tool_client_for(
                     service=SERVICE_NAME,
                     event="tool.call",
                     outcome="refused",
-                    reason=REFUSAL_REASON,
+                    reason=reason,
                     tool=tool,
                     tenant=identity.tenant,
                     agent=identity.agent,
@@ -407,6 +409,7 @@ def tool_client_for(
         run_id=identity.run_id,
         tracer=tracer,
         on_refusal=audit_refusal,
+        on_worker_refusal=audit_refusal,
         max_calls=runs.MAX_TOOL_CALLS_PER_RUN,
         verify=verify,
         transport=transport,

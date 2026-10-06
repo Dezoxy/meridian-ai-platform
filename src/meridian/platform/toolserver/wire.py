@@ -6,6 +6,7 @@ Constants and two readers of ``_meta``, so the runtime's client can import them
 without importing a server.
 """
 
+import re
 import uuid
 from collections.abc import Mapping
 from typing import Any, Literal
@@ -13,6 +14,11 @@ from typing import Any, Literal
 # The run the call belongs to. The caller sends only this; the server reads
 # tenant, agent and claim from the run's own record (T-22).
 META_RUN = "meridian/run"
+# The worker of the run's agent that makes the call (S031). It only narrows:
+# the server accepts it when it is a worker of the run row's agent, and then
+# allows that worker's tools alone, so no name reaches more than the agent's
+# own list.
+META_WORKER = "meridian/worker"
 # The key that makes a write happen once (T-23). Not a tool argument.
 META_IDEMPOTENCY_KEY = "meridian/idempotency-key"
 # How long the caller will still wait for the call, as a whole number of
@@ -63,12 +69,47 @@ def run_id_of(meta: Mapping[str, Any]) -> uuid.UUID | None:
         return None
 
 
+# What a worker's ID looks like on the wire: a registry entity ID (lower-case
+# words joined by hyphens), bounded as the idempotency step is.
+WORKER_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+class InvalidWorker(ValueError):
+    """``_meta`` holds a worker key that is not a worker's ID. Its message holds
+    no part of what was sent."""
+
+    def __init__(self) -> None:
+        super().__init__("the worker key is not a worker ID")
+
+
+def worker_of(meta: Mapping[str, Any]) -> str | None:
+    """The worker the caller named in ``_meta``; None when it named none.
+
+    Raises ``InvalidWorker`` when the key is there and is anything but a string
+    of the ID's form (another type, empty, over 64 characters, a character
+    outside ``a-z0-9-``): a bad key is refused, not read as no key, so a caller
+    cannot turn a worker's call into an agent's by garbling the name.
+    """
+    if META_WORKER not in meta:
+        return None
+    value = meta[META_WORKER]
+    # fullmatch, and not $: $ also matches before a trailing newline.
+    if not isinstance(value, str) or WORKER_PATTERN.fullmatch(value) is None:
+        raise InvalidWorker
+    return value
+
+
 RefusalReason = Literal[
     "unknown-tool",
     "unknown-run",
     "run-not-running",
     "tenant-not-allowed",
     "tool-not-allowed",
+    # An agent's tool on the wrong worker, and the worker checks (S031).
+    "worker-tool-not-allowed",
+    "worker-unknown",
+    "worker-missing",
+    "invalid-worker",
     "approval-required",
     "invalid-arguments",
     "claim-not-bound",

@@ -40,7 +40,11 @@ from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
-from meridian.platform.toolserver.wire import META_IDEMPOTENCY_KEY, META_RUN
+from meridian.platform.toolserver.wire import (
+    META_IDEMPOTENCY_KEY,
+    META_RUN,
+    META_WORKER,
+)
 from meridian.runtime.toolprobe import Answer, main, succeeded
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
@@ -316,6 +320,22 @@ def test_the_probe_sends_a_fresh_run_and_a_key_only_where_the_tool_needs_one(
     for seen in stand_in.calls:
         assert seen.arguments == {}
         assert (META_IDEMPOTENCY_KEY in seen.meta) == (seen.name == "add_claim_note")
+
+
+def test_the_probe_calls_each_tool_as_the_worker_that_holds_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stand_in = StandIn()
+    targets = {server: stand_in.server for server, _ in PAIRS}
+
+    probe(capsys, environ_for({}), targets=targets)
+
+    sent = {seen.name: seen.meta[META_WORKER] for seen in stand_in.calls}
+    assert sent == {
+        "policy_lookup": "intake",
+        "wording_search": "terms",
+        "add_claim_note": "approvals",
+    }
 
 
 # ── the exit status ─────────────────────────────────────────────────────────

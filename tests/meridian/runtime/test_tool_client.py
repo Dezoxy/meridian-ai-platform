@@ -32,6 +32,7 @@ from toolsupport import (
     CLAIM,
     POLICY,
     TENANT,
+    Routed,
     StandIn,
     World,
     a_valid_answer,
@@ -102,16 +103,19 @@ def direct(
     refusals: Refusals | None = None,
     agent: str = AGENT,
     max_calls: int = 100,
-) -> ToolClient:
-    """A client with no database behind its refusal callback."""
-    return ToolClient(
-        servers,
-        registry=registry,
-        agent=agent,
-        run_id=run_id or uuid.uuid4(),
-        tracer=tracer_of(exporter),
-        on_refusal=refusals or Refusals(),
-        max_calls=max_calls,
+) -> Routed:
+    """A client with no database behind its refusal callback, called as the
+    graph calls it: through the view of the worker that holds the tool (S031)."""
+    return Routed(
+        ToolClient(
+            servers,
+            registry=registry,
+            agent=agent,
+            run_id=run_id or uuid.uuid4(),
+            tracer=tracer_of(exporter),
+            on_refusal=refusals or Refusals(),
+            max_calls=max_calls,
+        )
     )
 
 
@@ -132,15 +136,18 @@ def with_database(
     *,
     registry: Registry | None = None,
     run_id: uuid.UUID | None = None,
-) -> ToolClient:
-    """A client built the way the runtime builds it, over the world's database."""
-    return tool_client_for(
-        servers,
-        registry=registry or load_registry(REGISTRY_DIR),
-        dsn=world.db.dsn("agent_runtime"),
-        tracer=tracer_of(exporter),
-        identity=identity_of(world, run_id),
-        throttle=RefusalAuditThrottle(),
+) -> Routed:
+    """A client built the way the runtime builds it, over the world's database,
+    called through the view of the worker that holds the tool (S031)."""
+    return Routed(
+        tool_client_for(
+            servers,
+            registry=registry or load_registry(REGISTRY_DIR),
+            dsn=world.db.dsn("agent_runtime"),
+            tracer=tracer_of(exporter),
+            identity=identity_of(world, run_id),
+            throttle=RefusalAuditThrottle(),
+        )
     )
 
 
@@ -195,6 +202,7 @@ def test_a_read_call_returns_the_seeded_policy_and_the_spans_are_linked(
     assert dict(client_span.attributes) == {
         "meridian.tool": "policy_lookup",
         "meridian.tool_server": "policy-mcp",
+        "meridian.worker": "intake",
         "meridian.tool_outcome": "completed",
         "meridian.call_id": result.call_id,
     }
@@ -626,6 +634,7 @@ def test_a_policy_that_is_not_the_claims_is_refused_outside_claim(
     assert attributes == {
         "meridian.tool": "policy_lookup",
         "meridian.tool_server": "policy-mcp",
+        "meridian.worker": "intake",
         "meridian.tool_outcome": "refused",
         "meridian.reason": "outside-claim",
     }
@@ -690,6 +699,11 @@ KIT_REASONS = [
     "run-not-running",
     "tenant-not-allowed",
     "tool-not-allowed",
+    # The worker's (S031).
+    "worker-tool-not-allowed",
+    "worker-unknown",
+    "worker-missing",
+    "invalid-worker",
     "approval-required",
     "invalid-arguments",
     "claim-not-bound",
@@ -1021,7 +1035,7 @@ def work():
             tracer=tracer,
             on_refusal=lambda tool: None,
             max_calls=4,
-        )
+        ).for_worker("intake")
         outcomes.append(
             "ok" if tools.call("policy_lookup", {"policy_number": "POL-0049"}).data
             == {"found": False} else "wrong"

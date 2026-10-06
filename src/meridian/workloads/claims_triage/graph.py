@@ -1,7 +1,10 @@
 """The claims triage graph (S014, S015): seven nodes, the tools in a fixed order.
 
 The graph's own code calls the tools and asks the model at most once; the model
-never chooses a tool or an argument, and ``rules.decide`` chooses the route. The
+never chooses a tool or an argument, and ``rules.decide`` chooses the route. Each
+call goes through the view of the worker the registry gives the tool (``intake``,
+``terms`` or ``approvals``), which the runtime and the tool servers enforce
+(S031); the nodes themselves are not yet split by worker. The
 state holds plain data only (the runtime runs LangGraph in strict msgpack mode),
 and each node validates what it reads back into the typed models.
 
@@ -154,7 +157,9 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
 
     def lookup_policy(state: ClaimState) -> dict[str, Any]:
         claim = ClaimFacts.model_validate(state["claim"])
-        found = tools.call("policy_lookup", {"policy_number": claim.policy_number}).data
+        intake = tools.for_worker("intake")
+        number = {"policy_number": claim.policy_number}
+        found = intake.call("policy_lookup", number).data
         # The later keys start empty so that every node reads a key that is set,
         # also on the path that skips them.
         empty: dict[str, Any] = {
@@ -173,7 +178,9 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
 
     def load_history(state: ClaimState) -> dict[str, Any]:
         claim = ClaimFacts.model_validate(state["claim"])
-        found = tools.call("claim_history", {"policy_number": claim.policy_number}).data
+        intake = tools.for_worker("intake")
+        number = {"policy_number": claim.policy_number}
+        found = intake.call("claim_history", number).data
         entries = [
             _fitted(HistoryEntry, entry, "history-entry-unfit")
             for entry in found["entries"]
@@ -187,9 +194,10 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
         claim = ClaimFacts.model_validate(state["claim"])
         policy = _policy_of(state)
         in_force = policy_state(policy, claim.loss_date) == "in_force"
+        terms = tools.for_worker("terms")
         chunks: list[dict[str, Any]] = []
         for query in probes(claim.peril, in_force=in_force):
-            found = tools.call(
+            found = terms.call(
                 "wording_search", {"query": query, "product": policy.product}
             ).data
             if (
@@ -273,7 +281,8 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
         claim = ClaimFacts.model_validate(state["claim"])
         # Read back from the checkpointed state, so a rerun sends the same reason.
         proposal = TriageProposal.model_validate(state["output"])
-        answer = tools.call(
+        approvals = tools.for_worker("approvals")
+        answer = approvals.call(
             "request_approval",
             {"claim_id": claim.claim_id, "reason": proposal.reason},
             step="request-approval",
@@ -287,15 +296,16 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
         # the Claims API's record is.
         interrupt({"request_id": state["request_id"]})
         claim = ClaimFacts.model_validate(state["claim"])
+        approvals = tools.for_worker("approvals")
         decision = _fitted(
             ApprovalOutcome,
-            tools.call("approval_outcome", {"claim_id": claim.claim_id}).data,
+            approvals.call("approval_outcome", {"claim_id": claim.claim_id}).data,
             "approval-outcome-unfit",
         ).outcome
         if decision is None:
             # Resumed with no decision recorded: leave the run paused.
             raise GraphFailure("decision-not-recorded")
-        answer = tools.call(
+        answer = approvals.call(
             "add_claim_note",
             {"claim_id": claim.claim_id, "note": DECISION_NOTES[decision]},
             step="decision-note",

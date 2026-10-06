@@ -209,7 +209,7 @@ def tool_client(url: str, pki: Pki, caller: str) -> ToolClient:
         on_refusal=lambda _tool: None,
         max_calls=1,
         verify=verify_of(pki.tls_of(caller)),
-    )
+    ).for_worker("intake")
 
 
 def test_the_runtimes_tool_client_with_its_certificate_calls_a_tool(
@@ -269,7 +269,7 @@ def test_a_tool_client_that_trusts_another_ca_cannot_connect(
             on_refusal=lambda _tool: None,
             max_calls=1,
             verify=stranger,
-        )
+        ).for_worker("intake")
         with pytest.raises(ToolUnavailable):
             client.call("policy_lookup", {})
 
