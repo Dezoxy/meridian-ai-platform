@@ -9,8 +9,6 @@ claimant's name nor e-mail address (S047).
 """
 
 import logging
-import re
-import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -29,8 +27,8 @@ from pydantic_core import ErrorDetails
 from meridian.platform.common.db import connect
 from meridian.platform.common.http import database_failure, error_answer
 from meridian.platform.common.telemetry import mark_error, set_span_attributes
-from meridian.platform.guardrails import EMAIL_PLACEHOLDER, PLACEHOLDERS, redact
 from meridian.runtime.models import RunResponse, RunState
+from meridian.workloads.claims_triage.claimant_name import description_for_run
 from meridian.workloads.claims_triage.lifecycle import (
     AGENT,
     MAX_TRIAGES_PER_CLAIM,
@@ -53,7 +51,6 @@ from meridian.workloads.claims_triage.lifecycle import (
 )
 from meridian.workloads.claims_triage.meters import ClaimsMeters, TriageFailure
 from meridian.workloads.claims_triage.models import (
-    Claimant,
     ClaimFacts,
     ClaimResponse,
     ClaimSubmission,
@@ -149,82 +146,6 @@ def _dotted(error: ErrorDetails) -> str:
     if error["type"] == "extra_forbidden" and parts:
         parts[-1] = DATA_KEY
     return ".".join(parts)
-
-
-NAME_PLACEHOLDER = "[name]"
-# The shortest part of a name that is replaced on its own: a shorter one ("Li",
-# "Jr.") is also an ordinary word or an initial.
-MIN_NAME_PART_LETTERS = 3
-
-
-CURLY_APOSTROPHE = chr(0x2019)
-# The characters a name is split on into the parts that are replaced on their
-# own: white space, hyphens, apostrophes (straight and curly) and dots.
-NAME_PART_SEPARATORS = re.compile(r"[\s\-'" + CURLY_APOSTROPHE + r".]+")
-# A name is matched as a whole word: bounded by letters and digits only, so an
-# underscore or a square bracket next to it is not a boundary that protects it.
-NAME_BOUNDARY_BEFORE = r"(?<![^\W_])"
-NAME_BOUNDARY_AFTER = r"(?![^\W_])"
-# The exact placeholders, tried first at every position: a part that is a
-# placeholder's word ("Name", "Email") must not turn "[name]" into "[[name]]".
-PLACEHOLDER_PATTERN = "|".join(
-    re.escape(placeholder) for placeholder in (*PLACEHOLDERS.values(), NAME_PLACEHOLDER)
-)
-
-
-def _name_alternatives(name: str) -> list[str]:
-    """The patterns for a claimant's name, the longest first: the full name (any
-    white space between its words), then each part, each with at least three
-    letters. No alternative is empty: an empty one matches at every boundary.
-    The minimum also bounds the copy's growth: a one-letter name would turn
-    every "A" into ``[name]``."""
-    alternatives = (
-        [r"\s+".join(re.escape(word) for word in name.split())]
-        if sum(char.isalpha() for char in name) >= MIN_NAME_PART_LETTERS
-        else []
-    )
-    parts = {part for part in NAME_PART_SEPARATORS.split(name) if part}
-    alternatives += [
-        re.escape(part)
-        for part in sorted(parts, key=len, reverse=True)
-        if sum(char.isalpha() for char in part) >= MIN_NAME_PART_LETTERS
-    ]
-    return [alternative for alternative in alternatives if alternative]
-
-
-def description_for_run(description: str, claimant: Claimant) -> str:
-    """The description the run is sent (S047), in three steps: the claimant's
-    e-mail address, ignoring case, becomes ``[email]``; ``redact`` replaces what
-    it finds (so a third party's address that shares the claimant's surname is
-    one address, not cut by a name); then the full name and each part of it of
-    at least three letters become ``[name]``, each as a whole word and ignoring
-    case, bounded by letters and digits only (a square bracket or an underscore
-    next to it does not protect it). A pattern cannot find a name, and this API
-    is the one place that knows it. The claimant's values are escaped: they are
-    matched, never read as a pattern. One pass finds the exact placeholders
-    first and keeps each as it is, then the name, so no placeholder is cut or
-    nested. The description and the name are compared in Unicode form NFC, and
-    the copy is NFC. The copy can be longer than the submission
-    (``MAX_RUN_DESCRIPTION_CHARS``)."""
-    emailless = re.sub(
-        re.escape(claimant.email),
-        EMAIL_PLACEHOLDER,
-        unicodedata.normalize("NFC", description),
-        flags=re.IGNORECASE,
-    )
-    redacted = unicodedata.normalize("NFC", redact(emailless).text)
-    alternatives = _name_alternatives(unicodedata.normalize("NFC", claimant.name))
-    if not alternatives:
-        return redacted
-    whole = "(?:" + "|".join(alternatives) + ")"
-    pattern = re.compile(
-        f"({PLACEHOLDER_PATTERN})|{NAME_BOUNDARY_BEFORE}{whole}{NAME_BOUNDARY_AFTER}",
-        flags=re.IGNORECASE,
-    )
-    return pattern.sub(
-        lambda match: match.group(1) or NAME_PLACEHOLDER,
-        redacted,
-    )
 
 
 def facts_for_run(
