@@ -481,6 +481,42 @@ def test_frequent_claims_are_two_entries_in_the_365_days_before_the_loss(
 
 
 @pytest.mark.parametrize(
+    "status",
+    [
+        "submitted",
+        "triaging",
+        "triage_failed",
+        "awaiting_adjuster",
+        "documents_requested",
+        "approved",
+        "rejected",
+    ],
+)
+def test_a_claim_counts_by_its_loss_date_whatever_state_the_claims_store_has_it_in(
+    status: str,
+) -> None:
+    # S067: the claim history holds the claims still open as well as the decided
+    # ones (the tool says which), and the rules count every entry by its date.
+    # They read no status, so this needs no change in them.
+    def entry_in(days_before: int, history_id: str) -> HistoryEntry:
+        return entry(days_before, history_id).model_copy(update={"status": status})
+
+    claim, policy = make_claim(reported_on=LOSS), make_policy()
+
+    assert fraud_indicators(claim, policy, (entry_in(1, "CLM-0001"),)) == ()
+    assert fraud_indicators(
+        claim, policy, (entry_in(1, "CLM-0001"), entry_in(365, "CLM-0002"))
+    ) == ("frequent_claims",)
+    # The strict date rule: two claims of the loss's own date count nothing.
+    assert (
+        fraud_indicators(
+            claim, policy, (entry_in(0, "CLM-0001"), entry_in(0, "CLM-0002"))
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
     ("delay_days", "expected"),
     [(0, ()), (30, ()), (31, ("late_report",))],
 )

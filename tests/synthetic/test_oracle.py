@@ -376,6 +376,28 @@ def test_frequent_claims_need_two_entries_in_the_365_days_before_the_loss(
     assert outcome["fraud_indicators"] == expected
 
 
+@pytest.mark.parametrize("status", ["submitted", "awaiting_adjuster", "approved"])
+def test_a_history_entry_counts_by_its_dates_whatever_its_status(status):
+    # S067: a claim still open is a history entry of the platform's run, as a
+    # decided one is. The oracle counts by policy and loss date and reads no
+    # status, so it needs no change.
+    # Arrange
+    entries = [
+        {**entry, "status": status}
+        for entry in make_history("2026-03-01", "2026-04-01", "2026-06-10")
+    ]
+
+    # Act
+    outcome = derive_outcome(make_claim(), make_policy(), entries)
+
+    # Assert: the third entry has the loss's own date and is not counted
+    assert outcome["fraud_indicators"] == ["frequent_claims"]
+    assert (
+        derive_outcome(make_claim(), make_policy(), entries[2:])["fraud_indicators"]
+        == []
+    )
+
+
 def test_history_of_another_policy_is_ignored():
     # Arrange
     entries = make_history("2026-03-01", "2026-04-01", policy_number="POL-0002")

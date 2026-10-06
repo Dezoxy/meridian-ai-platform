@@ -215,6 +215,11 @@ otherwise. The fraud indicators are computed for every claim, not only in step
 | Early loss | The loss is 0 to 30 days after `start_date`, both included |
 | Frequent claims | At least 2 history entries dated from 365 days before the loss up to the day before it |
 
+When the platform runs, the claim history also holds the platform's own claims
+of the policy, decided or still open (never a withdrawn one), and the same date
+rule counts them (S067); the golden set has one claim per policy, so it never
+sees one.
+
 If a policy both lapsed and ended before the loss, the oracle cites the lapse
 (6.2). A circumstance that the product does not exclude for the peril, such as
 racing on a theft claim, changes nothing.
