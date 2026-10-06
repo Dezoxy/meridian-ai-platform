@@ -85,7 +85,9 @@ def stored(db: DatabaseHandle, event: str) -> list[tuple[int, str]]:
 def planted_database(
     empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> DatabaseHandle:
-    """Two transactions of twelve rows written before 0017, then 0017 applied."""
+    """Two transactions of twelve rows written before 0017, then 0017 applied
+    and nothing after it: a later migration must not change what these tests
+    see."""
     files = migration_files()
     monkeypatch.setattr(
         runner, "migration_files", lambda: [(n, t) for n, t in files if n < NAME]
@@ -95,7 +97,9 @@ def planted_database(
         for service in ("first", "second"):
             conn.execute(PLANT, (service, ROWS_PER_TRANSACTION))
             conn.commit()
-        monkeypatch.setattr(runner, "migration_files", lambda: files)
+        monkeypatch.setattr(
+            runner, "migration_files", lambda: [(n, t) for n, t in files if n <= NAME]
+        )
         assert runner.apply_migrations(conn) == [NAME]
     return empty_database
 
