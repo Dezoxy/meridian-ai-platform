@@ -236,10 +236,11 @@ namespace; Meridian's file does not repeat them.
   `triage-not-started`, `triage-abandoned`, `runs-ended`, `threads-cleaned`
   and `failures`), set once from the last pass and sent before the sweep
   exits, within about 12 seconds of a collector that does not answer (the
-  exit code is the pass's, whatever the flush does). The series reach
-  nothing until the CronJob is given the collector's address, its
-  authority and a network rule to reach it (the cluster half of S064):
-  today's CronJob has none, so the sweep sends nothing. A pass that could
+  exit code is the pass's, whatever the flush does). The chart gives the
+  CronJob the collector's address, its authority and a network rule to
+  reach it (S064, tested without a cluster, not run on one), and bounds
+  one export at 5 seconds (`sweep.telemetryTimeoutSeconds`); with no
+  `telemetry.otlpEndpoint` it sends nothing. A pass that could
   not run, because the database was unreachable, has no numbers and sends
   none. No rule reads the gauge yet. Prometheus keeps a series for five
   minutes after its last sample and the CronJob runs every five, so a rule

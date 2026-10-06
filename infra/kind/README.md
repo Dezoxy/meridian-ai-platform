@@ -1005,7 +1005,8 @@ The policies are unchanged by TLS: the services listen on the same port, so
 every rule names the same peers and the same port as before, and a test
 renders the chart with TLS off and compares the policies byte for byte.
 Every workload may also reach DNS and the database, and the six services
-the collector; the Jobs and the sweep send no telemetry and may not. A test
+the collector, and the sweep when it has the address (S064); the Jobs send no
+telemetry and may not. A test
 derives the table from each container's environment: a service address
 without a rule, or a rule without an address, fails it. A Job's policy is
 rendered and applied with the Job, so it is never one deploy behind.
@@ -1345,8 +1346,8 @@ renewal, the DNS names `otel-collector.observability.svc` and
   (the last line of the traceback `uvicorn --factory` logs), and the container
   restarts, as it does for a certificate it cannot read (not seen on a
   cluster). That is better than starting with telemetry that fails on every
-  export. The Jobs and the sweep set no endpoint and get none of this. Status:
-  tested without a cluster.
+  export. The Jobs set no endpoint and get none of this; the sweep gets it
+  (S064). Status: tested without a cluster.
 - **What the collector does.** It serves OTLP/HTTP with TLS on `:4318` from the
   Secret `otel-collector-tls`, mounted read-only as a directory, and reads the
   files again at a handshake every five minutes at most (`reload_interval`),
@@ -1478,8 +1479,11 @@ five minutes later. Kubernetes removes any Job a day after it finishes
 (`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
 the morning, and the last success of a suspended CronJob. A pod has no
 service-account token, no extra privilege and a read-only root filesystem,
-mounts only the CA's public certificate, and may reach DNS and the database
-and nothing else (S019).
+mounts only the CA's public certificate and the collector's, and may reach DNS,
+the database and the collector's port 4318, and nothing else (S019; the
+collector from S064, where `telemetry.otlpEndpoint` is set, with the SDK's
+export deadline `sweep.telemetryTimeoutSeconds`, 5 seconds, for the findings it
+sends before it exits; tested without a cluster, not run on one).
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
 

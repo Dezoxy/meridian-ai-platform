@@ -703,7 +703,15 @@ def test_the_sweep_takes_its_own_roles_connection_string_and_the_deadline() -> N
 
     # The role's Secret is named as common.sh's role_secret_name names it.
     secret = SWEEP_ROLE.replace("_", "-") + "-db"
-    assert set(environment) == {DATABASE_URL_ENV, SWEEP_DEADLINE_ENV}
+    # Beside them, the three variables of the collector (S064, C2): its address,
+    # the file that verifies it and the bound on the send.
+    assert set(environment) == {
+        DATABASE_URL_ENV,
+        SWEEP_DEADLINE_ENV,
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+    }
     assert environment[DATABASE_URL_ENV]["valueFrom"]["secretKeyRef"] == {
         "name": secret,
         "key": "uri",
