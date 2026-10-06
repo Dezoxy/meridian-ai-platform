@@ -347,3 +347,155 @@
 {"expect":"none","command":"grep -n grafana-password Makefile"}
 {"expect":"none","command":"grep -rn 'make grafana-password' docs/"}
 {"expect":"none","command":"shellcheck infra/kind/grafana.sh"}
+{"expect":"none","command":"kubectl --context kind-meridian apply -f infra/kind/bootstrap.yaml"}
+{"expect":"none","command":"kubectl --kubeconfig infra/kind/kubeconfig apply -f x.yaml"}
+{"expect":"none","command":"kubectl --kubeconfig /srv/projects/meridian-ai-platform/infra/kind/kubeconfig -n meridian rollout restart deploy/gateway"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K -n meridian rollout restart deploy/gateway"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig ${K} -n meridian rollout restart deploy/gateway"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig \"$K\" -n meridian rollout restart deploy/gateway"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig \"${K}\" -n meridian rollout restart deploy/gateway"}
+{"expect":"none","command":"K=\"/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\"; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"K='/srv/projects/meridian-ai-platform/infra/kind/kubeconfig'; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"export K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\nkubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"cd /srv/x && K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig && kubectl --kubeconfig $K rollout restart deploy/x"}
+{"expect":"none","command":"K=$PWD/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; for d in gateway runtime; do kubectl --kubeconfig $K -n meridian rollout restart deploy/$d; done"}
+{"expect":"none","command":"kubectl -n meridian rollout restart deploy/gateway --context kind-meridian"}
+{"expect":"none","command":"kubectl rollout restart -n meridian deploy/x --kubeconfig infra/kind/kubeconfig"}
+{"expect":"none","command":"kubectl --kubeconfig \"/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\" apply -f x.yaml"}
+{"expect":"none","command":"kubectl --kubeconfig '/srv/projects/meridian-ai-platform/infra/kind/kubeconfig' apply -f x.yaml"}
+{"expect":"none","command":"kubectl --kubeconfig=infra/kind/kubeconfig apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context=kind-meridian apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context \"kind-meridian\" apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context kind-meridian -n meridian scale deploy/gateway --replicas=2"}
+{"expect":"none","command":"kubectl --kubeconfig infra/kind/kubeconfig scale deploy/x --replicas=0"}
+{"expect":"none","command":"kubectl --context kind-meridian apply --dry-run=server -f x.yaml"}
+{"expect":"none","command":"helm template x infra/helm/meridian | kubectl --context kind-meridian apply -f -"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; cat x.yaml | kubectl --kubeconfig $K apply -f -"}
+{"expect":"none","command":"kubectl --context kind-meridian apply -f - <<'EOF'\napiVersion: v1\nkind: ConfigMap\nEOF"}
+{"expect":"none","command":"kubectl --context kind-meridian \\\n  apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context kind-meridian apply -f a.yaml && kubectl --context kind-meridian rollout restart deploy/x"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K get pods && kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context kind-meridian get pods | grep apply"}
+{"expect":"ask","command":"kubectl rollout restart deploy/x"}
+{"expect":"ask","command":"kubectl -n meridian scale deploy/x --replicas=0"}
+{"expect":"ask","command":"kubectl apply --dry-run=server -f x.yaml"}
+{"expect":"ask","command":"kubectl -n meridian apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context prod apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context minikube apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context=gke-prod apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kindly apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind- apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context KIND-meridian apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian --context prod apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context prod --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig infra/kind/kubeconfig --context prod apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig ~/.kube/config --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian --server https://prod.example:6443 apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian -s https://prod.example:6443 apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig infra/kind/kubeconfig --cluster prod apply -f x.yaml"}
+{"expect":"ask","command":"kubectl apply -f x.yaml --context"}
+{"expect":"ask","command":"kubectl --context apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig ~/.kube/config apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig /tmp/x/kubeconfig apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig not-infra/kind/kubeconfig-old apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig not-infra/kind/kubeconfig apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig infra/kind/kubeconfig.bak apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig infra/kind/kubeconfig-old apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig infra/kind apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig \"/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\"x apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig '/srv/projects/meridian-ai-platform/infra/kind/kubeconfig ' apply -f x.yaml"}
+{"expect":"ask","command":"K=~/.kube/config; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; K=/root/.kube/config; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; for K in /root/.kube/config; do kubectl --kubeconfig $K apply -f x.yaml; done"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; read K; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig '$K' apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --kubeconfig $K apply -f x.yaml; K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig"}
+{"expect":"ask","command":"# K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\nkubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"false || K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"cd /srv/x && K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig \"$K\" apply -f x.yaml"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig || true; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"echo x | K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"J=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $Kx apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig ${K}.bak apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K/../x apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; K=/root/x &\nkubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig A=1; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian get pods && kubectl apply -f x.yaml"}
+{"expect":"ask","command":"kubectl apply -f x.yaml && kubectl --context kind-meridian get pods"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml ; kubectl --context prod apply -f y.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f a.yaml & kubectl apply -f b.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian get pods -o name | xargs kubectl apply -f"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f a.yaml || kubectl apply -f b.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f a.yaml\nkubectl apply -f b.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f a.yaml; kubectl rollout restart deploy/x"}
+{"expect":"ask","command":"kubectl --context kind-meridian delete pod x"}
+{"expect":"ask","command":"kubectl --kubeconfig infra/kind/kubeconfig delete deploy/x"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; kubectl --kubeconfig $K delete pod x"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && kubectl --context kind-meridian delete pod x"}
+{"expect":"ask","command":"sudo kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"env KUBECONFIG=x kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"time kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"FOO=1 kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"nohup kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"command kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"/usr/local/bin/kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"bash -c \"kubectl --context kind-meridian apply -f x.yaml\""}
+{"expect":"ask","command":"xargs kubectl --context kind-meridian apply -f"}
+{"expect":"ask","command":"(kubectl --context kind-meridian apply -f x.yaml)"}
+{"expect":"ask","command":"x=$(kubectl --context kind-meridian apply -f x.yaml)"}
+{"expect":"ask","command":"kubectl apply -f x.yaml # --context kind-meridian"}
+{"expect":"ask","command":"kubectl apply -f x.yaml # --kubeconfig infra/kind/kubeconfig"}
+{"expect":"ask","command":"# kubectl --context kind-meridian apply\nkubectl apply -f x.yaml"}
+{"expect":"ask","command":"echo \"--context kind-meridian\"; kubectl apply -f x.yaml"}
+{"expect":"ask","command":"echo --context kind-meridian kubectl apply -f x.yaml"}
+{"expect":"ask","command":"kubectl apply -f x.yaml -l \"a --context kind-meridian\""}
+{"expect":"ask","command":"kubectl apply -f x.yaml --field-manager 'a --context kind-meridian b'"}
+{"expect":"ask","command":"kubectl --context kind-meridian get po; echo \"a #\"; kubectl apply -f y.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml -l \"a#b\" # kind"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f kubectl.yaml"}
+{"expect":"deny","command":"kubectl --context kind-meridian get secret x -o yaml"}
+{"expect":"deny","command":"kubectl --kubeconfig infra/kind/kubeconfig get secrets -A -o json"}
+{"expect":"deny","command":"kubectl --context kind-meridian delete namespace meridian"}
+{"expect":"deny","command":"kubectl --context kind-meridian delete pods --all"}
+{"expect":"deny","command":"kubectl --context kind-meridian delete pvc data"}
+{"expect":"deny","command":"kubectl --context kind-meridian apply -f x.yaml && terraform destroy"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && docker push x"}
+{"expect":"ask","command":"kubectl --context kind-meridian rollout restart deploy/x && helm uninstall meridian"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && az group create -n x"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && gh release create v1"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && make down"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && kind delete cluster"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && make grafana-password"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml && make azure-apply"}
+{"expect":"ask","command":"kubectl --context kind-meridian -n meridian exec platform-db-1 -- psql -c 'select 1'"}
+{"expect":"ask","command":"kubectl --context kind-meridian exec platform-db-1 -- psql -c 'select 1' && kubectl --context kind-meridian apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context kind-meridian get pods"}
+{"expect":"none","command":"kubectl --kubeconfig infra/kind/kubeconfig -n meridian rollout status deploy/x"}
+{"expect":"none","command":"kubectl --context kind-meridian apply --help"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml; KUBECTL apply -f y.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian apply -f x.yaml; Kubectl --context prod apply -f y.yaml"}
+{"expect":"ask","command":"K=/tmp/a b/infra/kind/kubeconfig; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=\"/tmp/a b/infra/kind/kubeconfig\"; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context notkind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian/x apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian! apply -f x.yaml"}
+{"expect":"ask","command":"kubectl apply -f x.yaml --field-manager \"a --context kind-meridian b\""}
+{"expect":"ask","command":"kubectl apply -f x.yaml --field-manager a\\ --context kind-meridian b"}
+{"expect":"ask","command":"kubectl apply -f `echo --context kind-meridian `"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig; echo Kx; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"cd /x && K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\nkubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"none","command":"kubectl --context kind-meridian apply -f a.yaml & kubectl --context kind-meridian apply -f b.yaml"}
+{"expect":"none","command":"kubectl apply -f x.yaml \\\n  --context kind-meridian"}
+{"expect":"none","command":"kubectl\t--context kind-meridian apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig & kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig | cat; kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"(K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig); kubectl --kubeconfig $K apply -f x.yaml"}
+{"expect":"ask","command":"kubectl --context kind-meridian get po; kubectl-x --context kind-meridian apply -f y.yaml"}
+{"expect":"none","command":"K=/srv/projects/meridian-ai-platform/infra/kind/kubeconfig\necho x | cat\nkubectl --kubeconfig $K apply -f x.yaml"}

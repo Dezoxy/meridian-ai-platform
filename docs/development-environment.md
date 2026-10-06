@@ -127,10 +127,14 @@ For the virtual machine both are recorded below.
   GitHub's auto-merge was set on two pull requests that night and fired
   on neither.
 - **A step that owns the cluster needed a person within reach on the
-  laptop**: the command guard asks before every change to it, and an
-  unattended session waited at that question. On the virtual machine
-  those questions did not stop a session on 2026-10-06; what stands is
-  that the owner is asked, in chat, before the cluster is deleted.
+  laptop**: the command guard asked before every change to it, and an
+  unattended session waited at that question. It now asks only before a
+  `kubectl delete` and before a mutating call that names no cluster;
+  `--kubeconfig infra/kind/kubeconfig` or `--context kind-<name>` on
+  every `kubectl` of the command answers that second question. On the
+  virtual machine those questions did not stop a session on 2026-10-06;
+  what stands is that the owner is asked, in chat, before the cluster is
+  deleted.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.

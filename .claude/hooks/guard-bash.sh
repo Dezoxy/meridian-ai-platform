@@ -319,8 +319,141 @@ psql_exec_re="(^|[^[:alnum:]_-])exec[[:space:]].*[[:space:]]--[[:space:]](.*[[:s
   decide ask "psql through kubectl exec runs SQL inside the database pod, usually as its superuser; confirm the statement and the kube context."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
-[[ "$cmd" =~ kubectl[[:space:]].*(apply|delete|scale|rollout[[:space:]]+restart) ]] && \
-  decide ask "Mutating kubectl call; confirm the current kube context is the intended one."
+# A mutating kubectl call asks, because the current kube context may not be the
+# one meant. A call that names the local kind cluster has answered that, so
+# apply, scale and rollout restart pass when EVERY kubectl invocation in the
+# command names it. Recognised, and nothing else:
+# - an invocation that starts a segment (a segment is cut at newlines, ;, &, &&,
+#   || and |; `do`, `then` and `else` may stand before it), with no second
+#   `kubectl` in the segment, no --server, -s or --cluster, and every
+#   --context and --kubeconfig it carries (a space or = before the value)
+#   outside quotes and of these forms, at least one of them present:
+#   --context kind-<name>; --kubeconfig <path> where the path is
+#   infra/kind/kubeconfig or ends in /infra/kind/kubeconfig, or is a shell
+#   variable ($K, ${K}, quoted or not) that an earlier segment of the same
+#   command assigned such a path (K=path or export K=path alone in its
+#   segment, after a newline, ; or at the start, or after && when no other
+#   separator comes before the use). A later assignment of something else,
+#   a for or read of that name, or an assignment after || or | withdraws it,
+#   and so does a & or | right after it (a subshell or a background job).
+# - Anything else asks as before: no cluster named, another context or
+#   kubeconfig, sudo, env, time or a path before kubectl, kubectl inside
+#   $( ), ( ), bash -c or xargs, a # that starts a comment anywhere in the
+#   command (the quoting of a line is not parsed), a kind name only in an echo.
+# kubectl delete asks on kind as well; the denies above it are not touched.
+# This reads like the other rules, as a pattern on what a session types, not
+# as a boundary: a flag inside a quoted string is skipped by quote parity only.
+kind_path_re="^([^[:space:]\"${sq}\`;&|()<>]*/)?infra/kind/kubeconfig\$"
+kind_dq_re='^"([^"]*)"$'
+kind_sq_re="^${sq}([^${sq}]*)${sq}\$"
+# shellcheck disable=SC2016  # a regex that names a literal $
+kind_var_re='^\$(\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$'
+kind_flag_re='(^|[[:space:]])--(kubeconfig|context)(=|[[:space:]]+)([^[:space:]]*)'
+kind_other_re='(^|[[:space:]])(--(server|cluster)([=[:space:]]|$)|-s([^-]|$))'
+kind_word='[Kk][Uu][Bb][Ee][Cc][Tt][Ll]' # in any case, as the rule above reads it
+kind_unquote() { # sets kind_value, and kind_single when it was single-quoted
+  kind_value="$1"
+  kind_single=""
+  if [[ "$1" =~ $kind_dq_re ]]; then
+    kind_value="${BASH_REMATCH[1]}"
+  elif [[ "$1" =~ $kind_sq_re ]]; then
+    kind_value="${BASH_REMATCH[1]}"
+    kind_single=1
+  fi
+}
+kind_invocation() { # $1=segment, $2=names usable as a kubeconfig path
+  local seg="$1" vars="$2" rest named="" flag name pre quotes without
+  [[ "$seg" =~ ^((do|then|else)[[:space:]]+)?kubectl[[:space:]] ]] || return 1
+  without="${seg//$kind_word/}"
+  [ $(( ${#seg} - ${#without} )) -eq 7 ] || return 1
+  [[ "$seg" =~ $kind_other_re ]] && return 1
+  rest="$seg"
+  while [[ "$rest" =~ $kind_flag_re ]]; do
+    flag="${BASH_REMATCH[2]}"
+    pre="${rest%%"${BASH_REMATCH[0]}"*}"
+    rest="${rest#*"${BASH_REMATCH[0]}"}"
+    kind_unquote "${BASH_REMATCH[4]}"
+    quotes="${pre//[^$sq]/}"
+    [ $(( ${#quotes} % 2 )) -eq 0 ] || return 1
+    quotes="${pre//[^\"]/}"
+    [ $(( ${#quotes} % 2 )) -eq 0 ] || return 1
+    [[ "$pre" != *\\* && "$pre" != *"\`"* ]] || return 1
+    if [ "$flag" = context ]; then
+      [[ "$kind_value" =~ ^kind-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+    elif [ -z "$kind_single" ] && [[ "$kind_value" =~ $kind_var_re ]]; then
+      name="${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+      [[ "$vars" == *" $name "* ]] || return 1
+    else
+      [[ "$kind_value" =~ $kind_path_re ]] || return 1
+    fi
+    named=1
+  done
+  [ -n "$named" ]
+}
+kind_scan() { # $1=the whole command; succeeds when every kubectl names kind
+  local text="${1//"$bs_nl"/ }" seg trimmed prev_sep="" name seen="" value just_set=""
+  local kind_vars=" " chain_vars=" "
+  [[ "$text" =~ (^|[[:space:]\;\&\|\(])# ]] && return 1
+  while IFS= read -r seg; do
+    case "$seg" in
+      '&&' | '||' | ';' | '|' | '&')
+        # an assignment that a & or a | follows runs in a subshell and is lost
+        if [ -n "$just_set" ] && [[ "$seg" == '&' || "$seg" == '|' ]]; then
+          kind_vars="${kind_vars// $just_set / }"
+          chain_vars="${chain_vars// $just_set / }"
+        fi
+        just_set=""
+        prev_sep="$seg"
+        continue
+        ;;
+    esac
+    trimmed="${seg#"${seg%%[![:space:]]*}"}"
+    [ -z "$trimmed" ] && continue
+    just_set=""
+    # a name assigned after && holds only while && is the one separator
+    [ "$prev_sep" = "&&" ] || chain_vars=" "
+    if [[ "$trimmed" =~ $kind_word ]]; then
+      seen=1
+      kind_invocation "$trimmed" "$kind_vars$chain_vars" || return 1
+    elif [[ "$trimmed" =~ ^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      name="${BASH_REMATCH[2]}"
+      value="${BASH_REMATCH[3]}"
+      value="${value%"${value##*[![:space:]]}"}"
+      kind_vars="${kind_vars// $name / }"
+      chain_vars="${chain_vars// $name / }"
+      kind_unquote "$value"
+      if [[ "$kind_value" =~ $kind_path_re ]]; then
+        case "$prev_sep" in
+          '' | ';') kind_vars="$kind_vars$name " ;;
+          '&&') chain_vars="$chain_vars$name " ;;
+        esac
+        just_set="$name"
+      fi
+    else
+      # any other mention of a trusted name (for K in, read K, unset K) ends it
+      for name in $kind_vars $chain_vars; do
+        if [[ "$trimmed" =~ (^|[^[:alnum:]_\$\{])${name}([^[:alnum:]_]|$) ]]; then
+          kind_vars="${kind_vars// $name / }"
+          chain_vars="${chain_vars// $name / }"
+        fi
+      done
+    fi
+    prev_sep=""
+  done < <(printf '%s\n' "$text" | sed -E 's/(&&|\|\||;|\||&)/\n&\n/g')
+  [ -n "$seen" ]
+}
+kind_only() {
+  local rc=0
+  shopt -u nocasematch
+  kind_scan "$1" || rc=1
+  shopt -s nocasematch
+  return "$rc"
+}
+[[ "$cmd" =~ kubectl[[:space:]].*delete ]] && \
+  decide ask "kubectl delete asks even on the local kind cluster; confirm the object and the kube context."
+if [[ "$cmd" =~ kubectl[[:space:]].*(apply|scale|rollout[[:space:]]+restart) ]] && ! kind_only "$cmd"; then
+  decide ask "Mutating kubectl call; confirm the current kube context is the intended one, or name the local cluster: --kubeconfig infra/kind/kubeconfig or --context kind-<name>."
+fi
 [[ "$cmd" =~ docker[[:space:]].*push ]] && \
   decide ask "Pushing an image to a registry; confirm tag and registry."
 [[ "$cmd" =~ az[[:space:]].*[[:space:]](create|set|update|assign)([[:space:]]|$) ]] && \
