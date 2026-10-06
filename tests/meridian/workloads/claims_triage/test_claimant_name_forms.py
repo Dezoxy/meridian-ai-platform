@@ -373,6 +373,76 @@ def test_a_suffix_from_the_list_ends_the_word_so_a_following_letter_protects_it(
     assert signed_by("Kovács", "Kovácsnak-") == "Signed by [name]- today."
 
 
+# -- a form with an ending needs a capital first letter (C4b) -----------------
+#
+# Hungarian writes a name with a capital in every form ("Jánosnak", "Kovácsné",
+# "Kiss-sel"), and an ordinary word inside a sentence has none. A lower-case form
+# is therefore left alone. That is a residual: a text typed without capitals
+# ("kovácsnak") keeps the name in the clear, and the bare name, in any case, is
+# still replaced.
+
+
+@pytest.mark.parametrize(
+    ("name", "word"), ASSIMILATED, ids=[word for _, word in ASSIMILATED]
+)
+def test_a_lower_case_name_with_an_assimilated_ending_is_left_alone(
+    name: str, word: str
+) -> None:
+    lower = word.lower()
+    # A hyphen ends the word, so the bare name is replaced, as before S067.
+    expected = "[name]-" + lower.split("-", 1)[1] if "-" in lower else lower
+
+    assert signed_by(name, lower) == f"Signed by {expected} today."
+
+
+@pytest.mark.parametrize("stem", ["Kovács", "Péter", "Fülöp"])
+@pytest.mark.parametrize("ending", ENDING_VARIANTS)
+def test_a_lower_case_name_with_a_case_ending_is_left_alone(
+    stem: str, ending: str
+) -> None:
+    word = (stem + ending).lower()
+
+    assert signed_by(stem, word) == f"Signed by {word} today."
+
+
+@pytest.mark.parametrize("word", ["jánosné", "jánosnénak", "jánosnével"])
+def test_a_lower_case_wife_s_form_is_left_alone(word: str) -> None:
+    assert signed_by("János", word) == f"Signed by {word} today."
+
+
+@pytest.mark.parametrize("word", ["annával", "annaként", "imrével"])
+def test_a_lower_case_form_with_a_lengthened_vowel_is_left_alone(word: str) -> None:
+    name = "Anna" if word.startswith("anna") else "Imre"
+
+    assert signed_by(name, word) == f"Signed by {word} today."
+
+
+def test_only_the_last_word_of_a_full_name_needs_the_capital_for_its_ending() -> None:
+    assert copy_of("Kovács Jánosnak", "Kovács János") == "[name]"
+    assert copy_of("kovács Jánosnak", "Kovács János") == "[name]"
+    # A lower-case last word with an ending is left; the first word is taken on
+    # its own, as it was before the endings.
+    assert copy_of("Kovács jánosnak", "Kovács János") == "[name] jánosnak"
+    assert copy_of("kovács jánosnak", "Kovács János") == "[name] jánosnak"
+
+
+def test_a_form_in_a_script_with_two_cases_needs_its_capital_too() -> None:
+    # The endings are Latin letters: a Cyrillic name takes one only in a text
+    # that writes the ending in Latin, which is all the closed list can find.
+    ivanov = "Иванов"  # Cyrillic, capitalised
+    lower = ivanov.lower()
+
+    assert signed_by(ivanov, ivanov + "nak") == "Signed by [name] today."
+    assert signed_by(ivanov, lower + "nak") == f"Signed by {lower}nak today."
+    assert signed_by(ivanov, lower) == "Signed by [name] today."
+
+
+def test_a_first_letter_without_a_case_counts_as_a_capital() -> None:
+    # A decision: nothing is lower case there, so the form is taken (the bare
+    # name is taken in any case, and a form must not be the way round it).
+    assert signed_by("李大明", "李大明nak") == "Signed by [name] today."
+
+
 @pytest.mark.parametrize("name", ["Li", "Al", "A B"])
 def test_a_name_part_of_under_three_letters_is_still_never_replaced(
     name: str,
@@ -387,7 +457,8 @@ def test_every_placeholder_stays_whole_next_to_a_name_that_is_its_word(
     placeholder: str,
 ) -> None:
     word = placeholder.strip("[]")
-    text = f"{placeholder} and {word}nak and {placeholder}nak"
+    # Capitalised since C4b: a form with an ending is a name only when capitalised.
+    text = f"{placeholder} and {word.capitalize()}nak and {placeholder}nak"
 
     result = copy_of(text, f"{word} Smith")
 
@@ -401,7 +472,8 @@ def test_every_placeholder_stays_whole_next_to_a_name_that_is_its_word(
 def test_a_suffixed_word_is_replaced_by_one_placeholder_so_the_copy_does_not_grow() -> (
     None
 ):
-    text = "abcnak " * 700
+    # Capitalised since C4b: a lower-case "abcnak" is left alone.
+    text = "Abcnak " * 700
 
     result = copy_of(text, "abc Smith")
 
@@ -409,15 +481,70 @@ def test_a_suffixed_word_is_replaced_by_one_placeholder_so_the_copy_does_not_gro
     assert len(result) <= len(text)
 
 
+# A common English given name and the ordinary word it spells with an ending from
+# the closed list (the lower-case word is what an English description holds).
+ORDINARY_WORDS = [
+    ("Jack", "jacket"),
+    ("Tim", "time"),
+    ("Sam", "same"),
+    ("May", "maybe"),
+    ("Rob", "robot"),
+    ("Mark", "market"),
+    ("Ben", "bent"),
+    ("Jan", "jane"),
+    ("Jan", "janet"),
+]
+
+
 @pytest.mark.parametrize(
-    ("name", "word"), [("Mark", "market"), ("Rob", "robot"), ("Ben", "bent")]
+    ("name", "word"), ORDINARY_WORDS, ids=[word for _, word in ORDINARY_WORDS]
 )
-def test_an_ordinary_word_that_a_name_and_an_ending_spell_is_replaced_too(
+def test_an_ordinary_lower_case_word_that_a_name_and_an_ending_spell_is_left_alone(
     name: str, word: str
 ) -> None:
-    """The price of the endings, stated in the module's docstring: meaning in the
+    """Rewritten in C4b (it pinned "Mark" and "market" as replaced): a word that
+    is the name plus an ending is taken for the name only when it is written as
+    a name is, with a capital first letter."""
+    assert signed_by(name, word) == f"Signed by {word} today."
+
+
+@pytest.mark.parametrize(
+    ("name", "word"), ORDINARY_WORDS, ids=[word for _, word in ORDINARY_WORDS]
+)
+def test_the_same_word_capitalised_inside_a_sentence_is_still_taken_for_the_name(
+    name: str, word: str
+) -> None:
+    """The price that is left, stated in the module's docstring: a capitalised
+    ordinary word that the name and an ending spell is meaning lost in the
     run's copy, never a name let through."""
-    assert signed_by(name, word) == "Signed by [name] today."
+    assert signed_by(name, word.capitalize()) == "Signed by [name] today."
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Time was short.", "[name] was short."),  # a sentence's first word
+        ("Maybe next week.", "[name] next week."),
+        ("Market value.", "[name] value."),
+        ("A LONG TIME AGO.", "A LONG [name] AGO."),  # text in capitals
+        ("a long time ago.", "a long time ago."),
+    ],
+)
+def test_a_sentence_initial_word_and_text_in_capitals_are_the_price_that_is_left(
+    text: str, expected: str
+) -> None:
+    claimant = Claimant(name="Tim May Mark", email="who@example.net")
+
+    assert description_for_run(text, claimant) == expected
+
+
+@pytest.mark.parametrize("name", ["Jack", "jack", "JACK"])
+def test_the_case_of_the_name_as_given_does_not_matter_only_the_text_s(
+    name: str,
+) -> None:
+    assert signed_by(name, "Jacket") == "Signed by [name] today."
+    assert signed_by(name, "jacket") == "Signed by jacket today."
+    assert signed_by(name, "jack") == "Signed by [name] today."  # the bare name
 
 
 def test_the_worst_growth_of_the_copy_is_the_one_a_bare_three_letter_part_gives() -> (
@@ -557,6 +684,53 @@ def test_a_hostile_name_and_description_are_replaced_in_linear_time(
     small, large = build(SMALL_LENGTH), build(LARGE_LENGTH)
     assert len(small) == SMALL_LENGTH
     assert len(large) == LARGE_LENGTH
+
+    result = growth(lambda text: description_for_run(text, claimant), small, large)
+
+    assert result < MAX_GROWTH
+
+
+@pytest.mark.parametrize("shape", HOSTILE)
+def test_the_same_shapes_in_capitals_are_replaced_in_linear_time(shape: str) -> None:
+    # The shapes above are lower case, which a capital check rejects at once; in
+    # capitals every ending is tried, so this is the path that could backtrack.
+    name, build = HOSTILE[shape]
+    claimant = Claimant(name=name, email="who@example.net")
+    small, large = build(SMALL_LENGTH).upper(), build(LARGE_LENGTH).upper()
+
+    result = growth(lambda text: description_for_run(text, claimant), small, large)
+
+    assert result < MAX_GROWTH
+
+
+# A long run of words that are the name plus an ending, in lower case: the path
+# C4b rejects (the first letter is not a capital, and the bare name is followed
+# by a letter).
+LOWER_CASE_RUNS = {
+    "three-letter-name": (
+        "abc Smith",
+        lambda length: repeated("abcnak abcnek abcot abcben abcnál ", length),
+    ),
+    "one-letter-name": (
+        "a" * LONGEST_NAME,
+        lambda length: repeated("a" * LONGEST_NAME + "nak ", length),
+    ),
+    "vowels-only-name": (
+        "aeiou" * (LONGEST_NAME // 5),
+        lambda length: repeated("aeiou" * 40 + "val ", length),
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", LOWER_CASE_RUNS)
+def test_a_long_run_of_lower_case_name_and_ending_words_is_left_alone_in_linear_time(
+    shape: str,
+) -> None:
+    name, build = LOWER_CASE_RUNS[shape]
+    claimant = Claimant(name=name, email="who@example.net")
+    small, large = build(SMALL_LENGTH), build(LARGE_LENGTH)
+    assert len(small) == SMALL_LENGTH
+    assert NAME_PLACEHOLDER not in description_for_run(large, claimant)
 
     result = growth(lambda text: description_for_run(text, claimant), small, large)
 

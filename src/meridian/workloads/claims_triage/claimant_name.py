@@ -11,10 +11,21 @@ without the accents the note ``hungarian-identifiers.md`` lists for it
 (``VOWEL_FORMS``): a character class per vowel, so a lengthened final vowel
 needs no rule of its own, and the copy's other characters stay as they were.
 
-An ending makes more words match: the copy can lose an ordinary word to
-``[name]`` when the claimant's name with a Hungarian ending spells it ("Mark"
-and "market", "Rob" and "robot"). The price is meaning in the run's copy, never
-a name let through.
+An ending makes more words match, so a form with an ending (or ``-né``, or an
+assimilated ``-val``) is taken for the name only when its first letter is a
+capital, as Hungarian writes a name in every form ("Jánosnak", "Kovácsné",
+"Kiss-sel") and an ordinary word inside a sentence is not capitalised: "jacket",
+"time" and "market" stay whole for Jack, Tim and Mark. The check is part of the
+pattern (``_capital``), so a form that is not taken falls to the bare name,
+which is replaced in any case, as before S067 ("kiss-sel" is ``[name]-sel``).
+The copy can still lose an ordinary word to ``[name]`` when it is capitalised
+(a sentence's first word, "Time was short"; text in capitals; a proper noun such
+as "Seat Leon" for a claimant named Leo) and the name with an ending spells it.
+Counted over the 40 golden descriptions and the four wordings for twenty common
+English given names, that is one word ("Leon"), where taking every ending in any
+case took seventeen. The price is meaning in the run's copy, never a name let
+through; a name typed with no capitals in a Hungarian form ("kovácsnak") stays
+in the clear, a residual.
 
 Every pattern is a literal with a bounded group after it: no repetition is
 nested in another, so matching is linear in the description for any name. Names
@@ -162,13 +173,30 @@ def _assimilated_forms(word: str) -> list[str]:
     return forms
 
 
+def _capital(char: str) -> str:
+    """A zero-width check that the text's next character is a capital form of
+    ``char``, whatever case ``char`` has itself: the capital of the letter and of
+    each accented or unaccented form of a vowel. The check is case-sensitive
+    inside the pattern's ``IGNORECASE``, and built from the name's own first
+    letter, so it holds for any script that has two cases. A letter with no case
+    (a character no script writes in lower case) counts as a capital."""
+    base = unicodedata.normalize("NFD", char)[0].lower()
+    forms = {*char.lower(), *VOWEL_FORMS.get(base, "")}
+    capitals = {form.upper() if len(form.upper()) == 1 else form for form in forms}
+    return "(?=(?-i:[" + "".join(sorted(map(re.escape, capitals))) + "]))"
+
+
 def _word_forms(word: str) -> list[str]:
-    """The patterns for one word of a name: with -val/-vel/-vá/-vé, then with at
-    most one other ending, or as it is. A word that does not end in a letter
-    (``"C*"``) takes no ending."""
+    """The patterns for one word of a name. A word that does not end in a letter
+    (``"C*"``) takes no ending. Otherwise a form with an ending (-val/-vel/-vá/-vé
+    first, then at most one other ending) needs a capital first letter, as a name
+    is written, so "Jánosnak" is the name and "jacket" is not Jack with an ending;
+    the word as it is, in any case, is the alternative after it: where the
+    capital check fails, a non-letter after the name ("kiss-sel") still ends it."""
     if not word[-1].isalpha():
         return [_literal(word)]
-    return [*_assimilated_forms(word), f"{_literal(word)}(?:{SIMPLE_ENDINGS})?"]
+    forms = [*_assimilated_forms(word), f"{_literal(word)}(?:{SIMPLE_ENDINGS})?"]
+    return [_capital(word[0]) + "(?:" + "|".join(forms) + ")", _literal(word)]
 
 
 def _pattern_for(words: list[str]) -> str:
@@ -198,6 +226,20 @@ def _name_alternatives(name: str) -> list[str]:
     return list(dict.fromkeys(filter(None, alternatives)))
 
 
+def _name_pattern(name: str) -> re.Pattern[str] | None:
+    """The one pattern ``description_for_run`` substitutes with: group 1 is an
+    exact placeholder (kept), anything else it matches is the name. ``None``
+    where the name has no part long enough to replace."""
+    alternatives = _name_alternatives(unicodedata.normalize("NFC", name))
+    if not alternatives:
+        return None
+    whole = "(?:" + "|".join(alternatives) + ")"
+    return re.compile(
+        f"({PLACEHOLDER_PATTERN})|{NAME_BOUNDARY_BEFORE}{whole}{NAME_BOUNDARY_AFTER}",
+        flags=re.IGNORECASE,
+    )
+
+
 def description_for_run(description: str, claimant: Claimant) -> str:
     """The description the run is sent (S047), in three steps: the claimant's
     e-mail address, ignoring case, becomes ``[email]``; ``redact`` replaces what
@@ -219,14 +261,9 @@ def description_for_run(description: str, claimant: Claimant) -> str:
         flags=re.IGNORECASE,
     )
     redacted = unicodedata.normalize("NFC", redact(emailless).text)
-    alternatives = _name_alternatives(unicodedata.normalize("NFC", claimant.name))
-    if not alternatives:
+    pattern = _name_pattern(claimant.name)
+    if pattern is None:
         return redacted
-    whole = "(?:" + "|".join(alternatives) + ")"
-    pattern = re.compile(
-        f"({PLACEHOLDER_PATTERN})|{NAME_BOUNDARY_BEFORE}{whole}{NAME_BOUNDARY_AFTER}",
-        flags=re.IGNORECASE,
-    )
     return pattern.sub(
         lambda match: match.group(1) or NAME_PLACEHOLDER,
         redacted,
