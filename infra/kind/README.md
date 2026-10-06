@@ -578,8 +578,9 @@ creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
 
 - seven `Certificate` objects in `meridian`, signed by the `meridian-services`
   ClusterIssuer: ECDSA P-256, a new key at every renewal (`rotationPolicy:
-  Always`, set in the chart), cert-manager's default lifetime (90 days,
-  renewed at 60), the URI `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
+  Always`, set in the chart), a lifetime of `certificate.duration` (90 days by
+  default, renewed at 60: see "How long a certificate lasts" below), the URI
+  `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
   for the five services that serve TLS the DNS name `<name>.meridian.svc`;
 - seven Secrets `<name>-tls` (`tls.crt`, `tls.key`, `ca.crt`), each mounted
   read-only at `/etc/meridian/tls` in its own pod and in no other;
@@ -593,6 +594,75 @@ is repeated in the values. The chart fails for a service that another workload
 calls (a `serviceUrl` or a `serviceMap` entry, the Jobs' included) and does not
 set `tls: true`; only the Claims API, which nobody inside the chart calls,
 stays plain HTTP.
+
+**How long a certificate lasts (S062).** Two chart values set the lifetime of
+every one of the seven Certificates; the defaults render what the chart
+rendered before they existed (`duration: 2160h`, no `renewBefore`, so
+cert-manager renews at a third of the lifetime, 60 days in):
+
+| Value | Meaning | Refused |
+|---|---|---|
+| `certificate.duration` | whole hours and minutes (`2160h`, `1h30m`; no days, no seconds) | above `2160h`, the most the issuer's policy signs (`maxDuration` of `meridian-services`); below `1h`, cert-manager's shortest; anything that is not hours and minutes, empty included |
+| `certificate.renewBefore` | how long before the end cert-manager renews; empty leaves it out | not shorter than `certificate.duration`; anything that is not hours and minutes |
+
+A refused value fails `helm template`, `helm upgrade` and `make deploy`
+before anything is applied, with a message that names the value. The service's
+own margin is not one of them: from the smaller of 24 hours and a sixth of the
+lifetime before the end (`src/meridian/platform/common/certlife.py`) it reads
+the mounted file again, and `/healthz` answers 503 once the file holds a newer
+certificate. With the default `renewBefore` the renewal always comes before
+that margin starts.
+
+Designed, not yet run on a cluster: to watch a renewal, the 503 and the
+restart on kind, give the certificates a one-hour life for a while. In a
+working copy of `infra/kind/values/meridian.yaml`, never committed, add
+
+```yaml
+certificate:
+  duration: 1h
+  renewBefore: 30m
+```
+
+then run `make deploy`, which reissues the seven certificates and waits for
+them to be Ready. The services still hold the 90-day certificates they loaded,
+and a service looks at its file again only near the end of the one it loaded,
+so restart the Deployments once (the owner's command, as in the runbook
+[certificate-expiry](../../docs/operations/runbooks/certificate-expiry.md)):
+
+```sh
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian "$@"; }
+k -n meridian rollout restart deployment
+k -n meridian rollout status deployment/agent-runtime
+```
+
+The times below count from the issuance (the end of `make deploy`). Expect
+the renewal 30 minutes in, the 503 after 50 (the margin is a sixth of an
+hour, 10 minutes) and the container's restart about a minute later: the
+liveness probe asks every 10 seconds and fails the container on the sixth
+503. Each of these only reads:
+
+```sh
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian "$@"; }
+k -n meridian get certificate -o custom-columns=NAME:.metadata.name,READY:.status.conditions[0].status,NOTAFTER:.status.notAfter,RENEWAL:.status.renewalTime
+k -n meridian get certificaterequest
+k -n meridian get pods
+k -n meridian get events --field-selector type=Warning
+k -n meridian logs deployment/agent-runtime --previous
+```
+
+The Certificates' `NOTAFTER` moves an hour forward at the renewal, and a new
+CertificateRequest appears and is Approved. Pods keep `RESTARTS 0` until about
+50 minutes in, then each service shows `RESTARTS 1`; the Warning events say
+`Liveness probe failed` with status code 503, then that the container failed
+its liveness probe and will be restarted; the previous container's log has the
+warning that a renewed certificate is on disk. The renewed certificate lasts
+another hour, so every service restarts again half an hour later: stop after
+one cycle by removing the two lines and running `make deploy`. The services
+keep the one-hour certificates until the end margin of each, then load the
+90-day ones and stay (a restart of the Deployments does it at once). While the
+short certificates are in place `MeridianCertificateNotRenewed` is expected to
+fire after an hour, because the rule counts every certificate under 21 days
+from its end as a late renewal.
 
 | Caller | What it proves | Callee | What the callee checks |
 |---|---|---|---|
@@ -615,13 +685,14 @@ What this does not cover, on purpose: the edge to the Claims API is plain HTTP
 and the Claims API's own certificate is for its calls out only (TLS at the edge
 is a backlog row); a service loads its certificate once, and cert-manager does
 not restart a Deployment's pods, so the service asks for the restart itself:
-inside the last 24 hours of the certificate it loaded it answers 503 on
-`/healthz` as soon as the mounted file holds a renewed one, and the kubelet
-restarts the container, about a minute in which a one-replica service does not
-answer; if cert-manager has not renewed it, the service stays healthy until the
-certificate ends and is unhealthy from then on, but two alerts fire long before
-(21 days left; not Ready); a renewed CA still reaches a service only when it
-restarts; no certificate is revoked; nothing limits which service's name a
+inside the last 24 hours of the certificate it loaded (the last sixth of its
+life, for one that lasts under six days) it answers 503 on `/healthz` as soon
+as the mounted file holds a renewed one, and the kubelet restarts the
+container, about a minute in which a one-replica service does not answer; if
+cert-manager has not renewed it, the service stays healthy until the
+certificate ends and is unhealthy from then on, but two alerts fire long
+before (21 days left; not Ready); a renewed CA still reaches a service only
+when it restarts; no certificate is revoked; nothing limits which service's name a
 request in `meridian` asks for (approver-policy lets the `meridian-services`
 issuer sign only a request from `meridian` with a URI under the Meridian
 prefix, so a request from another namespace is denied, but whoever can create
@@ -696,9 +767,10 @@ only: no call to any service and no model. The deadline for documents is
 `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 days of 24 hours from the
 claim's latest request for documents. The Claims API reads the same
 variable for the day its status page tells a claimant; the chart sets it
-on this CronJob alone, so set it on the Claims API too if you change it
-(the plan's backlog has the chart's part). `make smoke`'s seventh line
-checks that the job ran and finished on your cluster.
+on both from one value, `sweep.documentsDeadlineDays` (14), and a test
+holds the two rendered values equal (tested without a cluster).
+`make smoke`'s seventh line checks that the job ran and finished on your
+cluster.
 
 `concurrencyPolicy: Forbid` governs only what the schedule starts: a scheduled
 pass is skipped while another is running. A Job made by hand (below) runs

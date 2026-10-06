@@ -123,6 +123,7 @@ KNOWN_ENV = {
     MODE_ENV,
     ENVIRONMENT_ENV,
     OTLP_ENDPOINT_ENV,
+    SWEEP_DEADLINE_ENV,
 }
 FACTORIES = {
     "claims-api": "meridian.workloads.claims_triage.app:create_app_from_env",
@@ -681,6 +682,42 @@ def test_the_sweep_takes_its_own_roles_connection_string_and_the_deadline() -> N
         "value": "14",
     }
     assert "envFrom" not in sweep_container()
+
+
+def deadline_of_each_workload(documents: list[dict]) -> dict[str, str]:
+    """The documents deadline the Claims API and the sweep are each given."""
+    claims_api = [
+        d
+        for d in documents
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == "claims-api"
+    ]
+    sweep = [
+        d
+        for d in documents
+        if d["kind"] == "CronJob" and d["metadata"]["name"] == "meridian-sweep"
+    ]
+    (api,) = claims_api
+    (cron,) = sweep
+    (api_container,) = containers(api)
+    (sweep_pod_container,) = containers(cron["spec"]["jobTemplate"])
+    return {
+        "claims-api": env_of(api_container)[SWEEP_DEADLINE_ENV]["value"],
+        "sweep": env_of(sweep_pod_container)[SWEEP_DEADLINE_ENV]["value"],
+    }
+
+
+def test_the_claims_api_and_the_sweep_are_given_the_same_documents_deadline() -> None:
+    deadlines = deadline_of_each_workload(all_documents())
+
+    assert deadlines == {"claims-api": "14", "sweep": "14"}
+
+
+def test_one_value_changes_the_documents_deadline_of_both_workloads() -> None:
+    documents = render([*helm_arguments(), "--set", "sweep.documentsDeadlineDays=30"])
+
+    deadlines = deadline_of_each_workload(documents)
+
+    assert deadlines == {"claims-api": "30", "sweep": "30"}
 
 
 def test_the_sweep_reads_its_own_secret_and_the_ca_and_never_the_owners() -> None:

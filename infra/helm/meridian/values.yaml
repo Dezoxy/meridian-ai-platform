@@ -43,6 +43,34 @@ identity:
     name: ""
     kind: ""
 
+# How long each of those certificates lasts and when cert-manager renews it
+# (S062, templates/_helpers.tpl: meridian.certificateLifetime checks both).
+#   duration      whole hours and minutes (2160h, 1h30m; no days, no seconds).
+#                 90 days by default, which is also the most the issuer's
+#                 policy signs (maxDuration of meridian-services in
+#                 infra/kind/manifests/certificate-policy.yaml): a duration
+#                 above 2160h or below 1h, cert-manager's shortest, fails the
+#                 render. It is always rendered, because the policy cannot
+#                 decide a request that names none.
+#   renewBefore   how long before the end cert-manager renews. Empty leaves it
+#                 out and cert-manager's default stays, a third of the
+#                 lifetime (30 days of 90); set, it must be shorter than
+#                 duration or the render fails.
+# A service does not reload its certificate: from the smaller of 24 hours and a
+# sixth of the certificate's lifetime before its end (RESTART_MARGIN and
+# RESTART_FRACTION in src/meridian/platform/common/certlife.py) it reads the
+# file again, and when the file holds a newer certificate /healthz answers 503
+# and the kubelet restarts the container. That margin is the application's and
+# no value here changes it. With the default renewBefore, renewal (a third
+# before the end) always comes before the margin starts (a sixth at most). A
+# renewBefore shorter than the margin renews inside it: the service then
+# restarts as soon as the file changes, with less time left before the end.
+# One hour with a renewBefore of 30m lets a run on kind watch a renewal, the
+# 503 and the restart (infra/kind/README.md, "Who a service is").
+certificate:
+  duration: 2160h
+  renewBefore: ""
+
 # Where a service sends its traces (OTLP over HTTP). Empty: no variable.
 telemetry:
   otlpEndpoint: ""
@@ -110,6 +138,10 @@ probes:
 #   serviceMap   {"<service>": <its serviceUrl>, ...}, in the order listed:
 #                the registry's server IDs and where each is served (base URLs;
 #                the client appends /mcp)
+#   documentsDeadlineDays
+#                `sweep.documentsDeadlineDays` below, as a string: one value
+#                for the sweep and for the Claims API's status page (only the
+#                Claims API's env uses it)
 # The scheme is https for a service with `tls: true` and http for the others;
 # the template reads it from the target's entry, so an address cannot disagree
 # with what the service serves.
@@ -141,6 +173,8 @@ services:
     env:
       - name: MERIDIAN_RUNTIME_URL
         serviceUrl: agent-runtime
+      - name: MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS
+        documentsDeadlineDays: true
     # Sized from cAdvisor on kind (2026-10-01): peak working set 66 MB after
     # two demo claims; the limit leaves about three times that.
     resources:
@@ -406,7 +440,9 @@ sweep:
   # The role's Secret, never the owner's.
   dbSecret: claims-sweep-db
   # Whole calendar days from the claim's latest request for documents (the
-  # owner's answer of 2026-10-03).
+  # owner's answer of 2026-10-03). The sweep acts on it and the Claims API's
+  # status page names the day from it: both get it from this one value (the
+  # Claims API's env item `documentsDeadlineDays`, above).
   documentsDeadlineDays: 14
   # Under half the period: a hung connection ends the pass, because the
   # CronJob's Forbid policy would otherwise skip every later run behind it.

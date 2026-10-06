@@ -35,9 +35,9 @@ DOCUMENTS_DEADLINE_DAYS = 14
 # The variable that sets those days, for the sweep (which acts on it) and for the
 # Claims API (whose status page tells the claimant the day): one name, one parser
 # and one sum, here, so the two agree when both are given the same value. The
-# chart sets it on the sweep's CronJob alone today (a step that works on the chart
-# will set it on the Claims API too), so a deployment that changes it sets it on
-# both. Whole days, ASCII digits.
+# chart sets it on the sweep's CronJob and on the Claims API's Deployment from
+# one value (``sweep.documentsDeadlineDays``), and a test holds the two rendered
+# values equal. Whole days, ASCII digits.
 DOCUMENTS_DEADLINE_ENV = "MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS"
 MIN_DEADLINE_DAYS = 1
 MAX_DEADLINE_DAYS = 365
