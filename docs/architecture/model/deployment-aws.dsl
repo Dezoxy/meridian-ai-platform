@@ -28,7 +28,7 @@ aws = deploymentEnvironment "AwsDesigned" {
 
     region = deploymentNode "AWS Region eu-central-1 (Frankfurt)" "The Region for the test of the mapping; the mapping ADR says why. Designed." "AWS Region" "Designed" {
 
-        edge = infrastructureNode "Load balancer" "Takes the public host's traffic into the cluster. An Application Load Balancer with AWS WAF, or a Network Load Balancer in front of Envoy Gateway: not chosen (the mapping ADR says what each changes). Designed." "Elastic Load Balancing" "Designed"
+        edge = infrastructureNode "Load balancer" "A Network Load Balancer in front of Envoy Gateway, as on kind. An Application Load Balancer with AWS WAF is the managed alternative: not built (the mapping ADR says what each changes). Designed." "Elastic Load Balancing, Network Load Balancer" "Designed"
 
         cluster = deploymentNode "Managed Kubernetes" "Would run the Meridian chart as on kind. Besides the two instances drawn, the Agent Runtime, the three tool servers, the Claims Triage App and the Observability Stack would run here unchanged, reach nothing of AWS's, and are not drawn (the Containers view shows them). Designed." "Amazon EKS" "Designed" {
             gatewayInstance = containerInstance meridian.gateway "" "Designed"
@@ -45,7 +45,7 @@ aws = deploymentEnvironment "AwsDesigned" {
 
         provider = infrastructureNode "Model provider" "Serves the models. From Frankfurt a Claude model is reached through the eu. inference profile (label eu-zone), not in-Region (eu-region). Designed." "Amazon Bedrock" "Designed"
 
-        edge -> cluster.ingressInstance "Forwards the public host's traffic to" "HTTP, or TLS passthrough: not chosen" "Designed"
+        edge -> cluster.ingressInstance "Forwards the public host's traffic to" "TCP; the certificate is cert-manager's, as on kind" "Designed"
         cluster.gatewayInstance -> provider "Sends redacted prompts to" "HTTPS, IAM-signed requests" "Designed"
     }
 }
