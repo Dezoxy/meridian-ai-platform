@@ -411,11 +411,11 @@ product and wording version (`src/comparison/`).
   candidate exclusions, and the five fixed terms (deductible, limit, reporting,
   period, lapse). A set of 6 to 10 clauses, not a ranking, so it has no recall
   at a cut-off: the tables give how many labelled clauses it holds. It is not
-  what the triage runs. The deployed triage sends four fixed probes through
+  what the triage runs. The triage as built sends four fixed probes through
   `wording_search`, each returning ten clauses, and picks from what they return;
   for a policy that is not in force it asks the timing probe only. The root
-  `README.md` labels the triage "Implemented in part (S014); on kind since S044
-  (laptop only, replay mode)". So the lookup's numbers are what the lookup would
+  `README.md` labels the triage as implemented in part, running on kind in
+  replay mode and nowhere else. So the lookup's numbers are what the lookup would
   name given the whole wording, an upper bound on what the triage can name, and
   not a measured result of a triage run.
 - `chance`: the hits a random ranking of the claim's wording would give, as
@@ -929,7 +929,7 @@ wording, upper bound) does not on 0 of 40 claims and finds fewer on 26; the two
 are the same on 14. On the narrative labels the two hold the same labelled
 clauses for all 28 claims. A reading: the graph's gain on the narrative labels
 is the gain of using structure, which the triage's own code also does. That code
-is "Implemented in part (S014); on kind since S044 (laptop only, replay mode)",
+is implemented in part and runs on kind in replay mode, nowhere else,
 and the lookup's 63 of 63 is what the lookup would name given the whole wording,
 not a measured result of a triage run.
 

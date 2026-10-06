@@ -574,7 +574,7 @@ def test_the_lookup_is_never_called_production_after_the_rule() -> None:
 
     assert bare == []
     assert "upper bound" in comparison
-    assert "Implemented in part (S014)" in comparison
+    assert "implemented in part" in comparison
     assert "replay mode" in comparison
 
 
