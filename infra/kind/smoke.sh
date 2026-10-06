@@ -88,7 +88,7 @@
 #                 trace ID, the log line, the series count) goes through
 #                 clean_lines and is cut to 120 characters: anyone who can push
 #                 a log line to the collector chooses its text.
-#   5. cost panel: three lines. Grafana serves the provisioned dashboard
+#   5. cost panel: four lines. Grafana serves the provisioned dashboard
 #                 "Meridian: Model Gateway tokens and cost", its queries equal
 #                 the file's and every one of them runs in Prometheus (a
 #                 dashboard with no query, or a target with no expression, is a
@@ -99,7 +99,17 @@
 #                 `make deploy`, or the gateway has settled nothing yet, `make
 #                 demo`, and fails when the gateway is not available); and
 #                 Grafana's service account may not read Secrets in meridian or
-#                 observability.
+#                 observability; and (S063) kube-state-metrics' service account
+#                 may not get, list or watch Secrets in meridian or cert-manager
+#                 (`kubectl auth can-i --as`, six read-only questions; the line
+#                 needs no deployed service and no Grafana forward, so it prints
+#                 after `make up` alone). The last line does not prove that the
+#                 Prometheus operator's rights are narrow: they are not, the
+#                 chart gives it a ClusterRole that reads, creates and changes
+#                 Secrets in every namespace and has no value to narrow it
+#                 (threat model T-68, still open for the operator); nor that
+#                 kube-state-metrics' other rights are small (it still lists
+#                 and watches ConfigMaps, Pods and the rest cluster-wide).
 #   6. adjuster pages: three lines, through the edge as demo.sh reaches the Claims
 #                 API. The queue page answers 200 with the Content-Security-
 #                 Policy (frame-ancestors 'none', default-src 'none') and the
@@ -758,6 +768,8 @@ readonly ALERT_ERROR_LENGTH=120
 readonly ALERT_RULES_PATH=/api/datasources/proxy/uid/prometheus/api/v1/rules
 # The service account the chart makes for Grafana (release name + "-grafana").
 readonly GRAFANA_ACCOUNT=system:serviceaccount:observability:kube-prometheus-stack-grafana
+# ... and for kube-state-metrics (release name + "-kube-state-metrics").
+readonly KSM_ACCOUNT=system:serviceaccount:observability:kube-prometheus-stack-kube-state-metrics
 
 failures=0
 skips=0
@@ -1635,12 +1647,33 @@ check_grafana_rights() {
   pass "grafana rights: Grafana's service account may not read Secrets in meridian or observability (T-68)"
 }
 
+# kube-state-metrics' service account must not get, list or watch Secrets in the
+# namespace of the database roles' passwords or in the one of the CA's key: the
+# chart's `secrets` collector is off (values/kube-prometheus-stack.yaml), and the
+# ClusterRole it derives from the collectors has no rule for them. Same shape as
+# check_grafana_rights: stdout is the answer, stderr is not. A role that came
+# back with a rule for Secrets fails here, naming the verb and the namespace.
+check_kube_state_metrics_rights() {
+  local namespace verb answer
+  for namespace in meridian cert-manager; do
+    for verb in get list watch; do
+      answer="$(kctl auth can-i "${verb}" secrets -n "${namespace}" --as "${KSM_ACCOUNT}" 2>/dev/null || true)"
+      if [[ "${answer}" != no ]]; then
+        fail "kube-state-metrics rights: expected \"no\" to ${verb} of Secrets in ${namespace} as ${KSM_ACCOUNT}, got \"$(clean_lines "${answer}")\""
+        return
+      fi
+    done
+  done
+  pass "kube-state-metrics rights: its service account may not get, list or watch Secrets in meridian or cert-manager (T-68)"
+}
+
 check_cost_panel() {
   if open_grafana; then # otherwise it printed the one FAIL line
     check_dashboard "${DASHBOARD_UID}" "${DASHBOARD_FILE}"
     check_cost_series
   fi
   check_grafana_rights
+  check_kube_state_metrics_rights
 }
 
 # ── 6. adjuster pages ────────────────────────────────────────────────────────

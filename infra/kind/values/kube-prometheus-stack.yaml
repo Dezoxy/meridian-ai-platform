@@ -50,6 +50,14 @@ prometheusOperator:
       memory: 128Mi
 
 kube-state-metrics:
+  # Not the `secrets` collector (S063, threat model T-68): it is the chart's only
+  # reason to give kube-state-metrics' ClusterRole a list and watch of Secrets in
+  # every namespace, and it exists to report kube_secret_* series, which no rule
+  # or dashboard here or in the chart reads (a test and the README say how that
+  # was checked). The chart derives the rule from the collectors, so the rule
+  # goes with the collector; every other collector stays as the chart has it.
+  collectorsExclude:
+    - secrets
   resources:
     requests:
       cpu: 10m

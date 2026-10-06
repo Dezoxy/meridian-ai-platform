@@ -2267,6 +2267,7 @@ def run_cost_panel(
     bad_query: str = "",
     poll_error: str = "",
     can_i: tuple[str, str] = ("no", "no"),
+    ksm_can_i: str = "no",
     grafana_opens: bool = True,
     asked: list[str] | None = None,
 ) -> tuple[list[str], str]:
@@ -2274,7 +2275,9 @@ def run_cost_panel(
     against stubs. ``kctl``: ``count`` is the ledger's one-line answer and
     ``FAIL`` makes the query fail with a message on stderr; ``primary``
     ``FAIL`` does the same for the pod lookup; ``can_i`` is what ``auth can-i``
-    prints for meridian and observability. ``poll``: an empty ``series`` is a
+    prints for meridian and observability, as Grafana's account, and ``ksm_can_i``
+    what it prints, in both namespaces, as kube-state-metrics' (S063).
+    ``poll``: an empty ``series`` is a
     timeout and an empty string for ``served`` means no dashboard; both leave
     ``poll_error``. ``gcurl`` answers every query with Prometheus's answer
     (``seen_in_prometheus``, ``prometheus_status``), except a query that holds
@@ -2306,7 +2309,7 @@ def run_cost_panel(
             'skip() { echo "SKIP  $*"; }',
             *re.findall(
                 r"^readonly (?:DASHBOARD_UID|DASHBOARD_FILE|COST_SERIES|POLL_TIMEOUT"
-                r"|GRAFANA_ACCOUNT|PSQL_OPTIONS)=.*$",
+                r"|GRAFANA_ACCOUNT|KSM_ACCOUNT|PSQL_OPTIONS)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
@@ -2344,6 +2347,7 @@ def run_cost_panel(
             '      echo "${COUNT}" ;;',
             '    *"auth can-i"*)',
             '      case "$*" in',
+            '        *"--as ${KSM_ACCOUNT}"*) answer="${CAN_I_KSM}" ;;',
             '        *"-n meridian "*) answer="${CAN_I_MERIDIAN}" ;;',
             '        *) answer="${CAN_I_OBSERVABILITY}" ;;',
             "      esac",
@@ -2369,6 +2373,7 @@ def run_cost_panel(
                     "check_dashboard",
                     "check_cost_series",
                     "check_grafana_rights",
+                    "check_kube_state_metrics_rights",
                     "check_cost_panel",
                 )
             ),
@@ -2394,6 +2399,7 @@ def run_cost_panel(
             "ERROR_ANSWER": PROMETHEUS_ERROR_ANSWER,
             "CAN_I_MERIDIAN": can_i[0],
             "CAN_I_OBSERVABILITY": can_i[1],
+            "CAN_I_KSM": ksm_can_i,
             "GRAFANA_OPENS": "yes" if grafana_opens else "no",
         },
         check=True,
@@ -2409,7 +2415,7 @@ def test_the_cost_check_finds_the_dashboard_and_skips_the_series_when_not_deploy
 ) -> None:
     lines, queries = run_cost_panel(tmp_path, deployed="")
 
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert lines[0].startswith("PASS  dashboard:")
     assert DASHBOARD_TITLE in lines[0]
     assert "meridian-gateway-cost" in lines[0]
@@ -2418,6 +2424,7 @@ def test_the_cost_check_finds_the_dashboard_and_skips_the_series_when_not_deploy
         "SKIP  cost series: the Meridian services are not deployed (make deploy)"
     )
     assert lines[2].startswith("PASS  grafana rights:")
+    assert lines[3].startswith("PASS  kube-state-metrics rights:")
     assert queries == ""
 
 
@@ -2491,11 +2498,12 @@ def test_the_cost_check_passes_when_the_three_series_are_in_prometheus(
 ) -> None:
     lines, queries = run_cost_panel(tmp_path, count=f"7|{FIRST_SETTLED}")
 
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert [line.split(":")[0] for line in lines] == [
         "PASS  dashboard",
         "PASS  cost series",
         "PASS  grafana rights",
+        "PASS  kube-state-metrics rights",
     ]
     assert lines[1].startswith("PASS  cost series:")
     assert "7 settled" in lines[1]
@@ -2683,10 +2691,14 @@ def test_the_rights_line_passes_on_two_noes_and_runs_without_a_grafana_forward(
     with_grafana, _ = run_cost_panel(tmp_path)
     without, _ = run_cost_panel(tmp_path, grafana_opens=False)
 
-    assert with_grafana[-1] == expected
+    assert with_grafana[2] == expected
     # open_grafana printed its own FAIL; the cost lines stay quiet and the rights
-    # line, which needs no forward, still runs.
-    assert without == [expected]
+    # lines, which need no forward, still run.
+    assert without[0] == expected
+    assert [line.split(":")[0] for line in without] == [
+        "PASS  grafana rights",
+        "PASS  kube-state-metrics rights",
+    ]
     body = function_body(SMOKE_SH, "check_grafana_rights")
     (account,) = re.findall(r"^readonly GRAFANA_ACCOUNT=(\S+)$", SMOKE_SH, re.M)
     assert "auth can-i get secrets" in body

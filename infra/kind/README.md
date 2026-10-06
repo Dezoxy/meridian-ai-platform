@@ -159,6 +159,43 @@ Grafana; [`manifests/grafana-rbac.yaml`](manifests/grafana-rbac.yaml) gives
 it a Role in `observability` that reads ConfigMaps only, and both sidecars
 watch that namespace only (threat model T-68). `make smoke` checks it.
 
+kube-state-metrics reads no Secret either (S063, T-68); the Prometheus
+operator still does. Rendered at chart 91.8.2 with these values, the chart
+gave kube-state-metrics a ClusterRole whose only rule for Secrets was `list`
+and `watch` in every namespace, there because its `secrets` collector is on
+by default. `collectorsExclude: [secrets]` in
+[`values/kube-prometheus-stack.yaml`](values/kube-prometheus-stack.yaml)
+turns that collector off, the chart derives its rules from the collectors, and
+the rendered ClusterRole has 27 rules instead of 28, none for Secrets. Every
+other collector stays the chart's. What goes quiet: the `kube_secret_*`
+family of series is no longer exported. Nothing reads it: no
+alert rule and no dashboard of this repository does (a test keeps it so), and
+a search of the chart's own default rules and dashboards, rendered with these
+values, found no `kube_secret` at all, so no panel or alert of the chart goes
+quiet. The series the repository reads
+(`kube_deployment_status_replicas_available`, `kube_pod_status_ready`,
+`kube_cronjob_status_last_successful_time`, `kube_cronjob_created` and
+`kube_pod_container_status_restarts_total`) come from collectors that stay.
+`make smoke` asks the API server about it (check 5). Tested without a
+cluster; not yet run on one.
+
+The Prometheus operator keeps its ClusterRole, which reads, creates and
+changes Secrets and ConfigMaps in every namespace (the rule is `get`, `list`,
+`watch`, `create`, `update`, `delete`): the operator writes the generated
+configuration of Prometheus as Secrets in `observability`, and reads the
+Secrets that a ServiceMonitor names in the ServiceMonitor's own namespace.
+The chart at this version has no value for a namespaced Role: the
+ClusterRole and its binding are rendered whenever the operator and
+`global.rbac.create` are on, and `global.rbac.create: false` would drop
+every Role of the chart (Prometheus's, the admission webhook's and the
+operator's), to be written by hand, well beyond Grafana's one rule.
+`prometheusOperator.namespaces` narrows only what the operator watches (the
+flag `--namespaces=`, rendered and read), not what its ClusterRole may read,
+and it would stop Prometheus from picking up a ServiceMonitor or PrometheusRule
+outside the namespace it names; a test keeps it unset. So the operator's
+read of Secrets stays open (T-68's residual), and `make smoke` does not
+check it.
+
 The CA for the services (S055) is three cert-manager objects in
 [`manifests/service-ca.yaml`](manifests/service-ca.yaml): a self-signed
 issuer, a CA certificate (ECDSA P-256, one year) and the `meridian-services`
@@ -429,7 +466,7 @@ node image, Kubernetes components and the platform).
    series count) is cleaned of control characters and newlines and cut to 120
    characters: anyone who can push a log line to the collector chooses its
    text.
-5. **Cost panel.** Three lines. The dashboard: Grafana serves
+5. **Cost panel.** Four lines. The dashboard: Grafana serves
    `meridian-gateway-cost` as provisioned, with the same queries as the
    file, and Prometheus runs each of them without an error (a dashboard with
    no query, or a target with no expression, is a FAIL, and the targets of
@@ -442,7 +479,12 @@ node image, Kubernetes components and the platform).
    do not count. Before `make deploy`, and while the gateway has settled
    nothing since it started, this line prints SKIP; `make demo` sends a
    claim. Grafana's rights: its service account may not read Secrets in
-   `meridian` or `observability`.
+   `meridian` or `observability`. kube-state-metrics' rights (S063): its
+   service account may not get, list or watch Secrets in `meridian` or
+   `cert-manager` (six `kubectl auth can-i --as` questions, each answered
+   exactly `no`). Neither rights line needs a deployed service, so both print
+   after `make up` alone. The second says nothing of the Prometheus
+   operator, which still reads Secrets in every namespace.
 6. **Adjuster pages.** Three lines. The queue at
    `http://claims.meridian.localhost:8088/adjuster/claims` answers 200 with
    a `Content-Security-Policy` that forbids framing and every script, and
@@ -1214,7 +1256,7 @@ renewal, the DNS names `otel-collector.observability.svc` and
   `observability`, readable by whatever reads Secrets there or cluster-wide:
   cert-manager's controller, and in the rendered kube-prometheus-stack chart
   Prometheus's operator (it reads, creates and changes Secrets in every
-  namespace) and kube-state-metrics (it lists and watches them). Whoever reads
+  namespace; kube-state-metrics no longer lists them, S063). Whoever reads
   it can issue a certificate for the collector's name. This is tested without a
   cluster; it has not been run on one.
 
