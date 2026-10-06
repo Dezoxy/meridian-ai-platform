@@ -60,9 +60,9 @@
 One step per branch and per worktree, and two or three steps side by side
 in one session whenever that many are ready and do not meet ("Two or
 three steps side by side", below). A session that grows long is
-compacted between steps (step 6 says how that is made safe): the advisor
-re-reads the whole transcript on every call, uncached, and a long context
-blurs what a step was for.
+compacted by the harness when its context fills (step 7 says how that is
+made safe): the advisor re-reads the whole transcript on every call,
+uncached, and a long context blurs what a step was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -74,9 +74,17 @@ blurs what a step was for.
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
    with paths, names and what not to touch (the form is below), delegates
    implementation to the `implementer` subagent (Sonnet at high effort), and
-   consults the advisor before committing to an approach and before
-   declaring done. It runs every gate itself and reads every changed file;
-   a subagent's report is a claim, not evidence.
+   consults the advisor at three fixed points: before the step's first
+   contract goes out (the design), before the pull request, and whenever a
+   result contradicts what was expected. The step's section says when
+   (the template's Advisor line), so a step that skipped it shows it. On
+   2026-10-06 the session went eighty minutes without the advisor while
+   five to seven agents returned results, designed two steps and closed
+   a third in that time, and the call it then made found three things
+   one of the designs had not settled (the owner, that day: "Why
+   skipped?"). Nothing enforces the call but this record. It runs every
+   gate itself and reads every changed file; a subagent's report is a
+   claim, not evidence.
 5. **Gates.** Always `make docs` and `make test`. `make check` when the model
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
@@ -103,11 +111,14 @@ blurs what a step was for.
    record is in Part C, every open branch is pushed, the contracts that
    are still to run are in a folder that outlives the session, and a
    short state note says what is merged, what is in flight on which
-   branch and what comes next. Then the session tells the owner in one
-   line that it is a good moment to compact. A session cannot compact
-   itself: the owner does, or the harness does when the context is full,
-   and after a checkpoint neither loses anything (the owner, 2026-10-06:
-   "we should optimalise the conversation but it should be a routine").
+   branch and what comes next. The harness compacts the conversation by
+   itself when the context is full, and after a checkpoint that loses
+   nothing (the owner, 2026-10-06: "we should optimalise the conversation
+   but it should be a routine"). The session does not ask the owner to
+   compact by hand: on 2026-10-06 a compact that ended interrupted stopped
+   every background agent, the harness would not start them again
+   without the owner's word, and the owner decided against compacting by
+   hand that day.
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -395,7 +406,7 @@ pinned images resolve there.
 | S059 | Runtime and tool server loose ends | The runtime's tool client lives longer than one call; `runtime.runs` text columns have length checks; an error answer without a reason is not read as the refusal `unknown`; one URL check in `common/env.py` serves every service address; `policy_lookup`'s output schema requires `policy` when `found` is true; `finish_run` writes a status only over the one it expects, so a late leg cannot overwrite the sweep's `Failed`; a tool server's waiting calls are bounded, and a search the runtime gave up on is not charged or audited as completed (T-62); no span processor or sampler can see a URL with its query; the tool servers have their entry in `test_openapi.py`; contract tests pass | done | S046, S052 |
 | S060 | Claims pages and API loose ends | In the claims workload, without a change to the triage graph or a prompt: the adjuster's queue has a next page past 100 claims and shows that a referred claim's documents are overdue; documents posted after the deadline are shown to the adjuster as tried; the claimant's page says by when documents are due and picks the latest proposal with the tie-break the views use; a 500 or 503 under `/claimant/` is a page; `database_failure` carries the claim's ID, and a claim that is not valid facts is logged by field and error type, never by its text; the calls to the runtime have a timeout per phase; `AGENT` and `TRIAGE_LEASE_SECONDS` live where the sweep imports them without FastAPI | done | S053 |
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | done | S039, S050 |
-| S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
+| S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | done | S056 |
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | todo | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
@@ -439,11 +450,11 @@ that day; the rest stand as their step recorded them.
 
 | Item | Raised in | Status | Home |
 |---|---|---|---|
-| `make up` waits on the Gateway's `Programmed` condition, which Envoy Gateway left `False` for hours while the edge served | S041 | open; left by S019 (not a chart change; `make up` passed the wait twice on 2026-10-04). It timed out again that afternoon on a two-hour-old cluster (`NoResources`, proxy pod ready); the README's remedy cleared it | S062 |
+| `make up` waits on the Gateway's `Programmed` condition, which Envoy Gateway left `False` for hours while the edge served | S041 | closed by S062: the wait ends with a message that says the edge may be serving all the same and names the remedy; the condition itself is Envoy Gateway's (the wait passed on both cold `make up` runs of 2026-10-06) | S062 |
 | `make demo` passes as soon as each service has one span in Tempo, so it can pass on a trace that is not complete | S044 | closed by S018 (PASS needs every service and span counts unchanged in three readings, six seconds) | S018 |
-| Old `meridian:*` images and finished migrate and seed Jobs stay until `make down` | S041, S044 | open | S062 |
-| The wait after an interrupted deploy | S044 | open | S062 |
-| `make smoke` does not read the stores | S044 | partly closed by S043 (it reads `gateway.usage`) | S062 |
+| Old `meridian:*` images and finished migrate and seed Jobs stay until `make down` | S041, S044 | closed by S062: `make images` lists the images no workload uses, keeps a rollback's target and prints the removal commands for a person; the migrate and seed Jobs have had a time to live of an hour since S019, and were seen gone on the cluster | S062 |
+| The wait after an interrupted deploy | S044 | closed by S062: a deploy that did not run the ingestion says that it skips the wait and what a refused first request then means; it still does not wait, because it reads no cluster timestamp | S062 |
+| `make smoke` does not read the stores | S044 | closed by S062 (check 2: the policy store, the knowledge store and the ledger's newest migration against the checkout's) | S062 |
 | A deployment past its `retires` date still routes | S010 | open | S030 |
 | A recording is keyed on the request alone (messages, output budget, schema), and the evaluation compares who answered by kind and label, so a model swapped behind an unchanged prompt replays the old recording and passes the gate | S034 | open; found while applying the onboarding checklist (PO-19), confirmed by its fact-check in `recorded.py` and `compare.py` | S030 |
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
@@ -469,7 +480,7 @@ that day; the rest stand as their step recorded them.
 | The count of a refusal flood's last window is never written | S046 | closed by S058 for the gateway's own refusals (a row with the outcome `suppressed`); the caller check and the other services have a row below | S058 |
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | closed by S059 (one conditional form, admitted in an output schema only) | S059 |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open; moved from S060 on 2026-10-05: the one reader of the table is `select_terms`, where a missing pair is never complete and the claim goes to an adjuster as unverified, so a failure there changes how the triage routes a claim | S067 |
-| The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | open; both of S060's reviewers rated it medium | S062 |
+| The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | closed by S062: one value for both workloads, held to the code's range at render, and a test holds the two rendered values equal | S062 |
 | The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed. Not taken by S065 (not in its "done when"); its PostgreSQL review measured 105 ms at 200,000 audit rows, the same with `seq` in the order | none |
 | A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | open | S067 |
 | Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | open | none |
@@ -526,7 +537,7 @@ that day; the rest stand as their step recorded them.
 | The claimant's page does not say by when the documents are due | S052 | closed by S060 (the day before which they are needed) | S060 |
 | Documents posted after the deadline are refused (409) and the adjuster does not see that they were tried | S052 | closed by S060 (one audit event per referral, and a sentence on the adjuster's page) | S060 |
 | The adjuster's queue shows a referred claim's last proposal reason, not that its documents are overdue (the claim's page says it) | S052 | closed by S060 ("Documents overdue" beside the reason) | S060 |
-| `make smoke` cannot see a schedule that stopped after a success: it has no server clock to compare with (the controller manager's Lease would be one) | S052 | open | S062 |
+| `make smoke` cannot see a schedule that stopped after a success: it has no server clock to compare with (the controller manager's Lease would be one) | S052 | closed by S062 (the newest success against the database's clock; a schedule with no Job left is seen too) | S062 |
 | No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | partly closed by S024: an alert on the CronJob's last success, from kube-state-metrics, checked offline and not yet on a cluster. Still open: a metric of the sweep's own (what a pass found is in its log line only) | S064 |
 | A NetworkPolicy for the sweep's pod: egress to DNS and the database only | S052 | done in S019 | S019 |
 | The sweep's listing of leftover threads reads every checkpoint row each pass (160 ms at 390,000 rows) | S052 | closed by S065 (a walk of the thread index from a random start, at most three times the limit, and an index probe into `runs` per candidate; the plan reads the same rows when the tables double) | S065 |
@@ -553,7 +564,7 @@ that day; the rest stand as their step recorded them.
 | No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open; left by S024 (the services' telemetry setup, or a log collector on the node, which a session without the cluster cannot try). So no alert rule reads a log | S064 |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open; not built by S057: the checker and its test are copies of development-base's, where the fix goes first and is then re-copied. S057's section says what the check is; tried from a scratch folder, it finds no split table in the tree today | none |
-| `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | open | S062 |
+| `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | closed by S062 (a wording of its own; and a service with no span no longer counts as present) | S062 |
 | 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | open | S037 |
 | No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open | S037 |
 | The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | closed by S057, accepted with its number: 11 s of one worker in CI (pull request 79), 30 to 39 s on a laptop | S057 |
@@ -580,10 +591,10 @@ that day; the rest stand as their step recorded them.
 | The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator and, since S055, cert-manager, whose pods read every Secret) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | open | S063 |
 | On a cluster whose services were first applied as raw manifests, the field manager `kubectl` still co-owns their fields, so a field a later chart version drops would stay | S019 | open; a new cluster ends it | none |
 | Private endpoints or IP rules for the vault, the Azure OpenAI account and the state storage, and diagnostics settings: `infra/terraform/README.md` had named S019 for "the hardening" | S007, S019 | open | S020 |
-| `tests/meridian/test_helm_chart.py` is over the 800-line ceiling (about 1,080 lines); its network-policy tests could be a file of their own | S019 | open; not taken by S057, which runs beside S056 while that step changes the chart's tests | S062 |
+| `tests/meridian/test_helm_chart.py` is over the 800-line ceiling (about 1,080 lines); its network-policy tests could be a file of their own | S019 | closed by S062 (`test_helm_network_policy.py`; 725 lines are left) | S062 |
 | The advisory hook `check-iac.sh` runs `helm lint` on the chart with no values, so every edit of the chart reports the image and the policy peers as missing; `make helm-lint` is the gate | S019 | closed by S057 (for the chart that `make helm-lint` lints, the hook runs that target) | S057 |
 | A tag that is valid for an image but not for an object's name (upper case, `_`, more than 46 characters) passes the chart and fails when the Job is applied; `deploy.sh` passes twelve hex digits | S019 | open | S022 |
-| `make smoke` proves one denied path (Claims API to Model Gateway); egress to an address outside the cluster and the database's policy were proved by hand in S019 | S019 | open | S062 |
+| `make smoke` proves one denied path (Claims API to Model Gateway); egress to an address outside the cluster and the database's policy were proved by hand in S019 | S019 | closed by S062: three denied paths (the Claims API to the gateway; the Claims API to the API server's Service; the database refusing a pod without the workloads' label) beside one allowed, with a probe Pod. An address on the internet is not tried: smoke reaches nothing outside the cluster | S062 |
 | A first `helm upgrade --install` that fails may leave a release Helm refuses to upgrade ("has no deployed releases"); `deploy.sh` names `status` and `history`, and the cure, an uninstall, needs the owner (not tried) | S019 | open | none |
 | GitHub Actions are pinned by version tag, not by commit, `azure/setup-helm@v5` among them (T-36) | S002, S019 | open | S022 |
 | Under a laptop load average of 50 to 90 the kubelet's probes time out and containers restart (the database five times on 2026-10-04, the services once or twice); seen before the network policies existed and after, and whether kindnet's enforcement adds to it is not measured | S019 | open | none |
@@ -591,7 +602,7 @@ that day; the rest stand as their step recorded them.
 | The test database's image has pgvector 0.8.7, the cluster's CloudNativePG image 0.8.6; both are PostgreSQL 17.11 on Debian trixie | changelog v0.33 | open; closes when the CloudNativePG image ships 0.8.7 and Renovate proposes it | none |
 | `azurerm` is locked at 5.8.0 and no plan has been read with it: `make azure-plan` stopped at the backend because the Azure CLI's account is not in the pinned tenant (`AADSTS50020`) | changelog v0.33 | open; needs the owner's `az login` | S020 |
 | The cluster proof of S024: `make up` on `main`, then the seven checks under "Not proved on a cluster" in `docs/operations/README.md` (the rule object, its three groups healthy, a `count()` per series the rules and the health dashboard name, no Meridian alert on a healthy cluster, the dashboard served) | S024 | done on 2026-10-04 by the S055 session, on its branch after merging `main`: `make up` exit 0 with both log lines, the rule object exists, the three groups are healthy (the alert group read `unknown` until its first evaluation), the seven counts are 6, 1, 1, 1, 11, 1 and 4, and no Meridian alert fires. Not done: the health dashboard was not opened in Grafana | none |
-| `make smoke` checks neither the alert rules nor the health dashboard; it reads the cost dashboard by name | S024 | open | S062 |
+| `make smoke` checks neither the alert rules nor the health dashboard; it reads the cost dashboard by name | S024 | closed by S062 (check 11: the groups loaded and healthy, the rule names the file's, no Meridian alert firing, the health dashboard served with its queries running) | S062 |
 | Alert routing and notification: kind runs no Alertmanager, so a firing alert is shown and nobody is told | S024 | open; the game day is the first time someone must be told | S028 |
 | Three objectives have no indicator: a duration metric for a triage run (QA-01) and for the gateway's own time (QA-02), and a count of runs by how they end | S024 | open | S027 |
 | Alerts on the rate an error budget burns at, which need measured targets | S024 | open | S027 |
@@ -638,16 +649,24 @@ that day; the rest stand as their step recorded them.
 | The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | open | none |
 | A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
 | The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | open | none |
-| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | open | S062 |
+| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | closed by S062: watched on kind on 2026-10-06 with one-hour certificates: renewed thirty minutes in, 503 ten minutes before the end of the certificate each process had loaded, each container restarted once by the kubelet | S062 |
 | The pods of one deploy hold certificates that end in the same minute, so they turn unhealthy and restart together: about a minute without an answer from a service with one replica (readiness fails after 10 to 15 seconds, liveness after 60). With one replica each that is the shortest total; with more, the pods of one service should not go together, which needs a margin that differs per pod | S056 | open | S020 |
-| `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | open | S062 |
+| `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | closed by S062: check 10 asks for a certificate from another namespace on every run and passes only on a denial by the deny policy; the audit line is this run's own row or a skip; a reset is told from the unknown-CA alert, and a connection that ends after the request was sent is a failure | S062 |
 | approver-policy has a readiness probe and no liveness probe, so a hung pod is not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | open | S063 |
 | The certificate policy is kind's: the namespace, the trust domain and the issuer are literals in `infra/kind/manifests/certificate-policy.yaml`, so the chart in another namespace, with another trust domain or with a namespaced Issuer is denied or never decided, and nothing says so before the pods wait for a Secret. The policy also lets a request made in `meridian` name any DNS name under `meridian.svc`, and a request with no usage gets cert-manager's default usages | S056 | open | S020 |
 | After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open | none |
-| `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | open | S062 |
+| `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | closed by S062 (it looks for a minute, and the refusal after that quotes what kubectl said) | S062 |
 | The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | open; a guard or a rule is the owner's | none |
 | Retrieval over a graph was measured on data that has nothing relational to find: no customer holds two policies and no asset is on two (S038's census). Measure again if the synthetic data gains customers with several policies or assets with several claims | S038 | open | none |
 | S038's one failing check (all cited clauses, rank 10) is against a fusion whose vector half is the simulated embedding, a hashed bag of words; the comparison was not run against a real embedding, which needs a paid call | S038 | open; a rerun belongs with a step that can call an embedding deployment without a laptop | none |
+| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | open | none |
+| `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | open | none |
+| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open | none |
+| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open | none |
+| Check 10 of `make smoke` reads approver-policy's wording (the names of the policies in a denial's message) at the pinned version; an update of the add-on is when that line would fail without a fault | S062 | open | S063 |
+| The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open; each needs something broken on purpose on a cluster | none |
+| A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | open | none |
+| The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | open | none |
 
 ## Part C — Step details
 
@@ -658,6 +677,8 @@ Each step gets a section here when it starts. Template:
 **Status:** doing · **Started:** YYYY-MM-DD · **Finished:** —
 **Goal:** one sentence.
 **Decisions:** bullets, with the alternative rejected and why.
+**Advisor:** when it was consulted (before the first contract, before
+the pull request, at a surprise), or that it was not.
 **Work log:** what was actually done, commands, links to PRs.
 **Result / verification:** how we proved it is done.
 **Follow-ups:** new steps or issues this created; those no step covers
@@ -9164,6 +9185,218 @@ whether retrieval over a graph deserves a step of its own.
 - For the owner: nothing to decide. The spike says no step is owed;
   it does not say a graph could never earn one.
 
+### S062 — Smoke and deploy loose ends
+**Status:** done · **Started:** 2026-10-05 · **Finished:** 2026-10-06
+**Goal:** close the smoke, deploy and demo items of the follow-up
+backlog on the kind cluster: `make smoke` reads what it did not read
+and proves more than one denied path, the waits name their remedy, a
+target lists the images no workload uses, and a certificate renewal is
+watched on the cluster.
+
+**Decisions:**
+
+- **The step owned the kind cluster**, made on the virtual machine on
+  2026-10-06 with the owner's word of 2026-10-05 ("Yes, and recreate if
+  broken"), and deleted and made again once at the end, on the owner's
+  word of that day ("you should delete the cluster it is necessary for
+  the test so i allow it in the vm"). It ran beside S065, S034, S038,
+  S066 and S031 in one session (Part A). Its implementers ran no
+  command against the
+  cluster: every script is tested against stub binaries, and the main
+  session ran the real commands from a checkout of its own after each
+  contract and told the next one what the cluster said.
+- **`make smoke` grew from 24 lines to 35, and every new line says what
+  it does not prove.** Eleven checks. The rules a new check keeps:
+  read-only unless its header says what it makes and removes; a skip
+  only when the thing checked is not deployed; nothing printed that a
+  row or a Secret holds; a bound on every wait; no image pulled.
+- **The stores are read by count, the schedule by the database's
+  clock.** Check 2 reads the policy store, the knowledge store and the
+  migrations ledger's newest file against the checkout's. The sweep
+  check compares the newest success with `now()` in the database: the
+  machine that runs smoke and the cluster need not agree on the time.
+  Rejected: the controller manager's Lease as the clock (a second
+  thing to read, for a time the database already has).
+- **Three denied paths and one allowed, with a Pod of the Claims API's
+  own image.** The control comes first (the Claims API reaches the
+  Agent Runtime), so that a "blocked" is the policy's and not a broken
+  probe; only a connect timeout counts as blocked, a name that does not
+  resolve or a refused connection is an error. The Pod pulls nothing,
+  mounts no token and is deleted on every path.
+- **Smoke asks the issuer for a certificate it must refuse**, the one
+  place where it changes the cluster on purpose: a CertificateRequest
+  in `default` for the `meridian-services` issuer, whose shape the
+  policy would sign in `meridian`, so that only its namespace refuses
+  it. A CertificateRequest and not a Certificate: the key is made by
+  `openssl` on the machine and written to `/dev/null`, and no Secret is
+  ever made. Denied passes only when the approver's message names the
+  deny policy and not the selecting one; that ties the line to
+  approver-policy's wording at the pinned version, which the header
+  says.
+- **`reset` passes, and is told apart from `refused`.** Measured against
+  the test server with the services' flags: uvicorn ends an unknown
+  CA's connection without delivering the TLS alert (a reset under TLS
+  1.3, an EOF under 1.2), so a line that demanded the alert would fail
+  on every healthy cluster. The probe reads before it writes; a
+  connection that ends after the request was sent is a failure of its
+  own, because a server that accepted the certificate and closed would
+  look the same.
+- **The audit line is this run's, or a skip.** The gateway writes one
+  refusal row per reason, tenant and minute, so a second run inside the
+  minute causes none: the line passes on a row at or after the
+  database's clock read before the request, and says SKIP, not PASS,
+  when only an earlier run's row is there.
+- **`make images` lists and removes nothing.** Each `meridian:*` image
+  in the Docker engine and in the node is marked in use, unused or a
+  rollback's target (an image only an old ReplicaSet names: the chart
+  keeps its revision history and kind never pulls, so a removed image
+  cannot come back); the removal commands are printed for a person.
+  Without the cluster's credentials it refuses to guess when the
+  cluster exists.
+- **A wait that cannot know says so.** A deploy that did not run the
+  ingestion skips the token window's wait and says what a refused
+  first request then means; it reads no Kubernetes timestamp, as
+  before. The look at approver-policy is repeated for a minute and
+  the refusal quotes what kubectl said.
+- **One value for the documents deadline, and values for the
+  certificates' lifetime.** The Claims API and the sweep take the
+  deadline from one value, held to the code's range at render. The
+  render refuses a duration above the policy's cap or below an hour,
+  and a `renewBefore` under five minutes (the cluster's webhook was
+  asked by a server-side dry run: it refused 1m and 4m and accepted
+  5m) or not shorter than the duration.
+- **Check 11 fails on any firing Meridian alert, warnings included.**
+  The infra review asked whether a warning should turn smoke red. Kept:
+  a firing alert is news for whoever runs smoke, and the documents say
+  that smoke fails while one fires.
+- **Three reviews, four contracts for what they found.** No critical
+  finding. The pattern in what they found: a line that could pass or
+  skip on nothing (an empty answer, a missing object, a dashboard with
+  no query, a delete that failed in silence). Each is a failure now,
+  with a test that makes the stub return the bad input.
+
+**Advisor:** consulted after the three reviews, on the order of the
+cluster's last runs and on what the checks could not show (2026-10-06,
+05:28 UTC), and before the pull request. Not consulted before the four
+contracts for the reviews' findings went out: the gap that Part A's
+rule of that day answers.
+
+**Work log:**
+
+- **Mapping first**, then nine contracts to the `implementer`, one
+  concern each: the chart's network-policy tests as a file of their
+  own; the waits; the demo's wording; `make images`; the stores and
+  the schedule; the alert rules and the health dashboard; the denied
+  paths; the identity check's weak spots; the chart's values. The
+  smoke contracts ran one after another (one file), the others beside
+  them, each implementer in a worktree of its own.
+- **On the cluster after each smoke contract**: `make deploy`,
+  `make smoke`, and what the lines said went into the next contract.
+- **`main` merged in after S065**, and the deploy applied migrations
+  0017 to 0019 to the cluster's database: the proof S065 left open.
+  One of this step's own tests pinned the newest migration by name and
+  went red with that merge; all three reviewers found it; it compares
+  the script's answer with the directory now and names no file.
+- **Reviews, at once**: `infra-reviewer` (57 single-line mutations of
+  the new code against the suite), `security-reviewer` (the refused
+  request, the probe and the SQL attacked with scripts of its own) and
+  `silent-failure-hunter` (every new line traced for a pass or a skip
+  on a wrong input). An interrupted `/compact` stopped all three and
+  an implementer mid-run; they were started again.
+- **Four contracts for the findings**, three side by side on disjoint
+  parts of the script and one after them.
+- **The renewal watch** (below), then the certificates put back; **a
+  cluster from nothing** at the last code commit; then **a documents
+  contract** that was given everything the cluster had shown and
+  changed each "tested without a cluster" that the evidence covers,
+  and no other.
+
+**Result / verification:**
+
+- **`make smoke` reads the alert rules, the health dashboard and the
+  stores, proves more than one denied path and notices a schedule that
+  stopped after a success.** On a cluster made from nothing at the
+  step's last code commit (2026-10-06; the owner allowed deleting the
+  cluster for it): `make up` 4 min 28 s; `make smoke` after `make up`
+  alone, 24 lines, 17 PASS and 7 SKIP, exit 0, in 37 s (the count was
+  only derived until then); `make deploy` 1 min 30 s; `make demo`
+  passed in 33 s; `make smoke`, 35 lines: 34 PASS and one SKIP while
+  the sweep had not been scheduled yet, and three minutes later
+  **35 PASS, no SKIP, no FAIL, exit 0, in 49 s**, with no probe Pod
+  and no CertificateRequest of smoke's left behind. Earlier the same
+  day, on the first cluster: the migrations line named
+  `0019_audit_trail_seq.sql` after the deploy applied S065's three
+  migrations; a second run inside the gateway's minute printed SKIP on
+  the audit line; the foreign-CA line said `reset` on every run; the
+  issuer's refusal read "No policy approved this request:
+  [meridian-deny-unlisted: ...".
+- **`make demo` says so when a trace's readings alternate**, and a
+  service with no span no longer counts as present: tested against a
+  stub that alternates; on the cluster the demo passed with spans from
+  every service, and the alternating wording was not seen there.
+- **Finished migrate and seed Jobs remove themselves, and a target
+  lists the images no workload uses.** The Jobs have had a time to
+  live of an hour since S019; on the cluster the Jobs of earlier images
+  were gone an hour after they finished. `make images` on the first
+  cluster after three deploys: one image in use, two marked as a
+  rollback's target and kept with no command; on the new cluster: one
+  in use, two unused in the engine with the removal line printed.
+  Nothing was removed by it.
+- **The waits end with a message that names the remedy.** Tested
+  against stubs; on the cluster a repeat deploy printed the line about
+  the skipped wait. The refusal after the wait for approver-policy
+  needs the add-on down and was not seen.
+- **The network-policy tests of `test_helm_chart.py` are a file of
+  their own**: 725 lines left, the same 82 tests collected.
+
+- **A certificate renewal was watched on the cluster** (2026-10-06,
+  times in UTC). With `certificate.duration: 1h` and `renewBefore: 30m`
+  in an uncommitted copy of kind's values, `make deploy` reissued the
+  seven certificates at once (04:50:33); the Deployments were
+  restarted once to load them. cert-manager renewed all seven at
+  05:20:34, thirty minutes in, and `notAfter` moved an hour on.
+  Between 05:40:40 and 05:41:10, ten minutes before the end of the
+  certificate each process had loaded, every service stopped reporting
+  ready (503 on `/healthz`); by 05:41:40 the
+  kubelet had restarted all six containers once, and the previous
+  container's log says why ("a renewed one is on disk; reporting
+  unhealthy so the container is restarted with it").
+  `MeridianCertificateNotRenewed` was pending from 04:51:46 and
+  firing from 05:51:46 for all seven certificates, as its rule says
+  for a certificate under 21 days from its end; with the 90-day
+  certificates back (05:54:53) it cleared within five minutes.
+- **What the watch showed that nobody had written down: every service
+  restarts in the same minute.** The certificates are issued together
+  by one deploy, so they reach their margin together, and with one
+  replica each the platform answered nothing for about a minute. In
+  the backlog.
+- **Gates, run by the main session:** the whole suite on the last commit
+  before the plan (`GITHUB_ACTIONS=true make pytest-db
+  PYTEST_WORKERS=8`): 10,243 passed, 8 skipped, exit 0, in 1 min 53 s
+  beside the cluster; `make lint` (5 contracts kept), `make registry`,
+  `make helm-lint`, `shellcheck` on every script under `infra/kind/`,
+  `make docs`, `make test`, `make check` (no ERROR line) and `make
+  secret-scan`, each exit 0.
+- **Not seen on a cluster:** the failure paths of the new lines (each
+  needs something broken on purpose: a missing table, a deleted rule
+  object, a request that is approved); a smoke run interrupted by a
+  signal; `make images` from a checkout without the cluster's
+  credentials; the alternating wording of `make demo`.
+
+**Follow-ups:**
+
+- In the backlog, none with a home unless said: every service
+  restarts in the same minute at a renewal; `infra/kind/smoke.sh` is
+  about 2,300 lines and its checks could be files of their own; the
+  scripts' `kubectl` calls have no request timeout of their own; the
+  chart keeps its whole revision history, which is why a rollback's
+  target exists; check 10 reads approver-policy's wording at the
+  pinned version (S063, which pins that add-on by digest); a few small
+  ends of the checks.
+- For the owner: nothing to decide. Check 11 failing on a warning
+  alert was kept (above); say so if smoke should pass while a budget
+  alert fires.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9536,3 +9769,16 @@ whether retrieval over a graph deserves a step of its own.
   search on the cover and exclusion clauses and finds nothing the
   triage's lookup by structure does not. A fact-check recomputed every
   table and found no wrong number. Two backlog rows, none with a home.
+- **v0.52, 2026-10-06:** S062 done, beside S065, S034, S038, S066 and
+  S031. `make smoke` went from 24 lines to 35: it reads the stores, a
+  schedule that stopped, three denied paths and one allowed, this run's
+  own audit row, a certificate the issuer must refuse, and the alert
+  rules with the health dashboard; the waits name their remedy;
+  `make images` lists and removes nothing; the chart has values for the
+  certificates' lifetime. Three reviews found no critical defect and a
+  pattern: a line that could pass or skip on nothing; four contracts
+  closed those. On the cluster: a renewal watched end to end, and a
+  cluster made from nothing at the last code (24 lines after `make up`
+  alone, 35 PASS after the deploy). Part A: the advisor at three fixed
+  points, recorded per step; the checkpoint no longer asks the owner to
+  compact by hand. Thirteen backlog rows closed, eight new.
