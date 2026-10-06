@@ -5,7 +5,6 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Iterator
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -449,37 +448,95 @@ def test_a_start_that_falls_after_the_last_thread_wraps_to_the_first(
 def test_a_live_runs_thread_is_skipped_and_the_walk_stops_at_its_candidates(
     fresh_database: DatabaseHandle,
 ) -> None:
-    add_checkpoints(fresh_database, thread_name(1))
-    for number in range(2, 8):
+    # Threads 1 to 11 in ID order, limit 3, so the walk takes nine candidates
+    # (CANDIDATES_PER_LIMIT is 3): 1 and 9 are leftovers, 2 to 8 are live runs'
+    # threads, and 10 and 11 are leftovers that lie past the ninth candidate.
+    # The result pins the constant from both sides: with 2 the walk ends at the
+    # sixth thread and 9 is not listed, with 4 it reaches 10 and lists it.
+    for number in (1, 9, 10, 11):
+        add_checkpoints(fresh_database, thread_name(number))
+    for number in range(2, 9):
         add_run(
             fresh_database,
             "Running",
             idle_seconds=0,
             thread_id=uuid.UUID(thread_name(number)),
         )
-    for number in (8, 9):
-        add_checkpoints(fresh_database, thread_name(number))
 
     found = as_the_sweep(
-        fresh_database, lambda c: leftover_threads(c, limit=2, start=start_at(1))
+        fresh_database, lambda c: leftover_threads(c, limit=3, start=start_at(1))
     )
 
-    # Candidates are three times the limit (1 to 6): five are live, so one is
-    # listed, and the next pass starts elsewhere.
-    assert found == [thread_name(1)]
+    # Fewer than the limit: the live threads used up candidates, and the next
+    # pass starts elsewhere.
+    assert found == [thread_name(1), thread_name(9)]
+
+
+def planned_starts(monkeypatch: pytest.MonkeyPatch, *starts: uuid.UUID) -> None:
+    """Make the listing's draws of a start the ones given, in order. A draw
+    beyond them fails the test, saying so (``pytest.fail`` is not an
+    ``Exception``, so no handler of the sweep swallows it)."""
+    remaining = iter(starts)
+
+    def draw() -> uuid.UUID:
+        try:
+            return next(remaining)
+        except StopIteration:
+            pytest.fail(
+                f"the sweep drew a start the test did not plan: it planned "
+                f"{len(starts)}",
+                pytrace=False,
+            )
+
+    monkeypatch.setattr(runtime_sweep, "_new_start", draw)
 
 
 def test_without_a_start_the_listing_starts_at_a_random_uuid(
     even_threads: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    drawn = start_at(7)
-    monkeypatch.setattr(
-        runtime_sweep, "uuid", SimpleNamespace(uuid4=lambda: drawn, UUID=uuid.UUID)
-    )
+    planned_starts(monkeypatch, start_at(7))
 
     found = as_the_sweep(even_threads, lambda c: leftover_threads(c, limit=2))
 
     assert found == [thread_name(8), thread_name(10)]
+
+
+def test_a_draw_the_test_did_not_plan_fails_the_test_and_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planned_starts(monkeypatch, start_at(7))
+    runtime_sweep._new_start()
+
+    with pytest.raises(pytest.fail.Exception, match="did not plan: it planned 1"):
+        runtime_sweep._new_start()
+
+
+def test_a_start_of_all_zeros_is_a_start_not_a_missing_one(
+    even_threads: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planned_starts(monkeypatch)  # no draw is planned: the given start is used
+
+    found = as_the_sweep(
+        even_threads, lambda c: leftover_threads(c, limit=1, start=uuid.UUID(int=0))
+    )
+
+    assert found == [thread_name(2)]
+
+
+class NoStatementConnection:
+    """Fails the test when a statement is run on it."""
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        pytest.fail("the listing ran a statement for a limit that lists nothing")
+
+
+@pytest.mark.parametrize("limit", [0, -1, -5])
+def test_a_limit_of_zero_or_below_lists_nothing_and_runs_no_statement(
+    limit: int,
+) -> None:
+    found = leftover_threads(NoStatementConnection(), limit=limit)  # type: ignore[arg-type]
+
+    assert found == []
 
 
 SPELLINGS_OF_A_THREAD = {

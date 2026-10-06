@@ -12,7 +12,9 @@ from importlib import resources
 import psycopg
 from psycopg.pq import TransactionStatus
 
-MIGRATION_NAME = re.compile(r"^\d{4}_[a-z0-9_]+\.sql$")
+# ASCII digits only: ``\d`` matches any Unicode digit, and a file numbered in
+# fullwidth digits would sort after every other and escape the shared-number check.
+MIGRATION_NAME = re.compile(r"^[0-9]{4}_[a-z0-9_]+\.sql$")
 # Arbitrary constant: serialises concurrent runners on the same database.
 LOCK_KEY = 7_009_001
 
@@ -31,12 +33,24 @@ class MigrationError(Exception):
 
 
 def _packaged_files() -> list[tuple[str, str]]:
-    """The packaged ``(name, SQL text)`` pairs, in name order."""
-    found = [
-        (entry.name, entry.read_text(encoding="utf-8"))
-        for entry in resources.files(__package__).iterdir()
-        if MIGRATION_NAME.fullmatch(entry.name)
-    ]
+    """The packaged ``(name, SQL text)`` pairs, in name order.
+
+    Raises ``MigrationError`` naming the file when a ``.sql`` entry has a name
+    that does not match ``MIGRATION_NAME``: it would never be applied, and
+    nothing else would say so. Entries of other kinds (``README.md``, the
+    Python modules) are not migrations and are ignored.
+    """
+    found: list[tuple[str, str]] = []
+    for entry in resources.files(__package__).iterdir():
+        if not entry.name.lower().endswith(".sql"):
+            continue
+        if not MIGRATION_NAME.fullmatch(entry.name):
+            raise MigrationError(
+                f"{entry.name} is not named like a migration and would never be "
+                "applied; name it four digits, an underscore, lower-case words "
+                "joined by underscores and .sql (0019_add_column.sql)"
+            )
+        found.append((entry.name, entry.read_text(encoding="utf-8")))
     return sorted(found)
 
 
@@ -66,9 +80,10 @@ def _refuse_shared_numbers(files: list[tuple[str, str]]) -> None:
 def migration_files() -> list[tuple[str, str]]:
     """The packaged ``(name, SQL text)`` pairs, in name order.
 
-    Raises ``MigrationError`` when two files share a number (see
-    ``_refuse_shared_numbers``), so every caller is covered before anything is
-    applied.
+    Raises ``MigrationError`` when a ``.sql`` file's name does not match
+    ``MIGRATION_NAME`` (see ``_packaged_files``) or when two files share a
+    number (see ``_refuse_shared_numbers``), so every caller is covered before
+    anything is applied.
     """
     files = _packaged_files()
     _refuse_shared_numbers(files)

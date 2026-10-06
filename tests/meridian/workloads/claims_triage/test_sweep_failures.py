@@ -7,7 +7,6 @@ pass does when nothing fails is in ``test_sweep.py``."""
 import logging
 import uuid
 from collections.abc import Callable
-from types import SimpleNamespace
 from typing import Any
 
 import psycopg
@@ -197,11 +196,15 @@ def test_threads_that_fail_every_pass_do_not_stop_the_good_ones_behind_them(
     # threads that all fail; the second on the last failing thread and the good
     # ones behind it.
     starts = iter([uuid.UUID(int=0), uuid.UUID(int=12)])
-    monkeypatch.setattr(
-        runtime_sweep,
-        "uuid",
-        SimpleNamespace(uuid4=lambda: next(starts), UUID=uuid.UUID),
-    )
+
+    def draw() -> uuid.UUID:
+        try:
+            return next(starts)
+        except StopIteration:
+            # Not an Exception, so the sweep's own handlers do not swallow it.
+            pytest.fail("the sweep drew a start the test did not plan: it planned 2")
+
+    monkeypatch.setattr(runtime_sweep, "_new_start", draw)
 
     first = one_pass(fresh_database)
     second = one_pass(fresh_database)

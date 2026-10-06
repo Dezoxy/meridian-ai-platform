@@ -5,11 +5,13 @@ same server (S054): two workers that both found no role both ran CREATE ROLE,
 and each worker's own random passwords overwrote the others'.
 """
 
+import inspect
 import secrets
 import threading
 from types import SimpleNamespace
 from typing import Any
 
+import dbsupport
 import psycopg
 import pytest
 from dbsupport import (
@@ -23,6 +25,7 @@ from dbsupport import (
 )
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from sweepmigrationsupport import as_role_by_set_role
 
 THREADS = 8
 ROUNDS = 5
@@ -30,6 +33,11 @@ ALL_ROLES = (OWNER, *SERVICE_ROLES)
 # Long enough that a live lock holder is certain to outlast it, short enough
 # that the test does not wait: PostgreSQL ends the wait itself.
 SHORT_TIMEOUT_SECONDS = 0.2
+# The server's own limit on any one statement in the tests that hold the lock.
+STATEMENT_TIMEOUT_MS = 5000
+# Nothing listens on port 1: a test that passes it shows that no connection
+# is opened.
+UNREACHABLE_DSN = "host=127.0.0.1 port=1 dbname=none connect_timeout=1"
 
 
 def _race(
@@ -160,10 +168,96 @@ def _drop(admin_dsn: str, roles: dict[str, str]) -> None:
             )
 
 
+def test_the_roles_and_the_template_builder_take_their_lock_through_one_helper() -> (
+    None
+):
+    # One helper takes the lock for both, so the two cannot drift apart again,
+    # and ensure_roles stays well under the 50 lines a function may have.
+    roles = inspect.getsource(ensure_roles)
+    template = inspect.getsource(dbsupport.ensure_template)
+
+    assert "_advisory_lock(" in roles
+    assert "_advisory_lock(" in template
+    assert "pg_advisory_xact_lock" not in roles
+    assert len(roles.splitlines()) < 50
+
+
+class RecordingConnection:
+    """A stand-in for the connection ``as_role_by_set_role`` opens: answers the
+    names the test gives and records whether it was closed."""
+
+    def __init__(self, names: tuple[str, str] | None, fail_on: str = "") -> None:
+        self.names = names
+        self.fail_on = fail_on
+        self.closed = False
+
+    def execute(self, query: Any, params: Any = None) -> "RecordingConnection":
+        if self.fail_on and self.fail_on in str(query):
+            raise psycopg.errors.InsufficientPrivilege(self.fail_on)
+        return self
+
+    def fetchone(self) -> tuple[str, str] | None:
+        return self.names
+
+    def commit(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _as_role_with(
+    monkeypatch: pytest.MonkeyPatch, connection: RecordingConnection
+) -> Any:
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: connection)
+    database = SimpleNamespace(admin_dsn="host=none", name="none")
+    return as_role_by_set_role(database, "claims_sweep")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("connection", "error"),
+    [
+        (RecordingConnection(("claims_sweep", "claims_sweep")), AssertionError),
+        (RecordingConnection(("postgres", "postgres")), AssertionError),
+        (RecordingConnection(None), AssertionError),
+        (RecordingConnection(None, fail_on="SET ROLE"), psycopg.Error),
+    ],
+    ids=["session-user-is-the-role", "role-not-set", "no-names", "set-role-refused"],
+)
+def test_a_failed_set_role_closes_the_connection_it_opened(
+    monkeypatch: pytest.MonkeyPatch, connection: RecordingConnection, error: type
+) -> None:
+    with pytest.raises(error):
+        _as_role_with(monkeypatch, connection)
+
+    assert connection.closed
+
+
+def test_a_set_role_that_works_hands_the_connection_over_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = RecordingConnection(("postgres", "claims_sweep"))
+
+    handed = _as_role_with(monkeypatch, connection)
+
+    assert handed is connection
+    assert not connection.closed
+
+
+def _with_statement_timeout(admin_dsn: str) -> str:
+    """The DSN with a server-side ``statement_timeout``: if ``lock_timeout``
+    regressed, the wait for a lock the test holds would end in an error after a
+    few seconds, not hang the run."""
+    return make_conninfo(
+        admin_dsn, options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}"
+    )
+
+
 def test_a_lock_held_by_another_worker_ends_in_an_error_naming_lock_and_wait(
     db_admin_dsn: str,
 ) -> None:
     scratch = _scratch_roles()
+    guarded = _with_statement_timeout(db_admin_dsn)
     try:
         with psycopg.connect(db_admin_dsn) as holder:
             holder.execute(
@@ -172,7 +266,7 @@ def test_a_lock_held_by_another_worker_ends_in_an_error_naming_lock_and_wait(
 
             with pytest.raises(RuntimeError) as raised:
                 ensure_roles(
-                    db_admin_dsn, scratch, lock_timeout_seconds=SHORT_TIMEOUT_SECONDS
+                    guarded, scratch, lock_timeout_seconds=SHORT_TIMEOUT_SECONDS
                 )
 
             assert _existing(db_admin_dsn, scratch) == set()
@@ -189,6 +283,7 @@ def test_once_the_lock_is_released_the_next_call_sets_the_roles_up(
     db_admin_dsn: str,
 ) -> None:
     scratch = _scratch_roles()
+    guarded = _with_statement_timeout(db_admin_dsn)
     try:
         with psycopg.connect(db_admin_dsn) as holder:
             holder.execute(
@@ -196,10 +291,12 @@ def test_once_the_lock_is_released_the_next_call_sets_the_roles_up(
             )
             with pytest.raises(RuntimeError):
                 ensure_roles(
-                    db_admin_dsn, scratch, lock_timeout_seconds=SHORT_TIMEOUT_SECONDS
+                    guarded, scratch, lock_timeout_seconds=SHORT_TIMEOUT_SECONDS
                 )
 
-        ensure_roles(db_admin_dsn, scratch, lock_timeout_seconds=SHORT_TIMEOUT_SECONDS)
+        # The default timeout: the roles' lock is cluster-wide and other workers
+        # queue on it, so a short wait could fail here under load.
+        ensure_roles(guarded, scratch)
 
         assert _existing(db_admin_dsn, scratch) == set(scratch)
     finally:
@@ -208,12 +305,13 @@ def test_once_the_lock_is_released_the_next_call_sets_the_roles_up(
 
 @pytest.mark.parametrize("seconds", [0, -1, -0.5])
 def test_a_timeout_of_zero_or_below_is_refused_because_zero_means_no_timeout(
-    db_admin_dsn: str, seconds: float
+    seconds: float,
 ) -> None:
     # PostgreSQL reads lock_timeout = 0 as "wait for ever", the very hang the
-    # timeout is there to end; no connection is opened for it.
+    # timeout is there to end. The DSN cannot connect, so the ValueError also
+    # shows that no connection is opened for it (and the test needs no database).
     with pytest.raises(ValueError, match="positive"):
-        ensure_roles(db_admin_dsn, {}, lock_timeout_seconds=seconds)
+        ensure_roles(UNREACHABLE_DSN, {}, lock_timeout_seconds=seconds)
 
 
 def test_the_roles_transaction_runs_read_committed_whatever_the_server_defaults_to(

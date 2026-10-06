@@ -290,13 +290,18 @@ def as_role_by_set_role(db: DatabaseHandle, role: str) -> psycopg.Connection:
     the server refuses (and the rollback after it) leaves the role as it was.
     For ``claims_sweep`` this is the session of a login later made a member of
     the role that runs SET ROLE: session_user is the login, current_user the
-    role (0014).
+    role (0014). The connection is closed on every path that does not hand it
+    over: a failed check leaves none open.
     """
     conn = psycopg.connect(make_conninfo(db.admin_dsn, dbname=db.name))
-    conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
-    names = conn.execute("SELECT session_user, current_user").fetchone()
-    assert names is not None
-    assert names[1] == role
-    assert names[0] != role
-    conn.commit()
+    try:
+        conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+        names = conn.execute("SELECT session_user, current_user").fetchone()
+        assert names is not None
+        assert names[1] == role
+        assert names[0] != role
+        conn.commit()
+    except BaseException:
+        conn.close()
+        raise
     return conn

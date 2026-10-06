@@ -96,24 +96,9 @@ def ensure_roles(
         raise ValueError(
             f"lock_timeout_seconds must be positive, got {lock_timeout_seconds}"
         )
-    with psycopg.connect(admin_dsn) as admin:
-        admin.isolation_level = psycopg.IsolationLevel.READ_COMMITTED
-        # The first statement of the transaction; LOCAL, so it ends with it.
-        admin.execute(
-            sql.SQL("SET LOCAL lock_timeout = {}").format(
-                sql.Literal(math.ceil(lock_timeout_seconds * 1000))
-            )
-        )
-        try:
-            admin.execute(
-                "SELECT pg_advisory_xact_lock(hashtext(%s))", (ROLES_LOCK_KEY,)
-            )
-        except psycopg.errors.LockNotAvailable as exc:
-            raise RuntimeError(
-                f"gave up after waiting {lock_timeout_seconds} seconds for the "
-                f"test roles' advisory lock ({ROLES_LOCK_KEY!r}): another worker "
-                "holds it and has not let go"
-            ) from exc
+    with _advisory_lock(
+        admin_dsn, ROLES_LOCK_KEY, lock_timeout_seconds, "test roles'"
+    ) as admin:
         for role, password in passwords.items():
             exists = admin.execute(
                 "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
@@ -204,17 +189,20 @@ def _database_exists(admin_dsn: str, name: str) -> bool:
 
 @contextmanager
 def _advisory_lock(
-    admin_dsn: str, lock_name: str, lock_timeout_seconds: float
-) -> Iterator[None]:
-    """Hold a transaction-level advisory lock on the admin database.
+    admin_dsn: str, lock_name: str, lock_timeout_seconds: float, owner: str
+) -> Iterator[psycopg.Connection]:
+    """Hold a transaction-level advisory lock on the admin database; yield the
+    connection that holds it, for work in the same transaction.
 
-    The same shape as the lock in ``ensure_roles``: READ COMMITTED, a
-    ``lock_timeout`` set first, and a ``RuntimeError`` naming the lock when the
-    wait runs out. The caller's work runs inside the ``with``; the lock ends
-    with the transaction, on success, on error and when the process dies.
+    READ COMMITTED, a ``lock_timeout`` set first, and a ``RuntimeError`` naming
+    the lock (``owner`` is whose it is: "test roles'") when the wait runs out.
+    The caller's work runs inside the ``with``; the lock ends with the
+    transaction, on success, on error and when the process dies. The caller
+    refuses a timeout of zero or below: PostgreSQL reads it as no timeout.
     """
     with psycopg.connect(admin_dsn) as admin:
         admin.isolation_level = psycopg.IsolationLevel.READ_COMMITTED
+        # The first statement of the transaction; LOCAL, so it ends with it.
         admin.execute(
             sql.SQL("SET LOCAL lock_timeout = {}").format(
                 sql.Literal(math.ceil(lock_timeout_seconds * 1000))
@@ -225,10 +213,10 @@ def _advisory_lock(
         except psycopg.errors.LockNotAvailable as exc:
             raise RuntimeError(
                 f"gave up after waiting {lock_timeout_seconds} seconds for the "
-                f"test template's advisory lock ({lock_name!r}): another worker "
+                f"{owner} advisory lock ({lock_name!r}): another worker "
                 "holds it and has not let go"
             ) from exc
-        yield
+        yield admin
 
 
 def _drop_if_exists(admin: psycopg.Connection, name: str) -> None:
@@ -329,7 +317,9 @@ def ensure_template(
     name = name or template_name()
     if _database_exists(admin_dsn, name):
         return name
-    with _advisory_lock(admin_dsn, template_lock_name(name), lock_timeout_seconds):
+    with _advisory_lock(
+        admin_dsn, template_lock_name(name), lock_timeout_seconds, "test template's"
+    ):
         if not _database_exists(admin_dsn, name):
             _build_template(admin_dsn, passwords, name)
     return name

@@ -1,6 +1,7 @@
 """The connection the refusal tests pass in fails the test when anything is
 executed on it (S065): "nothing was written" is true by construction."""
 
+import typing
 import uuid
 
 import pytest
@@ -39,6 +40,42 @@ def test_using_the_stand_in_in_any_way_fails_the_test_with_a_message_that_says_s
         getattr(connection, use)
 
     assert use in str(failed.value)
+
+
+@pytest.mark.parametrize("name", ["__wrapped__", "__setstate__", "_mock_methods"])
+def test_a_name_python_or_a_tool_probes_on_its_own_is_an_attribute_error(
+    name: str,
+) -> None:
+    connection = RefusalOnlyConnection()
+
+    with pytest.raises(AttributeError):
+        getattr(connection, name)
+
+    assert not hasattr(connection, name)
+
+
+def test_a_with_block_on_the_stand_in_fails_the_test_instead_of_a_type_error() -> None:
+    # A bare TypeError is an Exception, which code under test may swallow;
+    # a failed test is not.
+    with pytest.raises(Failed, match=REACHED) as failed, RefusalOnlyConnection():
+        pytest.fail("the body of the with block ran")
+
+    assert "__enter__" in str(failed.value)
+
+
+def test_leaving_a_with_block_on_the_stand_in_fails_the_test_too() -> None:
+    connection = RefusalOnlyConnection()
+
+    with pytest.raises(Failed, match=REACHED) as failed:
+        connection.__exit__(None, None, None)
+
+    assert "__exit__" in str(failed.value)
+
+
+def test_the_stand_ins_getattr_never_returns() -> None:
+    hints = typing.get_type_hints(RefusalOnlyConnection.__getattr__)
+
+    assert hints["return"] is typing.NoReturn
 
 
 def test_a_refusal_before_the_first_write_passes_through_the_stand_in(

@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 import pytest
@@ -155,7 +155,25 @@ class RefusalOnlyConnection:
     def __init__(self, *, autocommit: bool = False) -> None:
         self.autocommit = autocommit
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> NoReturn:
+        # Python and tools probe names of their own (``__wrapped__``,
+        # ``__setstate__``, ``_mock_methods``); that is not a use of the
+        # database, so a name with a leading underscore is just absent.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        self._reached(name)
+
+    # ``with conn:`` looks these up on the type, where ``__getattr__`` is not
+    # consulted, and would otherwise raise a plain TypeError, an ``Exception``
+    # that code under test could swallow; a failed test is not one.
+    def __enter__(self) -> NoReturn:
+        self._reached("__enter__")
+
+    def __exit__(self, *exc_info: object) -> NoReturn:
+        self._reached("__exit__")
+
+    @staticmethod
+    def _reached(name: str) -> NoReturn:
         pytest.fail(
             f"a refusal test reached the database: the connection's {name!r} was "
             "used, so the ingestion went past its refusal checks",

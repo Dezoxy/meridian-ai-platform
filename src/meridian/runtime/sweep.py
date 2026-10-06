@@ -159,6 +159,11 @@ def delete_thread_checkpoints(conn: psycopg.Connection, thread_id: str) -> int:
     return deleted
 
 
+def _new_start() -> uuid.UUID:
+    """The random start of one pass of the listing (a test replaces this)."""
+    return uuid.uuid4()
+
+
 def leftover_threads(
     conn: psycopg.Connection, *, limit: int, start: uuid.UUID | None = None
 ) -> list[str]:
@@ -169,23 +174,35 @@ def leftover_threads(
     The listing is a sample from where ``start`` falls in the order of the
     threads' IDs (a random uuid when none is given): the threads after it, then
     the ones before it. It reads at most ``CANDIDATES_PER_LIMIT * limit``
-    threads of each table, through its index, so what a pass reads does not
-    grow with the tables. The sample is not uniform: a thread that follows a
-    long gap in the ID space is drawn more often. A thread whose ID is the text
-    of a uuid (the saver writes nothing else) is reached with probability above
-    zero on every pass, so one whose delete keeps failing cannot hold the others
-    out for good. A thread that is no uuid text may sort after every random
-    start (``orphan-1`` does) and is then reached only when fewer than
-    ``CANDIDATES_PER_LIMIT * limit`` threads follow the start; that is
+    threads of each table, through its index, so what a pass reads in index
+    probes does not grow with the tables. The bound is in probes, not in dead
+    index entries: after many deletes and before a vacuum a probe steps over
+    them, and one pass read far more buffers (about 512k, then about 14k on the
+    next pass). The sample is not uniform: a thread that follows a long gap in
+    the ID space is drawn more often. A thread is listed only when fewer than
+    ``CANDIDATES_PER_LIMIT * limit`` threads of its table lie between the start
+    and it, and a thread of a live run uses up a candidate. A leftover that is
+    preceded in ID order by at least that many threads of live runs is
+    therefore reached only when the start falls within the last
+    ``CANDIDATES_PER_LIMIT * limit`` threads of that run: some start reaches it
+    (a thread whose ID is the text of a uuid, as the saver writes, is never out
+    of reach), but a given pass need not, and how often one does depends on the
+    live runs' threads before it. A thread that is no uuid text may sort after
+    every random start (``orphan-1`` does) and is then reached only when fewer
+    than ``CANDIDATES_PER_LIMIT * limit`` threads follow the start; that is
     acceptable because the runtime is the only writer of checkpoint threads and
-    writes the text of a uuid. A pass may list
-    fewer than ``limit`` when candidates belong to a live run; the next pass
-    starts elsewhere."""
+    writes the text of a uuid. A pass may list fewer than ``limit`` when
+    candidates belong to a live run; the next pass starts elsewhere.
+
+    A ``limit`` of zero or below lists nothing and runs no statement (a
+    negative ``LIMIT`` is a server error)."""
+    if limit <= 0:
+        return []
     params = {
         "statuses": list(SWEPT_STATUSES),
         "limit": limit,
         "walk": CANDIDATES_PER_LIMIT * limit,
-        "start": str(start or uuid.uuid4()),
+        "start": str(start if start is not None else _new_start()),
     }
     rows = conn.execute(LEFTOVER_THREADS, params).fetchall()
     return [thread for (thread,) in rows]
