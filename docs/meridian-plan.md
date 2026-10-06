@@ -376,7 +376,7 @@ and Pydantic, at the cost of one dependency.
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
-| S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent | todo | S020 |
+| S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | todo | S007, S019 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
 ### Backlog steps
@@ -410,6 +410,21 @@ Each waits for the running steps that change its files (its last column).
 Several rows are observations seen once: their step closes them with a
 measurement or as not reproduced; it does not have to change code for each.
 The grouping is the session's; the owner may move a row or merge two steps.
+
+**Up to Azure (the owner, 2026-10-06).** "So we have a lot of steps before
+azure… and add the aws template too and we will test it in a real aws
+enviroment and you should go until azure step where we have to spend some
+money on it". So the session goes on, without waiting for a go-ahead between
+steps, through every step that needs no Azure resource and no payment: S064,
+S066 and S037 (running that day), S067, S068 to S076, S025, and the first half
+of S036. It stops, and says what the next thing costs, at each point where
+money is spent: a paid model call (S071 whole, and any recording a changed
+prompt needs in S067), the apply of S036 in the owner's AWS account, and S020.
+The parts of a step that need no payment are done and the paid part is parked
+in its section, as the owner said of a blocked step on 2026-10-05. Decisions
+inside those steps that are the owner's (retention periods, uploads,
+node-exporter, a coverage gate, the Renovate hold, two guard rules) are asked
+when their step opens and do not stop the others.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
@@ -452,11 +467,13 @@ The grouping is the session's; the owner may move a row or merge two steps.
 ### M4 — Optional, at most one
 
 S039 took the one. The owner lifted the limit for S038 on 2026-10-06
-(its section says how); it stands for the other two.
+(its section says how), for S037 the same day ("We can do s037 if we
+can now") and for S036 with it ("add the aws template too and we will
+test it in a real aws enviroment"): all four are built or to be built.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S036 | AWS validate-only Terraform | The module passes `terraform validate` and a policy scan; it is never applied | todo | S025 |
+| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so | todo | S025 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
@@ -10326,3 +10343,8 @@ documentation before it went in).
   S011 declined, and the adjuster queue's lookup, which S027's load test
   measures). Part A: a new row names its step, and `none` is no longer
   used for an open row.
+  The same day the owner set the road to Azure: the session runs every
+  step that needs no Azure resource and no payment and stops where money
+  is spent; S025 no longer waits for S020; S036 is no longer
+  validate-only: its module is applied once in the owner's AWS account
+  after its checks pass; the M4 limit is lifted for S036 and S037.

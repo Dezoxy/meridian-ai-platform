@@ -129,7 +129,7 @@ graph LR
 | M1 Claims triage on kind | Gateway, three MCP servers, retrieval, triage graph with approval, adjuster UI, evaluation harness | The fifteen-minute demo runs from a clean checkout with `make` |
 | M2 Azure, identity, delivery | Terraform, AKS, Entra ID, hardened charts, CI/CD with SBOM, scanning, signing and a manual approval gate | Environment created, demo on AKS, environment removed, all recorded |
 | M3 Reliability and operations | Load test, game day and incident record, restore drill, provider swap, read-only console; the triage as a supervisor and workers is built (S031, ADR 5; in tests, not run on a cluster since) | SLO thresholds measured; the incident record comes from a real timeline |
-| M4 Optional | AWS mapping with validate-only Terraform, or a second-framework workload, or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item, if time allows; a second by the owner's choice of 2026-10-06 |
+| M4 Optional | AWS mapping with a Terraform module that is checked and then applied once in a real account (designed: S025 and S036, the owner's decision of 2026-10-06; nothing of it is written yet), or a second-framework workload, or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item was the limit; the owner lifted it for each of the four on 2026-10-06 |
 
 The step-by-step version, with dependencies, demo checkpoints and status, is
 the [plan](docs/meridian-plan.md).
