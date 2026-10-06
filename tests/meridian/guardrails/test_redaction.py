@@ -66,6 +66,9 @@ def test_the_placeholders_are_fixed_and_safe_inside_a_json_string() -> None:
         "iban": "[iban]",
         "card": "[card]",
         "phone": "[phone]",
+        "tax_number": "[tax-number]",
+        "account": "[account]",
+        "national_id": "[national-id]",
     }
     for placeholder in PLACEHOLDERS.values():
         assert json.loads(json.dumps(placeholder)) == placeholder
@@ -278,8 +281,6 @@ def test_a_phone_number_keeps_the_text_after_its_last_digit() -> None:
         "4111 1111 1111 1112",
         "GB82 WEST 1234 5698 7654 33",
         "HU42 1177 3016 1111 1018 0000 0001",
-        "06 30 123 4567",
-        "06301234567",
         "@anna_example is a handle",
         "write to anna@ soon",
         "anna@example",
