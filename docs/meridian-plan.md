@@ -57,9 +57,9 @@
 
 ## Part A — How a session works
 
-One step per branch and per worktree, and two or three steps side by side
-in one session whenever that many are ready and do not meet ("Two or
-three steps side by side", below). A session that grows long is
+One step per branch and per worktree, and up to five steps side by side
+in one session whenever that many are ready and do not meet ("Five
+steps side by side", below). A session that grows long is
 compacted by the harness when its context fills (step 7 says how that is
 made safe): the advisor re-reads the whole transcript on every call,
 uncached, and a long context blurs what a step was for.
@@ -185,9 +185,12 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**Two or three steps side by side.** This is the default, not an
+**Five steps side by side.** This is the default, not an
 allowance: when a session starts, and whenever a step closes, it fills up to
-three slots with steps whose dependencies are `done`. The owner's decisions:
+five slots with steps whose dependencies are `done` (three until the
+afternoon of 2026-10-06, when the owner wrote "Okay can you start 5 steps
+in total so we can go quicker on the steps"; a step the owner names on top
+of the five is started too, as S077 was that day). The owner's decisions:
 2026-10-06, "So back to multisteps… what steps could you start to proceed
 more? Can we run 3 steps at once?", which reversed the one-at-a-time rule of
 the day before (a night of one step at a time, and of a session that stood
@@ -205,7 +208,10 @@ most one running step may hold each:
 | Evaluation | changes a prompt, the triage graph, a tool's contract, a guardrail screen, the golden set or an injection case | One set of recorded answers and baselines |
 
 A step in none of the three (documents, a spike, tests and tooling, code
-that touches none of them) is free and fills any slot. Among the ready
+that touches none of them) is free and fills any slot. With three lanes and
+five slots, at least two running steps are free ones. The machine is the
+other limit: implementers pass four test workers, and two whole suites do
+not run at once (`docs/development-environment.md`). Among the ready
 steps the session takes at most one per lane and prefers those with no file
 in common; the plan and the root README are shared by every step and are
 merged, not avoided. If fewer steps are ready, fewer run: a step whose
@@ -406,6 +412,7 @@ and Pydantic, at the cost of one dependency.
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | todo | S007, S019 |
+| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | todo | S007, S019 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
 ### Backlog steps
@@ -445,10 +452,11 @@ azure… and add the aws template too and we will test it in a real aws
 enviroment and you should go until azure step where we have to spend some
 money on it". So the session goes on, without waiting for a go-ahead between
 steps, through every step that needs no Azure resource and no payment: S064,
-S066 and S037 (running that day), S067, S068 to S076, S025, and the first half
-of S036. It stops, and says what the next thing costs, at each point where
-money is spent: a paid model call (S071 whole, and any recording a changed
-prompt needs in S067), the apply of S036 in the owner's AWS account, and S020.
+S066 and S037 (running that day), S067, S068 to S076, S025 and S077, and the
+first halves of S036 and S078. It stops, and says what the next thing costs,
+at each point where money is spent: a paid model call (S071 whole, and any
+recording a changed prompt needs in S067), the apply of S036 in the owner's
+AWS account and of S078 in the owner's Google Cloud project, and S020.
 The parts of a step that need no payment are done and the paid part is parked
 in its section, as the owner said of a blocked step on 2026-10-05. Decisions
 inside those steps that are the owner's (retention periods, uploads,
@@ -499,10 +507,12 @@ S039 took the one. The owner lifted the limit for S038 on 2026-10-06
 (its section says how), for S037 the same day ("We can do s037 if we
 can now") and for S036 with it ("add the aws template too and we will
 test it in a real aws enviroment"): all four are built or to be built.
+S078 was added the same day, with S077 in M2, for Google Cloud.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so | todo | S025 |
+| S078 | GCP Terraform, applied once | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). Two halves. Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
@@ -10384,3 +10394,8 @@ documentation before it went in).
   irreversible action; before a pull request only when something reached
   the branch that no reviewer and no consultation has seen; each
   consultation's effect is recorded.
+- **v0.57, 2026-10-06:** five steps side by side is the default (the
+  owner; three since v0.49), and Google Cloud is mapped and tested as
+  AWS is: S077 (the mapping) and S078 (a Terraform module, checked and
+  then applied once in the owner's project) are new, and the road to
+  Azure names them.
