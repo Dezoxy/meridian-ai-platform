@@ -8,6 +8,7 @@ a skipped manifest suite would pass CI while it tested nothing.
 
 import functools
 import json
+import re
 import shutil
 import subprocess
 from urllib.parse import urlsplit
@@ -21,6 +22,13 @@ VALUES_FILE = REPO_ROOT / "infra" / "kind" / "values" / "meridian.yaml"
 RELEASE = "meridian"
 NAMESPACE = "meridian"
 IMAGE_REPOSITORY = "meridian"
+PINS_FILE = REPO_ROOT / "infra" / "kind" / "pins.env"
+# The rate store's image, as `make deploy` passes it from the pins file
+# (`rateStore.image`, --set-string): kind's values turn the store on and name no
+# image, and the chart refuses a store without one.
+(RATE_STORE_IMAGE,) = re.findall(
+    r"^RATE_STORE_IMAGE=(\S+)$", PINS_FILE.read_text(encoding="utf-8"), re.MULTILINE
+)
 # Twelve characters, as deploy.sh cuts them from the image ID.
 TEST_TAG = "0123456789ab"
 # An image digest, as `docker inspect` or a registry prints it: sha256 and 64
@@ -75,6 +83,7 @@ def helm_arguments(
         arguments += ["--set-string", f"image.repository={repository}"]
     if tag is not None:
         arguments += ["--set-string", f"image.tag={tag}"]
+    arguments += ["--set-string", f"rateStore.image={RATE_STORE_IMAGE}"]
     for job in jobs:
         arguments += ["--set", f"jobs.{job}.enabled=true"]
     return arguments
@@ -102,6 +111,26 @@ def rendered_chart() -> tuple[dict, ...]:
     """Every object of the chart with deploy.sh's arguments, once per process.
     The documents are shared: a test must not change them."""
     return tuple(render(helm_arguments()))
+
+
+# Kind's values turn the rate store on (S066), so the rendering holds a seventh
+# workload that is not like the six services: the official image, its own user,
+# no `tmp`, a ConfigMap and a Secret for volumes, no database and no
+# collector. All six of its objects are named for it.
+RATE_STORE = "rate-store"
+
+
+def without_rate_store(documents: list[dict] | tuple[dict, ...]) -> list[dict]:
+    """``documents`` less the six objects of the rate store: what the checks of
+    the six services, the Jobs and the sweep read. The store has checks of its
+    own (``test_helm_rate_store.py``, ``test_kind_rate_store.py``)."""
+    return [d for d in documents if d["metadata"]["name"] != RATE_STORE]
+
+
+@functools.cache
+def rendered_services() -> tuple[dict, ...]:
+    """``rendered_chart()`` without the rate store, once per process."""
+    return tuple(without_rate_store(rendered_chart()))
 
 
 NAME_LABEL = "app.kubernetes.io/name"

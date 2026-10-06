@@ -24,7 +24,10 @@ from test_kind_manifests import GATEWAY_SERIES
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS
 from meridian.platform.gateway.budget import BudgetRefusalReason
 from meridian.platform.gateway.providers.base import ProviderErrorKind
-from meridian.platform.gateway.ratelimit import RateRefusalReason
+from meridian.platform.gateway.ratelimit import (
+    RateRefusalReason,
+    RateStoreRefusalReason,
+)
 from meridian.platform.gateway.routing import RefusalReason
 from meridian.platform.gateway.walk import INTERNAL_REASON
 
@@ -77,13 +80,15 @@ SERVICE_CA_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "service-ca.yaml"
 # test_kind_manifests.py's METRIC_LABELS), and "job" from the collector.
 GATEWAY_LABELS = {key.replace(".", "_") for key in METRIC_ATTRIBUTE_KEYS} | {"job"}
 # Every word the gateway can put in the reason label of a call: a provider
-# error's kind, a policy refusal, a budget refusal, a rate refusal and the
-# word for a failure that was not a provider's. Read from the code's own types.
+# error's kind, a policy refusal, a budget refusal, a rate refusal, the word for
+# a rate store that cannot be reached and the word for a failure that was not a
+# provider's. Read from the code's own types.
 REASONS = (
     set(get_args(ProviderErrorKind))
     | set(get_args(RefusalReason))
     | set(get_args(BudgetRefusalReason))
     | set(get_args(RateRefusalReason))
+    | set(get_args(RateStoreRefusalReason))
     | {INTERNAL_REASON}
 )
 PROMQL_WORDS = {
@@ -196,7 +201,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 16
+    assert len(found) == 17
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -298,6 +303,45 @@ def test_every_reason_word_is_one_the_gateway_can_emit() -> None:
 
     assert words, "no reason matcher found: the extraction is broken"
     assert words <= REASONS, words - REASONS
+
+
+def test_the_rate_store_alert_counts_the_word_of_a_refusal_it_cannot_count() -> None:
+    (alert,) = [a for a in alerts() if a["alert"] == "MeridianRateStoreRefusing"]
+    (word,) = get_args(RateStoreRefusalReason)
+    refusals = reason_words(alert["expr"])
+    (failing,) = [a for a in alerts() if a["alert"] == "MeridianModelCallsFailing"]
+
+    # The word is the code's own constant (the type the gateway's refusal uses),
+    # on the recorded series, among the calls it refused.
+    assert refusals == {word} == {"rate-store-unavailable"}
+    assert series_named(alert["expr"]) == {RECORDED}
+    assert 'meridian_outcome="refused"' in alert["expr"]
+    # A share and a count, as the failing-calls alert has them, or a majority
+    # and a smaller count (a store that is down refuses every call, so a quiet
+    # platform needs two): one refused call (the seconds of a certificate
+    # renewal's restart) is neither. The delta holds a count for 15 minutes, so
+    # a bare "> 0" paged for one blip.
+    expression = " ".join(alert["expr"].split())
+    assert not expression.endswith("> 0")
+    share = re.search(r"> 0\.05 and sum\([^()]*\{[^{}]*\}\) >= 5 \)", expression)
+    majority = re.search(r"> 0\.5 and sum\([^()]*\{[^{}]*\}\) >= 2 \)", expression)
+    assert share and majority, expression
+    assert share.start() < majority.start()
+    assert re.search(r"\) or \(", expression), expression
+    # The denominator is the calls that completed or failed and the ones the
+    # store refused: not every refusal. The others are refused before the store
+    # is asked, so a caller could send enough of them to hide an outage.
+    assert 'meridian_outcome=~"completed|failed"' in expression
+    assert "completed|failed|refused" not in expression
+    assert "or vector(0)" in expression
+    # In the gateway's group, with the severity and the `for` of the failing-calls
+    # alert, and the store's runbook.
+    assert alert in groups()["meridian.gateway"]
+    assert alert["labels"]["severity"] == failing["labels"]["severity"]
+    assert alert["for"] == failing["for"] == "2m"
+    assert alert["annotations"]["runbook_url"] == RUNBOOK_PREFIX + "rate-store.md"
+    # No new group: the count of groups is the file's own.
+    assert len(groups()) == 5
 
 
 def test_a_reason_word_that_is_not_emitted_would_be_caught() -> None:

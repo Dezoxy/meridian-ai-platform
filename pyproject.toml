@@ -27,6 +27,9 @@ dependencies = [
     "pydantic==2.13.5",
     "python-multipart==0.0.32",
     "pyyaml==6.0.3",
+    # The gateway's shared rate windows (S066, T-45): synchronous client only, no
+    # hiredis extra. Imported only under meridian.platform.gateway.
+    "redis==8.1.0",
     "typer==0.27.2",
     "uvicorn==0.54.0",
 ]
@@ -146,6 +149,10 @@ forbidden_modules = [
     # an external package, so `azure.identity` and `azure.core` cannot be named:
     # `azure` covers every azure.* distribution.
     "azure",
+    # Not a provider SDK: the client of the rate windows' store (S066, T-45),
+    # which only the gateway talks to. It is in this list, and not in the
+    # adapter contract's below, because the gateway's own rate store imports it.
+    "redis",
 ]
 
 [[tool.importlinter.contracts]]

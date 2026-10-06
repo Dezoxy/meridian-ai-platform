@@ -29,7 +29,7 @@ import re
 from fnmatch import fnmatchcase
 
 import yaml
-from chartsupport import rendered_chart
+from chartsupport import rendered_chart, without_rate_store
 from test_certificate_policy_up import (
     line_containing,
     line_index,
@@ -81,10 +81,13 @@ LISTED_FILES = "listed-files-only"
 def chart_pod_families() -> list[str]:
     """The names the chart's long-lived pods start with: its Deployments (the six
     services) and its CronJobs (the sweep). The Jobs are not here: they run the
-    CLI, which prints, and does not log."""
+    CLI, which prints, and does not log. Nor is the rate store (S066), a Deployment
+    too: it is Redis, whose own log lines went through neither the JSON format nor
+    the redaction, so the agent does not open them (the test of the pods not
+    opened below names it)."""
     return sorted(
         found["metadata"]["name"]
-        for found in rendered_chart()
+        for found in without_rate_store(rendered_chart())
         if found["kind"] in ("Deployment", "CronJob")
     )
 
@@ -435,6 +438,7 @@ def test_the_jobs_the_database_and_smokes_pods_are_not_opened() -> None:
     for family in (
         *jobs,
         "platform-db-1",
+        "rate-store",
         "probe-x7k2",
         "smoke-logs-1700000000",
         "claims-apiary",

@@ -15,8 +15,9 @@
   [database failure](operations/runbooks/database-failure.md),
   [rollback](operations/runbooks/rollback.md),
   [secret rotation](operations/runbooks/secret-rotation.md),
-  [certificate expiry](operations/runbooks/certificate-expiry.md) and
-  [telemetry missing](operations/runbooks/telemetry-missing.md).
+  [certificate expiry](operations/runbooks/certificate-expiry.md),
+  [telemetry missing](operations/runbooks/telemetry-missing.md) and
+  [rate store](operations/runbooks/rate-store.md).
 
 - [Governance](governance/README.md): how a model provider is onboarded and
   when a workload counts as accepted. Start there before adding a provider or
