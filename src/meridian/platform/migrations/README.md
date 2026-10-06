@@ -68,14 +68,15 @@ table fails the file and rolls it back.
 
 ## A file that takes ACCESS EXCLUSIVE starts with `SET LOCAL lock_timeout`
 
-Most forms of `ALTER TABLE`, and `DROP TRIGGER`, `CLUSTER`,
-`CREATE OR REPLACE VIEW` and `LOCK TABLE` without a weaker mode, take an ACCESS
-EXCLUSIVE lock: it waits for every open transaction that has touched the
-object. The wait is the danger, not
-the statement. PostgreSQL queues lock requests, so every NEW reader and writer
-of the object queues behind the waiting request, and a change that needs
-milliseconds once it has the lock can stall the table for as long as the oldest
-open transaction stays open, up to the 10 s statement timeout. The review
+Most forms of `ALTER TABLE`, and `DROP TRIGGER`, `DROP INDEX`, `DROP TABLE`,
+`DROP VIEW`, `TRUNCATE`, `CLUSTER`, `CREATE OR REPLACE VIEW` and `LOCK TABLE`
+without a weaker mode, take an ACCESS EXCLUSIVE lock (so does `REINDEX`, on the
+index it rebuilds): it waits for every open transaction that has touched the
+object. The wait is the danger, not the statement. PostgreSQL queues lock
+requests, so every NEW reader and writer of the object queues behind the
+waiting request, and a change that needs milliseconds once it has the lock can
+stall the table for as long as the oldest open transaction stays open, up to
+the 10 s statement timeout. The review
 measured it: one reader held a transaction open, a queued
 `ADD COLUMN ... DEFAULT 0` waited behind it, and every new reader waited behind
 the `ADD COLUMN` until the statement timeout.
@@ -102,13 +103,14 @@ exists.
 
 A test enforces the first rule for every file numbered above 0016:
 [`test_migration_rules.py`](../../../../tests/meridian/db/test_migration_rules.py)
-refuses a file whose first `ALTER TABLE`, `DROP TRIGGER`, `CLUSTER`,
+refuses a file whose first `ALTER TABLE`, `DROP TRIGGER`, `DROP INDEX`,
+`DROP TABLE`, `DROP VIEW`, `TRUNCATE`, `REINDEX`, `CLUSTER`,
 `CREATE OR REPLACE VIEW` or `LOCK TABLE` (in ACCESS EXCLUSIVE mode, which is the
 default) comes before a `SET LOCAL lock_timeout` with a positive value, and
 names the file and the statement. It cannot tell the forms of `ALTER TABLE`
 that take a weaker lock apart (a `VALIDATE CONSTRAINT`, below), so a file with
-one sets the timeout too, which costs nothing. It reads text, so it does not
-see these statements inside a `DO` block or in dynamic SQL.
+one sets the timeout too, which costs nothing. What it does not see is
+[listed once](#what-the-check-does-not-see), below.
 
 ## The header
 
@@ -181,11 +183,10 @@ refuses a file that adds a column to a table and also changes that table's rows
 in the same file, and names the file, the table and the form: an `UPDATE`, a
 `MERGE` with `WHEN MATCHED THEN UPDATE`, an `INSERT ... ON CONFLICT ... DO
 UPDATE`, an `UPDATE` in a `WITH`, or an `UPDATE` inside a `DO` block. It reads
-text, with comments and string literals removed. It does not see an `UPDATE` in
-dynamic SQL (`EXECUTE`), a `MERGE` or an upsert inside a `WITH` or a `DO`
-block, an `ADD` without the word `COLUMN`, or a table reached by another name.
-A function's text only defines the statement and does not count. It reads a
-file's number with ASCII digits only. A second file,
+text, with comments and string literals removed; what it does not see is
+[listed once](#what-the-check-does-not-see), below. A function's text only
+defines the statement and does not count. It reads a file's number with ASCII
+digits only. A second file,
 [`test_migration_rules_on_a_scratch_table.py`](../../../../tests/meridian/db/test_migration_rules_on_a_scratch_table.py),
 shows against PostgreSQL on a scratch table, from `pg_locks`, which lock a
 change takes and whether it rewrites the table (the table's file on disk
@@ -203,14 +204,64 @@ rewrite without firing a row trigger, so no `UPDATE` is needed. The price is
 in the header: the file holds ACCESS EXCLUSIVE on `audit.events` from its
 second statement to the commit, for as long as the rewrites take, which grows
 with the table. The header gives the size above which the runner's 10 s
-statement timeout stops it (about 5 to 6 million rows, measured), what it
+statement timeout stops it (about 5 to 6 million rows, measured) and what it
 writes (about twice the table in WAL, free disk for two more copies of the
-table) and the way for a large production table (a new table with the column,
-the old rows copied in order, a switch), and leaves the choice to the owner. The
-view that shows the column is replaced by a file of its own,
+table). The view that shows the column is replaced by a file of its own,
 [`0019_audit_trail_seq.sql`](0019_audit_trail_seq.sql), for the reason given
 under the lock timeout above. A new column on `audit.events` states its lock
 the same way.
+
+**0017's way through, for a table that is too large.** No database of this
+project is in the state that needs one: kind's is short-lived and the Azure
+database of S020 starts empty, so 0017 runs over a table of a few rows. An
+applied file cannot change and no later file runs before it, so a database that
+held millions of audit rows with 0001 to 0016 applied and 0017 not could not
+take it: above the ceiling the runner fails closed, the transaction rolls back
+and the table is as it was. `test_audit_order_migration_timeout.py` shows that
+with the statement timeout turned down in place of the table turned up, and
+shows the same file applied under the default timeout. Two ways out exist on
+paper, and they are **designed, not built**: no command of this repository
+performs either.
+
+- A longer statement timeout for one run, in a maintenance window. The lock is
+  held for the whole rewrite, so every service's audit write waits and then
+  fails closed (a failed audit write fails the call) until the file commits.
+- A new table with the column, the old rows copied in order and a switch, which
+  is outside the rules above (the file's hash is recorded) and needs an
+  exception written for that database.
+
+## What the check does not see
+
+Both checks in
+[`test_migration_rules.py`](../../../../tests/meridian/db/test_migration_rules.py)
+read text with patterns and no SQL parser (a dependency for a check on twenty
+files). This is the one list of what they miss. Each entry is **implemented as
+a limit**: a test pins it as not seen, so a change that starts to see it fails
+that test and the entry goes in the same change. "Backfill" is the rule that
+refuses a column added and rows changed in one file; "timeout" is the rule
+that asks for a `SET LOCAL lock_timeout` before ACCESS EXCLUSIVE.
+
+| Not seen | Rule | Test that pins it |
+|---|---|---|
+| An `UPDATE` in a function's body (it defines, it does not run) | backfill | `test_an_update_in_a_functions_body_is_not_seen` |
+| An `UPDATE` in dynamic SQL (`EXECUTE`) | backfill | `test_an_update_in_dynamic_sql_is_not_seen` |
+| A lock statement in a `DO` block | timeout | `test_a_lock_statement_in_a_do_block_is_not_seen` |
+| A lock statement in dynamic SQL | timeout | `test_a_lock_statement_in_dynamic_sql_is_not_seen` |
+| An `ADD` without the word `COLUMN` (the timeout rule still sees the `ALTER TABLE`) | backfill | `test_an_add_without_the_word_column_is_not_seen_by_the_backfill_rule` |
+| A table renamed earlier in the file | backfill | `test_a_table_renamed_earlier_in_the_file_is_not_seen` |
+| A table reached through a view | backfill | `test_a_table_reached_through_a_view_is_not_seen` |
+| A column that comes with `CREATE TABLE ... (LIKE ...)` (a new table, no readers) | backfill | `test_a_column_that_comes_with_a_like_copy_is_not_an_added_column` |
+| A backfill written as a removal of rows (`DELETE`, or `DELETE` then `INSERT`) | backfill | `test_a_backfill_written_as_a_removal_of_rows_is_not_seen` |
+| A nested block comment: the first `*/` ends it, so what follows is read as code, and a stray `*/` in front of a statement hides it | both | `test_a_nested_block_comment_is_not_stripped_whole`, `test_a_statement_after_a_nested_block_comment_is_not_seen` |
+| An `E'...'` literal with a backslash-escaped quote, read as two literals | both | `test_an_escape_string_literal_is_not_read_as_one` |
+| `CREATE INDEX`: deliberately outside, it takes SHARE and blocks writers, not readers | timeout | `test_a_create_index_is_not_in_the_timeout_rule` |
+| `DROP INDEX CONCURRENTLY` and `REINDEX ... CONCURRENTLY`: a weaker lock, and they cannot run in the runner's transaction | timeout | `test_a_concurrent_index_statement_is_not_seen` |
+| A database-level `ALTER ... SET` or privilege, or one reached through `format(... current_database())` | timeout | `test_a_database_level_setting_or_privilege_is_not_seen` |
+| `SET LOCAL statement_timeout`: read as "not a lock timeout", and nothing refuses a file that lengthens its own statement timeout (the effect on the runner is not shown by a test) | timeout | `test_a_set_local_statement_timeout_is_not_a_lock_timeout_and_is_not_refused` |
+
+**Seen, so not on the list:** a table reached through the search path. A name
+without a schema matches the same name in any schema, so the check refuses it
+(`test_a_table_reached_through_the_search_path_is_seen_by_its_bare_name`).
 
 ## Testing a migration
 
