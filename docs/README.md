@@ -14,8 +14,9 @@
   [budget exhaustion](operations/runbooks/budget-exhaustion.md),
   [database failure](operations/runbooks/database-failure.md),
   [rollback](operations/runbooks/rollback.md),
-  [secret rotation](operations/runbooks/secret-rotation.md) and
-  [certificate expiry](operations/runbooks/certificate-expiry.md).
+  [secret rotation](operations/runbooks/secret-rotation.md),
+  [certificate expiry](operations/runbooks/certificate-expiry.md) and
+  [telemetry missing](operations/runbooks/telemetry-missing.md).
 
 - [Governance](governance/README.md): how a model provider is onboarded and
   when a workload counts as accepted. Start there before adding a provider or

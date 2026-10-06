@@ -366,10 +366,13 @@ def create_service_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
-        if close is not None:
-            close()
-        if owns_provider:
-            provider.shutdown()
+        try:
+            if close is not None:
+                close()
+        finally:
+            # Spans are flushed even when what ``close`` shuts down fails.
+            if owns_provider:
+                provider.shutdown()
 
     # FastAPI's own telemetry, with OTEL_EXPORTER_OTLP_ENDPOINT set, creates the
     # global tracer, meter and logger providers with the default resource. The

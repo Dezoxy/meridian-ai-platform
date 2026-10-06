@@ -6,10 +6,12 @@ from collections.abc import Callable
 from http.cookiejar import DefaultCookiePolicy
 
 import httpx
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
 from meridian.platform.common.env import SettingsError
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.knowledge_mcp import SERVICE_NAME
 from meridian.platform.knowledge_mcp.settings import (
@@ -59,6 +61,7 @@ def create_app(
     *,
     http: httpx.Client | None = None,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> ToolApp:
     """The app. An ``http`` the caller gives is the caller's and is not closed;
@@ -83,6 +86,7 @@ def create_app(
             service_name=SERVICE_NAME,
             handlers=handlers(client),
             tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
             clock=clock,
             on_close=client.close if http is None else None,
         )
@@ -95,4 +99,5 @@ def create_app(
 def create_app_from_env() -> Starlette:
     """The ASGI app, for ``uvicorn --factory``."""
     install_log_redaction()
+    configure_logging(SERVICE_NAME)
     return create_app(KnowledgeServerSettings.from_env()).app

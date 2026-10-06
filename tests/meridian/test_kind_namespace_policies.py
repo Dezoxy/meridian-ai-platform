@@ -341,14 +341,23 @@ def test_the_header_says_what_the_operators_webhook_port_reaches() -> None:
     assert "nobody has measured it" in header
 
 
-def test_only_the_pods_of_meridian_may_push_to_the_collector_and_only_on_4318() -> None:
+def test_only_the_pods_of_meridian_and_the_log_agent_push_to_the_collector() -> None:
     collector = policies_of(OBSERVABILITY_FILE)["otel-collector"]
 
     assert selected(collector) == collector_labels()
+    # The namespace `meridian` alone, and the log agent's pods (S064) by namespace
+    # AND pod label (test_log_agent_network.py); both on 4318 and nothing else.
     assert rules(collector, "ingress") == [
         {
             "from": [
-                {"namespaceSelector": {"matchLabels": {NAMESPACE_LABEL: "meridian"}}}
+                {"namespaceSelector": {"matchLabels": {NAMESPACE_LABEL: "meridian"}}},
+                pods(
+                    {
+                        "app.kubernetes.io/name": "opentelemetry-collector",
+                        "app.kubernetes.io/instance": "log-agent",
+                    },
+                    "logging",
+                ),
             ],
             "ports": tcp(4318),
         }
@@ -369,7 +378,8 @@ def test_the_collectors_policy_and_the_charts_egress_name_one_path() -> None:
         ]
     )
     (rule,) = rules(collector, "ingress")
-    (source,) = rule["from"]
+    # The first peer is the namespace `meridian`; the second is the log agent's.
+    source, _agent = rule["from"]
     chart_policies = network_policies(rendered_chart())
     pushers = {
         name

@@ -53,6 +53,8 @@ from dbsupport import (
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from meridian.platform.common.logformat import HELD_AT_WARNING, UVICORN_LOGGERS
+
 # (file name, text to find, replacement); the first occurrence is replaced.
 Edit = tuple[str, str, str]
 
@@ -86,6 +88,40 @@ def _keep_the_log_record_factory() -> Iterator[None]:
         yield
     finally:
         logging.setLogRecordFactory(saved)
+
+
+@pytest.fixture(autouse=True)
+def _keep_the_logging_configuration() -> Iterator[None]:
+    """A test that calls a service's production factory (or the sweep's
+    ``main``) configures logging for the process (S064): a handler and the
+    INFO level on the root logger, and uvicorn's loggers taken over. Put the
+    root's level and uvicorn's handlers, levels and propagation back after
+    every test, and take off the root only the handlers the test added:
+    pytest's own capture handlers come and go around each phase, so the root's
+    list is never restored wholesale."""
+    root = logging.getLogger()
+    root_handlers = set(root.handlers)
+    root_level = root.level
+    saved = {
+        name: (
+            logging.getLogger(name).handlers[:],
+            logging.getLogger(name).level,
+            logging.getLogger(name).propagate,
+        )
+        for name in (*UVICORN_LOGGERS, *HELD_AT_WARNING)
+    }
+    try:
+        yield
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in root_handlers:
+                root.removeHandler(handler)
+        root.setLevel(root_level)
+        for name, (handlers, level, propagate) in saved.items():
+            logger = logging.getLogger(name)
+            logger.handlers[:] = handlers
+            logger.setLevel(level)
+            logger.propagate = propagate
 
 
 @pytest.fixture(scope="session")

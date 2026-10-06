@@ -11,17 +11,29 @@
 #
 # Ingress: nothing, except the rules below, each a peer and a port.
 #   otel-collector   4318 TCP (OTLP over HTTP) from the pods of the namespace
-#                    `meridian`, and no other port from any namespace. The
-#                    rule selects the namespace and no pod label: the chart's
-#                    own egress rules are what narrow it to the six services
+#                    `meridian` and from the log agent's pods in `logging`
+#                    (S064), and no other port from any namespace. The agent is
+#                    admitted by namespace AND pod label (its name and its
+#                    release's, log-agent), not by namespace: `logging` is its
+#                    own, but nothing else in it is let in. It reads the output
+#                    of every pod on its node and sends only what `meridian`'s
+#                    pods wrote (values/log-agent.yaml), so "only Meridian's pods
+#                    push to the collector" is true of what arrives, if not of
+#                    the pod that sends it. A source that is let in can push
+#                    under any name (T-68): the collector asks for no client
+#                    certificate, and this rule limits who can reach it, not
+#                    what they say. The rule for `meridian` selects the
+#                    namespace and no pod label: the chart's own egress rules
+#                    are what narrow it to the six services
 #                    (its default-deny leaves every pod of `meridian` without
 #                    egress, and only a pod that is given the collector's
 #                    address has a rule for it, tests/meridian/test_helm_
 #                    network_policy.py), and smoke's telemetrygen Jobs run in `meridian`
 #                    with a policy of their own (smoke-networkpolicy.yaml). A
 #                    pod of any other namespace (default, kube-system,
-#                    cert-manager, this one) cannot push a trace, a log or a
-#                    metric under a name that is not its own (T-68, T-84). The
+#                    cert-manager, this one, `logging` but for the agent) cannot
+#                    push a trace, a log or a metric under a name that is not
+#                    its own (T-68, T-84). The
 #                    collector's gRPC receiver, 4317, is closed in this branch
 #                    (values/otel-collector.yaml removes the receiver and the
 #                    port) and admitted from no one: 4317 is admitted from no
@@ -107,6 +119,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: meridian
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: logging
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: log-agent
       ports:
         - port: 4318
           protocol: TCP

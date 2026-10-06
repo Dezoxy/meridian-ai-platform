@@ -29,7 +29,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Tokens and cost count the attempts a provider answered**, with the provider's own token counts and the registry's prices. What a tenant was *charged* (a reservation kept after a failed attempt, for example) is in the gateway's ledger, table `gateway.usage`. The ledger is the record; this dashboard is a view.\n\n**Cost reads 0 on kind.** The simulated `replay` provider is priced at zero in the registry. Cost is above zero only on a route to a priced deployment.\n\n**How a total is computed.** A gateway process exports its counters once a minute, and its first export already carries what it counted, so `increase()` and `rate()` would miss it. Each panel subtracts a series' value at the start of the time range (zero for a process that started inside the range) from its last value. Choose a range of at least two minutes. Prometheus keeps 24 hours on kind, so a longer range shows what it still holds.",
+        "content": "**Tokens and cost count the attempts a provider answered**, with the provider's own token counts and the registry's prices. What a tenant was *charged* (a reservation kept after a failed attempt, for example) is in the gateway's ledger, table `gateway.usage`. The ledger is the record; this dashboard is a view.\n\n**Cost reads 0 on kind.** The simulated `replay` provider is priced at zero in the registry. Cost is above zero only on a route to a priced deployment.\n\n**How a total is computed.** A gateway process exports its counters once a minute, and its first export already carries what it counted, so `increase()` and `rate()` would miss it. Each panel subtracts a series' value at the start of the time range (zero for a process that started inside the range) from its last value. That value is the series' last one at or before the start, looked for up to 24 hours back, so a gap in the data (a laptop that slept, a collector that was down) does not show a lifetime total as the range's; the figure then also holds what was counted during the gap. Choose a range of at least two minutes. Prometheus keeps 24 hours on kind, so a longer range shows what it still holds, and a series with no sample for longer than that is a new series.",
         "mode": "markdown"
       },
       "title": "What these numbers are",
@@ -72,7 +72,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "expr": "sum(last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) - (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -118,7 +118,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_cost_EUR_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "expr": "sum(last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -164,7 +164,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (meridian_outcome) (last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_calls_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "expr": "sum by (meridian_outcome) (last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[${__range_s}s]) - (last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_calls_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
           "instant": true,
           "legendFormat": "{{meridian_outcome}}",
           "refId": "A"
@@ -215,7 +215,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by ($dimension) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "expr": "sum by ($dimension) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) - (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
           "instant": true,
           "legendFormat": "{{$dimension}}",
           "refId": "A"
@@ -266,7 +266,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by ($dimension) (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_cost_EUR_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "expr": "sum by ($dimension) (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
           "instant": true,
           "legendFormat": "{{$dimension}}",
           "refId": "A"
@@ -318,7 +318,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[${__range_s}s]) * 0))",
+          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[${__range_s}s]) - (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"input\"}[${__range_s}s]) * 0))",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -329,7 +329,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[${__range_s}s]) - (meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"} offset ${__range_s}s or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[${__range_s}s]) * 0))",
+          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[${__range_s}s]) - (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\", gen_ai_token_type=\"output\"}[${__range_s}s]) * 0))",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -340,7 +340,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (meridian_gateway_cost_EUR_total{job=\"model-gateway\"} offset ${__range_s}s or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
+          "expr": "sum by (meridian_tenant, meridian_agent, meridian_provider, gen_ai_request_model) (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) - (last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[24h] offset ${__range_s}s) or last_over_time(meridian_gateway_cost_EUR_total{job=\"model-gateway\"}[${__range_s}s]) * 0))",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -386,7 +386,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tokens counted in the five minutes before each point.",
+      "description": "Tokens counted in the five minutes before each point. The first point after a gap in the data holds what was counted during the gap.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -426,7 +426,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[5m]) - (meridian_gateway_tokens_total{job=\"model-gateway\"} offset 5m or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[5m]) * 0))",
+          "expr": "sum by (gen_ai_request_model) (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[5m]) - (last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[24h] offset 5m) or last_over_time(meridian_gateway_tokens_total{job=\"model-gateway\"}[5m]) * 0))",
           "legendFormat": "{{gen_ai_request_model}}",
           "range": true,
           "refId": "A"
