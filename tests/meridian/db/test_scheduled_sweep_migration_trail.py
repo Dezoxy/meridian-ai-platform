@@ -70,7 +70,7 @@ def trail_of(db: DatabaseHandle, claim_id: str = CLAIM_ID) -> list[tuple]:
     )
 
 
-def test_the_view_has_the_seven_columns_of_0011_in_order_and_the_reason_last(
+def test_the_view_has_the_nine_columns_of_0011_0014_and_0019_in_order_seq_last(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(

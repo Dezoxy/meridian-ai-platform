@@ -5,6 +5,7 @@ error that is not the database's ends the pass with its class name only. What a
 pass does when nothing fails is in ``test_sweep.py``."""
 
 import logging
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -179,7 +180,10 @@ def test_threads_that_fail_every_pass_do_not_stop_the_good_ones_behind_them(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sweep, "MAX_THREADS_PER_PASS", 3)
-    threads = [f"orphan-{n:02d}" for n in range(15)]
+    # Thread IDs are the text of a uuid, as the runtime writes them; these are
+    # numbered so that their order in the index is known (1 to 15). The first
+    # twelve fail every pass.
+    threads = [str(uuid.UUID(int=n)) for n in range(1, 16)]
     for thread in threads:
         add_checkpoints(fresh_database, thread)
     monkeypatch.setattr(
@@ -187,8 +191,29 @@ def test_threads_that_fail_every_pass_do_not_stop_the_good_ones_behind_them(
         "delete_thread_checkpoints",
         breaking(sweep.delete_thread_checkpoints, set(threads[:12]), "thread_id"),
     )
+    # A pass lists the first three threads from a random start; the starts of the
+    # two passes are fixed here, in place of the draws. The first lands on
+    # threads that all fail; the second on the last failing thread and the good
+    # ones behind it.
+    starts = iter([uuid.UUID(int=0), uuid.UUID(int=12)])
 
-    assert passes_until(fresh_database, lambda r: r.threads_cleaned) >= 1
+    def draw() -> uuid.UUID:
+        try:
+            return next(starts)
+        except StopIteration:
+            # Not an Exception, so the sweep's own handlers do not swallow it.
+            pytest.fail("the sweep drew a start the test did not plan: it planned 2")
+
+    monkeypatch.setattr(runtime_sweep, "_new_start", draw)
+
+    first = one_pass(fresh_database)
+    second = one_pass(fresh_database)
+
+    assert (first.threads_cleaned, first.failures) == (0, 3)
+    assert (second.threads_cleaned, second.failures) == (2, 1)
+    assert [checkpoint_rows(fresh_database, t) for t in threads[12:14]] == [0, 0]
+    assert checkpoint_rows(fresh_database, threads[14]) > 0
+    assert all(checkpoint_rows(fresh_database, t) > 0 for t in threads[:12])
 
 
 # ── one step that fails does not skip the others (T-63) ─────────────────────

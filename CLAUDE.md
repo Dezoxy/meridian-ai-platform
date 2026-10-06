@@ -45,6 +45,11 @@ before the first edit, not after the first failure.
   the same pull request. `make eval-baseline` replays the recording and
   costs nothing; `make eval-record` calls the live model, costs money and
   waits for the owner's yes.
+- **A migration:**
+  [src/meridian/platform/migrations/README.md](src/meridian/platform/migrations/README.md):
+  numbers are taken late and used once, an applied file never changes, a
+  file that takes an exclusive lock sets a lock timeout first, and a
+  column is added in one file and backfilled in the next.
 - **A model provider or deployment, or calling a workload accepted:**
   [docs/governance/README.md](docs/governance/README.md): two designed
   processes, each with a checklist and one applied example.

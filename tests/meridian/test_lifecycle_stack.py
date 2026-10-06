@@ -50,7 +50,7 @@ DOCUMENTS_REQUESTED = "CLM-0030"
 ROUTE_WITH_THE_DOCUMENTS = "auto_approve"
 CLAIM_EVENTS_SQL = (
     "SELECT recorded_at, event, reason FROM audit.events "
-    "WHERE service = 'claims-api' AND reference = %s ORDER BY recorded_at, event"
+    "WHERE service = 'claims-api' AND reference = %s ORDER BY recorded_at, seq"
 )
 
 
@@ -95,7 +95,7 @@ def checkpoint_threads(db: DatabaseHandle) -> set[str]:
 def claim_trail(db: DatabaseHandle, claim_id: str) -> list[tuple[str, str]]:
     """The Claims API's audit events for the claim, oldest first, as
     ``(event, reason)``. Events of one transaction share a moment (``now()``),
-    so their order among themselves is not the order they were written in."""
+    so ``seq`` (stamped in the order the rows were inserted) breaks the tie."""
     return [
         (event, reason)
         for _, event, reason in owner_rows(db, CLAIM_EVENTS_SQL, (claim_id,))
@@ -432,17 +432,15 @@ def test_an_adjuster_decides_a_claim_whose_triage_failed_with_no_run_to_resume(
     ) == [(0,)]
     assert table_count(fresh_database, "claims.notes") == 0
     # The claim's trail: the referral and the decision are one transaction, so
-    # they share a moment and are compared as a pair after the two before them.
+    # they share a moment, and the order they were written in is their seq's.
+    # Alphabetically the decision would come first.
     trail = claim_trail(fresh_database, third)
-    assert trail[:2] == [
+    assert trail == [
         ("claim.triaging", "triage-started"),
         ("claim.triage_failed", "triage-failed"),
-    ]
-    assert len(trail) == 4
-    assert set(trail[2:]) == {
         ("claim.awaiting_adjuster", "triage-referred"),
         ("claim.approved", "adjuster-approved"),
-    }
+    ]
     moments = {
         moment
         for moment, event, _ in owner_rows(fresh_database, CLAIM_EVENTS_SQL, (third,))

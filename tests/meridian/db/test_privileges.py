@@ -466,14 +466,16 @@ def test_the_database_stamps_the_identity_of_every_audit_row(
     migrated_database: DatabaseHandle,
 ) -> None:
     forged_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    forged_seq = -1
     marker = f"forged-{uuid.uuid4()}"
 
     run(
         migrated_database,
         "model_gateway",
-        "INSERT INTO audit.events (event_id, recorded_at, service, event, outcome) "
-        "VALUES (%s, '2001-01-01T00:00:00Z', 'agent-runtime', %s, 'ok')",
-        (forged_id, marker),
+        "INSERT INTO audit.events "
+        "(event_id, recorded_at, seq, service, event, outcome) "
+        "VALUES (%s, '2001-01-01T00:00:00Z', %s, 'agent-runtime', %s, 'ok')",
+        (forged_id, forged_seq, marker),
     )
 
     ((event_id, recorded_at, db_role, service, _),) = audit_rows(
@@ -483,6 +485,15 @@ def test_the_database_stamps_the_identity_of_every_audit_row(
     assert recorded_at.year >= 2026
     assert db_role == "model_gateway"  # the session user, whatever the row says
     assert service == "agent-runtime"  # self-asserted; db_role is the proof
+    # The order is the database's too: a sequence's value, never the caller's.
+    ((seq,),) = run(
+        migrated_database,
+        OWNER,
+        "SELECT seq FROM audit.events WHERE event = %s",
+        (marker,),
+    )
+    assert seq > 0
+    assert seq != forged_seq
 
 
 def test_a_forged_db_role_is_overridden_too(
@@ -599,6 +610,8 @@ def test_the_audit_log_has_no_content_columns(
         "tool",
         # 0015: the call's purpose on a refusal row of the Model Gateway.
         "purpose",
+        # 0017: the order of the rows, stamped by the trigger.
+        "seq",
     }
 
 
