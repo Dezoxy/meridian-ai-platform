@@ -58,6 +58,8 @@ def expected_stdout(name: str, module: str) -> str:
         "generated: a graph with one node that calls no model and no tool, an "
         "evaluation with no grader, a golden set with no case and an agent with "
         "no tool and no worker",
+        "host: the new agent runs on the langgraph host, the registry's default "
+        "for an agent's host, and its graph is written for that host",
         "still by hand: the agent in the `agents` of a tenant in tenants.yaml (no "
         "call for it is admitted before, and `meridian registry validate` will "
         "print a note until it is done), its tools and any workers (an edit of "

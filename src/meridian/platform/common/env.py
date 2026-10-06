@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import AfterValidator
 
 REGISTRY_DIR_ENV = "MERIDIAN_REGISTRY_DIR"
@@ -35,7 +36,7 @@ def service_url_problem(value: str) -> str | None:
     in it (``urlsplit`` drops a tab, a carriage return and a line feed without a
     word), it parses (a bad port, port 0 and an empty port are refused), its
     scheme is http or https with a host name, and it names no user, password,
-    query or fragment. A path is allowed."""
+    query or fragment, and the HTTP client parses it too. A path is allowed."""
     if any(ch.isspace() or not ch.isprintable() for ch in value):
         return "is not a usable URL"
     try:
@@ -55,6 +56,11 @@ def service_url_problem(value: str) -> str | None:
         # The same log line would carry a ``?token=`` too; a bare ``?`` or
         # ``#`` parses to an empty part and is refused all the same.
         return "must not carry a query or a fragment"
+    try:
+        httpx.URL(value)
+    except httpx.InvalidURL:
+        # The client's own text quotes the address: it is dropped, not chained.
+        return "is not a usable URL"
     return None
 
 
