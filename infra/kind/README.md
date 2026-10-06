@@ -51,9 +51,14 @@ digest of its tag, each in [`pins.env`](pins.env) as `X_IMAGE_TAG` and
 the chart with `--set`. The tag is the one the chart installs by default at
 its pinned version, except the collector's: the chart's appVersion is 0.161.0
 and the pin is 0.162.0 (it was pinned before this step). A chart upgrade moves
-the tags with it, and Renovate
-proposes a tag of its own that may not be the chart's, so read the chart's
-defaults again (below) before merging. What a chart's key takes is not
+the tags with it, by hand, in the chart's pull request: Renovate does not
+propose a new tag for an image a chart installs (`.github/renovate.json`
+switches off its major, minor and patch updates for them, so no image arrives
+before the chart that installs it), only a new digest of the tag in place. The
+pull request that moves a chart reads the chart's defaults again (below) and
+writes each new tag, and the index digest of that tag, into `pins.env`. The
+collector's images are outside that rule until their pin and their chart agree,
+and Renovate still proposes their tags. What a chart's key takes is not
 uniform: `digest` takes `sha256:<hex>`; `sha` in kube-prometheus-stack and
 Grafana takes the hex alone (their templates write `@sha256:` themselves) and
 `up.sh` strips the prefix; `sha` in kube-state-metrics takes the whole digest;
@@ -110,6 +115,14 @@ helm template cert-manager "${CERT_MANAGER_CHART}" --repo "${CERT_MANAGER_REPO}"
   --values infra/kind/values/cert-manager.yaml |
   grep -oE '(docker\.io|quay\.io|ghcr\.io|registry\.k8s\.io)/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?' |
   sort -u
+```
+
+The digest to write next to a tag is the one of the tag's multi-architecture
+index. This prints it without pulling the image (it reads the registry):
+
+```sh
+docker buildx imagetools inspect quay.io/jetstack/cert-manager-webhook:v1.21.2 \
+  --format '{{.Manifest.Digest}}'
 ```
 
 On the cluster, after `make up` (with `KUBECONFIG` set as `make up` prints),

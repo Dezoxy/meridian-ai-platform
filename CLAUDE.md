@@ -142,8 +142,9 @@ A change that violates one is wrong even if it works.
   merges none. A line added to `infra/kind/pins.env`, an `_IMAGE` variable
   in the `Makefile` or a `_VERSION` value in a workflow needs a reader
   there, and `make test` fails without one; a pin of another shape needs a
-  line in `tests/test_renovate_config.py` too. The plan's Part A says which
-  of Renovate's pull requests green checks do not prove.
+  line in `tests/test_renovate_config.py` too. A chart's image tags move in
+  the chart's pull request, by hand. The plan's Part A says which of
+  Renovate's pull requests green checks do not prove.
 - Prose in Markdown wraps at 80 columns; tables, fences and single long
   tokens are exempt. Do not use a Markdown formatter to enforce it.
 

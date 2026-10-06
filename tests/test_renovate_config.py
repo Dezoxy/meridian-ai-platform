@@ -62,6 +62,68 @@ def unread_pins(path: str, pins: str, text: str, config: dict) -> list[str]:
     return unread
 
 
+# Images that are pinned and that the "keeps the chart's tag" rule does NOT cover,
+# each with the reason. Everything else that names an image must be matched by
+# the rule, so a new chart image cannot slip past unnoticed.
+OTEL = "ghcr.io/open-telemetry/opentelemetry-collector"
+NOT_A_CHARTS_TAG = {
+    # Not a chart's default: the kind node image, moved by a step (a minor by hand).
+    "kindest/node": "the Kubernetes minor is a step's decision",
+    # Not a chart's default: cluster.imageName, with a PostgreSQL and pgvector pair.
+    "ghcr.io/cloudnative-pg/postgresql": "set by the cluster chart's imageName",
+    # The pin is 0.162.0 and the chart's appVersion 0.161.0: outside the rule until
+    # the two agree (the owner's call which way they go).
+    f"{OTEL}-releases/opentelemetry-collector": "pin and chart disagree",
+    # The log agent (S064) is a second release of the collector's chart with the
+    # contrib build of the collector's release: it follows the core image's side.
+    f"{OTEL}-releases/opentelemetry-collector-contrib": "follows the core image",
+    # smoke.sh's load generator, the collector's release; no chart installs it.
+    f"{OTEL}-contrib/telemetrygen": "no chart installs it",
+    # The test database: no chart installs it.
+    "pgvector/pgvector": "the tests' database, no chart",
+    # The documentation toolchain, run by the Makefile and CI: no chart.
+    "structurizr/structurizr": "documentation tooling, no chart",
+    "pandoc/extra": "documentation tooling, no chart",
+    "minlag/mermaid-cli": "documentation tooling, no chart",
+}
+IMAGE_NAME = r"[a-z0-9][a-z0-9./-]*"
+DIGEST_LINE = rf"^[A-Z][A-Z0-9_]*=({IMAGE_NAME}):[\w.-]+@sha256:[a-f0-9]{{64}}"
+TAG_UNDER_COMMENT = (
+    rf"^# renovate: datasource=docker depName=({IMAGE_NAME})\n"
+    r"[A-Z][A-Z0-9_]*_IMAGE_TAG="
+)
+MAKEFILE_IMAGE = rf"^[A-Z][A-Z0-9_]*_IMAGE\s*[:?]?=\s*({IMAGE_NAME}):"
+
+
+def pinned_images(pins: str, makefile: str) -> set[str]:
+    """The name of every image the pins file and the Makefile pin."""
+    names = set(re.findall(DIGEST_LINE, pins, re.MULTILINE))
+    names |= set(re.findall(TAG_UNDER_COMMENT, pins, re.MULTILINE))
+    names |= set(re.findall(MAKEFILE_IMAGE, makefile, re.MULTILINE))
+    return names
+
+
+def chart_image_rule(config: dict) -> dict:
+    """The package rule that leaves an image's tag to its chart's pull request."""
+    (rule,) = [
+        rule
+        for rule in config["packageRules"]
+        if "docker.io/envoyproxy/gateway" in rule.get("matchPackageNames", [])
+    ]
+    return rule
+
+
+def unguarded_images(pins: str, makefile: str, config: dict) -> list[str]:
+    """Pinned images that the rule does not match and no exception explains."""
+    patterns = chart_image_rule(config)["matchPackageNames"]
+    return sorted(
+        name
+        for name in pinned_images(pins, makefile)
+        if name not in NOT_A_CHARTS_TAG
+        and not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+    )
+
+
 def pinned_files() -> list[tuple[str, str]]:
     """Each existing file a glob of PIN_LINES names, with its pin pattern."""
     found = []
@@ -219,7 +281,11 @@ class Readers(unittest.TestCase):
         (image_reader,) = [r for r in readers if "currentDigest" in r.pattern]
         in_makefile = [m.group("depName") for m in image_reader.finditer(makefile)]
         rules = self.config["packageRules"]
-        (group,) = [r for r in rules if name in r.get("matchPackageNames", [])]
+        (group,) = [
+            r
+            for r in rules
+            if name in r.get("matchPackageNames", []) and "groupName" in r
+        ]
         (platform,) = [r for r in rules if r.get("groupName") == "kind platform"]
 
         self.assertIn(name, in_pins)
@@ -255,6 +321,93 @@ class Readers(unittest.TestCase):
         match = self.comment_reader(PINS).search(text)
         found = match.group("currentValue", "currentDigest")
         self.assertEqual(found, ("0.1.0", digest))
+
+    def test_every_pinned_image_keeps_its_charts_tag_or_is_a_named_exception(
+        self,
+    ) -> None:
+        pins = (ROOT / PINS).read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+        self.assertEqual(unguarded_images(pins, makefile, self.config), [])
+        # The test sees the pins it is meant to guard.
+        self.assertIn("quay.io/prometheus/prometheus", pinned_images(pins, makefile))
+        self.assertIn("docker.io/grafana/loki", pinned_images(pins, makefile))
+
+    def test_a_chart_image_that_no_rule_matches_is_reported(self) -> None:
+        digest = "sha256:" + "a" * 64
+        pins = (
+            "# renovate: datasource=docker depName=example.org/chart/new\n"
+            "NEW_IMAGE_TAG=1.0.0\n"
+            f"NEW_IMAGE_DIGEST={digest}\n"
+        )
+        makefile = f"OTHER_IMAGE := example.org/thing/other:1.2.3@{digest}\n"
+
+        unguarded = unguarded_images(pins, makefile, self.config)
+
+        expected = ["example.org/chart/new", "example.org/thing/other"]
+        self.assertEqual(unguarded, expected)
+
+    def test_the_rule_for_a_chart_s_images_disables_the_tag_and_keeps_the_digest(
+        self,
+    ) -> None:
+        rule = chart_image_rule(self.config)
+
+        self.assertEqual(rule["matchDatasources"], ["docker"])
+        self.assertEqual(rule["matchUpdateTypes"], ["major", "minor", "patch"])
+        self.assertIs(rule["enabled"], False)
+        self.assertNotIn("digest", rule["matchUpdateTypes"])
+        self.assertIn("collector", rule["description"])
+
+    def test_the_rule_matches_no_chart_and_no_exception(self) -> None:
+        pins = (ROOT / PINS).read_text(encoding="utf-8")
+        patterns = chart_image_rule(self.config)["matchPackageNames"]
+        charts = re.findall(r"^# renovate: datasource=helm depName=(\S+)", pins, re.M)
+
+        self.assertTrue(charts)
+        for name in [*charts, *NOT_A_CHARTS_TAG]:
+            with self.subTest(name=name):
+                self.assertFalse(any(fnmatch.fnmatchcase(name, p) for p in patterns))
+
+    def test_the_terraform_lock_refresh_is_off_and_the_others_are_not(self) -> None:
+        terraform = self.config["terraform"]
+
+        self.assertEqual(terraform["lockFileMaintenance"], {"enabled": False})
+        self.assertIn("provider", terraform["description"])
+        self.assertEqual(set(terraform), {"description", "lockFileMaintenance"})
+        self.assertEqual(
+            self.config["lockFileMaintenance"],
+            {"enabled": True, "schedule": ["* * 1 * *"]},
+        )
+
+    def test_the_envoy_gateway_chart_waits_a_week_like_the_other_charts(self) -> None:
+        pins = (ROOT / PINS).read_text(encoding="utf-8")
+        rules = self.config["packageRules"]
+        week = rules[0]
+        (chart,) = [
+            r
+            for r in rules
+            if "envoyproxy/gateway-helm" in r.get("matchPackageNames", [])
+        ]
+
+        # The chart is read with the docker datasource, which the week's rule lacks.
+        self.assertIn(
+            "# renovate: datasource=docker depName=envoyproxy/gateway-helm\n", pins
+        )
+        self.assertNotIn("docker", week["matchDatasources"])
+        self.assertEqual(chart["matchDatasources"], ["docker"])
+        self.assertEqual(chart["minimumReleaseAge"], week["minimumReleaseAge"])
+        self.assertEqual(chart["matchUpdateTypes"], ["major", "minor", "patch"])
+
+    def test_the_notes_say_a_chart_s_pull_request_moves_its_image_tags_by_hand(
+        self,
+    ) -> None:
+        rules = self.config["packageRules"]
+        for group in ("kind platform", "cert-manager", "prometheus image"):
+            (rule,) = [r for r in rules if r.get("groupName") == group]
+            note = " ".join(rule["prBodyNotes"])
+            with self.subTest(group=group):
+                self.assertIn("by hand", note)
+                self.assertNotIn("A tag Renovate proposes", note)
 
     def test_the_expressions_stay_within_what_renovate_s_engine_reads(self) -> None:
         # RE2 has no lookaround and no backreference; Python would accept both.
