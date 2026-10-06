@@ -671,6 +671,14 @@ class SplitTables(TreeCase):
         self.assertEqual(len(found), 1, found)
         self.assertIn("docs/notes.md:9", found[0])
 
+    def test_an_unclosed_fence_hides_a_cut_row_to_the_end_of_the_file(self):
+        for fence in ("```", "~~~"):
+            with self.subTest(fence=fence):
+                self.write(
+                    "docs/notes.md", f"{fence}\n{self.TABLE}\n| 3 | 4 |\n| 5 | 6 |\n"
+                )
+                self.assertEqual(self.failures(), [])
+
     def test_a_row_after_a_fence_that_follows_a_table_is_not_cut_off(self):
         # The line above the blank line is a fence marker, not a table row.
         self.write("docs/notes.md", f"{self.TABLE}```\ncode\n```\n\n| 3 | 4 |\n")

@@ -210,8 +210,12 @@ known.
   `.claude/lanes.md` (not tracked): `Target: N` and a table `Lane | Step | Out
   now | Idle because | Next`. The `Stop` hook `check-lanes.sh` blocks the stop
   once, naming a lane with nothing out and no reason, or saying fewer than
-  `Target` run (a lane with a reason does not count as running). It reads
-  that file only and cannot tell a true "out now" from a false one.
+  `Target` run (a lane with a reason does not count as running), or saying
+  the board is not one it can read (a cell may not hold `|`). It reads that
+  file only and cannot tell a true "out now" from a false one. It is Claude
+  Code's only (Codex's hooks file has no `Stop` entry), it checks once per
+  turn (a second stop in the same turn passes), and a session started in a
+  fresh worktree has no board and so no check.
 - **A hook that names files a shell command rewrote.** The edit gate and
   the lint, boundary and docs hooks see only what the Edit and Write tools
   change, and an implementer told to use them sometimes used `sed -i` or a

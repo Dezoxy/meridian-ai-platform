@@ -260,50 +260,144 @@ class Lanes(unittest.TestCase):
         self.write(board(IDLE))
         self.reason({"agent_id": ""})
 
-    # A board it cannot read must not trap a session --------------------------
+    # A board it cannot read is said to the session, once -----------------------
 
-    def assertUnreadable(self, run: Run) -> None:
-        self.assertPasses(run)
-        notes = run.stderr.strip().splitlines()
-        self.assertEqual(len(notes), 1, run.stderr)
-        self.assertIn("lanes.md", notes[0])
+    UNREADABLE = "is not a board the hook can read"
 
-    def test_a_row_with_too_few_cells_is_a_note_and_a_pass(self) -> None:
+    def assertUnreadable(self, why: str, event: dict | None = None) -> str:
+        """The block's reason for a board that is not one; the second stop passes."""
+        reason = self.reason(event)
+        self.assertIn(self.UNREADABLE, reason)
+        self.assertIn("lanes.md", reason)
+        self.assertIn(why, reason)
+        self.assertIn("'|'", reason, "the reason must say a cell may not hold a pipe")
+        self.assertPasses(self.here({"stop_hook_active": True}))
+        return reason
+
+    def test_a_row_with_too_few_cells_is_said_and_blocks_once(self) -> None:
         self.write(board(RUNNING, "| 3 | S003 | |\n"))
-        self.assertUnreadable(self.here())
+        self.assertUnreadable("a row has 3 cells, not 5")
 
-    def test_a_row_with_too_many_cells_is_a_note_and_a_pass(self) -> None:
+    def test_a_row_with_too_many_cells_is_said_and_blocks_once(self) -> None:
         self.write(board(IDLE, "| 3 | S003 | | | | extra |\n"))
-        self.assertUnreadable(self.here())
+        self.assertUnreadable("a row has 6 cells, not 5")
 
-    def test_a_table_without_the_five_columns_is_a_note_and_a_pass(self) -> None:
+    def test_a_pipe_inside_a_cell_is_said_and_blocks_once(self) -> None:
+        for cell in ("a | b", r"a \| b", "`a | b`"):
+            with self.subTest(cell=cell):
+                self.write(board(RUNNING, f"| 3 | S003 | {cell} | | |\n"))
+                self.assertUnreadable("a row has 6 cells, not 5")
+
+    def test_a_second_table_of_another_shape_is_said_and_blocks_once(self) -> None:
+        legend = "\n| Word | Meaning |\n|---|---|\n| out | an agent is out |\n"
+        self.write(board(RUNNING) + legend)
+        self.assertUnreadable("a row has 2 cells, not 5")
+
+    def test_a_table_without_the_five_columns_is_said_and_blocks_once(self) -> None:
         self.write("| Lane | Step | Notes |\n|---|---|---|\n| 1 | S001 | x |\n")
-        self.assertUnreadable(self.here())
+        self.assertUnreadable("the first table is not Lane | Step")
 
-    def test_columns_in_another_order_are_a_note_and_a_pass(self) -> None:
-        header = "| Lane | Step | Idle because | Out now | Next |\n|---|---|---|---|---|\n"
+    def test_columns_in_another_order_are_said_and_blocks_once(self) -> None:
+        header = (
+            "| Lane | Step | Idle because | Out now | Next |\n|---|---|---|---|---|\n"
+        )
         self.write(header + IDLE)
-        self.assertUnreadable(self.here())
+        self.assertUnreadable("the first table is not Lane | Step")
 
-    def test_a_row_before_any_header_is_a_note_and_a_pass(self) -> None:
+    def test_a_row_before_any_header_is_said_and_blocks_once(self) -> None:
         self.write(IDLE + HEADER)
-        self.assertUnreadable(self.here())
+        self.assertUnreadable("the first table is not Lane | Step")
 
-    def test_a_target_that_is_not_a_number_is_a_note_and_a_pass(self) -> None:
-        self.write(board(IDLE, prose="Target: many\n"))
-        self.assertUnreadable(self.here())
+    def test_a_target_that_is_not_a_number_is_said_and_blocks_once(self) -> None:
+        for line in ("Target: many", "Target: the plan", "Target:"):
+            with self.subTest(line=line):
+                self.write(board(IDLE, prose=line + "\n"))
+                self.assertUnreadable("Target is not a number")
 
-    def test_binary_content_is_a_pass(self) -> None:
+    def test_a_target_of_eight_digits_is_said_and_blocks_once(self) -> None:
+        self.write(board(RUNNING, prose="Target: 12345678\n"))
+        self.assertUnreadable("Target is too large")
+
+    def test_a_bold_target_is_read_as_a_target(self) -> None:
+        for line in ("**Target:** 3", "**Target**: 3", "__Target:__ 3"):
+            with self.subTest(line=line):
+                self.write(board(RUNNING, prose=line + "\n\n"))
+                self.assertIn("1 of 3", self.reason())
+
+    def test_a_bold_target_that_is_not_a_number_is_not_ignored(self) -> None:
+        self.write(board(RUNNING, prose="**Target:** many\n\n"))
+        self.assertUnreadable("Target is not a number")
+
+    def test_binary_content_with_no_table_is_a_pass(self) -> None:
+        self.write(b"\x00\xff\xfe not | a | board\x00\nmore bytes \xc3\n")
+        self.assertPasses(self.here())
+
+    def test_binary_content_around_a_row_is_said_and_blocks_once(self) -> None:
         self.write(b"\x00\xff\xfe| not | a | board\x00\n| 1 | 2 | 3 | 4 | 5 |\n")
-        run = self.here()
-        self.assertEqual(run.returncode, 0)
-        self.assertEqual(run.stdout, "")
+        self.assertUnreadable("the first table is not Lane | Step")
 
     def test_input_that_is_not_json_is_a_note_and_a_pass(self) -> None:
         self.write(board(IDLE))
         run = self.here("this is not json")
         self.assertPasses(run)
         self.assertEqual(len(run.stderr.strip().splitlines()), 1)
+
+    def test_empty_input_and_null_are_not_json_events_and_pass(self) -> None:
+        self.write(board(IDLE))
+        for payload in ("", "  \n", "null", "[]", '"x"', "7", "true"):
+            with self.subTest(payload=payload):
+                run = self.here(payload)
+                self.assertPasses(run)
+                self.assertEqual(len(run.stderr.strip().splitlines()), 1)
+
+    # Rows that look like something else ---------------------------------------
+
+    def test_a_repeated_header_row_is_not_a_lane(self) -> None:
+        again = HEADER + IDLE_WITH_REASON
+        self.write(board(RUNNING, target=2) + "\n" + again)
+        self.assertIn("1 of 2", self.reason())
+
+    def test_a_second_table_of_the_same_shape_is_read_without_its_delimiter(
+        self,
+    ) -> None:
+        self.write(board(RUNNING, target=2) + "\n" + HEADER + RUNNING_TOO)
+        self.assertPasses(self.here())
+
+    def test_a_row_of_five_dashes_is_an_idle_lane_not_a_delimiter(self) -> None:
+        self.write(board(RUNNING, "| - | - | - | - | - |\n"))
+        self.assertIn("lane -", self.reason())
+
+    def test_a_row_of_dashes_in_the_second_place_is_the_delimiter(self) -> None:
+        header = "| Lane | Step | Out now | Idle because | Next |\n"
+        self.write(header + "|-|-|-|-|-|\n")
+        self.assertPasses(self.here())
+
+    # A board that is very large -----------------------------------------------
+
+    def test_a_huge_board_still_gives_a_short_valid_block(self) -> None:
+        rows = [f"| {n} | S{n} | | | |\n" for n in range(1, 20001)]
+        self.write(board(*rows))
+        reason = self.reason()
+        self.assertLess(len(reason), 3000)
+        self.assertIn("lane 1 ", reason)
+        self.assertNotIn("lane 11 ", reason)
+        self.assertIn("19990 more", reason)
+
+    def test_a_few_idle_lanes_are_all_named_and_a_crowd_is_counted(self) -> None:
+        self.write(board(*[f"| {n} | S{n} | | | |\n" for n in range(1, 11)]))
+        reason = self.reason()
+        self.assertIn("lane 10 ", reason)
+        self.assertNotIn("more", reason)
+        self.write(board(*[f"| {n} | S{n} | | | |\n" for n in range(1, 13)]))
+        reason = self.reason()
+        self.assertNotIn("lane 11 ", reason)
+        self.assertIn("2 more", reason)
+
+    def test_a_very_long_lane_name_is_cut_before_it_reaches_the_reason(self) -> None:
+        self.write(board(f"| {'é' * 300000} | {'s' * 300000} | | | |\n"))
+        reason = self.reason()
+        self.assertLess(len(reason), 3000)
+        self.assertIn("lane ", reason)
 
     def test_a_board_file_that_cannot_be_read_is_a_pass(self) -> None:
         self.write(board(IDLE))

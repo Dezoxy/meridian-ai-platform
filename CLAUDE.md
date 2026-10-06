@@ -214,10 +214,13 @@ A change that violates one is wrong even if it works.
   Codex runs the shell hooks through `.codex/hooks.json`; GateGuard, the session
   hooks and the slash commands are Claude Code only. Open `/hooks` once
   after a fresh clone to activate them. `check-lanes.sh`, a synchronous
-  `Stop` hook, blocks the stop once when the untracked board
-  `.claude/lanes.md` shows a lane idle with no reason or fewer lanes running
-  than its `Target`; it checks what the session wrote on the board, not
-  whether an agent is really out. `check-shell-edits.sh`, an advisory
+  `Stop` hook (Claude Code only: `.codex/hooks.json` has no `Stop` entry),
+  blocks the stop once per turn when the untracked board `.claude/lanes.md`
+  shows a lane idle with no reason, fewer lanes running than its `Target`,
+  or a table it cannot read (a cell may not hold `|`); it checks what the
+  session wrote on the board, not whether an agent is really out, and a
+  session in a fresh worktree has no board and so no check.
+  `check-shell-edits.sh`, an advisory
   `PostToolUse` hook on Bash, names the tracked files a shell command
   rewrote outside the Edit and Write tools, which the edit hooks never
   see (it needs `bashEditDiffEnabled` in the user settings, not here).
