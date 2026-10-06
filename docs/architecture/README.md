@@ -69,6 +69,7 @@ style of `Designed`.
 - [0003 Build a thin model gateway instead of adopting LiteLLM](decisions/0003-build-a-thin-model-gateway.md)
 - [0004 Prove a service's identity with mutual TLS and cert-manager](decisions/0004-prove-service-identity-with-mutual-tls.md)
 - [0005 Split an agent into workers routed by code, with their own tool lists](decisions/0005-split-an-agent-into-workers-routed-by-code.md)
+- [0006 Map the Azure platform to Google Cloud](decisions/0006-map-the-azure-platform-to-google-cloud.md)
 
 New ADR: copy [templates/adr.md](templates/adr.md) to
 `decisions/NNNN-short-title.md`. Keep this index current; there is
