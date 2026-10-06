@@ -367,7 +367,7 @@ def test_the_check_prints_three_rule_lines_and_the_dashboard_line_when_all_is_we
     ]
     assert lines[3].startswith(
         f'PASS  dashboard: Grafana serves "{HEALTH_TITLE}" (uid {HEALTH_UID}), '
-        "provisioned, with the file's queries; all 9 queries ran in Prometheus"
+        "provisioned, with the file's queries; all 10 queries ran in Prometheus"
     )
     assert any(RULES_PATH in call for call in asked)
 
@@ -591,7 +591,7 @@ def test_the_health_dashboard_runs_every_query_over_an_hour(tmp_path: Path) -> N
     run_alert_rules(tmp_path, asked=asked)
 
     queries = [c.split("query=", 1)[1] for c in asked if "query=" in c]
-    assert len(queries) == len(targets) == 9
+    assert len(queries) == len(targets) == 10
     for query in queries:
         assert "${__range_s}" not in query
     assert len([q for q in queries if "[3600s]" in q]) == 1

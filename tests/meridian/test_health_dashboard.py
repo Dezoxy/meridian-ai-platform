@@ -10,6 +10,7 @@ import json
 import re
 from pathlib import Path
 
+from chartsupport import RATE_STORE, SERVICES
 from servicesupport import REPO_ROOT
 
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS
@@ -37,6 +38,7 @@ GATEWAY_LABELS = {key.replace(".", "_") for key in METRIC_ATTRIBUTE_KEYS} | {
 PANELS = [
     ("What this shows", "text"),
     ("Services available", "stat"),
+    ("Rate store available", "stat"),
     ("Database ready", "stat"),
     ("Since the sweep last succeeded", "stat"),
     ("Model calls answered", "stat"),
@@ -47,6 +49,9 @@ PANELS = [
     ("Refused and failed calls per 5 minutes by reason", "timeseries"),
 ]
 GRID_COLUMNS = 24
+# The six services the first figure counts, by the name of their Deployment, in
+# the one alternation its query holds (the chart's list: a rename fails here).
+SERVICE_NAMES = "|".join(SERVICES)
 
 
 def load(file: Path) -> dict:
@@ -110,7 +115,7 @@ def test_the_dashboard_is_json_with_its_own_uid_and_no_id() -> None:
     assert dashboard["templating"]["list"] == []
 
 
-def test_the_dashboard_has_the_ten_panels_in_order() -> None:
+def test_the_dashboard_has_the_eleven_panels_in_order() -> None:
     assert [(p["title"], p["type"]) for p in panels()] == PANELS
 
 
@@ -121,7 +126,7 @@ def test_every_panel_and_target_reads_the_prometheus_datasource_by_uid() -> None
         for target in panel.get("targets", []):
             assert target["datasource"] == PROMETHEUS_DATASOURCE, panel["title"]
     assert [p["type"] for p in panels()].count("text") == 1
-    assert len(targets()) == 9
+    assert len(targets()) == 10
 
 
 def test_no_target_uses_increase_or_rate_or_a_grafana_interval_variable() -> None:
@@ -224,7 +229,12 @@ def test_the_series_panels_group_calls_by_the_outcome_and_reason_labels() -> Non
 
 def test_the_workload_panels_ask_for_the_meridian_namespace() -> None:
     assert expr_of("Services available") == (
-        'sum(kube_deployment_status_replicas_available{namespace="meridian"} > bool 0)'
+        "sum(kube_deployment_status_replicas_available"
+        f'{{namespace="meridian", deployment=~"{SERVICE_NAMES}"}} > bool 0)'
+    )
+    assert expr_of("Rate store available") == (
+        "sum(kube_deployment_status_replicas_available"
+        f'{{namespace="meridian", deployment="{RATE_STORE}"}} > bool 0)'
     )
     assert expr_of("Database ready") == (
         'sum(kube_pod_status_ready{namespace="meridian", '
@@ -258,9 +268,11 @@ def test_the_table_reads_the_firing_alerts_of_the_platform() -> None:
 
 
 def test_the_stat_thresholds_turn_on_the_boundary_the_contract_names() -> None:
-    # Six services in the namespace: red below 6, green at 6. Red below one
-    # database pod. Amber over 600 seconds, red over 900, since the sweep ran.
+    # Six services, named in the query: red below 6, green at 6. The rate store
+    # is 1 or nothing: red below 1. Red below one database pod. Amber over 600
+    # seconds, red over 900, since the sweep ran.
     assert threshold_steps("Services available") == [("red", None), ("green", 6)]
+    assert threshold_steps("Rate store available") == [("red", None), ("green", 1)]
     assert threshold_steps("Database ready") == [("red", None), ("green", 1)]
     assert threshold_steps("Since the sweep last succeeded") == [
         ("green", None),
@@ -287,10 +299,11 @@ def test_the_panels_fit_the_24_column_grid_without_overlap() -> None:
             assert apart, (a, b)
     widths = [(b["y"], b["w"]) for b in boxes]
     assert widths[0][1] == GRID_COLUMNS
-    assert [w for _, w in widths[1:5]] == [6, 6, 6, 6]
-    assert len({y for y, _ in widths[1:5]}) == 1
-    assert widths[5][1] == GRID_COLUMNS
-    assert [w for _, w in widths[6:]] == [12, 12, 12, 12]
+    assert [w for _, w in widths[1:6]] == [5, 4, 5, 5, 5]
+    assert len({y for y, _ in widths[1:6]}) == 1
+    assert sum(w for _, w in widths[1:6]) == GRID_COLUMNS
+    assert widths[6][1] == GRID_COLUMNS
+    assert [w for _, w in widths[7:]] == [12, 12, 12, 12]
     assert [b["y"] for b in boxes] == sorted(b["y"] for b in boxes)
 
 
@@ -320,3 +333,39 @@ def test_the_folder_holds_two_dashboards_with_distinct_uids_and_configmap_names(
     assert len(set(uids)) == len(set(names)) == 2
     for name in names:
         assert re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", name), name
+
+
+def test_the_services_figure_counts_the_six_by_name_and_not_the_rate_store() -> None:
+    expr = expr_of("Services available")
+    (alternation,) = re.findall(r'deployment=~"([^"]*)"', expr)
+    named = alternation.split("|")
+
+    assert sorted(named) == sorted(SERVICES)
+    assert len(named) == 6
+    assert RATE_STORE not in named
+    # The figure's green threshold is the number of services it names.
+    assert threshold_steps("Services available")[-1] == ("green", len(named))
+    description = panel_titled("Services available")["description"]
+    assert "Six when every one of the six" in description
+    assert "rate store" in description
+
+
+def test_the_rate_store_figure_says_what_one_means_and_what_its_loss_costs() -> None:
+    panel = panel_titled("Rate store available")
+    services = panel_titled("Services available")
+
+    assert panel["description"] == (
+        "1 when the rate store is up; the gateway refuses every model call without it"
+    )
+    assert panel["type"] == "stat"
+    assert panel["gridPos"]["y"] == services["gridPos"]["y"]
+    # Beside the services' figure: the next panel in the row.
+    order = [p["title"] for p in panels()]
+    assert order.index("Rate store available") == order.index("Services available") + 1
+    assert panel["gridPos"]["x"] == services["gridPos"]["x"] + services["gridPos"]["w"]
+
+
+def test_the_panel_ids_are_unique() -> None:
+    ids = [p["id"] for p in panels()]
+
+    assert len(ids) == len(set(ids))

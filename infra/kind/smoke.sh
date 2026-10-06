@@ -500,7 +500,7 @@
 #                 by hand, in docs/operations/README.md), that a threshold is
 #                 right, or that anyone would be told (kind has no
 #                 Alertmanager). It adds one request for the rules, one for
-#                 the dashboard and its nine queries: a few seconds.
+#                 the dashboard and its ten queries: a few seconds.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 

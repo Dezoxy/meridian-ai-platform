@@ -103,6 +103,9 @@ database:
   # The ingestion Job's role (knowledge_ingest): the knowledge chunks, and one
   # insert-only row of the audit log.
   ingestSecret: knowledge-ingest-db
+  # The upkeep Job's role (gateway_upkeep): three functions of the ledger, no
+  # table. Only that Job holds it; the release's workloads never do.
+  upkeepSecret: gateway-upkeep-db
   # The CA that signed the database's certificate. The Secret also holds the
   # CA's private key, so the pods mount only ca.crt.
   caSecret: platform-db-ca
@@ -428,6 +431,30 @@ jobs:
     env:
       - name: MERIDIAN_GATEWAY_URL
         serviceUrl: model-gateway
+    resources: *jobResources
+
+  # The Model Gateway's upkeep command (S066): `meridian gateway` with `args`
+  # after it, as the role gateway_upkeep (database.upkeepSecret), for one run
+  # of one operator's change (close a reservation, credit a tenant, expire a
+  # month, or list the open reservations). Off, and never part of the release:
+  # `make gateway-upkeep ARGS="..."` (infra/kind/upkeep.sh) turns it on for one
+  # `helm template`, gives the run a suffix of its own and applies the result
+  # outside the release. Nothing schedules it: retention is the owner's call.
+  #   args       a list of strings, the subcommand and its arguments; the chart
+  #              refuses an empty list and renders each as a YAML string
+  #   runSuffix  a DNS label of at most 32 characters that ends the Job's name,
+  #              so a second run is a new Job (the image's tag does not change)
+  upkeep:
+    enabled: false
+    command: [meridian, gateway]
+    args: []
+    runSuffix: ""
+    # A failed change is read, not repeated blind.
+    backoffLimit: 0
+    # One connection and one transaction: a hung connection ends the Job.
+    activeDeadlineSeconds: 120
+    # A day: what keeps the output (and a refusal) for the morning after.
+    ttlSecondsAfterFinished: 86400
     resources: *jobResources
 
 # What the namespace may do on the network (templates/networkpolicy.yaml). The

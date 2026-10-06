@@ -65,11 +65,6 @@ set -euo pipefail
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-REPO_ROOT="$(cd "${KIND_DIR}/../.." && pwd)"
-readonly REPO_ROOT
-readonly CHART_DIR="${REPO_ROOT}/infra/helm/meridian"
-readonly VALUES_FILE="${KIND_DIR}/values/meridian.yaml"
-readonly RELEASE=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
 # The ClusterIssuer of kind's values (identity.issuer.name), made by `make up`.
@@ -191,7 +186,7 @@ require_issuer() {
 approver_error=""
 readonly APPROVER_ERROR_LENGTH=300
 
-# one_line TEXT: TEXT on one line: printable ASCII only (printable_ascii, below),
+# one_line TEXT: TEXT on one line: printable ASCII only (printable_ascii, common.sh),
 # line breaks and runs of blanks squeezed to one blank, trimmed, cut short.
 one_line() {
   printable_ascii <<<"$1" | tr '\n' ' ' | tr -s ' ' |
@@ -269,44 +264,12 @@ build_image() {
   log "image ${image} loaded into cluster ${CLUSTER_NAME}"
 }
 
-# helm_chart VERB [ARGUMENT...]: `helm VERB` on the release's chart with what
-# every call shares: the release, the chart, the namespace, kind's values and
-# the image just built (--set-string: twelve hex digits can be all digits, which
-# --set would turn into a number) and the rate store's pinned image (S066: kind's
-# values turn the store on and name no image, so the pin has one place). The
-# tests render the chart with these same arguments
-# (tests/meridian/chartsupport.py).
-helm_chart() {
-  local verb="$1"
-  shift
-  helmc "${verb}" "${RELEASE}" "${CHART_DIR}" --namespace "${NAMESPACE}" -f "${VALUES_FILE}" --set-string "image.repository=${IMAGE_REPOSITORY}" --set-string "image.tag=${tag}" --set-string "rateStore.image=${RATE_STORE_IMAGE}" "$@"
-}
-
 # render_job NAME: the manifest of the Job `migrate`, `seed` or `ingest` with
 # its ServiceAccount, from the chart with that Job's flag on. The release never
 # holds a Job: deploy.sh applies each one itself.
 render_job() {
   local name="$1"
   helm_chart template --set "jobs.${name}.enabled=true" --show-only "templates/job-${name}.yaml"
-}
-
-# job_state NAME: "succeeded", "failed" or "running", from the Job's conditions.
-job_state() {
-  kctl -n "${NAMESPACE}" get job "$1" -o json |
-    jq -r 'if any(.status.conditions[]?; .type == "Complete" and .status == "True") then "succeeded"
-           elif any(.status.conditions[]?; .type == "Failed" and .status == "True") then "failed"
-           else "running" end'
-}
-
-# printable_ascii: stdin without any byte that is not printable ASCII or a
-# newline, and with anything that looks like a PostgreSQL URL (postgres:// or
-# postgresql:// up to the next whitespace) replaced by postgresql://[redacted].
-# A Job's log can quote data of a checkout (a manifest key, a database message),
-# and an escape sequence in it must not reach the terminal; a driver's error can
-# quote the connection string, and its password must not reach the log.
-printable_ascii() {
-  LC_ALL=C tr -cd '[:print:]\n' |
-    sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://[redacted]#g'
 }
 
 # run_job NAME CHART_JOB: the Job NAME, rendered by render_job CHART_JOB, run to

@@ -1576,7 +1576,7 @@ def test_a_succeeded_job_with_no_chunks_or_no_answer_ingests_again(count: str) -
 
 def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
     body = function_body(DEPLOY_SH, "run_job")
-    filter_body = function_body(DEPLOY_SH, "printable_ascii")
+    filter_body = function_body(COMMON_SH, "printable_ascii")
     log_reads = re.findall(r"^.*logs \"job/\$\{job\}\".*$", body, re.MULTILINE)
 
     # The success line and both failure paths (a verdict and the timeout): a
@@ -1591,7 +1591,7 @@ def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
 def test_the_printable_ascii_filter_drops_escapes_and_other_bytes() -> None:
     hostile = "ok \\033[31mred\\033[0m\\tcaf\\303\\251\\r\\nnext\\n"
     script = (
-        function_definition(DEPLOY_SH, "printable_ascii")
+        function_definition(COMMON_SH, "printable_ascii")
         + f"printf '{hostile}' | printable_ascii"
     )
 
@@ -1610,7 +1610,7 @@ def test_the_printable_ascii_filter_redacts_a_postgresql_connection_string() -> 
         "plain line",
     )
     script = (
-        function_definition(DEPLOY_SH, "printable_ascii")
+        function_definition(COMMON_SH, "printable_ascii")
         + "printf '%s\\n' "
         + " ".join(f"'{line}'" for line in lines)
         + " | printable_ascii"

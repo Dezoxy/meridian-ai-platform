@@ -317,10 +317,11 @@ def test_helm_lint_strict_fails_without_the_image_so_the_check_can_fail() -> Non
 
 
 def chart_flags(text: str) -> list[str]:
-    """The words of the ``helmc`` call in deploy.sh's ``helm_chart`` function
-    for ``helm template``, with the script's variables (read from the script
-    and from common.sh, where the image's repository is shared with images.sh)
-    replaced by their values."""
+    """The words of the ``helmc`` call in ``helm_chart`` (in common.sh since
+    S066, which deploy.sh and upkeep.sh share) for ``helm template``, with the
+    script's variables (read from the script and from common.sh, where the
+    chart, the values file and the image's repository are shared) replaced by
+    their values."""
     common = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
     constants = {
         name: value.strip('"')
@@ -339,7 +340,7 @@ def chart_flags(text: str) -> list[str]:
         "tag": TEST_TAG,
         "verb": "template",
     }
-    (call,) = re.findall(r"^  helmc .*$", function_body(text, "helm_chart"), re.M)
+    (call,) = re.findall(r"^  helmc .*$", function_body(common, "helm_chart"), re.M)
     words = shlex.split(call.removeprefix("  helmc ").replace('"$@"', ""))
     expanded: list[str] = []
     for word in words:
@@ -365,10 +366,15 @@ def test_deploy_passes_helm_the_arguments_the_chart_tests_render_with() -> None:
     assert '--set "jobs.${name}.enabled=true"' in body
     assert '--show-only "templates/job-${name}.yaml"' in body
     # Every Job flag the tests set is one deploy.sh can set, and the three
-    # templates are the three files the chart has.
+    # templates are the files the chart has, beside the upkeep Job's (S066),
+    # which infra/kind/upkeep.sh applies outside the release and deploy.sh never
+    # does (test_kind_upkeep_script.py).
     assert {p.name for p in (CHART_DIR / "templates").glob("job-*.yaml")} == {
-        f"job-{name}.yaml" for name in JOBS
+        *(f"job-{name}.yaml" for name in JOBS),
+        "job-upkeep.yaml",
     }
+    assert "jobs.upkeep" not in DEPLOY_SH
+    assert 'run_job "meridian-upkeep' not in DEPLOY_SH
 
 
 def workflow_steps() -> list[dict]:
@@ -419,6 +425,11 @@ def test_make_helm_lint_lints_the_chart_strictly_with_kinds_values_and_every_job
     assert "image.tag=" in recipe
     for name in JOBS:
         assert f"jobs.{name}.enabled=true" in recipe
+    # The upkeep Job (S066) needs an argument and a run suffix to render at all:
+    # lint it with one of each, the way upkeep.sh passes them.
+    assert "jobs.upkeep.enabled=true" in recipe
+    assert "--set-string jobs.upkeep.runSuffix=" in recipe
+    assert "--set-json 'jobs.upkeep.args=[\"reservations\"]'" in recipe
 
 
 # ---------------------------------------------------------------------------

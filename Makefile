@@ -87,7 +87,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -275,6 +275,10 @@ demo: deploy
 smoke:
 	infra/kind/smoke.sh
 
+## gateway-upkeep  run the Model Gateway's upkeep command on kind as a Job of its own, under its own database role, and print its output; ARGS is the subcommand and its arguments, letters, digits and . _ = - only: make gateway-upkeep ARGS="reservations --older-than 15" (also close ATTEMPT_ID --reason SLUG, credit TENANT --tokens N --reason SLUG, expire --before YYYY-MM --reason SLUG); reservations, and expire without --confirm, only read, every other subcommand changes the ledger (needs make up and make deploy)
+gateway-upkeep:
+	infra/kind/upkeep.sh
+
 ## grafana         port-forward Grafana to http://127.0.0.1:3000 (Ctrl-C stops it)
 grafana:
 	infra/kind/grafana.sh forward
@@ -283,9 +287,9 @@ grafana:
 grafana-password:
 	@infra/kind/grafana.sh password
 
-## helm-lint       lint the Meridian chart strictly, with kind's values (the rate store on, with the image of PYTEST_REDIS_IMAGE: the pin in infra/kind/pins.env is the same one) and every Job on (needs helm)
+## helm-lint       lint the Meridian chart strictly, with kind's values (the rate store on, with the image of PYTEST_REDIS_IMAGE: the pin in infra/kind/pins.env is the same one) and every Job on, the upkeep Job with one argument (needs helm)
 helm-lint:
-	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
+	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
 
 ## down            delete the kind cluster "meridian" and its credentials file (destructive; for a test that needs a fresh cluster, never to clear a fault; hard rule 8)
 down:

@@ -190,9 +190,10 @@ Read the second query's `state` column:
 
 Status: implemented (S066) and tested against PostgreSQL; it has not run
 on a cluster. On kind: the role and its Secret `gateway-upkeep-db` are
-declared (`make up` creates both; implemented, not yet read on the cluster),
-and no workload holds that Secret. How the command is run there, with the
-Secret's `uri` as its credential, is designed, with the step's second half.
+declared (`make up` creates both), no workload of the release holds that
+Secret, and `make gateway-upkeep` runs the command as a Job of its own
+(below, "On kind, as a Job"): implemented and tested without a cluster (stub
+commands and the real chart), not yet run on kind.
 
 `meridian gateway` is the supported way to close a reservation, credit a
 tenant or remove old ledger rows. It connects as the database role
@@ -269,7 +270,69 @@ meridian gateway expire --before YYYY-MM --reason old-months --confirm
 (a typed one is kept in the shell's history and shown in the process list).
 Set `MERIDIAN_GATEWAY_UPKEEP_DATABASE_URL` from the store, and ask for
 `sslmode=verify-full` in it: without it the client does not verify the
-server it reaches.
+server it reaches. On kind you do not handle it: the Job below reads it from
+the Secret.
+
+**On kind, as a Job.** `make gateway-upkeep` runs the command in a pod of the
+cluster, under the role, and prints what the command printed. It needs `make
+up` (the Secret) and `make deploy` (the image: the Job runs the image the
+release runs, so the command is the deployed one's). `ARGS` is the subcommand
+and its arguments, as you would type them after `meridian gateway`:
+
+```sh
+make gateway-upkeep ARGS="reservations --older-than 30"
+make gateway-upkeep ARGS="close ATTEMPT_ID --reason dead-process"
+make gateway-upkeep ARGS="close ATTEMPT_ID --reason dead-process --release"
+make gateway-upkeep ARGS="credit TENANT --tokens 50000 --reason retry-loop"
+make gateway-upkeep ARGS="credit TENANT --eur 1.5 --reason retry-loop"
+make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months"
+make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months --confirm"
+```
+
+The first reads and writes no audit row; so does `expire` without `--confirm`,
+which only counts. Every other line changes the ledger and writes one.
+
+What `ARGS` may hold. The script splits it on blanks into a list and reads no
+word of it as shell. Each word is letters, digits, `.`, `_`, `=` and `-` only,
+which is every slug, number, date and ID the command takes; a word with a
+quote, a backslash, a `$`, a backtick, a glob or shell character (`*`, `;`,
+`|`, `&`, `(`, `<` and the rest), a non-ASCII letter or a newline is refused
+before the cluster is asked anything, and the refusal shows the word. Make
+itself expands `$(...)` and `$$` in a value given on its command line before
+the script sees it; what reaches the script is checked the same way. The words
+reach Helm as one JSON list, and the pod runs `meridian gateway` followed by
+them as separate arguments: there is no shell in the Job.
+
+What you see. The script prints the Job's name, waits (at most three minutes;
+the Job's own deadline is two), then prints the command's output and exits:
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The Job succeeded; the output is the command's. |
+| 1 | The Job failed: the command refused (`ERROR GUnnn ...`, which changed nothing) or failed, or it was given a usage error (the command's own code is 2 then), and the output above the last line says which. Or the Job did not finish, or `make up` or `make deploy` is missing: the last line, which starts `error:`, says what to run. |
+
+A refusal is a Failed Job and is not retried (`backoffLimit: 0`): read it, fix
+the arguments and run again. A second run is a second Job (its name ends in the
+run's time and process number, not in the image's tag), so a run never meets
+the last one's leftovers, and nothing deletes one.
+
+Where the output is kept. The Job and its pod stay for a day
+(`ttlSecondsAfterFinished: 86400`), whether it succeeded or failed:
+`kubectl -n meridian logs job/NAME` reads the output again, and `kubectl -n
+meridian get jobs -l app.kubernetes.io/name=meridian-upkeep` lists the runs.
+Its ServiceAccount and NetworkPolicy stay (they hold no secret); the Job is the
+only object that holds the Secret, and only the Job's own pod reads it. The
+script never prints the connection string, never puts it on a command line and
+passes the Job's output through the filter `make deploy` uses for its Jobs.
+
+Seeing the audit row afterwards: the output names what was done (the IDs, the
+counts and the amounts), and the audit row is the database's record of it. On
+kind the one way to read `audit.events` is the read-only `psql` in the
+database's own pod that
+[the operations index](../README.md#looking-into-the-database-on-kind)
+describes, with the query under "Every change leaves an audit row" below: it
+is a privileged read the platform does not record, and no other path to those
+rows exists yet.
 
 **Every change leaves an audit row**, written by the function in the
 transaction of the change, with the database role `gateway_upkeep`, the
