@@ -201,6 +201,7 @@ node image, Kubernetes components and the platform).
 |---|---|
 | `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` or `unused` by the pod templates of the namespace's Deployments, CronJobs and Jobs, with the counts and the size Docker reports for the unused ones, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no cluster it lists the engine's images, all unused; a cluster that does not answer is an error. Tested against stub commands; not yet run on a cluster. |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross and its span counts have settled (unchanged for three readings, six seconds). |
@@ -384,7 +385,12 @@ In order, `make deploy`:
    predates S056, a look at the pod (`kubectl -n cert-manager get pods`) for
    one that has it and shows it restarting. (Tested against stub commands;
    not yet seen on a cluster.)
-2. Builds and loads the image.
+2. Builds and loads the image, tagged `meridian:<first 12 hex of its ID>`. A
+   deploy of a changed tree leaves the previous image in the Docker engine
+   and in the node, and images stay there until a person removes them.
+   `make images` lists them, each marked in use or unused by a workload, and
+   prints the commands that would remove the unused ones; it removes nothing.
+   (Tested against stub commands; not yet run on a cluster.)
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
    `meridian_owner`. Only the three Jobs read that Secret. The script renders
@@ -394,7 +400,10 @@ In order, `make deploy`:
    before anything else is applied; on failure the script prints the Job's
    log and exits non-zero. They run on every deploy (a Job of the same tag is
    deleted first; the runner skips what is applied and the seed mirrors its
-   source, so a rerun takes seconds) and end after 300 seconds at most. The
+   source, so a rerun takes seconds) and end after 300 seconds at most. A
+   finished migrate or seed Job removes itself an hour later
+   (`ttlSecondsAfterFinished: 3600`); only the ingestion Job of the image in
+   use stays (step 5). The
    seed comes before the services because a claim that meets an empty policy
    table gets a stored proposal "policy not found", and a stored proposal is
    final.

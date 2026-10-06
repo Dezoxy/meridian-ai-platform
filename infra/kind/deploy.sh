@@ -55,7 +55,6 @@ readonly REPO_ROOT
 readonly CHART_DIR="${REPO_ROOT}/infra/helm/meridian"
 readonly VALUES_FILE="${KIND_DIR}/values/meridian.yaml"
 readonly RELEASE=meridian
-readonly IMAGE_REPOSITORY=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
 # The ClusterIssuer of kind's values (identity.issuer.name), made by `make up`.

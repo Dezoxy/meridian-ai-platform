@@ -308,14 +308,16 @@ def test_helm_lint_strict_fails_without_the_image_so_the_check_can_fail() -> Non
 
 def chart_flags(text: str) -> list[str]:
     """The words of the ``helmc`` call in deploy.sh's ``helm_chart`` function
-    for ``helm template``, with the script's variables (read from the script)
+    for ``helm template``, with the script's variables (read from the script
+    and from common.sh, where the image's repository is shared with images.sh)
     replaced by their values."""
+    common = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
     constants = {
         name: value.strip('"')
         for name, value in re.findall(
             r"^readonly (NAMESPACE|IMAGE_REPOSITORY|RELEASE|CHART_DIR|VALUES_FILE)"
             r"=(.*)$",
-            text,
+            text + common,
             re.MULTILINE,
         )
     }

@@ -163,7 +163,7 @@ tests/              tests for the scripts and the bash guard
 pyproject.toml      uv project: Python 3.13, the meridian command, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
 Dockerfile          one image for the six services, the migrations, the policy seed, the ingestion and the scheduled sweep; .dockerignore allowlists its context
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, pytest-db, eval, registry, synthetic, up, deploy, demo, smoke, grafana, down, azure-*
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, pytest-db, eval, registry, synthetic, up, deploy, images, demo, smoke, grafana, down, azure-*
 ```
 
 Planned, milestone by milestone: OpenAPI documents under `api/` and the
@@ -189,6 +189,7 @@ uv run meridian workload new NAME  # scaffold a workload into this checkout: a g
 make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl, helm, jq)
 make demo     # build the image, migrate, seed, deploy the six services, ingest the wordings, post a claim, find its trace in Tempo; decide it when it waits for an adjuster (DECISION=reject)
 make smoke    # edge, pgvector, one call per tool server through the runtime's client, a test trace, log and metric read back through Grafana, the cost dashboard with the gateway's series, the adjuster's and claimant's pages, and the scheduled sweep's last run
+make images   # list the meridian:* images in the Docker engine and the kind node that no workload uses, and print the commands that would remove them; removes nothing (Docker, kubectl, jq)
 make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password
 make down     # delete the kind cluster; destructive
 make azure-state  # once: the Terraform state storage in Azure (creates Azure resources)
