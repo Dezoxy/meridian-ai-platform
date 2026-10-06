@@ -39,6 +39,7 @@ AMOUNT_TOO_LARGE = "GU204"
 NOT_A_MONTH = "GU301"
 CURRENT_MONTH = "GU302"
 STILL_RESERVED = "GU303"
+NOTHING_TO_REMOVE = "GU304"
 INSUFFICIENT_PRIVILEGE = "42501"
 
 CLOSE = "SELECT * FROM gateway.close_reservation(%s, %s, %s)"
@@ -52,7 +53,7 @@ INSERT_USAGE = (
     "deployment, provider, model, day, month, reserved_tokens, "
     "reserved_micro_eur, charged_tokens, charged_micro_eur, state, closed_at, "
     "reserved_at) VALUES (%(attempt_id)s, %(call_id)s, %(tenant)s, 'claims-triage', "
-    "%(run_id)s, 'aoai-sdc-gpt-4o', 'azure-openai', 'gpt-4o', %(day)s, %(month)s, "
+    "%(run_id)s, %(deployment)s, 'azure-openai', 'gpt-4o', %(day)s, %(month)s, "
     "%(tokens)s, %(micro_eur)s, %(charged_tokens)s, %(charged_micro_eur)s, "
     "%(state)s, CASE WHEN %(state)s = 'reserved' THEN NULL ELSE now() END, "
     "now() - %(age)s)"
@@ -120,6 +121,7 @@ def plant_usage(
     state: str = "reserved",
     charged: tuple[int, int] | None = None,
     counted: bool = True,
+    deployment: str = "aoai-sdc-gpt-4o",
 ) -> uuid.UUID:
     """A usage row as the gateway left it, written by the owner so that the test
     sets ``reserved_at`` (``age`` before now) and the period.
@@ -140,6 +142,7 @@ def plant_usage(
             "attempt_id": attempt_id,
             "call_id": uuid.uuid4(),
             "tenant": tenant,
+            "deployment": deployment,
             "run_id": uuid.uuid4(),
             "day": day,
             "month": month,

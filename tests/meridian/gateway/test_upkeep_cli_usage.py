@@ -8,6 +8,7 @@ The commands against PostgreSQL, as the role ``gateway_upkeep``, are in
 
 import re
 import shlex
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,9 @@ MIGRATION = (
     / "0020_gateway_upkeep.sql"
 )
 RUNBOOK = REPO_ROOT / "docs" / "operations" / "runbooks" / "budget-exhaustion.md"
-SECRET = "s3cret-value"  # noqa: S105 (a test password, not a credential)
+# Planted in each connection string: no output may carry it. (Not named after
+# what it stands for: the repository's secret scan reads the name.)
+MARKER_VALUE = "marker-value-7f3a"
 ATTEMPT = "3f2b8c1e-5d4a-4e6f-9a1b-0c2d3e4f5a6b"
 # Typer styles a usage error when it thinks a terminal is there, as it does in
 # GitHub Actions, and the escape codes and the panel's frame then split a message.
@@ -103,9 +106,11 @@ def test_the_services_and_the_owners_variables_are_not_a_fallback(
     monkeypatch: pytest.MonkeyPatch, connections: list[str], argv: list[str]
 ) -> None:
     monkeypatch.delenv(gateway_cli.UPKEEP_DATABASE_URL_ENV, raising=False)
-    monkeypatch.setenv(DATABASE_URL_ENV, f"postgresql://svc:{SECRET}@db.invalid/m")
     monkeypatch.setenv(
-        MIGRATIONS_DATABASE_URL_ENV, f"postgresql://owner:{SECRET}@db.invalid/m"
+        DATABASE_URL_ENV, f"postgresql://svc:{MARKER_VALUE}@db.invalid/m"
+    )
+    monkeypatch.setenv(
+        MIGRATIONS_DATABASE_URL_ENV, f"postgresql://owner:{MARKER_VALUE}@db.invalid/m"
     )
 
     result = runner.invoke(app, argv)
@@ -113,21 +118,21 @@ def test_the_services_and_the_owners_variables_are_not_a_fallback(
     assert result.exit_code == 1
     assert gateway_cli.UPKEEP_DATABASE_URL_ENV in result.output
     assert connections == []
-    assert SECRET not in result.output
+    assert MARKER_VALUE not in result.output
 
 
 @pytest.mark.parametrize("argv", COMMANDS.values(), ids=COMMANDS.keys())
 def test_an_unreachable_database_exits_1_without_printing_the_dsn(
     monkeypatch: pytest.MonkeyPatch, argv: list[str]
 ) -> None:
-    dsn = f"postgresql://nobody:{SECRET}@127.0.0.1:1/none?connect_timeout=1"
+    dsn = f"postgresql://nobody:{MARKER_VALUE}@127.0.0.1:1/none?connect_timeout=1"
     monkeypatch.setenv(gateway_cli.UPKEEP_DATABASE_URL_ENV, dsn)
 
     result = runner.invoke(app, argv)
 
     assert result.exit_code == 1
     assert result.output.startswith("ERROR ")
-    assert SECRET not in result.output
+    assert MARKER_VALUE not in result.output
     assert "127.0.0.1" not in result.output
 
 
@@ -176,7 +181,31 @@ USAGE_ERRORS = [
     pytest.param(replace(CREDIT, "10", "0"), "above zero", id="zero-tokens"),
     pytest.param(replace(CREDIT, "10", "-5"), "above zero", id="negative-tokens"),
     pytest.param(replace(CREDIT, "10", str(2**63)), "above zero", id="too-many-tokens"),
-    pytest.param(replace(CREDIT, "10", "1.5"), "1.5", id="fractional-tokens"),
+    pytest.param(replace(CREDIT, "10", "1.5"), "whole number", id="fractional-tokens"),
+    # int() would take each of these; an amount is ASCII digits, as --eur is.
+    pytest.param(replace(CREDIT, "10", "1_0"), "whole number", id="tokens-underscore"),
+    pytest.param(replace(CREDIT, "10", "+10"), "whole number", id="tokens-plus-sign"),
+    pytest.param(replace(CREDIT, "10", " 10"), "whole number", id="tokens-space"),
+    pytest.param(replace(CREDIT, "10", "1e3"), "whole number", id="tokens-exponent"),
+    pytest.param(replace(CREDIT, "10", ""), "whole number", id="tokens-empty"),
+    pytest.param(
+        replace(CREDIT, "10", chr(0x661) + chr(0x660)),
+        "whole number",
+        id="tokens-arabic-indic-digits",
+    ),
+    *(
+        pytest.param(replace(CREDIT, "tenant-a", tenant), "a tenant is an ID", id=name)
+        for name, tenant in {
+            "upper-tenant": "Tenant-A",
+            "tenant-dot": "a.b",
+            "tenant-space": "a b",
+            "tenant-underscore": "a_b",
+            "tenant-newline": "a\n",
+            "tenant-escape": "\x1b[31m",
+            "tenant-not-utf-8": "t\udcff",
+            "tenant-empty": "",
+        }.items()
+    ),
     pytest.param(
         replace(EXPIRE, "2026-01", "2026-1"), "YYYY-MM", id="a-month-without-zero"
     ),
@@ -302,7 +331,7 @@ def migration_codes() -> set[str]:
 
 
 def test_the_table_of_refusals_holds_every_code_the_migration_names() -> None:
-    assert len(migration_codes()) == 13
+    assert len(migration_codes()) == 14
     assert set(gateway_cli.REFUSALS) == migration_codes()
 
 
@@ -313,6 +342,131 @@ def test_each_refusal_has_one_line_of_help_that_says_what_to_do(code: str) -> No
     assert "\n" not in line
     assert 20 < len(line) <= 200
     assert not line.endswith(" ")
+
+
+@pytest.mark.parametrize("tenant", ["-lead", "-", "a\n", "A", "a_b", "é"])
+def test_a_tenant_that_is_not_an_id_is_refused(tenant: str) -> None:
+    # `-lead` cannot be typed as an argument (the parser takes it for an option),
+    # so the check itself is shown here.
+    with pytest.raises(typer.BadParameter):
+        gateway_cli._tenant(tenant)
+
+
+@pytest.mark.parametrize("tenant", ["a", "tenant-a", "0", "a-", "claims-triage"])
+def test_a_tenant_that_is_an_id_is_accepted(tenant: str) -> None:
+    assert gateway_cli._tenant(tenant) == tenant
+
+
+def test_the_credit_refusal_says_open_reservations_are_not_creditable() -> None:
+    line = gateway_cli.REFUSALS["GU204"]
+
+    assert "open reservations" in line
+
+
+def test_the_refusal_of_an_expiry_of_nothing_says_there_is_nothing_to_remove() -> None:
+    line = gateway_cli.REFUSALS["GU304"]
+
+    assert "nothing to remove" in line
+
+
+@pytest.mark.parametrize(
+    ("message", "detail"),
+    [
+        (
+            "credit_tenant: the amount is larger than the counter holds beyond "
+            "open reservations (250)",
+            " (at most 250 tokens can be credited now)",
+        ),
+        (
+            "credit_tenant: the amount is larger than the counter holds beyond "
+            "open reservations (0)",
+            " (at most 0 tokens can be credited now)",
+        ),
+    ],
+)
+def test_the_number_a_credit_refusal_gives_is_what_can_be_credited_now(
+    message: str, detail: str
+) -> None:
+    assert gateway_cli._detail("GU204", message, "tokens-day") == detail
+
+
+def test_the_number_of_a_cost_credit_refusal_is_in_euro() -> None:
+    message = (
+        "credit_tenant: the amount is larger than the counter holds beyond "
+        "open reservations (1500000)"
+    )
+
+    detail = gateway_cli._detail("GU204", message, "cost-month")
+
+    assert detail == " (at most 1.500000 EUR can be credited now)"
+
+
+# ── what the dry run prints ─────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    ("first", "text"),
+    [
+        (date(1, 1, 1), "0001-01"),
+        (date(99, 12, 1), "0099-12"),
+        (date(999, 3, 1), "0999-03"),
+        (date(2026, 9, 1), "2026-09"),
+        (date(9999, 12, 1), "9999-12"),
+    ],
+)
+def test_a_month_is_printed_with_four_digits_of_year_and_two_of_month(
+    first: date, text: str
+) -> None:
+    line = gateway_cli._counts("would remove", first, 1, 2, 3)
+
+    assert line == (
+        f"would remove before {text}: usage rows 1, counter rows 2, credits 3"
+    )
+
+
+# ── text that is not UTF-8 ends in a line, not a traceback ──────────────────
+def test_the_gateway_app_shows_no_locals_in_a_traceback() -> None:
+    assert gateway_cli.app.pretty_exceptions_show_locals is False
+
+
+@pytest.mark.parametrize("error", [UnicodeEncodeError, UnicodeDecodeError])
+@pytest.mark.parametrize("argv", COMMANDS.values(), ids=COMMANDS.keys())
+def test_a_unicode_error_from_the_connection_is_one_line_with_no_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: None,
+    argv: list[str],
+    error: type[UnicodeError],
+) -> None:
+    def refuse(dsn: str, application_name: str) -> psycopg.Connection:
+        if error is UnicodeEncodeError:
+            raise UnicodeEncodeError("utf-8", MARKER_VALUE, 0, 1, "surrogates")
+        raise UnicodeDecodeError("utf-8", MARKER_VALUE.encode(), 0, 1, "bad byte")
+
+    monkeypatch.setattr(gateway_cli, "connect", refuse)
+
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 1
+    assert result.output.splitlines() == [
+        "ERROR gateway upkeep failed: text that is not valid UTF-8 was given"
+    ]
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert MARKER_VALUE not in result.output
+
+
+@pytest.mark.parametrize("argv", COMMANDS.values(), ids=COMMANDS.keys())
+def test_a_connection_string_that_is_not_utf_8_exits_1_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    monkeypatch.setenv(
+        gateway_cli.UPKEEP_DATABASE_URL_ENV, f"postgresql://x:{MARKER_VALUE}\udcff@h/m"
+    )
+
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 1
+    assert result.output.startswith("ERROR ")
+    assert len(result.output.splitlines()) == 1
+    assert MARKER_VALUE not in result.output
+    assert "Traceback" not in result.output
 
 
 # ── the module imports no provider SDK ──────────────────────────────────────

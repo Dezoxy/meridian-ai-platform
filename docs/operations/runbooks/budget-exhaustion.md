@@ -100,6 +100,32 @@ LEFT JOIN (
 ORDER BY c.tenant, c.kind, c.period_start;
 ```
 
+That query starts from the counters, so a usage row whose counter row is
+missing is invisible to it: the gateway's settle of such a row can never
+succeed. This one starts from the usage rows and lists each row that has no
+counter row of its day or of its month; it returns no rows on a sound ledger:
+
+```sql
+SELECT attempt_id, tenant, state, day, month,
+       missing_tokens_counter, missing_cost_counter
+FROM (
+  SELECT u.attempt_id, u.tenant, u.state, u.day, u.month,
+         NOT EXISTS (
+           SELECT 1 FROM gateway.budget_counters c
+           WHERE c.tenant = u.tenant AND c.kind = 'tokens-day'
+             AND c.period_start = u.day
+         ) AS missing_tokens_counter,
+         NOT EXISTS (
+           SELECT 1 FROM gateway.budget_counters c
+           WHERE c.tenant = u.tenant AND c.kind = 'cost-month'
+             AND c.period_start = u.month
+         ) AS missing_cost_counter
+  FROM gateway.usage u
+) t
+WHERE missing_tokens_counter OR missing_cost_counter
+ORDER BY month, day, attempt_id;
+```
+
 ## What spent it
 
 Read the second query's `state` column:
@@ -191,11 +217,18 @@ meridian gateway close ATTEMPT_ID --reason dead-process --release
 
 **Credit a tenant**, when a fault spent the budget and the tenant's work
 did not. A credit applies to the current UTC period only: the day's token
-counter with `--tokens`, the month's cost counter with `--eur` (up to six
-decimals). It is refused when the tenant has no counter of the period, and
-for more than the counter holds. A credit is a row of its own, so the
-reconciliation above stays at zero drift: the counter equals the charges
-less the credits.
+counter with `--tokens` (a whole number), the month's cost counter with
+`--eur` (up to six decimals). It is refused when the tenant has no counter of
+the period, and for more than the counter holds beyond the reservations still
+open: a call in flight settles against the counter, so what its reservation
+holds is not creditable until the call closes (a credit of all of it would
+leave the settle to push the counter below zero and lose the provider's
+count). So credit while the tenant has no call in flight, or expect less to
+be creditable; the refusal says how much can be credited now. Just after
+00:00 UTC the new day's counter may not exist yet and the credit is refused
+with `GU203`: that is the right answer, a past counter decides nothing. A
+credit is a row of its own, so the reconciliation above stays at zero drift:
+the counter equals the charges less the credits.
 
 ```sh
 meridian gateway credit TENANT --tokens 50000 --reason retry-loop
@@ -205,30 +238,53 @@ meridian gateway credit TENANT --eur 1.5 --reason retry-loop
 **Expire old ledger rows.** The command removes whole months before
 `--before` (a month, written YYYY-MM): their usage rows, counters and
 credits together. The current month is never removed, and a month with a
-reservation still open is refused until each is closed. The month is the
+reservation still open is refused until each is closed. An expiry that would
+remove nothing is refused (`GU304`) and writes no audit row. The month is the
 owner's decision: there is no default and nothing runs this on a schedule,
-because retention is still open. Without `--confirm` the command prints
-what it would remove and removes nothing; read that first.
+because retention is still open, and there is no minimum age: one call
+removes every whole month before the one named, up to the current month.
+Without `--confirm` the command prints what it would remove and removes
+nothing; read that first. It is a count at that moment: rows that arrive
+before `--confirm` are removed too, and a reservation that arrives makes the
+expiry refuse.
 
 ```sh
-meridian gateway expire --before YYYY-MM --reason retention-decision
-meridian gateway expire --before YYYY-MM --reason retention-decision --confirm
+meridian gateway expire --before YYYY-MM --reason old-months
+meridian gateway expire --before YYYY-MM --reason old-months --confirm
 ```
+
+**The connection string** comes from a secret store, not from a command line
+(a typed one is kept in the shell's history and shown in the process list).
+Set `MERIDIAN_GATEWAY_UPKEEP_DATABASE_URL` from the store, and ask for
+`sslmode=verify-full` in it: without it the client does not verify the
+server it reaches.
 
 **Every change leaves an audit row**, written by the function in the
 transaction of the change, with the database role `gateway_upkeep`, the
-time and the reason. The role is the database's word, not the command's.
-Who held the credential is not recorded until people sign in (S021). Read
-the rows as the queries above are read:
+time and the reason. The role is the database's word, not the command's:
+`db_role` is stamped from the session, while `service` and `event` are
+written by whoever inserts, so the query below filters on `db_role` (another
+role can write a row that says `gateway-upkeep` in `service`). `reference`
+says what was done: `attempt=ID tokens=N micro_eur=N` for a closed
+reservation (what it had reserved), `credit=ID kind=KIND amount=N
+period=YYYY-MM-DD` for a credit, and `before=YYYY-MM usage=N counters=N
+credits=N` for an expiry, so a row still says how much after an expiry
+removed the ledger rows it was about. Read the rows as the queries above are
+read:
 
 ```sql
 SELECT seq, recorded_at, db_role, event, outcome, tenant, reference, reason
 FROM audit.events
-WHERE service = 'gateway-upkeep'
+WHERE db_role = 'gateway_upkeep'
   AND event IN ('ledger.reservation-closed', 'budget.credited', 'ledger.expired')
 ORDER BY seq DESC
 LIMIT 50;
 ```
+
+What the audit rows do not cover, stated: nothing alerts on a credit (an alert
+on the event belongs with the metrics step, S064), and a refused call writes
+no audit row. Who ran the command is the cluster's access control: the row
+names the database role, not a person, until people sign in (S021).
 
 ## What not to do
 

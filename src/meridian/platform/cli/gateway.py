@@ -21,6 +21,7 @@ import psycopg
 import typer
 
 from meridian.platform.common.db import connect
+from meridian.platform.registry.models import ENTITY_ID_PATTERN
 
 # The upkeep's own variable: no fallback to the services' or the owner's.
 UPKEEP_DATABASE_URL_ENV = "MERIDIAN_GATEWAY_UPKEEP_DATABASE_URL"
@@ -31,7 +32,13 @@ FLOOR_MINUTES = 10
 INT4_MAX = 2**31 - 1
 BIGINT_MAX = 2**63 - 1
 SLUG = re.compile(r"[a-z0-9-]{1,64}")
-# ASCII digits only: `\d` would match every script's digits.
+# The registry's pattern for a tenant's or a deployment's ID (a tenant is checked
+# against it before the database is touched, and the ledger's text is printed only
+# when it matches). `fullmatch`: its `$` would let a trailing newline through.
+ENTITY_ID = re.compile(ENTITY_ID_PATTERN)
+# ASCII digits only: `\d` would match every script's digits, and `int()` takes
+# underscores, a sign and spaces. At most 19 digits keeps `int()` bounded.
+TOKEN_AMOUNT = re.compile(r"[0-9]{1,19}")
 EURO = re.compile(r"[0-9]+(\.[0-9]{1,6})?")
 MONTH = re.compile(r"([0-9]{4})-(0[1-9]|1[0-2])")
 TOKENS_KIND = "tokens-day"
@@ -66,7 +73,10 @@ REFUSALS = {
         "the tenant has no counter of the current period: check the tenant's "
         "name; only a tenant that has spent in this period can be credited"
     ),
-    "GU204": "the amount is larger than the counter holds: credit no more than that",
+    "GU204": (
+        "the amount is larger than the counter holds beyond open reservations: "
+        "credit no more than that, or wait until they close"
+    ),
     "GU301": "the month is not the first day of a month: give --before as YYYY-MM",
     "GU302": (
         "the current month is never removed: "
@@ -76,12 +86,26 @@ REFUSALS = {
         "usage rows of those months are still reserved: "
         "close each with `meridian gateway close` first"
     ),
+    "GU304": (
+        "there is nothing to remove before that month: "
+        "run without --confirm to see the counts"
+    ),
 }
+# What the dry run prints for a tenant or deployment that is not an ID: the ledger
+# is text from a database, and an escape sequence in it must not reach a terminal.
+NOT_AN_ID = "<not an ID>"
+DRY_RUN_NOTE = (
+    "this is a count at this moment: rows that arrive before --confirm are "
+    "removed too; a reservation that arrives makes it refuse"
+)
 
+# No locals in a traceback, as the root app has it: they could hold a connection
+# string. (Typer's default is False; it is set here so a change of it is not one.)
 app = typer.Typer(
     no_args_is_help=True,
     help="Keep the Model Gateway's ledger: close, credit and expire. Each change "
     "leaves one audit row.",
+    pretty_exceptions_show_locals=False,
 )
 
 
@@ -104,8 +128,8 @@ def _amount(kind: str, amount: int) -> str:
 
 def _detail(code: str, message: str, kind: str | None) -> str:
     """The number the server's own message gives for two refusals."""
-    if code == "GU204" and kind and (held := re.search(r"holds \((\d+)\)$", message)):
-        return f" (the counter holds {_amount(kind, int(held[1]))})"
+    if code == "GU204" and kind and (left := re.search(r"\((\d+)\)$", message)):
+        return f" (at most {_amount(kind, int(left[1]))} can be credited now)"
     if code == "GU303" and (rows := re.search(r"^expire_ledger: (\d+) usage", message)):
         return f" (count: {rows[1]})"
     return ""
@@ -139,6 +163,10 @@ def _upkeep[T](
             return work(conn)
     except psycopg.Error as exc:
         _fail_on(exc, kind)
+    except UnicodeError:
+        # Text that cannot be encoded or decoded (a stray byte in an argument or
+        # in the connection string): no detail, which could carry the string.
+        _fail("gateway upkeep failed: text that is not valid UTF-8 was given")
 
 
 # ── what the operator typed, checked before the database is touched ─────────
@@ -163,12 +191,25 @@ def _month(text: str) -> date:
         ) from None
 
 
-def _tokens(amount: int) -> int:
+def _tokens(text: str) -> int:
+    amount = int(text) if TOKEN_AMOUNT.fullmatch(text) else 0
     if not 0 < amount <= BIGINT_MAX:
         raise typer.BadParameter(
-            f"an amount is above zero and at most {BIGINT_MAX}", param_hint="'--tokens'"
+            "an amount of tokens is a whole number above zero, in ASCII digits, "
+            f"and at most {BIGINT_MAX}",
+            param_hint="'--tokens'",
         )
     return amount
+
+
+def _tenant(tenant: str) -> str:
+    if not ENTITY_ID.fullmatch(tenant):
+        raise typer.BadParameter(
+            "a tenant is an ID of lower-case letters, digits and hyphens that "
+            "starts with a letter or a digit",
+            param_hint="TENANT",
+        )
+    return tenant
 
 
 def micro_eur_from(text: str) -> int:
@@ -195,6 +236,13 @@ def _minutes(minutes: int) -> int:
 
 
 # ── reservations ─────────────────────────────────────────────────────────────
+def _shown(text: str) -> str:
+    """A tenant or a deployment from the ledger, as it is printed: only when it
+    is an ID. Anything else (an escape sequence, a line break) is a placeholder;
+    the attempt's ID, a UUID the database typed, is still printed beside it."""
+    return text if ENTITY_ID.fullmatch(text) else NOT_AN_ID
+
+
 LIST_RESERVED = (
     "SELECT attempt_id, tenant, deployment, "
     "floor(extract(epoch FROM now() - reserved_at) / 60)::bigint, "
@@ -228,7 +276,8 @@ def reservations(
     )
     for attempt_id, tenant, deployment, age, tokens, micro_eur in rows:
         typer.echo(
-            f"attempt {attempt_id} tenant {tenant} deployment {deployment} "
+            f"attempt {attempt_id} tenant {_shown(tenant)} "
+            f"deployment {_shown(deployment)} "
             f"age {age} min reserved {tokens} tokens {_eur(micro_eur)} EUR"
         )
     typer.echo(f"reservations: {len(rows)}")
@@ -294,8 +343,12 @@ def credit(
         str, typer.Option("--reason", help="Why: a slug, such as goodwill. Audited.")
     ],
     tokens: Annotated[
-        int | None,
-        typer.Option("--tokens", help="Tokens to credit to today's (UTC) counter."),
+        str | None,
+        typer.Option(
+            "--tokens",
+            help="Tokens to credit to today's (UTC) counter: a whole number, "
+            "in ASCII digits.",
+        ),
     ] = None,
     eur: Annotated[
         str | None,
@@ -309,10 +362,13 @@ def credit(
 
     Give exactly one of --tokens and --eur. A credit is a row of its own, so
     the counter stays equal to the charges less the credits, and it is never
-    larger than what the counter holds. One audit row is written.
+    larger than what the counter holds beyond the reservations still open: a
+    call in flight settles against the counter, so what it holds is not
+    creditable until it closes. One audit row is written.
     """
     if (tokens is None) == (eur is None):
         raise typer.BadParameter("give exactly one of --tokens and --eur")
+    tenant = _tenant(tenant)
     slug = _slug(reason)
     kind, amount = (
         (TOKENS_KIND, _tokens(tokens))
@@ -344,8 +400,10 @@ WOULD_REMOVE = (
 
 
 def _counts(prefix: str, month: date, usage: int, counters: int, credits: int) -> str:
+    # Not `%Y`: it prints the year of 1 AD as `1`, and the database's own text for
+    # the month (to_char YYYY) is `0001-01`.
     return (
-        f"{prefix} before {month:%Y-%m}: usage rows {usage}, "
+        f"{prefix} before {month.year:04d}-{month.month:02d}: usage rows {usage}, "
         f"counter rows {counters}, credits {credits}"
     )
 
@@ -363,7 +421,7 @@ def _dry_run(conn: psycopg.Connection, before: date) -> list[str]:
     ]
     if open_rows:
         lines.append("--confirm is refused until each is closed (see: close)")
-    return [*lines, "nothing removed: add --confirm to remove them"]
+    return [*lines, "nothing removed: add --confirm to remove them", DRY_RUN_NOTE]
 
 
 @app.command()

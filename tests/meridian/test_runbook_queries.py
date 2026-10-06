@@ -27,6 +27,7 @@ from upkeepsupport import (
     previous_month,
     run,
     usage_row,
+    utc_day,
     utc_month,
 )
 
@@ -45,7 +46,7 @@ from meridian.platform.registry.models import Deployment, ExchangeRate, TenantLi
 
 OPERATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "operations"
 # Fewer than this means a fence was renamed or a runbook lost a query.
-EXPECTED_QUERIES = 7
+EXPECTED_QUERIES = 8
 FENCE_OPEN = re.compile(r"^(?P<indent>[ \t]*)```sql[ \t]*$")
 FENCE_CLOSE = re.compile(r"^[ \t]*```[ \t]*$")
 # Data-changing keywords, as whole words, in any case.
@@ -378,6 +379,7 @@ def test_the_upkeep_audit_query_lists_each_change_newest_first_under_the_role(
     stale = plant_usage(db, tenant=TENANT, tokens=7, micro_eur=3)
     run(db, UPKEEP_ROLE, CLOSE, (stale, False, "dead-process"))
     run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    plant_ledger_of_a_month(db, previous_month(utc_month(db)))
     run(db, UPKEEP_ROLE, EXPIRE, (utc_month(db), "retention-test"))
     sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
 
@@ -395,3 +397,86 @@ def test_the_upkeep_audit_query_lists_each_change_newest_first_under_the_role(
         "goodwill",
         "dead-process",
     ]
+
+
+FORGED_ROW = (
+    "INSERT INTO audit.events "
+    "(service, event, outcome, tenant, reference, reason) "
+    "VALUES ('gateway-upkeep', 'budget.credited', 'completed', %s, 'forged', "
+    "'goodwill')"
+)
+
+
+def test_the_upkeep_audit_query_does_not_list_a_row_another_role_wrote_as_the_upkeep(
+    ledger_run: LedgerRun,
+) -> None:
+    # The gateway's own role may append to the audit log and chooses `service`
+    # and `event` itself; `db_role` is stamped by the database from the session.
+    db = ledger_run.db
+    run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    run(db, "model_gateway", FORGED_ROW, (TENANT,))
+    sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
+
+    columns, rows = run_read_only(db, sql)
+
+    found = [dict(zip(columns, row, strict=True)) for row in rows]
+    assert [row["reference"] != "forged" for row in found] == [True]
+    assert {row["db_role"] for row in found} == {UPKEEP_ROLE}
+    # The control: the forged row is in the log under the upkeep's service name.
+    forged = run(
+        db, OWNER, "SELECT db_role FROM audit.events WHERE reference = 'forged'"
+    )
+    assert forged == [("model_gateway",)]
+
+
+def orphan_rows(db: DatabaseHandle) -> list[dict]:
+    sql = runbook_query("runbooks/budget-exhaustion.md", "missing_cost_counter")
+    columns, rows = run_read_only(db, sql)
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def test_the_orphan_query_finds_nothing_on_a_sound_ledger(
+    ledger_run: LedgerRun,
+) -> None:
+    assert orphan_rows(ledger_run.db) == []
+
+
+def test_the_orphan_query_finds_a_usage_row_whose_counters_are_missing(
+    ledger_run: LedgerRun,
+) -> None:
+    # What a reservation that outlived its month's expiry would leave: a usage row
+    # and no counter row. The drift query starts from the counters and cannot see it.
+    orphan = plant_usage(ledger_run.db, tenant="orphan-tenant", counted=False)
+
+    found = orphan_rows(ledger_run.db)
+
+    assert [row["attempt_id"] for row in found] == [orphan]
+    assert (found[0]["missing_tokens_counter"], found[0]["missing_cost_counter"]) == (
+        True,
+        True,
+    )
+    rows = drift_rows(ledger_run.db)
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+
+
+def test_the_orphan_query_names_which_of_the_two_counters_is_missing(
+    ledger_run: LedgerRun,
+) -> None:
+    db = ledger_run.db
+    # The day's counter is there, the month's is not.
+    orphan = plant_usage(db, tenant="orphan-tenant", counted=False)
+    run(
+        db,
+        OWNER,
+        "INSERT INTO gateway.budget_counters (tenant, kind, period_start, amount) "
+        "VALUES ('orphan-tenant', 'tokens-day', %s, 100)",
+        (utc_day(db),),
+    )
+
+    found = orphan_rows(db)
+
+    assert [row["attempt_id"] for row in found] == [orphan]
+    assert (found[0]["missing_tokens_counter"], found[0]["missing_cost_counter"]) == (
+        False,
+        True,
+    )

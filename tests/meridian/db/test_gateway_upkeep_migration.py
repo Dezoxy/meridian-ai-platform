@@ -9,11 +9,16 @@ helpers they share are in ``upkeepsupport``.
 """
 
 import re
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import psycopg
 import pytest
 from dbsupport import OWNER, SERVICE_ROLES, DatabaseHandle
-from sweepmigrationsupport import INDEX_COLUMNS, privileges
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
+from sweepmigrationsupport import privileges
 from upkeepsupport import (
     INSUFFICIENT_PRIVILEGE,
     MIGRATION,
@@ -35,9 +40,26 @@ PUBLIC_FUNCTIONS = (
 HELPER_FUNCTIONS = (
     "gateway.upkeep_check_reason(text)",
     "gateway.upkeep_lower_counter(text, text, date, bigint)",
+    "gateway.upkeep_open_charge(text, text, date)",
     "gateway.upkeep_audit(text, text, text, text, text, text, text, text, text, uuid)",
 )
 LEDGER_TABLES = ("usage", "budget_counters", "credits")
+# The columns `meridian gateway` reads, by table: LIST_RESERVED (usage) and the
+# dry run's counts of rows by month (usage.month, the two period_start columns).
+READABLE_COLUMNS = {
+    "usage": (
+        "attempt_id",
+        "tenant",
+        "deployment",
+        "state",
+        "reserved_at",
+        "reserved_tokens",
+        "reserved_micro_eur",
+        "month",
+    ),
+    "budget_counters": ("period_start",),
+    "credits": ("period_start",),
+}
 # The schemas of the platform: pgvector's functions in `public` are executable by
 # everyone and are not what this asks about.
 PLATFORM_SCHEMAS = ("audit", "claims", "gateway", "knowledge", "policy", "runtime")
@@ -45,6 +67,10 @@ OTHER_ROLES = SERVICE_ROLES
 INSERT_CREDIT = (
     "INSERT INTO gateway.credits (tenant, kind, period_start, amount, reason) "
     "VALUES (%(tenant)s, %(kind)s, '2026-10-01', %(amount)s, %(reason)s)"
+)
+INSERT_CREDIT_AT = (
+    "INSERT INTO gateway.credits (tenant, kind, period_start, amount, reason) "
+    "VALUES (%(tenant)s, %(kind)s, %(period)s, %(amount)s, %(reason)s)"
 )
 CREDIT_DEFAULTS = {
     "tenant": TENANT,
@@ -130,36 +156,250 @@ def test_a_missing_upkeep_role_fails_clearly_and_changes_nothing(
         ).fetchone() == (0,)
 
 
+@contextmanager
+def probe_role(
+    db: DatabaseHandle, attributes: str, member_of: str | None = None
+) -> Iterator[str]:
+    """A login-less role of its own, with ``attributes``, that is a member of
+    ``member_of``; dropped when the block ends. Roles are cluster-wide and the
+    workers share one server, so a test never alters ``gateway_upkeep``: it
+    makes a role like it, under a name of its own, and swaps the name into the
+    migration's text."""
+    name = f"gateway_upkeep_probe_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(db.admin_dsn, autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("CREATE ROLE {} NOLOGIN {}").format(
+                sql.Identifier(name), sql.SQL(attributes)
+            )
+        )
+        try:
+            if member_of is not None:
+                admin.execute(
+                    sql.SQL("GRANT {} TO {}").format(
+                        sql.Identifier(member_of), sql.Identifier(name)
+                    )
+                )
+            yield name
+        finally:
+            admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
+
+
+def apply_0020_naming_the_role(
+    db: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    """Apply 0001 to 0019 as the owner, then 0020 with ``role`` in place of the
+    upkeep role in its role check, as the owner. Raises what the file raises."""
+    files = migration_files()
+    name, text = files[19]
+    swapped = text.replace(f"ARRAY['{ROLE}']", f"ARRAY['{role}']")
+    assert swapped != text
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:19])
+    with connect(db.dsn(OWNER), "test") as conn:
+        runner.apply_migrations(conn)
+    monkeypatch.setattr(
+        runner, "migration_files", lambda: [*files[:19], (name, swapped)]
+    )
+    with connect(db.dsn(OWNER), "test") as conn:
+        try:
+            runner.apply_migrations(conn)
+        finally:
+            conn.rollback()
+
+
+def assert_nothing_of_0020_exists(db: DatabaseHandle) -> None:
+    for relation in ("pg_class", "pg_proc"):
+        column = "relname" if relation == "pg_class" else "proname"
+        assert run(
+            db,
+            OWNER,
+            f"SELECT count(*) FROM {relation} WHERE {column} IN "  # noqa: S608
+            "('credits', 'close_reservation', 'credit_tenant', 'expire_ledger')",
+        ) == [(0,)]
+
+
+@pytest.mark.parametrize(
+    ("attributes", "member_of", "named"),
+    [
+        pytest.param("SUPERUSER", None, "SUPERUSER", id="superuser"),
+        pytest.param("BYPASSRLS", None, "BYPASSRLS", id="bypassrls"),
+        pytest.param("CREATEROLE", None, "CREATEROLE", id="createrole"),
+        pytest.param("CREATEDB", None, "CREATEDB", id="createdb"),
+        pytest.param("REPLICATION", None, "REPLICATION", id="replication"),
+        pytest.param("", "pg_write_all_data", "membership", id="builtin-group"),
+        pytest.param("", "pg_monitor", "membership", id="another-builtin-group"),
+    ],
+)
+def test_a_role_with_more_than_a_plain_login_is_refused_and_nothing_is_created(
+    empty_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    attributes: str,
+    member_of: str | None,
+    named: str,
+) -> None:
+    with (
+        probe_role(empty_database, attributes, member_of) as role,
+        pytest.raises(psycopg.Error) as caught,
+    ):
+        apply_0020_naming_the_role(empty_database, monkeypatch, role)
+
+    message = caught.value.diag.message_primary or ""
+    assert f"role {role} must not hold" in message
+    assert named in message
+    assert_nothing_of_0020_exists(empty_database)
+
+
+def test_a_role_that_is_a_member_of_a_throwaway_group_is_refused_too(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with (
+        probe_role(empty_database, "") as group,
+        probe_role(empty_database, "", member_of=group) as role,
+        pytest.raises(psycopg.Error, match="membership"),
+    ):
+        apply_0020_naming_the_role(empty_database, monkeypatch, role)
+
+    assert_nothing_of_0020_exists(empty_database)
+
+
+def test_a_plain_role_passes_the_role_check(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The control of the refusals above: the same swap with a role that has none
+    # of the attributes goes through, so a refusal is about the attribute.
+    with probe_role(empty_database, "") as role:
+        apply_0020_naming_the_role(empty_database, monkeypatch, role)
+
+
+def test_the_upkeep_role_as_the_tests_and_the_cluster_make_it_has_no_attribute_of_note(
+    migrated_database: DatabaseHandle,
+) -> None:
+    rows = run(
+        migrated_database,
+        OWNER,
+        "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, "
+        "(SELECT count(*) FROM pg_auth_members m WHERE m.member = r.oid) "
+        "FROM pg_roles r WHERE rolname = %s",
+        (ROLE,),
+    )
+
+    assert rows == [(False, False, False, False, False, 0)]
+
+
+def test_a_migration_run_by_a_superuser_is_refused_and_creates_nothing(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = migration_files()
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:19])
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        runner.apply_migrations(conn)
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:20])
+    as_admin = make_conninfo(empty_database.admin_dsn, dbname=empty_database.name)
+
+    with connect(as_admin, "test") as conn:
+        is_superuser = conn.execute(
+            "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+        ).fetchone()
+        conn.rollback()  # the runner wants an idle connection
+        assert is_superuser == (True,)
+        with pytest.raises(
+            psycopg.Error,
+            match="must be run by the owner of the schema gateway",
+        ):
+            runner.apply_migrations(conn)
+        conn.rollback()
+
+    assert_nothing_of_0020_exists(empty_database)
+
+
+def test_a_migration_run_by_a_role_that_does_not_own_the_schema_is_refused(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = migration_files()
+    monkeypatch.setattr(runner, "migration_files", lambda: files[:19])
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        runner.apply_migrations(conn)
+    text = dict(migration_files())[MIGRATION]
+
+    with connect(empty_database.dsn("model_gateway"), "test") as conn:
+        with pytest.raises(
+            psycopg.Error, match="must be run by the owner of the schema gateway"
+        ):
+            conn.execute(text)
+        conn.rollback()
+
+    assert_nothing_of_0020_exists(empty_database)
+
+
 # ── the role holds what the contract says and nothing else ──────────────────
 def expected_holds(db: DatabaseHandle) -> frozenset[tuple]:
-    """The role's rights: SELECT on the three ledger tables (so on each of their
-    columns) and USAGE on the schema gateway."""
-    columns = run(
-        db,
-        OWNER,
-        "SELECT table_name, column_name FROM information_schema.columns "
-        "WHERE table_schema = 'gateway' AND table_name = ANY(%s)",
-        (list(LEDGER_TABLES),),
-    )
+    """The role's rights: SELECT on the columns the command reads and USAGE on the
+    schema gateway. No table-level right at all (``db`` is kept so that callers
+    read as before)."""
     return frozenset(
         {
             ("schema", "gateway", "USAGE", ""),
-            *(("table", f"gateway.{table}", "SELECT", "") for table in LEDGER_TABLES),
             *(
                 ("column", f"gateway.{table}", "SELECT", column)
-                for table, column in columns
+                for table, columns in READABLE_COLUMNS.items()
+                for column in columns
             ),
         }
     )
 
 
-def test_the_role_holds_exactly_three_selects_and_the_schema_usage(
+def test_the_role_holds_exactly_the_columns_the_command_reads_and_the_schema_usage(
     migrated_database: DatabaseHandle,
 ) -> None:
     held = privileges(migrated_database, ROLE)
 
     expected = expected_holds(migrated_database)
     assert held == expected, (held - expected, expected - held)
+    assert not [right for right in held if right[0] == "table"]
+
+
+@pytest.mark.parametrize(
+    ("table", "column"),
+    [
+        ("usage", "run_id"),
+        ("usage", "call_id"),
+        ("usage", "agent"),
+        ("usage", "model"),
+        ("usage", "provider"),
+        ("usage", "input_tokens"),
+        ("usage", "charged_tokens"),
+        ("usage", "closed_at"),
+        ("budget_counters", "amount"),
+        ("budget_counters", "tenant"),
+        ("credits", "amount"),
+        ("credits", "tenant"),
+        ("credits", "reason"),
+        ("credits", "db_role"),
+    ],
+)
+def test_the_role_cannot_read_a_column_the_command_does_not_need(
+    migrated_database: DatabaseHandle, table: str, column: str
+) -> None:
+    state = sqlstate(
+        migrated_database,
+        ROLE,
+        f"SELECT {column} FROM gateway.{table}",  # noqa: S608
+    )
+
+    assert state == INSUFFICIENT_PRIVILEGE
+
+
+def test_the_role_cannot_read_every_column_of_a_ledger_table_with_a_star(
+    migrated_database: DatabaseHandle,
+) -> None:
+    for table in LEDGER_TABLES:
+        state = sqlstate(
+            migrated_database,
+            ROLE,
+            f"SELECT * FROM gateway.{table}",  # noqa: S608
+        )
+
+        assert state == INSUFFICIENT_PRIVILEGE, table
 
 
 def test_the_role_has_no_privilege_on_the_audit_schema_or_any_other_schema(
@@ -475,25 +715,53 @@ def test_a_credit_tenant_holds_128_characters_and_refuses_129(
     )
 
 
-def test_the_reconciliation_index_covers_tenant_kind_and_period(
+def test_the_credits_table_has_no_index_but_its_key(
     migrated_database: DatabaseHandle,
 ) -> None:
+    # The reconciliation reads the whole table (a hash aggregate: an index on
+    # (tenant, kind, period_start) was measured never used) and the expiry's
+    # DELETE filters on period_start alone, which that index cannot serve.
     indexes = run(
         migrated_database,
         OWNER,
         "SELECT indexname FROM pg_indexes "
         "WHERE schemaname = 'gateway' AND tablename = 'credits'",
     )
-    named = [name for (name,) in indexes if name != "credits_pkey"]
 
-    assert len(named) == 1
-    columns = run(
-        migrated_database, OWNER, INDEX_COLUMNS, ("gateway", "credits", named[0])
-    )
-    assert columns == [("tenant",), ("kind",), ("period_start",)]
+    assert indexes == [("credits_pkey",)]
 
 
-def test_the_credits_table_is_the_owners_and_only_the_role_reads_it(
+@pytest.mark.parametrize("period", ["2026-10-01", "2026-01-01"])
+def test_a_cost_credit_may_name_the_first_of_a_month(
+    fresh_database: DatabaseHandle, period: str
+) -> None:
+    values = CREDIT_DEFAULTS | {"kind": "cost-month", "period": period}
+
+    run(fresh_database, OWNER, INSERT_CREDIT_AT, values)
+
+    assert run(fresh_database, OWNER, "SELECT count(*) FROM gateway.credits") == [(1,)]
+
+
+@pytest.mark.parametrize("period", ["2026-10-02", "2026-10-15", "2026-10-31"])
+def test_a_cost_credit_that_names_another_day_than_the_first_is_refused(
+    fresh_database: DatabaseHandle, period: str
+) -> None:
+    values = CREDIT_DEFAULTS | {"kind": "cost-month", "period": period}
+
+    state = sqlstate(fresh_database, OWNER, INSERT_CREDIT_AT, values)
+
+    assert state == "23514"
+
+
+def test_a_token_credit_may_name_any_day(fresh_database: DatabaseHandle) -> None:
+    values = CREDIT_DEFAULTS | {"kind": "tokens-day", "period": "2026-10-17"}
+
+    run(fresh_database, OWNER, INSERT_CREDIT_AT, values)
+
+    assert run(fresh_database, OWNER, "SELECT count(*) FROM gateway.credits") == [(1,)]
+
+
+def test_the_credits_table_is_the_owners_and_no_table_right_is_granted(
     migrated_database: DatabaseHandle,
 ) -> None:
     rows = run(
@@ -503,8 +771,32 @@ def test_the_credits_table_is_the_owners_and_only_the_role_reads_it(
         "WHERE oid = 'gateway.credits'::regclass",
     )
 
-    # `m` is MAINTAIN, which PostgreSQL 17 adds to the owner's own rights.
-    assert rows == [(OWNER, [f"{OWNER}=arwdDxtm/{OWNER}", f"{ROLE}=r/{OWNER}"])]
+    # No ACL at all: the owner's default rights, and the role holds a column right
+    # only, which lives in pg_attribute (next test).
+    assert rows == [(OWNER, None)]
+
+
+def test_the_column_rights_of_the_role_are_in_the_catalog_as_granted_by_the_owner(
+    migrated_database: DatabaseHandle,
+) -> None:
+    rows = run(
+        migrated_database,
+        OWNER,
+        "SELECT c.relname, a.attname, "
+        "array_agg(i::text) FROM pg_attribute a "
+        "JOIN pg_class c ON c.oid = a.attrelid "
+        "CROSS JOIN LATERAL unnest(a.attacl) AS i "
+        "WHERE c.relnamespace = 'gateway'::regnamespace AND i::text LIKE %s "
+        "GROUP BY 1, 2 ORDER BY 1, 2",
+        (f"{ROLE}=%",),
+    )
+
+    expected = sorted(
+        (table, column, [f"{ROLE}=r/{OWNER}"])
+        for table, columns in READABLE_COLUMNS.items()
+        for column in columns
+    )
+    assert rows == expected
 
 
 # ── the functions in the catalog ────────────────────────────────────────────

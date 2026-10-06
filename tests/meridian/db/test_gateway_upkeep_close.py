@@ -127,11 +127,27 @@ def test_a_closing_writes_one_audit_row_that_names_the_role_and_the_attempt(
         "gpt-4o",
     )
     assert row["call_id"] == call_id
-    assert row["reference"] == str(attempt)
+    # The attempt and what it had reserved, so the audit row still says how much
+    # after an expiry removed the usage row.
+    assert row["reference"] == f"attempt={attempt} tokens={TOKENS} micro_eur={MICRO}"
     assert row["reason"] == REASON
     # An operator's upkeep is not part of a claim's story: no run, so
     # audit.claim_trail never shows it.
     assert row["run_id"] is None
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_the_audit_reference_of_the_largest_reservation_fits_the_column(
+    fresh_database: DatabaseHandle, release: bool
+) -> None:
+    biggest = 2**63 - 1
+    attempt = plant_usage(fresh_database, tokens=biggest, micro_eur=biggest)
+
+    close(fresh_database, attempt, release=release)
+
+    (row,) = audit_rows(fresh_database)
+    assert f"tokens={biggest} micro_eur={biggest}" in row["reference"]
+    assert len(row["reference"]) <= 128
 
 
 def test_a_closing_leaves_the_claim_trail_alone(

@@ -10,6 +10,7 @@ in ``upkeepsupport``.
 import uuid
 from datetime import date, timedelta
 
+import psycopg
 import pytest
 from dbsupport import OWNER, DatabaseHandle
 from upkeepsupport import (
@@ -20,8 +21,11 @@ from upkeepsupport import (
     CREDIT,
     CURRENT_MONTH,
     EXPIRE,
+    INSERT_OLD_CREDIT,
+    INSERT_USAGE,
     NO_COUNTER,
     NOT_A_MONTH,
+    NOTHING_TO_REMOVE,
     NULL_ARGUMENT,
     OTHER_TENANT,
     REASON,
@@ -48,6 +52,9 @@ from upkeepsupport import (
     utc_day,
     utc_month,
 )
+
+from meridian.platform.common.db import connect
+from meridian.platform.gateway.budget import ADJUST_COUNTER, CLOSE_USAGE
 
 HELD = 100
 MICRO_HELD = 5_000_000
@@ -160,7 +167,8 @@ def test_two_credits_are_two_rows_and_both_come_off_the_counter(
 def test_a_credit_writes_one_audit_row_that_names_the_role_and_the_credit(
     fresh_database: DatabaseHandle,
 ) -> None:
-    plant_counter(fresh_database, TOKENS_KIND, utc_day(fresh_database), HELD)
+    day = utc_day(fresh_database)
+    plant_counter(fresh_database, TOKENS_KIND, day, HELD)
 
     credit_id, _ = credit(fresh_database, 30)
 
@@ -169,9 +177,43 @@ def test_a_credit_writes_one_audit_row_that_names_the_role_and_the_credit(
     assert row["service"] == SERVICE
     assert (row["event"], row["outcome"]) == ("budget.credited", "completed")
     assert row["tenant"] == TENANT
-    assert row["reference"] == str(credit_id)
+    # The credit's ID, the kind, the amount and the period, so that the audit
+    # row still says how much after an expiry removed the credit's own row.
+    assert row["reference"] == (
+        f"credit={credit_id} kind={TOKENS_KIND} amount=30 period={day}"
+    )
     assert row["reason"] == REASON
     assert row["run_id"] is None
+
+
+def test_the_audit_row_of_a_cost_credit_names_the_first_of_the_month(
+    fresh_database: DatabaseHandle,
+) -> None:
+    month = utc_month(fresh_database)
+    plant_counter(fresh_database, COST_KIND, month, MICRO_HELD)
+
+    credit_id, _ = credit(fresh_database, 1_500_000, kind=COST_KIND)
+
+    (row,) = audit_rows(fresh_database)
+    assert row["reference"] == (
+        f"credit={credit_id} kind={COST_KIND} amount=1500000 period={month}"
+    )
+
+
+@pytest.mark.parametrize("kind", [TOKENS_KIND, COST_KIND])
+def test_the_audit_reference_of_the_largest_credit_fits_the_column(
+    fresh_database: DatabaseHandle, kind: str
+) -> None:
+    period = (
+        utc_day(fresh_database) if kind == TOKENS_KIND else utc_month(fresh_database)
+    )
+    plant_counter(fresh_database, kind, period, 2**63 - 1)
+
+    credit(fresh_database, 2**63 - 1, kind=kind)
+
+    (row,) = audit_rows(fresh_database)
+    assert f"amount={2**63 - 1} " in row["reference"]
+    assert len(row["reference"]) <= 128
 
 
 # ── credit_tenant: what is refused, each with its own code ──────────────────
@@ -220,7 +262,189 @@ def test_a_credit_larger_than_the_counter_names_what_the_counter_holds(
 
     assert error.sqlstate == AMOUNT_TOO_LARGE
     assert error.diag.message_primary is not None
-    assert error.diag.message_primary.endswith(f"holds ({HELD})")
+    # With no reservation open, what can be credited is what the counter holds.
+    assert error.diag.message_primary.endswith(f"({HELD})")
+
+
+# ── credit_tenant: open reservations are not creditable ─────────────────────
+# One settled call, and two reservations still open: the counters hold the sum.
+SETTLED = (500, 5_000)
+OPEN_A = (300, 3_000)
+OPEN_B = (200, 2_000)
+OPEN = (OPEN_A[0] + OPEN_B[0], OPEN_A[1] + OPEN_B[1])
+# What a counter holds beyond the open reservations: the most a credit may take.
+CREDITABLE = {TOKENS_KIND: SETTLED[0], COST_KIND: SETTLED[1]}
+
+
+def plant_open_reservations(db: DatabaseHandle) -> tuple[uuid.UUID, uuid.UUID]:
+    plant_usage(db, tokens=SETTLED[0], micro_eur=SETTLED[1], state="settled")
+    return (
+        plant_usage(db, tokens=OPEN_A[0], micro_eur=OPEN_A[1]),
+        plant_usage(db, tokens=OPEN_B[0], micro_eur=OPEN_B[1]),
+    )
+
+
+def gateway_closes(
+    db: DatabaseHandle,
+    attempt: uuid.UUID,
+    state: str,
+    charged: tuple[int, int],
+    reserved: tuple[int, int],
+) -> None:
+    """The gateway's own close of a reservation, with its own statements: close
+    the usage row, then move both counters by charged minus reserved, in one
+    transaction. A counter pushed below zero fails the transaction."""
+    with connect(db.dsn("model_gateway"), "test-gateway") as conn:
+        conn.execute(
+            CLOSE_USAGE,
+            {
+                "attempt_id": attempt,
+                "state": state,
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "charged_tokens": charged[0],
+                "charged_micro_eur": charged[1],
+            },
+        )
+        for kind, period, delta in (
+            (TOKENS_KIND, utc_day(db), charged[0] - reserved[0]),
+            (COST_KIND, utc_month(db), charged[1] - reserved[1]),
+        ):
+            conn.execute(
+                ADJUST_COUNTER,
+                {
+                    "tenant": TENANT,
+                    "kind": kind,
+                    "period_start": period,
+                    "delta": delta,
+                },
+            )
+        conn.commit()
+
+
+@pytest.mark.parametrize("kind", [TOKENS_KIND, COST_KIND])
+def test_a_credit_of_the_whole_counter_is_refused_while_a_reservation_holds_it(
+    fresh_database: DatabaseHandle, kind: str
+) -> None:
+    # The reviewed scenario: a call in flight reserved the whole counter. A credit
+    # of all of it would leave the gateway's settle (below the reservation) to
+    # push the counter below zero and lose the provider's count.
+    plant_usage(fresh_database, tokens=1000, micro_eur=1000)
+    before = ledger_snapshot(fresh_database)
+
+    error = refusal(fresh_database, ROLE, CREDIT, (TENANT, kind, 1000, REASON))
+
+    assert error.sqlstate == AMOUNT_TOO_LARGE
+    assert error.diag.message_primary is not None
+    assert error.diag.message_primary.endswith("(0)")
+    assert ledger_snapshot(fresh_database) == before
+
+
+@pytest.mark.parametrize("kind", [TOKENS_KIND, COST_KIND])
+def test_a_credit_one_above_what_the_counter_holds_beyond_open_ones_is_refused(
+    fresh_database: DatabaseHandle, kind: str
+) -> None:
+    plant_open_reservations(fresh_database)
+    creditable = CREDITABLE[kind]
+
+    error = refusal(
+        fresh_database, ROLE, CREDIT, (TENANT, kind, creditable + 1, REASON)
+    )
+
+    assert error.sqlstate == AMOUNT_TOO_LARGE
+    assert error.diag.message_primary is not None
+    assert error.diag.message_primary.endswith(f"({creditable})")
+    assert credits(fresh_database) == []
+
+
+def test_a_credit_of_exactly_what_the_counter_holds_beyond_open_ones_passes(
+    fresh_database: DatabaseHandle,
+) -> None:
+    attempt_a, attempt_b = plant_open_reservations(fresh_database)
+    day, month = utc_day(fresh_database), utc_month(fresh_database)
+
+    credit(fresh_database, CREDITABLE[TOKENS_KIND], kind=TOKENS_KIND)
+    credit(fresh_database, CREDITABLE[COST_KIND], kind=COST_KIND)
+
+    # What the two reservations hold is what is left.
+    assert counters(fresh_database) == {
+        (TENANT, TOKENS_KIND, day): OPEN[0],
+        (TENANT, COST_KIND, month): OPEN[1],
+    }
+    # The gateway settles one open reservation low and releases the other: both
+    # succeed (before the rule, the settle broke the counter's CHECK), and the
+    # counters equal the charges less the credits.
+    gateway_closes(fresh_database, attempt_a, "settled", (10, 20), OPEN_A)
+    gateway_closes(fresh_database, attempt_b, "released", (0, 0), OPEN_B)
+    assert counters(fresh_database) == {
+        (TENANT, TOKENS_KIND, day): 10,
+        (TENANT, COST_KIND, month): 20,
+    }
+    assert_counters_reconcile(fresh_database)
+
+
+def test_a_credit_leaves_room_for_the_upkeeps_own_release_of_an_open_reservation(
+    fresh_database: DatabaseHandle,
+) -> None:
+    attempt_a, _ = plant_open_reservations(fresh_database)
+    credit(fresh_database, CREDITABLE[TOKENS_KIND])
+
+    released = run(
+        fresh_database,
+        ROLE,
+        "SELECT * FROM gateway.close_reservation(%s, %s, %s)",
+        (attempt_a, True, REASON),
+    )
+
+    assert released == [("released", *OPEN_A)]
+    assert_counters_reconcile(fresh_database)
+
+
+def test_open_reservations_of_another_tenant_or_period_or_a_closed_one_do_not_count(
+    fresh_database: DatabaseHandle,
+) -> None:
+    day, month = utc_day(fresh_database), utc_month(fresh_database)
+    planted_ledger(fresh_database)
+    # Open, but another tenant's.
+    plant_usage(fresh_database, tenant=OTHER_TENANT, tokens=900, micro_eur=900)
+    # Open, but of yesterday's counters (and last month's).
+    plant_usage(
+        fresh_database,
+        day=day - timedelta(days=1),
+        month=previous_month(month),
+        tokens=900,
+        micro_eur=900,
+    )
+    # Closed: its charge is settled, not open.
+    plant_usage(fresh_database, tokens=1, micro_eur=1, state="kept")
+    held, micro_held = HELD + 1, MICRO_HELD + 1
+
+    credit(fresh_database, held)
+    credit(fresh_database, micro_held, kind=COST_KIND)
+
+    assert counters(fresh_database)[(TENANT, TOKENS_KIND, day)] == 0
+    assert counters(fresh_database)[(TENANT, COST_KIND, month)] == 0
+    assert_counters_reconcile(fresh_database)
+
+
+def test_two_credits_at_once_cannot_both_pass_while_a_reservation_is_open(
+    fresh_database: DatabaseHandle,
+) -> None:
+    plant_open_reservations(fresh_database)
+    day = utc_day(fresh_database)
+    # Creditable is 500: the first takes 300, the second asks 300 of the 200 left.
+    first, second = second_waits_for_first(
+        fresh_database,
+        (ROLE, CREDIT, (TENANT, TOKENS_KIND, 300, REASON)),
+        (ROLE, CREDIT, (TENANT, TOKENS_KIND, 300, REASON)),
+    )
+
+    assert first[0][1] == SETTLED[0] + OPEN[0] - 300
+    assert isinstance(second, psycopg.Error)
+    assert second.sqlstate == AMOUNT_TOO_LARGE
+    assert (second.diag.message_primary or "").endswith("(200)")
+    assert counters(fresh_database)[(TENANT, TOKENS_KIND, day)] == OPEN[0] + 200
+    assert_counters_reconcile(fresh_database)
 
 
 def test_a_credit_cannot_take_a_counter_below_zero_in_two_steps(
@@ -392,15 +616,179 @@ def test_the_day_before_the_first_of_the_month_goes_and_the_first_stays(
     assert counters(fresh_database) == {(TENANT, TOKENS_KIND, current): 1}
 
 
-def test_an_expiry_of_nothing_removes_nothing_and_still_writes_its_audit_row(
+def test_an_expiry_of_nothing_is_refused_and_writes_no_audit_row(
     fresh_database: DatabaseHandle,
 ) -> None:
     current = utc_month(fresh_database)
+    plant_ledger_of_a_month(fresh_database, current)  # the current month stays
+    before = ledger_snapshot(fresh_database)
 
-    result = run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    error = refusal(fresh_database, ROLE, EXPIRE, (current, REASON))
 
-    assert result == [(0, 0, 0)]
+    assert error.sqlstate == NOTHING_TO_REMOVE
+    assert ledger_snapshot(fresh_database) == before
+    assert audit_rows(fresh_database) == []
+
+
+def test_an_expiry_repeated_with_nothing_to_remove_leaves_no_audit_row_at_all(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # One credential in a loop must not be able to fill the audit table.
+    current = utc_month(fresh_database)
+    for _ in range(5):
+        assert sqlstate(fresh_database, ROLE, EXPIRE, (current, REASON)) == (
+            NOTHING_TO_REMOVE
+        )
+
+    assert audit_rows(fresh_database) == []
+
+
+def test_an_expiry_that_removes_one_row_of_one_table_is_not_nothing(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # The boundary of GU304: one row in any of the three tables is something.
+    current = utc_month(fresh_database)
+    old = previous_month(current)
+    plant_usage(fresh_database, day=old, month=old, state="settled", counted=False)
+
+    assert run(fresh_database, ROLE, EXPIRE, (current, REASON)) == [(1, 0, 0)]
+    plant_counter(fresh_database, TOKENS_KIND, old, 1)
+    assert run(fresh_database, ROLE, EXPIRE, (current, REASON)) == [(0, 1, 0)]
+    run(fresh_database, OWNER, INSERT_OLD_CREDIT, (TENANT, TOKENS_KIND, old, 1))
+    assert run(fresh_database, ROLE, EXPIRE, (current, REASON)) == [(0, 0, 1)]
+    assert [row["reference"] for row in audit_rows(fresh_database)] == [
+        f"before={current:%Y-%m} usage=1 counters=0 credits=0",
+        f"before={current:%Y-%m} usage=0 counters=1 credits=0",
+        f"before={current:%Y-%m} usage=0 counters=0 credits=1",
+    ]
+
+
+def test_the_expiry_that_follows_one_that_removed_everything_is_refused(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+    plant_ledger_of_a_month(fresh_database, previous_month(current))
+    run(fresh_database, ROLE, EXPIRE, (current, REASON))
+
+    state = sqlstate(fresh_database, ROLE, EXPIRE, (current, REASON))
+
+    assert state == NOTHING_TO_REMOVE
     assert len(audit_rows(fresh_database)) == 1
+
+
+# ── expire_ledger: a reservation that commits while it runs ─────────────────
+RESERVE_AS_THE_GATEWAY = (  # noqa: S608 (two constants joined, no input in it)
+    # What a gateway does for a month that has turned in its own clock: it locks
+    # both counters (CHARGE_COUNTER) and inserts the usage row (INSERT_USAGE), and
+    # commits both together. One statement, so that a test can hold it open.
+    "WITH t AS (UPDATE gateway.budget_counters SET amount = amount + %(tokens)s "
+    "WHERE tenant = %(tenant)s AND kind = 'tokens-day' AND period_start = %(day)s "
+    "RETURNING 1), c AS (UPDATE gateway.budget_counters "
+    "SET amount = amount + %(micro_eur)s WHERE tenant = %(tenant)s "
+    "AND kind = 'cost-month' AND period_start = %(month)s RETURNING 1) "
+) + INSERT_USAGE
+
+
+def test_a_reservation_that_commits_while_an_expiry_waits_is_not_orphaned(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+    old = previous_month(current)
+    plant_ledger_of_a_month(fresh_database, old)
+    attempt = uuid.uuid4()
+    reserve = {
+        "attempt_id": attempt,
+        "call_id": uuid.uuid4(),
+        "run_id": uuid.uuid4(),
+        "tenant": TENANT,
+        "deployment": "aoai-sdc-gpt-4o",
+        "day": old,
+        "month": old,
+        "tokens": 50,
+        "micro_eur": 20,
+        "charged_tokens": 50,
+        "charged_micro_eur": 20,
+        "state": "reserved",
+        "age": timedelta(0),
+    }
+    counters_before = counters(fresh_database)
+
+    # The reservation holds the old counters' row locks and has not committed, so
+    # the expiry's count sees no reserved row and its DELETE of the counters
+    # waits (second_waits_for_first reads that from pg_locks); then it commits.
+    first, second = second_waits_for_first(
+        fresh_database,
+        (OWNER, RESERVE_AS_THE_GATEWAY, reserve),
+        (ROLE, EXPIRE, (current, REASON)),
+    )
+
+    assert first == []
+    # The expiry noticed the row when it came back and undid all it had done.
+    assert isinstance(second, psycopg.Error)
+    assert second.sqlstate == STILL_RESERVED
+    assert usage_row_state(fresh_database, attempt) == "reserved"
+    after = counters(fresh_database)
+    assert (
+        after[(TENANT, TOKENS_KIND, old)]
+        == counters_before[(TENANT, TOKENS_KIND, old)] + 50
+    )
+    assert (
+        after[(TENANT, COST_KIND, old)]
+        == counters_before[(TENANT, COST_KIND, old)] + 20
+    )
+    assert len(after) == len(counters_before)
+    assert len(credits(fresh_database)) == 2
+    assert audit_rows(fresh_database) == []
+    assert_counters_reconcile(fresh_database)
+
+
+def test_a_credit_that_waits_for_a_reservation_counts_it_when_it_commits(
+    fresh_database: DatabaseHandle,
+) -> None:
+    # The counter holds 100 (a settled call). A reservation of 60 locks the
+    # counter row and has not committed; a credit of 150 waits for the row. When
+    # the reservation commits the counter holds 160 and 60 of it is open, so 100 is
+    # creditable: a count taken before the wait would say 160 and let 150 through.
+    day, month = utc_day(fresh_database), utc_month(fresh_database)
+    planted_ledger(fresh_database)
+    reserve = {
+        "attempt_id": uuid.uuid4(),
+        "call_id": uuid.uuid4(),
+        "run_id": uuid.uuid4(),
+        "tenant": TENANT,
+        "deployment": "aoai-sdc-gpt-4o",
+        "day": day,
+        "month": month,
+        "tokens": 60,
+        "micro_eur": 10,
+        "charged_tokens": 60,
+        "charged_micro_eur": 10,
+        "state": "reserved",
+        "age": timedelta(0),
+    }
+
+    first, second = second_waits_for_first(
+        fresh_database,
+        (OWNER, RESERVE_AS_THE_GATEWAY, reserve),
+        (ROLE, CREDIT, (TENANT, TOKENS_KIND, 150, REASON)),
+    )
+
+    assert first == []
+    assert isinstance(second, psycopg.Error)
+    assert second.sqlstate == AMOUNT_TOO_LARGE
+    assert (second.diag.message_primary or "").endswith(f"({HELD})")
+    assert counters(fresh_database)[(TENANT, TOKENS_KIND, day)] == HELD + 60
+    assert_counters_reconcile(fresh_database)
+
+
+def usage_row_state(db: DatabaseHandle, attempt: uuid.UUID) -> str | None:
+    rows = run(
+        db,
+        OWNER,
+        "SELECT state FROM gateway.usage WHERE attempt_id = %s",
+        (attempt,),
+    )
+    return rows[0][0] if rows else None
 
 
 def test_an_expiry_writes_one_audit_row_with_the_month_and_the_three_counts(

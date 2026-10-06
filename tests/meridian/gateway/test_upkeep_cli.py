@@ -170,7 +170,7 @@ def test_close_keeps_the_charge_by_default_and_audits_it_under_the_role(
     )
     assert (row["tenant"], row["reference"], row["reason"]) == (
         TENANT,
-        str(attempt),
+        f"attempt={attempt} tokens=100 micro_eur=40",
         REASON,
     )
     assert row["db_role"] == UPKEEP_ROLE
@@ -203,7 +203,7 @@ def test_close_with_release_gives_back_what_was_reserved_and_audits_it(
     assert (row["event"], row["outcome"], row["reference"]) == (
         "ledger.reservation-closed",
         "released",
-        str(attempt),
+        f"attempt={attempt} tokens=100 micro_eur=40",
     )
     assert row["db_role"] == UPKEEP_ROLE
     assert_counters_reconcile(db)
@@ -296,7 +296,10 @@ def test_credit_tokens_lowers_the_days_counter_and_audits_it_under_the_role(
         "completed",
         TENANT,
     )
-    assert (row["reference"], row["reason"]) == (str(credit_id), "goodwill")
+    assert (row["reference"], row["reason"]) == (
+        f"credit={credit_id} kind={TOKENS_KIND} amount=30 period={utc_day(db)}",
+        "goodwill",
+    )
     assert row["db_role"] == UPKEEP_ROLE
     assert_counters_reconcile(db)
     assert db.passwords[UPKEEP_ROLE] not in result.output
@@ -338,7 +341,7 @@ def test_credit_of_exactly_what_the_counter_holds_is_accepted_and_one_more_is_no
     over = runner.invoke(
         app, ["gateway", "credit", TENANT, "--tokens", "101", "--reason", "goodwill"]
     )
-    refusal(db, over, "GU204", detail=" (the counter holds 100 tokens)")
+    refusal(db, over, "GU204", detail=" (at most 100 tokens can be credited now)")
     assert ledger_snapshot(db) == before
     exact = runner.invoke(
         app, ["gateway", "credit", TENANT, "--tokens", "100", "--reason", "goodwill"]
@@ -360,8 +363,30 @@ def test_credit_eur_over_the_counter_names_what_it_holds_in_euro(
         app, ["gateway", "credit", TENANT, "--eur", "0.000041", "--reason", "goodwill"]
     )
 
-    refusal(db, result, "GU204", detail=" (the counter holds 0.000040 EUR)")
+    refusal(db, result, "GU204", detail=" (at most 0.000040 EUR can be credited now)")
     assert ledger_snapshot(db) == before
+
+
+def test_credit_refuses_what_a_reservation_in_flight_holds_and_says_what_is_left(
+    db: DatabaseHandle,
+) -> None:
+    # The counter holds 160: 100 settled and 60 in flight. Only 100 is creditable.
+    plant_usage(db, tokens=100, micro_eur=40, state="settled")
+    plant_usage(db, tokens=60, micro_eur=10)
+    before = ledger_snapshot(db)
+
+    over = runner.invoke(
+        app, ["gateway", "credit", TENANT, "--tokens", "101", "--reason", "goodwill"]
+    )
+    refusal(db, over, "GU204", detail=" (at most 100 tokens can be credited now)")
+    assert ledger_snapshot(db) == before
+    exact = runner.invoke(
+        app, ["gateway", "credit", TENANT, "--tokens", "100", "--reason", "goodwill"]
+    )
+
+    assert exact.exit_code == 0, exact.output
+    assert exact.stdout.splitlines()[-1] == "counter tokens-day now holds 60 tokens"
+    assert_counters_reconcile(db)
 
 
 def test_credit_refuses_a_tenant_with_no_counter_of_the_period(
@@ -406,6 +431,8 @@ def test_expire_without_confirm_says_what_it_would_remove_and_removes_nothing(
         "counter rows 3, credits 2",
         "still reserved in those months: 0",
         "nothing removed: add --confirm to remove them",
+        "this is a count at this moment: rows that arrive before --confirm are "
+        "removed too; a reservation that arrives makes it refuse",
     ]
     assert ledger_snapshot(db) == before
     assert audit_rows(db) == []
@@ -535,3 +562,110 @@ def test_expire_succeeds_once_the_open_reservation_is_closed_by_the_command(
         "ledger.expired",
     ]
     assert_counters_reconcile(db)
+
+
+def test_expire_with_confirm_and_nothing_to_remove_is_one_line_and_exit_1(
+    db: DatabaseHandle,
+) -> None:
+    plant_usage(db, state="settled")  # the current month only
+    before = ledger_snapshot(db)
+
+    result = runner.invoke(
+        app,
+        [
+            "gateway",
+            "expire",
+            "--before",
+            month_text(utc_month(db)),
+            "--reason",
+            REASON,
+            "--confirm",
+        ],
+    )
+
+    refusal(db, result, "GU304")
+    assert ledger_snapshot(db) == before
+    assert audit_rows(db) == []
+
+
+def test_expire_dry_run_of_nothing_still_prints_its_counts_and_exits_0(
+    db: DatabaseHandle,
+) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "gateway",
+            "expire",
+            "--before",
+            month_text(utc_month(db)),
+            "--reason",
+            REASON,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0].endswith(
+        "usage rows 0, counter rows 0, credits 0"
+    )
+
+
+def test_expire_dry_run_prints_a_year_before_1000_with_four_digits(
+    db: DatabaseHandle,
+) -> None:
+    result = runner.invoke(
+        app, ["gateway", "expire", "--before", "0001-01", "--reason", REASON]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0].startswith("would remove before 0001-01:")
+
+
+# ── what the ledger holds is text from a database ───────────────────────────
+PLACEHOLDER = "<not an ID>"
+
+
+@pytest.mark.parametrize(
+    "planted",
+    ["\x1b[31mred\x1b[0m", "line\nbreak", "Upper", "a b", "\x07bell", ""],
+    ids=["escape", "newline", "upper-case", "space", "bell", "empty"],
+)
+def test_reservations_prints_a_placeholder_for_a_tenant_that_is_not_an_id(
+    db: DatabaseHandle, planted: str
+) -> None:
+    attempt = plant_usage(db, tenant=planted, counted=False)
+
+    result = runner.invoke(app, ["gateway", "reservations", "--older-than", "10"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        f"attempt {attempt} tenant {PLACEHOLDER} deployment {DEPLOYMENT} "
+        "age 30 min reserved 100 tokens 0.000040 EUR",
+        "reservations: 1",
+    ]
+    assert "\x1b" not in result.stdout
+    assert "\x07" not in result.stdout
+
+
+def test_reservations_prints_a_placeholder_for_a_deployment_that_is_not_an_id(
+    db: DatabaseHandle,
+) -> None:
+    attempt = plant_usage(db, counted=False, deployment="\x1b]0;title\x07")
+
+    result = runner.invoke(app, ["gateway", "reservations", "--older-than", "10"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == (
+        f"attempt {attempt} tenant {TENANT} deployment {PLACEHOLDER} "
+        "age 30 min reserved 100 tokens 0.000040 EUR"
+    )
+    assert "\x1b" not in result.stdout
+
+
+def test_reservations_prints_a_tenant_that_is_an_id_as_it_is(
+    db: DatabaseHandle,
+) -> None:
+    attempt = plant_usage(db, tenant="a-1", counted=False)
+
+    result = runner.invoke(app, ["gateway", "reservations", "--older-than", "10"])
+
+    assert f"attempt {attempt} tenant a-1 deployment {DEPLOYMENT}" in result.stdout
