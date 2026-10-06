@@ -3118,12 +3118,14 @@
         "wordings/MOTOR-TPL.md": "df33b667c14078a2bc37500c20a9778a787c03818ea3dab781ff06cca7444109"
       },
       "generator_version": "1",
-      "manifest": "ec3f1aeec62bc4eacdc2decffb41de0b3a09a5f84265eddae59c6f23cd008544",
-      "seed": 20260929
+      "manifest": "c3423324790a8d443e03e50f4a585b9d629623d8f37b0c6b57982adea3f09c93",
+      "seed": 20260929,
+      "workload": "claims-triage"
     },
     "judge": "0d63ecf609890bf5003b858b092d0e83b181209f4b667eaef5f9d277026bed03",
     "prompt": "cc8e3c33cbde8e76040e80e51f64420aed4b8fc9fb05bf493fbd2a9d78ff3925",
     "recording": "cac9a74fee18fd28c3a517ed63b1a1614bbec98f0acdf524488a2c5cd1696d27",
+    "screen": "d0ae76ab66fba5a5211845bc0ee8aa91197a653a05ff63b10dae06c34207b5ba",
     "tools": "3bba182d9c93a8eec75fbebff68d43684954fe44d3e56e9c045a448fb487da25"
   },
   "format": 2,

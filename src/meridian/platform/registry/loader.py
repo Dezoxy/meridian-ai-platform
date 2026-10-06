@@ -100,8 +100,11 @@ def _parse_file(path: Path) -> tuple[Any, list[str]]:
     """Return the parsed document, or the errors that stopped it."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+    except UnicodeDecodeError as exc:
         return None, [f"{path.name}: cannot read: {exc}"]
+    except OSError as exc:
+        # The error's class, never its text (which holds the full path).
+        return None, [f"{path.name}: cannot read: {type(exc).__name__}"]
     try:
         # UniqueKeyLoader is a SafeLoader subclass.
         return yaml.load(text, Loader=UniqueKeyLoader), []  # noqa: S506
@@ -142,16 +145,33 @@ def _build_registry(files: dict[str, Any]) -> Registry:
     )
 
 
-def load_registry(directory: Path) -> Registry:
-    """Parse, validate and cross-check ``directory``; raise ``RegistryError``."""
+def unreadable_directory(directory: Path, exc: OSError) -> str:
+    """The problem of a directory the process cannot read: the error's class,
+    never its text (which holds a path)."""
+    return f"{directory}: registry directory cannot be read: {type(exc).__name__}"
+
+
+def _present_files(directory: Path) -> tuple[list[str], dict[str, Path]]:
+    """The directory's own problems and the registry files that are there."""
     if not directory.is_dir():
         raise RegistryError([f"{directory}: registry directory not found"])
-    errors = _directory_errors(directory)
+    paths = {
+        stem: directory / f"{stem}.yaml"
+        for stem in FILE_MODELS
+        if (directory / f"{stem}.yaml").is_file()
+    }
+    return _directory_errors(directory), paths
+
+
+def load_registry(directory: Path) -> Registry:
+    """Parse, validate and cross-check ``directory``; raise ``RegistryError``."""
+    try:
+        errors, paths = _present_files(directory)
+    except OSError as exc:
+        raise RegistryError([unreadable_directory(directory, exc)]) from None
     files: dict[str, Any] = {}
-    for stem, model in FILE_MODELS.items():
-        path = directory / f"{stem}.yaml"
-        if not path.is_file():
-            continue
+    for stem, path in paths.items():
+        model = FILE_MODELS[stem]
         document, parse_errors = _parse_file(path)
         if parse_errors:
             errors += parse_errors

@@ -6,10 +6,11 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from servicesupport import REGISTRY_DIR, TESTS_ROOT
+from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.registry import load_registry
 from meridian.runtime import graphs
@@ -42,9 +43,13 @@ def published(monkeypatch: pytest.MonkeyPatch, *entries: FakeEntryPoint) -> None
         return list(entries)
 
     monkeypatch.setattr(graphs, "entry_points", fake_entry_points)
-    # The stand-in factory below lives in tests/, outside the meridian package;
-    # the package-directory check has its own tests at the end of this file.
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", TESTS_ROOT)
+    # The stand-in entry points claim the real module's value, which the loader
+    # locates before it loads: so the trusted root is the repository, holding
+    # both that module (imported here: the loader reads it once loaded) and the
+    # stand-in factory below, which lives in tests/. The package-directory check
+    # has its own tests at the end of this file.
+    importlib.import_module("meridian.workloads.claims_triage.graph")
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 def entry(
@@ -128,6 +133,13 @@ def test_an_agent_without_an_entry_point_is_refused(
 
     with pytest.raises(GraphLoadError, match="no graph"):
         load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_refusal_the_wording_does_not_know_is_an_error_not_silence() -> None:
+    unknown = SimpleNamespace(reason="a reason added later", distribution=None)
+
+    with pytest.raises(AssertionError):
+        graphs._refusal_message("claims-triage", unknown)
 
 
 def test_an_entry_point_that_fails_to_import_is_a_load_error(
@@ -224,6 +236,66 @@ def test_a_factory_whose_module_lies_outside_the_package_directory_is_refused(
 
     with pytest.raises(GraphLoadError, match="outside"):
         load_graph_factory("claims-triage", REGISTRY)
+
+
+def test_a_graph_whose_module_lies_outside_the_package_directory_never_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+
+    def loads() -> Any:
+        calls.append("the module's code ran")
+        return build
+
+    published(monkeypatch, entry(loads=loads))
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", tmp_path)  # not where the module is
+
+    with pytest.raises(GraphLoadError, match=r"'claims-triage'.*outside"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+    assert calls == []
+
+
+def test_a_factory_defined_outside_the_package_is_refused_whatever_its_entry_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reexported(model: object, tools: object) -> None:
+        """A factory a trusted module imported from elsewhere."""
+
+    reexported.__module__ = "json"  # the standard library: outside the repository
+    published(monkeypatch, entry(loads=lambda: reexported))
+
+    with pytest.raises(GraphLoadError, match=r"'claims-triage'.*comes from a file"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "meridian.workloads.no_such_module:build",
+        "meridian.workloads.claims_triage.no_such_module:build",
+        # The parent of this module cannot even be imported.
+        "meridian.workloads.no_such_package.module:build",
+        "meridian.workloads..module:build",
+    ],
+)
+def test_a_graph_whose_module_cannot_be_found_never_runs(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    calls: list[str] = []
+
+    def loads() -> Any:
+        calls.append("the module's code ran")
+        return build
+
+    published(
+        monkeypatch, FakeEntryPoint("claims-triage", FakeDist("meridian"), loads, value)
+    )
+
+    with pytest.raises(GraphLoadError, match=r"'claims-triage'.*outside"):
+        load_graph_factory("claims-triage", REGISTRY)
+
+    assert calls == []
 
 
 def test_the_real_workload_graph_passes_both_checks() -> None:

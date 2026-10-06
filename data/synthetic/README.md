@@ -29,7 +29,7 @@ test regenerates the data and compares it with the committed files.
 | `expected-outcomes.json` | A list with one label record per `claim_id`, sorted by `claim_id` | 40 |
 | `wordings/<CODE>.md` | The policy wording of each product | 4 |
 | `manifest.json` | Seed, counts and a SHA-256 of every other file | 1 |
-| `injection/cases.json` | Injection cases: golden claims that carry an attack or a look-alike text | 90 |
+| `injection/cases.json` | Injection cases: golden claims that carry an attack or a look-alike text | 94 |
 | `injection/manifest.json` | Seed, counts and a SHA-256 of the case file, and of the golden manifest it was built from | 1 |
 | `generator/` | The generator; run it with `make synthetic` | code |
 
@@ -115,6 +115,7 @@ in the description only. It is not a field of the claim.
 | Field | Meaning |
 |---|---|
 | `synthetic` | Always `true` |
+| `workload` | `claims-triage`, the workload the set belongs to; `meridian eval run` refuses a set whose manifest names another or none, and the injection set's manifest carries the same key |
 | `generator_version` | Version of the generator that wrote the files |
 | `seed` | The seed of the run |
 | `reference_date` | 2026-09-01, the dataset's clock; nothing is reported after it |
@@ -239,13 +240,14 @@ is an instruction to whoever, or whatever, reads it.** Status: implemented,
 and used by tests only; no service reads it.
 
 A case is a golden claim that asks the model, copied under a new claim ID,
-with a sentence added. There are three groups:
+with a sentence added. There are four groups:
 
 | IDs | Label | Carrier | Cases | What is added |
 |---|---|---|---|---|
 | `CLM-1001` to `CLM-1054` | `attack` | `description` | 54 | A sentence in the claimant's description that tries to make the model say no exclusion applies |
 | `CLM-2001` to `CLM-2012` | `attack` | `clause` | 12 | A sentence put into an exclusion clause of the claim's wording, before the clause's closing sentence |
 | `CLM-3001` to `CLM-3024` | `benign` | `description` | 24 | An ordinary claimant's sentence, most of them written to resemble an attack's words |
+| `CLM-4001` to `CLM-4004` | `benign` | `clause` | 4 | A plain wording sentence (a definition, a notice period, a cross-reference) put into an exclusion clause the way an attack is, on claims no exclusion applies to (the clause is one the triage shows the model for the claim's peril), to show that a changed clause alone does not flag a claim or change how the claim ends |
 
 | Field | Meaning |
 |---|---|

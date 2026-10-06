@@ -37,6 +37,7 @@ NAME = "first-run-probe"
 MODULE = "first_run_probe"
 TIMEOUT_SECONDS = 300
 AGENTS = "config/registry/agents.yaml"
+SERVICES = "config/registry/services.yaml"
 PYPROJECT = "pyproject.toml"
 WORKLOAD_SOURCE = f"src/meridian/workloads/{MODULE}"
 WORKLOAD_TESTS = f"tests/meridian/workloads/{MODULE}"
@@ -103,7 +104,8 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     tree = tmp_path / "tree"
     copy_of_the_tree(tree)
     environment = {k: v for k, v in os.environ.items() if k not in DROPPED}
-    repo_before = {path: (REPO / path).read_bytes() for path in (PYPROJECT, AGENTS)}
+    edited = (PYPROJECT, AGENTS, SERVICES)
+    repo_before = {path: (REPO / path).read_bytes() for path in edited}
     repo_agents = len(load_registry(REPO / "config" / "registry").agents)
 
     def run(label: str, *command: str, expect: int = 0) -> subprocess.CompletedProcess:
@@ -126,7 +128,8 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     run("0 the environment (uv, its cache, the lock) works", "python", "-c", "pass")
 
     run("1 workload new", "meridian", "workload", "new", NAME)
-    after_first = {path: (tree / path).read_bytes() for path in (PYPROJECT, AGENTS)}
+    after_first = {path: (tree / path).read_bytes() for path in edited}
+    assert after_first[SERVICES] != repo_before[SERVICES]
 
     validated = run("2 registry validate", "meridian", "registry", "validate")
     assert agent_count(validated.stdout) == repo_agents + 1, validated.stdout
@@ -170,13 +173,39 @@ def test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy(
     assert refused.stderr == f"ERROR {EMPTY_GOLDEN_SET}\n", refused.stderr
     assert not (tree / "report.json").exists()
 
+    # The claims workload's own set, which the new workload must not run on.
+    claims_set = tree / "claims-set"
+    shutil.copytree(
+        REPO / "data" / "synthetic",
+        claims_set,
+        ignore=shutil.ignore_patterns("__pycache__", "generator", "injection"),
+    )
+    own_set = f"data/evaluation/{NAME}/golden"
+    elsewhere = tuple(str(claims_set) if arg == own_set else arg for arg in eval_run)
+    assert elsewhere != eval_run
+    for flags in ((), ("--allow-empty",)):
+        other = run("7c eval run on the claims set", *elsewhere, *flags, expect=2)
+        assert other.stdout == "", other.stdout
+        assert other.stderr.splitlines()[-1:] == [
+            "ERROR the golden set: its manifest names the workload "
+            f"claims-triage, not {NAME}"
+        ], other.stderr
+        assert not (tree / "report.json").exists()
+
     tested = run("8 pytest", "pytest", WORKLOAD_TESTS, "-q", "-p", "no:cacheprovider")
     # Four generated tests; the pattern cannot match "14 passed".
     assert TESTS_PASSED.search(tested.stdout), tested.stdout
 
     again = run("9 workload new again", "meridian", "workload", "new", NAME, expect=2)
     # The last line: uv may print a notice of its own before the command's.
-    assert again.stderr.splitlines()[-1:] == [f"ERROR {NAME_TAKEN}"], again.stderr
+    held = (
+        "an agent of the registry, an entry point of the meridian.graphs group, "
+        "an entry point of the meridian.evaluations group, the workload's package, "
+        "the workload's tests and the workload's evaluation data"
+    )
+    assert again.stderr.splitlines()[-1:] == [f"ERROR {NAME_TAKEN.format(held)}"], (
+        again.stderr
+    )
     for path, content in after_first.items():
         assert (tree / path).read_bytes() == content, path
 

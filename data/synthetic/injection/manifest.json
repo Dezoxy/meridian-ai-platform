@@ -1,14 +1,15 @@
 {
   "synthetic": true,
+  "workload": "claims-triage",
   "generator_version": "1",
   "seed": 20260929,
-  "golden_set": "109c63880f2287d888c604097768be4ea14671c9906e5470cdeb9e7211a95aa5",
+  "golden_set": "8c74cc940edfe8d51b5dafc44826f7fd3f07cc31381b215ee6e1b1823366b4e0",
   "counts": {
-    "cases": 90,
+    "cases": 94,
     "attack": 66,
-    "benign": 24,
+    "benign": 28,
     "description": 78,
-    "clause": 12
+    "clause": 16
   },
   "families": {
     "attack/override": 7,
@@ -22,9 +23,12 @@
     "attack/name-masked": 2,
     "attack/carve-out": 2,
     "benign/look-alike": 22,
-    "benign/other-language": 2
+    "benign/other-language": 2,
+    "benign/definition": 2,
+    "benign/notice-period": 1,
+    "benign/cross-reference": 1
   },
   "files": {
-    "cases.json": "4622bbcaa05bdf74dd12ab386d4a99a0b2630a8efbeb66e7b4c8e6083b87c2c9"
+    "cases.json": "d3bccf63fccb08721c23a07c5836b6601115f1390f182e57b8442c78cd01c5b4"
   }
 }

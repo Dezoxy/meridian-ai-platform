@@ -2,6 +2,7 @@
 workload needed)."""
 
 import contextlib
+import importlib
 import json
 import logging
 import threading
@@ -27,7 +28,7 @@ from opentelemetry.trace import StatusCode
 from servicesupport import (
     GATEWAY_REPLY,
     REGISTRY_DIR,
-    TESTS_ROOT,
+    REPO_ROOT,
     assert_spans_hold_no_exception_and_no_canary,
     audit_events,
     database_error,
@@ -101,13 +102,16 @@ def ok_factory(model: ModelClient, tools: ToolClient) -> StateGraph:
 def register(monkeypatch: pytest.MonkeyPatch, factory: Callable) -> None:
     """Publish ``factory`` as the claims-triage graph for the next ``make_client``.
 
-    The stand-in graphs live under tests/, outside the meridian package, so the
-    loader's package-directory check is pointed at tests/ for these tests; the
-    check itself is tested in test_graphs.py.
+    The stand-in graphs live under tests/, outside the meridian package, and
+    claim the real graph's module, which the loader locates before it loads:
+    the loader's package-directory check is pointed at the repository for these
+    tests, which holds both, and the real module is imported so that the loader
+    finds it loaded; the check itself is tested in test_graphs.py.
     """
     entry = FakeEntryPoint(factory)
     monkeypatch.setattr(graphs, "entry_points", lambda *, group: [entry])
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", TESTS_ROOT)
+    importlib.import_module("meridian.workloads.claims_triage.graph")
+    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 class Gateway:

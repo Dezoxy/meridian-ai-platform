@@ -60,6 +60,8 @@ def _fingerprint_problems(baseline: Report, new: Report) -> list[str]:
         problems.append(f"the judge's prompt changed: {REGENERATE}")
     if before.recording != after.recording:
         problems.append(f"the recording changed: {REGENERATE}")
+    if before.screen != after.screen:
+        problems.append(f"the screens changed: {REGENERATE}")
     return problems
 
 

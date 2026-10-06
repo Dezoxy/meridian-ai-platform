@@ -1,7 +1,11 @@
 """Screens for text that a model should not be sent as it stands."""
 
+import hashlib
+import inspect
+import json
 import re
 import unicodedata
+from collections.abc import Callable
 
 _SPACES = re.compile(r"\s+")
 _FORMAT_CATEGORY = "Cf"
@@ -158,3 +162,64 @@ def addresses_the_model(text: str) -> bool:
     the text."""
     normalised = _normalise(text)
     return any(pattern.search(normalised) for pattern in _ADDRESSES_THE_MODEL)
+
+
+SOURCE_UNAVAILABLE = "the source of the screens cannot be read"
+
+
+class ScreenSourceUnavailable(Exception):
+    """The source text of a screen cannot be read, so the screens cannot be
+    fingerprinted. The message is fixed; the cause is the error that
+    ``inspect.getsource`` raised."""
+
+    def __init__(self) -> None:
+        super().__init__(SOURCE_UNAVAILABLE)
+
+
+def _source(function: Callable[..., object]) -> str:
+    try:
+        return inspect.getsource(function)
+    except (OSError, TypeError) as exc:
+        raise ScreenSourceUnavailable from exc
+
+
+def _digest(parts: list[object]) -> str:
+    # JSON, so that two parts cannot run together into the same bytes.
+    encoded = json.dumps(parts, ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def screen_fingerprint() -> str:
+    """The SHA-256, in hex, of everything that decides what the two screens
+    match: the source text of ``_normalise``, ``holds_special_category`` and
+    ``addresses_the_model``, the data they use (the two normalisation values
+    and the special-category pattern, each with its flags) and each pattern
+    that addresses the model, with its flags.
+
+    An evaluation report carries it, so that a changed screen asks for a new
+    baseline instead of passing because no grade happened to regress.
+
+    A function's source text is read with ``inspect.getsource`` (docstring and
+    comments included: any edit to the function changes the digest) from the
+    module's globals at the time of the call. The text is the same in a source
+    tree and in an installed package, which ships its ``.py`` files; where it
+    cannot be read, ``ScreenSourceUnavailable`` is raised. Not covered: the
+    helpers a pattern is built from at import (their result is, in the
+    patterns), the Unicode database of the interpreter, which NFKC and the
+    category check read (a baseline is made under the pinned Python), and the
+    ``re`` module."""
+    return _digest(
+        [
+            _source(_normalise),
+            _source(holds_special_category),
+            _source(addresses_the_model),
+            _SPACES.pattern,
+            _SPACES.flags,
+            _FORMAT_CATEGORY,
+            _SPECIAL_CATEGORY.pattern,
+            _SPECIAL_CATEGORY.flags,
+            # In the order they are tried: the order is part of the screen's
+            # source.
+            *[(pattern.pattern, pattern.flags) for pattern in _ADDRESSES_THE_MODEL],
+        ]
+    )

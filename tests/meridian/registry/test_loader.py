@@ -1,11 +1,14 @@
 """The loader: files, YAML strictness, schema errors and error collection."""
 
+import errno
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
+from directorysupport import CANARY, FAILURES, Failure, make_unreadable
 from registrysupport import Change, add_field, apply_changes, planted, set_field
 
 from meridian.platform.registry import RegistryError, load_registry
@@ -164,6 +167,37 @@ def test_missing_directory_is_reported(tmp_path: Path, load_errors: LoadErrors) 
 
     assert len(errors) == 1
     assert "registry directory not found" in errors[0]
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+def test_a_directory_that_cannot_be_read_is_one_registry_error_naming_the_class(
+    registry_copy: Path,
+    load_errors: LoadErrors,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Failure,
+) -> None:
+    make_unreadable(monkeypatch, registry_copy, failure)
+
+    errors = load_errors(registry_copy)
+
+    assert errors == (
+        f"{registry_copy}: registry directory cannot be read: PermissionError",
+    )
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+def test_a_directory_that_cannot_be_read_does_not_repeat_the_os_error_text(
+    registry_copy: Path,
+    load_errors: LoadErrors,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Failure,
+) -> None:
+    make_unreadable(monkeypatch, registry_copy, failure)
+
+    errors = load_errors(registry_copy)
+
+    assert CANARY not in " ".join(errors)
+    assert "Traceback" not in " ".join(errors)
 
 
 def test_invalid_id_is_reported(plant: Plant, load_errors: LoadErrors) -> None:
@@ -342,6 +376,26 @@ def test_invalid_utf8_is_reported_not_raised(
 
     assert len(errors) == 1
     assert errors[0].startswith("agents.yaml: cannot read: ")
+
+
+def test_a_file_that_cannot_be_read_is_named_with_the_error_class_only(
+    registry_copy: Path, load_errors: LoadErrors, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_read_text = Path.read_text
+    unreadable = registry_copy / "agents.yaml"
+
+    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == unreadable:
+            raise PermissionError(errno.EACCES, CANARY, str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    errors = load_errors(registry_copy)
+
+    assert errors == ("agents.yaml: cannot read: PermissionError",)
+    assert CANARY not in errors[0]
+    assert str(registry_copy) not in errors[0]
 
 
 @pytest.mark.parametrize(

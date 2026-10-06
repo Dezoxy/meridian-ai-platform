@@ -71,7 +71,7 @@ from meridian.platform.gateway.providers.recorded import (
     load_recording,
     write_recording,
 )
-from meridian.platform.guardrails import holds_special_category
+from meridian.platform.guardrails import holds_special_category, screen_fingerprint
 from meridian.workloads.claims_triage import assessment
 from meridian.workloads.claims_triage.evaluation import RULE_GRADERS
 
@@ -469,6 +469,15 @@ def test_a_committed_report_and_the_comparison_hold_nothing_of_the_service(
     assert text, path.name
     for what, pattern in FORBIDDEN.items():
         assert pattern.search(text) is None, f"{path.name} holds {what}"
+
+
+def test_the_committed_baseline_carries_the_fingerprint_of_the_screens() -> None:
+    if not BASELINE_PATH.is_file():
+        pytest.fail(f"no {BASELINE_PATH.name}: {BASELINE_COMMAND}")
+
+    baseline = load_report(BASELINE_PATH)
+
+    assert baseline.fingerprints.screen == screen_fingerprint(), BASELINE_COMMAND
 
 
 def test_the_forbidden_patterns_find_what_they_name() -> None:

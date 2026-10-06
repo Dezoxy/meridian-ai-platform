@@ -112,6 +112,32 @@ def test_a_changed_recording_asks_for_a_new_baseline() -> None:
     assert "make eval-baseline" in comparison.problems[0]
 
 
+def test_a_changed_screen_asks_for_a_new_baseline() -> None:
+    comparison = compare(
+        with_fingerprint("screen", DIGEST), with_fingerprint("screen", OTHER_DIGEST)
+    )
+
+    only_problem(comparison, "the screens changed")
+    assert "make eval-baseline" in comparison.problems[0]
+
+
+def test_an_old_baseline_without_a_screen_asks_for_a_new_baseline() -> None:
+    # An old baseline must ask, or it never would.
+    only_problem(
+        compare(make_report(), with_fingerprint("screen", DIGEST)),
+        "the screens changed",
+    )
+
+
+def test_an_equal_screen_passes() -> None:
+    comparison = compare(
+        with_fingerprint("screen", DIGEST), with_fingerprint("screen", DIGEST)
+    )
+
+    assert comparison.passed
+    assert comparison.problems == ()
+
+
 def test_a_judge_or_recording_on_one_side_only_is_a_difference() -> None:
     only_problem(
         compare(make_report(), with_fingerprint("judge", DIGEST)),

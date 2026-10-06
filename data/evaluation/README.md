@@ -24,7 +24,7 @@ on a changed fingerprint. The baseline is the recorded real model's run
 (the owner's decision, 2026-10-04): 38 of 40 on `recommendation`, 40 of 40
 on every other grader.
 
-A report carries five fingerprints, and a change to any of them asks for a
+A report carries six fingerprints, and a change to any of them asks for a
 new baseline in the same reviewed change (T-29, T-72):
 
 - `prompt`: what the model is sent, the system message, the user message's
@@ -32,12 +32,20 @@ new baseline in the same reviewed change (T-29, T-72):
   (`assessment.py`); not the model, the deployment or the answer parser.
 - `judge`: the same for the judge's prompt (`evaluation/judge.py`).
 - `recording`: the recording file's bytes.
+- `screen`: what the two guardrail screens match, the patterns of the
+  injection screen and of the special-category screen with their flags, and
+  the text normalisation they read through (`guardrails/screening.py`); a
+  baseline made before it existed asks for a new one. It is not part of the
+  prompt's version, which labels the recording.
 - `tools`: the agent's registry entry, with its allowlist, and the registry
   entries of the tools on it; not the tool servers' entries.
-- `golden_set`: the generator's version and seed, the hash of the whole
-  manifest and of every file it lists, each checked against the file's
-  bytes; a file in the golden set's directory that the manifest does not
-  list is refused.
+- `golden_set`: the workload the manifest names, the generator's version
+  and seed, the hash of the whole manifest and of every file it lists, each
+  checked against the file's bytes; a file in the golden set's directory
+  that the manifest does not list is refused. A manifest must name its
+  workload, and `meridian eval run` refuses a set that names another
+  before it reads a case, empty set or not (S061); the two live reports
+  were written before that and carry none.
 
 ## The recording
 
@@ -113,11 +121,13 @@ calls, tokens, cost).
 
 ## The injection suite (S032)
 
-Ninety synthetic cases from `data/synthetic/injection/` run through the real
-services in one process: 54 attacks written into a claimant's description, 12
-written into a stored exclusion clause, and 24 benign sentences, most of
-them written to resemble an attack. Each is a golden claim that asks the
-model, under a new ID. [The synthetic data's README](../synthetic/README.md)
+Ninety-four synthetic cases from `data/synthetic/injection/` run through the
+real services in one process: 54 attacks written into a claimant's
+description, 12 written into a stored exclusion clause, 24 benign sentences
+in a description, most of them written to resemble an attack, and four plain
+wording sentences in a clause of a claim no exclusion applies to (S061: a
+changed clause alone flags nothing and changes no outcome). Each is a golden
+claim that asks the model, under a new ID. [The synthetic data's README](../synthetic/README.md)
 describes the case file; its sentences are data, never instructions.
 
 Who answers the model: a script that says "no exclusion applies" whenever it
@@ -188,7 +198,7 @@ which holds the hash of the golden manifest.
   from reject to approve; the 6 on the claim with a fraud indicator changed
   nothing. A clean copy of the first four claims flips the same way when
   the model wrongly says none (T-26; a test in `test_triage_stack.py`).
-- The three absolute graders passed on all 90 cases.
+- The three absolute graders passed on all 94 cases.
 
 The cases were written in the session that built the suite, after it had
 read the screen. The rates describe these cases. The screen was not changed
@@ -234,7 +244,8 @@ to raise them.
 ## A scaffolded workload's golden set
 
 `meridian workload new NAME` writes `NAME/golden/` here: `cases.json`, an
-empty list, and the `manifest.json` that lists its hash. No such directory is
+empty list, and the `manifest.json` that names the workload and lists the
+file's hash. No such directory is
 committed; the claims workload's golden set is `data/synthetic/`. A golden
 set with no case is an empty evaluation: `meridian eval run --allow-empty`
 says that nothing was evaluated, sends nothing and writes no report, and

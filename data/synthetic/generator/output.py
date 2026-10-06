@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import GENERATOR_VERSION, catalogue, injection
+from . import GENERATOR_VERSION, WORKLOAD, catalogue, injection
 from .scenarios import Dataset
 from .wording import render_wording
 
@@ -34,6 +34,7 @@ def build_manifest(dataset: Dataset, seed: int, files: dict[str, bytes]) -> dict
     reasons = [outcome["reason"] for outcome in dataset.outcomes]
     return {
         "synthetic": True,
+        "workload": WORKLOAD,
         "generator_version": GENERATOR_VERSION,
         "seed": seed,
         "reference_date": catalogue.REFERENCE_DATE.isoformat(),

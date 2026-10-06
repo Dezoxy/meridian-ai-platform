@@ -271,6 +271,7 @@ def test_the_golden_set_text_is_an_empty_list_and_its_manifest(root: Path) -> No
     assert manifest == (
         json.dumps(
             {
+                "workload": NAME,
                 "generator_version": "none",
                 "seed": 0,
                 "files": {"cases.json": digest},
@@ -289,6 +290,7 @@ def test_the_generated_golden_set_passes_the_platform_fingerprint(
     golden_set = golden_set_of(root / f"data/evaluation/{NAME}/golden/manifest.json")
 
     assert tuple(golden_set.files) == ("cases.json",)
+    assert golden_set.workload == NAME
     assert golden_set.generator_version == "none"
     assert golden_set.seed == 0
 

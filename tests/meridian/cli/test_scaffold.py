@@ -20,6 +20,8 @@ import yaml
 from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
+    AGENTS_LIST_UNUSABLE,
+    AGENTS_NO_FINAL_NEWLINE,
     AMBIGUOUS_NAME,
     BAD_NAME,
     MAX_NAME_CHARS,
@@ -28,6 +30,7 @@ from meridian.platform.cli.scaffold import (
     PATH_EXISTS,
     PATH_OUTSIDE,
     PYPROJECT_EDIT_UNVERIFIED,
+    PYPROJECT_HEADER_UNUSABLE,
     PYPROJECT_NOT_TOML,
     REGISTRY_COPY_FAILED,
     REGISTRY_EDIT_INVALID,
@@ -39,6 +42,15 @@ from meridian.platform.cli.scaffold import (
     ScaffoldError,
     ScaffoldWriteError,
     plan_workload,
+)
+from meridian.platform.cli.scaffold_services import (
+    SERVICES_AGENT_LISTED,
+    SERVICES_AGENTS_MISSING,
+    SERVICES_AGENTS_UNUSABLE,
+    SERVICES_EDIT_UNVERIFIED,
+    SERVICES_NOT_YAML,
+    SERVICES_RUNTIME_MISSING,
+    SERVICES_RUNTIME_TWICE,
 )
 from meridian.platform.registry.loader import RegistryError, load_registry
 
@@ -90,7 +102,7 @@ def comment_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.lstrip()[:1] == "#"]
 
 
-def test_a_plan_creates_six_files_and_changes_two_and_writes_nothing(
+def test_a_plan_creates_six_files_and_changes_three_and_writes_nothing(
     root: Path,
 ) -> None:
     before = snapshot(root)
@@ -101,7 +113,11 @@ def test_a_plan_creates_six_files_and_changes_two_and_writes_nothing(
     assert plan.module == MODULE
     assert set(plan.created) == created_paths()
     assert len(plan.created) == 6
-    assert set(plan.changed) == {"config/registry/agents.yaml", "pyproject.toml"}
+    assert set(plan.changed) == {
+        "config/registry/agents.yaml",
+        "config/registry/services.yaml",
+        "pyproject.toml",
+    }
     assert snapshot(root) == before
 
 
@@ -401,7 +417,7 @@ def test_a_name_an_agent_already_has_is_refused(root: Path) -> None:
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, "claims-triage")
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
     assert snapshot(root) == before
 
 
@@ -417,7 +433,7 @@ def test_a_name_only_an_agent_has_is_refused_with_no_entry_point_or_directory(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, agent)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
 
 
 @pytest.mark.parametrize("group", [GRAPHS, EVALUATIONS])
@@ -433,7 +449,7 @@ def test_a_name_in_only_one_entry_point_table_is_refused(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
 
 
 def occupy_with_a_directory(path: Path) -> None:
@@ -474,7 +490,7 @@ def test_a_path_the_workload_would_take_is_refused_whatever_is_there(
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == NAME_TAKEN
+    assert str(refused.value).startswith(NAME_TAKEN.format(""))
     assert snapshot(root) == before
 
 
@@ -575,9 +591,10 @@ def test_an_agents_file_in_flow_style_fails_the_agents_edit(root: Path) -> None:
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
-    assert "block style" in AGENTS_EDIT_UNVERIFIED
-    assert "`agents` last" in AGENTS_EDIT_UNVERIFIED
+    # The whole file is one line of JSON: the list starts on line 1.
+    assert str(refused.value) == AGENTS_LIST_UNUSABLE.format(1)
+    assert "block style" in AGENTS_LIST_UNUSABLE
+    assert "`agents` last" in AGENTS_LIST_UNUSABLE
     assert snapshot(root) == before
 
 
@@ -585,18 +602,18 @@ def test_the_parse_step_alone_refuses_an_edit_the_registry_check_would_accept(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     flow_style_agents(root)
-    monkeypatch.setattr(scaffold, "_registry_with", lambda directory, text: None)
+    monkeypatch.setattr(scaffold, "_registry_with", lambda directory, texts: None)
 
     with pytest.raises(ScaffoldError) as refused:
         plan_workload(root, NAME)
 
-    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
+    assert str(refused.value) == AGENTS_LIST_UNUSABLE.format(1)
 
 
 def test_the_registry_check_alone_refuses_an_edit_the_parse_step_accepts(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def invalid(directory: Path, text: str) -> None:
+    def invalid(directory: Path, texts: dict[str, str]) -> None:
         raise RegistryError(["agents.yaml: agents.9: a message of the registry's own"])
 
     monkeypatch.setattr(scaffold, "_registry_with", invalid)
@@ -643,52 +660,25 @@ def test_a_pyproject_table_the_text_edit_cannot_find_fails_the_pyproject_edit(
     assert str(refused.value) == PYPROJECT_EDIT_UNVERIFIED
 
 
-TOML_WITH_A_HEADER_IN_A_STRING = (
-    '[project]\nname = "meridian"\ndescription = """\n'
-    '[project.entry-points."meridian.graphs"]\n"""\n\n'
-    '[ project.entry-points."meridian.graphs" ]\nclaims-triage = "a.b:c"\n\n'
-    '[project.entry-points."meridian.evaluations"]\nclaims-triage = "d.e:f"\n'
-)
-# The first header is the real one, so an edit that took it would be right: only
-# the refusal of a header seen twice stops this one.
-TOML_WITH_A_HEADER_TWICE = (
-    '[project]\nname = "meridian"\n\n'
-    '[project.entry-points."meridian.graphs"]\nclaims-triage = "a.b:c"\n\n'
-    '[project.entry-points."meridian.evaluations"]\nclaims-triage = "d.e:f"\n\n'
-    '[tool.x]\nnote = """\n[project.entry-points."meridian.graphs"]\n"""\n'
-)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [TOML_WITH_A_HEADER_IN_A_STRING, TOML_WITH_A_HEADER_TWICE],
-    ids=["insertion-lands-in-the-string", "header-seen-twice"],
-)
-def test_a_header_line_inside_a_string_fails_the_pyproject_edit(
-    root: Path, text: str
-) -> None:
-    (root / "pyproject.toml").write_text(text, encoding="utf-8")
-    before = snapshot(root)
-
-    with pytest.raises(ScaffoldError) as refused:
-        plan_workload(root, NAME)
-
-    assert str(refused.value) == PYPROJECT_EDIT_UNVERIFIED
-    assert snapshot(root) == before
-
-
-def test_the_trees_with_a_header_line_in_a_string_are_valid_toml() -> None:
-    for text in (TOML_WITH_A_HEADER_IN_A_STRING, TOML_WITH_A_HEADER_TWICE):
-        document = tomllib.loads(text)
-        assert document["project"]["entry-points"][GRAPHS] == {"claims-triage": "a.b:c"}
-
-
 def nothing_to_arrange(root: Path) -> None:
     return None
 
 
 def occupy_the_module_directory(root: Path) -> None:
     occupy_with_a_file(root / f"src/meridian/workloads/{MODULE}")
+
+
+def publish_the_name_in_the_graphs_group(root: Path) -> None:
+    header = f'[project.entry-points."{GRAPHS}"]\n'
+    edit(
+        root / "pyproject.toml",
+        lambda t: t.replace(header, header + f'{NAME} = "x.y:z"\n'),
+    )
+
+
+def comment_on_the_graphs_header(root: Path) -> None:
+    header = f'[project.entry-points."{GRAPHS}"]'
+    edit(root / "pyproject.toml", lambda t: t.replace(header, header + "  # note"))
 
 
 def break_pyproject_toml(root: Path) -> None:
@@ -709,6 +699,10 @@ def break_the_registry(root: Path) -> None:
         pytest.param("import", nothing_to_arrange, id="keyword-import"),
         pytest.param("claims-triage", nothing_to_arrange, id="agent-exists"),
         pytest.param(NAME, occupy_the_module_directory, id="directory-taken"),
+        pytest.param(
+            NAME, publish_the_name_in_the_graphs_group, id="entry-point-taken"
+        ),
+        pytest.param(NAME, comment_on_the_graphs_header, id="header-with-a-comment"),
         pytest.param(NAME, break_layout_no_agents_file, id="not-a-checkout"),
         pytest.param(NAME, break_the_registry, id="registry-invalid"),
         pytest.param(NAME, break_pyproject_toml, id="pyproject-not-toml"),
@@ -739,7 +733,17 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         REGISTRY_INVALID,
         NAME_TAKEN,
         AGENTS_EDIT_UNVERIFIED,
+        AGENTS_LIST_UNUSABLE,
+        AGENTS_NO_FINAL_NEWLINE,
+        SERVICES_NOT_YAML,
+        SERVICES_RUNTIME_MISSING,
+        SERVICES_RUNTIME_TWICE,
+        SERVICES_AGENTS_MISSING,
+        SERVICES_AGENTS_UNUSABLE,
+        SERVICES_AGENT_LISTED,
+        SERVICES_EDIT_UNVERIFIED,
         PYPROJECT_EDIT_UNVERIFIED,
+        PYPROJECT_HEADER_UNUSABLE,
         PYPROJECT_NOT_TOML,
         PATH_EXISTS,
         STALE_PLAN,
@@ -749,11 +753,21 @@ def test_every_refusal_text_is_fixed_and_only_those_that_take_a_type_hold_a_fiel
         WRITE_FAILED,
         ROLLBACK_FAILED,
     ]
+    # The first four take the type of an error; the other eight take what the
+    # refusal says of the person's own tree: what holds a name, a line, a header.
     taking_a_type = {
         REGISTRY_UNREADABLE,
         REGISTRY_COPY_FAILED,
         WRITE_FAILED,
         ROLLBACK_FAILED,
+        NAME_TAKEN,
+        AGENTS_LIST_UNUSABLE,
+        PYPROJECT_HEADER_UNUSABLE,
+        SERVICES_RUNTIME_TWICE,
+        SERVICES_AGENTS_MISSING,
+        SERVICES_AGENTS_UNUSABLE,
+        SERVICES_AGENT_LISTED,
+        SERVICES_EDIT_UNVERIFIED,
     }
     assert len(set(texts)) == len(texts)
     assert all(text.strip() for text in texts)

@@ -17,7 +17,7 @@ the screen, so the rates describe this set of cases and not attacks nobody
 wrote. data/synthetic/README.md says how to add one.
 
 - Attacks: 66; stopped before the model: 24 (36%).
-- Benign cases: 24; flagged by the screen: 16 (67%).
+- Benign cases: 28; flagged by the screen: 16 (57%).
 - Attacks that reached the model: 42; route not held: 30 (71%); recommendation
   not held: 36 (86%).
 

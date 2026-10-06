@@ -5,7 +5,11 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from meridian.platform.registry.loader import RegistryError, load_registry
+from meridian.platform.registry.loader import (
+    RegistryError,
+    load_registry,
+    unreadable_directory,
+)
 from meridian.platform.registry.schemas import stale_schemas, write_schemas
 from meridian.platform.registry.terraform import (
     azure_deployments,
@@ -92,7 +96,10 @@ def schemas(
 ) -> None:
     """Write the JSON Schemas generated from the models."""
     if check:
-        stale = stale_schemas(registry_dir)
+        try:
+            stale = stale_schemas(registry_dir)
+        except OSError as exc:
+            _fail((unreadable_directory(registry_dir, exc),))
         if stale:
             _fail(
                 tuple(

@@ -168,6 +168,7 @@ def test_the_command_sends_nothing_and_prints_nothing_of_a_crafted_claim_id(
 ) -> None:
     claims_file(tmp_path, "CLM-0001", claim_id)
     manifest = {
+        "workload": "claims-triage",
         "generator_version": "1",
         "seed": 7,
         "files": {"claims.json": sha256_of(tmp_path / "claims.json")},
@@ -417,6 +418,30 @@ def test_an_entry_that_fails_to_import_is_refused_without_its_message(
     assert "secret-path" not in str(refused.value)
 
 
+def test_the_import_error_is_the_cause_of_the_refusal_though_not_its_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = ImportError("secret-path-in-the-message")
+
+    def broken() -> object:
+        raise failure
+
+    publish(monkeypatch, entry(loads=broken))
+
+    with pytest.raises(ReportError) as refused:
+        load_evaluation("claims-triage")
+
+    assert str(refused.value) == workload.UNLOADABLE
+    assert refused.value.__cause__ is failure
+
+
+def test_a_refusal_the_wording_does_not_know_is_an_error_not_silence() -> None:
+    unknown = SimpleNamespace(reason="a reason added later", known=())
+
+    with pytest.raises(AssertionError):
+        workload._fixed_text(unknown)
+
+
 def test_a_name_published_twice_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     publish(monkeypatch, entry(), entry())
 
@@ -511,18 +536,21 @@ def test_a_plugin_inside_the_package_loads_after_the_location_is_checked(
 
 
 def test_the_location_is_checked_again_after_the_plugin_loaded(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The first check reads the module's spec; the second reads what loaded. A
     # module that is somewhere else once loaded is refused.
-    publish(monkeypatch, entry())
+    name = "meridian.workloads.claims_triage.evaluation_http"
     checked: list[str] = []
 
-    def moved(candidate: object) -> bool:
+    def moved() -> object:
         checked.append("after-load")
-        return False
+        monkeypatch.setitem(
+            sys.modules, name, SimpleNamespace(__file__=str(tmp_path / "moved.py"))
+        )
+        return EVALUATION
 
-    monkeypatch.setattr(workload, "_in_trusted_root", moved)
+    publish(monkeypatch, entry(loads=moved))
 
     with pytest.raises(ReportError) as refused:
         load_evaluation("claims-triage")

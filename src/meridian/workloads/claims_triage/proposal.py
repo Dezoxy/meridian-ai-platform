@@ -7,7 +7,7 @@ from the reason, and an automatic approval needs every condition the rules
 need.
 """
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -42,6 +42,8 @@ UnavailableBecause = Literal[
     "injection-suspected",
     "filtered",
 ]
+# The one word the screen and the assessment share; a test pins it to the Literal.
+INJECTION_SUSPECTED: Final = "injection-suspected"
 # The model said something about the exclusions, in its own words.
 ASSESSED = ("none_applies", "applies")
 
