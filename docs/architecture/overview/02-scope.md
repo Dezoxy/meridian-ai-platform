@@ -18,7 +18,7 @@
 | Area | Reason |
 |---|---|
 | A second deployed cloud | One maintainer; AWS is a designed mapping only (ADR 1) |
-| Fine-tuning and GraphRAG | Not needed to prove the platform; GraphRAG is a later option |
+| Fine-tuning and GraphRAG | Not needed to prove the platform. GraphRAG was measured as a spike (S038) and got no step: on the synthetic data a graph names no clause that the triage's lookup by structure does not |
 | Life and health insurance use cases | Listed as high-risk under the EU AI Act; motor and property triage with human approval is not (C-02) |
 | Microsoft 365 Copilot administration | Tenant administration cannot be evidenced in a portfolio |
 | Real personal data or real documents | Public repository; synthetic data only (C-03) |

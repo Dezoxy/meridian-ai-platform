@@ -25,10 +25,12 @@ What a certificate says:
   issuer        identity.issuer: on kind the `meridian-services` ClusterIssuer
                 that `make up` installs, one CA for every certificate
 
-The lifetime is 90 days (duration: 2160h, said explicitly: the issuer's policy
-caps it and cannot evaluate a request that names none, which is then never
-approved or denied), renewed at 60 by cert-manager's default renewBefore. A
-service reads its certificate when it starts and does not
+The lifetime is certificate.duration, 90 days by default (duration: 2160h, said
+explicitly: the issuer's policy caps it and cannot evaluate a request that
+names none, which is then never approved or denied), renewed at 60 by
+cert-manager's default renewBefore unless certificate.renewBefore is set
+(values.yaml says which values are refused and how they relate to the
+service's own restart margin). A service reads its certificate when it starts and does not
 reload it; instead it turns unhealthy near the end of the one it loaded
 (/healthz answers 503), the kubelet restarts the container and it loads the
 renewed one. With the values' liveness probe (periodSeconds 10, failureThreshold

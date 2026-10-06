@@ -123,6 +123,7 @@ KNOWN_ENV = {
     MODE_ENV,
     ENVIRONMENT_ENV,
     OTLP_ENDPOINT_ENV,
+    SWEEP_DEADLINE_ENV,
 }
 FACTORIES = {
     "claims-api": "meridian.workloads.claims_triage.app:create_app_from_env",
@@ -681,6 +682,42 @@ def test_the_sweep_takes_its_own_roles_connection_string_and_the_deadline() -> N
         "value": "14",
     }
     assert "envFrom" not in sweep_container()
+
+
+def deadline_of_each_workload(documents: list[dict]) -> dict[str, str]:
+    """The documents deadline the Claims API and the sweep are each given."""
+    claims_api = [
+        d
+        for d in documents
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == "claims-api"
+    ]
+    sweep = [
+        d
+        for d in documents
+        if d["kind"] == "CronJob" and d["metadata"]["name"] == "meridian-sweep"
+    ]
+    (api,) = claims_api
+    (cron,) = sweep
+    (api_container,) = containers(api)
+    (sweep_pod_container,) = containers(cron["spec"]["jobTemplate"])
+    return {
+        "claims-api": env_of(api_container)[SWEEP_DEADLINE_ENV]["value"],
+        "sweep": env_of(sweep_pod_container)[SWEEP_DEADLINE_ENV]["value"],
+    }
+
+
+def test_the_claims_api_and_the_sweep_are_given_the_same_documents_deadline() -> None:
+    deadlines = deadline_of_each_workload(all_documents())
+
+    assert deadlines == {"claims-api": "14", "sweep": "14"}
+
+
+def test_one_value_changes_the_documents_deadline_of_both_workloads() -> None:
+    documents = render([*helm_arguments(), "--set", "sweep.documentsDeadlineDays=30"])
+
+    deadlines = deadline_of_each_workload(documents)
+
+    assert deadlines == {"claims-api": "30", "sweep": "30"}
 
 
 def test_the_sweep_reads_its_own_secret_and_the_ca_and_never_the_owners() -> None:
@@ -1362,7 +1399,8 @@ def test_deploy_skips_the_ingestion_only_when_the_store_holds_chunks() -> None:
     assert "cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary" in reader
     assert "-c postgres" in reader
     assert "psql -d meridian" in reader
-    assert "FROM knowledge.chunks" in reader
+    assert "${CHUNK_COUNT_SQL}" in reader
+    assert "SELECT count(*) FROM knowledge.chunks" in COMMON_SH
     # The skip is the branch that counted more than zero, and it returns.
     assert "> 0" in body
     skip = next(i for i, line in enumerate(lines) if "already in the store" in line)
@@ -1377,6 +1415,7 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
         [
             "set -euo pipefail",
             "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
+            *re.findall(r"^readonly CHUNK_COUNT_SQL=.*$", COMMON_SH, re.M),
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
             "job_state() { echo succeeded; }",
@@ -1509,6 +1548,83 @@ def test_deploy_waits_out_the_token_window_the_ingestion_opens() -> None:
     # The node's clock is not the laptop's: no Kubernetes timestamp is read.
     assert "Timestamp" not in DEPLOY_SH
     assert "completionTime" not in DEPLOY_SH
+
+
+def run_ingest_then_token_window(
+    *, job: str, chunks: str
+) -> subprocess.CompletedProcess[str]:
+    """``ingest_corpus`` and then ``wait_for_token_window`` of deploy.sh in bash
+    against stubs: ``kctl`` finds the ingestion Job unless ``job`` is
+    ``absent``, ``job_state`` says ``job`` (``succeeded`` or ``absent``),
+    ``stored_chunk_count`` prints ``chunks``, ``run_job`` and ``sleep`` only
+    say that they ran, and ``log`` prints its words on stdout."""
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
+            'log() { printf "log: %s\\n" "$*"; }',
+            'sleep() { printf "sleep %s\\n" "$1"; }',
+            'run_job() { printf "run_job %s\\n" "$1"; }',
+            f'job_state() {{ printf "%s" "{job}"; }}',
+            f'stored_chunk_count() {{ printf "%s" "{chunks}"; }}',
+            "kctl() {",
+            '  case "$*" in',
+            f'    *"get job"*) [[ "{job}" == absent ]] || echo job.batch/stub ;;',
+            "  esac",
+            "}",
+            "NAMESPACE=meridian tag=abc image=stub:abc",
+            *re.findall(r"^readonly TOKEN_WINDOW_SECONDS=\d+$", DEPLOY_SH, re.M),
+            'ingested_at=""',
+            function_definition(DEPLOY_SH, "ingest_corpus"),
+            function_definition(DEPLOY_SH, "wait_for_token_window"),
+            "ingest_corpus",
+            "wait_for_token_window",
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_deploy_says_it_skipped_the_token_window_when_the_ingestion_was_not_run() -> (
+    None
+):
+    done = run_ingest_then_token_window(job="succeeded", chunks="85")
+
+    assert done.returncode == 0, done.stderr
+    message = " ".join(done.stdout.split())
+    assert "run_job" not in done.stdout
+    # No wait, and one line that says so and why: this run did not run it.
+    assert "sleep" not in done.stdout
+    assert "did not run the ingestion" in message
+    assert "skipped" in message
+    # What the reader may meet, and the remedy.
+    assert "token" in message
+    assert "wait a minute" in message
+    assert "run it again" in message
+    # One line, not a stack of them.
+    assert len([line for line in done.stdout.splitlines() if "skipped" in line]) == 1
+
+
+@pytest.mark.parametrize(
+    ("job", "chunks"), [("succeeded", "0"), ("succeeded", ""), ("absent", "")]
+)
+def test_deploy_waits_as_before_and_prints_no_skip_when_this_run_ran_the_ingestion(
+    job: str, chunks: str
+) -> None:
+    done = run_ingest_then_token_window(job=job, chunks=chunks)
+
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert any(line.startswith("run_job meridian-ingest-abc") for line in lines)
+    assert any(line.startswith("log: waiting ") for line in lines)
+    assert any(line.startswith("sleep ") for line in lines)
+    assert "skipped" not in done.stdout
+    assert "did not run the ingestion" not in done.stdout
 
 
 def test_the_ingest_job_is_not_retried_and_ends_after_the_ingestions_longest_wait() -> (
@@ -2131,7 +2247,7 @@ def run_cost_panel(
             'skip() { echo "SKIP  $*"; }',
             *re.findall(
                 r"^readonly (?:DASHBOARD_UID|DASHBOARD_FILE|COST_SERIES|POLL_TIMEOUT"
-                r"|GRAFANA_ACCOUNT)=.*$",
+                r"|GRAFANA_ACCOUNT|PSQL_OPTIONS)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
@@ -2187,9 +2303,11 @@ def run_cost_panel(
                 function_definition(SMOKE_SH, name)
                 for name in (
                     "deployed_services",
+                    "dashboard_targets",
+                    "dashboard_target_problem",
                     "run_dashboard_query",
                     "run_dashboard_queries",
-                    "check_cost_dashboard",
+                    "check_dashboard",
                     "check_cost_series",
                     "check_grafana_rights",
                     "check_cost_panel",
@@ -2539,10 +2657,17 @@ def run_open_grafana(
             'fail() { echo "FAIL  $*"; failures=$((failures + 1)); }',
             "readonly GRAFANA_SERVICE=svc/grafana KUBECONFIG_FILE=/dev/null",
             "readonly KUBE_CONTEXT=ctx",
-            *re.findall(r"^(?:grafana_url|grafana_failed)=.*$", SMOKE_SH, re.MULTILINE),
+            *re.findall(
+                r"^(?:grafana_url|grafana_failed|network_pod|refused_request"
+                r"|refused_err_file)=.*$",
+                SMOKE_SH,
+                re.MULTILINE,
+            ),
             one_line_function(SMOKE_SH, "clean_lines"),
             f"kctl() {{ printf '%s' '{secret}'; }}",
             f"kubectl() {{ {kubectl}; }}",
+            function_definition(SMOKE_SH, "network_delete_pod"),
+            function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             function_definition(SMOKE_SH, "open_grafana"),
             function_definition(SMOKE_SH, "gcurl"),
@@ -2792,7 +2917,10 @@ case "${url}" in
     if [[ "${decided}" == "${id}" ]]; then services="${STUB_DECISION_SERVICES}"; fi
     # The reading's number for this trace: STUB_GROW_UNTIL makes every service
     # report 2 + min(reading, STUB_GROW_UNTIL) spans, and STUB_LATE_AFTER holds
-    # model-gateway back until that reading. Both unset: two spans, always.
+    # model-gateway back until that reading. STUB_ALTERNATE_UNTIL answers the
+    # odd readings up to that number with every service, and the even ones and
+    # every one after it without the first (claims-api for the triage). All
+    # unset: two spans, always.
     echo >>"${STUB_DIR}/reads-${id}"
     reading="$(wc -l <"${STUB_DIR}/reads-${id}" | tr -d ' ')"
     spans=2
@@ -2802,10 +2930,18 @@ case "${url}" in
     if [[ -n "${STUB_LATE_AFTER}" ]] && ((reading < STUB_LATE_AFTER)); then
       services="${services/model-gateway/}"
     fi
-    jq -cn --arg services "${services}" --argjson spans "${spans}" '{batches: [
+    if [[ -n "${STUB_ALTERNATE_UNTIL}" ]] &&
+      { ((reading > STUB_ALTERNATE_UNTIL)) || ((reading % 2 == 0)); }; then
+      services="${services#* }"
+    fi
+    # STUB_SILENT_SERVICES names services that are in the answer with a
+    # resource and no span (the shape of a service that sent nothing yet).
+    jq -cn --arg services "${services}" --argjson spans "${spans}" \
+      --arg silent " ${STUB_SILENT_SERVICES} " '{batches: [
       ($services | split(" ")[] | select(. != "")) as $name
+      | (if ($silent | contains(" " + $name + " ")) then 0 else $spans end) as $count
       | {resource: {attributes: [{key: "service.name", value: {stringValue: $name}}]},
-         scopeSpans: [{spans: [range(0; $spans) | {}]}]}]}'
+         scopeSpans: [{spans: [range(0; $count) | {}]}]}]}'
     printf '\n200' ;;
   *) echo "unexpected curl: ${url}" >&2; exit 1 ;;
 esac
@@ -2862,7 +2998,9 @@ def run_demo(
     poll_interval: int = 0,
     grow_until: int | None = None,
     late_after: int | None = None,
+    alternate_until: int | None = None,
     first_claim_conflict: str | None = None,
+    silent_services: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
     """demo.sh run in a scratch copy of ``infra/kind`` against the stubs, with
     ``poll_interval`` seconds between two readings of a trace (none unless
@@ -2871,9 +3009,12 @@ def run_demo(
     trace needs three readings, and a one-second deadline does not always
     hold three when the suite's workers share the CPU (S018). ``decision``
     sets the DECISION variable (unset when None).
-    ``grow_until`` and ``late_after`` shape what the stub Tempo answers (see
-    the stub); ``first_claim_conflict`` is the detail of a 409 the stub answers
-    to the first claim (the second is accepted). Returns the process and the
+    ``grow_until``, ``late_after`` and ``alternate_until`` shape what the stub
+    Tempo answers (see the stub); ``first_claim_conflict`` is the detail of a
+    409 the stub answers to the first claim (the second is accepted);
+    ``silent_services`` lists services (space-separated) that the stub's
+    answers carry with a resource and no span. Returns
+    the process and the
     stub curl's calls, each as its words: ``POST``/``GET``, the URL, and for a
     POST the trace ID the traceparent carried and the body."""
     kind, bin_dir = tmp_path / "infra" / "kind", tmp_path / "bin"
@@ -2911,7 +3052,11 @@ def run_demo(
         "STUB_DECISION_SERVICES": decision_services,
         "STUB_GROW_UNTIL": "" if grow_until is None else str(grow_until),
         "STUB_LATE_AFTER": "" if late_after is None else str(late_after),
+        "STUB_ALTERNATE_UNTIL": (
+            "" if alternate_until is None else str(alternate_until)
+        ),
         "STUB_CONFLICT_DETAIL": first_claim_conflict or "",
+        "STUB_SILENT_SERVICES": silent_services,
     }
     if decision is not None:
         env["DECISION"] = decision
@@ -3217,6 +3362,59 @@ def test_a_trace_that_keeps_growing_until_the_deadline_fails_as_still_growing(
 
 
 @requires_demo_tools
+def test_a_trace_whose_readings_alternate_fails_saying_they_alternated(
+    tmp_path: Path,
+) -> None:
+    # Readings 1 and 3 have every service, 2 and 4 lack one, and so does every
+    # later reading: two complete in a row never happens, and the last reading
+    # is partial although the trace was complete twice.
+    done, calls = run_demo(tmp_path, alternate_until=4, poll_timeout=3)
+
+    lines = done.stdout.splitlines()
+    assert done.returncode != 0
+    assert "PASS" not in done.stdout
+    triage, decision = [line for line in lines if line.startswith("FAIL")]
+    reads = trace_reads(calls)
+    triage_id, decision_id = reads
+    assert triage == (
+        f"FAIL  trace {triage_id}: readings alternated between complete and "
+        f"partial (2 complete, {reads[triage_id] - 2} partial or missing) "
+        "over 3s, Tempo was still settling"
+    )
+    assert decision.startswith(f"FAIL  decision trace {decision_id}: readings alt")
+    # It says what to do: look the trace up by its ID in a moment.
+    remedy = (
+        "      Look it up in a moment: make grafana, then Explore, Tempo, "
+        'TraceQL { trace:id = "%s" }'
+    )
+    assert remedy % triage_id in lines
+    assert remedy % decision_id in lines
+    assert reads[triage_id] > 4  # the last readings were partial
+    # Neither of the two other wordings: every service was there at times, and
+    # the trace did not keep growing.
+    assert "no trace" not in done.stdout
+    assert "still growing" not in done.stdout
+
+
+@requires_demo_tools
+def test_one_complete_reading_and_then_only_partial_ones_is_worded_as_alternated(
+    tmp_path: Path,
+) -> None:
+    # Reading 1 has every service, every later one lacks one. The script never
+    # saw complete, partial, complete: "alternated" is its inference from one
+    # complete reading and the partial ones after it, and demo.sh says so.
+    done, calls = run_demo(tmp_path, alternate_until=1, poll_timeout=3)
+
+    lines = done.stdout.splitlines()
+    triage_id, _ = trace_reads(calls)
+    triage, _ = [line for line in lines if line.startswith("FAIL")]
+    assert done.returncode != 0
+    assert triage.startswith(f"FAIL  trace {triage_id}: readings alternated between")
+    assert "(1 complete, " in triage
+    assert "is an inference from those counts" in DEMO_SH
+
+
+@requires_demo_tools
 def test_a_trace_missing_a_service_still_fails_with_the_line_it_had_before(
     tmp_path: Path,
 ) -> None:
@@ -3232,6 +3430,68 @@ def test_a_trace_missing_a_service_still_fails_with_the_line_it_had_before(
         "claims-api agent-runtime policy-mcp knowledge-mcp model-gateway after 6s"
     )
     assert "still growing" not in done.stdout
+
+
+@requires_demo_tools
+def test_a_service_in_the_trace_with_no_span_does_not_count_as_present(
+    tmp_path: Path,
+) -> None:
+    # Tempo's answer names model-gateway (a resource) but carries no span of it:
+    # the per-service list says "model-gateway 0", which is not "spans from".
+    done, _ = run_demo(tmp_path, silent_services="model-gateway", **SLOW_POLL)
+
+    (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
+    assert done.returncode != 0
+    assert failure.startswith("FAIL  no trace ")
+    assert failure.endswith(" after 6s")
+    assert "PASS  trace " not in done.stdout
+    # Every reading was partial, so none counts as complete or as alternating.
+    assert "alternated" not in done.stdout
+    assert "still growing" not in done.stdout
+    # What Tempo returned is listed, the silent service with its zero.
+    assert re.search(r"^ +model-gateway +0 span\(s\)$", done.stdout, re.MULTILINE)
+    # The decision trace, which has all of its services, still passes.
+    assert "PASS  decision trace " in done.stdout
+
+
+@requires_demo_tools
+def test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span(
+    tmp_path: Path,
+) -> None:
+    done, _ = run_demo(tmp_path, silent_services="claims-mcp", **SLOW_POLL)
+
+    # claims-mcp is in the decision trace's three and in the triage's optional
+    # sixth, which is not required: the triage passes, the decision fails.
+    assert done.returncode != 0
+    assert "PASS  trace " in done.stdout
+    (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
+    assert failure.startswith("FAIL  no decision trace ")
+
+
+@pytest.mark.parametrize(
+    ("counts", "present"),
+    [
+        ("claims-api 1\nagent-runtime 12", True),
+        ("claims-api 0\nagent-runtime 12", False),
+        ("claims-api 10\nagent-runtime 0", False),
+        ("claims-api 1", False),
+        ("claims-api-extra 5\nagent-runtime 1", False),
+    ],
+)
+def test_a_service_counts_as_present_from_its_first_span_and_not_before(
+    counts: str, present: bool
+) -> None:
+    script = (
+        function_definition(DEMO_SH, "has_every_service")
+        + f"counts='{counts}'\n"
+        + "has_every_service claims-api agent-runtime\n"
+    )
+
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=False, timeout=30
+    )
+
+    assert (done.returncode == 0) is present, done.stderr
 
 
 def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:
@@ -3261,15 +3521,20 @@ SWEEP_TOLERANCE_SECONDS = 3 * SWEEP_PERIOD_SECONDS  # three periods
 
 
 def sweep_cronjob_answer(
-    *, scheduled: str | None = SWEEP_SCHEDULED, created: str = SWEEP_CREATED, active=0
+    *,
+    scheduled: str | None = SWEEP_SCHEDULED,
+    created: str = SWEEP_CREATED,
+    active=0,
+    schedule: str | None = None,
 ) -> dict:
-    """The CronJob as the API returns it: the server's own timestamps only."""
+    """The CronJob as the API returns it: the server's own timestamps only
+    (``schedule``: its ``.spec.schedule``, absent by default)."""
     status: dict = {"active": [{"name": f"meridian-sweep-{i}"} for i in range(active)]}
     if scheduled is not None:
         status["lastScheduleTime"] = scheduled
     return {
         "metadata": {"name": "meridian-sweep", "creationTimestamp": created},
-        "spec": {},
+        "spec": {} if schedule is None else {"schedule": schedule},
         "status": status,
     }
 
@@ -3313,23 +3578,46 @@ def other_job(created: str) -> dict:
     }
 
 
+def epoch_of(stamp: str) -> int:
+    return int(datetime.fromisoformat(stamp).timestamp())
+
+
+def newest_stamp(cronjob: dict | str, jobs: list[dict] | str) -> int:
+    """The newest timestamp the answers hold: the server's clock when a test
+    does not say what the database's is (nothing is then overdue by it)."""
+    stamps = []
+    if isinstance(cronjob, dict):
+        stamps += [cronjob["metadata"].get("creationTimestamp")]
+        stamps += [cronjob.get("status", {}).get("lastScheduleTime")]
+    for job in jobs if isinstance(jobs, list) else []:
+        stamps += [job["metadata"].get("creationTimestamp")]
+        stamps += [c.get("lastTransitionTime") for c in job["status"]["conditions"]]
+        stamps += [job["status"].get("completionTime")]
+    return max((epoch_of(stamp) for stamp in stamps if stamp), default=0)
+
+
 def run_sweep_check(
     tmp_path: Path,
     *,
     deployed: str = "deployment.apps/claims-api",
     cronjob: dict | str | None = None,
     jobs: list[dict] | str | None = None,
+    now: int | str | None = None,
 ) -> tuple[list[str], str]:
     """``check_sweep`` from smoke.sh in bash against a stub ``kctl``. ``cronjob``
     is the CronJob's answer (an empty string: it does not exist; ``FAIL``: the
-    lookup fails) and ``jobs`` the Jobs of the namespace. Returns the output
-    lines and what ``kctl`` was asked."""
+    lookup fails) and ``jobs`` the Jobs of the namespace. ``now`` is what the
+    database's clock answers, in epoch seconds (``FAIL``: the query fails; any
+    other text is sent as it is); by default the newest timestamp of the other
+    answers. Returns the output lines and what ``kctl`` was asked."""
     asked = tmp_path / "kctl-calls"
     asked.touch()
     if cronjob is None:
         cronjob = sweep_cronjob_answer()
     if jobs is None:
         jobs = []
+    if now is None:
+        now = newest_stamp(cronjob, jobs)
     script = "\n".join(
         [
             "set -euo pipefail",
@@ -3337,7 +3625,8 @@ def run_sweep_check(
             'pass() { echo "PASS  $*"; }',
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
-            *re.findall(r"^readonly SWEEP_\w+=.*$", SMOKE_SH, re.MULTILINE),
+            *re.findall(r"^readonly (?:SWEEP|QUERY_ERROR)_\w+=.*$", SMOKE_SH, re.M),
+            *re.findall(r"^readonly PSQL_OPTIONS=.*$", SMOKE_SH, re.M),
             one_line_function(SMOKE_SH, "clean_lines"),
             "kctl() {",
             f'  echo "$*" >>"{asked}"',
@@ -3353,10 +3642,21 @@ def run_sweep_check(
             "      fi",
             '      printf "%s" "${JOBS}" ;;',
             '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
+            '    *"get pod"*) echo platform-db-1 ;;',
+            '    *" exec "*)',
+            '      if [[ "${NOW}" == FAIL ]]; then',
+            '        echo "psql failed" >&2; return 1',
+            "      fi",
+            '      printf "%s\\n" "${NOW}" ;;',
             "  esac",
             "}",
             function_definition(SMOKE_SH, "deployed_services"),
+            function_definition(SMOKE_SH, "platform_db_primary"),
+            function_definition(SMOKE_SH, "meridian_query"),
+            function_definition(SMOKE_SH, "server_epoch"),
+            function_definition(SMOKE_SH, "sweep_period"),
             function_definition(SMOKE_SH, "sweep_verdict"),
+            function_definition(SMOKE_SH, "report_sweep"),
             function_definition(SMOKE_SH, "check_sweep"),
             "check_sweep",
         ]
@@ -3370,6 +3670,7 @@ def run_sweep_check(
             "DEPLOYED": deployed,
             "CRONJOB": cronjob if isinstance(cronjob, str) else json.dumps(cronjob),
             "JOBS": jobs if isinstance(jobs, str) else json.dumps({"items": jobs}),
+            "NOW": str(now),
         },
         check=True,
     )
@@ -3405,15 +3706,25 @@ def test_the_sweep_check_fails_when_the_cronjob_cannot_be_read(tmp_path: Path) -
 
 
 @requires_jq
-def test_the_sweep_check_fails_on_a_suspended_cronjob_whatever_its_jobs_did(
+def test_the_sweep_check_skips_a_suspended_cronjob_with_a_line_of_its_own(
     tmp_path: Path,
 ) -> None:
     suspended = {"metadata": {"name": "meridian-sweep"}, "spec": {"suspend": True}}
     ok = [sweep_job("meridian-sweep-1", "2026-10-03T10:00:00Z")]
 
-    (line,) = run_sweep_check(tmp_path, cronjob=suspended, jobs=ok)[0]
+    # Even with a clock that would call the last success overdue.
+    lines, asked = run_sweep_check(
+        tmp_path,
+        cronjob=suspended,
+        jobs=ok,
+        now=epoch_of("2026-10-03T10:00:00Z") + 10 * SWEEP_TOLERANCE_SECONDS,
+    )
 
-    assert line.startswith("FAIL  sweep: cronjob/meridian-sweep is suspended")
+    assert lines == [
+        "SKIP  sweep: cronjob/meridian-sweep is suspended (spec.suspend), "
+        "so it makes no runs and none can be overdue"
+    ]
+    assert " exec " not in asked
 
 
 @requires_jq
@@ -3602,15 +3913,50 @@ def test_the_sweep_check_skips_a_cronjob_that_has_not_been_scheduled_yet(
 
 
 @requires_jq
-def test_the_sweep_check_says_it_has_no_clock_when_nothing_is_newer_than_the_cronjob(
+def test_the_sweep_check_says_which_clock_it_asked_for_a_cronjob_not_scheduled_yet(
     tmp_path: Path,
 ) -> None:
-    (line,) = run_sweep_check(
-        tmp_path, cronjob=sweep_cronjob_answer(scheduled=None), jobs=[]
+    created = epoch_of(SWEEP_CREATED)
+
+    lines, asked = run_sweep_check(
+        tmp_path,
+        cronjob=sweep_cronjob_answer(scheduled=None),
+        jobs=[],
+        now=created + 120,
+    )
+
+    (line,) = lines
+    assert line.startswith("SKIP  sweep: cronjob/meridian-sweep has not been scheduled")
+    assert "120 s ago by the database's clock" in line
+    assert "no server-side clock" not in line
+    # The clock is the primary's `now()`, read as a whole number of seconds.
+    options = re.search(r"^readonly PSQL_OPTIONS='(.*)'$", SMOKE_SH, re.M)
+    assert options
+    exec_psql = f"exec platform-db-1 -c postgres -- env PGOPTIONS={options.group(1)} "
+    assert exec_psql + "psql -d meridian -tAc " in asked
+    assert "-tAc SELECT floor(extract(epoch FROM now()))::bigint" in asked
+
+
+@requires_jq
+def test_the_sweep_check_fails_a_cronjob_never_scheduled_by_the_databases_clock(
+    tmp_path: Path,
+) -> None:
+    created = epoch_of(SWEEP_CREATED)
+    cronjob = sweep_cronjob_answer(scheduled=None)
+
+    # Nothing in the API is newer than the CronJob: only the clock knows.
+    (kept,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, now=created + SWEEP_TOLERANCE_SECONDS
+    )[0]
+    (late,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, now=created + SWEEP_TOLERANCE_SECONDS + 1
     )[0]
 
-    assert line.startswith("SKIP  sweep: cronjob/meridian-sweep has not been scheduled")
-    assert "no server-side clock" in line
+    assert kept.startswith("SKIP  sweep:")
+    assert late.startswith(
+        "FAIL  sweep: cronjob/meridian-sweep has never been scheduled"
+    )
+    assert f"{SWEEP_TOLERANCE_SECONDS + 1} s" in late
 
 
 @requires_jq
@@ -3657,6 +4003,160 @@ def test_the_sweep_check_skips_while_the_first_job_is_running(tmp_path: Path) ->
     assert "running" in line
 
 
+SWEEP_FINISHED_AT = epoch_of(SWEEP_FINISHED)
+
+
+def run_after_a_success(
+    tmp_path: Path, *, ago: int, active: int = 0, schedule: str | None = None
+) -> list[str]:
+    """The sweep check when the newest finished Job (a success) finished
+    ``ago`` seconds before the database's clock and the CronJob was last
+    scheduled at that moment, with ``active`` Jobs running."""
+    cronjob = sweep_cronjob_answer(
+        scheduled=SWEEP_FINISHED, active=active, schedule=schedule
+    )
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+
+    return run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=jobs, now=SWEEP_FINISHED_AT + ago
+    )[0]
+
+
+@requires_jq
+def test_the_sweep_check_fails_a_schedule_that_stopped_after_a_success(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_after_a_success(tmp_path, ago=SWEEP_TOLERANCE_SECONDS + 1)
+
+    assert line.startswith("FAIL  sweep: the schedule stopped")
+    assert "meridian-sweep-1" in line
+    assert SWEEP_FINISHED in line
+    # How long ago by the database's clock, and what the bound is.
+    assert f"{SWEEP_TOLERANCE_SECONDS + 1} s" in line
+    assert "database's clock" in line
+    assert f"{SWEEP_TOLERANCE_SECONDS} s (three periods of 300 s)" in line
+    assert "no Job is running" in line
+
+
+@requires_jq
+def test_the_sweep_check_passes_a_success_exactly_three_periods_old(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_after_a_success(tmp_path, ago=SWEEP_TOLERANCE_SECONDS)
+
+    assert line.startswith("PASS  sweep:")
+
+
+@requires_jq
+def test_the_sweep_check_passes_an_old_success_while_a_job_is_running(
+    tmp_path: Path,
+) -> None:
+    (line,) = run_after_a_success(tmp_path, ago=SWEEP_TOLERANCE_SECONDS * 4, active=1)
+
+    assert line.startswith("PASS  sweep:")
+
+
+@requires_jq
+def test_the_sweep_check_counts_in_the_period_of_the_cronjobs_own_schedule(
+    tmp_path: Path,
+) -> None:
+    ten_minutes = "*/10 * * * *"
+    bound = 3 * 10 * 60
+
+    (kept,) = run_after_a_success(tmp_path, ago=bound, schedule=ten_minutes)
+    (late,) = run_after_a_success(tmp_path, ago=bound + 1, schedule=ten_minutes)
+
+    assert kept.startswith("PASS  sweep:")
+    assert late.startswith("FAIL  sweep: the schedule stopped")
+    assert f"{bound} s (three periods of 600 s)" in late
+
+
+@requires_jq
+@pytest.mark.parametrize(
+    "schedule", ["0 * * * *", "*/0 * * * *", "*/90 * * * *", "*/5 * * * * *", "x"]
+)
+def test_the_sweep_check_uses_its_own_constant_for_a_schedule_it_cannot_read(
+    tmp_path: Path, schedule: str
+) -> None:
+    (kept,) = run_after_a_success(
+        tmp_path, ago=SWEEP_TOLERANCE_SECONDS, schedule=schedule
+    )
+    (late,) = run_after_a_success(
+        tmp_path, ago=SWEEP_TOLERANCE_SECONDS + 1, schedule=schedule
+    )
+
+    assert kept.startswith("PASS  sweep:")
+    assert f"{SWEEP_TOLERANCE_SECONDS} s (three periods of 300 s)" in late
+
+
+@requires_jq
+def test_the_sweep_check_does_not_fail_a_cronjob_deployed_less_than_a_period_ago(
+    tmp_path: Path,
+) -> None:
+    # A Job of an earlier CronJob of the same name is old; this one is new.
+    created = seconds_after(SWEEP_FINISHED, 4 * SWEEP_TOLERANCE_SECONDS)
+    cronjob = sweep_cronjob_answer(scheduled=None, created=created)
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+    created_at = epoch_of(created)
+
+    (young,) = run_sweep_check(
+        tmp_path,
+        cronjob=cronjob,
+        jobs=jobs,
+        now=created_at + SWEEP_PERIOD_SECONDS - 1,
+    )[0]
+    (grown,) = run_sweep_check(
+        tmp_path, cronjob=cronjob, jobs=jobs, now=created_at + SWEEP_PERIOD_SECONDS
+    )[0]
+
+    assert young.startswith("SKIP  sweep: cronjob/meridian-sweep was deployed")
+    assert "299 s ago" in young
+    assert grown.startswith("FAIL  sweep: the schedule stopped")
+
+
+@requires_jq
+def test_the_sweep_check_still_fails_a_failed_job_whatever_the_clock_says(
+    tmp_path: Path,
+) -> None:
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED, kind="Failed")]
+
+    (line,) = run_sweep_check(
+        tmp_path,
+        cronjob=sweep_cronjob_answer(scheduled=SWEEP_FINISHED),
+        jobs=jobs,
+        now=SWEEP_FINISHED_AT + 10 * SWEEP_TOLERANCE_SECONDS,
+    )[0]
+
+    assert line.startswith("FAIL  sweep: the last finished Job")
+
+
+@requires_jq
+@pytest.mark.parametrize("clock", ["FAIL", "", "soon", "12.5", "-3"])
+def test_the_sweep_check_fails_when_the_databases_clock_cannot_be_read(
+    tmp_path: Path, clock: str
+) -> None:
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+
+    (line,) = run_sweep_check(tmp_path, jobs=jobs, now=clock)[0]
+
+    assert line.startswith("FAIL  sweep: could not read the database's clock")
+
+
+def test_the_sweep_check_says_why_it_asks_the_database_and_not_the_laptop() -> None:
+    header = SMOKE_SH.split("set -euo pipefail")[0]
+    section = header.split("7. sweep:")[1].split("8. network policy:")[0]
+    body = " ".join(section.replace("#", " ").split())
+
+    assert "database's clock" in body
+    assert "laptop" in body
+    assert "Lease" in body
+    assert "cannot be seen" not in body
+    assert "no clock the script trusts" not in body
+    assert "Only the API server's timestamps are compared" not in body
+    (clock_sql,) = re.findall(r"^readonly SWEEP_CLOCK_SQL=(.*)$", SMOKE_SH, re.M)
+    assert clock_sql.strip("'") == "SELECT floor(extract(epoch FROM now()))::bigint"
+
+
 @requires_jq
 @pytest.mark.parametrize(
     ("outcome", "cronjob", "jobs"),
@@ -3685,10 +4185,14 @@ def test_the_sweep_check_only_reads(
 ) -> None:
     lines, asked = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs)
 
-    # Every path gets its verdict from `get` calls alone.
+    # Every path gets its verdict from `get` calls and one SELECT of the
+    # database's clock.
     assert lines[0].startswith(outcome), lines
     assert asked.splitlines(), "kubectl was never asked"
     for call in asked.splitlines():
+        if " exec " in call:
+            assert call.endswith("-tAc SELECT floor(extract(epoch FROM now()))::bigint")
+            continue
         assert " get " in call, call
         assert not re.search(r"\b(create|apply|delete|patch|replace|exec)\b", call)
 
@@ -3886,10 +4390,11 @@ def test_the_readme_describes_what_s056_added_to_deploy_and_smoke_and_the_restar
 ):
     readme = " ".join((KIND_DIR / "README.md").read_text(encoding="utf-8").split())
 
-    # `make smoke` checks ten things; the tenth is the certificate policy.
-    assert "`make smoke` checks ten things" in readme
+    # `make smoke` checks eleven things; the tenth is the certificate policy and
+    # the eleventh the alert rules (test_smoke_alert_rules.py).
+    assert "`make smoke` checks eleven things" in readme
     assert "`make smoke` checks nine things" not in readme
-    assert "**Certificate policy.** Three lines" in readme
+    assert "**Certificate policy.** Four lines" in readme
     # The ninth check's description no longer counts three statuses.
     assert "`make smoke`'s ninth check proves 200, 401 and 403" not in readme
     # `make deploy` refuses without the policies and the add-on, too.
