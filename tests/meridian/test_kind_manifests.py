@@ -36,12 +36,16 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Metric, Sum
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.cli import app as meridian_cli
-from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
+from meridian.platform.cli.db import (
+    INGEST_DATABASE_URL_ENV,
+    MIGRATIONS_DATABASE_URL_ENV,
+    SEED_DATABASE_URL_ENV,
+)
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS, make_meter_provider
-from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
+from meridian.platform.common.telemetry import OTLP_CERTIFICATE_ENV, OTLP_ENDPOINT_ENV
 from meridian.platform.gateway.meters import GatewayMeters
 from meridian.platform.gateway.ratelimit import (
     TOKEN_WINDOW_SECONDS as GATEWAY_TOKEN_WINDOW_SECONDS,
@@ -83,6 +87,11 @@ KIND_DIR = REPO_ROOT / "infra" / "kind"
 SWEEP_MODULE = "meridian.workloads.claims_triage.sweep"
 SWEEP_ROLE = "claims_sweep"
 UPKEEP_ROLE = "gateway_upkeep"
+# The roles of the seed and the ingestion Jobs (S063), and the Secret of each.
+SEED_ROLE = "policy_seed"
+INGEST_ROLE = "knowledge_ingest"
+SEED_SECRET = "policy-seed-db"  # noqa: S105 (a Secret name, not a password)
+INGEST_SECRET = "knowledge-ingest-db"  # noqa: S105 (a Secret name, not a password)
 TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
 SERVER_PORT = 8000
 # The tenant whose limits the ingestion's embedding calls count against.
@@ -117,6 +126,8 @@ KNOWN_ENV = {
     IDENTITY_PREFIX_ENV,
     DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
+    SEED_DATABASE_URL_ENV,
+    INGEST_DATABASE_URL_ENV,
     RUNTIME_URL_ENV,
     GATEWAY_URL_ENV,
     TOOL_SERVERS_ENV,
@@ -124,6 +135,7 @@ KNOWN_ENV = {
     MODE_ENV,
     ENVIRONMENT_ENV,
     OTLP_ENDPOINT_ENV,
+    OTLP_CERTIFICATE_ENV,
     SWEEP_DEADLINE_ENV,
 }
 FACTORIES = {
@@ -349,6 +361,7 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
         DATABASE_URL_ENV,
         ALLOWED_HOSTS_ENV,
         OTLP_ENDPOINT_ENV,
+        OTLP_CERTIFICATE_ENV,
         IDENTITY_PREFIX_ENV,
         # Every container that mounts its certificate names its files, so
         # /healthz watches the one the server serves (S056).
@@ -531,19 +544,31 @@ def test_traces_go_to_the_collectors_http_port() -> None:
     for name in SERVICES:
         endpoint = env_of(containers(deployment(name))[0])[OTLP_ENDPOINT_ENV]["value"]
         url = urlsplit(endpoint)
-        assert url.scheme == "http"
+        assert url.scheme == "https"  # the collector serves TLS (S063, T-90)
         assert url.hostname == "otel-collector.observability.svc.cluster.local"
         assert url.port == 4318  # 4317 is gRPC; the exporter speaks HTTP
         assert url.path in ("", "/")
 
 
-def test_only_the_three_jobs_reference_the_owner_credentials() -> None:
+def test_only_the_migrate_job_references_the_owner_credentials() -> None:
     for workload in pod_workloads():
         owner = OWNER_SECRET in secrets_referenced_by(pod_spec(workload))
-        assert owner == (workload["kind"] == "Job"), workload["metadata"]["name"]
+        name = workload["metadata"]["name"]
+        assert owner == name.startswith("meridian-migrate-"), name
     for document in all_documents():
         if document not in pod_workloads():
             assert OWNER_SECRET not in yaml.dump(document), document["kind"]
+
+
+def test_the_seed_and_the_ingest_job_each_hold_their_own_roles_secret_alone() -> None:
+    for name, secret in (("seed", SEED_SECRET), ("ingest", INGEST_SECRET)):
+        pod = pod_spec(job_named(name))
+
+        # A role's Secret is named <role>-db; the CA's and the certificate's are
+        # not, and the Job may mount them.
+        role_secrets = {s for s in secrets_referenced_by(pod) if s.endswith("-db")}
+
+        assert role_secrets == {secret}, name
 
 
 def only_container(job: dict) -> dict:
@@ -551,21 +576,26 @@ def only_container(job: dict) -> dict:
     return container
 
 
-@pytest.mark.parametrize("name", ["migrate", "seed", "ingest"])
-def test_each_job_runs_once_with_the_owner_credentials_and_its_own_account(
-    name: str,
+@pytest.mark.parametrize(
+    ("name", "variable", "secret"),
+    [
+        ("migrate", MIGRATIONS_DATABASE_URL_ENV, OWNER_SECRET),
+        ("seed", SEED_DATABASE_URL_ENV, SEED_SECRET),
+        ("ingest", INGEST_DATABASE_URL_ENV, INGEST_SECRET),
+    ],
+)
+def test_each_job_runs_once_with_its_own_credentials_and_its_own_account(
+    name: str, variable: str, secret: str
 ) -> None:
     job = job_named(name)
-    reference = env_of(only_container(job))[MIGRATIONS_DATABASE_URL_ENV]["valueFrom"][
-        "secretKeyRef"
-    ]
+    reference = env_of(only_container(job))[variable]["valueFrom"]["secretKeyRef"]
     accounts = {
         d["metadata"]["name"]: d
         for d in documents_of("ServiceAccount")
         if d["metadata"]["name"] == f"meridian-{name}"
     }
 
-    assert reference == {"name": OWNER_SECRET, "key": "uri"}
+    assert reference == {"name": secret, "key": "uri"}
     assert job["spec"]["template"]["spec"]["restartPolicy"] == "Never"
     assert job["spec"]["backoffLimit"] <= 3
     assert job["spec"]["activeDeadlineSeconds"] > 0
@@ -609,7 +639,7 @@ def test_the_seed_job_loads_the_policies_from_the_images_synthetic_data() -> Non
         synthetic_destination(),
     ]
     assert cli_command_words(container["command"][1:]) == ["db", "seed-policies"]
-    assert set(env_of(container)) == {MIGRATIONS_DATABASE_URL_ENV}
+    assert set(env_of(container)) == {SEED_DATABASE_URL_ENV}
     assert job["spec"]["ttlSecondsAfterFinished"] > 0
 
 
@@ -629,7 +659,7 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
     ]
     assert cli_command_words(container["command"][1:]) == ["knowledge", "ingest"]
     assert set(env_of(container)) == {
-        MIGRATIONS_DATABASE_URL_ENV,
+        INGEST_DATABASE_URL_ENV,
         GATEWAY_URL_ENV,
         *TLS_ENV,
     }
@@ -884,6 +914,8 @@ def test_the_database_declares_its_roles_with_login_only() -> None:
         "knowledge_mcp",
         SWEEP_ROLE,
         UPKEEP_ROLE,
+        SEED_ROLE,
+        INGEST_ROLE,
     }
     for name, role in roles.items():
         assert role["login"] is True
@@ -905,7 +937,8 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     limits = {
         r["name"]: r["connectionLimit"]
         for r in PLATFORM_DB["cluster"]["roles"]
-        if "connectionLimit" in r and r["name"] not in (SWEEP_ROLE, UPKEEP_ROLE)
+        if "connectionLimit" in r
+        and r["name"] not in (SWEEP_ROLE, UPKEEP_ROLE, SEED_ROLE, INGEST_ROLE)
     }
 
     # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one
@@ -940,6 +973,25 @@ def test_the_sweep_role_is_in_both_pg_hba_lines_of_the_meridian_roles() -> None:
     listed = {r["name"] for r in PLATFORM_DB["cluster"]["roles"]}
     assert set(accept.split()[2].split(",")) == listed
     assert set(refuse.split()[2].split(",")) == listed
+
+
+@pytest.mark.parametrize("role", [SEED_ROLE, INGEST_ROLE])
+def test_a_job_role_is_in_both_pg_hba_lines_and_carries_a_connection_limit_of_two(
+    role: str,
+) -> None:
+    rules = PLATFORM_DB["cluster"]["postgresql"]["pg_hba"]
+    (accept,) = [r for r in rules if r.startswith("hostssl meridian ") and "scram" in r]
+    (refuse,) = [
+        r for r in rules if r.startswith("hostssl all ") and r.endswith("reject")
+    ]
+    (declared,) = [r for r in PLATFORM_DB["cluster"]["roles"] if r["name"] == role]
+
+    assert role in accept.split()[2].split(",")
+    assert role in refuse.split()[2].split(",")
+    # Two, as the upkeep role has: one Job pod runs at a time and opens one
+    # connection, so a leaked credential cannot take more than two of the
+    # services' shared hundred (the reviews of S063, all three).
+    assert declared["connectionLimit"] == 2
 
 
 def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> None:
@@ -1103,9 +1155,10 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
         {"from": [{"podSelector": {"matchLabels": peer["podLabels"]}}]},
     ]
     assert [p["port"] for p in peer["ports"]] == [5432]
-    # Egress is exactly three rules: DNS, the API server's port on the node (no
-    # address: the node's own changes with the cluster) and the Cluster's own
-    # pods. The database pod cannot open a connection to the internet.
+    # Egress is exactly three rules: DNS, the API server's port on the node (to
+    # the address `make up` reads, S063: the file holds a placeholder that is not
+    # a CIDR; test_kind_database_policy_address.py pins it) and the Cluster's
+    # own pods. The database pod cannot open a connection to the internet.
     dns_rule = {
         "to": [
             {
@@ -1120,25 +1173,27 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
             {"port": 53, "protocol": "TCP"},
         ],
     }
-    api_server_rule = {"ports": [{"port": 6443, "protocol": "TCP"}]}
+    api_server_rule = {
+        "to": [{"ipBlock": {"cidr": "API-SERVER-ADDRESS/32"}}],
+        "ports": [{"port": 6443, "protocol": "TCP"}],
+    }
     cluster_rule = {"to": [{"podSelector": {"matchLabels": peer["podLabels"]}}]}
     assert spec["egress"] == [dns_rule, api_server_rule, cluster_rule]
     assert {} not in spec["egress"]  # an empty rule allows everything
-    # The only rule without a destination is the one for port 6443: a rule
-    # without `to` allows its ports to any address.
-    assert [r for r in spec["egress"] if "to" not in r] == [api_server_rule]
+    # No rule is without a destination: a rule without `to` allows its ports to
+    # any address, which is what the rule for port 6443 was until S063.
+    assert [r for r in spec["egress"] if "to" not in r] == []
     header = DB_POLICY_FILE.read_text(encoding="utf-8").split("apiVersion:")[0]
     assert "6443" in header
     assert "translated" in header
     assert "internet" in header
+    assert "any address" not in header
 
 
 PSA = "pod-security.kubernetes.io/"
 
 
-def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces() -> (
-    None
-):
+def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() -> None:
     namespaces = {
         d["metadata"]["name"]: d
         for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
@@ -1151,12 +1206,21 @@ def test_only_the_meridian_namespace_warns_and_audits_restricted_never_enforces(
         "observability",
         "meridian",
     }
-    labels = namespaces["meridian"]["metadata"].get("labels", {})
-    assert labels == {PSA + "warn": "restricted", PSA + "audit": "restricted"}
-    # `enforce` waits: a first `make up` under it was not tried.
-    assert PSA + "enforce" not in labels
+    # The level each namespace's pods meet as rendered (S063): all three meet
+    # restricted since the values of tempo and the collector set the fields
+    # that `restricted` asks for (test_kind_observability_security_context.py).
+    levels = {
+        "meridian": "restricted",
+        "cert-manager": "restricted",
+        "observability": "restricted",
+    }
+    for name, level in levels.items():
+        labels = namespaces[name]["metadata"].get("labels", {})
+        assert labels == {PSA + "warn": level, PSA + "audit": level}, name
+        # `enforce` waits: a first `make up` under it was not tried.
+        assert PSA + "enforce" not in labels, name
     for name, namespace in namespaces.items():
-        if name != "meridian":
+        if name not in levels:
             assert "labels" not in namespace["metadata"], name
 
 
@@ -1181,10 +1245,12 @@ def test_up_applies_the_database_policy_before_the_database_is_installed() -> No
     (namespaces,) = [
         i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
     ]
+    # Since S063 the file is applied through `apply_api_server_policy`, with the
+    # API server's address (test_kind_database_policy_address.py).
     (applied,) = [
         i
         for i, line in enumerate(lines)
-        if "manifests/platform-db-networkpolicy.yaml" in line
+        if line.startswith('apply_api_server_policy "${DATABASE_POLICY_FILE}"')
     ]
     (operator,) = [
         i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
@@ -1196,7 +1262,6 @@ def test_up_applies_the_database_policy_before_the_database_is_installed() -> No
     ]
 
     assert namespaces < applied < operator < database
-    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
     assert lines[applied - 1].startswith("log ")
     assert DB_POLICY_FILE.is_file()
 
@@ -1211,6 +1276,8 @@ def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
             "NAMESPACE=meridian; DATABASE_ROLES=()",
             'die() { echo "error: $*" >&2; exit 1; }',
             "database_roles_reconciled() { return 0; }",
+            # The address check has its own tests, with the real function.
+            "api_server_matches_policy() { return 0; }",
             "kctl() {",
             '  case "$*" in',
             '    *"get database"*) printf true ;;',
@@ -1311,7 +1378,7 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # Secret that cert-manager makes from one of them (S055). The issuer is a
     # precondition like the database: it is checked before the image is built
     # and before any Job runs (S056); so is the approval of the Certificates:
-    # approver-policy with its three policies.
+    # approver-policy with its five policies.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
@@ -2210,6 +2277,7 @@ def run_cost_panel(
     bad_query: str = "",
     poll_error: str = "",
     can_i: tuple[str, str] = ("no", "no"),
+    ksm_can_i: str = "no",
     grafana_opens: bool = True,
     asked: list[str] | None = None,
 ) -> tuple[list[str], str]:
@@ -2217,7 +2285,9 @@ def run_cost_panel(
     against stubs. ``kctl``: ``count`` is the ledger's one-line answer and
     ``FAIL`` makes the query fail with a message on stderr; ``primary``
     ``FAIL`` does the same for the pod lookup; ``can_i`` is what ``auth can-i``
-    prints for meridian and observability. ``poll``: an empty ``series`` is a
+    prints for meridian and observability, as Grafana's account, and ``ksm_can_i``
+    what it prints, in both namespaces, as kube-state-metrics' (S063).
+    ``poll``: an empty ``series`` is a
     timeout and an empty string for ``served`` means no dashboard; both leave
     ``poll_error``. ``gcurl`` answers every query with Prometheus's answer
     (``seen_in_prometheus``, ``prometheus_status``), except a query that holds
@@ -2249,7 +2319,7 @@ def run_cost_panel(
             'skip() { echo "SKIP  $*"; }',
             *re.findall(
                 r"^readonly (?:DASHBOARD_UID|DASHBOARD_FILE|COST_SERIES|POLL_TIMEOUT"
-                r"|GRAFANA_ACCOUNT|PSQL_OPTIONS)=.*$",
+                r"|GRAFANA_ACCOUNT|KSM_ACCOUNT|PSQL_OPTIONS)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
@@ -2287,6 +2357,7 @@ def run_cost_panel(
             '      echo "${COUNT}" ;;',
             '    *"auth can-i"*)',
             '      case "$*" in',
+            '        *"--as ${KSM_ACCOUNT}"*) answer="${CAN_I_KSM}" ;;',
             '        *"-n meridian "*) answer="${CAN_I_MERIDIAN}" ;;',
             '        *) answer="${CAN_I_OBSERVABILITY}" ;;',
             "      esac",
@@ -2312,6 +2383,7 @@ def run_cost_panel(
                     "check_dashboard",
                     "check_cost_series",
                     "check_grafana_rights",
+                    "check_kube_state_metrics_rights",
                     "check_cost_panel",
                 )
             ),
@@ -2337,6 +2409,7 @@ def run_cost_panel(
             "ERROR_ANSWER": PROMETHEUS_ERROR_ANSWER,
             "CAN_I_MERIDIAN": can_i[0],
             "CAN_I_OBSERVABILITY": can_i[1],
+            "CAN_I_KSM": ksm_can_i,
             "GRAFANA_OPENS": "yes" if grafana_opens else "no",
         },
         check=True,
@@ -2352,7 +2425,7 @@ def test_the_cost_check_finds_the_dashboard_and_skips_the_series_when_not_deploy
 ) -> None:
     lines, queries = run_cost_panel(tmp_path, deployed="")
 
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert lines[0].startswith("PASS  dashboard:")
     assert DASHBOARD_TITLE in lines[0]
     assert "meridian-gateway-cost" in lines[0]
@@ -2361,6 +2434,7 @@ def test_the_cost_check_finds_the_dashboard_and_skips_the_series_when_not_deploy
         "SKIP  cost series: the Meridian services are not deployed (make deploy)"
     )
     assert lines[2].startswith("PASS  grafana rights:")
+    assert lines[3].startswith("PASS  kube-state-metrics rights:")
     assert queries == ""
 
 
@@ -2434,11 +2508,12 @@ def test_the_cost_check_passes_when_the_three_series_are_in_prometheus(
 ) -> None:
     lines, queries = run_cost_panel(tmp_path, count=f"7|{FIRST_SETTLED}")
 
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert [line.split(":")[0] for line in lines] == [
         "PASS  dashboard",
         "PASS  cost series",
         "PASS  grafana rights",
+        "PASS  kube-state-metrics rights",
     ]
     assert lines[1].startswith("PASS  cost series:")
     assert "7 settled" in lines[1]
@@ -2626,10 +2701,14 @@ def test_the_rights_line_passes_on_two_noes_and_runs_without_a_grafana_forward(
     with_grafana, _ = run_cost_panel(tmp_path)
     without, _ = run_cost_panel(tmp_path, grafana_opens=False)
 
-    assert with_grafana[-1] == expected
+    assert with_grafana[2] == expected
     # open_grafana printed its own FAIL; the cost lines stay quiet and the rights
-    # line, which needs no forward, still runs.
-    assert without == [expected]
+    # lines, which need no forward, still run.
+    assert without[0] == expected
+    assert [line.split(":")[0] for line in without] == [
+        "PASS  grafana rights",
+        "PASS  kube-state-metrics rights",
+    ]
     body = function_body(SMOKE_SH, "check_grafana_rights")
     (account,) = re.findall(r"^readonly GRAFANA_ACCOUNT=(\S+)$", SMOKE_SH, re.M)
     assert "auth can-i get secrets" in body
@@ -2660,15 +2739,17 @@ def run_open_grafana(
             "readonly GRAFANA_SERVICE=svc/grafana KUBECONFIG_FILE=/dev/null",
             "readonly KUBE_CONTEXT=ctx",
             *re.findall(
-                r"^(?:grafana_url|grafana_failed|network_pod|refused_request"
-                r"|refused_err_file)=.*$",
+                r"^(?:grafana_url|grafana_failed|network_pod|network_outsider"
+                r"|refused_request|refused_err_file)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
+            "readonly NETWORK_OUTSIDER_NAMESPACE=default",
             one_line_function(SMOKE_SH, "clean_lines"),
             f"kctl() {{ printf '%s' '{secret}'; }}",
             f"kubectl() {{ {kubectl}; }}",
             function_definition(SMOKE_SH, "network_delete_pod"),
+            function_definition(SMOKE_SH, "network_outsider_delete"),
             function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             function_definition(SMOKE_SH, "open_grafana"),
@@ -4250,11 +4331,17 @@ def test_up_installs_cert_manager_from_its_pin_into_its_own_namespace() -> None:
         if line.startswith("install_release cert-manager ")
     ]
 
-    assert installed == (
+    assert installed.startswith(
         "install_release cert-manager cert-manager"
         ' "${CERT_MANAGER_CHART}" "${CERT_MANAGER_VERSION}"'
-        ' "${CERT_MANAGER_REPO}" cert-manager.yaml'
+        ' "${CERT_MANAGER_REPO}" cert-manager.yaml --set '
     )
+    # The four components' images by digest, and nothing else is set (S063).
+    assert re.findall(r'--set "([A-Za-z.]+)=', installed) == [
+        f"{component}image.{leaf}"
+        for component in ("", "webhook.", "cainjector.", "startupapicheck.")
+        for leaf in ("tag", "digest")
+    ]
 
 
 def test_up_installs_the_issuer_before_the_database_and_waits_for_it() -> None:

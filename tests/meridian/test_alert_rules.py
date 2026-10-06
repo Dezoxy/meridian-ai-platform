@@ -61,8 +61,11 @@ CERTIFICATE_ALERTS = (
     "MeridianCertificateApproverDown",
 )
 # Where Meridian's certificates are: the chart's, in the namespace it installs
-# into, and the CA's, in cert-manager's (manifests/service-ca.yaml).
-CERTIFICATE_NAMESPACES = {"meridian", "cert-manager"}
+# into, the services' CA's, in cert-manager's (manifests/service-ca.yaml), and
+# the collector's authority and certificate, in observability
+# (manifests/telemetry-ca.yaml, S063).
+CERTIFICATE_NAMESPACES = {"meridian", "cert-manager", "observability"}
+TELEMETRY_CA_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "telemetry-ca.yaml"
 METRICS_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "cert-manager-metrics.yaml"
 SERVICE_CA_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "service-ca.yaml"
 # What a gateway series' label can be: the metric attribute keys with each "."
@@ -339,13 +342,14 @@ def test_the_certificate_group_holds_the_four_alerts_with_their_thresholds() -> 
     # that was never issued has the expiry 0, which is not "close to its end":
     # only a series above 0 counts.
     assert expiring["expr"].strip() == (
-        f'({EXPIRY_SERIES}{{namespace=~"meridian|cert-manager"}} > 0)'
+        f'({EXPIRY_SERIES}{{namespace=~"meridian|cert-manager|observability"}} > 0)'
         " - time() < 21 * 86400"
     )
     assert expiring["for"] == "1h"
     unready = rules["MeridianCertificateNotReady"]
     assert unready["expr"].strip() == (
-        f'{READY_SERIES}{{namespace=~"meridian|cert-manager", condition!="True"}} == 1'
+        f"{READY_SERIES}"
+        '{namespace=~"meridian|cert-manager|observability", condition!="True"} == 1'
     )
     assert unready["for"] == "15m"
     # The CA's series, not a service's: after `make up` and before `make deploy`
@@ -400,16 +404,15 @@ def service_ca_certificate() -> dict:
     return ca
 
 
-def test_the_certificate_alerts_name_only_the_two_namespaces_of_the_certificates() -> (
-    None
-):
+def test_the_certificate_alerts_name_only_the_three_certificate_namespaces() -> None:
     for name, rule in certificate_rules().items():
         matchers = re.findall(r'namespace\s*(=~|=)\s*"([^"]*)"', rule["expr"])
 
         assert matchers, name
         for operator, value in matchers:
             if operator == "=~":
-                # Both of them: the services' certificates and the CA's.
+                # All three: the services' certificates, the services' CA's and
+                # the collector's authority and certificate.
                 assert set(value.split("|")) == CERTIFICATE_NAMESPACES, name
             else:
                 # One: the series of the CA, or of cert-manager's Deployments.
@@ -420,6 +423,14 @@ def test_the_certificate_alerts_name_only_the_two_namespaces_of_the_certificates
     # The CA's certificate is in cert-manager's namespace; the chart's in the
     # release's, which the workload alerts already pin to "meridian".
     assert service_ca_certificate()["metadata"]["namespace"] in CERTIFICATE_NAMESPACES
+    # The collector's two Certificates are in observability, the third namespace.
+    telemetry = [
+        d["metadata"]["namespace"]
+        for d in yaml.safe_load_all(TELEMETRY_CA_FILE.read_text("utf-8"))
+        if d and d["kind"] == "Certificate"
+    ]
+    assert telemetry == ["observability", "observability"]
+    assert set(telemetry) <= CERTIFICATE_NAMESPACES
 
 
 def test_the_missing_metrics_alert_names_the_series_of_the_cas_own_certificate() -> (
@@ -454,7 +465,7 @@ def test_the_approver_alert_names_the_two_deployments_of_the_issuing_path() -> N
         assert any(line.startswith(prefix) for line in lines), release
 
 
-def test_the_certificate_runbook_exists_and_names_the_three_policies() -> None:
+def test_the_certificate_runbook_exists_and_names_the_five_policies() -> None:
     runbook = (
         REPO_ROOT / "docs" / "operations" / "runbooks" / "certificate-expiry.md"
     ).read_text("utf-8")
@@ -468,7 +479,7 @@ def test_the_certificate_runbook_exists_and_names_the_three_policies() -> None:
         if d and d["kind"] == "CertificateRequestPolicy"
     ]
 
-    assert len(policies) == 3
+    assert len(policies) == 5
     for policy in policies:
         assert f"`{policy}`" in runbook, policy
     for alert in CERTIFICATE_ALERTS:
@@ -514,13 +525,14 @@ def test_the_service_monitor_selects_the_controllers_metrics_service() -> None:
         "honorLabels": True,
     }
     # Any namespace's Certificates would add series to Prometheus through this
-    # monitor; only the two namespaces the rules read are kept. With honorLabels
-    # the controller's own series carry the target's namespace, cert-manager.
+    # monitor; only the three namespaces the rules read are kept. With
+    # honorLabels the controller's own series carry the target's namespace,
+    # cert-manager.
     (relabeling,) = endpoint["metricRelabelings"]
     assert relabeling == {
         "action": "keep",
         "sourceLabels": ["namespace"],
-        "regex": "meridian|cert-manager",
+        "regex": "meridian|cert-manager|observability",
     }
     assert set(relabeling["regex"].split("|")) == CERTIFICATE_NAMESPACES
 

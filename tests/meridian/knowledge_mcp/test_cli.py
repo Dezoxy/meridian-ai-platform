@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import psycopg
 import pytest
-from dbsupport import OWNER, DatabaseHandle
+from dbsupport import INGEST_ROLE, OWNER, DatabaseHandle
 from directorysupport import CANARY as OS_ERROR_CANARY
 from directorysupport import FAILURES, Failure, make_unreadable
 from knowledgesupport import (
@@ -25,7 +25,10 @@ from typer.testing import CliRunner
 
 from meridian.platform.cli import app
 from meridian.platform.cli import knowledge as knowledge_cli
-from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
+from meridian.platform.cli.db import (
+    INGEST_DATABASE_URL_ENV,
+    MIGRATIONS_DATABASE_URL_ENV,
+)
 from meridian.platform.common.db import connect
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.knowledge_mcp.ingest import ingest_wordings
@@ -57,7 +60,7 @@ def stand_in(monkeypatch: pytest.MonkeyPatch) -> tuple[ScriptedGateway, list[str
 def configured(
     monkeypatch: pytest.MonkeyPatch, fresh_database: DatabaseHandle
 ) -> DatabaseHandle:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, fresh_database.dsn(OWNER))
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, fresh_database.dsn(INGEST_ROLE))
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, GATEWAY_URL)
     monkeypatch.setenv(REGISTRY_DIR_ENV, str(REGISTRY_DIR))
     return fresh_database
@@ -85,20 +88,40 @@ def test_the_tenant_option_is_required() -> None:
 def test_a_missing_database_variable_exits_1_and_names_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv(MIGRATIONS_DATABASE_URL_ENV, raising=False)
+    monkeypatch.delenv(INGEST_DATABASE_URL_ENV, raising=False)
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, GATEWAY_URL)
 
     result = runner.invoke(app, ingest_args())
 
     assert result.exit_code == 1
     assert result.output.startswith("ERROR ")
-    assert MIGRATIONS_DATABASE_URL_ENV in result.output
+    assert INGEST_DATABASE_URL_ENV in result.output
+
+
+def test_with_only_the_owners_variable_the_run_refuses_calls_nothing_and_stores_nothing(
+    configured: DatabaseHandle,
+    stand_in: tuple[ScriptedGateway, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, asked = stand_in
+    monkeypatch.delenv(INGEST_DATABASE_URL_ENV)
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, configured.dsn(OWNER))
+
+    result = runner.invoke(app, ingest_args())
+
+    assert result.exit_code == 1
+    assert result.output.startswith("ERROR ")
+    assert INGEST_DATABASE_URL_ENV in result.output
+    assert MIGRATIONS_DATABASE_URL_ENV not in result.output
+    assert asked == []
+    assert gateway.requests == []
+    assert chunk_count(configured) == 0
 
 
 def test_a_missing_gateway_variable_exits_1_and_names_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.delenv(knowledge_cli.GATEWAY_URL_ENV, raising=False)
 
     result = runner.invoke(app, ingest_args())
@@ -112,7 +135,7 @@ def test_a_missing_gateway_variable_exits_1_and_names_it(
 def test_a_gateway_address_that_is_not_http_exits_1_without_echoing_it(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
 
     result = runner.invoke(app, ingest_args())
@@ -134,7 +157,7 @@ def test_a_gateway_address_that_is_not_http_exits_1_without_echoing_it(
 def test_a_gateway_address_with_a_user_name_or_password_exits_1_without_echoing_it(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
 
     result = runner.invoke(app, ingest_args())
@@ -153,7 +176,7 @@ def test_a_gateway_address_with_a_user_name_or_password_exits_1_without_echoing_
 def test_a_gateway_address_urlsplit_cannot_take_exits_1_without_a_traceback(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
 
     result = runner.invoke(app, ingest_args())
@@ -179,7 +202,7 @@ def test_a_gateway_address_urlsplit_cannot_take_exits_1_without_a_traceback(
 def test_a_gateway_address_with_spaces_no_host_a_query_or_a_fragment_exits_1(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
 
     result = runner.invoke(app, ingest_args())
@@ -196,7 +219,7 @@ def test_a_gateway_address_httpx_cannot_take_exits_1_without_a_traceback(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     # urlsplit takes these; the real client factory (not replaced) does not.
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
     monkeypatch.setenv(REGISTRY_DIR_ENV, str(REGISTRY_DIR))
 
@@ -212,7 +235,7 @@ def test_a_gateway_address_httpx_cannot_take_exits_1_without_a_traceback(
 def test_a_registry_that_does_not_load_exits_1(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, GATEWAY_URL)
     monkeypatch.setenv(REGISTRY_DIR_ENV, str(tmp_path))
 
@@ -226,7 +249,7 @@ def test_a_registry_that_does_not_load_exits_1(
 def test_a_registry_dir_that_cannot_be_read_exits_1_on_an_error_line(
     monkeypatch: pytest.MonkeyPatch, registry_copy: Path, failure: Failure
 ) -> None:
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, GATEWAY_URL)
     monkeypatch.setenv(REGISTRY_DIR_ENV, str(registry_copy))
     make_unreadable(monkeypatch, registry_copy, failure)
@@ -277,7 +300,7 @@ def test_an_unreachable_database_exits_1_without_printing_the_dsn(
     monkeypatch: pytest.MonkeyPatch, stand_in: tuple[ScriptedGateway, list[str]]
 ) -> None:
     dsn = f"postgresql://nobody:{SECRET}@127.0.0.1:1/none?connect_timeout=1"
-    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, dsn)
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, dsn)
     monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, GATEWAY_URL)
     monkeypatch.setenv(REGISTRY_DIR_ENV, str(REGISTRY_DIR))
 
@@ -318,7 +341,7 @@ def test_a_successful_run_prints_the_counts_and_commits(
     ]
     assert asked == [GATEWAY_URL]
     assert chunk_count(configured) == 85
-    assert configured.passwords[OWNER] not in result.output
+    assert configured.passwords[INGEST_ROLE] not in result.output
     assert {h["X-Meridian-Tenant"] for h in gateway.headers} == {TENANT}
     assert {h["X-Meridian-Agent"] for h in gateway.headers} == {"knowledge-ingestion"}
     assert len({h["X-Meridian-Run"] for h in gateway.headers}) == 1
@@ -408,6 +431,34 @@ def test_a_tenant_the_registry_knows_but_refuses_leaves_a_row_that_names_it(
     assert result.exit_code == 1
     assert row == refused_row("evaluation", "registry-refused", row[5])
     assert isinstance(row[5], uuid.UUID)
+
+
+def test_the_completed_ingestions_audit_row_names_the_ingestions_own_role(
+    configured: DatabaseHandle, stand_in: tuple[ScriptedGateway, list[str]]
+) -> None:
+    result = runner.invoke(app, ingest_args())
+
+    roles = owner_rows(
+        configured,
+        "SELECT db_role, outcome FROM audit.events "
+        "WHERE service = 'knowledge-ingestion'",
+    )
+    assert result.exit_code == 0, result.output
+    assert roles == [(INGEST_ROLE, "completed")]
+
+
+def test_a_refused_ingestions_audit_row_names_the_ingestions_own_role(
+    configured: DatabaseHandle, stand_in: tuple[ScriptedGateway, list[str]]
+) -> None:
+    result = runner.invoke(app, ingest_args(tenant="evaluation"))
+
+    roles = owner_rows(
+        configured,
+        "SELECT db_role, outcome FROM audit.events "
+        "WHERE service = 'knowledge-ingestion'",
+    )
+    assert result.exit_code == 1
+    assert roles == [(INGEST_ROLE, "refused")]
 
 
 def test_a_tenant_the_registry_does_not_know_leaves_a_row_without_the_name(

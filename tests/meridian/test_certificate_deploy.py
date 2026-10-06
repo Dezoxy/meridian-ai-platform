@@ -34,7 +34,7 @@ ISSUER_STATES = {
 }
 ROLES = (
     "meridian_owner claims_api agent_runtime model_gateway policy_mcp claims_mcp "
-    "knowledge_mcp claims_sweep gateway_upkeep"
+    "knowledge_mcp claims_sweep gateway_upkeep policy_seed knowledge_ingest"
 )
 APPROVER_STATES = {
     "missing": 'echo "Error from server (NotFound): deployments.apps '
@@ -69,11 +69,13 @@ def run_deploy(
     policies: dict[str, str] | None = None,
     approver: str = "ready",
     approver_after: int | None = None,
+    telemetry_ca: str = "present",
 ) -> tuple[subprocess.CompletedProcess, str]:
     """deploy.sh whole, in a scratch copy of ``infra/kind/``, with stub
     ``docker``, ``kind``, ``helm`` and ``kubectl`` that log every call. The
-    database, its policy, its Secrets and its roles are all in place; the
-    issuer is in the state ``issuer`` names (``ISSUER_STATES``). The three
+    database, its policy, its Secrets and its roles are all in place, and so is
+    the ConfigMap ``telemetry-ca`` unless ``telemetry_ca`` is ``missing``; the
+    issuer is in the state ``issuer`` names (``ISSUER_STATES``). The five
     CertificateRequestPolicies are Ready except those ``policies`` maps to a
     state of ``POLICY_STATES``; the approver-policy Deployment is in the state
     ``approver`` names (``APPROVER_STATES``), until it has been looked at
@@ -123,9 +125,16 @@ def run_deploy(
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
         '  *"get database"*) printf true ;;\n'
-        '  *"get networkpolicy"*) ;;\n'
+        f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
+        f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
         '  *"get secret"*) ;;\n'
-        f"  *\"get cluster platform-db\"*) printf '%s' '{roles_json()}' ;;\n"
+        + (
+            '  *"get configmap telemetry-ca"*) ;;\n'
+            if telemetry_ca == "present"
+            else '  *"get configmap telemetry-ca"*) echo "Error from server '
+            '(NotFound): configmaps \\"telemetry-ca\\" not found" >&2; exit 1 ;;\n'
+        )
+        + f"  *\"get cluster platform-db\"*) printf '%s' '{roles_json()}' ;;\n"
         f'  *"get clusterissuer"*) {ISSUER_STATES[issuer]} ;;\n'
         + "".join(
             f'  *"get certificaterequestpolicy {name} "*) {POLICY_STATES[state]} ;;\n'
@@ -149,6 +158,26 @@ def run_deploy(
         timeout=SECONDS,
     )
     return done, calls.read_text(encoding="utf-8")
+
+
+# What the stub kubectl answers to the two reads `require_database` makes of the
+# API server's address (S063): the endpoint's one address, from the
+# documentation range, and the database policy's rule that names it.
+API_SERVER_SLICE = json.dumps(
+    {"items": [{"addressType": "IPv4", "endpoints": [{"addresses": ["192.0.2.10"]}]}]}
+)
+DATABASE_POLICY = json.dumps(
+    {
+        "spec": {
+            "egress": [
+                {
+                    "to": [{"ipBlock": {"cidr": "192.0.2.10/32"}}],
+                    "ports": [{"port": 6443, "protocol": "TCP"}],
+                }
+            ]
+        }
+    }
+)
 
 
 def roles_json() -> str:

@@ -163,16 +163,30 @@
       ],
       "groupName": "kind platform",
       "prBodyNotes": [
-        "CI does not start the kind platform. Before merging, run `make up` and `make smoke` on this branch, put what they printed in a comment, and bring the versions table in `infra/kind/README.md` up to date."
+        "CI does not start the kind platform. Before merging, run `make up` and `make smoke` on this branch, put what they printed in a comment, and bring the versions table in `infra/kind/README.md` up to date.",
+        "The images in `pins.env` that a chart runs (`X_IMAGE_TAG` and `X_IMAGE_DIGEST`) are the tags that chart version installs by default, except the collector's: the chart's appVersion is 0.161.0 and the pin is 0.162.0. A tag Renovate proposes that is not the chart's own belongs with a newer chart: leave it, or move the chart too, and read the chart's defaults again with the command in `infra/kind/README.md`."
       ]
     },
     {
-      "description": "promtool, the rule checker CI runs with make alerts, comes from the Prometheus image: it follows the Prometheus version the kube-prometheus-stack chart installs.",
+      "description": "approver-policy is built against one cert-manager release (the plan's backlog records v0.28.0 against v1.21.2), so the two charts and cert-manager's images arrive in one pull request. This rule comes after the 'kind platform' one so that its group wins.",
+      "matchPackageNames": [
+        "cert-manager",
+        "cert-manager-approver-policy",
+        "quay.io/jetstack/cert-manager-*"
+      ],
+      "groupName": "cert-manager",
+      "prBodyNotes": [
+        "approver-policy and cert-manager arrive together. Look up which cert-manager version the new approver-policy release is built against (its release notes or go.mod), and move both charts, and the images of cert-manager's components, to versions that agree. CI does not start the platform; run `make up` and `make smoke` on this branch and put what they printed in a comment."
+      ]
+    },
+    {
+      "description": "promtool, the rule checker CI runs with make alerts, comes from the Prometheus image: it follows the Prometheus version the kube-prometheus-stack chart installs. The image sits in pins.env (PROMETHEUS_IMAGE_*) and in the Makefile (PROMTOOL_IMAGE), so one group of its own holds both, and they move in one pull request. This rule comes after the 'kind platform' one so that its group wins for the pins.env line.",
       "matchPackageNames": [
         "quay.io/prometheus/prometheus"
       ],
+      "groupName": "prometheus image",
       "prBodyNotes": [
-        "This image is the rule checker CI runs with `make alerts`. Keep it at the Prometheus version the kube-prometheus-stack chart in `infra/kind/pins.env` installs: a newer checker accepts rules the cluster's Prometheus may not."
+        "This image is the rule checker CI runs with `make alerts`. Keep it at the Prometheus version the kube-prometheus-stack chart in `infra/kind/pins.env` installs: a newer checker accepts rules the cluster's Prometheus may not. This pull request moves the Prometheus the cluster runs (`PROMETHEUS_IMAGE_*` in `pins.env`) and the checker (`PROMTOOL_IMAGE` in the Makefile) together, and belongs with a kube-prometheus-stack chart that installs that version: CI does not start the platform, so run `make up` and `make smoke` on this branch and put what they printed in a comment."
       ]
     },
     {

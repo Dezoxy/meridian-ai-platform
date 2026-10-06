@@ -43,6 +43,8 @@ def test_up_installs_approver_policy_from_its_pin_into_the_cert_manager_namespac
         "install_release approver-policy cert-manager"
         ' "${APPROVER_POLICY_CHART}" "${APPROVER_POLICY_VERSION}"'
         ' "${CERT_MANAGER_REPO}" approver-policy.yaml'
+        ' --set "image.tag=${APPROVER_POLICY_IMAGE_TAG}"'
+        ' --set "image.digest=${APPROVER_POLICY_IMAGE_DIGEST}"'
     )
 
 

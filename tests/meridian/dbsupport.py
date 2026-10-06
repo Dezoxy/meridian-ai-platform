@@ -32,6 +32,14 @@ SERVICE_ROLES = (
 # tuple is read as "the roles that append to the audit log" by tests that insert
 # as each of them, and this role holds no right on any table it could write.
 UPKEEP_ROLE = "gateway_upkeep"
+# The roles of the chart's seed and ingestion Jobs (0022, S063). Neither is in
+# SERVICE_ROLES: tests read that tuple as "a role that holds no right on the
+# policy or knowledge tables" (the seed writes the first, the ingestion the
+# second) and as "every one of them appends to the audit log" (the seed does
+# not).
+SEED_ROLE = "policy_seed"
+INGEST_ROLE = "knowledge_ingest"
+JOB_ROLES = (SEED_ROLE, INGEST_ROLE)
 PASSWORD_BYTES = 24
 # The key under which the xdist controller hands its passwords to a worker.
 WORKERINPUT_KEY = "meridian_test_role_passwords"
@@ -63,7 +71,7 @@ def new_passwords() -> dict[str, str]:
     """A fresh random password for the owner and each service role."""
     return {
         role: secrets.token_urlsafe(PASSWORD_BYTES)
-        for role in (OWNER, *SERVICE_ROLES, UPKEEP_ROLE)
+        for role in (OWNER, *SERVICE_ROLES, UPKEEP_ROLE, *JOB_ROLES)
     }
 
 

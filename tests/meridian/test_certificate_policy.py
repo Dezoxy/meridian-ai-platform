@@ -4,7 +4,9 @@ cert-manager's built-in approver approves every CertificateRequest, so whoever
 may create a Certificate anywhere had any service's identity issued. On kind the
 built-in approver is off (``disableAutoApproval``) and cert-manager's
 approver-policy decides: three CertificateRequestPolicies in
-``infra/kind/manifests/certificate-policy.yaml``. No cluster is needed. The
+``infra/kind/manifests/certificate-policy.yaml`` for the services' issuer and
+two more for the collector's authority (S063; ``test_telemetry_ca.py`` judges
+those). No cluster is needed. The
 tests read the files, render the chart with kind's values and evaluate each
 Certificate the chart and ``service-ca.yaml`` define against the policies with
 a small model of approver-policy's rules (selector, allowed, constraints, and
@@ -18,7 +20,9 @@ import re
 import pytest
 import yaml
 from certpolicysupport import (
+    AUTHORITY_POLICY,
     CA_POLICY,
+    COLLECTOR_POLICY,
     DENY_POLICY,
     KIND_DIR,
     POLICY_NAMES,
@@ -35,6 +39,7 @@ from chartsupport import NAMESPACE, VALUES_FILE, rendered_chart
 
 POLICY_FILE = KIND_DIR / "manifests" / "certificate-policy.yaml"
 SERVICE_CA_FILE = KIND_DIR / "manifests" / "service-ca.yaml"
+TELEMETRY_CA_FILE = KIND_DIR / "manifests" / "telemetry-ca.yaml"
 CERT_MANAGER_VALUES = KIND_DIR / "values" / "cert-manager.yaml"
 APPROVER_VALUES = KIND_DIR / "values" / "approver-policy.yaml"
 
@@ -200,30 +205,39 @@ def test_approver_policy_is_pinned_as_a_helm_chart_of_the_cert_manager_repositor
 # ── approver-policy's values ─────────────────────────────────────────────────
 
 
-def test_approver_policy_may_approve_only_for_the_issuers_service_ca_defines() -> None:
+def test_approver_policy_may_approve_only_for_the_issuers_the_two_cas_define() -> None:
     values = yaml.safe_load(APPROVER_VALUES.read_text(encoding="utf-8"))
-    issuers = [
+    cluster_issuers = [
         d["metadata"]["name"]
         for d in documents(SERVICE_CA_FILE)
         if d["kind"] == "ClusterIssuer"
     ]
+    issuers = [
+        d["metadata"] for d in documents(TELEMETRY_CA_FILE) if d["kind"] == "Issuer"
+    ]
 
+    # Each list is tied to its own file: two ClusterIssuers of service-ca.yaml
+    # and two namespaced Issuers of telemetry-ca.yaml (the chart's form for an
+    # Issuer is issuers.cert-manager.io/<namespace>.<name>), and no other.
+    assert len(cluster_issuers) == 2
     assert len(issuers) == 2
     assert sorted(values["app"]["approveSignerNames"]) == sorted(
-        f"clusterissuers.cert-manager.io/{name}" for name in issuers
+        [f"clusterissuers.cert-manager.io/{name}" for name in cluster_issuers]
+        + [f"issuers.cert-manager.io/{m['namespace']}.{m['name']}" for m in issuers]
     )
 
 
-# ── the three policies ───────────────────────────────────────────────────────
+# ── the policies ─────────────────────────────────────────────────────────────
 
 
-def test_the_policy_file_holds_the_three_policies_and_their_bindings() -> None:
+def test_the_policy_file_holds_the_five_policies_and_their_bindings() -> None:
     kinds = sorted(d["kind"] for d in documents(POLICY_FILE))
 
     assert set(policies()) == POLICY_NAMES
+    # Three for the services' issuer (S056), two for the collector's (S063).
     assert kinds == sorted(
-        ["CertificateRequestPolicy"] * 3
-        + ["Role", "RoleBinding"] * 2
+        ["CertificateRequestPolicy"] * 5
+        + ["Role", "RoleBinding"] * 4
         + ["ClusterRole", "ClusterRoleBinding"]
     )
     for document in documents(POLICY_FILE):
@@ -548,11 +562,16 @@ def test_the_deny_policys_pattern_covers_the_two_issuers_the_signers_name() -> N
         "approveSignerNames"
     ]
 
+    # The deny policy is for the ClusterIssuers; the namespaced Issuers of
+    # telemetry-ca.yaml (S063) are signers too, with a policy of their own each.
+    cluster_signers = [s for s in signers if s.startswith("clusterissuers.")]
+
     assert len(service_ca_issuers()) == 2
     assert all(wildcard(pattern, name) for name in service_ca_issuers())
-    assert sorted(signers) == sorted(
+    assert sorted(cluster_signers) == sorted(
         f"clusterissuers.cert-manager.io/{name}" for name in service_ca_issuers()
     )
+    assert len(signers) == len(cluster_signers) + 2
 
 
 @pytest.mark.parametrize(
@@ -619,15 +638,16 @@ def test_without_the_deny_policy_a_request_no_policy_permits_would_wait() -> Non
 
 def test_each_policy_has_a_use_rule_for_cert_managers_account() -> None:
     for name in POLICY_NAMES:
-        assert any(may_use(name, ns) for ns in (NAMESPACE, CERT_MANAGER_NAMESPACE)), (
-            name
-        )
+        assert any(
+            may_use(name, ns)
+            for ns in (NAMESPACE, CERT_MANAGER_NAMESPACE, "observability")
+        ), name
 
 
 def test_every_use_rule_names_its_policy_and_grants_nothing_else() -> None:
     roles = [d for d in documents(POLICY_FILE) if d["kind"] in ("Role", "ClusterRole")]
 
-    assert len(roles) == 3
+    assert len(roles) == 5
     for role in roles:
         (rule,) = role["rules"]
         assert rule["apiGroups"] == [POLICY_GROUP]
@@ -642,6 +662,8 @@ def test_every_use_rule_names_its_policy_and_grants_nothing_else() -> None:
     [
         (SERVICES_POLICY, NAMESPACE, CERT_MANAGER_NAMESPACE),
         (CA_POLICY, CERT_MANAGER_NAMESPACE, NAMESPACE),
+        (AUTHORITY_POLICY, "observability", NAMESPACE),
+        (COLLECTOR_POLICY, "observability", CERT_MANAGER_NAMESPACE),
     ],
 )
 def test_the_policies_that_allow_are_bound_in_their_one_namespace_only(

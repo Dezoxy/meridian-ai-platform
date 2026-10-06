@@ -5,7 +5,7 @@
 in bash against a stub ``kctl``; ``test_certificate_probe.py`` runs the identity
 probe for real against a local TLS server. Each needs a few of the same values:
 the folder of the kind files, the time a subprocess may take, the calling
-service and the three CertificateRequestPolicies with the states a stub can
+service and the five CertificateRequestPolicies with the states a stub can
 answer for one.
 """
 
@@ -15,7 +15,13 @@ KIND_DIR = REPO_ROOT / "infra" / "kind"
 CALLER = "agent-runtime"
 SECONDS = 60
 
-POLICIES = ("meridian-services", "meridian-services-ca", "meridian-deny-unlisted")
+POLICIES = (
+    "meridian-services",
+    "meridian-services-ca",
+    "meridian-deny-unlisted",
+    "telemetry-ca",
+    "otel-collector",
+)
 POLICY_STATES = {
     "missing": 'echo "Error from server (NotFound): certificaterequestpolicies.'
     'policy.cert-manager.io \\"x\\" not found" >&2; exit 1',
