@@ -473,7 +473,7 @@ when their step opens and do not stop the others.
 | S061 | Scaffold, registry and evaluation plumbing | `meridian workload new` writes the new agent into the Agent Runtime's entry in `services.yaml`, says which line of an unusual file it refuses and what holds a taken name, and its comparison "the old agents plus exactly one" has a test that reaches it alone; `meridian registry validate` answers an unreadable registry directory with a message, not a traceback; `eval run` refuses a golden set that is not the workload's own, empty or not; the two entry-point groups share one loader and its trust checks; `injection.py` imports no private name, has a benign clause case, and a changed screen pattern asks for a new baseline | done | S039, S050 |
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (~~egress outside the cluster~~ egress from the Claims API to the gateway and to the API server's Service, the database's policy; changed on 2026-10-06: smoke reaches nothing outside the cluster, so an address on the internet is not tried) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | done | S056 |
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | done | S062 |
-| S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
+| S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | done | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | doing: the command, its role and the runbook are done (2026-10-06); the shared rate windows wait for the cluster lane | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
@@ -595,7 +595,7 @@ that day; the rest stand as their step recorded them.
 | A login that is a MEMBER of `claims_sweep` and does not `SET ROLE` has neither of the two names the sweep's triggers test, so it holds the sweep's grants and is not confined (true since 0014); a test holds that no login is a member on a test database, and nothing checks a deployed one | S065 | open; S063 did not take it: migration 0022 refuses a membership of its own two roles when it runs, and nothing looks at a deployed database afterwards; its security review, low; T-77's residual | S068 |
 | Migration 0017 rewrites `audit.events` twice under an exclusive lock, each statement under the connection's 10 s limit: above about five to six million rows the runner cannot apply it (it fails closed), and the ways out, a new table and a switch or a one-off longer timeout, are not built; it writes about twice the table in WAL | S065 | open; measured by its PostgreSQL review (1.5 million rows: 2.4 s and 2.2 s); the Azure database of S020 starts empty | S068 |
 | The order `seq` gives the audit rows that existed before 0017 rests on a table rewrite reading the heap in the order `CLUSTER` wrote it, which PostgreSQL does not promise; a test pins it, and 500,000 shuffled rows kept it | S065 | open; a PostgreSQL major upgrade is where it could change | S029 |
-| A checkpoint thread whose ID is not UUID text is walked from a fixed place and may never be listed, and a leftover behind a long run of live threads is listed only when the random start lands inside that run; nothing counts or alerts on leftovers that stay | S065 | open; the runtime writes UUID text only; both reviews, low | S064 |
+| A checkpoint thread whose ID is not UUID text is walked from a fixed place and may never be listed, and a leftover behind a long run of live threads is listed only when the random start lands inside that run; nothing counts or alerts on leftovers that stay | S065 | partly closed by S064: what a pass cleaned is a series (`meridian_sweep_last_pass`, finding `threads_cleaned`), so leftovers that are found are counted; a thread the walk never lists is still seen by nothing, and no rule reads the gauge's values. The runtime writes UUID text only; both reviews, low | S068 |
 | The template database is built from the packaged migrations read at import; a test that patches the runner's file list and is the first on its worker to need the template makes the session's fixture fail for the tests after it. A `files` parameter on `apply_migrations` would let the builder pass its own | S065 | open; no test does both today | S074 |
 | The static check on migrations reads SQL text: it does not see an `UPDATE` inside a function body or dynamic SQL, an `ADD` without the word `COLUMN`, or a table reached by another name | S065 | open; its own docstring and the README say so | S068 |
 | The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | closed by S057 (kept at 15: twice the slowest of 47 successful runs, 7 min 30 s; the median is 6 min 47 s, and the job prints its slowest tests) | S057 |
@@ -609,7 +609,7 @@ that day; the rest stand as their step recorded them.
 | `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-76) | S053 | open | S021 |
 | Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | open | S067 |
 | A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | closed by S060 (handlers and a middleware of the workload's own) | S060 |
-| The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | open; left by S019 (application and edge logging, not the chart) | S064 |
+| The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | closed by S064 for the six services: the access line is rebuilt from fields with no query and no client address, seen on kind with canaries. Still open: the edge's own line keeps the whole target and a client address (read on the cluster), in its pod's output on the node; nothing ships it | S072 |
 | The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | closed by S059 (the query is set aside before the instrumentation runs and given back to the routes) | S059 |
 | The claimant's status page picks the latest proposal by `created_at` with no tie-break; the decided-claims view and 0009 break a tie by `proposal_id` | S053 | closed by S060 (the three statements of the pages break the tie by `proposal_id`) | S060 |
 | `finish_run` writes a run's status without checking the one it replaces, so a leg that outlives the ten-minute lease would overwrite the sweep's `Failed` (a live leg is bounded near 280 s) | S052 | closed by S059 (`finish_run` and the pause after a failed resume write over `Running` only and say whether they did) | S059 |
@@ -618,7 +618,7 @@ that day; the rest stand as their step recorded them.
 | Documents posted after the deadline are refused (409) and the adjuster does not see that they were tried | S052 | closed by S060 (one audit event per referral, and a sentence on the adjuster's page) | S060 |
 | The adjuster's queue shows a referred claim's last proposal reason, not that its documents are overdue (the claim's page says it) | S052 | closed by S060 ("Documents overdue" beside the reason) | S060 |
 | `make smoke` cannot see a schedule that stopped after a success: it has no server clock to compare with (the controller manager's Lease would be one) | S052 | closed by S062 (the newest success against the database's clock; a schedule with no Job left is seen too) | S062 |
-| No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | partly closed by S024: an alert on the CronJob's last success, from kube-state-metrics, checked offline and not yet on a cluster. Still open: a metric of the sweep's own (what a pass found is in its log line only) | S064 |
+| No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | closed by S064: six gauges of the last pass under one instance, a rule on a sweep that runs and does not report (`MeridianSweepNotReporting`) beside S024's on one that does not run, and a smoke line that names the six values; seen on kind | S064 |
 | A NetworkPolicy for the sweep's pod: egress to DNS and the database only | S052 | done in S019 | S019 |
 | The sweep's listing of leftover threads reads every checkpoint row each pass (160 ms at 390,000 rows) | S052 | closed by S065 (a walk of the thread index from a random start, at most three times the limit, and an index probe into `runs` per candidate; the plan reads the same rows when the tables double) | S065 |
 | The trigger that confines the sweep's role runs, and returns at once, for every role's update of a claim or a run | S052 | closed by S065 (migration 0018: a `WHEN` clause on both triggers; each function keeps its own test) | S065 |
@@ -641,7 +641,7 @@ that day; the rest stand as their step recorded them.
 | An image built for Azure gives the policies' seed file to the seed Job alone (T-51) | threat model, S018 | open | S022 |
 | Service-to-service identity: the runtime, the gateway and the tool servers trust the tenant and agent headers they are sent (T-08, T-24, T-48, T-50). The README named S019 for it; no step's "done when" did | threat model, S018 | done in S055 (mutual TLS, ADR 4): a call with no identity, from an unmapped service or naming a tenant or agent outside the caller's registry entry is refused | S055 |
 | A web application firewall in the Azure design (T-02) | threat model, S018 | open | S020 |
-| No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | open; left by S024 (the services' telemetry setup, or a log collector on the node, which a session without the cluster cannot try). So no alert rule reads a log | S064 |
+| No service exports its logs: they stay in each pod's output, and only the smoke test's line reaches Loki | S018 | closed by S064: a node agent ships the six services' and the sweep's output to Loki, seen on kind. That no alert rule reads a log has a row of its own | S064 |
 | `make demo` uses one golden claim per run and stops after 40; a reset would delete claims and audit rows, which the roles forbid by design | S041, S044, S018 | closed in S018, not built: a new cluster is the reset, and the demo script says so | none |
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open; not built by S057: the checker and its test are copies of development-base's, where the fix goes first and is then re-copied. S057's section says what the check is; tried from a scratch folder, it finds no split table in the tree today | S075 |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | closed by S062 (a wording of its own; and a service with no span no longer counts as present) | S062 |
@@ -686,16 +686,16 @@ that day; the rest stand as their step recorded them.
 | Alert routing and notification: kind runs no Alertmanager, so a firing alert is shown and nobody is told | S024 | open; the game day is the first time someone must be told | S028 |
 | Three objectives have no indicator: a duration metric for a triage run (QA-01) and for the gateway's own time (QA-02), and a count of runs by how they end | S024 | open | S027 |
 | Alerts on the rate an error budget burns at, which need measured targets | S024 | open | S027 |
-| A metric for a caller that cannot reach the gateway, and for the knowledge server's empty-store and stale-vector warnings (S046's hand-off): the runtime and the tool servers export traces only | S046, S024 | open; left by S024 (their code, held by S055) | S064 |
-| A metric of the assessment's outcomes by reason word, so a jump in `special-data`, `injection-suspected` or `filtered` is seen (S047's hand-off) | S047, S024 | open; left by S024 (the triage graph, which only one session changes at a time) | S064 |
+| A metric for a caller that cannot reach the gateway, and for the knowledge server's empty-store and stale-vector warnings (S046's hand-off): the runtime and the tool servers export traces only | S046, S024 | closed by S064: the runtime counts its model calls by outcome and a fixed reason (unreachable, timed out, an error answered), the tool servers count every call by tool, outcome and reason, `no-corpus`, `stale-vectors` and `gateway-unavailable` among them; the completed and refused calls were seen on kind, the failures in tests | S064 |
+| A metric of the assessment's outcomes by reason word, so a jump in `special-data`, `injection-suspected` or `filtered` is seen (S047's hand-off) | S047, S024 | closed by S064 for the count (`meridian_claims_assessments_total`, seen on kind for `not_needed`); a jump is seen by whoever reads the series: the rule has a row of its own | S064 |
 | Nothing credits a tenant, closes a reservation a dead process left `reserved`, or expires old ledger rows (S011's hand-off): the budget runbook says wait for the period or raise the limit by pull request, and forbids editing the ledger by hand; a command of the gateway's own, with its role and an audit row, is the fix | S011, S024 | closed by S066: `meridian gateway` under the role `gateway_upkeep`, through three database functions that hold the rules and write the audit row; tested against PostgreSQL, the migration applied on kind, the command itself not yet run on a cluster | S066 |
-| The cost dashboard's queries take a series as new after a gap in the data longer than five minutes (a laptop that slept) and show its lifetime total as the selected range; S024's review found the same form in the new rules, which carry the fix (the earlier value is looked for 24 hours back) as does the health dashboard | S043, S024 | open | S064 |
+| The cost dashboard's queries take a series as new after a gap in the data longer than five minutes (a laptop that slept) and show its lifetime total as the selected range; S024's review found the same form in the new rules, which carry the fix (the earlier value is looked for 24 hours back) as does the health dashboard | S043, S024 | closed by S064: the nine queries look 24 hours back for the earlier value, and a generated `promtool` file in `make alerts` holds each against a gap | S064 |
 | The runbooks are written from the code and none is exercised: the rollback is S022's, the provider outage, the used-up budget and the database failure are the game day's; the secret rotation has no step, and its database-password procedure (delete the Secret, `make up`, restart) should first run on a cluster that can be thrown away | S024 | open | S022, S028 |
 | CloudNativePG issues and renews the database's certificates; the repository records no expiry, and whether a renewed certificate authority needs the services restarted is not known | S024 | recorded by S063 in the certificate runbook: three certificates, ninety days from the cluster's making, and that the services read the authority's file at each new connection, so a renewed one needs no restart by the code's reading. Still open: no renewal has been seen | S073 |
 | The required `python` check pulls the `promtool` image from quay.io on every run, so a registry outage fails it (the test database's image has the same exposure); and Renovate moves that image and the chart's Prometheus under separate lines, with a note and no constraint | S024 | open | S022 |
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | closed on 2026-10-04 outside a step, in development-base first (its pull request 45), then copied in: the rule reads what follows `get` in a command segment, whatever stands before it, and denies a get of a Secret with any output format but `name` and `wide`; a command that lists the Secrets in one segment and prints what a variable or xargs hands it in another is denied as a pair, which a security review of the first version found missing by running the old and the new hook side by side. The owner decided the other two that day: `psql` through `kubectl exec` asks on every call, and `make grafana-password` asks (a person's own terminal never meets the hook). 125 cases added; 38 mutants of the patterns each fail one | none |
 | The command guard is a pattern on what a session types, and these ways to a Secret's values or to superuser SQL give no answer: `kubectl exec` with `env`, `printenv` or `cat` of a mounted file, `kubectl get --raw`, `kubectl config view --raw`, `kubectl create token`, `helm get manifest`, a cloud CLI's secret commands, `pg_dump` or `pg_restore` through `kubectl exec`, and `psql` reached by `kubectl run`, `kubectl debug`, a plugin or `docker exec`. Listed by the security review of the Secret rule on 2026-10-04. A rule for one of them goes into development-base first; the hook stays a guard for habits, not a boundary, as its header says | S024 | open | S075 |
-| Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | open; a rule on absent series and a NetworkPolicy for `observability`; since S063 the collector admits `meridian`'s pods alone, so the forging is left to the six services and to what writes to Prometheus directly | S064 |
+| Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | partly closed by S064: three rules compare the two ends of a hop (the gateway's series against the runtime's, the runtime's against the app's, the sweep's gauge against its CronJob) and one watches the log agent's DaemonSet; loaded and healthy on kind, none seen firing. Still open: with no traffic anywhere a stopped collector leaves nothing to compare; a deleted Deployment or CronJob still takes its alert with it; one of the six services can push under another's name (T-68) | S073 |
 | A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | closed by S056 (inside the last 24 hours of the certificate it loaded, a service answers 503 on `/healthz` once the mounted file holds a renewed one, and from the certificate's end whatever the file holds; alerts at 21 days left, on a certificate that is not Ready, on the metrics going missing and on the two Deployments that issue). The restart itself was not seen on the cluster | S056 |
 | Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | partly closed by S056 (cert-manager's own approver is off and approver-policy lets the issuer sign only a request made in `meridian` with a URI under its prefix; on the cluster a request from another namespace was denied). Open, for before the chart goes to AKS: revocation; a CA key outside a Kubernetes Secret; inside `meridian` the policy does not tell one service's request from another's | S020 |
 | Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | closed by S063: TLS 1.3 to the collector, verified against an authority of its own; on kind | S063 |
@@ -716,8 +716,8 @@ that day; the rest stand as their step recorded them.
 | `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | closed by S059 (the stand-in waits until it is cancelled, and the test reads that) | S059 |
 | The gateway's client of the runtime has a timeout per phase (30 s each), not per call, so "a live leg is bounded near 280 s" (four model calls, sixteen tool calls) understates what a slow, trickling gateway can take; a test holds 280 s under the 600 s lease, and no constant bounds a whole model call | S059 | open | S069 |
 | A resumed leg that outlives its lease while another resume takes the run over can still write its end over the other leg's `Running` (the guard is the status alone, not who holds the run); it needs a leg hung past 600 s | S059 | open; not taken by S065 (not in its "done when"): the guard needs to know who holds the run, a column on `runtime.runs` and a design of its own | S069 |
-| `httpx2` logs each request's URL at INFO; the services' loggers stay at WARNING and the settings refuse an address with a query or a password, but nothing sets that logger's level as `quiet_sdk_logging` does for the SDK | S059 | open | S064 |
-| S059 set a request's query aside before the middleware stack; where a middleware forwards a copy of the scope (the caller's identity check), the server's access log no longer has the query, and where none does (the Claims API) it still has | S059 | open; S064's access-log row covers the rest | S064 |
+| `httpx2` logs each request's URL at INFO; the services' loggers stay at WARNING and the settings refuse an address with a query or a password, but nothing sets that logger's level as `quiet_sdk_logging` does for the SDK | S059 | closed by S064: `httpx` and `httpx2` are held at WARNING by the log configuration every service and the sweep install | S064 |
+| S059 set a request's query aside before the middleware stack; where a middleware forwards a copy of the scope (the caller's identity check), the server's access log no longer has the query, and where none does (the Claims API) it still has | S059 | closed by S064, and corrected: on the cluster every deployed service's access line kept the query (the certificate wrapper copies the scope first); the line is now rebuilt from fields and no longer depends on where the scope is copied | S064 |
 | `service_url_problem` still accepts some addresses the HTTP client refuses (an address of four numbers over 255, a host with a combining mark or an emoji); the second net, the client's own refusal at start, catches them | S059 | open | S069 |
 | `test_after_the_threshold_the_next_call_skips_the_first_candidate` (`tests/meridian/gateway/test_gateway_fallback.py`) failed in a whole run on a machine at a load over 60 and passes alone, and in the whole run on a quiet machine that closed S059; S057 made five timing tests hold by construction and this one was not among them | S059 | open | S074 |
 | A shed call's audit row and span have no run: the run's ID in `_meta` is not verified on that path, so only the server's warning line names it | S059 | open; by design until a tool server can check a run without a worker | S069 |
@@ -748,7 +748,7 @@ that day; the rest stand as their step recorded them.
 | A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | open | S073 |
 | The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | open | S075 |
 | A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | open | S068 |
-| Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open | S064 |
+| Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open; S064 did not take it: the upkeep is a command a person runs and exports no series, so a rule has nothing to read; its audit rows are the record | S068 |
 | `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | open; the step's second half | S066 |
 | `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | open | S068 |
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | S074 |
@@ -765,6 +765,12 @@ that day; the rest stand as their step recorded them.
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open | S073 |
 | Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | open | S068 |
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | open | S074 |
+| No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
+| The log agent's own counters (its exporter's failures, the memory limiter's refusals) are scraped by nothing; a DaemonSet that does not exist leaves no series, so only smoke says the agent is gone; the kubelet's rotation can outrun the agent, and one flooding pod may stall the others' lines (not measured). The agent mounts the node's pod-log directory, so `logging` cannot be `restricted` and a compromised agent reads every pod's output on its node | S064 (infra review) | open; the second half is a stated residual | S072 |
+| Not seen on a cluster after S064: any of the four telemetry alerts firing, a renewal of the telemetry authority with the log agent and the sweep as its readers, a line with an `exception` field, a run counted `not-saved` or `not-started`, a triage counted `failed`, a tool call counted `cancelled` | S064 | open; tests hold each | S073 |
+| `platform/common/telemetry.py` loads the web framework, so the sweep imports its meters late to stay a job with no web stack; `runtime/app.py` and `claims_triage/triaging.py` stand at 799 lines and `test_toolserver_meters.py` at 832 | S064 | open | S074 |
+| A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | open; the first is the owner's to overturn | S069 |
+| Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | open | S069 |
 
 ## Part C — Step details
 
@@ -9962,6 +9968,220 @@ documentation before it went in).
   is observed) and the authority of its own for telemetry are the
   session's decisions to overturn.
 
+### S064 — Metrics and logs
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** on kind, the services' logs reach Loki and no access log of a
+service keeps a query string (T-03); the runtime, the tool servers, the
+Claims Triage App and the sweep export metrics, among them a caller that
+cannot reach the gateway, the knowledge server's empty-store and
+stale-vector refusals, the assessment's outcomes by reason word and what
+a sweep pass found; rules notice telemetry that stopped arriving; the
+cost dashboard's queries survive a gap in the data.
+
+**Decisions** (the main session's unless marked; the owner may
+overturn any):
+
+- **Logs reach Loki through an agent on the node that reads the pods'
+  output, the owner's word of 2026-10-06** ("A - node agent reads
+  outpot"), over each service pushing its own records: the SDK's logs
+  API is marked unstable at the pinned version, and a push from the
+  service is blind to uvicorn's access line, to a crash before logging
+  is set up and to the edge. The agent is a second OpenTelemetry
+  Collector, the contrib build pinned by digest, as a DaemonSet in a
+  namespace of its own, `logging`; it forwards over OTLP with TLS to the
+  collector that exists, so the path to Loki, the telemetry authority
+  and the policy pattern are reused. That choice was the session's
+  suggestion, and the owner answered "S064 is okay" when told it would
+  go out (read as a yes; no other agent was asked for). Rejected:
+  Promtail (its support ended), Fluent Bit and Grafana Alloy (each a
+  second configuration language for one pipeline).
+- **The agent does not run as root.** The infra review asked whether uid
+  0 was needed; read on the node, the pod-log directory is `root:root`
+  0750 and a container's file 0640, so the group reads them. The agent
+  runs as user and group 10001 with the supplementary group 0. It still
+  mounts the node's pod-log directory (read-only), so `logging` cannot
+  meet Pod Security `restricted`: its labels warn and audit at
+  `privileged`.
+- **The agent ships a named list and nothing else**: the six services
+  and the sweep, a positive list that a test holds equal to the chart.
+  The three Jobs (`migrate`, `seed`, `ingest`) print through the command
+  line, not through the redacting log format, so their output is not
+  shipped; nor is any pod outside `meridian`.
+- **One JSON object per record, configured in code** at the start of
+  each service's factory and of the sweep, not by a uvicorn flag: the
+  chart's commands do not change and a test holds it per factory. The
+  access line is rebuilt from fields (method, path, status) with no
+  query and no client address, whatever the request's scope holds; the
+  path is decoded, redacted and cut at 256 characters; `extra` is never
+  written; a 200 on `/healthz` is dropped; `httpx` and `httpx2` are held
+  at WARNING, because they log a request's URL at INFO.
+- **A log line's `exception` field holds frames and class names and no
+  message text.** The security review found messages redacted by pattern
+  only, and a name or a street in a message matches no pattern. The
+  cost: an operator reads where it failed and as what, not the message.
+  Its source lines go through the same patterns and the field is cut at
+  8,192 characters (the second review). The session's decision; the
+  owner may overturn it.
+- **The assessment's counter lives in the Claims Triage App, not in the
+  graph.** Rejected: handing a workload's graph a meter, a third
+  argument of the factory that every workload and the scaffold would
+  then take (ADR 2, and S037 builds on that contract).
+- **The Claims Triage App counts every triage it ends**, stored, failed
+  (with one of six reason words) or taken over, after the silent-failure
+  review showed that three of the four failures between the app and the
+  runtime were counted nowhere while the runtime counted a completed
+  run.
+- **What a sweep pass found is six gauges of the last pass**, sent once
+  before the process exits, under one fixed instance name. Rejected:
+  counters (a process that lives seconds exports one sample and starts
+  from zero every time). The fixed name came from the cluster: with the
+  SDK's random instance ID each pass was six new series, which no rule
+  could read.
+- **No new failure word for a run.** The audit rows and the Claims API
+  read `model-error`; the finer word (the gateway could not be reached,
+  it timed out, it answered an error) is the metric's.
+- **A count never fails what it counts**: each metric call in a
+  request's path is guarded, so a raise is logged with its class and the
+  run is still settled, the tool's answer still returned and the
+  proposal still stored (the Python review's finding).
+- **A rule on telemetry that stopped compares the two ends of a hop**,
+  not a bare `absent()`, which would fire on a platform nobody is using:
+  the runtime counts completed model calls while the gateway's counter
+  has no sample; the app stores triages while the runtime's run counter
+  has none; the sweep's CronJob succeeds while its gauge has none. Each
+  waits five minutes; the thresholds are proposals nobody measured, like
+  all of the file's.
+- **The cost dashboard's queries take the earlier value from up to 24
+  hours back**, the form the rules and the health dashboard already had,
+  and a generated `promtool` file in `make alerts` holds each of the
+  nine against a gap.
+
+**Advisor:** consulted before the first contract (about 10:05 UTC): its
+points went into the first five contracts; the one the record still
+shows is in the log format's (a test puts the root logger back by
+removing what it added, not by restoring a saved list), and what else it
+changed was not written down at the time, which is the gap the rule of
+v0.56 closes. At a surprise (about 11:15 UTC, the sweep's gauge was a
+new series on every pass): it chose one fixed instance name for the
+sweep over an aggregation in every rule and panel. With the four reviews
+in hand (about 12:55 UTC): the agent's non-root form, of which the
+implementer kept an explicit group 10001 against its advice, with a
+measurement (the runtime defaults to group 0 for an image with no such
+user). Not consulted before the pull request: everything on the branch
+had been read by a reviewer or put to a consultation (Part A, step 4).
+
+**Work log:**
+
+- **A read-only map, a design with a threat note, then twelve
+  contracts** to the `implementer`, each in a worktree of its own. Five
+  from `main` while S063 was still open, none touching a cluster script:
+  the runtime's metrics, the tool servers', the workload's two (the
+  assessment and the sweep), the log format, the cost dashboard. Three
+  after S063 merged: the node agent, the sweep's telemetry in the chart,
+  the rules. Four of review fixes.
+- **Four reviews.** `python-reviewer`, `security-reviewer` and
+  `silent-failure-hunter` on the code half, `infra-reviewer` on the
+  cluster half: no critical finding. High, all fixed: a write to the
+  output that failed printed the record's arguments, the client's
+  address and the query among them, to the error stream (now one fixed
+  line); failed triages between the app and the runtime were counted
+  nowhere; the agent ran as root. Medium, fixed: a metric call that
+  raised could leave a run unsettled; exception messages were redacted
+  by pattern only; the runtime counted a leg before its result was saved
+  and counted nothing when the database refused the start (two reason
+  words, `not-saved` and `not-started`); a service with no collector
+  address exported nothing and said nothing (one INFO line now); a tool
+  call cancelled while it waited for a slot was not counted
+  (`cancelled`); a failed meter shutdown could skip the tracer's flush;
+  the Jobs' unredacted output reached Loki; Python's CRITICAL had no
+  severity in Loki; nothing re-checked the agent's pod after a chart
+  bump (a smoke line does); nobody would notice the agent down (a rule
+  does).
+- **A second pass** by `code-reviewer` over the five commits that
+  followed the reviews: no critical and no high finding, and nothing of
+  the first four reviews left entirely open. Fixed from it: smoke's line
+  for what Loki must not hold passed on two empty answers, so a Loki
+  that stopped indexing the two labels would have passed it (it now asks
+  first for the Claims API's own stream by those labels); a traceback's
+  source lines went out as written and the field had no bound; three
+  comments said which of two samples Prometheus keeps, wrongly. Its low
+  findings on counting are a backlog row.
+- **Four runs on the live cluster**, after the first contracts, after
+  the reviews' fixes, with everything but the second review's fixes, and
+  on the final tip, and three read-only checks; what they showed is
+  under "Result". The cluster was not made again.
+
+**Result / verification:**
+
+- **Before the change, on the cluster at `main`:** a request with a
+  canary in its query left the canary and the client's address in the
+  access line of the Claims API and, over mutual TLS, of the Model
+  Gateway. So the backlog row that said a service whose identity check
+  forwards a copy of the scope "no longer has the query" was wrong for
+  the deployed services.
+- **After it:** every line of the six services' output is one JSON
+  object; five canary requests (through the edge and over mutual TLS,
+  one with an e-mail address encoded in the path) left no canary in any
+  service's output and none in Loki over thirty minutes; the path with
+  the address arrived as `/u/[email]`.
+- **The services' logs are in Loki**, by `service_name`, with `path`,
+  `status` and `level` as structured metadata; on the final tip the
+  agent shipped the six services and the sweep and nothing of the Jobs
+  or of smoke's own pods that ran in the same minutes. The agent's pod:
+  user and group 10001, supplementary group 0, no restart, fourteen
+  files watched, all of the list, no `permission denied`.
+- **The new series are in Prometheus** after `make demo`:
+  `meridian_runtime_runs_total` (paused and completed),
+  `meridian_toolserver_calls_total` from the three tool servers
+  (completed by tool, and smoke's own probes as `refused`),
+  `meridian_claims_assessments_total`, `meridian_claims_triages_total`
+  (`stored`), and `meridian_sweep_last_pass`: one instance,
+  `claims-sweep`, six series. `meridian_runtime_model_calls_total` was
+  seen in the second run and not in the third, where neither demo claim
+  needed the model.
+- **The rules**: five groups and nineteen rules loaded and healthy, the
+  loaded text equal to the file's; no Meridian alert firing or pending;
+  kube-state-metrics serves the two DaemonSet series the agent's rule
+  reads.
+- **`make smoke` on the final tip:** 44 PASS, 0 FAIL, 0 SKIP in the
+  third run and again in the fourth, which added the second review's
+  fixes (41 before the three lines for the agent and the sweep's
+  findings; 32 lines after `make up` alone); `make up`, `make deploy`
+  and `make demo` each exit 0. The changed line found the Claims API's
+  own stream by the two labels before it asked for what must not be
+  there.
+- **The edge's own access log keeps the whole request target, query
+  included, and a client address** (read on the cluster): it stays in
+  the edge's pod output on the node and is not shipped, since the
+  agent's list names `meridian`'s services alone.
+- **Gates, run by the main session with `main` merged in:**
+  SUITE_LINE_PENDING
+- **Not seen on the cluster:** any of the four new alerts firing; a line
+  with an `exception` field (nothing failed); an `unparsed` access
+  record; the fixed line of a failed write; a count that raised; a run
+  counted `not-saved` or `not-started`; a triage counted `failed`; a
+  tool call counted `cancelled`; a restart of the agent; a renewal of
+  the telemetry authority with the agent and the sweep as its readers.
+  Tests hold each.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: no rule and no panel reads the new
+  series' values, and no rule reads a log line (S027); the edge's own
+  log keeps a query and an address (S072); the agent's own drop counters
+  are scraped by nothing, a DaemonSet that is gone leaves no series,
+  rotation can outrun the agent, and it reads the node's pod-log
+  directory (S072); the telemetry rules need one end of a hop alive, a
+  renewal of the authority was not seen with the two new readers, and no
+  alert of the four has fired (S073); `telemetry.py` loads the web
+  framework, two source files stand at 799 lines and one test file at
+  832 (S074); a log line's `exception` field has no message, and the
+  second review's low findings on counting (S069); nothing alerts on the
+  ledger's upkeep (S068).
+- For the owner: the `exception` field without messages is the session's
+  decision to overturn; so is shipping the services and the sweep alone
+  and leaving the Jobs' output on the node.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -10399,3 +10619,11 @@ documentation before it went in).
   AWS is: S077 (the mapping) and S078 (a Terraform module, checked and
   then applied once in the owner's project) are new, and the road to
   Azure names them.
+- **v0.58, 2026-10-06:** S064: on kind the six services and the sweep
+  write one JSON object per record with no query and no client address,
+  and a node agent that does not run as root ships them to Loki; the
+  runtime, the tool servers, the Claims Triage App and the sweep export
+  metrics; four rules notice telemetry that stopped arriving; the cost
+  dashboard survives a gap. Proved by four runs on the cluster. Seven
+  backlog rows closed, three in part and re-homed, one re-homed, six
+  new.

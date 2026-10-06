@@ -154,9 +154,10 @@ settings). The fields are `time` (UTC, ISO 8601), `level`, `logger`,
 `claims-api`, `policy-mcp`, `knowledge-mcp`, `claims-mcp`, `claims-sweep`),
 `message` and, for a record with a traceback, `exception` (one string: each
 exception's frames and its class, no message text, because a message can quote
-a claimant's name or street). A newline in a message is escaped, so a claimant's
-text cannot make a second line. A service's own record, and an
-exception's:
+a claimant's name or street; the frames' source lines go through the same
+redaction, and the field is cut at 8,192 characters). A newline in a message
+is escaped, so a claimant's text cannot make a second line. A service's own
+record, and an exception's:
 
 ```json
 {"time": "2026-10-06T10:33:02.222+00:00", "level": "WARNING", "logger": "meridian.workloads.claims_triage.triaging", "service": "claims-api", "message": "claim CLM-0001 moved to review"}
