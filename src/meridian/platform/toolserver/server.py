@@ -154,6 +154,9 @@ def _span_attributes(finished: Finished) -> dict[str, str]:
         "meridian.run_id": call.run_id,
         "meridian.tenant": call.tenant,
         "meridian.agent": call.agent,
+        # One of the agent's workers: an ID, set only once the name was found
+        # among them, so a made-up name never reaches a span (S031).
+        "meridian.worker": call.worker,
     }
     attributes |= {key: str(value) for key, value in named.items() if value}
     return attributes

@@ -87,10 +87,12 @@ connections close with their requests.
 On kind nothing restores it: there is no backup and no archive of the
 write-ahead log, and the volume is on the node's disk. A new cluster is
 the recovery, `make up` and then `make deploy`, about seven minutes.
-`make down` deletes the cluster and is the owner's to run. If the cause
-may be an attack and the database still answers, the owner first copies
-`audit.events` and `gateway.usage` out of it, into a file outside the
-repository: on kind the cluster is the only copy of the evidence.
+`make down` deletes the cluster. A session may run it for a test that
+needs a fresh cluster (`CLAUDE.md`, hard rule 8), but never to clear this
+fault before it has been looked at. If the cause may be an attack and the
+database still answers, the owner first copies `audit.events` and
+`gateway.usage` out of it, into a file outside the repository: on kind the
+cluster is the only copy of the evidence.
 
 `make deploy` rebuilds what comes from this repository, in this order: the
 migrations (Job `meridian-migrate-<tag>`), the 50 policies and their

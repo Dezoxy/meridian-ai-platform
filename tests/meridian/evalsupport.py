@@ -230,11 +230,17 @@ class ToolCapture:
     """The name and the arguments of every call a run makes through the tool
     client, taken from the call itself. An argument that is not the same on every
     run of the same tree (a UUID, a 64-digit key, a time of day) is not stored;
-    ``dropped`` names the tool and the argument."""
+    ``dropped`` names the tool and the argument.
+
+    It also holds, in memory and beside each call, the worker whose view made it
+    (None for the client itself): the injection grader checks the call against
+    that worker's list. The worker is not part of the stored call, so no report
+    changes shape (S031)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._calls: dict[uuid.UUID, list[ToolCall]] = defaultdict(list)
+        self._workers: dict[uuid.UUID, list[str | None]] = defaultdict(list)
         self.dropped: set[tuple[str, str]] = set()
 
     def install(self, patch: pytest.MonkeyPatch) -> None:
@@ -242,12 +248,18 @@ class ToolCapture:
         capture = self
 
         def call(client, tool, arguments, *, step=None):
-            capture.record(client._run_id, tool, arguments)
+            capture.record(client._run_id, tool, arguments, client._worker)
             return original(client, tool, arguments, step=step)
 
         patch.setattr(ToolClient, "call", call)
 
-    def record(self, run_id: uuid.UUID, tool: str, arguments: Mapping) -> None:
+    def record(
+        self,
+        run_id: uuid.UUID,
+        tool: str,
+        arguments: Mapping,
+        worker: str | None = None,
+    ) -> None:
         stored = {}
         dropped = set()
         for name, value in json.loads(json.dumps(dict(arguments))).items():
@@ -257,18 +269,38 @@ class ToolCapture:
                 stored[name] = value
         with self._lock:
             self._calls[run_id].append(ToolCall(tool=tool, arguments=stored))
+            self._workers[run_id].append(worker)
             self.dropped |= dropped
+
+    def calls_of(self, run_id: uuid.UUID) -> tuple[ToolCall, ...]:
+        """The calls of one run, in the order made."""
+        with self._lock:
+            return tuple(self._calls.get(run_id, ()))
+
+    def workers_of(self, run_id: uuid.UUID) -> tuple[str | None, ...]:
+        """The worker of each call ``calls_of`` returns, in the same order."""
+        with self._lock:
+            return tuple(self._workers.get(run_id, ()))
 
     def by_claim(self, db: DatabaseHandle) -> dict[str, tuple[ToolCall, ...]]:
         """The calls of each claim's runs, oldest run first, in the order made."""
+        return self._by_claim(db, self.calls_of)
+
+    def workers_by_claim(self, db: DatabaseHandle) -> dict[str, tuple[str | None, ...]]:
+        """The worker of each call ``by_claim`` returns, in the same order."""
+        return self._by_claim(db, self.workers_of)
+
+    @staticmethod
+    def _by_claim[T](
+        db: DatabaseHandle, of_run: Callable[[uuid.UUID], tuple[T, ...]]
+    ) -> dict[str, tuple[T, ...]]:
         runs = owner_rows(
             db, "SELECT run_id, reference FROM runtime.runs ORDER BY created_at"
         )
-        found: dict[str, list[ToolCall]] = defaultdict(list)
-        with self._lock:
-            for run_id, reference in runs:
-                found[reference].extend(self._calls.get(run_id, ()))
-        return {claim_id: tuple(calls) for claim_id, calls in found.items()}
+        found: dict[str, list[T]] = defaultdict(list)
+        for run_id, reference in runs:
+            found[reference].extend(of_run(run_id))
+        return {claim_id: tuple(items) for claim_id, items in found.items()}
 
 
 # ── the ledger ──────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@
           "type": "string"
         },
         "id": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Id",
           "type": "string"
@@ -34,6 +35,14 @@
           },
           "title": "Tools",
           "type": "array"
+        },
+        "workers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Worker"
+          },
+          "title": "Workers",
+          "type": "array"
         }
       },
       "required": [
@@ -42,6 +51,38 @@
         "tools"
       ],
       "title": "Agent",
+      "type": "object"
+    },
+    "Worker": {
+      "additionalProperties": false,
+      "description": "A part of one agent, with a tool list of its own (S031).\n\nNot an agent: the run, the tenant's list, the gateway and the budgets all\nknow the agent. ``worker_checks.py`` holds a worker's tools to a subset of\nits agent's, and the workers' lists together to the agent's list.",
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "tools"
+      ],
+      "title": "Worker",
       "type": "object"
     }
   },

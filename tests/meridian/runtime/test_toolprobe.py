@@ -40,7 +40,11 @@ from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
-from meridian.platform.toolserver.wire import META_IDEMPOTENCY_KEY, META_RUN
+from meridian.platform.toolserver.wire import (
+    META_IDEMPOTENCY_KEY,
+    META_RUN,
+    META_WORKER,
+)
 from meridian.runtime.toolprobe import Answer, main, succeeded
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
@@ -275,7 +279,11 @@ def test_a_refusal_with_a_made_up_reason_prints_unknown_and_nothing_of_it(
 def test_a_server_none_of_whose_tools_is_on_an_allowlist_is_no_tool(
     plant: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    registry_dir = plant(("agents.yaml", "      - wording_search\n", ""))
+    # The tool leaves the agent's list and the list of its worker (S031).
+    registry_dir = plant(
+        ("agents.yaml", "      - wording_search\n", ""),
+        ("agents.yaml", "tools:\n          - wording_search\n", "tools: []\n"),
+    )
     stand_in = StandIn()
     targets = {server: stand_in.server for server, _ in PAIRS}
 
@@ -312,6 +320,22 @@ def test_the_probe_sends_a_fresh_run_and_a_key_only_where_the_tool_needs_one(
     for seen in stand_in.calls:
         assert seen.arguments == {}
         assert (META_IDEMPOTENCY_KEY in seen.meta) == (seen.name == "add_claim_note")
+
+
+def test_the_probe_calls_each_tool_as_the_worker_that_holds_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stand_in = StandIn()
+    targets = {server: stand_in.server for server, _ in PAIRS}
+
+    probe(capsys, environ_for({}), targets=targets)
+
+    sent = {seen.name: seen.meta[META_WORKER] for seen in stand_in.calls}
+    assert sent == {
+        "policy_lookup": "intake",
+        "wording_search": "terms",
+        "add_claim_note": "approvals",
+    }
 
 
 # ── the exit status ─────────────────────────────────────────────────────────

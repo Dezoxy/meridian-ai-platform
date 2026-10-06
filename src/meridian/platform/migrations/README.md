@@ -113,7 +113,13 @@ writes the table until the file commits. So use two files.
    instant, and the file starts with `SET LOCAL lock_timeout` (above). A
    volatile default (`nextval(...)`, `gen_random_uuid()`), an identity column,
    a generated stored column and a change of a column's type rewrite the table:
-   the lock lasts as long as the rewrite, which grows with the table.
+   the lock lasts as long as the rewrite, which grows with the table. A nullable
+   column only changes the catalog without a check; an inline `CHECK` written
+   with it makes PostgreSQL scan the table under the same lock, so the check is
+   added `NOT VALID` in the same statement
+   ([`0021_audit_worker.sql`](0021_audit_worker.sql) measured it;
+   [`0015_audit_purpose.sql`](0015_audit_purpose.sql) wrote its check inline and
+   did not).
 2. **File N+1 backfills** with `UPDATE`. It takes ROW EXCLUSIVE on the table
    and locks only the rows it changes: readers are never blocked, and writers
    of other rows are not.

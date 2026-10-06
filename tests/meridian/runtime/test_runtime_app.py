@@ -471,9 +471,10 @@ def test_a_graph_that_calls_tools_past_the_limit_ends_failed_with_that_reason(
         def work(state: State) -> State:
             # No server is configured, so each call is unavailable; the call
             # past the limit is the one that raises the limit.
+            intake = tools.for_worker("intake")
             for _ in range(runs.MAX_TOOL_CALLS_PER_RUN + 1):
                 with contextlib.suppress(ToolUnavailable):
-                    tools.call("policy_lookup", {"policy_number": POLICY})
+                    intake.call("policy_lookup", {"policy_number": POLICY})
             return {"output": {}}
 
         return graph_of(work)
@@ -2790,8 +2791,9 @@ def policy_node(policy_number: str, *, catch: bool = False) -> Callable:
 
     def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
         def work(state: State) -> State:
+            intake = tools.for_worker("intake")
             try:
-                found = tools.call("policy_lookup", {"policy_number": policy_number})
+                found = intake.call("policy_lookup", {"policy_number": policy_number})
             except ToolRefused as refusal:
                 if not catch:
                     raise
@@ -2892,7 +2894,8 @@ def test_a_tool_the_agent_may_not_call_is_audited_by_the_runtime_and_fails_the_r
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
-        return graph_of(lambda state: {"output": tools.call("no_such_tool", {}).data})
+        intake = tools.for_worker("intake")
+        return graph_of(lambda state: {"output": intake.call("no_such_tool", {}).data})
 
     register(monkeypatch, factory)
 
@@ -2909,13 +2912,61 @@ def test_a_tool_the_agent_may_not_call_is_audited_by_the_runtime_and_fails_the_r
     ]
 
 
+WORKER_FAULTS = [
+    pytest.param(
+        lambda tools: tools.call("policy_lookup", {"policy_number": POLICY}),
+        ("worker-missing", "policy_lookup"),
+        id="a-call-site-with-no-worker",
+    ),
+    pytest.param(
+        lambda tools: tools.for_worker("nobody"),
+        ("worker-unknown", None),
+        id="a-worker-the-agent-does-not-declare",
+    ),
+    pytest.param(
+        lambda tools: tools.for_worker("assessor").call(
+            "policy_lookup", {"policy_number": POLICY}
+        ),
+        ("worker-tool-not-allowed", "policy_lookup"),
+        id="a-tool-of-another-worker",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "expected"), WORKER_FAULTS)
+def test_a_graph_that_gets_its_worker_wrong_fails_the_run_with_the_workers_reason(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: Callable,
+    expected: tuple[str, str | None],
+) -> None:
+    reason, tool = expected
+
+    def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
+        return graph_of(lambda state: {"output": {"made": fault(tools)}})
+
+    register(monkeypatch, factory)
+
+    response = start(make_client(fresh_database))
+
+    assert response.status_code == 502
+    events = audit_events(fresh_database, uuid.UUID(response.json()["run_id"]))
+    assert [
+        (e["service"], e["event"], e["outcome"], e["reason"], e["tool"]) for e in events
+    ] == [
+        ("agent-runtime", "run.started", "started", None, None),
+        ("agent-runtime", "tool.call", "refused", reason, tool),
+        ("agent-runtime", "run.failed", "failed", reason, tool),
+    ]
+
+
 def test_a_failed_audit_write_of_a_tool_refusal_fails_the_run(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
         def work(state: State) -> State:
             try:
-                tools.call("no_such_tool", {})
+                tools.for_worker("intake").call("no_such_tool", {})
             except ToolNotAllowed:
                 return {"output": {"swallowed": True}}  # must not be reached
             return {}
@@ -2953,9 +3004,10 @@ def refusing(times: int) -> Callable:
 
     def factory(model: ModelClient, tools: ToolClient) -> StateGraph:
         def work(state: State) -> State:
+            intake = tools.for_worker("intake")
             for _ in range(times):
                 with contextlib.suppress(ToolNotAllowed):
-                    tools.call("no_such_tool", {})
+                    intake.call("no_such_tool", {})
             return {"output": {"asked": times}}
 
         return graph_of(work)

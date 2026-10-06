@@ -363,7 +363,7 @@ def test_null_byte_is_reported_with_its_line(
 
     assert len(errors) == 1
     assert errors[0].startswith(
-        "agents.yaml: line 4: special characters are not allowed"
+        "agents.yaml: line 7: special characters are not allowed"
     )
 
 

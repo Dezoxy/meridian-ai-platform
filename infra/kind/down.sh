@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Remove the local platform: `make down`. Deletes the kind cluster "meridian"
 # and its credentials file, nothing else. Refuses any other cluster name.
-# Destructive (hard rule 8): only the owner runs this.
+# Destructive, but the cluster is disposable on the development machine (hard
+# rule 8): a session may run this when a test needs a fresh cluster, and says
+# so when it does; never to clear a fault nobody has looked at.
 set -euo pipefail
 
 # shellcheck source=common.sh

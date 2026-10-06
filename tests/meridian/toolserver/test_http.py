@@ -42,7 +42,11 @@ from meridian.platform.common.tls import CERT_FILE_ENV
 from meridian.platform.policy_mcp.app import create_app, create_app_from_env
 from meridian.platform.toolserver import server as server_module
 from meridian.platform.toolserver.settings import ALLOWED_HOSTS_ENV, ToolServerSettings
-from meridian.platform.toolserver.wire import META_IDEMPOTENCY_KEY, META_RUN
+from meridian.platform.toolserver.wire import (
+    META_IDEMPOTENCY_KEY,
+    META_RUN,
+    META_WORKER,
+)
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
@@ -81,7 +85,7 @@ def test_a_tool_call_works_over_http(live: Live) -> None:
             return await client.call_tool(
                 "policy_lookup",
                 {"policy_number": POLICY},
-                meta={META_RUN: str(live.world.run_id)},
+                meta={META_RUN: str(live.world.run_id), META_WORKER: "intake"},
             )
 
     result = anyio.run(go)
@@ -169,7 +173,7 @@ def test_a_call_with_a_canary_argument_leaves_no_record_at_debug(live: Live) -> 
             return await client.call_tool(
                 "policy_lookup",
                 {"policy_number": CANARY},
-                meta={META_RUN: str(live.world.run_id)},
+                meta={META_RUN: str(live.world.run_id), META_WORKER: "intake"},
             )
 
     with application_log() as records:
@@ -211,7 +215,11 @@ def test_a_write_call_over_http_stores_once_and_replays(
     world = seed_world(fresh_database)
     settings = settings_for(fresh_database, "claims_mcp", hosts=("127.0.0.1:*",))
     given = {"claim_id": CLAIM, "note": "Phone call."}
-    meta = {META_RUN: str(world.run_id), META_IDEMPOTENCY_KEY: KEY}
+    meta = {
+        META_RUN: str(world.run_id),
+        META_WORKER: "approvals",
+        META_IDEMPOTENCY_KEY: KEY,
+    }
 
     async def send(base: str) -> Any:
         async with Client(f"{base}/mcp") as client:

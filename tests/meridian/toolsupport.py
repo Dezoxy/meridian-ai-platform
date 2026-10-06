@@ -38,9 +38,13 @@ from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_a
 from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.policy_mcp.seed import seed_policies
-from meridian.platform.registry import load_registry
+from meridian.platform.registry import Registry, load_registry
 from meridian.platform.toolserver.settings import ToolServerSettings
-from meridian.platform.toolserver.wire import META_IDEMPOTENCY_KEY, META_RUN
+from meridian.platform.toolserver.wire import (
+    META_IDEMPOTENCY_KEY,
+    META_RUN,
+    META_WORKER,
+)
 from meridian.workloads.claims_triage.mcp_server.app import (
     create_app as create_claims_app,
 )
@@ -179,6 +183,22 @@ def with_client[Result](
         raise error from None
 
 
+class _FromRegistry:
+    """The default of ``run_call``'s ``worker``: the worker of ``AGENT`` that
+    holds the tool, as the graph's call site names it (S031)."""
+
+
+FROM_REGISTRY = _FromRegistry()
+
+
+def worker_holding(tool: str) -> str | None:
+    """The worker of ``AGENT`` that holds ``tool`` in the real registry, or
+    None when no worker does."""
+    agent = load_registry(REGISTRY_DIR).agent(AGENT)
+    assert agent is not None
+    return next((w.id for w in agent.workers if tool in w.tools), None)
+
+
 def run_call(
     server: Any,
     tool: str,
@@ -187,19 +207,53 @@ def run_call(
     run_id: uuid.UUID | str | None = None,
     key: str | None = None,
     meta: Mapping[str, Any] | None = None,
+    worker: str | _FromRegistry | None = FROM_REGISTRY,
 ) -> types.CallToolResult:
     """One ``tools/call`` through the SDK's in-process client. Raises
-    ``MCPError`` when the server answers a protocol error."""
+    ``MCPError`` when the server answers a protocol error.
+
+    ``worker`` is the ``meridian/worker`` key: by default the worker of the
+    real registry that holds the tool, a string to name one, ``None`` to send
+    none. A key already in ``meta`` is sent as it is."""
     sent: dict[str, Any] = dict(meta or {})
     if run_id is not None:
         sent[META_RUN] = str(run_id)
     if key is not None:
         sent[META_IDEMPOTENCY_KEY] = key
+    named = worker_holding(tool) if isinstance(worker, _FromRegistry) else worker
+    if named is not None:
+        sent.setdefault(META_WORKER, named)
 
     async def call(client: Client) -> types.CallToolResult:
         return await client.call_tool(tool, dict(arguments), meta=sent)
 
     return with_client(server, call)
+
+
+class Routed:
+    """A tool client as the triage graph's call sites use it (S031): each call
+    goes through the view of the worker that holds the tool. A tool no worker
+    holds (a made-up name, one a test took off the lists) goes through the first
+    worker's view, which refuses it as the agent's. An agent without workers is
+    called as it always was. Everything else is the client's own. The registry
+    and the agent's ID are the ones the client was built with; the client keeps
+    them to itself."""
+
+    def __init__(self, client: Any, registry: Registry, agent_id: str) -> None:
+        self.client = client
+        self.registry = registry
+        self.agent_id = agent_id
+
+    def call(self, tool: str, arguments: Mapping[str, Any], **kwargs: Any) -> Any:
+        agent = self.registry.agent(self.agent_id)
+        if agent is None or not agent.workers:
+            return self.client.call(tool, arguments, **kwargs)
+        holder = next((w.id for w in agent.workers if tool in w.tools), None)
+        view = self.client.for_worker(holder or agent.workers[0].id)
+        return view.call(tool, arguments, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
 
 
 def list_tools(server: Any) -> list[dict[str, Any]]:

@@ -9,6 +9,7 @@
           "type": "string"
         },
         "id": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Id",
           "type": "string"
@@ -77,6 +78,7 @@
           "type": "string"
         },
         "server": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Server",
           "type": "string"

@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import StatusCode
 
 from meridian.platform.common.telemetry import make_tracer_provider
+from meridian.platform.registry.models import ENTITY_ID_MAX_LENGTH
 from meridian.runtime.tracing import NodeSpans
 
 RUN_ID = uuid4()
@@ -129,3 +130,87 @@ def test_the_graph_itself_has_no_node_span(exporter: InMemorySpanExporter) -> No
     compiled.invoke({}, config)
 
     assert [s.name for s in exporter.get_finished_spans()] == ["langgraph.node only"]
+
+
+def test_a_node_labelled_with_a_worker_carries_it_on_its_span_and_others_do_not(
+    exporter: InMemorySpanExporter,
+) -> None:
+    """S031: a worker's nodes are labelled in their metadata; the span of a node
+    of a subgraph built with the label carries it, and the span of the node of
+    the parent that runs it, with no label, carries none."""
+    inner = StateGraph(State)
+    inner.add_node(
+        "read",
+        lambda s: {"note": "a"},
+        metadata={"meridian.worker": "approvals"},
+    )
+    inner.add_edge(START, "read")
+    inner.add_edge("read", END)
+    parent = StateGraph(State)
+    parent.add_node("decide", lambda s: {"output": inner.compile().invoke(s)})
+    parent.add_node("plain", lambda s: {"note": "b"})
+    parent.add_edge(START, "decide")
+    parent.add_edge("decide", "plain")
+    parent.add_edge("plain", END)
+    provider = make_tracer_provider("agent-runtime", exporter)
+    handler = NodeSpans(provider.get_tracer("t"), run_id=RUN_ID, agent="claims-triage")
+
+    parent.compile().invoke({}, {"callbacks": [handler]})
+
+    workers = {
+        s.name: s.attributes.get("meridian.worker")
+        for s in exporter.get_finished_spans()
+    }
+    assert workers == {
+        "langgraph.node read": "approvals",
+        "langgraph.node decide": None,
+        "langgraph.node plain": None,
+    }
+
+
+def span_of_a_node_labelled(exporter: InMemorySpanExporter, label: object) -> dict:
+    graph = StateGraph(State)
+    graph.add_node("only", lambda s: {"note": "a"}, metadata={"meridian.worker": label})
+    graph.add_edge(START, "only")
+    graph.add_edge("only", END)
+    provider = make_tracer_provider("agent-runtime", exporter)
+    handler = NodeSpans(provider.get_tracer("t"), run_id=RUN_ID, agent="claims-triage")
+
+    result = graph.compile().invoke({}, {"callbacks": [handler]})
+
+    (span,) = exporter.get_finished_spans()
+    assert result == {"note": "a"}
+    return dict(span.attributes or {})
+
+
+def test_a_worker_in_the_form_of_an_id_is_on_the_span_up_to_the_longest_id(
+    exporter: InMemorySpanExporter,
+) -> None:
+    longest = "w" * ENTITY_ID_MAX_LENGTH
+
+    attributes = span_of_a_node_labelled(exporter, longest)
+
+    assert attributes["meridian.worker"] == longest
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        pytest.param("w" * (ENTITY_ID_MAX_LENGTH + 1), id="one-over-the-longest-id"),
+        pytest.param("Approvals", id="upper-case"),
+        pytest.param("approvals\n", id="trailing-newline"),
+        pytest.param("two words", id="a-space"),
+        pytest.param("-approvals", id="leading-hyphen"),
+        pytest.param("claim for Jane Doe", id="free-text"),
+        pytest.param("", id="empty"),
+        pytest.param(7, id="a-number"),
+        pytest.param(["approvals"], id="a-list"),
+    ],
+)
+def test_a_worker_that_is_not_in_the_form_of_an_id_is_left_off_the_span(
+    exporter: InMemorySpanExporter, label: object
+) -> None:
+    attributes = span_of_a_node_labelled(exporter, label)
+
+    assert "meridian.worker" not in attributes
+    assert attributes["meridian.node"] == "only"

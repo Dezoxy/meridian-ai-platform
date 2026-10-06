@@ -38,6 +38,7 @@
       "description": "The deployment the gateway uses for a purpose in replay mode (and, for\nthe ``recorded`` list, in recorded mode).",
       "properties": {
         "deployment": {
+          "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "title": "Deployment",
           "type": "string"
@@ -63,6 +64,7 @@
       "properties": {
         "candidates": {
           "items": {
+            "maxLength": 64,
             "pattern": "^[a-z0-9][a-z0-9-]*$",
             "type": "string"
           },

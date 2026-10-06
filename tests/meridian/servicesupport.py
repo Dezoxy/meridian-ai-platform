@@ -205,6 +205,7 @@ AUDIT_COLUMNS = (
     "provider_model",
     "suppressed",
     "tool",
+    "worker",
 )
 
 
@@ -230,7 +231,7 @@ def audit_events(db: DatabaseHandle, run_id: uuid.UUID) -> list[dict]:
         "SELECT service, event, outcome, tenant, agent, run_id, reference, "
         "deployment, provider, model, input_tokens, output_tokens, "
         "reason, data_class, sku, region, residency, "
-        "call_id, http_status, provider_model, suppressed, tool "
+        "call_id, http_status, provider_model, suppressed, tool, worker "
         "FROM audit.events WHERE run_id = %s ORDER BY recorded_at, event",
         (run_id,),
     )

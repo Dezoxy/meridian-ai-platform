@@ -104,6 +104,7 @@ def test_a_chat_call_is_answered_audited_and_traced(
             "provider_model": "replay-chat",
             "suppressed": None,
             "tool": None,
+            "worker": None,  # the gateway's rows name no worker (S031)
         }
     ]
     (chat_span,) = [

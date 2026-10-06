@@ -12,11 +12,15 @@ set -euo pipefail
 input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [ -z "$cmd" ] && exit 0
+# The command as typed. The heredoc pass below drops lines the shell may still
+# run, so the kubectl rule that lets a call through reads this copy.
+raw_cmd="$cmd"
 
 if command -v python3 >/dev/null 2>&1; then
   cmd="$(printf '%s' "$cmd" | python3 -c '
 import re, sys
-MARK = re.compile(r"<<-?\s*[\x27\"]?([A-Za-z_][A-Za-z0-9_]*)[\x27\"]?")
+# A here-string (<<<word) is not a heredoc: it opens no body.
+MARK = re.compile(r"(?<!<)<<-?\s*[\x27\"]?([A-Za-z_][A-Za-z0-9_]*)[\x27\"]?")
 WRITER = re.compile(r"(^|[;&|(]\s*)(cat|tee)\b")
 # Interpreters count only as command tokens, not as substrings of a path
 # such as guard-bash-cases.jsonl.
@@ -253,20 +257,48 @@ hookspath_env_re="(^|[^[:alnum:]_])(GIT_CONFIG_KEY_[0-9]+|GIT_CONFIG_PARAMETERS)
 # ---- confirmations ----
 [[ "$cmd" =~ terraform[[:space:]].*apply ]] && \
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
-[[ "$cmd" =~ kind[[:space:]]+delete ]] && \
-  decide ask "Deleting the kind cluster loses local state; confirm."
-# `make down` and infra/kind/down.sh wrap `kind delete`, so the rule above never
-# sees them. `make` is matched as a whole word, any options may precede the
-# target, and the target must end at a space, separator or the end of the line.
+# Deleting the local kind cluster does not ask: `make down` and
+# infra/kind/down.sh pass, and so does a `kind delete cluster` that names the
+# cluster. The cluster is disposable on the development machine, `make up`
+# makes it again from the repository, and a test may need it made again (the
+# owner, 2026-10-06; AGENTS.md, hard rule 8). That word covers the local
+# cluster only. down.sh and make down refuse any other name themselves; a raw
+# `kind delete` does not (kind's default name is `kind`, and `clusters --all`
+# deletes every cluster on the machine), so it asks unless the segment is
+#   kind [global flags] delete cluster ... --name meridian ...
+# with exactly one --name, spelled --name meridian or --name=meridian (quotes
+# allowed), no --all and no command substitution. meridian is CLUSTER_NAME in
+# infra/kind/pins.env, which infra/kind/common.sh reads. A segment is cut at
+# newlines, ;, &, && and |, so each `kind delete` of a command is judged alone.
+# Anything else, sudo or a path before kind included, asks.
 nl=$'\n'
-[[ "$cmd" =~ (^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?down([[:space:]]|$|[;\&\|\)]) ]] && \
-  decide ask "make down deletes the kind cluster and its local state; confirm."
-[[ "$cmd" =~ (^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)down\.sh ]] && \
-  decide ask "infra/kind/down.sh deletes the kind cluster and its local state; confirm."
+# The longest command, in characters, that the kind rules below read segment by
+# segment: they cost time in proportion to the length, and a hook has ten
+# seconds. A longer command that holds such a call asks without being read.
+kind_scan_max=8192
+kind_delete_re="(^|[^[:alnum:]_.-])kind([[:space:]]+-[^[:space:]]*([[:space:]]+[0-9]+)?)*[[:space:]]+delete([[:space:]]|\$)"
+kind_delete_local_re="^[[:space:]]*kind([[:space:]]+-[^[:space:]]*([[:space:]]+[0-9]+)?)*[[:space:]]+delete[[:space:]]+cluster[[:space:]]"
+kind_delete_name_re="(^|[[:space:]])--name(=|[[:space:]]+)(meridian|\"meridian\"|'meridian')([[:space:]]|\$)"
+if [[ "$cmd" =~ $kind_delete_re ]]; then
+  [ "${#cmd}" -le "$kind_scan_max" ] || \
+    decide ask "kind delete in a command too long to check (over ${kind_scan_max} characters); use make down, or split the command."
+  while IFS= read -r seg; do
+    [[ "$seg" =~ $kind_delete_re ]] || continue
+    without="${seg//--name/}"
+    if [[ "$seg" =~ $kind_delete_local_re && "$seg" =~ $kind_delete_name_re \
+          && $(( ${#seg} - ${#without} )) -eq 6 \
+          && "$seg" != *--all* && "$seg" != *\$\(* && "$seg" != *'`'* ]]; then
+      continue
+    fi
+    decide ask "kind delete outside the local cluster; confirm the cluster, or use make down, or name it: kind delete cluster --name meridian."
+  done < <(printf '%s\n' "${cmd//"$bs_nl"/ }" | sed -E 's/(&&|\|\||;|\||&)/\n/g')
+fi
 # `make grafana-password` and the script behind it exist to print a password.
 # A person runs them in a terminal of their own, which never meets this hook;
 # in a session the output is the transcript, so the owner is asked first.
-# Same anchoring as the down rules; `make grafana` and `grafana.sh forward`
+# `make` is matched as a whole word, any options may precede the target, and
+# the target must end at a space, separator or the end of the line; a script
+# needs its path or an interpreter. `make grafana` and `grafana.sh forward`
 # pass.
 grafana_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?grafana-password([[:space:]]|\$|[;\&\|\)])"
 grafana_script_re="(^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([^[:space:]]*infra/kind/|\./)grafana\.sh[[:space:]]+password([[:space:]]|\$|[;\&\|\)])"
@@ -275,8 +307,8 @@ if [[ "$cmd" =~ $grafana_make_re ]] || [[ "$cmd" =~ $grafana_script_re ]]; then
 fi
 # `make azure-state`, `make azure-apply` and the scripts behind them create
 # Azure resources without the word terraform or az on the command line, so the
-# rules above never see them. Same anchoring as the down rules, widened for the
-# ways a command can be dressed: leading VAR=value assignments, `env`, `time`,
+# rules above never see them. Same anchoring as the Grafana rules, widened for
+# the ways a command can be dressed: leading VAR=value assignments, `env`, `time`,
 # quoted targets, and a body inside `bash -c "..."` or `sh -c '...'` (a quote
 # may start a command). `azure-plan`, `azure-smoke`, `foundation.sh plan|smoke`
 # and `shellcheck .../state.sh` pass.
@@ -319,13 +351,197 @@ psql_exec_re="(^|[^[:alnum:]_-])exec[[:space:]].*[[:space:]]--[[:space:]](.*[[:s
   decide ask "psql through kubectl exec runs SQL inside the database pod, usually as its superuser; confirm the statement and the kube context."
 [[ "$cmd" =~ helm[[:space:]]+(uninstall|delete|rollback) ]] && \
   decide ask "This changes a running Helm release; confirm the release and the kube context."
-[[ "$cmd" =~ kubectl[[:space:]].*(apply|delete|scale|rollout[[:space:]]+restart) ]] && \
-  decide ask "Mutating kubectl call; confirm the current kube context is the intended one."
+# A mutating kubectl call asks, because the current kube context may not be the
+# one meant. A call that names the local kind cluster has answered that, so
+# apply, scale and rollout restart pass when EVERY kubectl invocation in the
+# command names it. The scan reads the command as typed (raw_cmd), not the text
+# the heredoc pass left, because that pass also drops lines the shell still runs
+# (after a here-string, after a quoted "<<X", after a heredoc piped to
+# something that executes it): a heredoc that mentions kubectl, followed by a
+# kind call, therefore asks. Recognised, and nothing else:
+# - an invocation that starts a segment (a segment is cut at newlines, ;, &, &&,
+#   || and |; `do`, `then` and `else` may stand before it), with no second
+#   `kubectl` in the segment (in any case, $( ) and backticks included), no
+#   --server, --cluster or -s (alone or bundled: -Rs https://x), and every
+#   --context and --kubeconfig it carries (a space or = before the value)
+#   outside quotes and of these forms, at least one of them present:
+#   --context kind-<name>; --kubeconfig <path> where the path is
+#   infra/kind/kubeconfig or ends in /infra/kind/kubeconfig, or is a shell
+#   variable ($K, ${K}, quoted or not) that an earlier segment of the same
+#   command assigned such a path (K=path or export K=path alone in its
+#   segment, after a newline, ; or at the start, or after && when no other
+#   separator comes before the use). A later assignment of something else,
+#   a for or read of that name, or an assignment after || or | withdraws it,
+#   and so does a & or | right after it (a subshell or a background job).
+#   Where the command mentions KUBECONFIG (kind_env_re), --context names
+#   nothing: it only picks a context inside the file KUBECONFIG selects, and
+#   only --kubeconfig counts.
+# - Anything else asks as before: no cluster named, another context or
+#   kubeconfig, sudo, env, time or a path before kubectl, kubectl inside
+#   $( ), ( ), bash -c or xargs, a # that starts a comment anywhere in the
+#   command (the quoting of a line is not parsed), a kind name only in an echo.
+# kubectl delete asks on kind as well, and so do apply --prune and --force;
+# the denies above it are not touched.
+# This reads like the other rules, as a pattern on what a session types, not
+# as a boundary: a flag inside a quoted string is skipped by quote parity only.
+kind_path_re="^([^[:space:]\"${sq}\`;&|()<>]*/)?infra/kind/kubeconfig\$"
+kind_dq_re='^"([^"]*)"$'
+kind_sq_re="^${sq}([^${sq}]*)${sq}\$"
+# shellcheck disable=SC2016  # a regex that names a literal $
+kind_var_re='^\$(\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$'
+kind_flag_re='(^|[[:space:]])--(kubeconfig|context)(=|[[:space:]]+)([^[:space:]]*)'
+# -s may be bundled with other short flags (-Rs https://x, -Rshttps://x).
+kind_other_re='(^|[[:space:]])(--(server|cluster)([=[:space:]]|$)|-[A-Za-z]*s([^-]|$))'
+# KUBECONFIG, as a whole word, anywhere in the command (an assignment, an
+# export, a read, a $KUBECONFIG): kubectl then reads another file than the
+# default, and --context only picks a context inside it.
+kind_env_re='(^|[^[:alnum:]_])KUBECONFIG([^[:alnum:]_]|$)'
+kind_word='[Kk][Uu][Bb][Ee][Cc][Tt][Ll]' # in any case, as the rule above reads it
+kind_unquote() { # sets kind_value, and kind_single when it was single-quoted
+  kind_value="$1"
+  kind_single=""
+  if [[ "$1" =~ $kind_dq_re ]]; then
+    kind_value="${BASH_REMATCH[1]}"
+  elif [[ "$1" =~ $kind_sq_re ]]; then
+    kind_value="${BASH_REMATCH[1]}"
+    kind_single=1
+  fi
+}
+kind_invocation() { # $1=segment, $2=names usable as a kubeconfig path
+  local seg="$1" vars="$2" rest named="" flag name pre quotes without
+  [[ "$seg" =~ ^((do|then|else)[[:space:]]+)?kubectl[[:space:]] ]] || return 1
+  without="${seg//$kind_word/}"
+  [ $(( ${#seg} - ${#without} )) -eq 7 ] || return 1
+  [[ "$seg" =~ $kind_other_re ]] && return 1
+  rest="$seg"
+  while [[ "$rest" =~ $kind_flag_re ]]; do
+    flag="${BASH_REMATCH[2]}"
+    pre="${rest%%"${BASH_REMATCH[0]}"*}"
+    rest="${rest#*"${BASH_REMATCH[0]}"}"
+    kind_unquote "${BASH_REMATCH[4]}"
+    quotes="${pre//[^$sq]/}"
+    [ $(( ${#quotes} % 2 )) -eq 0 ] || return 1
+    quotes="${pre//[^\"]/}"
+    [ $(( ${#quotes} % 2 )) -eq 0 ] || return 1
+    [[ "$pre" != *\\* && "$pre" != *"\`"* ]] || return 1
+    if [ "$flag" = context ]; then
+      [[ "$kind_value" =~ ^kind-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+      [ -z "$kind_env" ] || continue # a context of the file KUBECONFIG selects
+    elif [ -z "$kind_single" ] && [[ "$kind_value" =~ $kind_var_re ]]; then
+      name="${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+      [[ "$vars" == *" $name "* ]] || return 1
+    else
+      [[ "$kind_value" =~ $kind_path_re ]] || return 1
+    fi
+    named=1
+  done
+  [ -n "$named" ]
+}
+kind_scan() { # $1=the whole command; succeeds when every kubectl names kind
+  local text="${1//"$bs_nl"/ }" seg trimmed prev_sep="" name seen="" value just_set=""
+  local kind_vars=" " chain_vars=" " kind_env=""
+  [[ "$text" =~ (^|[[:space:]\;\&\|\(])# ]] && return 1
+  [[ "$text" =~ $kind_env_re ]] && kind_env=1
+  while IFS= read -r seg; do
+    case "$seg" in
+      '&&' | '||' | ';' | '|' | '&')
+        # an assignment that a & or a | follows runs in a subshell and is lost
+        if [ -n "$just_set" ] && [[ "$seg" == '&' || "$seg" == '|' ]]; then
+          kind_vars="${kind_vars// $just_set / }"
+          chain_vars="${chain_vars// $just_set / }"
+        fi
+        just_set=""
+        prev_sep="$seg"
+        continue
+        ;;
+    esac
+    trimmed="${seg#"${seg%%[![:space:]]*}"}"
+    [ -z "$trimmed" ] && continue
+    just_set=""
+    # a name assigned after && holds only while && is the one separator
+    [ "$prev_sep" = "&&" ] || chain_vars=" "
+    if [[ "$trimmed" =~ $kind_word ]]; then
+      seen=1
+      kind_invocation "$trimmed" "$kind_vars$chain_vars" || return 1
+    elif [[ "$trimmed" =~ ^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      name="${BASH_REMATCH[2]}"
+      value="${BASH_REMATCH[3]}"
+      value="${value%"${value##*[![:space:]]}"}"
+      kind_vars="${kind_vars// $name / }"
+      chain_vars="${chain_vars// $name / }"
+      kind_unquote "$value"
+      if [[ "$kind_value" =~ $kind_path_re ]]; then
+        case "$prev_sep" in
+          '' | ';') kind_vars="$kind_vars$name " ;;
+          '&&') chain_vars="$chain_vars$name " ;;
+        esac
+        just_set="$name"
+      fi
+    else
+      # any other mention of a trusted name (for K in, read K, unset K) ends it
+      for name in $kind_vars $chain_vars; do
+        if [[ "$trimmed" =~ (^|[^[:alnum:]_\$\{])${name}([^[:alnum:]_]|$) ]]; then
+          kind_vars="${kind_vars// $name / }"
+          chain_vars="${chain_vars// $name / }"
+        fi
+      done
+    fi
+    prev_sep=""
+  done < <(printf '%s\n' "$text" | sed -E 's/(&&|\|\||;|\||&)/\n&\n/g')
+  [ -n "$seen" ]
+}
+kind_only() {
+  local rc=0
+  shopt -u nocasematch
+  kind_scan "$1" || rc=1
+  shopt -s nocasematch
+  return "$rc"
+}
+# Over kind_scan_max characters (set above) the patterns below are not run on a
+# command that holds a mutating call: it asks, whatever it names. They cost
+# time in proportion to the square of the length, and so does the scan; this
+# check comes first so that a long command pays for none of them.
+kubectl_mutates=""
+[[ "$cmd" =~ kubectl[[:space:]].*(apply|scale|rollout[[:space:]]+restart) ]] && kubectl_mutates=1
+[ -z "$kubectl_mutates" ] || [ "${#raw_cmd}" -le "$kind_scan_max" ] || \
+  decide ask "Mutating kubectl call in a command too long to check (over ${kind_scan_max} characters); confirm the kube context, or split the command."
+[[ "$cmd" =~ kubectl[[:space:]].*delete ]] && \
+  decide ask "kubectl delete asks even on the local kind cluster; confirm the object and the kube context."
+# apply --prune deletes what the manifests no longer hold, and apply --force
+# deletes and recreates what it cannot patch: the delete ask needs the word
+# delete, so these ask as well, kind or not. The flag is a whole word:
+# --force-conflicts deletes nothing and passes.
+apply_destroys_re="kubectl[[:space:]].*apply[[:space:]].*--(prune|force)([[:space:]=]|\$)"
+if [ -n "$kubectl_mutates" ]; then
+  [[ "$cmd" =~ $apply_destroys_re ]] && \
+    decide ask "kubectl apply --prune and --force delete objects, even on the local kind cluster; confirm the objects and the kube context."
+  kind_only "$raw_cmd" || \
+    decide ask "Mutating kubectl call; confirm the current kube context is the intended one, or name the local cluster: --kubeconfig infra/kind/kubeconfig or --context kind-<name>."
+fi
 [[ "$cmd" =~ docker[[:space:]].*push ]] && \
   decide ask "Pushing an image to a registry; confirm tag and registry."
 [[ "$cmd" =~ az[[:space:]].*[[:space:]](create|set|update|assign)([[:space:]]|$) ]] && \
   decide ask "Azure control-plane mutation; confirm subscription and resource."
 [[ "$cmd" =~ gh[[:space:]]+(release|repo)[[:space:]]+(create|delete|edit) ]] && \
   decide ask "Outward-facing GitHub change; confirm."
+# `gh pr merge` on green checks is the session's standing instruction and does
+# not ask. --admin merges past failing required checks, so it does. Read on
+# hook_cmd (a commit message that names the flag passes), with line
+# continuations joined; --admin=value and a quoted "--admin" count, and so does
+# a global flag between the words (gh -R owner/repo pr merge). A command that
+# holds both words in one line asks, even across a separator: fail-closed. The
+# pattern costs time in proportion to the square of the length: it runs only
+# when --admin is there and the command is within kind_scan_max characters;
+# a longer one that holds --admin, merge and gh asks without being read.
+gh_admin_re="(^|[^[:alnum:]_.-])gh[[:space:]]+([^${nl}]*[[:space:]])?pr[[:space:]]+([^${nl}]*[[:space:]])?merge([[:space:]][^${nl}]*)?[[:space:]][\"${sq}]?--admin([^[:alnum:]_-]|\$)"
+if [[ "$hook_cmd" == *--admin* ]]; then
+  gh_text="${hook_cmd//"$bs_nl"/ }"
+  if [ "${#gh_text}" -gt "$kind_scan_max" ]; then
+    [[ "$gh_text" == *merge* && "$gh_text" == *gh* ]] && \
+      decide ask "A long command that holds gh, merge and --admin; confirm that no gh pr merge --admin is in it, or split the command."
+  elif [[ "$gh_text" =~ $gh_admin_re ]]; then
+    decide ask "gh pr merge --admin merges past failing required checks; confirm the checks, or drop --admin."
+  fi
+fi
 
 exit 0
