@@ -97,6 +97,7 @@ graph LR
 | Synthetic data and golden set: policies, claim history, four policy wordings and 40 first-notice-of-loss claims with expected outcomes, from a seeded generator whose reruns are identical | Implemented | `data/synthetic/` |
 | Security and quality registers: threat model with T-IDs per trust boundary, data classification, quality attributes with initial targets | Implemented as registers. The threat model is version 1 (S018), with 91 threats since S019, S032, S039, S024, S055 and S056: each row's status was compared with the plan's steps and the code for version 1, and each control is labelled in its row. The quality attributes' targets are designed: none is measured before M3 | `docs/architecture/security/`, `docs/architecture/requirements/` |
 | Agent framework spike: one claim flow with an approval pause in Microsoft Agent Framework and in LangGraph under one test suite, and the decision matrix in ADR 2 | Implemented as a spike, never deployed | `spikes/` |
+| GraphRAG spike: a small knowledge graph of customer, policy, asset, claim and wording clause from the synthetic data, compared with the platform's hybrid search (simulated embedding) and with the triage's own lookup, under a decision rule written before the comparison. The rule's outcome is no: retrieval over a graph gets no step | Implemented as a spike, never deployed | `spikes/s038-graphrag/` |
 | Local platform on kind: a Gateway API edge (Envoy Gateway), PostgreSQL 17 with pgvector (CloudNativePG), OpenTelemetry Collector, Prometheus, Grafana, Tempo and Loki from pinned Helm charts, with Grafana's rights confined to its namespace; `make up`, `make smoke`, `make down` | Implemented, laptop only | `infra/kind/` |
 | Azure foundation: Terraform with its state in Azure Storage (Entra ID only), a 60-euro monthly budget with alerts at 50, 80 and 100 %, Key Vault, and Azure OpenAI `gpt-4o`, deployed twice as the gateway's two chat candidates, and `text-embedding-3-large` on regional deployments in Sweden Central with key authentication disabled; the West Europe fallback waits for the subscription's upgrade to pay-as-you-go | Implemented, persistent in a free-trial subscription of its own | `infra/terraform/` |
 | Platform registry: models, providers, tools, agents, routing policies, tenants and services in YAML, with JSON Schemas generated from Pydantic models; `meridian registry validate` checks references, residency labels against SKU and region, personal data on EU labels only, idempotency keys on mutating tools, no decision tool in an allowlist, and the Azure deployments against Terraform's outputs, locally and in CI | Implemented; the gateway and the runtime load it at startup | `config/registry/`, `src/meridian/platform/registry/` |
@@ -126,7 +127,7 @@ graph LR
 | M1 Claims triage on kind | Gateway, three MCP servers, retrieval, triage graph with approval, adjuster UI, evaluation harness | The fifteen-minute demo runs from a clean checkout with `make` |
 | M2 Azure, identity, delivery | Terraform, AKS, Entra ID, hardened charts, CI/CD with SBOM, scanning, signing and a manual approval gate | Environment created, demo on AKS, environment removed, all recorded |
 | M3 Reliability and operations | Load test, game day and incident record, restore drill, provider swap, supervisor and worker agents, read-only console | SLO thresholds measured; the incident record comes from a real timeline |
-| M4 Optional | AWS mapping with validate-only Terraform, or a second-framework workload, or a GraphRAG spike, or a workload scaffold command (built, S039) | One item, if time allows |
+| M4 Optional | AWS mapping with validate-only Terraform, or a second-framework workload, or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item, if time allows; a second by the owner's choice of 2026-10-06 |
 
 The step-by-step version, with dependencies, demo checkpoints and status, is
 the [plan](docs/meridian-plan.md).
@@ -154,7 +155,7 @@ infra/kind/         local platform: pinned chart versions, values, Grafana dashb
 infra/helm/         the Meridian chart: the six services, the Jobs, the sweep, their budgets and network policies
 infra/terraform/    Azure foundation: Terraform root module, state bootstrap, plan, apply and smoke scripts
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator, the alert rules' extraction for promtool
-spikes/             throwaway experiments, each its own uv project; never deployed
+spikes/             throwaway experiments (S005 a uv project of its own, S038 on the root environment); never deployed
 src/meridian/       the one Python package (src layout)
   platform/         shared platform services (gateway, registry, migrations, the tool-server kit, the policy tool server, the knowledge store with its ingestion, search and tool server) and the meridian CLI; never import the agent framework
   runtime/          the Agent Runtime, which hosts LangGraph graphs; between workloads and platform

@@ -418,11 +418,14 @@ pinned images resolve there.
 
 ### M4 — Optional, at most one
 
+S039 took the one. The owner lifted the limit for S038 on 2026-10-06
+(its section says how); it stands for the other two.
+
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S036 | AWS validate-only Terraform | The module passes `terraform validate` and a policy scan; it is never applied | todo | S025 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract | todo | S005, S018 |
-| S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | todo | S012 |
+| S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
 
 ### Follow-up backlog
@@ -643,6 +646,8 @@ that day; the rest stand as their step recorded them.
 | After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open | none |
 | `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | open | S062 |
 | The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | open; a guard or a rule is the owner's | none |
+| Retrieval over a graph was measured on data that has nothing relational to find: no customer holds two policies and no asset is on two (S038's census). Measure again if the synthetic data gains customers with several policies or assets with several claims | S038 | open | none |
+| S038's one failing check (all cited clauses, rank 10) is against a fusion whose vector half is the simulated embedding, a hashed bag of words; the comparison was not run against a real embedding, which needs a paid call | S038 | open; a rerun belongs with a step that can call an embedding deployment without a laptop | none |
 
 ## Part C — Step details
 
@@ -9019,6 +9024,146 @@ part of it.
   open here (the queue's lookup, the leg that outlives its lease) get a
   step.
 
+### S038 — GraphRAG spike
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** a small knowledge graph of customer, policy, asset and claim,
+and its retrieval compared with the platform's hybrid search, to decide
+whether retrieval over a graph deserves a step of its own.
+
+**Decisions:**
+
+- **Taken although M4 is "at most one", by the owner's choice
+  (2026-10-06).** S039 had taken M4's one slot. Asked "Which extra step
+  should run beside S062 and S065 right now?", the owner chose "S038
+  GraphRAG spike". The heading of M4 says so now. It ran beside S062,
+  S065 and, at the end, S066, in one session (Part A); it holds no
+  lane: it is code under `spikes/` that nothing imports, with no
+  cluster, no Azure, no model call and no cost.
+- **A spike, in plain Python, with no dependency.** The graph is
+  dictionaries and lists from the standard library: no graph database
+  and no graph library. A graph store would have been a platform
+  component chosen before knowing whether a graph is worth having;
+  the spike exists to answer that first. It runs with the repository's
+  own environment and reads the synthetic data in place.
+- **The decision rule was written and committed before anything was
+  compared** (commit ba921d3, 04:33 UTC; the comparison's contract went
+  out after it), so that the numbers could not choose their own
+  reading. Three points, all needed for a yes: the graph finds a
+  claim's clauses better than the search, on every clause the claim
+  cites and on the exclusions alone, at rank 5 and at rank 10; it finds
+  what the triage's own lookup by structure does not; and it answers a
+  question the plan asks that one hop cannot. The rule also names what
+  no outcome may be read as saying: nothing about a real embedding,
+  about free-text questions, or about a larger data set.
+- **No oracle leakage, held by tests.** The labels file and the
+  generator wrote the wordings and the labels from one catalogue. The
+  code that builds the graph and answers a query opens neither and
+  imports no scorer; one module reads the labels, and tests hold that
+  on the source text, on the paths opened at run time and on the
+  modules loaded in a fresh process.
+- **What the graph is compared with.** The platform's own search, run
+  through its own retrieval harness (S012) on a store ingested through
+  the gateway app in replay mode: the keyword half, the vector half
+  and their fusion. And the lookup the triage's code does
+  (`select_terms`: by peril, section and title), over the whole
+  wording: an upper bound on what the triage can name, not a measured
+  run of the triage. The search is asked with the claim's description
+  and the graph with its policy and peril: two inputs for one task,
+  said wherever a number stands.
+- **Every vector and fused number is a simulated embedding.** The only
+  embedding without a paid call is the gateway's `replay` one, a hashed
+  bag of words. The document labels each such number.
+- **The outcome is the rule's, on its own words: no.** After the
+  numbers the comparison offered a kinder reading of "all labels" (the
+  retrieval check's 28 labels instead of the 63 clauses the claims
+  cite), on which the rule gives "not now". The rule's sentence says
+  "the clauses each claim cites"; choosing the other reading afterwards
+  is what the rule was written to prevent. The document states one
+  outcome and shows the other as a sensitivity.
+- **No dependency, no registry entry, no architecture change.** The
+  spike adds nothing to the model, the registry or the platform's
+  packages; `docs/architecture/overview/02-scope.md` keeps GraphRAG
+  out of scope and now says why with a measurement.
+
+**Work log:**
+
+- **Mapping first.** An Explore subagent mapped the data and the
+  search: no customer ID and no asset ID in the data, one holder per
+  policy, one claim per policy for the 40 that have one, and real
+  structure in the wordings (85 clauses, an "applies to" sentence per
+  exclusion, cross-references).
+- **Three contracts to the `implementer`.** The graph with its six
+  questions, its census and a seeded variant; then, after the rule was
+  committed, the comparison; then the fact-check's findings. The
+  second implementer was stopped from outside when nearly done (an
+  interrupted `/compact` stops every background agent); its files
+  were kept as a work-in-progress commit and a third finished them,
+  starting by checking that draft against the contract. The main
+  session read every module and ran the tests with and without a
+  database before each commit.
+- **A fact-check** by `rag-pipeline-reviewer`: every table recomputed
+  with code of its own from the results file and the data, the
+  database variant run, the leakage claim attacked. No wrong number
+  and no leak; five places where the words said more than the numbers
+  (the graph's row read as retrieval quality when it is a parsing
+  result; the exclusion figure is recall of candidates; the triage's
+  lookup was called "production"; the one failing check rests on the
+  simulated vector half; two outcomes were offered). All corrected in
+  the document, with the numbers the reviewer asked for added and
+  pinned.
+
+**Result / verification:**
+
+- **A small knowledge graph of customer, policy, asset and claim.**
+  382 nodes and 521 edges from the committed data: 50 customers, 50
+  policies, 50 assets, 40 claims, 44 history entries, 4 products, 85
+  clauses, 10 perils. Six questions answered by one traversal
+  function, each with its hop count.
+- **What the committed data can answer.** Of the relational questions
+  a graph exists for, almost nothing: no customer holds two policies
+  (0 of 50), no asset is on two (0 of 50), one address is shared by
+  two customers. The clauses that bear on a claim: a non-trivial
+  answer for 37 of 40 claims. A seeded variant, labelled simulated,
+  shows what the questions return when there is something to return.
+- **Retrieval compared with hybrid search.** Labelled clauses found
+  within rank 10, of 28 (the cover and exclusion clauses the claims
+  cite): the graph 28, the keyword half 22, the fusion 23 (simulated
+  embedding). Of the 8 exclusions: 8, 5 and 5. Of all 63 cited clauses:
+  the graph 34, the keyword half 30, the fusion 36 (simulated
+  embedding): the graph has no relation to the clauses of sections 4
+  to 6 (the deductible, the limit, reporting, the period), which is
+  where the one check of the rule's first point fails. The platform's
+  own floors for the search were reproduced exactly first, so the
+  difference is not one of harness.
+- **Against the triage's own lookup.** It names all 63 cited clauses
+  over the whole wording; the graph names 34 of them and none that the
+  lookup does not, on 0 of 40 claims.
+- **The rule's three points: no, no, no. Outcome: no.** The graph's
+  gain over the search is the gain of asking with structure instead of
+  free text, which the triage's code already does; and the written
+  relational needs (the claims of a policy in a year, the holder of a
+  policy) are one hop each.
+- **Gates, run by the main session:** the spike's tests without a
+  database (`uv run pytest spikes/s038-graphrag/tests -q`: 136 passed, 7
+  skipped) and with one (143 passed, the results file made again and
+  equal); the whole suite with `main` merged in (9,864 passed, 8
+  skipped, exit 0, in 1 min 34 s beside the cluster with 8 workers);
+  `make lint` (5 contracts kept), `make docs`, `make test`, `make check`
+  (no ERROR line) and `make secret-scan`, each exit 0.
+- **Not shown, and said in the document:** anything about a real
+  embedding (the one failing check is against a fusion whose vector
+  half is a hashed bag of words); free-text questions to a graph; a
+  larger data set; a deployed search.
+
+**Follow-ups:**
+
+- In the backlog, none with a home: measure again when the data has
+  customers with several policies or assets with several claims; the
+  rank-10 comparison against a real embedding, once one can be called
+  without a laptop (the Azure steps).
+- For the owner: nothing to decide. The spike says no step is owed;
+  it does not say a graph could never earn one.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9382,3 +9527,12 @@ part of it.
   Retention is not built, the owner's decision. Its PostgreSQL review
   found that 0017 could deadlock against traffic; it was corrected before
   it reached `main`. Nine backlog rows closed, three left open, six new.
+- **v0.51, 2026-10-06:** S038 done, beside S062, S065 and S066: a
+  GraphRAG spike, by the owner's choice beyond M4's one item. A graph of
+  customer, policy, asset, claim and wording clause in plain Python,
+  compared with the platform's hybrid search (simulated embedding) and
+  with the triage's own lookup under a decision rule committed before
+  the comparison. The rule's outcome is no: the graph beats a free-text
+  search on the cover and exclusion clauses and finds nothing the
+  triage's lookup by structure does not. A fact-check recomputed every
+  table and found no wrong number. Two backlog rows, none with a home.
