@@ -251,6 +251,20 @@ known.
 - **Cluster commands run from a separate checkout** of the step's branch,
   with credentials exported into it by `kind export kubeconfig`, so
   `make deploy` never reads a script that an implementer is editing.
+- **The cluster says who holds it** (S075). One step uses it at a time,
+  and `make up`, `make deploy` and `make down` now read a record of the
+  holder, in a ConfigMap in `kube-system`: a name, a short commit and a UTC
+  time. Another holder is named and the command stops before it changes
+  anything; `TAKE_CLUSTER=1` in front of the same command takes the cluster
+  (`TAKE_CLUSTER=1 make deploy`). `make up` and `make deploy` write the
+  record when they end well, and `make cluster-holder` prints it. The holder
+  is the checkout's branch. A session that runs from a detached checkout,
+  as the main session does, sets `CLUSTER_HOLDER` (letters, digits, `.`,
+  `_`, `/` and `-`, at most 100) to a name of its own, so that its commands
+  and the cluster's record agree on who it is. It is a notice for an honest
+  mistake, not a lock: two commands started in the same second both pass.
+  `infra/kind/README.md` says which commands read the record and which do
+  not.
 - **Each test run has a database of its own**: `PYTEST_DB_CONTAINER` and
   `PYTEST_DB_PORT` per step, and per implementer when several of one
   step run at once. `make pytest-db` removes the container of its name

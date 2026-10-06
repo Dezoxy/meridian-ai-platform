@@ -155,6 +155,8 @@ def run_deploy(
         f"{log.format(name='kubectl')}\n"
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
+        # Who holds the cluster (S075): no record, so deploy.sh goes on.
+        '  *"get configmap meridian-cluster-holder"*) ;;\n'
         '  *"get database"*) printf true ;;\n'
         f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
         f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
@@ -187,6 +189,8 @@ def run_deploy(
             "PATH": f"{stubs}:{os.environ['PATH']}",
             "DOCKER_HOST": "unix:///stub.sock",
             "HOME": str(tmp_path),
+            # The holder's name (S075) comes from here, not from a git checkout.
+            "CLUSTER_HOLDER": "test-holder",
         },
         check=False,
         timeout=SECONDS,

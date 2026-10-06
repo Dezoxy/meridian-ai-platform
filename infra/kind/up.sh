@@ -31,6 +31,9 @@
 #      of the collector's chart, the contrib build, as a DaemonSet in `logging`
 #      that sends the output of `meridian`'s pods to the collector
 # Every version is pinned in pins.env.
+# Who holds the cluster (S075, common.sh): on a cluster that exists, another
+# holder stops this before it changes anything unless TAKE_CLUSTER=1, and the
+# record is written as the last step, when the run ended well.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -111,6 +114,8 @@ create_cluster() {
     log "kind cluster ${CLUSTER_NAME} exists"
     # Refresh the credentials file (missing or stale); still nothing global.
     kind export kubeconfig --name "${CLUSTER_NAME}" --kubeconfig "${KUBECONFIG_FILE}"
+    # Who holds it (S075): before anything below changes the cluster.
+    check_cluster_holder "make up"
     return
   fi
   log "creating kind cluster ${CLUSTER_NAME} (first run pulls the node image)"
@@ -489,4 +494,7 @@ kctl -n envoy-gateway-system wait --for=condition=Available deployment \
   -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m >/dev/null ||
   die "the wait for the edge's proxy Deployment to be Available ended without the condition (it waits up to 5m; kubectl's own message above says whether the time ran out or the wait failed at once, for instance with not found): look at its pods (kubectl -n envoy-gateway-system get pods -l gateway.envoyproxy.io/owning-gateway-name=edge; describe the one that is not ready) and at the controller's log (kubectl -n envoy-gateway-system logs deploy/envoy-gateway)"
 
+# Every wait above ended well: only now is the cluster claimed (S075). A run that
+# stopped earlier leaves the record as it was.
+record_cluster_holder
 log "done. Next: make smoke | make grafana | export KUBECONFIG=${KUBECONFIG_FILE}"

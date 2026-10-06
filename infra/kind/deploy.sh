@@ -60,6 +60,9 @@
 # Job's name ends in the tag; the CronJob's name has none) and the rate store's
 # image, which is a pin and not a build.
 # Nothing here prints a Secret's value, or a connection string of a Job's log.
+# Who holds the cluster (S075, common.sh): another holder stops this before step
+# 0 unless TAKE_CLUSTER=1, and the record is written as the last step, when the
+# run ended well.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -113,6 +116,9 @@ need_tools docker kind kubectl helm jq
 require_local_docker
 need_cluster
 docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
+# Who holds the cluster (S075): another holder stops this, before anything is
+# built or run, unless TAKE_CLUSTER=1.
+check_cluster_holder "make deploy"
 
 # The database, its roles and the role Secrets come from `make up`.
 require_database() {
@@ -472,4 +478,5 @@ ingest_corpus
 wait_for_other_rollouts
 wait_for_route
 wait_for_token_window
+record_cluster_holder
 log "done. Next: make demo"
