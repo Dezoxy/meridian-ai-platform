@@ -34,11 +34,13 @@ duration, fail the render with a message that names the value. The service's
 restart margin is the application's, the smaller of 24 hours and a sixth of
 the certificate's lifetime
 (`src/meridian/platform/common/certlife.py`), so it is 10 minutes for a
-certificate of one hour. A `renewBefore` under 5 minutes is refused by
-cert-manager's webhook too (asked by a server-side dry run on 2026-10-06:
-1 minute and 4 minutes refused, 5 accepted). The values are tested without
-a cluster; the procedure at the end of this page ran with `duration: 1h`
-and `renewBefore: 30m` on the kind cluster on 2026-10-06.
+certificate of one hour; each service looks at the file its chart-given share
+of one more margin earlier than that (up to five sixths of a margin). A
+`renewBefore` under 5 minutes is refused by cert-manager's webhook too (asked
+by a server-side dry run on 2026-10-06: 1 minute and 4 minutes refused, 5
+accepted). The values are tested without a cluster; the procedure at the end
+of this page ran with `duration: 1h` and `renewBefore: 30m` on the kind
+cluster on 2026-10-06.
 
 ## What you see
 
@@ -286,9 +288,12 @@ procedure before step 5.
    `k -n meridian rollout restart deployment`.
 3. Watch, counting from the issuance. About 30 minutes in cert-manager
    renews (a new CertificateRequest, Approved; the Certificate's
-   `notAfter` moves an hour on); at 50 minutes each service sees the newer
-   file and answers 503; about a minute later the kubelet restarts the
-   container. Each of these only reads:
+   `notAfter` moves an hour on); each service sees the newer file and
+   answers 503 from its own time, which the chart spreads across 10 to 18
+   minutes before the end (50 minutes in for the first service by name, about
+   41 for the last; tested with the clock injected, not yet seen on a
+   cluster); about a minute later the kubelet restarts the container. Each of
+   these only reads:
 
    ```sh
    k -n meridian get certificate -o custom-columns=NAME:.metadata.name,READY:.status.conditions[0].status,NOTAFTER:.status.notAfter,RENEWAL:.status.renewalTime
@@ -329,9 +334,22 @@ machine:
 
 Two things the watch showed:
 
-1. All six services restart in the same minute, because one deploy issues
+1. All six services restarted in the same minute, because one deploy issues
    their certificates in the same second. With one replica each, nothing
-   answered for about a minute.
+   answered for about a minute. That was before S073: the chart now gives
+   each service a share of its restart margin (its place in the sorted list
+   of services over their count, `MERIDIAN_TLS_RESTART_SHARE`), so the
+   restarts are spread across the margin (100 seconds apart for a one-hour
+   certificate, four hours apart for 90 days) and none comes later than it
+   did. Two replicas of one service would still restart together. This is
+   tested with the chart rendered and the clock injected, and has not been
+   seen on a cluster. The spread holds when the renewal comes before the
+   earliest look at the file: always with the default `renewBefore`, and with a
+   set one when it is longer than one and five sixths of the margin (the
+   one-hour watch's 30 minutes is). A shorter `renewBefore` is not refused: a
+   service whose time has passed stays healthy until the file holds the renewed
+   certificate and then restarts, so those services restart together when the
+   file changes, as all six did, and it costs the spread, never availability.
 2. While the short certificates are in place `make smoke` fails on check 11,
    because a Meridian alert is firing (smoke was not run then: the failure
    follows from the alert firing and from the check's rule). Any

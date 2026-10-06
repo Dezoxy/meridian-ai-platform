@@ -8,13 +8,19 @@
 #      namespace name now (a finished Job still names its image until its TTL
 #      removes it, and the ingestion Job stays as a record), and the Pods that
 #      exist (a bare Pod, or one of a rollout the template does not show yet)
-#   3. the tags only a ReplicaSet names. The chart sets no revisionHistoryLimit,
-#      so after a deploy that changed the image the previous tag is what an old
-#      ReplicaSet would start again on a rollback, and kind runs with
-#      pullPolicy Never: a removed image cannot be pulled again
+#   3. the tags only a ReplicaSet names. The chart keeps revisionHistoryLimit
+#      old ReplicaSets of each Deployment (2), so after a deploy that changed
+#      the image the previous tags are what an old ReplicaSet would start again
+#      on a rollback, and kind runs with pullPolicy Never: a removed image
+#      cannot be pulled again. A ReplicaSet beyond the limit goes at the next
+#      rollout, and the image only it named is then unused
 #   4. each image marked `in use`, `rollback` (a rollback's target) or `unused`,
-#      the counts, and the commands a person would run to remove the unused
-#      ones, printed and never run. A rollback's target gets no command.
+#      the counts, and the one command per place (the engine, the node) that a
+#      person would run to remove the images nothing names, printed and never
+#      run. A rollback's target gets no command.
+# A workload that names an image of this repository by a digest and no tag is an
+# error, not a guess: which tag runs cannot be told, and a guess could print a
+# command that removes an image in use.
 # With no credentials file it asks kind (cluster_exists): no cluster of that
 # name, and it lists the engine's images, every one unused by definition; a
 # cluster that exists (the credentials are in another checkout) is an error, as
@@ -51,11 +57,51 @@ node_rows() {
 # tags_of SELECTION JSON: the tags of IMAGE_REPOSITORY that the objects of the
 # list JSON (the items SELECTION, a jq filter, keeps) name, in a pod template (a
 # Deployment's, a ReplicaSet's, a Job's, a CronJob's) or in a Pod's own spec,
-# init containers too.
+# init containers too. A reference is read as a person would: a digest after
+# "@" is cut off, the tag is what follows the last ":" after the last "/" (so a
+# port in a registry's host is not a tag), and the repository is what comes
+# before it, with docker.io/library/ taken as the engine's own name. A
+# repository other than IMAGE_REPOSITORY (another registry's, or another name)
+# is another image and gives nothing. No tag and no digest is "latest", as
+# Docker reads it; no tag and a digest gives the line "@digest", which no tag
+# can be: refuse_digest_references stops on it.
 tags_of() {
   jq -r "${1} | (.spec.template // .spec.jobTemplate.spec.template // .).spec
     | ((.initContainers // []) + .containers)[].image" <<<"$2" |
-    awk -F: -v repository="${IMAGE_REPOSITORY}" '$1 == repository { print $2 }'
+    awk -v repository="${IMAGE_REPOSITORY}" '
+      {
+        reference = $0
+        digest = index(reference, "@")
+        if (digest) reference = substr(reference, 1, digest - 1)
+        slash = 0
+        colon = 0
+        for (i = 1; i <= length(reference); i++) {
+          character = substr(reference, i, 1)
+          if (character == "/") slash = i
+          if (character == ":") colon = i
+        }
+        name = reference
+        tag = ""
+        if (colon > slash) {
+          name = substr(reference, 1, colon - 1)
+          tag = substr(reference, colon + 1)
+        }
+        sub(/^docker\.io\/library\//, "", name)
+        if (name != repository) next
+        if (tag != "") print tag
+        else if (digest) print "@digest"
+        else print "latest"
+      }'
+}
+
+# refuse_digest_references LINES...: an image of IMAGE_REPOSITORY named by a
+# digest and no tag leaves open which of the engine's tags runs, and a listing that
+# guessed could print a removal command for an image in use. Dies, naming no
+# digest.
+refuse_digest_references() {
+  if contains_line "$1" "@digest" || contains_line "$2" "@digest"; then
+    die "a workload of namespace ${NAMESPACE} names an ${IMAGE_REPOSITORY} image by a digest and no tag, so make images cannot tell which tag it runs and prints no removal command"
+  fi
 }
 
 # The JSON of the Deployments, CronJobs and Jobs, and of the ReplicaSets and
@@ -122,7 +168,7 @@ suggest_removal() {
     fi
   fi
   if [[ -n "${kept}" ]]; then
-    log "kept, with no command: ${kept} (a rollback's target: an old ReplicaSet names it, a rollback would start it again, and with pullPolicy Never a removed image cannot be pulled again)"
+    log "kept, with no command: ${kept} (a rollback's target: an old ReplicaSet that the chart's revisionHistoryLimit keeps names it, a rollback would start it again, and with pullPolicy Never a removed image cannot be pulled again)"
   fi
 }
 
@@ -158,6 +204,7 @@ if [[ -f "${KUBECONFIG_FILE}" ]]; then
   used="$(tags_of '.items[]' "${workloads}"
     tags_of '.items[] | select(.kind == "Pod")' "${replicasets_and_pods}")"
   rollback="$(tags_of '.items[] | select(.kind == "ReplicaSet")' "${replicasets_and_pods}")"
+  refuse_digest_references "${used}" "${rollback}"
   node="$(node_rows)"
   report_place "${IMAGE_REPOSITORY}:* images in the Docker engine" "${engine}" "${used}" "${rollback}" unused_engine kept_engine
   report_place "${IMAGE_REPOSITORY}:* images in the kind node ${NODE}" "${node}" "${used}" "${rollback}" unused_node kept_node

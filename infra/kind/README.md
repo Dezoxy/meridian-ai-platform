@@ -1100,11 +1100,20 @@ In order, `make deploy`:
    `make images` lists them, each marked in use or unused by a workload, and
    prints the commands that would remove the unused ones; it removes nothing.
    "In use" means a pod template names the image now, or a Pod that exists
-   does. The chart sets no `revisionHistoryLimit`, so after a deploy that
-   changed the image the previous tag is what an old ReplicaSet would start
-   again on a rollback, and with `pullPolicy: Never` a removed image cannot be
-   pulled again: an image only an old ReplicaSet names is marked `rollback`
-   (a rollback's target), listed apart, and gets no removal command. In a
+   does. The chart keeps two old ReplicaSets of each Deployment
+   (`revisionHistoryLimit: 2`; a ReplicaSet beyond the limit goes at the next
+   rollout and does not come back), so after a deploy that changed the image
+   the previous tags are what an old ReplicaSet would start again on a
+   rollback, and with `pullPolicy: Never` a removed image cannot be pulled
+   again: an image only an old ReplicaSet names is marked `rollback` (a
+   rollback's target), listed apart, and gets no removal command; what nothing
+   names, not a pod and not a ReplicaSet the limit keeps, is `unused` and gets
+   the command. It reads a reference as `repository:tag`, with or without a
+   registry (a port in its host included) or a digest after the tag; another
+   registry's image of the same name is another image, and an image named by a
+   digest and no tag stops the listing, because it cannot say which tag runs.
+   (The reading of references is tested against stub commands and not seen on
+   a cluster; the limit is tested with the chart rendered.) In a
    checkout with no `infra/kind/kubeconfig` it asks kind for the cluster: when
    none exists every image is unused by definition, and when one does (its
    credentials are in another checkout) it says it cannot tell which images
@@ -1804,9 +1813,19 @@ hour (seen pending, then firing, on 2026-10-06), because the rule counts every
 certificate under 21 days from its end as a late renewal; any
 `certificate.duration` under 21 days trips it an hour after issuance.
 
-What the watch showed, beyond the marks above: all six services restart in the
-same minute, because one deploy issues their certificates in the same second,
-and with one replica each nothing answered for about a minute; and while the
+What the watch showed, beyond the marks above, before the restarts were spread
+(S073): all six services restarted in the same minute, because one deploy
+issues their certificates in the same second, and with one replica each nothing
+answered for about a minute. The chart now gives each service a share of the
+restart margin, its place in the sorted list of services over their count (the
+first none, the last five sixths) as `MERIDIAN_TLS_RESTART_SHARE`, and the
+service looks at the file that share of a margin earlier than it did: the
+restarts are spread across the margin, 100 seconds apart for one-hour
+certificates and four hours apart for the default of 90 days, and never later
+than before. Two replicas of one service would still restart together, because
+they mount one Secret (not built: each service has one replica on kind). The
+spread is implemented and tested with the chart rendered and the clock
+injected; it has not been seen on a cluster. And while the
 short certificates are in place `make smoke` fails on check 11, because a
 Meridian alert is firing (smoke itself was not run then: the failure follows
 from the firing alert and the check's rule). So the last step of the watch is

@@ -12,6 +12,9 @@ The rule, by the clock and the file (the file is compared with the certificate
 that was loaded, never with the clock)::
 
     now <  restart_at                    healthy; the file is not read
+                                         (restart_at: the margin, and the
+                                         service's share of one more, before
+                                         the end; see RESTART_SHARE_ENV)
     now >= not_after                     unhealthy: never green past the end
     otherwise, the first certificate in the file is read again:
         unreadable, or ends no later than the loaded one -> healthy
@@ -25,6 +28,7 @@ nothing would not have caused. A restart is only worth asking for when it loads
 something newer, or when the certificate has ended and nothing is left to lose.
 """
 
+import dataclasses
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -48,6 +52,12 @@ logger = logging.getLogger(__name__)
 # asked on the clock alone).
 RESTART_MARGIN = timedelta(hours=24)
 RESTART_FRACTION = 6
+# The chart gives each service a share of the margin, a decimal in [0, 1) from
+# its place in the list of services (place over count: the first none, the last
+# five sixths of six). The service looks at the file that share of a margin
+# EARLIER, so the services do not all restart in the same minute, and a restart
+# only ever moves earlier, by less than one margin. Absent or empty means 0.
+RESTART_SHARE_ENV = "MERIDIAN_TLS_RESTART_SHARE"
 
 Verdict = Literal["far", "ended", "not-renewed", "renewed"]
 
@@ -62,12 +72,15 @@ class LoadedCertificate:
     not_before: datetime
     not_after: datetime
     source: Path | None = field(default=None, repr=False, compare=False)
+    share: float = 0.0
 
     @property
     def restart_at(self) -> datetime:
-        """From this moment the service looks at the file again."""
+        """From this moment the service looks at the file again: the margin and
+        its ``share`` of one more before the end."""
         lifetime = self.not_after - self.not_before
-        return self.not_after - min(RESTART_MARGIN, lifetime / RESTART_FRACTION)
+        margin = min(RESTART_MARGIN, lifetime / RESTART_FRACTION)
+        return self.not_after - margin * (1 + self.share)
 
     def verdict(self, now: datetime) -> Verdict:
         """Where ``now`` stands: ``far`` from the end (the file is not read),
@@ -164,14 +177,35 @@ def load_certificate(environ: Mapping[str, str]) -> LoadedCertificate | None:
 
     Raise ``SettingsError`` naming the variable when the file cannot be read or
     parsed. The text of the failure can quote the path or the file's content,
-    so it is not carried.
+    so it is not carried. The same for ``MERIDIAN_TLS_RESTART_SHARE`` when it is
+    set and is not a number from 0 up to, not including, 1.
     """
+    share = _restart_share(environ)
     path = environ.get(CERT_FILE_ENV)
     if not path:
         return None
     try:
-        return _read_certificate(Path(path))
+        loaded = _read_certificate(Path(path))
     except (OSError, ValueError):
         raise SettingsError(
             f"{CERT_FILE_ENV} cannot be read as a certificate"
         ) from None
+    return dataclasses.replace(loaded, share=share)
+
+
+def _restart_share(environ: Mapping[str, str]) -> float:
+    """The share of the margin, 0 when the variable is unset or empty. The value
+    is never quoted: it is whatever the deployment set."""
+    text = environ.get(RESTART_SHARE_ENV)
+    if not text:
+        return 0.0
+    try:
+        share = float(text)
+    except ValueError:
+        share = float("nan")
+    if not 0 <= share < 1:  # written so that nan is refused too
+        raise SettingsError(
+            f"{RESTART_SHARE_ENV} must be a number from zero up to, but not "
+            "including, one"
+        ) from None
+    return share

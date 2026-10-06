@@ -62,10 +62,20 @@ identity:
 # RESTART_FRACTION in src/meridian/platform/common/certlife.py) it reads the
 # file again, and when the file holds a newer certificate /healthz answers 503
 # and the kubelet restarts the container. That margin is the application's and
-# no value here changes it. With the default renewBefore, renewal (a third
-# before the end) always comes before the margin starts (a sixth at most). A
-# renewBefore shorter than the margin renews inside it: the service then
-# restarts as soon as the file changes, with less time left before the end.
+# no value here changes it. The services do not all start in the same minute:
+# each is given a share of the margin from its place in the sorted list of
+# services over their count (the first none, the last five sixths of six, as
+# MERIDIAN_TLS_RESTART_SHARE, templates/_rollout.tpl) and looks at the file that
+# share of a margin earlier, so the widest restart is one and five sixths of a
+# margin before the end. The restarts are spread when the renewal comes before
+# the earliest look: always with the default renewBefore (a third before the
+# end, and the earliest look is 11/36 of the lifetime at most), and with a set
+# one when it is longer than one and five sixths of the margin. A shorter
+# renewBefore refuses nothing: the health rule reads the file, so a service
+# whose look has passed stays healthy until the file holds the renewed
+# certificate and then restarts, and the services whose look has passed restart
+# together when the file changes, as all of them did before the spread. It
+# costs the spread, never availability, and with less time left before the end.
 # One hour with a renewBefore of 30m lets a run on kind watch a renewal, the
 # 503 and the restart (infra/kind/README.md, "Who a service is").
 certificate:
@@ -122,6 +132,14 @@ database:
 # then render a privileged container; a literal changes only with a reviewed
 # change to the chart.
 runAsId: 10001
+
+# How many old ReplicaSets each Deployment keeps (S073): the services' and the
+# rate store's. Kubernetes keeps ten without this value, each one a pod template
+# that a rollback would start again. Two is one rollback target and the one
+# before it; a whole number of at least 1, or the render fails. A ReplicaSet
+# beyond the limit goes at the next rollout and does not come back, and the
+# image only it named is then one nothing names (`make images` lists it).
+revisionHistoryLimit: 2
 
 # The only writable path of a pod: an emptyDir mounted at /tmp, on the node's
 # disk (the default medium; a memory-backed one would count against the
