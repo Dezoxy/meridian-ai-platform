@@ -11,14 +11,46 @@ views and the decisions.
 [docs/meridian-plan.md](docs/meridian-plan.md) is the single living plan: the
 step list (S000…), the session protocol and the open questions.
 
-- Take the next `todo` step whose dependencies are `done`, unless the owner
-  names another. One step per session, on its own branch off `main`.
+- Take the next `todo` steps whose dependencies are `done`, unless the owner
+  names others: two or three side by side by default, at most one that
+  needs the cluster, one that adds a migration and one that changes what
+  the evaluation fingerprints (the plan's Part A). Each step has its own
+  branch off `main` and its own worktree.
 - Read the plan's Part A before starting; it says what to read, how to
   delegate, which gates to run and how to close the step.
+- Before running steps or implementers side by side, read "Working fast on
+  the virtual machine" in
+  [docs/development-environment.md](docs/development-environment.md): what
+  things cost there, how each implementer gets a worktree and a test
+  database of its own, and which worker counts to pass.
 - Record decisions and evidence in the step's Part C section, not in chat.
 - Private context (job targeting, owner notes) is in the gitignored
   `.context/` folder. Read it only when a step needs it; never copy it into
   tracked files.
+
+## Read before you touch
+
+Each of these holds rules that a diff cannot show. Read the one that fits
+before the first edit, not after the first failure.
+
+- **The kind cluster, or a script under `infra/kind/`:**
+  [infra/kind/README.md](infra/kind/README.md): what `make up` creates, what
+  each command changes, and what to do when one was interrupted.
+- **The registry under `config/registry/`:**
+  [config/registry/README.md](config/registry/README.md), "Change it": which
+  file comes first and what `meridian registry validate` refuses.
+- **A prompt, a tool's contract, a guardrail screen, the golden set or an
+  injection case:** [data/evaluation/README.md](data/evaluation/README.md):
+  each is a fingerprint of the evaluation gate, so the baselines change in
+  the same pull request. `make eval-baseline` replays the recording and
+  costs nothing; `make eval-record` calls the live model, costs money and
+  waits for the owner's yes.
+- **A model provider or deployment, or calling a workload accepted:**
+  [docs/governance/README.md](docs/governance/README.md): two designed
+  processes, each with a checklist and one applied example.
+- **An alert, or something broken on the cluster:**
+  [docs/operations/README.md](docs/operations/README.md): the objectives,
+  the alerts and the runbooks.
 
 ## Working with untrusted content
 

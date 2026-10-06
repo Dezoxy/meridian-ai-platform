@@ -57,9 +57,12 @@
 
 ## Part A — How a session works
 
-One step per session. Short sessions are cheaper and safer: the advisor
+One step per branch and per worktree, and two or three steps side by side
+in one session whenever that many are ready and do not meet ("Two or
+three steps side by side", below). A session that grows long is
+compacted between steps (step 6 says how that is made safe): the advisor
 re-reads the whole transcript on every call, uncached, and a long context
-blurs what the step was for.
+blurs what a step was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -78,18 +81,33 @@ blurs what the step was for.
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
 6. **Close.** Fill in the work log and verification, set `done`, commit, go
-   through "Before pushing" below, open the PR, set it to merge when its
-   required checks pass (`gh pr merge --auto --squash`), and confirm the
-   content landed on `main`. The session merges every pull request this
-   way. It stops and
+   through "Before pushing" below, open the PR, merge it with
+   `gh pr merge --squash` as soon as every required check is green, and
+   confirm the content landed on `main`. The session merges every pull
+   request this way, by hand: `--auto` was set on pull requests 84 and 85
+   and fired on neither, though every check was green and the state was
+   clean, and the second waited six hours for the owner. It stops and
    asks the owner first, in chat, only for a decision that shapes what
    comes later: the design, a security boundary or an accepted risk, the
    cost, or the roadmap and the rules of this repository. The answer goes
    into the step's section, so a pull request carries no decision the owner
-   has not taken; everything else the session decides and records. Start
-   the next step in a new session. A follow-up that no step's "done when"
+   has not taken; everything else the session decides and records. When
+   the owner is away, a question does not stop the session: it is written
+   into the step's section and the session takes what does not depend on
+   it (the owner, 2026-10-05: "dont stop, at a promt or for a question,
+   just put it away, note it and go on"). A follow-up that no step's "done when"
    covers goes into Part B's follow-up backlog, with a proposed home, not
    only into the step's own section.
+7. **Checkpoint.** At every close, and before a long stretch of work,
+   nothing that matters is left in the conversation alone: the step's
+   record is in Part C, every open branch is pushed, the contracts that
+   are still to run are in a folder that outlives the session, and a
+   short state note says what is merged, what is in flight on which
+   branch and what comes next. Then the session tells the owner in one
+   line that it is a good moment to compact. A session cannot compact
+   itself: the owner does, or the harness does when the context is full,
+   and after a checkpoint neither loses anything (the owner, 2026-10-06:
+   "we should optimalise the conversation but it should be a routine").
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -124,25 +142,41 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**One step at a time.** The owner's decision of 2026-10-05: "Work one step
-at a time, nothing in parallel: no parallel steps and no parallel
-implementers." One step is open at a time: it is finished, merged and
-confirmed on `main` before the next branch is cut. Inside a step one
-`implementer` works at a time, contract after contract, and so do the
-reviewers at its end (the session's reading of "nothing", until the owner
-says otherwise). A command of the step's own that runs in the background, a
-test run or a wait for checks, is not a parallel step. The decision replaces
-what stood here: steps without shared files in separate sessions, and, for
-some hours of that day, two or three steps inside one session with the
-subagents it started.
+**Two or three steps side by side.** This is the default, not an
+allowance: when a session starts, and whenever a step closes, it fills up to
+three slots with steps whose dependencies are `done`. The owner's decisions:
+2026-10-06, "So back to multisteps… what steps could you start to proceed
+more? Can we run 3 steps at once?", which reversed the one-at-a-time rule of
+the day before (a night of one step at a time, and of a session that stood
+still for six hours, had given two steps); and, the same day, "can we make
+default the 2-3steps to do next to each other yeah if the situation allows
+it, so deperated steps i mean, there eill be less colusion".
 
-**If steps run in parallel again.** Only on the owner's word. What it needed
-is kept, and two of its rules hold for a single step too, since a version
-update or the owner's own change can move `main` under it: numbers are taken
-late, and `main` is merged in before the pull request. Steps whose
-dependencies are `done` and whose files do not overlap ran in separate
-sessions, each in its own worktree and on its own branch, and the brief of
-each session said:
+Steps are chosen so that they do not meet. Three things exist once, and at
+most one running step may hold each:
+
+| Lane | A step is in it when it | Why only one |
+|---|---|---|
+| Cluster | runs `make up`, `make deploy`, `make smoke` or `make demo`, or changes what they deploy or check | One kind cluster; a second step's deploy changes what the first is verifying |
+| Database | adds a migration | One sequence of numbers; a test database is built from every packaged file |
+| Evaluation | changes a prompt, the triage graph, a tool's contract, a guardrail screen, the golden set or an injection case | One set of recorded answers and baselines |
+
+A step in none of the three (documents, a spike, tests and tooling, code
+that touches none of them) is free and fills any slot. Among the ready
+steps the session takes at most one per lane and prefers those with no file
+in common; the plan and the root README are shared by every step and are
+merged, not avoided. If fewer steps are ready, fewer run: a step whose
+dependency is not `done` is never started to fill a slot. It is prepared
+instead (mapped, its contracts written), so that it starts the moment its
+dependency lands. The owner is asked only where the plan itself asks: a
+step that costs money, an optional step beyond the plan's limit, a store or
+a design that shapes what comes later.
+
+Each step has its own worktree and branch, and its implementers work in
+worktrees of their own. Inside a step, contracts whose files do not overlap
+run side by side and the others one after another; a step's reviewers run
+together. What follows holds for the steps of one session as for separate
+sessions; the brief of each step, or of each session, says:
 
 - **What is shared, and who owns it.** There is one kind cluster and one
   Azure environment: one session owns them, and the others run no
@@ -150,9 +184,11 @@ each session said:
   `make azure-apply`. There is one set of recorded model answers: only one
   session at a time changes a prompt or the triage graph, since that needs
   `make eval-record`.
-- **What each session has of its own.** `PYTEST_DB_CONTAINER`,
-  `PYTEST_DB_PORT` and `PYTEST_WORKERS=3`, for `make pytest-db` and
-  `make eval`, so two test runs never meet.
+- **What each step has of its own.** `PYTEST_DB_CONTAINER`,
+  `PYTEST_DB_PORT` and `PYTEST_WORKERS` (4 beside other steps; the
+  virtual machine runs the whole suite alone with 10 in under two
+  minutes), for `make pytest-db` and `make eval`, so two test runs never
+  meet.
 - **Numbers are taken late.** Migration numbers, `T-NN`, ADR numbers and
   the changelog's version are taken after merging `main` into the step's
   branch, right before the pull request. A branch whose migration number
@@ -337,8 +373,8 @@ money unless its row says so. They sit beside M2 and M3, not in a
 milestone's exit.
 
 - S056 to S061 change different files and were made to run in parallel,
-  S056 owning the cluster; since 2026-10-05 steps run one at a time
-  (Part A). Two places are shared, so the session that
+  S056 owning the cluster (for one day, 2026-10-05, steps ran one at a
+  time; Part A). Two places are shared, so the session that
   finishes later expects a merge there: S056 changes the `/healthz` route
   in the application files S058 and S059 work in, and nothing else in
   them; S060 and S061 both work under `workloads/claims_triage/`, S061 in
@@ -377,7 +413,7 @@ pinned images resolve there.
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
 | S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | done | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
-| S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | todo | S024 |
+| S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | done | S024 |
 | S035 | M3 exit | Architecture PDF released; demo script v2; every capability labelled | todo | S028, S033, S034 |
 
 ### M4 — Optional, at most one
@@ -406,6 +442,7 @@ that day; the rest stand as their step recorded them.
 | The wait after an interrupted deploy | S044 | open | S062 |
 | `make smoke` does not read the stores | S044 | partly closed by S043 (it reads `gateway.usage`) | S062 |
 | A deployment past its `retires` date still routes | S010 | open | S030 |
+| A recording is keyed on the request alone (messages, output budget, schema), and the evaluation compares who answered by kind and label, so a model swapped behind an unchanged prompt replays the old recording and passes the gate | S034 | open; found while applying the onboarding checklist (PO-19), confirmed by its fact-check in `recorded.py` and `compare.py` | S030 |
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
 | A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
@@ -8706,6 +8743,105 @@ follow-up backlog, without a prompt change and without a live recording.
   builders' own workload check; `registry schemas` and a directory it
   cannot write; six functions over 50 lines that the step only touched.
 
+### S034 — Governance documents
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** the provider onboarding process and the service acceptance
+checklist that the scope and T-20 promise, each applied once to what the
+repository holds.
+
+**Decisions:**
+
+- **Run beside S062 and S065, in one session**, on the owner's word of
+  2026-10-06 ("So back to multisteps… Can we run 3 steps at once?"; Part
+  A). It shares no file with either but the root README and this plan.
+- **Where: `docs/governance/`, beside `docs/operations/`.** These are
+  operating-model documents, not architecture, so they are not under
+  `docs/architecture/` and not in the architecture PDF. Five files: the
+  two processes with their checklists (`PO-01` to `PO-24`, `SA-01` to
+  `SA-30`), each applied once (to Azure OpenAI, to claims triage), and an
+  index. The item IDs are the documents' own, so `make docs` does not
+  read them as citations of the registers.
+- **Designed, and said so.** Each document opens with a dated status: a
+  process written and applied once on paper, enforced by no gate beyond
+  the checks its items name. Each item says what enforces it, a check or
+  a person reading.
+- **"Met" means evidence in tests, CI or on kind, never Azure**, and an
+  item that cites a threat-register row labelled "implemented in part"
+  is at most partly met, unless the row's residual is not what the item
+  asks, which the item then says. An applied checklist that is all green
+  would be wrong here: nothing is deployed to Azure, the runbooks are
+  not exercised, the objectives' targets are proposals.
+- **No law is stated.** Where an item needs a legal judgement (what the
+  provider keeps, its sub-processors, an agreement), it is recorded as
+  open and as the insurer's legal function's to answer. The documents
+  cite the repository's own statements (C-02, the scope, the data
+  classification) and add none.
+- **Every row was checked against its evidence before the close.** The
+  documents' worth is that they are true, so a reviewer read all 54
+  applied rows, every number and every cited step against the files.
+  It found one statement wrong (the schema does not require a
+  retirement date; the validator does, for Azure), two rows marked met
+  that claimed more than tests, CI or kind show, and steps cited for
+  what their rows do not promise. All fifteen findings were corrected.
+- **No threat-model note of its own.** The step builds no feature; it
+  writes down, as T-20 asked, the checklist a provider passes. T-20 now
+  points at it.
+
+**Work log:**
+
+- **Mapping first.** An Explore subagent listed what the repository
+  already says about governance, the conventions a new document must
+  follow and the evidence to build on.
+- **One contract to the `implementer`.** Its first run stopped without
+  writing: the harness refuses a subagent's write outside the session's
+  own worktree. It was resumed to write in the session's worktree, and
+  the commit was carried to this branch with git. It read the registry,
+  the Terraform and the code before writing, and corrected the
+  contract's own brief in one place (the Azure foundation is
+  persistent; only the compute environment is per demo day).
+- **The fact-check**, then a second contract for its fifteen findings,
+  in a worktree of the implementer's own.
+- **Counts corrected on the way**, each recounted from its source: the
+  threat register has 91 rows (the model's opening said 87, the README
+  90), eight objectives of which five have an indicator, six runbooks,
+  twelve alert rules and one recording rule.
+
+**Result / verification:**
+
+- **Provider onboarding**, 24 items, applied to Azure OpenAI: 8 met, 11
+  partly met, 5 not met. Not met: what the provider keeps (PO-08), its
+  sub-processors (PO-09), an agreement (PO-10), all three the legal
+  function's; network exposure (PO-11: public access is enabled on the
+  account and the vault, S020); retirement (PO-17: the date is recorded
+  and nothing reads it, S030). Azure OpenAI is registered and routed
+  for synthetic data only.
+- **Service acceptance**, 30 items, applied to claims triage: 9 met, 15
+  partly met, 6 not met. Not met: people identified (SA-13, S021), the
+  injection suite's target (SA-16), runbooks exercised (SA-21), rollback
+  (SA-26), data recovery (SA-27), retention (SA-28). Claims triage is
+  not called accepted.
+- **The fact-check's tally after the corrections**: every relative link
+  and anchor resolves; no sentence reads as enforced capability; no
+  statement of what a law requires.
+- **Gates, run by the main session on the branch with `main` merged
+  in:** `make docs` (13 checks), `make test`, `make check` (no ERROR
+  line) and `make secret-scan` (no leaks), each exit 0. No Python
+  changed.
+- **Not done:** nothing was read from Azure for these documents; the
+  dated live readings they cite are the plan's own records (S007).
+
+**Follow-ups:**
+
+- In the backlog: a model swapped behind an unchanged prompt replays the
+  old recording and passes the evaluation gate (S030).
+- For the owner, no step: the three items that need the insurer's legal
+  function; and whether a live comparison of the registry with Azure
+  belongs in S022's "done when" (T-12 proposes it, the step's row does
+  not name it).
+- The root README's operations row still says the rules and the health
+  dashboard were not applied to a cluster; S062, which reads them from
+  `make smoke`, corrects it.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9019,3 +9155,42 @@ follow-up backlog, without a prompt change and without a live recording.
   gone: both of its steps are closed. Seven backlog rows closed, eight
   new ones, none with a home. The whole suite: 9,513 passed in 1 min
   47 s with ten workers.
+- **v0.45, 2026-10-06:** Part A is "Up to three steps at a time" again, the
+  owner's decision of that day, reversing the day before's. A pull request
+  is merged by hand once its checks are green (`--auto` fired on neither
+  84 nor 85), and a question does not stop a session while the owner is
+  away. `docs/development-environment.md` says where an unattended session
+  runs. S062, S065 and S034 open together.
+- **v0.46, 2026-10-06:** `PYTEST_WORKERS` defaults to 10, the owner's
+  decision ("My machine can handle 10 worker so it should be the default
+  from now"); the python workflow sets 4 for its runner, and a test holds
+  the two apart. Measured on the virtual machine that day: `make up` from
+  nothing 5 min 04 s, the first `make deploy` 1 min 30 s, `make smoke`
+  43 s with 24 lines passing, and the whole suite beside the deployed
+  cluster 3 min 10 s with 4 workers.
+- **v0.47, 2026-10-06:** S034 done, beside S062 and S065.
+  `docs/governance/` holds the provider onboarding process and the
+  service acceptance checklist, each applied once on paper: Azure OpenAI
+  8 met, 11 partly met, 5 not met of 24; claims triage 9, 15 and 6 of 30,
+  and not called accepted. Every applied row was checked against its
+  evidence before the close. Both are designed. One new backlog row, for
+  S030.
+- **v0.48, 2026-10-06:** `docs/development-environment.md` has "Working
+  fast on the virtual machine": what things cost there, measured; what
+  makes a step faster (steps and implementers side by side, each in a
+  worktree of its own with a test database of its own; every contract
+  written up front; reviewers at once; a pull request merged by hand on
+  green) and what does not (more than ten workers, more cores, a CI
+  runner on the machine). The page's older parts say what the machine
+  showed where they said what the laptop made us expect. `CLAUDE.md` and
+  `AGENTS.md` point at it, and gain "Read before you touch": five
+  pointers, each for an action (the cluster, the registry, what the
+  evaluation gate fingerprints, a provider or an accepted workload,
+  something broken) to the page that holds its rules.
+- **v0.49, 2026-10-06:** two or three steps side by side is the default of
+  Part A, the owner's decision; steps are chosen by lane (the cluster, the
+  database's migrations, the evaluation's recordings: one running step
+  each) so that they do not meet, and a step that is not ready is prepared,
+  not started. A step's reviewers run together. Step 7, the checkpoint:
+  at every close nothing that matters is left in the conversation alone,
+  and the owner is told that it is a good moment to compact.

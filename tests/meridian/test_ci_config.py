@@ -198,6 +198,18 @@ def test_the_tests_step_prints_its_slowest_tests() -> None:
     )
 
 
+def test_ci_sets_its_own_worker_count_whatever_the_makefiles_default_is() -> None:
+    # The Makefile's default is the 12-core development machine's; the
+    # runner has four cores, and ten processes on four would slow the job.
+    tests = step_named("Tests")
+
+    default = re.search(r"^PYTEST_WORKERS\s*\?=\s*(\S+)$", MAKEFILE, re.MULTILINE)
+
+    assert default is not None
+    assert default.group(1) == "10"
+    assert tests["env"]["PYTEST_WORKERS"] == "4"
+
+
 def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
     # 47 successful runs on 2026-10-04: 4 min 59 s to 7 min 30 s. The limit
     # ends a job that hangs; it is not a budget, and a run near it is a
