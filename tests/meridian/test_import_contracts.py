@@ -531,6 +531,7 @@ def test_importing_the_services_loads_no_provider_sdk_or_credential_library() ->
         "import meridian.platform.gateway.app\n"
         "import meridian.runtime.app\n"
         "import meridian.workloads.claims_triage.app\n"
+        "import meridian.workloads.claim_brief.workflow\n"
         "import meridian.platform.policy_mcp.app\n"
         "import meridian.workloads.claims_triage.mcp_server.app\n"
         "from meridian.platform.gateway.settings import GatewaySettings\n"
