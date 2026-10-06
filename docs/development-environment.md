@@ -2,8 +2,9 @@
 
 Where the work on this repository runs, what that machine needs, and what
 has to be carried to a new one. Written on 2026-10-05, when the work moved
-from a laptop to a dedicated virtual machine. Nothing here names a host, an
-address or an account: the repository is public.
+from a laptop to a dedicated virtual machine, and brought up to date on
+2026-10-06 with what that machine showed in its first two days. Nothing
+here names a host, an address or an account: the repository is public.
 
 ## Why the work moved
 
@@ -29,14 +30,16 @@ machine the test database needed.
 ## What the machine needs
 
 A Linux machine with Docker Engine runs the containers directly, with no
-virtual machine in between, which is most of the gain. The numbers below
-are an estimate from the measurements above, not a tested minimum:
+virtual machine in between, which is most of the gain. The second column
+was the estimate made on the laptop before the move; the third is what
+the machine the work moved to has, and it carries the work ("Working
+fast on the virtual machine", below, has the measurements):
 
-| Resource | Suggested | Why |
-|---|---|---|
-| Processor | 8 cores of its own, 12 if two steps run side by side | The suite uses 3 or 4 workers and PostgreSQL beside them, and the cluster's own processes filled the rest of 8 cores |
-| Memory | 24 to 32 GB | The cluster held 3.9 GiB; Docker's 8 GiB and a 16 GB host were not enough for it, a suite and the sessions together |
-| Disk | 80 GB or more | About 30 images on the first `make up`, the image `make deploy` builds on every change, and one checkout per parallel step |
+| Resource | Estimated before the move | The virtual machine, measured 2026-10-06 | Why |
+|---|---|---|---|
+| Processor | 8 cores of its own, 12 if two steps run side by side | 12 cores; the load stood at 1 with the cluster up and seven agents at work, and near 8 during a whole suite with ten workers | The suite's workers and PostgreSQL beside them, and the cluster's own processes |
+| Memory | 24 to 32 GB | 11 GB, fixed. Enough: the cluster's node holds 3.3 GiB, and with six services deployed, five agents at work and one suite of four workers 5.5 GB stayed available | The estimate came from Docker Desktop's 8 GiB virtual machine, where the cluster and the test database shared one small memory; on Linux they share the host's |
+| Disk | 80 GB or more | 123 GB, 47 GB used with the cluster's images and seven checkouts | About 30 images on the first `make up`, the image `make deploy` builds on every change, and one checkout per step and per implementer |
 
 `infra/kind/README.md` says to give Docker at least 6 GiB for the cluster
 alone; that is the floor for a demo, not for the suite beside it.
@@ -53,17 +56,19 @@ pins in `infra/kind/pins.env`, the `Makefile` and the workflows:
   the MCP server in `.mcp.json`;
 - `terraform` and `az` only for the Azure steps (S007, S020).
 
-Things to check on the first day, because the laptop never showed them:
+Three things the laptop never showed, and what the virtual machine
+answered on 2026-10-06:
 
-- **Processor architecture.** The laptop is arm64. The test database's
-  image is published for amd64 and arm64 (checked). The other pinned
-  images are pinned by digest: confirm each resolves on the new machine
-  with the first `make up` and `make deploy`, and record the result in
-  the versions table of `infra/kind/README.md`.
+- **Processor architecture.** The laptop is arm64, the virtual machine
+  amd64. Every image pinned by digest resolved there: `make up` from no
+  cluster and the first `make deploy` both ended with exit 0, and
+  `make smoke` passed every line. The versions table of
+  `infra/kind/README.md` still lists the laptop's tools; S062, the step
+  that ran these commands, adds the virtual machine's.
 - **kind on Linux.** The cluster's file-watch limits are the host's;
-  read kind's known issues if a pod fails to start with "too many open
-  files".
-- **The edge port.** `make smoke` and `make demo` reach the cluster at
+  no pod failed to start for them. Read kind's known issues if one does
+  with "too many open files".
+- **The edge port.** `make smoke` and `make demo` reached the cluster at
   `127.0.0.1:8088` on the machine itself.
 
 ## What git carries and what it does not
@@ -83,7 +88,7 @@ clone plus the tools above is a working environment. What is not in git:
 | Sign-ins | `gh`, `az`, Docker | Sign in again on the new machine; nothing to copy |
 | The assistant's memory | `~/.claude/projects/<name from the checkout's path>/memory/` | Copy the folder to the name the new path gives, or the next session starts without it |
 | The assistant's saved sessions | `~/.claude/session-data/` | Optional; `/resume-session` reads the latest |
-| Unmerged work | Branches on GitHub | Listed in the plan under "In flight"; nothing is only local |
+| Unmerged work | Branches on GitHub | Each open step's branch is pushed at the end of a day, and its section in the plan's Part C says what is left; nothing is only local |
 
 After a fresh clone open `/hooks` once, as `CLAUDE.md` says, or the edit
 and command hooks do not run.
@@ -101,14 +106,15 @@ make demo                                    # one claim, end to end
 
 Record how long the whole suite takes alone and beside the cluster; the
 plan's Part A rests its rule on a suite beside the cluster on that number.
+For the virtual machine both are recorded below.
 
 ## Rules that came out of the move
 
 - **One whole suite at a time on a machine**, and none beside a deployed
   cluster unless the machine was measured to carry both. Measured on the
   virtual machine on 2026-10-05, alone: the whole suite takes 2 min 42 s
-  with the default 4 workers, 2 min 03 s with 8 and 1 min 55 s with 10
-  (`PYTEST_WORKERS=10`). Ten is the Makefile's default since 2026-10-06,
+  with 4 workers (the default until then), 2 min 03 s with 8 and
+  1 min 55 s with 10. Ten is the Makefile's default since 2026-10-06,
   the owner's decision; CI sets 4 for its four-core runner, and a step
   that runs beside others passes 4. Beside the deployed cluster the
   suite took 3 min 10 s with 4 workers, with 5.5 GB still available.
