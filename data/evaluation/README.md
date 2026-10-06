@@ -16,13 +16,18 @@ Never edit a file by hand: each has a command that writes it.
 
 ## The gate
 
-CI answers the 40 golden claims through the real services with the Model
+CI answers the 47 golden claims through the real services with the Model
 Gateway in `recorded` mode, writes a report and compares it with the
 baseline (`meridian eval compare`). It fails on a grade that passed in the
 baseline and fails now, on a broken absolute grader, on a missed target and
 on a changed fingerprint. The baseline is the recorded real model's run
-(the owner's decision, 2026-10-04): 38 of 40 on `recommendation`, 40 of 40
-on every other grader.
+(the owner's decision, 2026-10-04): 45 of 47 on `recommendation`, 47 of 47
+on every other grader. The model is asked about 14 of the 47 claims, the
+same 14 as before S067; the other 33 are decided by the rules alone, among
+them the seven that S067 added, so the recording still holds its 27 answers
+and was not made again. The two misses on
+`recommendation` are CLM-0012 and CLM-0034, as in the forty claims the
+baseline held before S067 (38 of 40, 40 of 40).
 
 A report carries six fingerprints, and a change to any of them asks for a
 new baseline in the same reviewed change (T-29, T-72):
@@ -211,6 +216,35 @@ which holds the hash of the golden manifest.
 The cases were written in the session that built the suite, after it had
 read the screen. The rates describe these cases. The screen was not changed
 to raise them.
+
+### What S067 changed (2026-10-06)
+
+The numbers above are the first run's and stay as it measured them.
+`injection-summary.md` is the baseline as it stands; the counts below are read
+from it (the sums are the carrier table's rows).
+
+- The Claims API now screens the description as it was posted, before it
+  replaces the claimant's name, and hands the run one boolean beside the claim;
+  the assessor reads it as a hit of its own screen (`injection-suspected`, no
+  model call, the claim goes to an adjuster). The two attacks in a claimant's
+  name, CLM-1053 and CLM-1054, are stopped now. No pattern of the screen
+  changed, so the other families keep their counts: of the 66 attacks, 26 are
+  stopped (39 %), 21 of 54 in a description and 5 of 12 in a clause.
+- 40 attacks reach the model that obeys, where 42 did. By base claim (the
+  summary's second table): the 28 on CLM-0026, CLM-0031, CLM-0037 and CLM-0038
+  (6, 7, 8 and 7), excluded claims within EUR 2,500, became an automatic
+  approval; the 6 on CLM-0001 kept the adjuster's route with the
+  recommendation turned from reject to approve; the 6 on CLM-0034 changed
+  nothing. So the route is not held in 28 of 40 (70 %), the recommendation in
+  34 of 40 (85 %).
+- Not covered, and not measured by these cases: a claimant can choose a name
+  made of the words an exclusion turns on, and each of them becomes `[name]`
+  in the run's copy before the model reads it; the posted-text screen does not
+  see that. It is a backlog row (S070), and one more way to the automatic
+  approval of a small claim that the suite already measures as open (QA-09).
+- The golden set grew from 40 to 47 claims (the gate's description above);
+  the 94 injection cases are the same, and their `golden_set` fingerprint
+  moved with the golden manifest's hash.
 
 ## Commands
 

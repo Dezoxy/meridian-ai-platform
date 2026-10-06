@@ -95,7 +95,7 @@ database still answers, the owner first copies `audit.events` and
 cluster is the only copy of the evidence.
 
 `make deploy` rebuilds what comes from this repository, in this order: the
-migrations (Job `meridian-migrate-<tag>`), the 50 policies and their
+migrations (Job `meridian-migrate-<tag>`), the 56 policies and their
 claim history (Job `meridian-seed-<tag>`), the release, and the 85 chunks
 of the policy wordings (Job `meridian-ingest-<tag>`, which runs again
 whenever the store is empty).

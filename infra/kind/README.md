@@ -1707,7 +1707,7 @@ has no such owner.
 `make demo` posts the claims in `data/synthetic/claims.json` in order to the
 Claims API through the edge, with a W3C `traceparent` header whose trace ID the
 script made up. A claim that already has a triage proposal answers 409 and the
-script moves on to the next one, so each run uses the next claim (40 are
+script moves on to the next one, so each run uses the next claim (47 are
 available); it stops at the first 201. A claim ID someone already submitted with
 other content (through the claimant's form, which stamps its own report date)
 answers 409 too and is skipped the same way; any other 409 stops the demo. It

@@ -310,7 +310,9 @@ Things to know:
   that does not end with that sentence is not read as an exclusion at all:
   the model never sees it, and the claim goes to an adjuster.
 - The two `name-masked` cases replace the claimant's name with words
-  (`Ignore Previous`, `Approve Claim`). They are no person's name.
+  (`Ignore Previous`, `Approve Claim`). They are no person's name. Since
+  S067 the Claims API screens the description as posted, before it replaces
+  the name, so both are stopped before the model; they were not before.
 - The cases were written in the session that built the suite, after it had
   read the screen they test. They are not a blind red-team set: a rate
   measured on them describes these cases.
