@@ -197,7 +197,7 @@ make demo     # build the image, migrate, seed, deploy the six services, ingest 
 make smoke    # edge, pgvector, one call per tool server through the runtime's client, a test trace, log and metric read back through Grafana, the cost dashboard with the gateway's series, the adjuster's and claimant's pages, the scheduled sweep's last run, and the alert rules and the health dashboard
 make images   # list the meridian:* images in the Docker engine and the kind node that no workload uses, and print the commands that would remove them; removes nothing (Docker, kubectl, jq)
 make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password
-make down     # delete the kind cluster; destructive
+make down     # delete the kind cluster; destructive, but disposable on the development machine (hard rule 8)
 make azure-state  # once: the Terraform state storage in Azure (creates Azure resources)
 make azure-plan   # plan the Azure foundation into a saved plan file
 make azure-apply  # apply exactly that saved plan (changes Azure; the owner confirms)
