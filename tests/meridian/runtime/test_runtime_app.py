@@ -2,7 +2,6 @@
 workload needed)."""
 
 import contextlib
-import importlib
 import json
 import logging
 import threading
@@ -25,10 +24,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import StatusCode
+from runtimesupport import register
 from servicesupport import (
     GATEWAY_REPLY,
     REGISTRY_DIR,
-    REPO_ROOT,
     assert_spans_hold_no_exception_and_no_canary,
     audit_events,
     database_error,
@@ -42,6 +41,7 @@ from meridian.platform.common.db import connect
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
+from meridian.platform.registry import load_registry
 from meridian.runtime import app as runtime_app
 from meridian.runtime import graphs, runs, tool_client
 from meridian.runtime.app import create_app
@@ -67,22 +67,6 @@ class State(TypedDict, total=False):
     output: Any
 
 
-class FakeEntryPoint:
-    name = "claims-triage"
-    value = "meridian.workloads.claims_triage.graph:build"
-
-    class dist:
-        name = "meridian"
-
-    def __init__(
-        self, factory: Callable[[ModelClient, ToolClient], StateGraph]
-    ) -> None:
-        self.factory = factory
-
-    def load(self) -> Callable[[ModelClient, ToolClient], StateGraph]:
-        return self.factory
-
-
 def graph_of(node: Callable[[State], State]) -> StateGraph:
     graph = StateGraph(State)
     graph.add_node("work", node)
@@ -97,21 +81,6 @@ def ok_factory(model: ModelClient, tools: ToolClient) -> StateGraph:
         return {"output": {"text": reply.text, "echo": state["claim"]["n"]}}
 
     return graph_of(work)
-
-
-def register(monkeypatch: pytest.MonkeyPatch, factory: Callable) -> None:
-    """Publish ``factory`` as the claims-triage graph for the next ``make_client``.
-
-    The stand-in graphs live under tests/, outside the meridian package, and
-    claim the real graph's module, which the loader locates before it loads:
-    the loader's package-directory check is pointed at the repository for these
-    tests, which holds both, and the real module is imported so that the loader
-    finds it loaded; the check itself is tested in test_graphs.py.
-    """
-    entry = FakeEntryPoint(factory)
-    monkeypatch.setattr(graphs, "entry_points", lambda *, group: [entry])
-    importlib.import_module("meridian.workloads.claims_triage.graph")
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 class Gateway:
@@ -530,8 +499,15 @@ def test_the_runtime_starts_with_the_real_registry_and_loads_graph_agents_only(
 
     make_client(None)
 
-    # knowledge-ingestion is in the registry as a job: it has no graph to find.
-    assert loaded == ["claims-triage"]
+    # A job (knowledge-ingestion) is in the registry with no graph to find; the
+    # graph agents are loaded in the registry's order.
+    registry = load_registry(REGISTRY_DIR)
+    graph_agents = [a.id for a in registry.agents if a.kind == "graph"]
+    jobs = {a.id for a in registry.agents if a.kind == "job"}
+    assert loaded == graph_agents
+    assert "claims-triage" in loaded
+    assert jobs
+    assert not jobs & set(loaded)
 
 
 def test_a_graph_agent_without_a_published_graph_still_stops_the_start(

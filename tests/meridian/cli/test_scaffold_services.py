@@ -108,6 +108,13 @@ def read(root: Path, relative: str = SERVICES) -> str:
     return (root / relative).read_bytes().decode("utf-8")
 
 
+def runtime_agents(root: Path) -> tuple[str, ...]:
+    """The agents the registry in ``root`` lets the runtime's identity name."""
+    runtime = load_registry(root / REGISTRY).service("agent-runtime")
+    assert runtime is not None
+    return runtime.agents
+
+
 def runtime_line_index(text: str) -> int:
     """The 0-based index of the line of the runtime's ``agents``."""
     lines = text.split("\n")
@@ -145,6 +152,7 @@ def test_the_runtime_names_the_new_agent_and_one_line_of_services_yaml_changed(
 ) -> None:
     # Arrange
     old = read(root)
+    before = runtime_agents(root)
 
     # Act
     result = new_workload(root)
@@ -157,10 +165,8 @@ def test_the_runtime_names_the_new_agent_and_one_line_of_services_yaml_changed(
     pairs = enumerate(zip(old_lines, new_lines, strict=True))
     differing = [i for i, (a, b) in pairs if a != b]
     assert differing == [runtime_line_index(old)]
-    assert new_lines[differing[0]] == f"    agents: [claims-triage, {NAME}]"
-    runtime = load_registry(root / REGISTRY).service("agent-runtime")
-    assert runtime is not None
-    assert runtime.agents == ("claims-triage", NAME)
+    assert new_lines[differing[0]] == f"    agents: [{', '.join((*before, NAME))}]"
+    assert runtime_agents(root) == (*before, NAME)
     assert validate(root).exit_code == 0
 
 
@@ -198,14 +204,13 @@ def test_the_same_hand_edit_fails_with_the_rules_message_without_the_write(
 
 
 def test_a_second_workload_is_appended_after_the_first(root: Path) -> None:
+    before = runtime_agents(root)
     new_workload(root)
 
     result = new_workload(root, "claim-audit")
 
     assert result.exit_code == 0, result.stderr
-    runtime = load_registry(root / REGISTRY).service("agent-runtime")
-    assert runtime is not None
-    assert runtime.agents == ("claims-triage", NAME, "claim-audit")
+    assert runtime_agents(root) == (*before, NAME, "claim-audit")
 
 
 @pytest.mark.parametrize(

@@ -198,11 +198,13 @@ def test_summary_uses_singular_and_plural_correctly(registry_copy: Path) -> None
     agents.write_text(
         text[: text.index("  - id: knowledge-ingestion")], encoding="utf-8"
     )
-    # The ingestion Job names the agent that is gone.
+    # Every service that names an agent names the one agent that is left.
     services = registry_copy / "services.yaml"
     services.write_text(
-        services.read_text(encoding="utf-8").replace(
-            "agents: [knowledge-ingestion]", "agents: [claims-triage]"
+        re.sub(
+            r"agents: \[[^\]\s][^\]]*\]",
+            "agents: [claims-triage]",
+            services.read_text(encoding="utf-8"),
         ),
         encoding="utf-8",
     )
