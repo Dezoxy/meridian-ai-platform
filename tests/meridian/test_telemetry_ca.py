@@ -500,7 +500,35 @@ def test_the_collector_serves_otlp_over_http_with_tls_and_no_grpc_receiver() -> 
     # Helm merges a null over the chart's default and removes the key.
     assert protocols["grpc"] is None
     assert protocols["http"]["endpoint"] == "${env:MY_POD_IP}:4318"
-    assert set(protocols["http"]["tls"]) == {"cert_file", "key_file", "reload_interval"}
+    assert set(protocols["http"]["tls"]) == {
+        "cert_file",
+        "key_file",
+        "reload_interval",
+        "min_version",  # the floor: TLS 1.3 (test_kind_observability_security_context)
+    }
+
+
+def manifest_header() -> str:
+    head = MANIFEST.read_text(encoding="utf-8").split("apiVersion:")[0]
+    return " ".join(line.removeprefix("#").strip() for line in head.splitlines())
+
+
+def test_the_header_names_who_can_read_and_overwrite_the_authoritys_key() -> None:
+    header = manifest_header()
+
+    # The readers the threat model's T-88 names are all here: cert-manager's
+    # controller and cainjector, the CloudNativePG operator and Prometheus's
+    # operator (kube-state-metrics is named as no longer one of them); the two
+    # operators can write the Secret too, so the key is replaceable as well.
+    for reader in (
+        "cert-manager's controller",
+        "cainjector",
+        "CloudNativePG operator",
+        "Prometheus's operator",
+        "kube-state-metrics",
+    ):
+        assert reader in header, reader
+    assert "overwrite" in header
 
 
 def test_the_collector_closes_4317_in_the_service_and_the_container_too() -> None:

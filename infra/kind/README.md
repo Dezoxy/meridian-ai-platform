@@ -49,7 +49,9 @@ every image a chart starts here is pinned by the multi-architecture index
 digest of its tag, each in [`pins.env`](pins.env) as `X_IMAGE_TAG` and
 `X_IMAGE_DIGEST` under a `# renovate:` comment, and `make up` passes both to
 the chart with `--set`. The tag is the one the chart installs by default at
-its pinned version: a chart upgrade moves the tags with it, and Renovate
+its pinned version, except the collector's: the chart's appVersion is 0.161.0
+and the pin is 0.162.0 (it was pinned before this step). A chart upgrade moves
+the tags with it, and Renovate
 proposes a tag of its own that may not be the chart's, so read the chart's
 defaults again (below) before merging. What a chart's key takes is not
 uniform: `digest` takes `sha256:<hex>`; `sha` in kube-prometheus-stack and
@@ -1033,9 +1035,12 @@ What the policies do not do:
   API server's address alone since S063, which no test proves is enforced
   (above); the address must be read again when it changes (`make up`).
 - They are not enforced by admission. The namespaces warn about and audit
-  a pod below their Pod Security level (`restricted`, and `baseline` for
-  `observability`; [`manifests/namespaces.yaml`](manifests/namespaces.yaml));
-  they do not refuse one yet (below).
+  a pod below their Pod Security level (`restricted`;
+  [`manifests/namespaces.yaml`](manifests/namespaces.yaml)); they do not
+  refuse one yet (below), and on kind `audit` records nothing (no API server
+  audit policy is configured) and `warn` reaches only the client that creates
+  a workload, never a controller's pod. `cnpg-system` and
+  `envoy-gateway-system` carry neither labels nor a NetworkPolicy.
 - The Model Gateway has no rule towards a provider: on kind it calls none.
   The rule for Azure OpenAI is S020's.
 
@@ -1124,7 +1129,7 @@ first `make up` and `make smoke` after it have run on one.
 
 | File | Namespace | What it says |
 |---|---|---|
-| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 (the API server) only |
+| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
 | [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
 
@@ -1148,8 +1153,13 @@ What stays open, in one list:
 - The three webhooks (cert-manager's, approver-policy's, the Prometheus
   operator's) are open on one port each to any pod of the cluster, because
   the API server calls them from the node's address, which changes with every
-  cluster. They are TLS endpoints that answer admission reviews; the
-  operator's is `failurePolicy: Ignore`.
+  cluster. They are TLS endpoints that answer admission reviews, and they
+  answer anyone: any pod can post a forged review and read the verdict, and
+  nothing is applied by one, so nothing is changed. A flood against the two
+  that fail closed (cert-manager's and approver-policy's) can stall the
+  issuance and renewal of certificates; the operator's is
+  `failurePolicy: Ignore`. Nobody has measured whether the address the API
+  server's calls arrive from is the endpoint's, so none is narrowed.
 - The collector's rule admits every pod of `meridian` that the chart's policies
   let out, and on a cluster where the chart is not installed (`make up` alone)
   every pod of `meridian` can push to it: `default-deny` is the chart's.
@@ -1165,7 +1175,7 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 |---|---|---|
 | `meridian` | `restricted` | nothing |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
-| `observability` | `baseline` | `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either (their values files, not the label); node-exporter would have stopped `baseline` too, and is off |
+| `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
 
 The Prometheus pods are the operator's, not rendered by Helm, and were not read:
 a server-side dry run on the cluster (`kubectl label --dry-run=server`) is the
@@ -1626,7 +1636,7 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
   listens on loopback only.
 - `enforce` for Pod Security Admission on the `meridian` namespace, which
   has `warn` and `audit` at `restricted` since S019 (as `cert-manager` has
-  since S063, and `observability` at `baseline`): a server-side dry run
+  since S063, and `observability` at `restricted`): a server-side dry run
   of `enforce=restricted` reported no violation on `meridian`, but a cold
   `make up` under it (CloudNativePG's init Job) was not tried; in the backlog.
 - A second replica of any service, and so a budget that protects one:

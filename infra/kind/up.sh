@@ -2,10 +2,10 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
-#      the edge Gateway: the database's (applied with the API server's address,
-#      read from the `kubernetes` EndpointSlice in `default` on every run, so a
-#      cluster whose node got another address is repaired by running this
-#      again), those of cert-manager and observability
+#      the edge Gateway: the database's and cert-manager's (each applied with
+#      the API server's address, read from the `kubernetes` EndpointSlice in
+#      `default` on every run, so a cluster whose node got another address is
+#      repaired by running this again), the one of observability
 #      and the one for smoke's telemetrygen Jobs, all before the releases they
 #      guard,
 #      cert-manager (its own approver off), approver-policy with the policies
@@ -43,6 +43,9 @@ readonly DATABASE_CA_PATH=/etc/meridian/db-ca/ca.crt
 # server's addresses (S063). The placeholder is not a CIDR, so the API server
 # refuses the file as it stands; a test keeps this string equal to the file's.
 readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.yaml"
+# cert-manager's policies take the same placeholder, on the one egress rule for
+# TCP 6443 (S063, contract FB); its three 10250 ingress rules name no address.
+readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml"
 readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
@@ -86,39 +89,42 @@ create_cluster() {
     --config "${KIND_DIR}/cluster.yaml" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s
 }
 
-# database_policy_manifest PEERS: the database's policy file with PEERS (the
+# api_server_policy_manifest FILE PEERS: the policy file FILE with PEERS (the
 # text of a flow-style list of ipBlocks) in place of the placeholder, on stdout.
 # Stops when the file does not hold the placeholder exactly once: a file that
 # lost it would be applied as it stands, and one that holds it twice would be
 # half filled. The text is cut and joined with bash's own expansions, not sed or
 # a pattern, so nothing in PEERS can be read as an expression.
-database_policy_manifest() {
-  local manifest before after
-  manifest="$(<"${DATABASE_POLICY_FILE}")"
+api_server_policy_manifest() {
+  local file=$1 peers=$2 manifest before after
+  manifest="$(<"${file}")"
   [[ "${manifest}" == *"${API_SERVER_PEERS_PLACEHOLDER}"* ]] ||
-    die "${DATABASE_POLICY_FILE} does not hold the placeholder ${API_SERVER_PEERS_PLACEHOLDER}"
+    die "${file} does not hold the placeholder ${API_SERVER_PEERS_PLACEHOLDER}"
   before="${manifest%%"${API_SERVER_PEERS_PLACEHOLDER}"*}"
   after="${manifest#*"${API_SERVER_PEERS_PLACEHOLDER}"}"
   [[ "${after}" != *"${API_SERVER_PEERS_PLACEHOLDER}"* ]] ||
-    die "${DATABASE_POLICY_FILE} holds the placeholder ${API_SERVER_PEERS_PLACEHOLDER} more than once"
-  printf '%s%s%s\n' "${before}" "to: [${1}]" "${after}"
+    die "${file} holds the placeholder ${API_SERVER_PEERS_PLACEHOLDER} more than once"
+  printf '%s%s%s\n' "${before}" "to: [${peers}]" "${after}"
 }
 
-# Apply the database's NetworkPolicy with the API server's address (S063), on
-# every run: a cluster whose node was given another address by a Docker restart
-# is repaired by running `make up` again. The address is read and checked first
-# (read_api_server_addresses, common.sh), so a bad answer stops here with the
-# policy as it was, and the manifest is rendered whole before kubectl sees it.
-apply_database_policy() {
-  local address peers="" manifest
+# apply_api_server_policy FILE WHOSE: apply the NetworkPolicy file FILE with the
+# API server's address (S063), on every run: a cluster whose node was given
+# another address by a Docker restart is repaired by running `make up` again.
+# WHOSE ("the database's", "cert-manager's") is what the messages call the
+# policy. The address is read and checked first (read_api_server_addresses,
+# common.sh), so a bad answer stops here with the policy as it was, and the
+# manifest is rendered whole before kubectl sees it. The database's file and
+# cert-manager's are applied through this one function.
+apply_api_server_policy() {
+  local file=$1 whose=$2 address peers="" manifest
   read_api_server_addresses ||
-    die "${api_server_problem}; the database's NetworkPolicy was not changed"
+    die "${api_server_problem}; ${whose} NetworkPolicy was not changed"
   while IFS= read -r address; do
     peers+="${peers:+, }{ipBlock: {cidr: ${address}/32}}"
   done <<<"${api_server_addresses}"
-  manifest="$(database_policy_manifest "${peers}")" || exit 1
+  manifest="$(api_server_policy_manifest "${file}" "${peers}")" || exit 1
   kctl apply --server-side --force-conflicts -f - <<<"${manifest}" >/dev/null
-  log "network: the database's pod may reach TCP 6443 at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
+  log "network: ${whose} pods may reach TCP 6443 at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
 }
 
 # Apply the policies for approver-policy, trying again until the API server
@@ -252,10 +258,10 @@ log "namespaces"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.yaml" >/dev/null
 
 log "network: the database's NetworkPolicy, with the API server's address (before the database exists)"
-apply_database_policy
+apply_api_server_policy "${DATABASE_POLICY_FILE}" "the database's"
 
-log "network: cert-manager's NetworkPolicies (before cert-manager is installed)"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml" >/dev/null
+log "network: cert-manager's NetworkPolicies, with the API server's address (before cert-manager is installed)"
+apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
 
 log "network: observability's NetworkPolicies (before Prometheus, Tempo, Loki and the collector)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observability-networkpolicy.yaml" >/dev/null

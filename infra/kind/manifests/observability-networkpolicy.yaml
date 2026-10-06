@@ -22,9 +22,10 @@
 #                    pod of any other namespace (default, kube-system,
 #                    cert-manager, this one) cannot push a trace, a log or a
 #                    metric under a name that is not its own (T-68, T-84). The
-#                    collector's gRPC receiver, 4317, is listening and open to
-#                    no one: 4317 is admitted from no namespace and from no pod
-#                    to the collector (a later change closes the receiver)
+#                    collector's gRPC receiver, 4317, is closed in this branch
+#                    (values/otel-collector.yaml removes the receiver and the
+#                    port) and admitted from no one: 4317 is admitted from no
+#                    namespace and from no pod to the collector
 #   tempo            4317 (OTLP gRPC) from the collector; 3200 (query) from
 #                    Grafana
 #   loki             3100 from the collector (OTLP) and from Grafana (query);
@@ -47,8 +48,17 @@
 #                    address that changes with every new cluster and that no
 #                    pod selector can name, so the rule names the port and no
 #                    peer: any pod of the cluster may open a connection to this
-#                    one port of this one pod. A rule by the node's address,
-#                    once `make up` reads it, would narrow it
+#                    one port of this one pod. What it reaches is a TLS
+#                    endpoint that answers admission reviews, and it answers
+#                    anyone: any pod can post a forged review and read the
+#                    verdict. This webhook fails open, so a forged review or
+#                    a flood of them stops nothing; a review applies nothing,
+#                    so nothing is changed by a forged one. A rule by the
+#                    address the API server's calls arrive from would narrow
+#                    it, but that address is not known to be the endpoint's
+#                    and nobody has measured it, so the rule stays open (the
+#                    two webhooks of cert-manager, which fail closed, are the
+#                    ones a flood can stall: cert-manager-networkpolicy.yaml)
 # Prometheus scrapes itself, on 9090 and on its reloader's 8080 (the chart's
 # self-monitoring ServiceMonitor). The rule above admits Grafana and the
 # collector only, and none is written for the pod itself: a connection from a

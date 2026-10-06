@@ -118,20 +118,35 @@ def rule_ports(policy: dict) -> set[int]:
 # ── Pod Security labels ──────────────────────────────────────────────────────
 
 
-def test_the_namespaces_header_names_the_pods_that_keep_observability_at_baseline() -> (
-    None
-):
+def test_the_namespaces_header_names_the_pods_read_for_restricted() -> None:
     header = header_of(NAMESPACES_FILE)
 
-    # What stops `restricted` is named by pod, and so is what was turned off.
-    assert "baseline" in header
-    assert "tempo" in header and "otel-collector" in header
-    assert "allowPrivilegeEscalation" in header
-    assert "runAsNonRoot" in header
+    # The pods read are named, and so is what was turned off and what the
+    # cluster said about the pods that Helm does not render.
+    assert "observability: restricted" in header
+    for pod in ("tempo", "otel-collector", "loki", "grafana", "kube-state-metrics"):
+        assert pod in header, pod
     assert "node-exporter" in header
     assert "Prometheus" in header and "operator" in header
+    assert "server-side dry run" in header
+    assert "warned about the collector and Tempo only" in header
     # Said in the file, not only in a test: nothing enforces, and why.
     assert "never enforce" in header
+
+
+def test_the_namespaces_header_says_what_audit_and_warn_do_on_kind() -> None:
+    header = header_of(NAMESPACES_FILE)
+
+    # `audit` records nothing: no API server audit policy is configured, and the
+    # cluster's own configuration holds none (the grep is the evidence).
+    assert "audit records nothing on kind" in header
+    cluster = (KIND_DIR / "cluster.yaml").read_text(encoding="utf-8").lower()
+    assert "audit" not in cluster and "admission" not in cluster
+    # `warn` reaches the client that creates a workload; a controller drops it.
+    assert "warn reaches" in header and "controller drops it" in header
+    # Two namespaces carry neither labels nor a policy, as a stated gap.
+    assert "cnpg-system" in header and "envoy-gateway-system" in header
+    assert "neither labels nor a NetworkPolicy" in header
 
 
 # ── node-exporter is off on kind ─────────────────────────────────────────────
@@ -203,15 +218,20 @@ def test_cert_manager_denies_ingress_and_egress_and_names_what_it_allows() -> No
     deny_all_ingress(policies["default-deny-ingress"], "cert-manager")
     # Egress: every pod of the namespace may reach DNS and the API server, and
     # nothing else. The API server is the kind node itself, at an address that
-    # changes with every cluster, so its rule names the port (6443, the node's own
-    # port; the policy sees the address after the Service's translation) and no
-    # peer, as the database's policy does.
+    # changes with every cluster, so the file holds a placeholder (not a CIDR)
+    # for it, on 6443 (the node's own port; the policy sees the address after
+    # the Service's translation), and `make up` fills the address in, as it does
+    # the database's policy (test_kind_cert_manager_policy_address.py).
     egress = policies["egress"]
     assert egress["metadata"]["namespace"] == "cert-manager"
     assert egress["spec"]["podSelector"] == {}
     assert egress["spec"]["policyTypes"] == ["Egress"]
-    assert egress["spec"]["egress"] == [dns_rule(), {"ports": tcp(6443)}]
+    assert egress["spec"]["egress"] == [
+        dns_rule(),
+        {"to": [{"ipBlock": {"cidr": "API-SERVER-ADDRESS/32"}}], "ports": tcp(6443)},
+    ]
     assert {} not in egress["spec"]["egress"]  # an empty rule allows everything
+    assert [r for r in egress["spec"]["egress"] if "to" not in r] == []
 
 
 def test_the_api_server_reaches_both_webhooks_and_prometheus_the_metrics() -> None:
@@ -263,7 +283,7 @@ def test_cert_manager_rules_name_a_peer_and_a_port_but_the_webhooks() -> None:
             assert rule["ports"], name  # a rule with no port allows every port
     header = header_of(CERT_MANAGER_FILE)
     assert "10250" in header and "any pod" in header
-    assert "6443" in header and "no address" in header
+    assert "6443" in header and "no address" not in header
     assert "9402" in header
 
 
@@ -298,6 +318,27 @@ def test_observability_denies_ingress_leaves_egress_open_and_says_so() -> None:
     assert "Egress is open" in header
     assert "kubelet" in header and "API server" in header
     assert "4317" in header  # and what no longer reaches the collector
+
+
+def test_the_observability_header_says_4317_is_closed_not_that_it_is_coming() -> None:
+    header = header_of(OBSERVABILITY_FILE)
+
+    assert "4317, is closed in this branch" in header
+    assert "is listening" not in header
+    assert "a later change closes" not in header
+    # The receiver and its port are gone from the collector's values too.
+    values = yaml.safe_load((VALUES / "otel-collector.yaml").read_text("utf-8"))
+    assert values["config"]["receivers"]["otlp"]["protocols"]["grpc"] is None
+    assert values["ports"]["otlp"] == {"enabled": False}
+
+
+def test_the_header_says_what_the_operators_webhook_port_reaches() -> None:
+    header = header_of(OBSERVABILITY_FILE)
+
+    assert "answers anyone" in header
+    assert "forged review" in header and "read the verdict" in header
+    assert "fails open" in header
+    assert "nobody has measured it" in header
 
 
 def test_only_the_pods_of_meridian_may_push_to_the_collector_and_only_on_4318() -> None:
@@ -597,8 +638,20 @@ def test_up_applies_each_policy_after_the_namespaces_and_before_any_release() ->
         for name in ("cert-manager", "approver-policy", "kube-prometheus-stack")
     }
 
+    # cert-manager's file holds the API server's address as a placeholder, so it
+    # is applied through `apply_api_server_policy`, as the database's is.
+    (cert_manager,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith('apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}"')
+    ]
+    assert namespaces < cert_manager < first_release
+    assert lines[cert_manager - 1].startswith("log ")
+    assert cert_manager < releases["cert-manager"]
+    assert cert_manager < releases["approver-policy"]
+    assert CERT_MANAGER_FILE.is_file()
+
     for manifest, guards in (
-        ("cert-manager-networkpolicy.yaml", ("cert-manager", "approver-policy")),
         ("observability-networkpolicy.yaml", ("kube-prometheus-stack",)),
         ("smoke-networkpolicy.yaml", ()),
     ):
@@ -634,10 +687,20 @@ def test_the_readme_says_what_stays_open_and_that_node_exporter_is_off() -> None
         "cert-manager-networkpolicy.yaml",
         "observability-networkpolicy.yaml",
         "smoke-networkpolicy.yaml",
-        "baseline",
+        "| `observability` | `restricted` |",
         "tested without a cluster",
     ):
         assert words in kind, words
+    # The label moved to restricted (S063, FB): no row says baseline any more.
+    assert "| `observability` | `baseline` |" not in kind
+    # What the labels do on kind, and what has none, as the namespaces file says.
+    assert "`audit` records nothing" in kind
+    assert "carry neither labels nor a NetworkPolicy" in kind
+    # The collector's tag is the one pin that is not its chart's default.
+    assert "except the collector's" in kind and "0.161.0" in kind
+    # Egress to the API server: its address alone, not "DNS and the API server".
+    assert "TCP 6443 to the API server's address alone" in kind
+    assert "answer anyone" in kind and "forged review" in kind
     assert "node-exporter is off" in kind
     assert "no data on kind" in kind
     assert "4317 is admitted from no namespace" in kind

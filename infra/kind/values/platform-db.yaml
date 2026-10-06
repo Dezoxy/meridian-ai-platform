@@ -129,19 +129,25 @@ cluster:
     # The chart's seed Job (S063, migration 0022): the policy tables and nothing
     # else, in place of the owner's rights over every schema. Its Secret is read
     # by that Job alone. Plain login role, a member of no role, as the migration
-    # checks, and no connection limit (a Job holds one connection at a time; a
-    # bound is left out until a reason for one is shown).
+    # checks. One Job pod runs at a time and opens one connection, so 2 is one in
+    # use and one spare, as the upkeep role's: a leaked credential cannot take
+    # more than two of the services' shared hundred. It is a bound, not a
+    # defence (a session may still sit in an open transaction).
     - name: policy_seed
       ensure: present
       login: true
+      connectionLimit: 2
       passwordSecret:
         name: policy-seed-db
     # The chart's ingestion Job (S063, migration 0022): the knowledge chunks and
     # one insert-only row of the audit log. Its Secret is read by that Job alone.
-    # The same shape as policy_seed, for the same reason.
+    # The same shape as policy_seed, for the same reason (the database review
+    # of S063 read that it opens its connection before the gateway calls and
+    # runs no SQL until the corpus is replaced: idle, not in a transaction).
     - name: knowledge_ingest
       ensure: present
       login: true
+      connectionLimit: 2
       passwordSecret:
         name: knowledge-ingest-db
 

@@ -21,20 +21,40 @@
 #   cert-manager:  restricted. The five pods of cert-manager v1.21.2 and
 #                  approver-policy v0.28.0 (controller, cainjector, webhook,
 #                  the startup check Job, approver-policy) meet it as rendered.
-#   observability: baseline. Two pods stop `restricted`, each by name: `tempo`
-#                  (its container sets no allowPrivilegeEscalation: false, no
+#   observability: restricted. The pods read as `helm template` renders them
+#                  are tempo, otel-collector, loki, grafana, kube-state-metrics
+#                  and the Prometheus operator. Two of them stopped
+#                  `restricted` until the same step: `tempo` (its container
+#                  set no allowPrivilegeEscalation: false, no
 #                  capabilities.drop: [ALL] and no seccompProfile) and
-#                  `otel-collector` (the same three, and no runAsNonRoot). Both
-#                  are a matter of their values files, not of this one. The
-#                  pods the Prometheus operator makes for the Prometheus
-#                  resource are not rendered by Helm and were not read; the
-#                  resource sets runAsNonRoot and seccompProfile RuntimeDefault
-#                  for them. node-exporter would have held the namespace at
+#                  `otel-collector` (the same three, and no runAsNonRoot); their
+#                  values files (values/tempo.yaml, values/otel-collector.yaml)
+#                  now set those fields. The pods the Prometheus operator makes
+#                  for the Prometheus resource are not rendered by Helm and
+#                  were not read; on the running cluster the server-side dry
+#                  run of enforce=restricted on this namespace (2026-10-06,
+#                  after the first policies) warned about the collector and
+#                  Tempo only, so the operator's Prometheus pods met
+#                  `restricted`. The main
+#                  session repeats that dry run after a `make up` with these
+#                  values, and until it has, the level is tested without a
+#                  cluster. node-exporter would have held the namespace at
 #                  `privileged`: it uses the node's network and PID namespaces
 #                  and mounts /proc and /sys from the host. It is turned off on
 #                  kind (values/kube-prometheus-stack.yaml), because no alert
 #                  rule and no dashboard of this repository reads a series of
 #                  it, and a label that says `privileged` says nothing.
+#
+# What the two labels do on kind, and what has none. The label audit records
+# nothing on kind: no API server audit policy is configured (cluster.yaml sets
+# none), so a pod above the level leaves no trace there. The label warn reaches
+# the client that creates a workload (kubectl, helm); a pod made by a
+# controller (a Deployment's ReplicaSet, the operators) is warned about in a
+# response no one reads, and the controller drops it. Nothing stops a
+# privileged pod or one on
+# the node's network. cnpg-system and envoy-gateway-system carry neither labels
+# nor a NetworkPolicy: the CloudNativePG operator, which holds the widest rights
+# on the cluster, and Envoy Gateway's controller and proxy are outside both.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -58,8 +78,8 @@ kind: Namespace
 metadata:
   name: observability
   labels:
-    pod-security.kubernetes.io/warn: baseline
-    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
 ---
 apiVersion: v1
 kind: Namespace

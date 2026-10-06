@@ -283,6 +283,94 @@ def test_a_scheme_in_capitals_is_still_https() -> None:
         require_otlp_ca(environ)
 
 
+# The SDK gives these precedence over the generic endpoint and certificate, so
+# a service that set one would send somewhere, or trust something, that the
+# check above did not look at. Nothing sets them; the check refuses them.
+PER_SIGNAL_NAMES = (
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+    "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+)
+CANARY = "canary-value-that-must-not-be-printed"
+NOT_SUPPORTED = (
+    "not supported: set OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_CERTIFICATE"
+)
+
+
+@pytest.mark.parametrize("name", PER_SIGNAL_NAMES)
+def test_a_per_signal_variable_is_refused_by_name_and_never_by_value(
+    authorities: tuple[CertificateAuthority, CertificateAuthority, KeyPair],
+    name: str,
+) -> None:
+    environ = {
+        OTLP_ENDPOINT_ENV: HTTPS_ENDPOINT,
+        OTLP_CERTIFICATE_ENV: str(authorities[0].ca_file),
+        name: CANARY,
+    }
+
+    with pytest.raises(SettingsError, match=name) as refused:
+        require_otlp_ca(environ)
+
+    assert NOT_SUPPORTED in str(refused.value)
+    assert CANARY not in str(refused.value)
+
+
+@pytest.mark.parametrize("name", PER_SIGNAL_NAMES)
+@pytest.mark.parametrize("endpoint", [HTTP_ENDPOINT, HTTPS_ENDPOINT])
+def test_a_per_signal_variable_is_refused_whatever_the_generic_endpoint_is(
+    name: str, endpoint: str
+) -> None:
+    environ = {OTLP_ENDPOINT_ENV: endpoint, name: CANARY}
+
+    with pytest.raises(SettingsError, match=name):
+        require_otlp_ca(environ)
+
+
+@pytest.mark.parametrize("name", PER_SIGNAL_NAMES)
+def test_an_empty_per_signal_variable_is_as_good_as_none(name: str) -> None:
+    # The SDK reads an empty one as unset (`os.environ.get(...)` in a condition),
+    # so it changes nothing and is not refused.
+    environ = {OTLP_ENDPOINT_ENV: HTTP_ENDPOINT, name: ""}
+
+    require_otlp_ca(environ)  # raises nothing
+
+
+@pytest.mark.parametrize("name", PER_SIGNAL_NAMES)
+def test_the_tracer_provider_refuses_a_per_signal_variable(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv(OTLP_ENDPOINT_ENV, HTTP_ENDPOINT)
+    monkeypatch.setenv(name, CANARY)
+
+    with pytest.raises(SettingsError, match=name):
+        make_tracer_provider("claims-api")
+
+
+@pytest.mark.parametrize("name", PER_SIGNAL_NAMES)
+def test_the_meter_provider_refuses_a_per_signal_variable(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv(OTLP_ENDPOINT_ENV, HTTP_ENDPOINT)
+    monkeypatch.setenv(name, CANARY)
+
+    with pytest.raises(SettingsError, match=name):
+        make_meter_provider("model-gateway")
+
+
+def test_the_other_variables_the_sdk_reads_are_not_refused() -> None:
+    # Only the endpoint and the certificate decide where spans and metrics go and
+    # whom they trust; the protocol, the client certificate and the like are not
+    # refused here.
+    environ = {
+        OTLP_ENDPOINT_ENV: HTTP_ENDPOINT,
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "gzip",
+    }
+
+    require_otlp_ca(environ)  # raises nothing
+
+
 def test_an_injected_exporter_is_not_checked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

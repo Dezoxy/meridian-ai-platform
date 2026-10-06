@@ -33,6 +33,15 @@ OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
 # The CA file the OTLP exporters trust, read by the SDK itself; the chart sets it
 # to the collector's authority (S063, T-90), never to the service CA.
 OTLP_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CERTIFICATE"
+# The SDK gives these precedence over the two above (an empty one counts as
+# unset), so one would send the spans and metrics somewhere, or trust something,
+# that the start-up check does not look at. Nothing sets them: they are refused.
+OTLP_PER_SIGNAL_ENVS = (
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+    "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+)
 HTTP_SERVER_ERROR = 500
 
 # The only attribute keys our code may set on a span: identifiers, never
@@ -127,7 +136,18 @@ def require_otlp_ca(environ: Mapping[str, str] = os.environ) -> None:
     collector's authority, and every export would fail after the service had
     started. The message names the variable and never the path or the file's
     content. An endpoint that is not ``https`` (or no endpoint) needs no file.
+
+    A per-signal endpoint or certificate variable (``OTLP_PER_SIGNAL_ENVS``) is
+    refused first, whatever the generic endpoint is: the SDK would read it
+    before the generic one, so what is checked here would not be what is used.
+    The message names the variable and never its value.
     """
+    for name in OTLP_PER_SIGNAL_ENVS:
+        if environ.get(name):
+            raise SettingsError(
+                f"{name} is not supported: set {OTLP_ENDPOINT_ENV} and "
+                f"{OTLP_CERTIFICATE_ENV}"
+            )
     if not environ.get(OTLP_ENDPOINT_ENV, "").lower().startswith("https://"):
         return
     path = environ.get(OTLP_CERTIFICATE_ENV)

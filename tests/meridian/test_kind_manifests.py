@@ -937,7 +937,8 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     limits = {
         r["name"]: r["connectionLimit"]
         for r in PLATFORM_DB["cluster"]["roles"]
-        if "connectionLimit" in r and r["name"] not in (SWEEP_ROLE, UPKEEP_ROLE)
+        if "connectionLimit" in r
+        and r["name"] not in (SWEEP_ROLE, UPKEEP_ROLE, SEED_ROLE, INGEST_ROLE)
     }
 
     # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one
@@ -975,7 +976,7 @@ def test_the_sweep_role_is_in_both_pg_hba_lines_of_the_meridian_roles() -> None:
 
 
 @pytest.mark.parametrize("role", [SEED_ROLE, INGEST_ROLE])
-def test_a_job_role_is_in_both_pg_hba_lines_and_carries_no_connection_limit(
+def test_a_job_role_is_in_both_pg_hba_lines_and_carries_a_connection_limit_of_two(
     role: str,
 ) -> None:
     rules = PLATFORM_DB["cluster"]["postgresql"]["pg_hba"]
@@ -987,9 +988,10 @@ def test_a_job_role_is_in_both_pg_hba_lines_and_carries_no_connection_limit(
 
     assert role in accept.split()[2].split(",")
     assert role in refuse.split()[2].split(",")
-    # No limit, as the owner's Jobs had none: S063 gives these two roles no bound
-    # until a reason for one is shown (the sweep's and the upkeep's have one).
-    assert "connectionLimit" not in declared
+    # Two, as the upkeep role has: one Job pod runs at a time and opens one
+    # connection, so a leaked credential cannot take more than two of the
+    # services' shared hundred (the reviews of S063, all three).
+    assert declared["connectionLimit"] == 2
 
 
 def test_the_meridian_database_is_owned_by_the_owner_role_and_keeps_app() -> None:
@@ -1204,13 +1206,13 @@ def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() 
         "observability",
         "meridian",
     }
-    # The level each namespace's pods meet as rendered (S063): observability's
-    # are baseline, because tempo and the collector do not meet restricted (the
-    # namespaces file's header names what each lacks).
+    # The level each namespace's pods meet as rendered (S063): all three meet
+    # restricted since the values of tempo and the collector set the fields
+    # that `restricted` asks for (test_kind_observability_security_context.py).
     levels = {
         "meridian": "restricted",
         "cert-manager": "restricted",
-        "observability": "baseline",
+        "observability": "restricted",
     }
     for name, level in levels.items():
         labels = namespaces[name]["metadata"].get("labels", {})
@@ -1243,9 +1245,13 @@ def test_up_applies_the_database_policy_before_the_database_is_installed() -> No
     (namespaces,) = [
         i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
     ]
-    # Since S063 the file is applied through `apply_database_policy`, with the
+    # Since S063 the file is applied through `apply_api_server_policy`, with the
     # API server's address (test_kind_database_policy_address.py).
-    (applied,) = [i for i, line in enumerate(lines) if line == "apply_database_policy"]
+    (applied,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith('apply_api_server_policy "${DATABASE_POLICY_FILE}"')
+    ]
     (operator,) = [
         i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
     ]

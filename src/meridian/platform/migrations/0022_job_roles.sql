@@ -8,10 +8,29 @@
 -- repository), and must exist before this runs; the file also refuses a role
 -- that is a superuser or holds BYPASSRLS, CREATEROLE, CREATEDB or REPLICATION,
 -- or is a member of any role (a membership such as pg_write_all_data would give
--- it the table rights this file says it lacks). The form is 0020's, which
+-- it the table rights this file says it lacks), or owns an object (an owner may
+-- grant on, alter and drop what it owns, whatever this file grants: the check
+-- reads pg_shdepend). The form is 0020's, which
 -- checks the owner and the attributes; 0014 and 0004 checked only that the role
 -- exists. The file only grants: it adds no table, column, function, trigger or
 -- row, changes no existing grant and deletes nothing.
+--
+-- What the guard cannot see: a role granted to one of these roles after the
+-- file ran (a GRANT of pg_write_all_data to policy_seed, say, which nothing in
+-- the database refuses and which, the role being a plain login role that
+-- inherits, takes effect at once). The control is that
+-- infra/kind/values/platform-db.yaml never sets `inRoles` for either role: a
+-- change that adds one is a change to that file, and its review is where it is
+-- caught.
+--
+-- To undo these grants, a next file (there is no down migration; an applied
+-- file never changes) holds these statements, which the test of this file runs
+-- and finds that they take back every right granted here:
+--   REVOKE ALL ON policy.policies, policy.claim_history FROM policy_seed;
+--   REVOKE USAGE ON SCHEMA policy FROM policy_seed;
+--   REVOKE ALL ON knowledge.chunks, audit.events FROM knowledge_ingest;
+--   REVOKE USAGE ON SCHEMA knowledge, audit FROM knowledge_ingest;
+-- Rolling the chart back and keeping the grants is safe: they only add.
 --
 -- Why. The chart's seed Job and ingestion Job ran as the owner, with the rights
 -- over every schema and the power to drop the triggers that keep the audit
@@ -31,7 +50,11 @@
 --   INSERT   the upsert's insert.
 --   UPDATE   the columns the SET names and no other, so not the key
 --            (policy_number of policies, history_id of claim_history): the
---            seed cannot rename a row.
+--            key column is not updatable. That is not a guarantee that a row
+--            keeps its name: with DELETE and INSERT a delete and an insert
+--            still replace a row. The test of this file holds that the columns
+--            granted are the ones the seed's two upserts set, in both
+--            directions.
 --   DELETE   the mirror: what the source no longer lists is removed.
 -- The foreign key from claim_history to policies is checked with the owner's
 -- rights, so it needs no grant. No TRUNCATE, REFERENCES or TRIGGER, nothing on
@@ -53,9 +76,9 @@
 -- text: that is the process's work and not the database's, and the role is why
 -- a flaw there can reach one table and append to one log, no more.
 --
--- Neither role gets a connection limit here: that is the cluster's setting
--- (infra/kind/values/platform-db.yaml), and a Job holds one connection at a
--- time.
+-- A connection limit is not set here: it is the cluster's setting, and
+-- infra/kind/values/platform-db.yaml gives each role a connection limit of 2
+-- (a Job pod holds one connection at a time, so one in use and one spare).
 --
 -- Lock. The file takes no lock a reader notices: a GRANT, of a table's columns
 -- too, changes the access list in the catalog and takes no relation lock, and
@@ -93,7 +116,13 @@ BEGIN
             CASE WHEN r.rolreplication THEN 'REPLICATION' END,
             CASE WHEN EXISTS (
                 SELECT 1 FROM pg_auth_members AS m WHERE m.member = r.oid
-            ) THEN 'membership of another role' END
+            ) THEN 'membership of another role' END,
+            CASE WHEN EXISTS (
+                SELECT 1 FROM pg_shdepend AS d
+                WHERE d.refclassid = 'pg_authid'::regclass
+                    AND d.refobjid = r.oid
+                    AND d.deptype = 'o'
+            ) THEN 'an owned object' END
         ], NULL)
         INTO excess
         FROM pg_roles AS r
@@ -104,7 +133,7 @@ BEGIN
                 required_role;
         ELSIF cardinality(excess) > 0 THEN
             RAISE EXCEPTION
-                'role % must not hold % (a plain login role, a member of no role)',
+                'role % must not hold % (a plain login role: a member of no role, owning no object)',
                 required_role, array_to_string(excess, ', ');
         END IF;
     END LOOP;

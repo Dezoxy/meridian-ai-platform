@@ -31,10 +31,13 @@
 # untouched. The authority's private key is the Secret `telemetry-ca` in
 # `observability`: no Meridian pod and no Role in `meridian` can read it. It is
 # readable by whatever holds a read of Secrets in `observability` or
-# cluster-wide: cert-manager's controller, and in the rendered
-# kube-prometheus-stack chart Prometheus's operator and kube-state-metrics.
-# Whoever reads it can issue a certificate for the collector's name, and so can
-# intercept the services' telemetry.
+# cluster-wide: cert-manager's controller and its cainjector, the CloudNativePG
+# operator, and in the rendered kube-prometheus-stack chart Prometheus's
+# operator (kube-state-metrics no longer does: its collector for Secrets is
+# excluded, values/kube-prometheus-stack.yaml). The two operators can also
+# write Secrets cluster-wide, so each can overwrite the authority's Secret, not
+# only read it. Whoever reads the key can issue a certificate for the
+# collector's name, and so can intercept the services' telemetry.
 #
 # Who can ask for a certificate: approver-policy decides, by the policies
 # `telemetry-ca` and `otel-collector` in certificate-policy.yaml, each of which

@@ -148,6 +148,12 @@ def run_bash(
 # ── up.sh: the policy is applied with the address ────────────────────────────
 
 
+# The line of up.sh that applies the database's policy: one function serves this
+# file and cert-manager's (test_kind_cert_manager_policy_address.py), and each
+# call names its file and whose policy it is.
+DATABASE_CALL = 'apply_api_server_policy "${DATABASE_POLICY_FILE}" "the database\'s"'
+
+
 def up_parts() -> list[str]:
     return [
         *re.findall(
@@ -155,9 +161,9 @@ def up_parts() -> list[str]:
             UP_SH,
             re.M,
         ),
-        function_definition(UP_SH, "database_policy_manifest"),
-        function_definition(UP_SH, "apply_database_policy"),
-        "apply_database_policy",
+        function_definition(UP_SH, "api_server_policy_manifest"),
+        function_definition(UP_SH, "apply_api_server_policy"),
+        DATABASE_CALL,
     ]
 
 
@@ -360,7 +366,7 @@ def test_up_applies_the_database_policy_on_every_run_before_the_database() -> No
     (namespaces,) = [
         i for i, line in enumerate(lines) if "manifests/namespaces.yaml" in line
     ]
-    (applied,) = [i for i, line in enumerate(lines) if line == "apply_database_policy"]
+    (applied,) = [i for i, line in enumerate(lines) if line == DATABASE_CALL]
     (operator,) = [
         i for i, line in enumerate(lines) if line.startswith("install_release cnpg ")
     ]
@@ -381,7 +387,7 @@ def test_up_applies_the_database_policy_on_every_run_before_the_database() -> No
         line for line in lines if "manifests/platform-db-networkpolicy.yaml" in line
     ]
     assert path_lines.startswith("readonly DATABASE_POLICY_FILE=")
-    body = function_body(UP_SH, "apply_database_policy")
+    body = function_body(UP_SH, "apply_api_server_policy")
     assert "apply --server-side --force-conflicts -f -" in body
     assert 'kctl apply --server-side --force-conflicts -f "' not in body
 

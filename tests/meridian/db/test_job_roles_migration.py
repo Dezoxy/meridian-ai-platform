@@ -5,6 +5,7 @@ in the list: the number is provisional until the pull request merges, and the
 file is the last only until another one lands after it.
 """
 
+import re
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -27,6 +28,7 @@ from sweepmigrationsupport import INSUFFICIENT_PRIVILEGE, privileges, run
 from meridian.platform.common.db import connect
 from meridian.platform.migrations import runner
 from meridian.platform.migrations.runner import migration_files
+from meridian.platform.policy_mcp.seed import UPSERT_HISTORY, UPSERT_POLICY
 
 SUFFIX = "_job_roles.sql"
 ROLE_CHECK = "ARRAY['policy_seed', 'knowledge_ingest']"
@@ -185,6 +187,28 @@ def probe_role(
             admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
 
 
+@contextmanager
+def owned_table(db: DatabaseHandle, owner: str) -> Iterator[str]:
+    """A table in ``public`` of the test database that ``owner`` owns; dropped
+    when the block ends. Done as the administrator, in the test database itself:
+    ``public`` exists before any migration, and an object is owned in one
+    database only, so it must go before the role can be dropped."""
+    name = f"public.owned_by_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(
+        make_conninfo(db.admin_dsn, dbname=db.name), autocommit=True
+    ) as admin:
+        admin.execute(sql.SQL("CREATE TABLE {} (x int)").format(sql.SQL(name)))
+        try:
+            admin.execute(
+                sql.SQL("ALTER TABLE {} OWNER TO {}").format(
+                    sql.SQL(name), sql.Identifier(owner)
+                )
+            )
+            yield name
+        finally:
+            admin.execute(sql.SQL("DROP TABLE {}").format(sql.SQL(name)))
+
+
 def checks_naming(probe: str, at: int) -> str:
     """The role check with ``probe`` in the place of the role at ``at``."""
     roles = ["policy_seed", "knowledge_ingest"]
@@ -258,6 +282,25 @@ def test_a_role_with_more_than_a_plain_login_is_refused_and_nothing_is_granted(
 
 
 @pytest.mark.parametrize("at", [0, 1], ids=["seed", "ingest"])
+def test_a_role_that_owns_an_object_is_refused_and_nothing_is_granted(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, at: int
+) -> None:
+    # A role that owns a table may grant on it, drop it and change its triggers,
+    # whatever this file grants: the check refuses it (the database review).
+    with (
+        probe_role(empty_database, "") as probe,
+        owned_table(empty_database, probe),
+        pytest.raises(psycopg.Error) as caught,
+    ):
+        apply_with_role_check(empty_database, monkeypatch, checks_naming(probe, at))
+
+    message = caught.value.diag.message_primary or ""
+    assert f"role {probe} must not hold" in message
+    assert "an owned object" in message
+    assert_nothing_was_granted(empty_database)
+
+
+@pytest.mark.parametrize("at", [0, 1], ids=["seed", "ingest"])
 def test_a_plain_role_passes_the_role_check(
     empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, at: int
 ) -> None:
@@ -265,6 +308,20 @@ def test_a_plain_role_passes_the_role_check(
     # of the attributes goes through, so a refusal is about the attribute.
     with probe_role(empty_database, "") as probe:
         apply_with_role_check(empty_database, monkeypatch, checks_naming(probe, at))
+
+
+@pytest.mark.parametrize("at", [0, 1], ids=["seed", "ingest"])
+def test_a_role_that_owns_nothing_passes_beside_one_that_owns_a_table(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, at: int
+) -> None:
+    # The ownership check is about the role it is given: another role's table in
+    # the same database does not make a plain role fail.
+    with (
+        probe_role(empty_database, "") as plain,
+        probe_role(empty_database, "") as owner,
+        owned_table(empty_database, owner),
+    ):
+        apply_with_role_check(empty_database, monkeypatch, checks_naming(plain, at))
 
 
 @pytest.mark.parametrize("role", JOB_ROLES)
@@ -275,12 +332,15 @@ def test_a_role_as_the_tests_and_the_cluster_make_it_has_no_attribute_of_note(
         migrated_database,
         OWNER,
         "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, "
-        "(SELECT count(*) FROM pg_auth_members m WHERE m.member = r.oid) "
+        "(SELECT count(*) FROM pg_auth_members m WHERE m.member = r.oid), "
+        "(SELECT count(*) FROM pg_shdepend d "
+        "WHERE d.refclassid = 'pg_authid'::regclass "
+        "AND d.refobjid = r.oid AND d.deptype = 'o') "
         "FROM pg_roles r WHERE rolname = %s",
         (role,),
     )
 
-    assert rows == [(False, False, False, False, False, 0)]
+    assert rows == [(False, False, False, False, False, 0, 0)]
 
 
 def test_a_migration_run_by_a_superuser_is_refused_and_grants_nothing(
@@ -377,6 +437,43 @@ def test_each_role_holds_exactly_the_grants_of_the_contract(
     held = privileges(migrated_database, role)
 
     assert held == HOLDS[role], (held - HOLDS[role], HOLDS[role] - held)
+
+
+def set_columns(statement: str) -> frozenset[str]:
+    """The columns an upsert's ``DO UPDATE SET`` names: ``col = EXCLUDED.col``."""
+    return frozenset(re.findall(r"(\w+) = EXCLUDED", statement))
+
+
+def test_the_set_reader_finds_every_column_of_an_upsert_and_nothing_else() -> None:
+    statement = "ON CONFLICT (k) DO UPDATE SET\n    a = EXCLUDED.a,\n    b = EXCLUDED.b"
+
+    assert set_columns(statement) == {"a", "b"}
+    assert set_columns("INSERT INTO t (k, a) VALUES (1, 2)") == frozenset()
+
+
+def test_the_update_grants_are_the_columns_the_seeds_upserts_set_and_no_others(
+    migrated_database: DatabaseHandle,
+) -> None:
+    held = privileges(migrated_database, SEED_ROLE)
+
+    updatable = {
+        table: frozenset(
+            column
+            for kind, name, privilege, column in held
+            if kind == "column" and privilege == "UPDATE" and name == table
+        )
+        for table in ("policy.policies", "policy.claim_history")
+    }
+
+    # The source of truth is the seed's own statements, not this file's lists:
+    # a column granted that no upsert sets, or set that is not granted, differs.
+    assert updatable == {
+        "policy.policies": set_columns(UPSERT_POLICY),
+        "policy.claim_history": set_columns(UPSERT_HISTORY),
+    }
+    assert all(updatable.values())
+    assert "policy_number" not in updatable["policy.policies"]
+    assert "history_id" not in updatable["policy.claim_history"]
 
 
 @pytest.mark.parametrize("role", JOB_ROLES)
@@ -485,7 +582,7 @@ def test_the_seed_cannot_touch_the_audit_log_or_the_knowledge_store(
         "UPDATE policy.claim_history SET history_id = 'HIST-9999'",
     ],
 )
-def test_the_seed_cannot_truncate_the_policy_tables_or_rename_a_row(
+def test_the_seed_cannot_truncate_the_policy_tables_or_update_a_key(
     migrated_database: DatabaseHandle, statement: str
 ) -> None:
     outcome = sqlstates(migrated_database, SEED_ROLE, [statement])
@@ -551,3 +648,55 @@ def test_an_audit_row_of_the_ingestion_names_its_role_whatever_it_sends(
         (marker,),
     )
     assert rows == [(INGEST_ROLE,)]
+
+
+# ── the header ──────────────────────────────────────────────────────────────
+def migration_text() -> str:
+    return dict(migration_files())[migration_name()]
+
+
+def header_text() -> str:
+    head = migration_text().split("DO $$")[0]
+    return " ".join(line.removeprefix("--").strip() for line in head.splitlines())
+
+
+def test_the_header_names_the_guards_ownership_check_and_what_it_cannot_see() -> None:
+    header = header_text()
+
+    assert "owns an object" in header
+    assert "cannot see" in header
+    assert "granted to one of these roles after the file ran" in header
+    assert "inRoles" in header
+    assert "infra/kind/values/platform-db.yaml" in header
+
+
+def test_the_header_says_what_is_true_of_the_key_columns() -> None:
+    header = header_text()
+
+    assert "cannot rename a row" not in header
+    assert "not updatable" in header
+    assert "a delete and an insert still replace a row" in header
+
+
+def test_the_header_says_the_cluster_sets_a_limit_of_two_connections() -> None:
+    header = header_text()
+
+    assert "Neither role gets a connection limit here" not in header
+    assert "connection limit of 2" in header
+    assert "platform-db.yaml" in header
+
+
+def test_the_undo_the_header_gives_takes_every_grant_back(
+    fresh_database: DatabaseHandle,
+) -> None:
+    statements = re.findall(r"REVOKE [^;]+;", header_text())
+
+    assert len(statements) == 4
+    assert {SEED_ROLE, INGEST_ROLE} == {s.split()[-1].rstrip(";") for s in statements}
+    assert all(privileges(fresh_database, role) for role in JOB_ROLES)
+    for statement in statements:
+        run(fresh_database, OWNER, statement)
+    assert [privileges(fresh_database, role) for role in JOB_ROLES] == [
+        frozenset(),
+        frozenset(),
+    ]

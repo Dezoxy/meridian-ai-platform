@@ -29,8 +29,9 @@ JOB_ROLES = {
     "knowledge_ingest": ("knowledge-ingest-db", "meridian-ingest"),
 }
 # What a managed role of the values file may say: no field that would give the
-# role an attribute or a membership, which the migration refuses.
-PLAIN_ROLE_FIELDS = {"name", "ensure", "login", "passwordSecret"}
+# role an attribute or a membership, which the migration refuses. The limit on
+# connections is the one field it may add (the gateway's upkeep role has it too).
+PLAIN_ROLE_FIELDS = {"name", "ensure", "login", "connectionLimit", "passwordSecret"}
 
 
 def declared(role: str) -> dict:
@@ -64,6 +65,33 @@ def test_a_job_role_is_declared_with_login_and_nothing_else(role: str) -> None:
     assert declaration["login"] is True
     assert declaration["ensure"] == "present"
     assert declaration["passwordSecret"] == {"name": secret}
+
+
+@pytest.mark.parametrize("role", JOB_ROLES)
+def test_a_job_role_may_hold_two_connections_and_no_more(role: str) -> None:
+    # One Job pod runs at a time and opens one connection; the limit is that one
+    # and a spare, as the upkeep role's is. A leaked credential cannot take more
+    # than two of the services' shared hundred.
+    limit = declared(role)["connectionLimit"]
+
+    assert limit == 2
+    assert limit == declared("gateway_upkeep")["connectionLimit"]
+
+
+@pytest.mark.parametrize("job", [name for _, name in JOB_ROLES.values()])
+def test_each_job_runs_one_pod_at_a_time_which_is_what_the_limit_assumes(
+    job: str,
+) -> None:
+    (rendered,) = [
+        d
+        for d in rendered_chart()
+        if d["kind"] == "Job" and d["metadata"]["name"].startswith(f"{job}-")
+    ]
+
+    # Neither field is set, so the Job runs one pod, and a retry (a new pod) only
+    # after the failed one has ended.
+    assert "parallelism" not in rendered["spec"]
+    assert "completions" not in rendered["spec"]
 
 
 @pytest.mark.parametrize("role", JOB_ROLES)
