@@ -5,6 +5,12 @@ description = "Enterprise agentic AI platform with a claims-triage reference wor
 license = "Apache-2.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    # Microsoft Agent Framework, the second agent framework (S037). Only
+    # meridian.runtime and meridian.workloads may import it, never
+    # meridian.platform (import-linter, ADR 2). Pinned at the version the S037
+    # spike measured (spikes/s037-agent-framework-host); it brings msgspec and
+    # python-dotenv and no provider SDK. Nothing imports it yet.
+    "agent-framework-core==1.19.0",
     "azure-identity==1.26.0",
     # Reads the dates of the service's own certificate (common/certlife.py) and
     # makes the test certificates (tests/meridian/tlssupport.py); already
@@ -100,6 +106,8 @@ forbidden_modules = [
     "langchain_mistralai",
     "langchain_aws",
     "langchain_anthropic",
+    # The second framework (S037): its package is agent_framework.
+    "agent_framework",
 ]
 
 [[tool.importlinter.contracts]]

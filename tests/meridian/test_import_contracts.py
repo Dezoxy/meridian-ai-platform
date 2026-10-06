@@ -117,6 +117,18 @@ def test_unmodified_copy_passes_with_at_least_one_kept_contract(
             "langchain_community",
             id="platform-imports-langchain-community",
         ),
+        # The second framework (S037): the dependency is the runtime's and the
+        # workloads', never the platform's.
+        pytest.param(
+            "import agent_framework\n",
+            "agent_framework",
+            id="platform-imports-the-agent-framework",
+        ),
+        pytest.param(
+            "from agent_framework import Executor\n",
+            "agent_framework",
+            id="platform-imports-a-name-from-the-agent-framework",
+        ),
         pytest.param(
             "import meridian.workloads\n",
             "meridian.workloads",

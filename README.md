@@ -160,7 +160,7 @@ scripts/            documentation checker, PDF and Mermaid tooling, Codex agent 
 spikes/             throwaway experiments (S005 a uv project of its own, S038 on the root environment); never deployed
 src/meridian/       the one Python package (src layout)
   platform/         shared platform services (gateway, registry, migrations, the tool-server kit, the policy tool server, the knowledge store with its ingestion, search and tool server) and the meridian CLI; never import the agent framework
-  runtime/          the Agent Runtime, which hosts LangGraph graphs; between workloads and platform
+  runtime/          the Agent Runtime, which hosts LangGraph graphs (a second framework, Microsoft Agent Framework, is a dependency since S037, used by nothing yet: designed, not implemented); between workloads and platform
   workloads/        use cases built on the platform contract: the Claims API, its triage graph and its claims tool server
 tests/              tests for the scripts and the bash guard
   meridian/         pytest tests for the package: import contracts, registry, services, tool servers, database, the walking skeleton, the Helm chart and the kind scripts, the workload scaffold
