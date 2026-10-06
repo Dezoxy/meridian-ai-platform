@@ -8,6 +8,7 @@ and its wait for the Certificates runs in bash against a stub ``kctl``.
 ``smoke.sh``'s checks are in ``test_certificate_smoke.py``.
 """
 
+import base64
 import json
 import os
 import re
@@ -30,15 +31,23 @@ def rate_store_secret_json() -> str:
     """What the stub answers `kubectl get secret rate-store-credentials -o json`
     with: both keys, non-empty, holding no real value (deploy.sh reads only the
     names), and the annotation that `make up` puts on the Secret it makes (the
-    hash of the ACL file's rules, which deploy.sh compares)."""
+    hash of the ACL file's rules, which deploy.sh compares, and so is the ACL
+    file's own hash)."""
     with tempfile.TemporaryDirectory() as directory:
         done, created, _ = run_ensure(Path(directory))
     assert done.returncode == 0, done.stderr
-    annotations = yaml.safe_load(created)["metadata"]["annotations"]
+    secret = yaml.safe_load(created)
+    # deploy.sh decodes users.acl and compares its hash with the one `make up`
+    # would write now, so the stub holds the ACL file `make up` makes (its
+    # password's hash is a throwaway of this run) and a placeholder address.
+    acl = secret["stringData"]["users.acl"]
     return json.dumps(
         {
-            "metadata": {"annotations": annotations},
-            "data": {"uri": "eA==", "users.acl": "eA=="},
+            "metadata": {"annotations": secret["metadata"]["annotations"]},
+            "data": {
+                "uri": "eA==",
+                "users.acl": base64.b64encode(acl.encode()).decode(),
+            },
         }
     )
 

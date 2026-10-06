@@ -39,8 +39,12 @@ the latter, uri, as an environment variable (services.yaml).
 The probes. Both run PING as the ACL user `probe` over TLS, with the store's own
 certificate, and pass only when the OUTPUT is PONG (meridian.rateStorePing). The
 user is in the credentials' users.acl (`make up` writes it): no password, no key,
-no channel and exactly +ping, so all it can do is ask, and only a client that
-holds a certificate of the services' CA and has a network path reaches it. The
+no channel and exactly +ping, so it may only run PING. That is not nothing: it has
+no password, so any client that passes the TLS client-certificate check (a
+certificate of the services' CA, which all six services hold) and has a network
+path to the port is an authenticated session of this user, and an authenticated
+session may fill its query buffer. What bounds that is the NetworkPolicy and
+maxmemory-clients (below), not the user. The
 output is read and not the exit status, because redis-cli exits 0 for NOAUTH and
 for BUSY alike. This is what notices a frozen store. A script that never ends
 makes the store answer BUSY to every client but the one that could stop it (the
@@ -152,6 +156,27 @@ redis.conf of the 8.10.2 source, which the pinned image is built from):
   1mb                     default is 1 GB; the same bound for what arrives
                           in pieces, so a client cannot hold a gigabyte of
                           half a command
+  maxmemory-clients 8mb   What every client's buffers (query and output) hold
+                          together: past it Redis disconnects the client with the
+                          most memory, the largest first, until the total is under
+                          it. client-query-buffer-limit and proto-max-bulk-len
+                          cannot go below 1 MB and bound one client; 256 clients
+                          (maxclients) at 1 MB each are 256 MB, four times the pod's
+                          limit, and a review killed the store (OOMKilled, exit
+                          137) with 240 authenticated connections that each held
+                          the head of a 1 MB SCRIPT LOAD, which the probe user
+                          allows any holder of a services certificate to open
+                          (above). With this line the same flood held the store
+                          between 13 and 27 MiB of the 64 (docker stats, two runs)
+                          and nothing died; Redis evicted 233 of the 240 flood
+                          connections (each held about 1 MB) and no client with a
+                          small buffer, and twenty calls of the gateway's own
+                          limiter during the flood were all answered. The
+                          gateway's pooled connections hold a few hundred bytes
+                          each, so they are far from the largest and are not the
+                          ones evicted. 8 MB is under maxmemory and far under the
+                          pod's limit, and far above what the gateway's 40
+                          connections a pod hold
   No directive bounds     a script that writes without end. The gateway's user
                           may load and run any script on the keys it may touch (the
                           ACL is checked per command and per key inside a script,
@@ -193,6 +218,7 @@ tcp-keepalive 60
 busy-reply-threshold 100
 proto-max-bulk-len 1mb
 client-query-buffer-limit 1mb
+maxmemory-clients 8mb
 enable-protected-configs no
 enable-debug-command no
 enable-module-command no
@@ -209,7 +235,14 @@ port are the script's arguments ($1 and $2), always in double quotes. The exit
 status of redis-cli is not read: it is 0 for an answer of NOAUTH (the user is
 missing or the ACL file is not the one `make up` writes) and of BUSY (a script
 that never ends) alike, and neither is a healthy store. A refused connection or a
-failed handshake prints nothing, which is not PONG either. `--pass ''` is there
+failed handshake prints nothing, which is not PONG either. `timeout 2` (busybox's,
+in the image) ends redis-cli after two seconds, inside the kubelet's three: a server
+that is paused or frozen below the protocol never answers, the kubelet fails the
+probe at its own timeout without ending what the probe started, and a client would
+be left behind for every probe (measured on the pinned image against a paused
+container: without it the script was still waiting when it was ended from outside
+after eight seconds, and a redis-cli stayed behind; with it the script printed its
+refusal after two seconds and left none). `--pass ''` is there
 because redis-cli sends no AUTH without one, and `nopass` accepts any password,
 so the pod's spec holds no credential; `--no-auth-warning` keeps the warning about
 a password on the command line out of the answer. The message names the answer,
@@ -217,7 +250,7 @@ which the kubelet records in the pod's events. Takes the root (it names no value
 of the chart: the script has no template expression).
 */ -}}
 {{- define "meridian.rateStorePing" -}}
-answer=$(redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping)
+answer=$(timeout 2 redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping)
 [ "$answer" = PONG ] || { echo "rate-store: the probe user's PING was answered '$answer', not PONG" >&2; exit 1; }
 {{- end -}}
 

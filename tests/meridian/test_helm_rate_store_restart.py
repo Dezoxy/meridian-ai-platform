@@ -98,7 +98,7 @@ def test_the_liveness_script_still_does_what_the_readiness_probe_does() -> None:
     script = liveness_script()
 
     assert (
-        "answer=$(redis-cli --tls"
+        "answer=$(timeout 2 redis-cli --tls"
         ' --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key"'
         " -h 127.0.0.1 -p \"$2\" --user probe --pass '' --no-auth-warning ping)"
     ) in script

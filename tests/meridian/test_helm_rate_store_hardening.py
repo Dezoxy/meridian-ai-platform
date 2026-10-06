@@ -39,7 +39,7 @@ from test_helm_rate_store_restart import (
 PROBE_USER = "probe"
 VARIABLE = "MERIDIAN_GATEWAY_RATE_STORE_URL"
 PONG_LINE = (
-    'answer=$(redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt"'
+    'answer=$(timeout 2 redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt"'
     ' --key "$1/tls.key" -h 127.0.0.1 -p "$2"'
     f" --user {PROBE_USER} --pass '' --no-auth-warning ping)"
 )
@@ -111,6 +111,70 @@ def test_the_readiness_probe_keeps_its_timings() -> None:
 
     assert probe["timeoutSeconds"] == 3
     assert probe["periodSeconds"] == 5
+
+
+@pytest.mark.parametrize("probe", ["readinessProbe", "livenessProbe"])
+def test_redis_cli_has_a_time_limit_of_its_own_inside_the_kubelets(probe: str) -> None:
+    script = command_of(probe)[2]
+    limit = store_container()[probe]["timeoutSeconds"]
+
+    # A frozen process (a paused or stopped server) never answers, and the
+    # kubelet's timeout fails the probe without ending what it started: a
+    # client would be left behind for every probe. busybox's `timeout SECONDS
+    # COMMAND` ends it first.
+    seconds = re.search(r"answer=\$\(timeout (\d+) redis-cli ", script)
+    assert seconds, script
+    assert 0 < int(seconds.group(1)) < limit
+    assert script.count("redis-cli") == 1
+
+
+def test_the_time_limit_wraps_redis_cli_and_nothing_else(tmp_path: Path) -> None:
+    shell = shutil.which("sh")
+    assert shell is not None
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    record = tmp_path / "timeout-arguments"
+    (bin_dir / "timeout").write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$1" "$2" > "$RECORD"\nshift\nexec "$@"\n'
+    )
+    (bin_dir / "timeout").chmod(0o755)
+    (bin_dir / "redis-cli").write_text('#!/bin/sh\nprintf "PONG\\n"\n')
+    (bin_dir / "redis-cli").chmod(0o755)
+    command = command_of("readinessProbe")
+
+    done = subprocess.run(
+        [shell, "-c", command[2], command[3], "/some/tls", "6379"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "RECORD": str(record)},
+    )
+
+    assert (done.returncode, done.stderr) == (0, "")
+    assert record.read_text().splitlines() == ["2", "redis-cli"]
+
+
+def test_a_redis_cli_that_the_time_limit_ended_is_not_ready(tmp_path: Path) -> None:
+    shell = shutil.which("sh")
+    assert shell is not None
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    # What busybox's `timeout` does to a client that does not answer: it ends
+    # it, and the command substitution is empty.
+    (bin_dir / "timeout").write_text("#!/bin/sh\nexit 143\n")
+    (bin_dir / "timeout").chmod(0o755)
+    command = command_of("readinessProbe")
+
+    done = subprocess.run(
+        [shell, "-c", command[2], command[3], "/some/tls", "6379"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert done.returncode == 1
+    assert "answered '', not PONG" in done.stderr
 
 
 def test_the_liveness_script_asks_for_the_pong_before_the_certificates_time() -> None:
@@ -246,6 +310,48 @@ def test_a_bulk_and_a_query_buffer_are_one_megabyte() -> None:
     # below what a 100 MB SCRIPT LOAD would put in memory.
     assert found["proto-max-bulk-len"] == "1mb"
     assert found["client-query-buffer-limit"] == "1mb"
+
+
+def megabytes(value: str) -> int:
+    assert value.endswith("mb"), value
+    return int(value.removesuffix("mb"))
+
+
+def test_every_clients_buffers_together_are_bounded_well_under_the_pod_limit() -> None:
+    found = directives()
+    limit = store_container()["resources"]["limits"]["memory"]
+
+    # 256 clients at the 1 MB each may hold is 256 MB, four pod limits: the
+    # flood of the third infra review killed the store with 240 of them.
+    assert "maxmemory-clients" in found
+    assert megabytes(found["maxmemory-clients"]) == 8
+    assert megabytes(found["maxmemory-clients"]) < megabytes(found["maxmemory"])
+    assert limit.endswith("Mi")
+    assert megabytes(found["maxmemory-clients"]) < int(limit.removesuffix("Mi"))
+
+
+def test_the_header_gives_the_reason_of_the_aggregate_bound() -> None:
+    flat = flat_header()
+
+    assert "maxmemory-clients" in flat
+    after = flat.split("maxmemory-clients", 1)[1]
+    # What it bounds, what it is for, and what the single-client limits cannot do.
+    assert "client-query-buffer-limit" in flat
+    assert "together" in after
+    assert "evict" in after
+    assert "1 MB" in after or "1mb" in after
+
+
+def test_the_header_no_longer_says_the_probe_user_can_only_ask() -> None:
+    flat = flat_header()
+
+    assert "all it can do is ask" not in flat
+    # It may only run PING, and its session is an authenticated one that any
+    # holder of a services certificate with a path to the port can open: what
+    # bounds that is the NetworkPolicy and the aggregate bound on the buffers.
+    assert "may only run PING" in flat
+    assert "authenticated" in flat
+    assert "NetworkPolicy and maxmemory-clients" in flat
 
 
 def test_the_header_gives_the_reasons_of_the_three_directives() -> None:

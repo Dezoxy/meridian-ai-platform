@@ -355,7 +355,11 @@
 #                   read or reset every tenant's window; a refusal and a name
 #                   that does not resolve (a store that is not deployed) are
 #                   FAIL lines, never "blocked", and so is a missing kind policy
-#                   (without it the timeout would be the sender's). The
+#                   (without it the timeout would be the sender's) and a kind policy
+#                   of the wrong shape (read from its JSON before any Pod starts:
+#                   it must select the probe label, list Egress and name the
+#                   store's pods on TCP 6379, or the timeout would again be the
+#                   sender's). The
 #                   control, as the database's line does it: the same Pod given
 #                   the label app.kubernetes.io/name=model-gateway, which the
 #                   gateway's own egress rule and the store's ingress rule
@@ -662,6 +666,9 @@ readonly NETWORK_RATE_STORE=rate-store.meridian.svc:6379
 # looks for it, because without it a timeout would be the sender's and the line
 # would pass with the store wide open.
 readonly NETWORK_RATE_STORE_POLICY=meridian-smoke-rate-store
+# The label of the store's pods, which that policy's rule must name, as the chart's
+# own do (the line also reads the policy's shape, not only that it exists).
+readonly NETWORK_RATE_STORE_LABEL=app.kubernetes.io/name=rate-store
 # The probe Pod: the sweep's name label (its policy reaches DNS and the database
 # and no Service or Deployment selects it), a sleep that ends on its own, and how
 # long to wait for it and for the network plugin to see the label added to it.
@@ -2723,17 +2730,44 @@ network_rate_store_lines() {
 # store's INGRESS rule: a probe Pod that kind's policy lets send to the store must
 # time out, and with the gateway's name label reach it. Without that policy a
 # timeout would be the sender's egress and the line would pass with the store open,
-# so a missing policy is a FAIL before any Pod starts. The probe is check 8's own
+# so a missing policy is a FAIL before any Pod starts, and so is one that exists
+# but does not give the probe pod egress to the store's pods on TCP 6379 (read
+# from its JSON: the selector, the policy type, the peer and the port). The probe is check 8's own
 # and its control, the caller's, has passed before this runs. The header says what
 # the line does not prove.
 check_network_rate_store() {
   local found
-  if ! found="$(kctl -n meridian get networkpolicy "${NETWORK_RATE_STORE_POLICY}" -o name --ignore-not-found)"; then
+  if ! found="$(kctl -n meridian get networkpolicy "${NETWORK_RATE_STORE_POLICY}" -o json --ignore-not-found)"; then
     fail "network policy: could not look for networkpolicy/${NETWORK_RATE_STORE_POLICY} in meridian (kubectl's error is above)"
     return
   fi
   if [[ -z "${found}" ]]; then
     fail "network policy: networkpolicy/${NETWORK_RATE_STORE_POLICY} does not exist in meridian: it gives the probe pod its egress to the rate store, so without it the pod has no egress to the rate store, a timeout would be the sender's and the line would pass with the store open (make up applies infra/kind/manifests/smoke-rate-store-networkpolicy.yaml)"
+    return
+  fi
+  # That it exists is not enough: a policy that selects another pod, names another
+  # peer, port or protocol, or does not list Egress leaves the probe pod without a
+  # path to the store, so the first attempt would time out at the sender, the
+  # control would reach through the gateway's own egress rule, and the line would
+  # PASS with the store's ingress unproven. The shape the line needs, from the
+  # manifest's own: exactly the probe pods selected by their label, Egress listed,
+  # and a rule whose peers include the store's pods of this namespace (a pod
+  # selector of that one label and neither a namespace selector nor an address
+  # block) on TCP 6379 (no ports at all is every port, and the API server may
+  # leave the protocol out for TCP).
+  if ! jq -e --arg smoke_key "${NETWORK_POD_SMOKE_LABEL%%=*}" --arg smoke_value "${NETWORK_POD_SMOKE_LABEL#*=}" \
+    --arg store_key "${NETWORK_RATE_STORE_LABEL%%=*}" --arg store_value "${NETWORK_RATE_STORE_LABEL#*=}" \
+    --argjson port "${NETWORK_RATE_STORE##*:}" '
+    (.spec.podSelector == {matchLabels: {($smoke_key): $smoke_value}})
+    and ((.spec.policyTypes // []) | index("Egress") != null)
+    and ([.spec.egress[]? | select(
+      ([.to[]? | select(
+        .podSelector == {matchLabels: {($store_key): $store_value}}
+        and (has("namespaceSelector") | not) and (has("ipBlock") | not))] | length) > 0
+      and (((.ports // []) | length) == 0
+        or ([.ports[] | select((.protocol // "TCP") == "TCP" and .port == $port)] | length) > 0)
+    )] | length) > 0' >/dev/null 2>&1 <<<"${found}"; then
+    fail "network policy: networkpolicy/${NETWORK_RATE_STORE_POLICY} exists but does not give the probe pod (the label ${NETWORK_POD_SMOKE_LABEL}) egress to the rate store's pods (${NETWORK_RATE_STORE_LABEL}) on TCP ${NETWORK_RATE_STORE##*:}: with another selector, peer, port, protocol or policy type the pod's packets are dropped at the sender, a timeout would not be the store's ingress rule, the control would still reach through the gateway's own egress rule, and the line would pass with the store's ingress unproven (delete the policy and run make up: it applies infra/kind/manifests/smoke-rate-store-networkpolicy.yaml)"
     return
   fi
   if network_start_pod; then

@@ -316,12 +316,18 @@ def test_the_rate_store_alert_counts_the_word_of_a_refusal_it_cannot_count() -> 
     assert refusals == {word} == {"rate-store-unavailable"}
     assert series_named(alert["expr"]) == {RECORDED}
     assert 'meridian_outcome="refused"' in alert["expr"]
-    assert alert["expr"].strip().endswith("> 0")
-    # In the gateway's group, with the severity of the failing-calls alert, for
-    # five minutes, and the store's runbook.
+    # A ratio and a count, as the failing-calls alert has them: one refused call
+    # (the seconds of a certificate renewal's restart) is neither. The delta
+    # holds a count for 15 minutes, so a bare "> 0" paged for one blip.
+    expression = " ".join(alert["expr"].split())
+    assert not expression.endswith("> 0")
+    assert re.search(r"> 0\.05 and sum\(.*\) >= 5$", expression), expression
+    assert 'meridian_outcome=~"completed|failed|refused"' in expression
+    # In the gateway's group, with the severity and the `for` of the failing-calls
+    # alert, and the store's runbook.
     assert alert in groups()["meridian.gateway"]
     assert alert["labels"]["severity"] == failing["labels"]["severity"]
-    assert alert["for"] == "5m"
+    assert alert["for"] == failing["for"] == "2m"
     assert alert["annotations"]["runbook_url"] == RUNBOOK_PREFIX + "rate-store.md"
     # No new group: the count of groups is the file's own.
     assert len(groups()) == 5

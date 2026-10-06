@@ -154,9 +154,14 @@ require_database() {
 # common.sh: the hash of the ACL's rules with the password's hash masked) is
 # missing or is not the one `make up` would write now: a Secret from before the
 # probes' user has no such user, and the store's probes would never pass, so the
-# pod would not be Ready and nothing but its restarts would say why. The rules
-# below are up.sh's, copied (a test holds the two equal); no value of the Secret
-# is read or printed, nor the annotation.
+# pod would not be Ready and nothing but its restarts would say why. The annotation
+# is only a note `make up` left, so the ACL file the Secret holds is checked too:
+# jq decodes its key users.acl and the hash function masks and hashes it in the same
+# pipe, and the hash must be the one `make up` would write now; a file edited or
+# replaced after `make up` under an annotation that still matches is refused. The
+# rules below are up.sh's, copied (a test holds the two equal). Nothing of the
+# Secret is printed, traced (tracing is off inside the function) or kept: the
+# JSON is cleared once the hashes are taken, and only hashes are compared.
 readonly RATE_STORE_SECRET=rate-store-credentials
 readonly RATE_STORE_SECRET_KEYS=(uri users.acl)
 readonly RATE_STORE_USER=gateway
@@ -176,7 +181,12 @@ rate_store_expected_acl_hash() {
 }
 
 require_rate_store_secret() {
-  local secret present key annotation
+  # Tracing is off inside, and on again when the function returns if it was on: the
+  # Secret's JSON holds the gateway's password, and a `bash -x` run would trace the
+  # variable it is assigned to. (A `die` ends the script, so it needs no restore.)
+  local traced=0 secret present key annotation acl_hash
+  if [[ "$-" == *x* ]]; then traced=1; fi
+  { set +x; } 2>/dev/null
   secret="$(kctl -n "${NAMESPACE}" get secret "${RATE_STORE_SECRET}" -o json 2>/dev/null)" ||
     die "Secret ${RATE_STORE_SECRET} does not exist; run 'make up' first (it holds the gateway's address in the rate store and the store's ACL file)"
   present="$(jq -r '.data // {} | to_entries[] | select(.value != "") | .key' <<<"${secret}")"
@@ -185,11 +195,23 @@ require_rate_store_secret() {
       die "Secret ${RATE_STORE_SECRET} has no key '${key}', or it is empty; run 'make up' first, after deleting the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}): 'make up' keeps a Secret that exists"
   done
   annotation="$(jq -r --arg name "${RATE_STORE_ACL_ANNOTATION}" '.metadata.annotations[$name] // ""' <<<"${secret}")"
+  # The ACL file itself, decoded by jq and hashed masked in the same pipe: its text
+  # is never in a variable, an argument or a message, only the hash is. `-j`: no
+  # newline of jq's own after the text, which the hash would see.
+  acl_hash="$(jq -j '.data["users.acl"] // "" | @base64d' <<<"${secret}" | rate_store_acl_rules_hash)" ||
+    die "Secret ${RATE_STORE_SECRET}: could not read its key 'users.acl' as base64 text, so the store's ACL file cannot be checked; run 'make up' first, after deleting the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET})"
+  secret=""
   local remedy="delete the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}), run 'make up' (it makes the Secret again), restart the rate store (kubectl -n ${NAMESPACE} rollout restart deployment/${RATE_STORE_DEPLOYMENT}) and then the Model Gateway (deployment/model-gateway), which read the ACL file and the address at their start and not before, then run 'make deploy' again; the order is docs/operations/runbooks/rate-store.md's"
   [[ -n "${annotation}" ]] ||
     die "Secret ${RATE_STORE_SECRET} has no annotation ${RATE_STORE_ACL_ANNOTATION}: it was made before the store's probes had a user of their own (probe), so its ACL file has none and the store's pod would never be Ready. ${remedy}"
-  [[ "${annotation}" == "$(rate_store_expected_acl_hash)" ]] ||
+  local expected
+  expected="$(rate_store_expected_acl_hash)"
+  [[ "${annotation}" == "${expected}" ]] ||
     die "the ACL file of Secret ${RATE_STORE_SECRET} was made for other users, commands or keys than 'make up' writes now (its annotation ${RATE_STORE_ACL_ANNOTATION} differs), so the store would refuse the gateway or its probes. ${remedy}"
+  [[ "${acl_hash}" == "${expected}" ]] ||
+    die "the ACL file in Secret ${RATE_STORE_SECRET} (its key users.acl) is not what 'make up' writes now, though its annotation ${RATE_STORE_ACL_ANNOTATION} says it is: the file was edited or replaced after 'make up' made it (or the annotation was copied onto another Secret), so the store would run other users, commands or keys than the chart and its tests assume. ${remedy}"
+  ((traced == 0)) || set -x
+  return 0
 }
 
 # The issuer of the services' certificates (S056): the ClusterIssuer that kind's

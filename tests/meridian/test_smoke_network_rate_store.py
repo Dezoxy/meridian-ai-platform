@@ -19,6 +19,7 @@ The harness is that of the network policy check (its probe definitions); the stu
 ``kctl`` is this file's, because the check starts a pod and relabels it.
 """
 
+import copy
 import json
 import os
 import re
@@ -104,7 +105,7 @@ kctl() {
 def run_rate_store_check(
     tmp_path: Path,
     *,
-    policy: str = f"networkpolicy.networking.k8s.io/{POLICY_NAME}",
+    policy: str | None = None,
     before: str = "blocked\n",
     after: tuple[str, ...] = ("reached\n",),
     failing: dict[str, tuple[int, str]] | None = None,
@@ -113,12 +114,15 @@ def run_rate_store_check(
     label_status: int = 0,
 ) -> tuple[list[str], str]:
     """``check_network_rate_store`` of smoke.sh in bash against a stub ``kctl``.
-    ``policy`` is what the lookup of kind's own policy prints (empty: absent;
-    ``FAIL``: the lookup fails). ``before`` is what the probe pod prints before it
-    is given the gateway's label and ``after`` what it prints on each try after
-    (the last repeats). ``failing`` maps ``before`` or ``after`` to the exit status
-    and stderr of the probe. Returns the output lines and what ``kctl`` was asked,
-    one call per line."""
+    ``policy`` is what the lookup of kind's own policy prints (its JSON, which is
+    kind's manifest as the API server would return it unless given; empty:
+    absent; ``FAIL``: the lookup fails). ``before`` is what the probe pod prints
+    before it is given the gateway's label and ``after`` what it prints on each
+    try after (the last repeats). ``failing`` maps ``before`` or ``after`` to the
+    exit status and stderr of the probe. Returns the output lines and what ``kctl``
+    was asked, one call per line."""
+    if policy is None:
+        policy = json.dumps(kind_policy())
     state = tmp_path / "state"
     state.mkdir()
     asked = tmp_path / "kctl-calls"
@@ -359,6 +363,126 @@ def test_a_policy_lookup_that_fails_is_a_failed_line_and_no_pod_starts(
     assert verbs(asked) == ["get"]
 
 
+def mutated(change) -> str:
+    """Kind's own policy, as the API server returns it, after ``change``."""
+    policy = copy.deepcopy(kind_policy())
+    change(policy)
+    return json.dumps(policy)
+
+
+def to_peer(policy: dict) -> dict:
+    return policy["spec"]["egress"][0]["to"][0]
+
+
+WRONG_SHAPES = {
+    "the-wrong-port": lambda p: p["spec"]["egress"][0].update(
+        ports=[{"port": 6380, "protocol": "TCP"}]
+    ),
+    "the-wrong-protocol": lambda p: p["spec"]["egress"][0].update(
+        ports=[{"port": int(PORT), "protocol": "UDP"}]
+    ),
+    "other-ports-only": lambda p: p["spec"]["egress"][0].update(
+        ports=[{"port": 5432, "protocol": "TCP"}, {"port": 8000, "protocol": "TCP"}]
+    ),
+    "another-peer": lambda p: to_peer(p)["podSelector"]["matchLabels"].update(
+        {"app.kubernetes.io/name": "model-gateway"}
+    ),
+    "no-peer-label": lambda p: to_peer(p).update(podSelector={}),
+    "a-peer-in-another-namespace": lambda p: to_peer(p).update(
+        namespaceSelector={"matchLabels": {"kubernetes.io/metadata.name": "default"}}
+    ),
+    "an-address-block-not-the-pods": lambda p: p["spec"]["egress"][0].update(
+        to=[{"ipBlock": {"cidr": "10.0.0.0/8"}}]
+    ),
+    "no-peer-at-all": lambda p: p["spec"]["egress"][0].update(to=[]),
+    "no-egress-rule": lambda p: p["spec"].update(egress=[]),
+    "egress-rules-absent": lambda p: p["spec"].pop("egress"),
+    "egress-not-a-policy-type": lambda p: p["spec"].update(policyTypes=["Ingress"]),
+    "no-policy-types": lambda p: p["spec"].pop("policyTypes"),
+    "another-pod-selected": lambda p: p["spec"].update(
+        podSelector={"matchLabels": {"app.kubernetes.io/name": "meridian-sweep"}}
+    ),
+    "no-pod-selected-by-label": lambda p: p["spec"].update(podSelector={}),
+}
+
+
+@pytest.mark.parametrize("shape", list(WRONG_SHAPES))
+def test_a_kind_policy_of_the_wrong_shape_fails_the_line_before_any_pod_starts(
+    tmp_path: Path, shape: str
+) -> None:
+    lines, asked = run_rate_store_check(tmp_path, policy=mutated(WRONG_SHAPES[shape]))
+
+    # Without egress to the store's pods on TCP 6379 the first attempt would time
+    # out at the sender whatever the store's ingress says, the control would reach
+    # through the gateway's own egress rule, and the line would PASS with the
+    # store's ingress unproven: so it fails, with a sentence of its own.
+    (line,) = lines
+    assert line.startswith(f"FAIL  network policy: networkpolicy/{POLICY_NAME} exists")
+    assert "does not give the probe pod" in line
+    assert "meridian-smoke=network-probe" in line
+    assert "app.kubernetes.io/name=rate-store" in line
+    assert f"TCP {PORT}" in line
+    assert "unproven" in line
+    assert "smoke-rate-store-networkpolicy.yaml" in line
+    assert verbs(asked) == ["get"]
+
+
+def test_a_lookup_that_returns_something_that_is_not_json_fails_the_line(
+    tmp_path: Path,
+) -> None:
+    lines, asked = run_rate_store_check(tmp_path, policy="not json at all")
+
+    (line,) = lines
+    assert line.startswith(f"FAIL  network policy: networkpolicy/{POLICY_NAME} exists")
+    assert verbs(asked) == ["get"]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    {
+        "the-manifest-as-written": lambda p: None,
+        "the-api-server-defaults-the-protocol-away": lambda p: p["spec"]["egress"][
+            0
+        ].update(ports=[{"port": int(PORT)}]),
+        "no-ports-which-is-every-port": lambda p: p["spec"]["egress"][0].pop("ports"),
+        "another-rule-beside-it": lambda p: p["spec"]["egress"].insert(
+            0,
+            {
+                "to": [{"ipBlock": {"cidr": "10.0.0.0/8"}}],
+                "ports": [{"port": 53, "protocol": "UDP"}],
+            },
+        ),
+        "the-port-beside-another": lambda p: p["spec"]["egress"][0].update(
+            ports=[
+                {"port": 53, "protocol": "UDP"},
+                {"port": int(PORT), "protocol": "TCP"},
+            ]
+        ),
+        "metadata-the-server-adds": lambda p: p["metadata"].update(
+            uid="0", resourceVersion="1", creationTimestamp="2026-10-06T00:00:00Z"
+        ),
+    }.items(),
+    ids=lambda item: item[0],
+)
+def test_the_shapes_the_line_needs_pass_it(tmp_path: Path, variant) -> None:
+    _, change = variant
+
+    lines, _ = run_rate_store_check(tmp_path, policy=mutated(change))
+
+    assert lines == [PASS]
+
+
+def test_the_lookup_reads_the_policys_json_and_not_only_its_name(
+    tmp_path: Path,
+) -> None:
+    _, asked = run_rate_store_check(tmp_path)
+
+    (lookup,) = [c for c in asked.splitlines() if " get networkpolicy " in c]
+    assert lookup == (
+        f"-n meridian get networkpolicy {POLICY_NAME} -o json --ignore-not-found"
+    )
+
+
 def test_the_check_changes_nothing_but_its_own_pod(tmp_path: Path) -> None:
     source = " ".join(function_body(SMOKE_SH, name) for name in FUNCTIONS)
     _, asked = run_rate_store_check(tmp_path)
@@ -556,6 +680,8 @@ def test_the_header_says_the_store_line_proves_the_stores_ingress_and_how() -> N
     assert "rate-store.meridian.svc:6379" in store
     assert "manifests/smoke-rate-store-networkpolicy.yaml" in store
     assert "egress" in store and "ingress" in store
+    # The policy is read for its shape and not only for its existence.
+    assert "a kind policy of the wrong shape" in store
     # The control and its fail branch.
     assert "app.kubernetes.io/name=model-gateway" in store
     assert "proves nothing" in store

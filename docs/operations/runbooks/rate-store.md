@@ -16,7 +16,8 @@ by its probe, `make deploy`'s refusal of an old Secret and a rotation. Run
 outside a cluster, against the pinned Redis image: the ACL file that `make up`
 makes (the gateway's connection and script ran under that user, every other
 command was refused), the store's probes over TLS (healthy, frozen by a looping
-script, restarted), TLS 1.3 alone and the 1 MB bounds, and the class of each
+script, restarted, and against a paused store), TLS 1.3 alone, the 1 MB bounds
+and the 8 MB bound on every client's buffers together, and the class of each
 failure in the table below, except where the table says it was not measured.
 The game day (S028) exercises this runbook. The store is Redis 8 on kind only;
 on Azure it is designed, a managed Redis in the same EU region (S020), and its
@@ -79,6 +80,18 @@ ready to exit`. Afterwards the Deployment had rolled out, `make demo` completed
 (its model calls counted by the restarted store), the Model Gateway's pod had no
 restart and `make smoke` printed 45 PASS.
 
+**Since the third run** (the third infra review's changes, implemented and
+tested outside a cluster, and not yet run by `make deploy` or `make smoke` on
+one): `maxmemory-clients 8mb` in the store's configuration (proved on the pinned
+image under a 64 MiB limit, see "What `maxmemory-clients` bounds" below); a
+time limit of two seconds on the probes' `redis-cli` (proved against a paused
+container); `make deploy` comparing the ACL file the Secret holds and not only
+its annotation; the smoke line failing when kind's policy for its probe is not
+the shape the line needs; the upkeep script saying that the change may have
+been applied after any failure that is not a refusal
+([budget exhaustion](budget-exhaustion.md#the-upkeep-command)); and the alert's
+new condition (a ratio and a count, below), unit-tested with promtool.
+
 Not seen on a cluster, so tested without one: a 503 from the gateway when the
 store is down or refuses (the demo did not run in the seconds the store was down
 for the renewal); the alert `MeridianRateStoreRefusing` firing (it was loaded
@@ -110,15 +123,25 @@ its own). The price is that this one pod stands in front of every model call.
   `rate-store-unavailable`.
 - Two alerts. `MeridianServiceUnavailable` fires when the store's pod has been
   unavailable for five minutes (its selector is every Deployment of the
-  namespace). `MeridianRateStoreRefusing` fires when the gateway counted a call
-  refused with the reason `rate-store-unavailable` in the last 15 minutes and
-  that has held for five minutes: so it fires about five minutes after the
-  first refusal, and it ends 15 minutes after the last, which means a store
-  that restarted once (a renewed certificate does that, a frozen store's
-  restart does) raises it late and briefly. Both are rules checked by
-  `make alerts`, and `MeridianRateStoreRefusing` was loaded in Prometheus and
-  healthy on kind (2026-10-06); neither was seen firing there, and kind
-  notifies no one (S028).
+  namespace). `MeridianRateStoreRefusing` fires when more than 5 percent of
+  the calls that ended in the last 15 minutes were refused with the reason
+  `rate-store-unavailable`, at least 5 calls were, and both have held for 2
+  minutes (a ratio and a count, as `MeridianModelCallsFailing` has them;
+  `critical`, because with the store down every call is a 503 and there is no
+  fallback). It used to fire on any single refused call: the recorded count
+  holds for 15 minutes, so one blip (the seconds of a certificate renewal's
+  restart, which refuse a handful of calls) paged five minutes later and
+  stayed for ten. Now a restart's handful does not fire it, at any traffic:
+  under 5 refused calls is under the count, and a few seconds are well under 5
+  percent of 15 minutes of calls. A store that stays down refuses every call,
+  so the alert fires 2 minutes after the fifth refused call: about 4 minutes
+  after the outage began at 3 calls a minute (the unit test), later at a lower
+  rate (the numbers are proposals nobody measured, as the group's others are);
+  it ends when the refusals have left the 15-minute window. Both alerts are
+  rules checked by `make alerts` (the new condition and its unit tests are not
+  yet loaded on a cluster), `MeridianRateStoreRefusing` as it was before was
+  loaded in Prometheus and healthy on kind (2026-10-06); neither was seen
+  firing there, and kind notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
   restarts.
 
@@ -221,11 +244,20 @@ does not reach a running pod by surprise: the Secret carries the annotation
 `meridian.kind/rate-store-acl-rules`, the hash of the ACL file's rules with the
 password's hash masked, and `make deploy` stops, before it builds anything,
 when the annotation is missing or differs, and says to delete the Secret, run
-`make up`, restart the store and then the gateway. A Secret from before the
-`probe` user has no annotation and no such user: with it the store's pod is
-never Ready, its events say `AUTH failed: WRONGPASS` and `the probe user's PING
-was answered 'NOAUTH ...', not PONG`, and its liveness probe restarts it for
-ever. The cure is the same.
+`make up`, restart the store and then the gateway. The annotation is a note
+`make up` left, so `make deploy` also decodes the Secret's own `users.acl`,
+hashes it the same way (masked, in one pipe: the text is never printed, traced
+or kept) and compares that with what `make up` would write now: a file edited or
+replaced after `make up`, under an annotation that still matches, is refused
+too, with a sentence of its own (`the ACL file in Secret ... is not what 'make
+up' writes now, though its annotation ... says it is`) and the same cure. A
+password's hash that differs is not an edit: it is masked. (Implemented and
+tested with stub commands; not yet run by `make deploy` on a cluster.)
+
+A Secret from before the `probe` user has no annotation and no such user: with
+it the store's pod is never Ready, its events say `AUTH failed: WRONGPASS` and
+`the probe user's PING was answered 'NOAUTH ...', not PONG`, and its liveness
+probe restarts it for ever. The cure is the same.
 
 ### The store restarts again and again
 
@@ -269,7 +301,13 @@ running a script...', not PONG` (`k describe pod -l
 app.kubernetes.io/name=rate-store`). Every window starts again, as above. (The
 probe was run on the pinned image against a looping script and the restart
 that ended it; the kubelet's restart of a frozen store has not been seen on a
-cluster, though its restart on a renewed certificate has: see below.)
+cluster, though its restart on a renewed certificate has: see below.) A store
+that is frozen below the protocol (the process stopped, not a script) answers
+nothing at all: the probe's `redis-cli` runs under `timeout 2`, inside the
+kubelet's 3 seconds, so the probe fails with `answered '', not PONG` and leaves
+no client behind (on the pinned image against a paused container, the script
+printed that after 2 seconds and left none; without the limit it was still
+waiting when ended from outside after 8 seconds, and a `redis-cli` stayed).
 To end it sooner, delete the store's pod:
 
 ```sh
@@ -332,12 +370,31 @@ count above zero. The pod's limit is 64 MiB and the gateway's own windows take
 12 to 17 MB, so something filled the memory: a script that writes without end
 (no directive bounds that: Redis's `maxmemory` is not checked for a script's
 writes once it has run one, and the pod's limit is where it ends), or a very
-large request (a bulk is bounded at 1 MB now, so it takes many). The kubelet
+large request (a bulk is bounded at 1 MB now, so it takes many, and every
+client's buffers together are bounded at 8 MB by `maxmemory-clients`, so many
+connections no longer do it; see below). The kubelet
 restarted the store, so every window started again, and a script that is run
 again would do it again, each restart slower by the kubelet's back-off (to five
 minutes), which is a stream of 503s and of reset windows. It is the same
 person as above, or a fault: read [what the credential
 allows](#what-the-credential-allows) and rotate.
+
+**What `maxmemory-clients` bounds, and what you see when it works.** Redis
+disconnects the clients that hold the most memory (largest first) whenever
+all clients' buffers together pass 8 MB, and logs one line for each, `Evicting
+client: id=... qbuf=...` with the size of its query buffer. On the pinned image
+(outside a cluster, the store under a 64 MiB limit) 240 authenticated
+connections that each held the head of a 1 MB request took the store from 19 to
+63 MiB and killed it within 15 seconds without the setting, and with it the
+store stayed between 13 and 27 MiB: Redis evicted 233 of the 240, none of them a
+client with a small buffer, the store's own probe still answered `PONG`, the
+gateway's user still ran `TIME`, and twenty calls of the gateway's limiter
+during the flood were all answered. So a burst of `Evicting client` lines with
+a `qbuf` near 1 MB is a client that is not the gateway sending what the gateway
+never sends: read who can reach the port (the NetworkPolicy), not the gateway.
+The gateway's connections hold a few hundred bytes each, far from the largest,
+so they are not the ones Redis evicts; that this holds under real load was not
+measured, and nothing was run on a cluster.
 
 ### What the credential allows
 
@@ -364,7 +421,14 @@ configuration or users. A holder of a certificate of the services' CA but not of
 the password can open connections and try passwords: what stops that before
 authentication is the store's NetworkPolicy, not Redis, so a store is never run
 with the policy off (the chart refuses it). The `probe` user is not the
-credential: it has no password and one command, `ping`.
+credential: it has no password, and it may only run `ping`. That is not
+nothing: with no password, any holder of a certificate of the services' CA
+(all six services hold one) who has a network path to the port can open an
+authenticated session of that user, and an authenticated session may fill its
+query buffer. What bounds it is the store's NetworkPolicy and `maxmemory-clients`
+(below), not the user: without that setting 240 such connections, each holding
+the head of a 1 MB request, took a 64 MiB store to its limit and killed it
+(`OOMKilled`, measured outside a cluster).
 
 ### A password was rotated, or the two disagree
 
@@ -416,7 +480,7 @@ k rollout status deploy/model-gateway
 - The same steps (delete the Secret, `make up`, restart the store and then
   the gateway) bring a changed ACL to a cluster that has the old one, and
   `make deploy` says so when it finds a Secret that is not the one `make up`
-  would write now (the annotation above).
+  would write now (the annotation above, and the ACL file's own hash).
   The cluster is disposable on the development machine, so a new cluster
   (`make down`, `make up`, `make deploy`) is the last way out for a test that
   needs one, never to clear a fault nobody has looked at
@@ -452,8 +516,11 @@ restart the store by hand (`k rollout restart deploy/rate-store`).
   (base64 is not encryption). The names of the keys (above) are the check.
 - **Do not widen the ACL file by hand** (`+@all`, `+client`, `+eval`) to make a
   refusal go away, and do not give the `probe` user a password, a key or a
-  command beyond `ping`: it is the one user that needs no password, and its
-  being able to do nothing is why. A command that the gateway sends and the file
+  command beyond `ping`: it is the one user that needs no password, and it may
+  only run `ping`, which is what keeps it from reading or changing a window (its
+  session is still an authenticated one that any holder of a services
+  certificate with a path to the port can open: the NetworkPolicy and
+  `maxmemory-clients` bound it). A command that the gateway sends and the file
   lacks is a change in `up.sh` and its test, then a new Secret.
 - **Do not delete the store's pod in the middle of a flood of calls** to clear
   a fault nobody has looked at: it resets every window at once.

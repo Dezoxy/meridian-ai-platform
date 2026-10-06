@@ -53,9 +53,12 @@ ends (the ledger in PostgreSQL it cannot touch). A second user, `probe`, is on
 with no password (`nopass`), no key, no channel and exactly `ping`: the store's
 two probes run `PING` as it and pass only when the answer is `PONG`, so a store
 frozen by such a script (every other client gets `BUSY`) fails them and the
-kubelet restarts the pod within about a minute. It can do nothing but ask, and
-only a client that holds a certificate of the services' CA and has a network
-path reaches it. The password is 32 random bytes as 64 lower-case hex digits, an
+kubelet restarts the pod within about a minute. It may only run `ping`, which is
+not nothing: with no password, any client that holds a certificate of the
+services' CA (all six services do) and has a network path to the port is an
+authenticated session of that user, and may fill its query buffer; what bounds
+that is the store's NetworkPolicy and `maxmemory-clients` (below), not the
+user. The password is 32 random bytes as 64 lower-case hex digits, an
 alphabet that needs no percent-encoding in an address, so the address is
 exact; it goes to kubectl on standard input and is never an argument, a file
 or output. The Secret carries the annotation
@@ -456,7 +459,7 @@ node image, Kubernetes components and the platform).
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
-| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it; what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
+| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). Only a failure whose output holds the command's own `ERROR GUnnn` line says that nothing was changed; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
@@ -758,7 +761,18 @@ node image, Kubernetes components and the platform).
    of the model-gateway Service, so it is labelled back to the sweep's name
    straight after the control and deleted at the end. A missing kind policy is
    a FAIL before any pod starts (without it a timeout would be the sender's and
-   the line would pass with the store open). It fails like the others on an
+   the line would pass with the store open), and so is one that exists with the
+   wrong shape: the line reads the policy's JSON and fails with a sentence of
+   its own unless the policy selects exactly the pods with smoke's label, lists
+   `Egress`, and has a rule whose peers include the store's pods of this
+   namespace (a pod selector of `app.kubernetes.io/name=rate-store` and neither
+   a namespace selector nor an address block) on TCP 6379 (no ports at all is
+   every port). With another port or selector the first attempt would time out
+   at the sender, the control would reach through the gateway's own egress
+   rule, and the line would pass with the store's ingress unproven; the count
+   of lines does not change (implemented and tested with a stub `kubectl`, one
+   test for each wrong shape; the main session runs it on kind after this
+   lands). It fails like the others on an
    answer, a refusal and a name that does not resolve (a store that is not
    deployed), and prints one line when both parts hold. It does not prove that
    the store is up: `make deploy` waits for its Deployment and its Certificate,
@@ -1048,7 +1062,15 @@ In order, `make deploy`:
    `meridian.kind/rate-store-acl-rules` is missing (a Secret from before the
    store's probes had a user of their own) or is not the hash of the ACL that
    `make up` would write now: the store's pod would never be Ready, or would
-   refuse the gateway, and nothing but its restarts would say why. Such a Secret
+   refuse the gateway, and nothing but its restarts would say why. The
+   annotation is only a note `make up` left, so it also decodes the Secret's
+   own `users.acl`, hashes it the same way (the password's hash masked, in one
+   pipe from `jq` to the hash: the text is never printed, traced or kept, and
+   tracing is off inside the function) and refuses a file whose hash is not the
+   one `make up` would write now, with a sentence of its own: an ACL file edited
+   or replaced after `make up` under an annotation that still matches is no
+   longer let through (implemented and tested with stub commands; not yet run
+   on a cluster). Such a Secret
    (or one `make up` made with an ACL that has since changed) is deleted first,
    because `make up` keeps a Secret that exists; the message gives the order:
    delete it, `make up`, restart the store, then the gateway (above, and the
@@ -1221,12 +1243,20 @@ PodDisruptionBudget and a memory limit of 64 MiB, which is the real bound on
 what it can hold (Redis's own `maxmemory` does not stop the gateway's script
 writing). It serves TLS 1.3 alone, asks every client for a certificate of the
 services' CA, and its `default` user is off; a bulk and a client's query buffer
-are bounded at 1 MB (the gateway's script is a little over 1 KB), and no
+are bounded at 1 MB (the gateway's script is a little over 1 KB) and every
+client's buffers together at 8 MB (`maxmemory-clients`: past it Redis
+disconnects the largest clients; without it 240 authenticated connections each
+holding the head of a 1 MB request killed the store under its 64 MiB limit, with
+it the same flood held it between 13 and 27 MiB, the probe and the gateway's
+calls still answered; measured on the pinned image outside a cluster), and no
 directive bounds a script that writes without end, which the pod's memory limit
 ends by restarting the store, so every tenant has its windows again. Both
 probes ping as the ACL user `probe` and pass only on `PONG`, so a store frozen
 by a looping script is restarted within about a minute (every window starts
-again). Its NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
+again); their `redis-cli` runs under `timeout 2`, inside the kubelet's 3
+seconds, so a store frozen below the protocol fails the probe at once and
+leaves no client behind (proved against a paused container). Its
+NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
 else, and gives it no egress; it is the store's only control before
 authentication, so the chart refuses the store with `networkPolicy.enabled`
 false. The gateway's policy has the matching rule to it, and no other
@@ -2025,8 +2055,10 @@ three alerts that notice a series that is not there, and a fourth that
 notices the log agent not being ready). It holds 17 alert
 rules and three recording rules: six on the gateway, three on the workloads
 and four on the certificates (the gateway's sixth, `MeridianRateStoreRefusing`,
-fires when it refused a call because the rate store gave no answer; loaded and
-healthy on kind on 2026-10-06, and never seen firing), and, from
+fires when more than 5 percent of the calls of the last 15 minutes, and at
+least 5, were refused because the rate store gave no answer, for 2 minutes: one
+refused call no longer fires it; loaded and healthy on kind on 2026-10-06 in
+its earlier form (any refused call, for 5 minutes), and never seen firing), and, from
 S064, four on missing telemetry
 (loaded and healthy on kind on 2026-10-06, in the third run, and none seen
 firing; tested without a cluster, not seen firing on one): the Model Gateway's,

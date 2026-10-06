@@ -133,20 +133,38 @@ spec:
 
         - alert: MeridianRateStoreRefusing
           # The word is the gateway's own for a refusal it cannot count
-          # (RateStoreRefusalReason). The recorded delta holds a count for the
-          # 15 minutes after it, so this fires 5 minutes after the first refusal
-          # and ends 15 minutes after the last: a store that restarted once
-          # (a renewed certificate does that) also raises it, late and briefly.
+          # (RateStoreRefusalReason). A ratio and a count, as
+          # MeridianModelCallsFailing has them, and not a bare "> 0": the
+          # recorded delta holds a count for 15 minutes after the call, so any
+          # refused call kept "> 0" true for 15 minutes, `for: 5m` filtered
+          # nothing, and the seconds of a certificate renewal's restart (a
+          # handful of 503s) paged at `critical` five minutes later and stayed
+          # for ten. Now it needs more than 5 percent of the calls that ended in
+          # the window refused by the store (a restart's few seconds are a small
+          # share of 15 minutes of calls at any traffic) and at least 5 calls
+          # (a quiet platform's one or two refused calls are not a share worth
+          # waking for), for 2 minutes. A store that stays down refuses every
+          # call, so it is over both soon after its fifth refused call, and
+          # fires 2 minutes after that (about 4 minutes after the outage began
+          # at 3 calls a minute: the unit test below); a lower rate takes
+          # longer. The severity stays `critical`: with the store down every
+          # model call is a 503 and no fallback exists (the owner's decision).
+          # The numbers are proposals nobody measured, like the group's others.
           expr: |
-            sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"}) > 0
-          for: 5m
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
+            / sum(meridian:gateway_calls:delta15m{meridian_outcome=~"completed|failed|refused"})
+            > 0.05
+            and
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"}) >= 5
+          for: 2m
           labels:
             severity: critical
             platform: meridian
           annotations:
             summary: The Model Gateway refuses calls because the rate store gives no answer.
             description: >-
-              {{ $value }} call(s) in the last 15 minutes were refused with
+              {{ $value | humanizePercentage }} of the calls that ended in the
+              last 15 minutes (and at least 5 of them) were refused with
               rate-store-unavailable: the gateway could not count them in the
               rate store (unreachable, frozen, restarting, or refusing its
               credential) and refuses a call it cannot count, with a 503 and no

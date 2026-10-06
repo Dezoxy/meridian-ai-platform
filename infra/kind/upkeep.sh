@@ -10,9 +10,14 @@
 #      blanks into an array by `read -r -a`, which neither expands a glob nor
 #      reads a quote, and each word must be letters, digits, '.', '_', '=' and
 #      '-' (the command's arguments are slugs, numbers, dates and IDs; none needs
-#      more). Nothing is read as shell: a word with a quote, a backslash, a '$', a
-#      backtick, a newline or a glob or shell character is refused, with the word
-#      shown. A newline is refused first, since `read` stops at one
+#      more). This script reads no word as shell: a word with a quote, a
+#      backslash, a '$', a backtick, a newline or a glob or shell character is
+#      refused, with the word shown. A newline is refused first, since `read`
+#      stops at one. But make expands $(...) and $$ in ARGS, a value on its
+#      command line, BEFORE the script sees it (make gateway-upkeep
+#      ARGS='close $(shell touch FILE)' runs the touch): that is the operator's
+#      own input on the operator's own machine, and what reaches the script is
+#      checked as above
 #   2. the Secret gateway-upkeep-db must hold a `uri` (only key names are read,
 #      never a value, and the connection string is never in a file, a command
 #      line or this script's output), and the Helm release must say which image it
@@ -29,7 +34,12 @@
 # Exit code: 0 when the Job succeeded; 1 when it failed (the command exits 1 on a
 # refusal, `ERROR GUnnn`, which changes nothing, and on a failure of its own, and
 # 2 on a usage error: each is a Failed Job and none is retried, backoffLimit 0),
-# when it did not finish, and when a precondition was not met.
+# when it did not finish, and when a precondition was not met. (`make` itself
+# returns 2 for a recipe that failed, where this script exits 1.) Only a failed Job
+# whose output holds the command's own `ERROR GUnnn` line promises that nothing
+# was changed: every other failure, and a Job that did not finish, says the change
+# MAY have been applied and to read the reservations or the audit rows before a
+# rerun, because a credit is a new row on every run.
 # The Job and its output are kept for a day (ttlSecondsAfterFinished), so
 # `kubectl -n meridian logs job/<name>` still reads them the next morning.
 set -euo pipefail
@@ -49,6 +59,10 @@ readonly WORD_PATTERN='^[A-Za-z0-9._=-]+$'
 readonly TAG_PATTERN='^[0-9a-f]{12}$'
 readonly SHOWN_LENGTH=40
 readonly USAGE='make gateway-upkeep ARGS="reservations --older-than 15"'
+# What a failure that is not a refusal tells the operator to do first: a credit is
+# a row of its own (no idempotency key), so a rerun after one that did commit
+# credits twice.
+readonly READ_BEFORE_RERUN="Read the open reservations (make gateway-upkeep ARGS=\"reservations --older-than 15\") or the audit rows (docs/operations/runbooks/budget-exhaustion.md) before running it again, because a credit is a new row on every run."
 
 # The words of ARGS, and the image's tag helm_chart passes to the chart. The
 # first is set by split_arguments, the second by read_release_image.
@@ -57,6 +71,7 @@ words=()
 tag=""
 job=""
 verdict=""
+job_output=""
 
 # split_arguments: ${ARGS} into ${words}, or a refusal. The check is for the
 # letters of the C locale, whatever the operator's locale says.
@@ -118,11 +133,24 @@ wait_for_job() {
   done
 }
 
-# print_job_output: the pod's log on stdout, through printable_ascii: a log can
-# quote data, an escape sequence must not reach the terminal, and a driver's
-# error can quote a connection string.
+# read_job_output: the pod's log into ${job_output}, through printable_ascii: a
+# log can quote data, an escape sequence must not reach the terminal, and a
+# driver's error can quote a connection string. Read once, so the same text is
+# printed and searched for the command's refusal.
+read_job_output() {
+  job_output="$(kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii || true)"
+}
+
+# print_job_output: ${job_output} on stdout, nothing for an empty log.
 print_job_output() {
-  kctl -n "${NAMESPACE}" logs "job/${job}" 2>&1 | printable_ascii || true
+  [[ -z "${job_output}" ]] || printf '%s\n' "${job_output}"
+}
+
+# The command's refusal is a line of its own that starts `ERROR GU` and three
+# digits (src/meridian/platform/cli/gateway.py), and it changes nothing. Any other
+# failure may have come after the commit.
+job_output_is_a_refusal() {
+  grep -Eq '^ERROR GU[0-9]{3}( |$)' <<<"${job_output}"
 }
 
 split_arguments
@@ -147,16 +175,22 @@ wait_for_job
 case "${verdict}" in
   succeeded)
     log "job ${job} succeeded; its output:"
+    read_job_output
     print_job_output
     ;;
   failed)
     log "job ${job} failed; its output:"
+    read_job_output
     print_job_output
-    die "the upkeep job ${job} failed: the output above says why (a refusal, ERROR GUnnn, changed nothing). The Job and its output stay for a day: kubectl -n ${NAMESPACE} logs job/${job}"
+    if job_output_is_a_refusal; then
+      die "the upkeep job ${job} failed with a refusal of the command (an ERROR GUnnn line above): a refusal changed nothing, so fix the arguments and run it again. The Job and its output stay for a day: kubectl -n ${NAMESPACE} logs job/${job}"
+    fi
+    die "the upkeep job ${job} failed, and its output holds no refusal of the command (no ERROR GUnnn line), so the change may have been applied: a deadline, a lost connection or a crash can come after the commit. ${READ_BEFORE_RERUN} The Job and its output stay for a day: kubectl -n ${NAMESPACE} logs job/${job}"
     ;;
   *)
     log "job ${job} did not finish; its output so far:"
+    read_job_output
     print_job_output
-    die "the upkeep job ${job} did not finish in $((UPKEEP_LOOKS * UPKEEP_INTERVAL))s (its deadline is 120s, so the pod may not have started: kubectl -n ${NAMESPACE} describe job/${job})"
+    die "the upkeep job ${job} did not finish in $((UPKEEP_LOOKS * UPKEEP_INTERVAL))s (its deadline is 120s, so the pod may not have started: kubectl -n ${NAMESPACE} describe job/${job}), so the change may have been applied. ${READ_BEFORE_RERUN}"
     ;;
 esac

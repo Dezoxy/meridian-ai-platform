@@ -276,7 +276,7 @@ demo: deploy
 smoke:
 	infra/kind/smoke.sh
 
-## gateway-upkeep  run the Model Gateway's upkeep command on kind as a Job of its own, under its own database role, and print its output; ARGS is the subcommand and its arguments, letters, digits and . _ = - only: make gateway-upkeep ARGS="reservations --older-than 15" (also close ATTEMPT_ID --reason SLUG, credit TENANT --tokens N --reason SLUG, expire --before YYYY-MM --reason SLUG); reservations, and expire without --confirm, only read, every other subcommand changes the ledger (needs make up and make deploy)
+## gateway-upkeep  run the Model Gateway's upkeep command on kind as a Job of its own, under its own database role, and print its output; ARGS is the subcommand and its arguments, letters, digits and . _ = - only (make expands $(...) in ARGS before the script sees it: your own input): make gateway-upkeep ARGS="reservations --older-than 15" (also close ATTEMPT_ID --reason SLUG, credit TENANT --tokens N --reason SLUG, expire --before YYYY-MM --reason SLUG); reservations, and expire without --confirm, only read, every other subcommand changes the ledger (needs make up and make deploy)
 gateway-upkeep:
 	infra/kind/upkeep.sh
 

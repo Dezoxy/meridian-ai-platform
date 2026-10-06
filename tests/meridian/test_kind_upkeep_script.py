@@ -477,6 +477,117 @@ def test_a_job_that_never_finishes_ends_the_script_and_prints_what_it_has(
     assert 10 < len(sleeps) < 500
 
 
+# Only a refusal of the command, its own `ERROR GUnnn` line, promises that nothing
+# was changed. Every other failure may have come after the commit (a deadline, a
+# crash, a lost connection): a credit is a new row on every run, so an operator who
+# reads "nothing changed" and runs it again credits twice.
+NOT_A_REFUSAL = {
+    "a-traceback": (
+        "Traceback (most recent call last):\n"
+        "psycopg.OperationalError: server closed the connection unexpectedly\n"
+    ),
+    "a-crash-after-the-change": (
+        "credited claims-triage: 1 tokens (credit 3746e010-0000-4000-8000-00aa)\n"
+        "Traceback (most recent call last):\nBrokenPipeError\n"
+    ),
+    "no-output-the-pod-never-started": "",
+    "a-line-that-only-mentions-a-refusal": "see the runbook: ERROR GU203, GU304\n",
+    "a-usage-error": "usage: meridian gateway credit [-h] --tokens TOKENS\n",
+}
+
+
+def last_line_of(stderr: str) -> str:
+    return stderr.strip().splitlines()[-1]
+
+
+def test_a_failed_job_that_ended_in_a_refusal_says_nothing_was_changed(
+    tmp_path: Path,
+) -> None:
+    done = run_upkeep(
+        tmp_path,
+        "credit tenant-a --tokens 5 --reason retry-loop",
+        job="failed",
+        output=REFUSAL,
+    )
+
+    last = last_line_of(done.stderr)
+    assert done.returncode == 1
+    assert last.startswith("error: ")
+    assert "a refusal" in last
+    assert "ERROR GUnnn" in last
+    assert "changed nothing" in last
+    assert "may have been applied" not in done.stderr
+    # The output is printed once: read once, not twice.
+    assert done.stdout.count(REFUSAL.strip()) == 1
+
+
+def test_a_refusal_in_the_middle_of_the_output_is_still_a_refusal(
+    tmp_path: Path,
+) -> None:
+    done = run_upkeep(
+        tmp_path,
+        "expire --before 2000-01 --reason old-months --confirm",
+        job="failed",
+        output="counting what would go\n" + REFUSAL,
+    )
+
+    assert done.returncode == 1
+    assert "changed nothing" in last_line_of(done.stderr)
+    assert "may have been applied" not in done.stderr
+
+
+@pytest.mark.parametrize(
+    "output", list(NOT_A_REFUSAL.values()), ids=list(NOT_A_REFUSAL)
+)
+def test_a_failed_job_that_did_not_end_in_a_refusal_may_have_changed_the_ledger(
+    tmp_path: Path, output: str
+) -> None:
+    done = run_upkeep(
+        tmp_path,
+        "credit tenant-a --tokens 5 --reason retry-loop",
+        job="failed",
+        output=output,
+    )
+
+    last = last_line_of(done.stderr)
+    assert done.returncode == 1
+    assert last.startswith("error: ")
+    assert "may have been applied" in last
+    # What to read before running it again, and why.
+    assert "reservations" in last
+    assert "audit" in last
+    assert "before running it again" in last
+    assert "a credit is a new row on every run" in last
+    # The promise only a refusal may make is not made.
+    assert "changed nothing" not in done.stderr
+    assert "ERROR GUnnn, changed nothing" not in done.stderr
+
+
+def test_a_job_that_did_not_finish_may_have_changed_the_ledger_too(
+    tmp_path: Path,
+) -> None:
+    done = run_upkeep(
+        tmp_path, "credit tenant-a --tokens 5 --reason retry-loop", job="running"
+    )
+
+    last = last_line_of(done.stderr)
+    assert done.returncode == 1
+    assert "did not finish" in last
+    assert "may have been applied" in last
+    assert "before running it again" in last
+    assert "a credit is a new row on every run" in last
+    assert "changed nothing" not in done.stderr
+
+
+def test_a_succeeded_job_says_nothing_about_a_change_that_may_have_been_applied(
+    tmp_path: Path,
+) -> None:
+    done = run_upkeep(tmp_path, "reservations --older-than 15", job="succeeded")
+
+    assert done.returncode == 0, done.stderr
+    assert "may have been applied" not in done.stdout + done.stderr
+
+
 def test_the_jobs_output_reaches_the_terminal_through_the_printable_filter(
     tmp_path: Path,
 ) -> None:
@@ -580,6 +691,41 @@ def test_the_help_line_of_the_target_names_the_variable_and_the_four_subcommands
     assert 'ARGS="' in line
     for word in ("reservations", "close", "credit", "expire"):
         assert word in line
+
+
+def test_the_header_and_the_help_line_say_that_make_expands_dollar_in_args() -> None:
+    header = " ".join(
+        line.lstrip("# ") for line in UPKEEP_SH.split("set -euo")[0].splitlines()
+    )
+    (help_line,) = re.findall(r"^## gateway-upkeep +(.*)$", MAKEFILE, re.MULTILINE)
+
+    # The script reads no word as shell, but make has expanded $(...) in ARGS
+    # before the script sees it: the operator's own input, and a review made
+    # `$(shell touch FILE)` run.
+    assert "make expands" in header
+    assert "$(" in header
+    assert "Nothing is read as shell" not in header
+    assert "expands $(" in help_line
+    assert "before the script" in help_line
+
+
+def test_the_runbook_says_what_make_itself_returns_for_a_failed_job() -> None:
+    runbook = (
+        REPO_ROOT / "docs" / "operations" / "runbooks" / "budget-exhaustion.md"
+    ).read_text(encoding="utf-8")
+    header = (
+        "| Exit code of the script | What `make gateway-upkeep` returns | Meaning |"
+    )
+    table = runbook.split(header, 1)[1].split("\n\n", 1)[0]
+    rows = [line.split("|")[1:-1] for line in table.splitlines()[2:]]
+
+    # make's own code for a recipe that failed is 2, where the script exits 1.
+    assert [(a.strip(), b.strip()) for a, b, _ in rows] == [("0", "0"), ("1", "2")]
+    flat = " ".join(runbook.split())
+    assert "A refusal changed nothing" in flat
+    assert "may have been applied" in flat
+    assert "before running it again" in flat
+    assert "a credit is a new row on every run" in flat
 
 
 def test_make_dry_run_shows_the_recipe_and_nothing_else() -> None:

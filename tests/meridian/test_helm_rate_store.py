@@ -433,6 +433,7 @@ EXPECTED_DIRECTIVES = {
     "busy-reply-threshold": "100",
     "proto-max-bulk-len": "1mb",
     "client-query-buffer-limit": "1mb",
+    "maxmemory-clients": "8mb",
     "enable-protected-configs": "no",
     "enable-debug-command": "no",
     "enable-module-command": "no",

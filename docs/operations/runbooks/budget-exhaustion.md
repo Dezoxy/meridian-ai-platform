@@ -320,15 +320,31 @@ them as separate arguments: there is no shell in the Job.
 What you see. The script prints the Job's name, waits (at most three minutes;
 the Job's own deadline is two), then prints the command's output and exits:
 
-| Exit code | Meaning |
-|---|---|
-| 0 | The Job succeeded; the output is the command's. |
-| 1 | The Job failed: the command refused (`ERROR GUnnn ...`, which changed nothing) or failed, or it was given a usage error (the command's own code is 2 then), and the output above the last line says which. Or the Job did not finish, or `make up` or `make deploy` is missing: the last line, which starts `error:`, says what to run. |
+| Exit code of the script | What `make gateway-upkeep` returns | Meaning |
+|---|---|---|
+| 0 | 0 | The Job succeeded; the output is the command's. |
+| 1 | 2 | The Job failed or did not finish, or `make up` or `make deploy` is missing: the last line, which starts `error:`, says which and what to do. |
 
-A refusal is a Failed Job and is not retried (`backoffLimit: 0`): read it, fix
-the arguments and run again. A second run is a second Job (its name ends in the
-run's time and process number, not in the image's tag), so a run never meets
-the last one's leftovers, and nothing deletes one.
+`make` itself returns 2 for a recipe that failed, where the script exits 1:
+read the last line, not the number (seen on kind on 2026-10-06, an `expire`
+that refused). The last line says one of two things about the ledger.
+
+- **A refusal changed nothing.** The output holds the command's own line,
+  `ERROR GUnnn ...` (a refusal of one of the database functions), and the last
+  line says so: fix the arguments and run again.
+- **Any other failure may have changed it.** A Job that failed without such a
+  line (a lost connection, a crash, a usage error, a pod that never started), or
+  that did not finish within its three minutes, can have failed after the
+  commit: the change **may have been applied**, and the last line says so. Read
+  the open reservations (`make gateway-upkeep ARGS="reservations --older-than
+  15"`) or the audit rows (below) **before running it again**, because a credit
+  is a new row on every run (it has no idempotency key): a rerun after one that
+  did commit credits twice. The Job's output stays for a day
+  (`kubectl -n meridian logs job/NAME`).
+
+A failed Job is not retried (`backoffLimit: 0`). A second run is a second Job
+(its name ends in the run's time and process number, not in the image's tag), so
+a run never meets the last one's leftovers, and nothing deletes one.
 
 Where the output is kept. The Job and its pod stay for a day
 (`ttlSecondsAfterFinished: 86400`), whether it succeeded or failed:

@@ -561,7 +561,10 @@ sweep:
 #               PONG, which is how a store frozen by a script that never ends
 #               is restarted; without it the store's pod is never Ready. On kind
 #               `make deploy` compares the Secret's annotation
-#               meridian.kind/rate-store-acl-rules with what `make up` writes.
+#               meridian.kind/rate-store-acl-rules with what `make up` writes,
+#               and the hash of the Secret's own users.acl (password hash
+#               masked) with the same, so a file edited under an annotation
+#               that still matches is refused.
 #               The store's NetworkPolicy is its only control before
 #               authentication, so the chart fails with `enabled` and
 #               `networkPolicy.enabled` false; and a values `env` item of any
@@ -575,7 +578,13 @@ sweep:
 #               the admissions of a minute per tenant (about six times the
 #               request limit, 140 entries of about 100 bytes with the
 #               registry's numbers) and the connections (up to 40 per gateway
-#               pod, the size of its thread pool). Measured on the pinned image
+#               pod, the size of its thread pool), whose buffers together
+#               `maxmemory-clients 8mb` in redis.conf bounds (the probe user has
+#               no password, so any holder of a services certificate with a
+#               path to the port may open a session and fill its query buffer:
+#               240 of them killed the store under this limit without that
+#               line; templates/rate-store.yaml gives the measurement).
+#               Measured on the pinned image
 #               without modules, over TLS, read-only, as uid 999: 12 MB resident
 #               when idle and a peak of 17 MB after 12,000 admissions from 40
 #               connections on 3 tenants (2026-10-06), so 64Mi leaves nearly
