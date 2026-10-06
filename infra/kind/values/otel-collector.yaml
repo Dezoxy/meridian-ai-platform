@@ -1,8 +1,21 @@
 # OpenTelemetry Collector: the single OTLP entry point for apps in the cluster.
-# Applications send OTLP to otel-collector.observability:4317 (gRPC) or :4318
-# (HTTP); the collector fans out to Tempo (traces), Prometheus (metrics) and
-# Loki (logs), all over OTLP. The image (core distribution, pinned by digest)
-# is set by up.sh from pins.env.
+# Applications send OTLP over HTTP with TLS to otel-collector.observability:4318
+# (S063, T-90); the collector fans out to Tempo (traces), Prometheus (metrics)
+# and Loki (logs), all over OTLP. The image (core distribution, pinned by
+# digest) is set by up.sh from pins.env.
+#
+# The gRPC receiver (4317) is closed: nothing but smoke's telemetrygen used it,
+# and that now sends over HTTP too. The collector's own hops to Tempo, Prometheus
+# and Loki stay clear text: they are inside `observability`, and T-90 names the
+# hop from the services to the collector.
+#
+# The server certificate is the Secret otel-collector-tls, which cert-manager
+# makes from the Certificate in manifests/telemetry-ca.yaml (up.sh waits for it
+# before this release). The collector re-reads the pair by itself: configtls
+# reloads the files at a handshake once `reload_interval` has passed since the
+# last read, so a renewal needs no restart. The kubelet refreshes the mounted
+# files some time after the Secret changes, so a renewal reaches a handshake
+# within about the interval plus that time.
 mode: deployment
 replicaCount: 1
 
@@ -11,8 +24,12 @@ fullnameOverride: otel-collector
 
 # The chart's defaults also open Jaeger and Zipkin receivers and scrape the
 # collector itself; the core distribution does not contain those components,
-# and only OTLP is used here.
+# and only OTLP is used here. `otlp` is the gRPC port: switched off here, the
+# chart leaves no Service port and no container port for it (the receiver
+# below is removed too).
 ports:
+  otlp:
+    enabled: false
   jaeger-compact:
     enabled: false
   jaeger-thrift:
@@ -29,6 +46,23 @@ resources:
   limits:
     memory: 256Mi
 
+# The image runs as user 10001 and the pod sets no security context, so the
+# files of the Secret below are read through the pod's group: fsGroup with mode
+# 0440 (288), as the services' Secrets (infra/helm/meridian, meridian.tlsVolume).
+podSecurityContext:
+  fsGroup: 10001
+
+# A directory mount, not a subPath: a subPath never sees the renewed Secret.
+extraVolumes:
+  - name: tls
+    secret:
+      secretName: otel-collector-tls
+      defaultMode: 288 # 0440
+extraVolumeMounts:
+  - name: tls
+    mountPath: /etc/otel-collector/tls
+    readOnly: true
+
 config:
   receivers:
     jaeger: null
@@ -36,10 +70,14 @@ config:
     prometheus: null
     otlp:
       protocols:
-        grpc:
-          endpoint: ${env:MY_POD_IP}:4317
+        # Closed (see the top); a null removes the chart's default receiver.
+        grpc: null
         http:
           endpoint: ${env:MY_POD_IP}:4318
+          tls:
+            cert_file: /etc/otel-collector/tls/tls.crt
+            key_file: /etc/otel-collector/tls/tls.key
+            reload_interval: 5m
   # Since collector 0.1xx the exporters are named otlp_grpc and otlp_http
   # ("otlp" and "otlphttp" are deprecated aliases).
   exporters:

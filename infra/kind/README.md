@@ -42,12 +42,13 @@ Jobs are in [`manifests/`](manifests/). The Meridian
 services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
 which `make deploy` installs (below).
 
-How telemetry flows: a Meridian service sends OTLP over HTTP to
-`otel-collector.observability:4318`. The collector also listens for gRPC on
-`:4317`, but since S063 that port is admitted from no namespace and no pod
-(see "The namespaces outside `meridian`" below). The collector
-forwards traces to Tempo, metrics to Prometheus's OTLP receiver and logs to
-Loki's OTLP endpoint. Grafana has three datasources with fixed uids:
+How telemetry flows: an application sends OTLP over HTTP with TLS to
+`otel-collector.observability:4318` (S063: the gRPC port, 4317, is closed, and
+the collector's certificate comes from an authority of its own, below). The
+collector forwards traces to Tempo, metrics to Prometheus's OTLP receiver and
+logs to Loki's OTLP endpoint, and those three hops stay clear text: they are
+inside `observability`, and the threat model names the hop to the collector.
+Grafana has three datasources with fixed uids:
 `prometheus`, `tempo` and `loki`. Retention is 24 hours everywhere.
 
 node-exporter is off on kind (S063). It is the one pod of `observability` that
@@ -90,10 +91,11 @@ leave a restarted pod distrusting the pods that had not.
 Who may ask for a certificate (S056, threat T-88) is decided by cert-manager's
 approver-policy, not by cert-manager: its built-in approver, which approves
 every request, is switched off (`disableAutoApproval` in
-[`values/cert-manager.yaml`](values/cert-manager.yaml)). Three
+[`values/cert-manager.yaml`](values/cert-manager.yaml)). Five
 `CertificateRequestPolicy` objects in
 [`manifests/certificate-policy.yaml`](manifests/certificate-policy.yaml) apply
-to the two issuers, and approver-policy may act for no other signer
+to the four issuers (the two of the services' CA and the two of the
+collector's), and approver-policy may act for no other signer
 ([`values/approver-policy.yaml`](values/approver-policy.yaml)):
 
 - `meridian-services` permits a request for the `meridian-services` issuer
@@ -109,9 +111,17 @@ to the two issuers, and approver-policy may act for no other signer
   any namespace and permits none that names anything, so a request that no
   other policy permits is denied, not left waiting. A request for any other
   issuer meets no policy and is never approved.
+- `telemetry-ca` and `otel-collector` (S063, below) are the same for the
+  collector's own authority, each selecting one namespaced `Issuer` in
+  `observability`: the first permits the authority's request (common name
+  `telemetry-ca`, `isCA`, at most a year), the second the collector's server
+  certificate (its two DNS names, the usages digital signature and server
+  auth, at most 90 days, no URI and no CA). Each is also what denies a
+  request for its issuer that it does not permit: no policy of the deny kind
+  is needed.
 
 The namespace limit is held twice: by each policy's selector and by where its
-binding is. cert-manager's account may `use` the two policies that allow
+binding is. cert-manager's account may `use` the four policies that allow
 through a Role and RoleBinding in one namespace each, and the one that denies
 through a ClusterRoleBinding, so a request from another namespace meets only
 the policy that denies. What is left: whoever can create a `Certificate` in
@@ -120,7 +130,7 @@ and the URI prefix, not which service), and whoever can change a policy or its
 binding undoes the limit; on kind that is the cluster's administrator.
 
 `make up` installs approver-policy and applies the policies before the CA,
-waits for the three to be Ready, and then waits for the issuer to be Ready
+waits for the five to be Ready, and then waits for the issuer to be Ready
 before it installs the database. On a cluster where cert-manager already ran
 with its approver on, `make up` turns the approver off first and brings the
 policies seconds later: the certificates already issued are not touched, and
@@ -1019,6 +1029,53 @@ call. `make smoke`'s ninth check proves the gateway's 200, 401 and 403, the
 audit row of the 403 and the refusal of a certificate from another CA (five
 lines).
 
+**A second authority, for the collector (S063, threat T-90).** The services
+send their traces and metrics to the collector over OTLP/HTTP, and the owner
+chose to encrypt that hop. The collector's server certificate is not signed by
+`meridian-services`: S056 made "that issuer signs only for `meridian` and its
+URI prefix" the boundary (T-88), and a policy that let it sign for
+`observability` would reopen it for one certificate. Instead
+[`manifests/telemetry-ca.yaml`](manifests/telemetry-ca.yaml) makes an authority
+of its own in `observability`, from namespaced `Issuer`s (a request can name
+one only from its own namespace, so it signs only there): a self-signed
+`telemetry-selfsigned`, the CA certificate `telemetry-ca` (ECDSA P-256, one
+year, key kept at renewal like the service CA's) with the `Issuer` of that name,
+and the collector's `Certificate` `otel-collector` (90 days, a new key at each
+renewal, the DNS names `otel-collector.observability.svc` and
+`otel-collector.observability.svc.cluster.local`, usages `server auth` and
+`digital signature`, no URI and no address). Two more policies in
+`certificate-policy.yaml` (above) decide those two requests, and
+`approveSignerNames` names the Issuers' signers
+(`issuers.cert-manager.io/observability.telemetry-ca` and
+`.../observability.telemetry-selfsigned`).
+
+- **Who trusts it.** The services trust the service CA through their own
+  Secret, so this authority has to reach them: `make up` writes its public
+  certificate (`tls.crt` of the Secret `telemetry-ca`, never the key) into the
+  ConfigMap `telemetry-ca`, key `ca.crt`, in `meridian`, on every run, and
+  `make deploy` refuses to start without it. The services mount that file.
+- **What the collector does.** It serves OTLP/HTTP with TLS on `:4318` from the
+  Secret `otel-collector-tls`, mounted read-only as a directory, and reads the
+  files again at a handshake every five minutes at most (`reload_interval`),
+  so a renewed certificate needs no restart. The gRPC port, `:4317`, is closed.
+  Its own hops to Tempo, Prometheus and Loki stay clear text, inside
+  `observability`.
+- **What goes stale.** The authority's certificate lasts a year and keeps its
+  key when it is renewed (about eight months in), but the ConfigMap holds the
+  old certificate until the next `make up`; a service that mounts a stale
+  ConfigMap fails to verify the collector, its exports are dropped (the
+  exporters run in background threads and log the failure) and it keeps
+  serving. The runbook
+  [certificate-expiry](../../docs/operations/runbooks/certificate-expiry.md)
+  says what to do. The alerts on certificates now read `observability` too.
+- **What it does not cover.** The authority's private key is a Secret in
+  `observability`, readable by whatever reads Secrets there or cluster-wide:
+  cert-manager's controller, and in the rendered kube-prometheus-stack chart
+  Prometheus's operator (it reads, creates and changes Secrets in every
+  namespace) and kube-state-metrics (it lists and watches them). Whoever reads
+  it can issue a certificate for the collector's name. This is tested without a
+  cluster; it has not been run on one.
+
 What this does not cover, on purpose: the edge to the Claims API is plain HTTP
 and the Claims API's own certificate is for its calls out only (TLS at the edge
 is a backlog row); a service loads its certificate once, and cert-manager does
@@ -1037,8 +1094,10 @@ prefix, so a request from another namespace is denied, but whoever can create
 a `Certificate` in `meridian`, or change a policy or its binding, can still
 mint any service's identity); the CA's private key is readable by the
 operators that hold a cluster-wide read of Secrets (cert-manager, cainjector,
-CloudNativePG), though by no Meridian pod; and the telemetry to the collector
-is still plain OTLP.
+CloudNativePG), though by no Meridian pod; and the telemetry from the services
+to the collector is TLS only by the second authority above (S063, tested without
+a cluster), while the collector's own hops to Tempo, Prometheus and Loki are
+still plain.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no

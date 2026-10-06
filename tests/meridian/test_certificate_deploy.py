@@ -69,11 +69,13 @@ def run_deploy(
     policies: dict[str, str] | None = None,
     approver: str = "ready",
     approver_after: int | None = None,
+    telemetry_ca: str = "present",
 ) -> tuple[subprocess.CompletedProcess, str]:
     """deploy.sh whole, in a scratch copy of ``infra/kind/``, with stub
     ``docker``, ``kind``, ``helm`` and ``kubectl`` that log every call. The
-    database, its policy, its Secrets and its roles are all in place; the
-    issuer is in the state ``issuer`` names (``ISSUER_STATES``). The three
+    database, its policy, its Secrets and its roles are all in place, and so is
+    the ConfigMap ``telemetry-ca`` unless ``telemetry_ca`` is ``missing``; the
+    issuer is in the state ``issuer`` names (``ISSUER_STATES``). The five
     CertificateRequestPolicies are Ready except those ``policies`` maps to a
     state of ``POLICY_STATES``; the approver-policy Deployment is in the state
     ``approver`` names (``APPROVER_STATES``), until it has been looked at
@@ -125,7 +127,13 @@ def run_deploy(
         '  *"get database"*) printf true ;;\n'
         '  *"get networkpolicy"*) ;;\n'
         '  *"get secret"*) ;;\n'
-        f"  *\"get cluster platform-db\"*) printf '%s' '{roles_json()}' ;;\n"
+        + (
+            '  *"get configmap telemetry-ca"*) ;;\n'
+            if telemetry_ca == "present"
+            else '  *"get configmap telemetry-ca"*) echo "Error from server '
+            '(NotFound): configmaps \\"telemetry-ca\\" not found" >&2; exit 1 ;;\n'
+        )
+        + f"  *\"get cluster platform-db\"*) printf '%s' '{roles_json()}' ;;\n"
         f'  *"get clusterissuer"*) {ISSUER_STATES[issuer]} ;;\n'
         + "".join(
             f'  *"get certificaterequestpolicy {name} "*) {POLICY_STATES[state]} ;;\n'

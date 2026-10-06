@@ -7,12 +7,16 @@
 
 app:
   # The signers approver-policy may approve and deny for: the two issuers in
-  # manifests/service-ca.yaml and no other. The chart's default, an empty list,
-  # is every signer, and the add-on's ClusterRole would then reach every issuer
-  # in the cluster.
+  # manifests/service-ca.yaml and the two in manifests/telemetry-ca.yaml (S063),
+  # and no other. The chart's default, an empty list, is every signer, and the
+  # add-on's ClusterRole would then reach every issuer in the cluster. A
+  # ClusterIssuer's signer is clusterissuers.cert-manager.io/<name>; a
+  # namespaced Issuer's is issuers.cert-manager.io/<namespace>.<name>.
   approveSignerNames:
     - clusterissuers.cert-manager.io/meridian-services
     - clusterissuers.cert-manager.io/meridian-selfsigned
+    - issuers.cert-manager.io/observability.telemetry-ca
+    - issuers.cert-manager.io/observability.telemetry-selfsigned
 
 # One small pod on a one-node cluster.
 resources:
