@@ -6,13 +6,13 @@
 #      the API server's address, read from the `kubernetes` EndpointSlice in
 #      `default` on every run, so a cluster whose node got another address is
 #      repaired by running this again), the one of observability
-#      and the one for smoke's telemetrygen Jobs, all before the releases they
-#      guard,
+#      and the one for smoke's telemetrygen Jobs, and the one of the log agent's
+#      namespace `logging`, all before the releases they guard,
 #      cert-manager (its own approver off), approver-policy with the policies
 #      that say who may ask for a certificate, the CA that signs the
 #      services' certificates, and the CA of its own in `observability` that
 #      signs the collector's certificate (its public certificate goes into the
-#      ConfigMap telemetry-ca in `meridian`, on every run)
+#      ConfigMap telemetry-ca in `meridian` and in `logging`, on every run)
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its eleven roles (the owner, six services, the
 #      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
@@ -23,7 +23,9 @@
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
 #      there is deleted), Meridian's alert rules (infra/kind/alerts, one
 #      PrometheusRule), a ServiceMonitor for cert-manager's metrics, Tempo,
-#      Loki, OpenTelemetry Collector
+#      Loki, OpenTelemetry Collector, and (S064) the log agent: a second release
+#      of the collector's chart, the contrib build, as a DaemonSet in `logging`
+#      that sends the output of `meridian`'s pods to the collector
 # Every version is pinned in pins.env.
 set -euo pipefail
 
@@ -146,24 +148,30 @@ apply_certificate_policy() {
 
 # Publish the public certificate of the collector's authority (S063) as the
 # ConfigMap telemetry-ca (key ca.crt) in `meridian`, for the services to mount
-# and trust it. Only the field tls.crt of the authority's Secret is read (a
-# jsonpath; never the object and never tls.key), the text is checked to be a
-# certificate and not to hold a key, and nothing is printed. Server-side apply,
-# on every run: a renewed authority reaches the ConfigMap at the next `make up`,
-# and a rerun changes nothing when the certificate is the same.
+# and trust it, and (S064) in `logging`, for the log agent. Only the field
+# tls.crt of the authority's Secret is read (a jsonpath; never the object and
+# never tls.key), once, the text is checked to be a certificate and not to hold
+# a key, and nothing is printed. Server-side apply, on every run: a renewed
+# authority reaches the ConfigMaps at the next `make up`, and a rerun changes
+# nothing when the certificate is the same. The services read the mounted file
+# again at each new connection; the log agent's exporter is not known to, so
+# after a renewal of the authority restart its DaemonSet (the runbook
+# certificate-expiry.md covers the services).
 publish_telemetry_ca() {
-  local pem
+  local pem namespace
   pem="$(kctl -n observability get secret telemetry-ca \
     -o 'jsonpath={.data.tls\.crt}' | base64 -d)" ||
     die "could not read tls.crt of the Secret telemetry-ca in observability (is the Certificate telemetry-ca Ready? kubectl -n observability get certificate)"
   [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* && "${pem}" != *"PRIVATE KEY"* ]] ||
     die "tls.crt of the Secret telemetry-ca in observability does not hold a certificate; the ConfigMap telemetry-ca was not changed"
-  kctl -n meridian create configmap telemetry-ca --from-literal=ca.crt="${pem}" \
-    --dry-run=client -o json |
-    jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian"}
-      | del(.metadata.creationTimestamp)' |
-    kctl -n meridian apply --server-side --force-conflicts -f - >/dev/null
-  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian"
+  for namespace in meridian logging; do
+    kctl -n "${namespace}" create configmap telemetry-ca --from-literal=ca.crt="${pem}" \
+      --dry-run=client -o json |
+      jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian"}
+        | del(.metadata.creationTimestamp)' |
+      kctl -n "${namespace}" apply --server-side --force-conflicts -f - >/dev/null
+  done
+  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian and in logging"
 }
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
@@ -268,6 +276,9 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observabili
 
 log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null
+
+log "network: the log agent's NetworkPolicies in logging (before the agent)"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/logging-networkpolicy.yaml" >/dev/null
 
 log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
@@ -384,6 +395,16 @@ install_release otel-collector observability "${OTEL_COLLECTOR_CHART}" \
   --set "image.repository=${OTEL_COLLECTOR_IMAGE_REPOSITORY}" \
   --set "image.tag=${OTEL_COLLECTOR_IMAGE_TAG}" \
   --set "image.digest=${OTEL_COLLECTOR_IMAGE_DIGEST}"
+
+# The log agent (S064) needs the collector's Service to send to and the
+# ConfigMap telemetry-ca in `logging` (published above): both exist by now. Its
+# pod is the one pod of this script's releases that mounts a host path.
+log "logging: the log agent (OpenTelemetry Collector, contrib build, one pod per node)"
+install_release log-agent logging "${OTEL_COLLECTOR_CHART}" \
+  "${OTEL_COLLECTOR_VERSION}" "${OTEL_REPO}" log-agent.yaml \
+  --set "image.repository=${LOG_AGENT_IMAGE_REPOSITORY}" \
+  --set "image.tag=${LOG_AGENT_IMAGE_TAG}" \
+  --set "image.digest=${LOG_AGENT_IMAGE_DIGEST}"
 
 log "edge: waiting for the Gateway to be programmed"
 # Envoy Gateway has left Programmed False for hours while the edge served

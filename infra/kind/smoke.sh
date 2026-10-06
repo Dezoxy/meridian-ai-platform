@@ -64,7 +64,7 @@
 #                 was given), with a run ID that does not exist: each server must
 #                 refuse it as `unknown-run`. Skipped, not failed, while the
 #                 Meridian services are not deployed (`make deploy`).
-#   4. telemetry: six lines (S063). The first two are about TLS and do not need
+#   4. telemetry: seven lines (S063, S064). The first two are about TLS and do not need
 #                 the Meridian services: the ConfigMap `telemetry-ca` in
 #                 `meridian`, which the six services mount to trust the
 #                 collector, holds the certificate its authority has now (the
@@ -117,6 +117,30 @@
 #                 trace ID, the log line, the series count) goes through
 #                 clean_lines and is cut to 120 characters: anyone who can push
 #                 a log line to the collector chooses its text.
+#                 The seventh line (S064) is about the log agent, the DaemonSet
+#                 in `logging` that reads the pods' output on the node and sends
+#                 it to the collector, and it runs after the three read-backs,
+#                 through the same Grafana forward. Smoke asks the Claims API,
+#                 through the edge the adjuster pages use, for a path that does
+#                 not exist and carries this run's marker in the path
+#                 (/smoke-<epoch>: a path and not a query, because the access
+#                 line keeps no query), expects a 404, and then looks in Loki
+#                 for a record of the service claims-api whose path is that
+#                 marker, within the wait the log line above uses. PASS says what
+#                 was found (the record's body, cleaned and cut like the other
+#                 answers). Three FAILs tell what is wrong apart: the edge did
+#                 not answer 404 (what came back, or that it did not answer at
+#                 all), Loki answered and has no such line (the agent is not
+#                 sending, the services' image does not write the JSON access
+#                 line, or the line is not what the query reads), and Loki did
+#                 not answer. One SKIP replaces it while the Meridian services
+#                 are not deployed (`make deploy`; so it is a SKIP after `make
+#                 up` alone) and while the agent's DaemonSet is not there. What
+#                 it does not prove: that every service's output arrives (one
+#                 service, one line), that a line that is not JSON arrives (a
+#                 crash, output before a service set up its logging), that the
+#                 agent's checkpoint survives a restart, and that nothing but
+#                 `meridian`'s output is read: the query looks at one path.
 #   5. cost panel: four lines. Grafana serves the provisioned dashboard
 #                 "Meridian: Model Gateway tokens and cost", its queries equal
 #                 the file's and every one of them runs in Prometheus (a
@@ -783,6 +807,16 @@ fi'
 # What the telemetry check (4) prints of an answer of Tempo, Loki or Prometheus
 # is cut to this many characters (see telemetry_answer).
 readonly TELEMETRY_ANSWER_LENGTH=120
+# The log agent's line (the seventh of check 4, S064): the namespace and the
+# DaemonSet of the log agent (the chart names a DaemonSet <fullname>-agent, and
+# values/log-agent.yaml sets the fullname; a test keeps them equal), the service
+# whose record is looked for (the container's name, which the agent makes the
+# service name), and the edge's address for the Claims API, the host the adjuster
+# pages are asked on. The marker is a path of this run: /smoke-<epoch>.
+readonly LOG_AGENT_NAMESPACE=logging
+readonly LOG_AGENT_DAEMONSET=log-agent-agent
+readonly LOG_AGENT_SERVICE=claims-api
+readonly CLAIMS_EDGE_ORIGIN=http://claims.meridian.localhost:8088
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
@@ -1444,6 +1478,59 @@ check_telemetry_clear_text() {
   fi
 }
 
+# check_telemetry_log_agent: the seventh line of check 4 (S064). The log agent
+# sent a record of a service's own output to Loki. The Claims API is asked,
+# through the edge, for /smoke-${epoch}, a path that does not exist (404), and
+# Loki is then asked for a record of the service ${LOG_AGENT_SERVICE} whose
+# `path` is that marker: the access line of the request, as the agent ships it
+# from the pod's output (the fields other than the message are structured
+# metadata in Loki, so the filter reads the field and not the text). The marker
+# is in the path, not in a query: the access line keeps no query. SKIP while
+# the services are not deployed or the agent's DaemonSet is not there. Needs the
+# Grafana forward of check_telemetry (${grafana_url}) and its poll. The three
+# FAILs: the edge did not answer 404; Loki answered and has no such line (poll
+# keeps the start of its last answer, which for a query that found nothing is a
+# `"status":"success"` body); Loki did not answer (a curl error or an answer
+# that is not a success). What came back is cleaned and cut by telemetry_answer.
+check_telemetry_log_agent() {
+  local found marker status
+  if ! found="$(deployed_services)"; then
+    fail "telemetry: could not look for the Meridian deployments (kubectl's error is above), so no line of theirs was looked for in Loki"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "telemetry: the Meridian services are not deployed (make deploy), so no line of theirs was looked for in Loki"
+    return
+  fi
+  if ! found="$(kctl -n "${LOG_AGENT_NAMESPACE}" get daemonset "${LOG_AGENT_DAEMONSET}" -o name --ignore-not-found)"; then
+    fail "telemetry: could not look for daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE} (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    skip "telemetry: the log agent is not there (no daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE}: run make up), so no line of the services was looked for in Loki"
+    return
+  fi
+  marker="/smoke-${epoch}"
+  if ! status="$(curl -q --noproxy '*' -sS -m 10 -o /dev/null -w '%{http_code}' "${CLAIMS_EDGE_ORIGIN}${marker}" 2>&1)"; then
+    fail "telemetry: the edge did not answer 404 for ${CLAIMS_EDGE_ORIGIN}${marker}: $(telemetry_answer "${status}")"
+    return
+  fi
+  if [[ "${status}" != 404 ]]; then
+    fail "telemetry: the edge did not answer 404 for ${CLAIMS_EDGE_ORIGIN}${marker}: it answered $(telemetry_answer "${status}")"
+    return
+  fi
+  if poll '.data.result[0].values[0][1] // empty' -G \
+    "${grafana_url}/api/datasources/proxy/uid/loki/loki/api/v1/query_range" \
+    --data-urlencode "query={service_name=\"${LOG_AGENT_SERVICE}\"} | path=\"${marker}\"" \
+    --data-urlencode "limit=5"; then
+    pass "telemetry: the log agent shipped the Claims API's access line for ${marker}: Loki has a record of ${LOG_AGENT_SERVICE} with that path: $(telemetry_answer "${poll_result}")"
+  elif [[ "${poll_error}" == *'"status":"success"'* ]]; then
+    fail "telemetry: Loki has no line of ${LOG_AGENT_SERVICE} whose path is ${marker} after ${POLL_TIMEOUT}s, though the edge answered 404: the log agent is not sending (kubectl -n ${LOG_AGENT_NAMESPACE} logs daemonset/${LOG_AGENT_DAEMONSET}), or the Claims API does not write its access line as JSON with a path field"
+  else
+    fail "telemetry: Loki did not answer the question for ${marker} after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
+  fi
+}
+
 check_telemetry() {
   epoch="$(date +%s)"
   service="meridian-smoke-${epoch}"
@@ -1494,6 +1581,8 @@ check_telemetry() {
   else
     fail "metric: no series for ${service} in Prometheus after ${POLL_TIMEOUT}s"
   fi
+
+  check_telemetry_log_agent
 }
 
 # ── 5. cost panel ────────────────────────────────────────────────────────────

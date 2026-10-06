@@ -158,9 +158,41 @@ Not JSON: what a process prints before its factory ran, a start-up error
 (a missing setting is uvicorn's traceback on standard error, exit status 1,
 with nothing on standard output) and a crash of the interpreter. The edge's
 own log is not ours to format. The two HTTP client libraries are held at
-WARNING because they log each request's URL at INFO. The records stay in each
-pod's output: nothing ships them to Loki until the node agent of the
-cluster half of S064 is built.
+WARNING because they log each request's URL at INFO.
+
+On kind the output of `meridian`'s pods is also in Loki (S064; **implemented,
+tested without a cluster, and not yet seen on one**): the log agent, a
+DaemonSet in `logging`, reads each pod's files on the node and sends the lines
+to the collector (`infra/kind/README.md`, "The log agent and the namespace
+`logging`", says what that pod can read and what a restart re-sends). It sends
+`meridian`'s pods and nothing else: not the database's (`platform-db-*`), not
+`observability`'s, not its own. In Grafana, Explore, the Loki datasource:
+
+- a service's lines: `{service_name="claims-api"}`. The service name is the
+  container's name: `claims-api`, `agent-runtime`, `model-gateway`,
+  `policy-mcp`, `claims-mcp`, `knowledge-mcp`, the CronJob's `sweep` and the
+  Jobs' `migrate`, `seed` and `ingest`. Loki also labels each stream with the
+  namespace, pod and container (`k8s_pod_name`, `k8s_container_name`).
+- a service's errors: `{service_name="agent-runtime"} | level="ERROR"`. A line
+  that is a JSON object keeps its fields as structured metadata (`level`,
+  `logger`, `service`, and for an access line `method`, `path` and `status`),
+  which are filtered after the stream selector with no parser, for example
+  `{service_name="claims-api"} | path="/adjuster/claims" | status="200"`. An
+  access line's path never has a query string: it is built without one.
+- a line that is not JSON (a crash's traceback, output from before a service
+  set up its logging): `{service_name="claims-api"} | logger=""`. Such a line
+  has no severity and no fields; its body is the line as the service printed
+  it. A JSON line that cannot be parsed (cut off) is in this set too.
+- by a trace's ID: **the lines do not carry one.** A service's JSON line has
+  `time`, `level`, `logger`, `service`, `message` and an access line's three
+  fields, no trace or span ID, so Grafana's link from a trace to its logs
+  (`{service_name=~".+"} | trace_id="…"`, in the Tempo datasource) finds
+  nothing until a line carries that field. Find a request by its time and its
+  service instead.
+
+Loki keeps 24 hours. A line the agent had read and not yet sent when it
+stopped is lost, so a gap after a restart of the agent is a known thing, not a
+sign of a quiet service.
 
 ## A runbook is something people execute
 
@@ -211,7 +243,7 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 40 of 40 lines (S055 added three, for service
+7. `make smoke` passes, 41 of 41 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
@@ -221,11 +253,12 @@ applied to one. The session that owns the cluster checks, on `main`:
    kube-state-metrics' rights, which may not read Secrets, and one for the
    database's policy, which must name the API server's address (a FAIL says
    "run make up"), tested
-   without a cluster until they have run on one: the 35 below are S062's
-   count); 28 after `make up` alone, with SKIP lines for
+   without a cluster until they have run on one; S064 one for the log agent,
+   the Claims API's own access line found in Loki: the 35 below are S062's
+   count); 29 after `make up` alone, with SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   28 is edge 1, database 4, tools 1, telemetry 6, cost panel 4, adjuster
+   29 is edge 1, database 4, tools 1, telemetry 7, cost panel 4, adjuster
    pages 1, sweep 1, network policy 1, service identity 1, certificate policy 4
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster

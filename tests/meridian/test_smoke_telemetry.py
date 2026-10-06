@@ -58,6 +58,9 @@ def run_telemetry_check(
             # (test_smoke_telemetry_tls.py), which test_smoke_line_count.py adds.
             "check_telemetry_ca() { :; }",
             "check_telemetry_clear_text() { :; }",
+            # The line that finds a service's own record in Loki (S064) has a
+            # harness of its own too (test_smoke_log_agent.py).
+            "check_telemetry_log_agent() { :; }",
             "open_grafana() { grafana_url=http://127.0.0.1:1; }",
             'kctl() { [[ "${JOBS_COMPLETE}" == yes ]]; }',
             "poll() {",

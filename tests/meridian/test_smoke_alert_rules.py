@@ -55,10 +55,11 @@ RULE_COUNT = 13
 # TLS lines that open the telemetry check (the authority's ConfigMap, a push in
 # clear text), the fourth line of the cost panel check (kube-state-metrics'
 # rights) and the first line of the database check (its policy names the API
-# server's address): 35 before.
-SMOKE_LINES_AFTER_DEPLOY = 40
+# server's address): 35 before. S064 added the telemetry check's seventh line
+# (the Claims API's own access line found in Loki, shipped by the log agent).
+SMOKE_LINES_AFTER_DEPLOY = 41
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
-# one SKIP for its stores, tools 1 SKIP, telemetry 6, cost panel 3 and one SKIP
+# one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP
 # (the collector's line is skipped with the other four: it is part of the same
 # check, which stops at the Claims API), service identity 1 SKIP, certificate
@@ -67,8 +68,9 @@ SMOKE_LINES_AFTER_DEPLOY = 40
 # authority's Secret and the collector exist after `make up`, and the services
 # are not needed. The kube-state-metrics line makes it 27: it reads the stack's
 # RBAC, which `make up` makes. The database policy's line makes it 28: it reads
-# the policy and the endpoint, which `make up` makes.
-SMOKE_LINES_AFTER_UP = 28
+# the policy and the endpoint, which `make up` makes. S064's telemetry line makes
+# it 29: after `make up` alone it is one SKIP (the services are not deployed).
+SMOKE_LINES_AFTER_UP = 29
 
 
 def tree_groups() -> list[dict]:

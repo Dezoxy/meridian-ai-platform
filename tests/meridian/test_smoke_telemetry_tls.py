@@ -1,7 +1,7 @@
 """The two TLS lines of smoke's telemetry check, and telemetrygen's Job (S063, N4b).
 
 ``check_telemetry`` in ``infra/kind/smoke.sh`` opens with two lines of its own,
-before it sends anything (check 4 now prints six lines):
+before it sends anything (check 4 prints seven lines, the last of them S064's):
 
 - ``check_telemetry_ca``: the ConfigMap ``telemetry-ca`` in `meridian` holds the
   certificate the authority has now (the fingerprint of its ``ca.crt`` equals the

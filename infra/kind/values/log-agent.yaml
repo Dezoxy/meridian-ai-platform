@@ -1,0 +1,215 @@
+# The log agent (S064): a second release of the OpenTelemetry Collector chart,
+# the contrib build, as a DaemonSet in the namespace `logging`. It reads the
+# output of the pods of `meridian` from the node's pod-log directory and sends
+# each line as an OTLP log record, over HTTP with TLS, to the collector in
+# `observability`, which writes it to Loki (values/otel-collector.yaml). The
+# image (contrib, pinned by digest, the same release as the collector's) is set
+# by up.sh from pins.env. The owner chose this way, a node agent, over each
+# service pushing its own records (2026-10-06): it also ships what no service
+# could push, uvicorn's access line, output before a service's logging was set up
+# and a crash. Implemented and tested without a cluster; it has not run on one.
+#
+# What this pod can read, and what it cannot (the price of the owner's decision):
+#   - One hostPath, /var/log/pods, read-only: the output of EVERY pod on the node,
+#     in every namespace. The receiver is configured to open the files of
+#     `meridian`'s pods and nothing else, but the mount reaches all of them, so a
+#     compromised agent reads the output of every pod on its node (the other
+#     namespaces', the database's and cert-manager's included). That is what
+#     remains, and the only thing that bounds it is what the mount and the
+#     container below take away.
+#   - No other host path. The checkpoint is an emptyDir (see below), not a
+#     writable host directory; the chart's `logsCollection` preset, which was not
+#     used, also mounts /var/lib/docker/containers (Docker's own log directory,
+#     not containerd's, which kind runs) and a writable /var/lib/otelcol.
+#   - No host network, no host PID, no hostPort (every port of the chart is off:
+#     this agent receives nothing), no service-account token, no ClusterRole.
+#     Pod, namespace and container come from the FILE'S PATH, read by the
+#     receiver's `container` operator, and not from the API server, so there is no
+#     k8sattributes processor and nothing here calls the API server.
+#
+# The user is root (uid 0), with every capability dropped. containerd writes each
+# log file as root:root, mode 0640 (the CRI plugin opens it with that mode), and
+# its directories root-owned, so no other user can read them: the image's own
+# user, 10001, could not. As the file's owner, root reads it with no capability
+# at all (CAP_DAC_READ_SEARCH and CAP_DAC_OVERRIDE are dropped with the rest).
+# What bounds root here: the mount is read-only, the root filesystem is read-only,
+# `allowPrivilegeEscalation` is false (nothing can gain a capability later), the
+# default seccomp profile applies, and the pod has no host namespace, no token and
+# a NetworkPolicy that lets it reach DNS and the collector's port 4318 and
+# nothing else (manifests/logging-networkpolicy.yaml). The file mode is what
+# containerd does as far as is known; it is an expectation until `make up` has
+# run, and a pod log full of "permission denied" is how the cluster would say not.
+#
+# Pod Security: the namespace `logging` is labelled `privileged` (warn and audit,
+# as the others; manifests/namespaces.yaml says why). `baseline` forbids a
+# hostPath volume, which this pod has; `restricted` forbids it too, and asks for
+# runAsNonRoot, which this pod cannot meet. So this pod is not in `observability`
+# (which S063 brought to `restricted`): putting it there would turn that
+# namespace's label into a statement that is not true of it.
+#
+# Where logs are on kind. kind's node runs containerd. Its CRI plugin writes
+# /var/log/pods/<namespace>_<pod>_<uid>/<container>/<restart>.log, which are the
+# files themselves, in the CRI format ("<time> <stdout|stderr> <F|P> <line>"), and
+# /var/log/containers/*.log are symlinks into that directory. So the one mount
+# reaches the files and nothing else is needed (Docker's directory is only for a
+# Docker runtime, where the files in /var/log/pods are the symlinks).
+#
+# The pipeline, as text:
+#   file_log   reads /var/log/pods/meridian_*/*/*.log (not the database's:
+#              meridian_platform-db-*), from the end of each file it finds at
+#              start and the beginning of each file that appears later
+#     container  parses the CRI format (time and stream), joins partial lines, and
+#                reads namespace, pod, container and the pod's UID from the path
+#     json_parser  a line that is a JSON object becomes attributes; any other line
+#                is sent as it is (on_error: send_quiet), none is dropped
+#     severity   the attribute `level` becomes the record's severity
+#     move       the attribute `message` becomes the body
+#   memory_limiter, resource (service.name from the container's name), batch
+#   otlp_http  https://otel-collector.observability.svc.cluster.local:4318
+# A line that is not a JSON object keeps the whole line as its body and has no
+# severity. A JSON line keeps its other fields (logger, service, method, path,
+# status, time) as attributes, which Loki stores as structured metadata.
+#
+# The checkpoint is the offset of each file read so far (the file_storage
+# extension) on an emptyDir. An emptyDir survives a restart of the container
+# (a crash, an OOM kill) and is gone when the pod is replaced (a new release of
+# this chart, a deleted pod, a node reboot, an eviction). So a container restart
+# re-sends nothing, and a replaced pod starts every file it finds at its end:
+# it re-sends nothing either, and the lines written to those files while no agent
+# ran are not sent. Lines the agent had read and not yet exported (the batch and
+# the exporter's queue are in memory) are lost when it stops, and an export that
+# fails for more than the exporter's retry window (five minutes) is dropped.
+# Rotated files are not looked for: kubelet renames a full file to a name that
+# does not end in .log (and keeps five of 10 MiB per container), so the receiver
+# does not pick it up under that name, and what of it was not read before the
+# rename is not sent.
+mode: daemonset
+
+# The DaemonSet is named `<fullname>-agent` by the chart: log-agent-agent.
+fullnameOverride: log-agent
+
+# No receiver listens: the chart's ports are all off, which also leaves no
+# hostPort (the chart gives each enabled port one in daemonset mode).
+ports:
+  otlp:
+    enabled: false
+  otlp-http:
+    enabled: false
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    memory: 192Mi
+
+podSecurityContext: {}
+
+# Root, with nothing: see the header. runAsNonRoot is left unset (it would stop
+# the pod); everything else is what `restricted` asks of a container.
+securityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  seccompProfile:
+    type: RuntimeDefault
+  readOnlyRootFilesystem: true
+
+serviceAccount:
+  automountServiceAccountToken: false
+
+# Directory mounts, no subPath. `type: Directory` makes the kubelet refuse to
+# start the pod when the directory is not there, instead of making one.
+extraVolumes:
+  - name: varlogpods
+    hostPath:
+      path: /var/log/pods
+      type: Directory
+  - name: checkpoints
+    emptyDir:
+      sizeLimit: 32Mi
+  - name: telemetry-ca
+    configMap:
+      name: telemetry-ca
+      items:
+        - key: ca.crt
+          path: ca.crt
+extraVolumeMounts:
+  - name: varlogpods
+    mountPath: /var/log/pods
+    readOnly: true
+  - name: checkpoints
+    mountPath: /var/lib/otelcol
+  - name: telemetry-ca
+    mountPath: /etc/telemetry-ca
+    readOnly: true
+
+config:
+  extensions:
+    file_storage:
+      directory: /var/lib/otelcol
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+    otlp: null
+    file_log:
+      include:
+        - /var/log/pods/meridian_*/*/*.log
+      # The database's pods are in `meridian` too. Their output is PostgreSQL's,
+      # not the services' (the redaction of personal data and the JSON format are
+      # the services' own), and a statement that failed can be in it.
+      exclude:
+        - /var/log/pods/meridian_platform-db-*/*/*.log
+      include_file_path: true
+      start_at: end
+      storage: file_storage
+      retry_on_failure:
+        enabled: true
+      operators:
+        - id: container
+          type: container
+        - id: json
+          type: json_parser
+          if: body matches "^\\s*\\{.*\\}\\s*$"
+          parse_from: body
+          on_error: send_quiet
+          severity:
+            parse_from: attributes.level
+        - id: message-to-body
+          type: move
+          if: attributes.message != nil
+          from: attributes.message
+          to: body
+  processors:
+    resource/service:
+      attributes:
+        - key: service.name
+          from_attribute: k8s.container.name
+          action: upsert
+  exporters:
+    debug: null
+    otlp_http/collector:
+      endpoint: https://otel-collector.observability.svc.cluster.local:4318
+      tls:
+        ca_file: /etc/telemetry-ca/ca.crt
+        min_version: "1.3"
+  service:
+    extensions: [health_check, file_storage]
+    pipelines:
+      traces: null
+      metrics: null
+      logs:
+        receivers: [file_log]
+        processors: [memory_limiter, resource/service, batch]
+        exporters: [otlp_http/collector]

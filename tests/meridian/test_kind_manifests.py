@@ -1201,7 +1201,7 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
 PSA = "pod-security.kubernetes.io/"
 
 
-def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() -> None:
+def test_meridian_cert_manager_observability_and_logging_never_enforce() -> None:
     namespaces = {
         d["metadata"]["name"]: d
         for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
@@ -1213,14 +1213,18 @@ def test_meridian_cert_manager_and_observability_warn_and_audit_never_enforce() 
         "cert-manager",
         "observability",
         "meridian",
+        "logging",
     }
     # The level each namespace's pods meet as rendered (S063): all three meet
     # restricted since the values of tempo and the collector set the fields
     # that `restricted` asks for (test_kind_observability_security_context.py).
+    # The log agent's pod (S064) mounts a host directory and runs as root, so
+    # `logging` is privileged (test_log_agent_network.py says why).
     levels = {
         "meridian": "restricted",
         "cert-manager": "restricted",
         "observability": "restricted",
+        "logging": "privileged",
     }
     for name, level in levels.items():
         labels = namespaces[name]["metadata"].get("labels", {})

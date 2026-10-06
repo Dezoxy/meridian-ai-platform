@@ -1,0 +1,75 @@
+# NetworkPolicies of the `logging` namespace (S064): the log agent, one pod per
+# node (values/log-agent.yaml). `make up` applies this before the agent's
+# release is installed, with the other policies. The kind cluster's network
+# plugin (kindnet) enforces both directions. The rules are tested without a
+# cluster until `make up` and `make smoke` have run on one.
+#
+# Two policies:
+#   default-deny  selects every pod of the namespace and allows nothing, in
+#                 either direction: no ingress and no egress. A pod added to
+#                 `logging` later starts with no network.
+#   log-agent     selects the agent's pods, by the two labels the chart gives them
+#                 (its name, and the name of the release, `log-agent`), and
+#                 allows egress to two peers and nothing else:
+#                   DNS     the cluster's DNS pods (kube-system, k8s-app=kube-dns),
+#                           UDP and TCP 53: to resolve the collector's name
+#                   the collector  OTLP over HTTP, 4318/TCP, the pods of the
+#                           collector in `observability` (by namespace AND pod
+#                           label), the port the collector's own ingress admits the
+#                           agent on (observability-networkpolicy.yaml)
+# There is no ingress rule: the agent takes no call (no receiver listens in it, and
+# its ports are off). The kubelet's probes of its health port are not filtered by
+# a policy, so the readiness and liveness probes need no rule; the same goes for
+# `kubectl logs`, which the kubelet serves. The agent cannot reach the API server,
+# the database, Loki, Tempo, Prometheus, the services or any address outside the
+# cluster: a compromised agent, which reads the output of every pod on its node,
+# can send what it read to the collector (and so to Loki, where Grafana shows it)
+# and to nothing else. The DNS pods answer any name, so a name can carry a few
+# bytes out through the cluster's resolver; the policy does not stop that.
+#
+# What the egress rules allow is the same two peers as smoke's telemetrygen Jobs
+# (smoke-networkpolicy.yaml) and the Meridian chart's collector rule
+# (networkPolicy.peers in values/meridian.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: logging
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: log-agent
+  namespace: logging
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: log-agent
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+      ports:
+        - port: 4318
+          protocol: TCP

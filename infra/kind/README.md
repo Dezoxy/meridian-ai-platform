@@ -29,6 +29,7 @@ adjuster; the rules decide every other claim.
 | Tempo (traces) | `tempo` | 3.1.0 | `observability` |
 | Loki (logs) | `loki` | 18.13.7 | `observability` |
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
+| Log agent: a second release of the collector's chart, the contrib build, as a DaemonSet that ships the services' output to Loki (S064) | `opentelemetry-collector` | 0.174.0 (collector 0.162.0, contrib) | `logging` |
 
 Every version and image digest is in [`pins.env`](pins.env), the only place
 to change one. `.github/renovate.json` reads them, so Renovate, once the
@@ -37,8 +38,8 @@ each month. CI does not start this platform: such a pull request needs
 `make up` and `make smoke` before it merges, and the table above follows
 by hand. The values that override chart defaults are in
 [`values/`](values/); the Gateway, the namespaces, Grafana's Role and the
-NetworkPolicies of the database, `cert-manager`, `observability` and smoke's
-Jobs are in [`manifests/`](manifests/). The Meridian
+NetworkPolicies of the database, `cert-manager`, `observability`, the log agent's
+namespace and smoke's Jobs are in [`manifests/`](manifests/). The Meridian
 services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
 which `make deploy` installs (below).
 
@@ -49,8 +50,10 @@ every image a chart starts here is pinned by the multi-architecture index
 digest of its tag, each in [`pins.env`](pins.env) as `X_IMAGE_TAG` and
 `X_IMAGE_DIGEST` under a `# renovate:` comment, and `make up` passes both to
 the chart with `--set`. The tag is the one the chart installs by default at
-its pinned version, except the collector's: the chart's appVersion is 0.161.0
-and the pin is 0.162.0 (it was pinned before this step). A chart upgrade moves
+its pinned version, except the collector's and the log agent's (S064): the
+chart's appVersion is 0.161.0 and the pins are 0.162.0 (the collector's was
+pinned before this step, and the agent's contrib build is the same release,
+so the two move together). A chart upgrade moves
 the tags with it, and Renovate
 proposes a tag of its own that may not be the chart's, so read the chart's
 defaults again (below) before merging. What a chart's key takes is not
@@ -91,6 +94,7 @@ digests were read from the registries on 2026-10-06 (each is an index with
 | tempo | `docker.io/grafana/tempo:3.1.0` | `tempo.tag` as `tag@digest` | yes, through the tag key |
 | loki | `docker.io/grafana/loki:3.7.8` | `loki.image.tag`, `.digest` | yes |
 | otel-collector | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:0.162.0` | `image.repository`, `.tag`, `.digest` (before S063) | yes |
+| log-agent | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.162.0` | `image.repository`, `.tag`, `.digest`: the contrib build of the collector's release, which has the receiver that reads files (S064; digest read 2026-10-06) | yes |
 
 The Prometheus tag is also the Makefile's `PROMTOOL_IMAGE`. Every image left
 by tag is one that nothing starts: if an ACME issuer, a rate-limit policy, a
@@ -136,6 +140,11 @@ logs to Loki's OTLP endpoint, and those three hops stay clear text: they are
 inside `observability`, and the threat model names the hop to the collector.
 Grafana has three datasources with fixed uids:
 `prometheus`, `tempo` and `loki`. Retention is 24 hours everywhere.
+
+The services' logs reach Loki another way (S064): they write to their output,
+and the log agent, a DaemonSet in `logging`, reads those files on the node and
+sends each line to the same collector as an OTLP log record (see "The log agent
+and the namespace `logging`" below, which also says what that pod can read).
 
 node-exporter is off on kind (S063). It is the one pod of `observability` that
 needs the node's own network and PID namespaces and `/proc` and `/sys` from the
@@ -434,12 +443,14 @@ node image, Kubernetes components and the platform).
    not prove a completed call: no single role can make up a claim and a run,
    so that is `make demo`'s proof. The calls run over TLS with the runtime's
    certificate (line 9). Before `make deploy` this check prints SKIP.
-4. **Telemetry.** Six lines (S063; seen on kind on 2026-10-06: the ConfigMap
-   line, the clear-text line answering `400` and telemetrygen's three lines
-   passed. Not seen: a renewal of the collector's certificate or of its
+4. **Telemetry.** Seven lines (six from S063; seen on kind on 2026-10-06: the
+   ConfigMap line, the clear-text line answering `400` and telemetrygen's three
+   lines passed. Not seen: a renewal of the collector's certificate or of its
    authority, and a cold start. The rule that only a 400 passes, the Jobs'
    deadline and check 8's dependence on the push are tested without a cluster
-   until the next run). The first two are about TLS and do not need the
+   until the next run; the seventh line, S064's, is described at the end of
+   this item and has not run on a cluster). The first two are about TLS and do
+   not need the
    Meridian services. The ConfigMap `telemetry-ca` in `meridian`, which the six
    services and telemetrygen mount to trust the collector, holds the
    certificate its authority has now: the SHA-256 fingerprint of its `ca.crt`
@@ -488,7 +499,23 @@ node image, Kubernetes components and the platform).
    What a PASS line prints of an answer (the trace ID, the log line, the
    series count) is cleaned of control characters and newlines and cut to 120
    characters: anyone who can push a log line to the collector chooses its
-   text.
+   text. The seventh line (S064) is about the log agent. After the three
+   read-backs, smoke asks the Claims API, through the edge the adjuster pages
+   use, for `/smoke-<epoch>`, a path that does not exist, and expects a 404;
+   the marker is in the path and not in a query, because the access line keeps
+   no query. It then looks in Loki, within the same wait as the log line above,
+   for a record of the service `claims-api` whose `path` is that marker
+   (`{service_name="claims-api"} | path="/smoke-<epoch>"`, a filter on the
+   record's field, which Loki keeps as structured metadata). PASS prints the
+   record's body. Three FAILs: the edge did not answer 404; Loki answered and
+   has no such line (the agent is not sending, the services' image does not
+   write the JSON access line, or the line is not what the query reads); Loki
+   did not answer. One SKIP replaces it while the Meridian services are not
+   deployed, so it is a SKIP after `make up` alone, and while the agent's
+   DaemonSet is not there. It proves one service's one line made the whole way;
+   it does not prove that every service's output arrives, that a line that is
+   not JSON arrives (a crash, output before a service set up its logging), or
+   that the checkpoint survives a restart.
 5. **Cost panel.** Four lines. The dashboard: Grafana serves
    `meridian-gateway-cost` as provisioned, with the same queries as the
    file, and Prometheus runs each of them without an error (a dashboard with
@@ -1123,7 +1150,8 @@ record that in the plan.
 Until S063 a pod of any namespace could push to the collector, and
 `cert-manager` and `observability` had neither a NetworkPolicy nor Pod Security
 labels (threat model T-68, T-84). `make up` now applies three policy files
-before the releases they guard, beside the database's; all of it is **tested
+before the releases they guard, beside the database's (a fourth, for the log
+agent's namespace, came with S064, below); all of it is **tested
 without a cluster** (the manifests and the script's lines are checked against
 stub commands, and the pods' specs were read with `helm template`), until the
 first `make up` and `make smoke` after it have run on one.
@@ -1131,10 +1159,12 @@ first `make up` and `make smoke` after it have run on one.
 | File | Namespace | What it says |
 |---|---|---|
 | [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
-| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
+| [`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml) | `logging` | Ingress and egress denied for every pod; the log agent may reach DNS and the collector's 4318 and nothing else (S064) |
 
-Only Meridian's pods push to the collector, on 4318, and 4317 is admitted from
+Only Meridian's pods push to the collector, on 4318, and the log agent, which
+sends only what `meridian`'s pods wrote (S064); 4317 is admitted from
 no namespace: the collector's rule selects the namespace `meridian` and no pod
 label, and the chart's own policies are what narrow that to the six services
 (its `default-deny` leaves every pod of `meridian` without egress, and only a
@@ -1177,10 +1207,117 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 | `meridian` | `restricted` | nothing |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
 | `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
+| `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume too (it allows no hostPath) and by `runAsNonRoot`, which the pod cannot meet (S064, read as `helm template` renders it, 2026-10-06; the label warns of nothing) |
 
 The Prometheus pods are the operator's, not rendered by Helm, and were not read:
 a server-side dry run on the cluster (`kubectl label --dry-run=server`) is the
 check that reads them.
+
+### The log agent and the namespace `logging` (S064)
+
+Status: **implemented and tested without a cluster; it has not run on one.**
+The owner chose, on 2026-10-06, that a node agent reads the pods' output and
+ships it to Loki, over each service pushing its own records (which would not
+have carried uvicorn's access line, output before a service's logging was set
+up, or a crash). The agent is a second release of the collector's chart, the
+contrib build (the core build has no receiver that reads files), as a
+DaemonSet named `log-agent-agent` in the namespace `logging`:
+[`values/log-agent.yaml`](values/log-agent.yaml), its image in `pins.env` as
+`LOG_AGENT_IMAGE_*`, its policy in
+[`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml).
+`make up` installs it after the collector, once the ConfigMap `telemetry-ca`
+(the authority's public certificate, which `up.sh` now publishes to `meridian`
+and to `logging`) is there.
+
+**What the owner's decision costs.** The agent mounts the node's pod-log
+directory, `/var/log/pods`, read-only. That directory holds the output of every
+pod on the node, in every namespace, and the pod can read all of it: a
+compromised agent reads the output of every pod on its node, not only
+`meridian`'s. The receiver is configured to open only
+`/var/log/pods/meridian_*/*/*.log`, minus the database's pods
+(`meridian_platform-db-*`, whose output is PostgreSQL's, not the services', and
+is not redacted), but that is configuration of the pod, not a limit on it. What
+bounds the pod:
+
+- one host path and no other, mounted read-only; the checkpoint is an
+  `emptyDir`, not a writable host directory
+- no host network, no host PID, no `hostPort` (every port of the chart is
+  off: nothing listens in it), no service-account token and no ClusterRole;
+  namespace, pod and container are read from each file's path by the
+  receiver's own `container` operator, so nothing calls the API server
+- the container runs as root (uid 0), with `allowPrivilegeEscalation: false`,
+  every capability dropped, the default seccomp profile and a read-only root
+  filesystem. Root is needed because containerd writes the files as
+  `root:root`, mode 0640, so the image's own user, 10001, cannot read them; as
+  the files' owner, root reads them with no capability at all. That mode is
+  what containerd does as far as is known: **it has not been looked at on the
+  node**, and a log full of "permission denied" is how the cluster would say
+  otherwise
+- a NetworkPolicy of its own: no ingress, and egress to DNS and the
+  collector's 4318 alone, so what it reads can go to Loki and nowhere else (the
+  cluster's DNS pods answer any name, which a few bytes can ride; the policy
+  does not stop that)
+- memory and CPU requests, a memory limit of 192 MiB and the `memory_limiter`
+  first in the pipeline
+
+Pod Security: `logging` is labelled `privileged` for `warn` and `audit`, as the
+other namespaces are labelled and never enforced. `baseline` forbids a hostPath
+volume, which this pod has; `restricted` forbids it too and asks for
+`runAsNonRoot`, which the pod cannot meet. The label warns of nothing: it says
+what the pod is. The pod is not in `observability` because that would make
+`observability`'s `restricted` untrue of one of its pods.
+
+Where the files are on kind: the node runs containerd, whose CRI plugin writes
+`/var/log/pods/<namespace>_<pod>_<uid>/<container>/<restart>.log` as the files
+themselves, in the CRI format; `/var/log/containers/*.log` are symlinks into
+that directory, and `/var/lib/docker/containers` is Docker's own and is not
+there. So one mount reaches the files. The collector chart's `logsCollection`
+preset, which was not used, would also mount `/var/lib/docker/containers` and a
+writable `/var/lib/otelcol` from the host.
+
+The pipeline: the receiver reads each line (the CRI format gives the time, the
+stream and the partial-line flag, and partial lines are joined), takes the
+namespace, pod and container from the path, and sets the resource attribute
+`service.name` to the container's name. The six services' containers are named
+for their service, the sweep's is `sweep`, and the Jobs' are `migrate`, `seed`
+and `ingest`; a Job's pod is `meridian-<job>-<tag>-<suffix>` and the CronJob's
+`meridian-sweep-<number>-<suffix>`. A line that is a JSON object becomes
+attributes, its `level` the record's severity and its `message` the body (the
+other fields, `logger`, `service`, `method`, `path`, `status` and `time`, stay
+attributes, which Loki keeps as structured metadata); a line that is not (a
+crash, output before the service's factory ran, a line cut off) is sent as it
+is, with no severity. No line is dropped for failing to parse. The pinned image
+was run over a fixture of both kinds, with the debug exporter in place of OTLP:
+both arrived, partial lines were joined, a file present at start was read from
+its end, and the other namespaces' and the database's files were not opened.
+That check is by hand and is not a test of the repository.
+
+What a restart re-sends. The checkpoint, the offset of each file read so far,
+is on an `emptyDir` of at most 32 MiB. It survives a restart of the container
+(a crash, an OOM kill), which then re-sends nothing. It is gone when the pod is
+replaced (a new release of the chart, a deleted pod, a reboot of the node):
+the new pod starts each file it finds at its end, so it re-sends nothing
+either, and the lines written while no agent ran are not sent. A file that
+appears later is read from its beginning. Lines read and not yet exported (the
+batch and the exporter's queue are in memory) are lost when the pod stops, and
+an export that keeps failing for the exporter's retry window (five minutes) is
+dropped. Kubelet keeps five rotated files of 10 MiB for each container; the
+agent does not read the rotated ones.
+
+The agent verifies the collector's certificate against the ConfigMap
+`telemetry-ca` in `logging`. The services re-read that file at each new
+connection; the exporter of the agent is not known to, so after the authority
+is renewed (`make up` publishes the new certificate to both namespaces),
+restart the DaemonSet: `kubectl -n logging rollout restart
+daemonset/log-agent-agent`. Reading the logs in Grafana is in
+[`docs/operations/README.md`](../../docs/operations/README.md), "Reading logs".
+
+The agent ships whatever a service prints. What a line holds is the service's
+doing: the JSON log format of this step's code half builds the access line from
+the method, the path without its query and the status, and the redaction of
+personal data runs before it. A service that still ran uvicorn's plain access
+line would send the client's address and the query string to Loki, and the
+agent would ship it unchanged.
 
 ### Who a service is (S055)
 
@@ -1624,10 +1761,12 @@ kubectl get pods -A
 ## Memory
 
 The laptop this was built on gives Docker Desktop 7.65 GiB. The memory limits
-of the components add up to about 4.4 GiB. Measured with `docker stats` on the
-node container on 2026-09-30, after a `make up` from no cluster, a second
-`make up` and one `make smoke`: 3.6 GiB, which includes the Kubernetes control
-plane, the kubelet and containerd. The six Meridian services add limits of
+of the components add up to about 4.4 GiB (the log agent of S064 adds a limit
+of 192 MiB, a request of 64 MiB, and no measurement yet). Measured with
+`docker stats` on the node container on 2026-09-30, after a `make up` from no
+cluster, a second `make up` and one `make smoke`: 3.6 GiB, which includes the
+Kubernetes control plane, the kubelet and containerd. The six Meridian services
+add limits of
 192 MiB (Claims API, Model Gateway) and 256 MiB (Agent Runtime and each tool
 server), 1.4 GiB in all; a Job adds 192 MiB while it runs. Measured from
 cAdvisor on 2026-10-02, twice, after demo claims and smoke runs: the working

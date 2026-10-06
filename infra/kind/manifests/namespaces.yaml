@@ -5,9 +5,12 @@
 # cert-manager:         cert-manager and the CA's private key (service-ca.yaml),
 #                       kept outside `meridian`.
 # observability:        Prometheus, Grafana, Tempo, Loki, the collector.
+# logging:              the log agent (S064): one pod per node that reads the
+#                       node's pod-log directory and sends `meridian`'s lines to
+#                       the collector. A namespace of its own, see the levels.
 # meridian:             platform-db and, from S041, the Meridian applications.
 #
-# Pod Security Admission: warn and audit, never enforce, on the three
+# Pod Security Admission: warn and audit, never enforce, on the four
 # namespaces below that carry the platform's own pods. These two never refuse a
 # pod; they make the API server warn about, and audit, a pod that does not meet
 # the level. A server-side dry run of enforce=restricted on `meridian` reported
@@ -44,6 +47,25 @@
 #                  kind (values/kube-prometheus-stack.yaml), because no alert
 #                  rule and no dashboard of this repository reads a series of
 #                  it, and a label that says `privileged` says nothing.
+#   logging:       privileged. The one pod, the log agent (values/log-agent.yaml,
+#                  read as `helm template` renders it on 2026-10-06), mounts
+#                  /var/log/pods from the node and runs as root. `baseline`
+#                  forbids a hostPath volume, and the pod has one; `restricted`
+#                  allows no hostPath volume either (its list of volume types
+#                  has none) and asks for runAsNonRoot, which the pod cannot
+#                  meet: it reads files that containerd writes as root:root,
+#                  mode 0640, so it runs as root, with every capability dropped
+#                  (the header of the values file says what bounds it). Unlike
+#                  node-exporter above, which a label would have misdescribed
+#                  for nothing in return, this pod is the owner's decision
+#                  (2026-10-06) and stays, so the label says what it is. The
+#                  pod is not in `observability`: it would make that namespace's
+#                  `restricted` untrue of one of its pods, or force the whole
+#                  namespace down to `privileged` for it. The label
+#                  `privileged` warns of nothing, here or anywhere: it is a
+#                  statement, not a control, and a second pod added to `logging`
+#                  is not warned about. What bounds the pod is in the values
+#                  file and in logging-networkpolicy.yaml, not in this label.
 #
 # What the two labels do on kind, and what has none. The label audit records
 # nothing on kind: no API server audit policy is configured (cluster.yaml sets
@@ -88,3 +110,11 @@ metadata:
   labels:
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    pod-security.kubernetes.io/warn: privileged
+    pod-security.kubernetes.io/audit: privileged
