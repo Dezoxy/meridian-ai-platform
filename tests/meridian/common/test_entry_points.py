@@ -246,7 +246,7 @@ def test_a_module_whose_spec_cannot_be_read_is_refused_before_it_loads(
     assert loads.calls == 0
 
 
-def test_a_parent_package_that_fails_to_import_is_the_cause_of_the_refusal(
+def test_a_parent_package_that_fails_to_import_leaves_its_class_as_the_cause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     package = tmp_path / "broken_parent_plugin"
@@ -262,7 +262,8 @@ def test_a_parent_package_that_fails_to_import_is_the_cause_of_the_refusal(
     )
 
     assert refused.reason is Refusal.UNLOCATABLE
-    assert isinstance(refused.__cause__, SyntaxError)
+    assert isinstance(refused.__cause__, shared.LoadFailure)
+    assert str(refused.__cause__) == "SyntaxError"
     assert loads.calls == 0
 
 
@@ -299,16 +300,53 @@ def test_the_trusted_root_is_a_parameter(
     assert loads.calls == 1
 
 
-def test_an_entry_that_fails_to_import_is_refused_with_the_cause() -> None:
-    failure = ImportError("a message that stays out of the refusal")
+def test_a_trusted_root_given_as_a_link_admits_a_module_inside_it(
+    plugin_module: Callable[[str], str], tmp_path: Path
+) -> None:
+    name = plugin_module("linked_root_plugin")
+    linked = tmp_path / "linked-root"
+    linked.symlink_to(tmp_path, target_is_directory=True)
+    loads = Loads(name)
 
+    loaded = load(
+        entry(value=f"{name}:VALUE", loads=loads),
+        value_prefix=name,
+        trusted_root=linked,
+    )
+
+    assert loaded == "loaded"
+    assert loads.calls == 1
+
+
+def test_a_trusted_root_given_as_a_link_still_refuses_a_module_outside_it(
+    plugin_module: Callable[[str], str], tmp_path: Path
+) -> None:
+    name = plugin_module("outside_linked_root_plugin")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    linked = tmp_path / "linked-elsewhere"
+    linked.symlink_to(elsewhere, target_is_directory=True)
+    loads = Loads(name)
+
+    refused = refusal_of(
+        entry(value=f"{name}:VALUE", loads=loads),
+        value_prefix=name,
+        trusted_root=linked,
+    )
+
+    assert refused.reason is Refusal.OUTSIDE_ROOT
+    assert loads.calls == 0
+
+
+def test_an_entry_that_fails_to_import_is_refused_with_the_class_as_cause() -> None:
     def broken() -> object:
-        raise failure
+        raise ImportError("a message that stays out of the refusal")
 
     refused = refusal_of(entry(loads=broken))
 
     assert refused.reason is Refusal.FAILED_TO_IMPORT
-    assert refused.__cause__ is failure
+    assert isinstance(refused.__cause__, shared.LoadFailure)
+    assert str(refused.__cause__) == "ImportError"
 
 
 def test_a_module_that_is_somewhere_else_once_loaded_is_refused(

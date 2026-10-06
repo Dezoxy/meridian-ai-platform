@@ -49,6 +49,35 @@ new baseline in the same reviewed change (T-29, T-72):
   before it reads a case, empty set or not (S061); the two live reports
   were written before that and carry none.
 
+What the `screen` digest covers is narrower than the word "screens" may read.
+Covered: the source text, as `inspect.getsource` gives it, of the three
+functions `_normalise`, `holds_special_category` and `addresses_the_model`
+(docstrings and comments included, so an edited comment asks for a new
+baseline too), and the data they read: the two normalisation values, the
+special-category pattern and each pattern of the injection screen, with its
+flags, in the order they are tried. Not covered:
+
+- the Unicode database of the interpreter, which NFKC, the category check,
+  casefolding and `\s` and `\b` read, and the `re` module that runs the
+  patterns: a baseline is made under one Python, and another release may
+  match differently while the digest stays the same;
+- the helpers a pattern is built from when the module is imported (such as
+  `_phrase`): their result is covered, in the patterns, but not their source;
+- which text the screens are applied to, which is the graph's code and the
+  judge's (`assessment.py`, `evaluation/judge.py`), and the redaction that
+  runs before them (`guardrails/redaction.py`);
+- the code that runs: the source is read from the file at the time of the
+  call, so a process that outlives an edit of `screening.py` fingerprints
+  whatever now sits at the old line numbers of the file, while it still runs
+  the old code.
+
+The digest is not widened to the interpreter's Unicode version and `re`: the
+Unicode database changes with the interpreter's minor release, not its patch
+release, so that would tie both baselines to one Python minor release, and
+every move to the next one would become a baseline change. It does not hash
+code objects either: a changed comment would then ask for no new baseline, and
+asking is the safe direction (T-72).
+
 ## The recording
 
 An entry is found by the SHA-256 of the request the provider is given: the

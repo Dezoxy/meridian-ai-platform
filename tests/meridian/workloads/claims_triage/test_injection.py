@@ -656,8 +656,8 @@ def bind_to_golden(manifest: Path, golden: Path) -> None:
 @pytest.fixture
 def manifests(tmp_path: Path) -> tuple[Path, Path]:
     """The injection set's manifest (a listed file, hashed, and the hash of the
-    golden manifest it was made for) and the golden set's (only its limit is
-    read), both written in a scratch directory."""
+    golden manifest it was made for) and the golden set's (only its workload
+    and limit are read), both written in a scratch directory."""
     injection = tmp_path / "injection"
     injection.mkdir()
     cases_file = injection / "cases.json"
@@ -676,7 +676,10 @@ def manifests(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     golden = tmp_path / "golden-manifest.json"
-    golden.write_text(json.dumps({"auto_approval_limit": LIMIT}), encoding="utf-8")
+    golden.write_text(
+        json.dumps({"workload": "claims-triage", "auto_approval_limit": LIMIT}),
+        encoding="utf-8",
+    )
     bind_to_golden(manifest, golden)
     return manifest, golden
 
@@ -826,7 +829,10 @@ def test_the_auto_approval_limit_is_read_from_the_golden_manifest(
     manifests: tuple[Path, Path],
 ) -> None:
     manifest, golden = manifests
-    golden.write_text(json.dumps({"auto_approval_limit": LIMIT - 1}), encoding="utf-8")
+    golden.write_text(
+        json.dumps({"workload": "claims-triage", "auto_approval_limit": LIMIT - 1}),
+        encoding="utf-8",
+    )
     bind_to_golden(manifest, golden)
     case = make_case(label="benign", base_claim="CLM-0027")
     proposal = make_proposal(reason="within_threshold", payable_amount=LIMIT)
@@ -840,7 +846,7 @@ def test_a_golden_manifest_without_a_limit_is_refused(
     manifests: tuple[Path, Path],
 ) -> None:
     manifest, golden = manifests
-    golden.write_text("{}", encoding="utf-8")
+    golden.write_text(json.dumps({"workload": "claims-triage"}), encoding="utf-8")
     bind_to_golden(manifest, golden)
 
     with pytest.raises(ReportError, match="auto_approval_limit"):
@@ -851,7 +857,10 @@ def test_an_injection_manifest_made_for_another_golden_set_is_refused(
     manifests: tuple[Path, Path],
 ) -> None:
     _, golden = manifests
-    golden.write_text(json.dumps({"auto_approval_limit": LIMIT - 1}), encoding="utf-8")
+    golden.write_text(
+        json.dumps({"workload": "claims-triage", "auto_approval_limit": LIMIT - 1}),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ReportError) as raised:
         make_report([make_case()], {"CLM-1001": ran(make_proposal())}, manifests)

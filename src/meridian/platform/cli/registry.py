@@ -10,7 +10,12 @@ from meridian.platform.registry.loader import (
     load_registry,
     unreadable_directory,
 )
-from meridian.platform.registry.schemas import stale_schemas, write_schemas
+from meridian.platform.registry.schemas import (
+    schemas_not_updated,
+    stale_schemas,
+    write_schemas,
+)
+from meridian.platform.registry.service_checks import unlisted_runtime_agents
 from meridian.platform.registry.terraform import (
     azure_deployments,
     compare_with_terraform,
@@ -73,6 +78,11 @@ def validate(
             ]
         )
     )
+    for agent in unlisted_runtime_agents(registry):
+        typer.echo(
+            f"NOTE: the Agent Runtime may name agent {agent!r} and no tenant "
+            "lists it, so no run of it is admitted until a tenant does"
+        )
     if terraform_outputs is None:
         return
     try:
@@ -109,7 +119,10 @@ def schemas(
             )
         typer.echo("schemas OK: up to date")
         return
-    changed = write_schemas(registry_dir)
+    try:
+        changed = write_schemas(registry_dir)
+    except OSError as exc:
+        _fail((schemas_not_updated(registry_dir, exc),))
     typer.echo(f"schemas written: {len(changed)} changed")
 
 

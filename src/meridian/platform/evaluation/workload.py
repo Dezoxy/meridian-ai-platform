@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Protocol, assert_never, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
@@ -35,16 +35,20 @@ from meridian.platform.common.entry_points import (
     TRUSTED_VALUE_PREFIX,
     EntryPointRefused,
     Refusal,
+    fixed_text,
     load_trusted_entry_point,
+    reason_text,
 )
 from meridian.platform.evaluation.report import Report, ReportError
 from meridian.platform.registry.models import Registry
 
-NOT_PUBLISHED = "no evaluation is published for this workload"
-UNTRUSTED = "the workload's evaluation does not come from the meridian package"
-UNLOADABLE = "the workload's evaluation cannot be loaded"
+# The words are the shared loader's, with this caller's word for what it loads.
+SUBJECT = "evaluation"
+NOT_PUBLISHED = reason_text(Refusal.NOT_PUBLISHED, SUBJECT)
+UNTRUSTED = reason_text(Refusal.OTHER_DISTRIBUTION, SUBJECT)
+UNLOADABLE = reason_text(Refusal.FAILED_TO_IMPORT, SUBJECT)
 NOT_AN_EVALUATION = "the workload's evaluation is not a WorkloadEvaluation"
-PUBLISHED_TWICE = "the workload's evaluation is published more than once"
+PUBLISHED_TWICE = reason_text(Refusal.PUBLISHED_TWICE, SUBJECT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,23 +80,7 @@ class WorkloadEvaluation(Protocol):
 
 
 def _fixed_text(refused: EntryPointRefused) -> str:
-    match refused.reason:
-        case Refusal.PUBLISHED_TWICE:
-            return PUBLISHED_TWICE
-        case Refusal.NOT_PUBLISHED:
-            known = ", ".join(refused.known) if refused.known else "none"
-            return f"{NOT_PUBLISHED}; known: {known}"
-        case Refusal.UNLOCATABLE | Refusal.FAILED_TO_IMPORT:
-            return UNLOADABLE
-        case (
-            Refusal.OTHER_DISTRIBUTION
-            | Refusal.OUTSIDE_WORKLOADS
-            | Refusal.OUTSIDE_ROOT
-            | Refusal.MOVED_OUTSIDE_ROOT
-        ):
-            return UNTRUSTED
-        case _:
-            assert_never(refused.reason)
+    return fixed_text(refused, SUBJECT)
 
 
 def load_evaluation(workload: str) -> WorkloadEvaluation:
