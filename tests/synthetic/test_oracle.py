@@ -441,6 +441,33 @@ def test_a_circumstance_the_product_does_not_exclude_is_ignored():
     assert outcome["exclusion"] is None
 
 
+# -- a policy number no policy has --------------------------------------------
+def test_a_claim_on_no_policy_goes_to_an_adjuster_with_nothing_else_decided():
+    # Arrange: a claim that would otherwise hold every indicator and miss a document
+    claim = make_claim(reported_on="2026-08-10", documents=[])
+
+    # Act
+    outcome = derive_outcome(claim, None, make_history("2026-05-01", "2026-05-02"))
+
+    # Assert
+    assert outcome == {
+        "claim_id": "CLM-0001",
+        "route": "adjuster",
+        "reason": "policy_not_found",
+        "recommendation": None,
+        "payable_amount": None,
+        "exclusion": None,
+        "fraud_indicators": [],
+        "missing_documents": [],
+        "citations": [],
+    }
+
+
+def test_a_claim_on_no_policy_reported_before_the_loss_still_raises():
+    with pytest.raises(ValueError, match="before the loss"):
+        derive_outcome(make_claim(reported_on="2026-06-09"), None, [])
+
+
 def test_an_unknown_circumstance_raises():
     with pytest.raises(ValueError, match="unknown circumstance"):
         derive_outcome(make_claim(), make_policy(), [], "sunspots")

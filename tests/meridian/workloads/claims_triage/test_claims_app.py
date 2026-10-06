@@ -592,7 +592,7 @@ def test_identifiers_in_the_description_are_redacted_too() -> None:
 def test_no_golden_description_names_its_claimant_or_holds_an_identifier() -> None:
     claims = synthetic_claims()
 
-    assert len(claims) == 40
+    assert len(claims) == 47
     for claim in claims:
         claimant = Claimant.model_validate(claim["claimant"])
         assert (

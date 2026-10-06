@@ -2,8 +2,9 @@
 
 A seeded generator writes the data of a fictional insurer, Meridian Insurance,
 which operates in eurozone Central Europe: policies, claim history, four
-policy-wording documents and 40 first-notice-of-loss (FNOL) claims, each with a
-labelled expected outcome. The set of expected outcomes is the golden set.
+policy-wording documents and 47 first-notice-of-loss (FNOL) claims, each with a
+labelled expected outcome: 40 drawn from the first random stream, and 7 added
+after them from a second one. The set of expected outcomes is the golden set.
 Status: implemented. The evaluation harness, retrieval and the MCP tool
 servers read these files, so the formats below are a contract.
 
@@ -23,10 +24,10 @@ test regenerates the data and compares it with the committed files.
 
 | Path | Holds | Records |
 |---|---|---|
-| `policies.json` | Policies, sorted by `policy_number` | 50 |
+| `policies.json` | Policies, sorted by `policy_number` | 56 |
 | `claim-history.json` | Prior, closed claims, sorted by `history_id` | see manifest |
-| `claims.json` | FNOL inputs only, never labels, sorted by `claim_id` | 40 |
-| `expected-outcomes.json` | A list with one label record per `claim_id`, sorted by `claim_id` | 40 |
+| `claims.json` | FNOL inputs only, never labels, sorted by `claim_id` | 47 |
+| `expected-outcomes.json` | A list with one label record per `claim_id`, sorted by `claim_id` | 47 |
 | `wordings/<CODE>.md` | The policy wording of each product | 4 |
 | `manifest.json` | Seed, counts and a SHA-256 of every other file | 1 |
 | `injection/cases.json` | Injection cases: golden claims that carry an attack or a look-alike text | 94 |
@@ -41,7 +42,7 @@ Fields keep the order shown in the tables. Lists are sorted by their ID.
 
 | Field | Meaning |
 |---|---|
-| `policy_number` | `POL-0001` to `POL-0050`; not the number of the claim on it |
+| `policy_number` | `POL-0001` to `POL-0056`; not the number of the claim on it |
 | `product` | Product code, see Products |
 | `wording_version` | `2026-01` |
 | `holder` | `name`, `email`, `address` (`street`, `city`, `country` as an ISO code) |
@@ -73,19 +74,21 @@ Policies are renewals, so history can predate the current term. It is never
 dated after the end of the term or on or after the lapse date. The
 frequent-claims cases have two or three entries dated from 365 days before the
 loss up to the day before it. All other history is quiet: no entries, one
-entry, or entries older than that window.
+entry, or entries older than that window. The two claims after the first forty
+that sit on the frequent-claims boundary have two entries each, the older one
+365 days before the loss (frequent) or 366 (one entry in the window, so not).
 
 ### claims.json
 
 | Field | Meaning |
 |---|---|
-| `claim_id` | `CLM-0001` to `CLM-0040`, shuffled so the number reveals nothing |
-| `policy_number` | The policy claimed on |
+| `claim_id` | `CLM-0001` to `CLM-0047`; the first forty and the seven after them are each shuffled, so the number reveals nothing |
+| `policy_number` | The policy claimed on; for one claim (`policy_not_found`) a number no policy has |
 | `reported_on`, `loss_date` | Losses fall between 2026-05-01 and 2026-08-25; nothing is reported after 2026-09-01 |
 | `peril` | A peril code of the product's line |
 | `claimed_amount` | Euros claimed |
 | `loss_location` | `city`, `country` |
-| `claimant` | `name`, `email`; always the policy holder |
+| `claimant` | `name`, `email`; the policy holder (for the claim on no policy, a stand-in holder who is in no file) |
 | `description` | First person, two to four sentences; it states any circumstance behind an exclusion, tells a story that fits it, and gives any reason for a late report |
 | `documents` | Document codes provided, in catalogue order |
 
@@ -95,7 +98,7 @@ entry, or entries older than that window.
 |---|---|
 | `claim_id` | The claim in `claims.json` that this record labels; one record per claim |
 | `route` | `auto_approve`, `adjuster` or `request_documents` |
-| `reason` | `within_threshold`, `over_threshold`, `fraud_indicator`, `excluded`, `policy_inactive` or `missing_documents` |
+| `reason` | `within_threshold`, `over_threshold`, `fraud_indicator`, `excluded`, `policy_inactive`, `missing_documents` or `policy_not_found` |
 | `recommendation` | `approve`, `reject` or null |
 | `payable_amount` | Euros, or null when nothing is payable yet |
 | `exclusion` | Exclusion code, or null |
@@ -176,6 +179,10 @@ the labels of the circumstance exclusions cannot be re-derived from the JSON
 files alone; the description states the circumstance in prose. The first rule
 that matches wins:
 
+0. No policy has the claim's number (the oracle is given no policy). Route
+   `adjuster`, reason `policy_not_found`, no recommendation, no payable amount,
+   no indicators, no citations: nothing else is decided, as the triage rules
+   decide it.
 1. The policy was not in force on the loss date: the loss is before
    `start_date` or after `end_date`, or the policy lapsed on or before the loss
    date. Route `adjuster`, reason `policy_inactive`, recommendation `reject`.
@@ -230,7 +237,37 @@ outcome; the generator then runs the oracle on what it built and stops if the
 reason, the fraud indicators, the exclusion or the missing documents differ
 from the intent. Non-fraud claims are built with a policy well into its term
 and a prompt report, so they carry no indicator. Claim numbers and policy
-numbers are random permutations, and 10 of the 50 policies have no claim.
+numbers are random permutations, and 10 of the first 50 policies have no claim.
+
+### Two random streams, and the seven claims after the forty
+
+The table above is the first forty claims, `CLM-0001` to `CLM-0040`, and the
+first fifty policies. They are **frozen while the recording of the triage
+model's answers stands**: that recording is keyed by a hash of each request,
+which holds the claim's description, so a description that moves by one byte
+loses an answer that only a paid recording brings back. One random stream
+feeds those forty, so adding any scenario to it reshuffles all of them.
+
+The scenarios added since are in `EXTRA_PLAN` in `generator/plan.py`, built in
+`generator/extra.py` from a second stream: `random.Random` seeded with the
+seed, a colon and a fixed label, once the first stream is spent. The new
+claims take the numbers `CLM-0041` to `CLM-0047` (shuffled among themselves
+from the second stream) and their policies `POL-0051` to `POL-0056`, so no
+number, record or history entry of the first set changes. A test holds a
+digest of the first forty claims, their labels, their policies and their
+history, and fails with a message that says a paid recording would be needed.
+Add a scenario to `EXTRA_PLAN`, never to `PLAN`, while the recording stands.
+
+| Claims | Built as |
+|---|---|
+| 3 | One fraud indicator on its boundary, the only one in play: a loss 30 days after the policy's start, a report 31 days after the loss, two earlier claims with the older 365 days before the loss. The payable amount is within the limit, so each is referred for the indicator alone |
+| 3 | The same, one day off the boundary: the 31st day after the start, a report after 30 days, an older claim 366 days before the loss (one entry in the window). Each is within the threshold and approves automatically |
+| 1 | A claim whose policy number no policy has (`POL-9xxx`), the reason `policy_not_found` |
+
+The perils are ones no circumstance exclusion of the product names (fire on
+Home Standard and Home Plus, glass on Motor Comprehensive, burglary for the
+unknown policy), so the triage model is not asked about any of the seven and
+the oracle's label is the expectation without a recorded answer.
 
 ## Injection cases
 
@@ -302,9 +339,11 @@ whatever the working directory. Any other seed needs an explicit `--out`; the
 generator refuses otherwise, so the committed golden set cannot be overwritten
 by accident. A rerun with the same seed produces identical bytes:
 
-- One `random.Random(seed)` is threaded through every builder. No module-level
-  `random`, no clock: the dataset's date is the fixed reference date
-  2026-09-01, and nothing is reported after it.
+- One `random.Random(seed)` is threaded through every builder of the first
+  forty claims, and a second stream, seeded from the seed and a fixed label,
+  through those of the seven after them. No module-level `random`, no clock:
+  the dataset's date is the fixed reference date 2026-09-01, and nothing is
+  reported after it.
 - No output depends on the iteration order of a set. JSON keeps the field
   order of the tables above, is indented by two spaces and ends with a newline.
   Files are UTF-8 with LF line endings and contain no timestamp.
@@ -323,15 +362,19 @@ Edit the generator, rerun `make synthetic`, review the diff of
 |---|---|
 | A product, an exclusion, a document, a threshold or a clause number | `generator/catalogue.py` |
 | The wording prose | `generator/wording_text.py` |
-| The mix of scenarios | `generator/plan.py` |
+| The mix of scenarios | `generator/plan.py` (`EXTRA_PLAN` for a new one while the recording stands) |
+| The scenarios of the second stream | `generator/extra.py` |
 | How a scenario is built | `generator/builders.py`, `generator/records.py` |
 | The rules of the outcome | `generator/oracle.py` |
 | The claim descriptions | `generator/narratives.py` |
 | Names, cities, vehicles | `generator/people.py` |
 | An injection case | `generator/injection_text.py`, `generator/injection.py` |
 
-One random stream feeds everything, so adding or removing any template variant
-or scenario reshuffles the generated claims. Downstream steps must treat a
-regenerated golden set as a new version; the hashes in `manifest.json` identify
-it. A different `--seed` produces a different but equally valid set. Only the
-default seed is committed.
+One random stream feeds the first forty claims, so adding or removing any
+template variant or scenario of `PLAN`, or editing the narratives, reshuffles
+them and loses the recording's answers: a regenerated first forty is a new
+version of the golden set, and a new recording costs money. A scenario of
+`EXTRA_PLAN` moves nothing in the first forty; it reshuffles only the claims
+after them. The hashes in `manifest.json` identify the set. A different
+`--seed` produces a different but equally valid set. Only the default seed is
+committed.

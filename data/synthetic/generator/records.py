@@ -39,9 +39,11 @@ class Context:
 
 
 class Scenario(NamedTuple):
-    """A built scenario: records without their ID, and the outcome intended."""
+    """A built scenario: records without their ID, and the outcome intended.
 
-    policy: Record
+    ``policy`` is None for a claim on a policy number no policy has."""
+
+    policy: Record | None
     history: list[Record]
     claim: Record
     circumstance: str | None

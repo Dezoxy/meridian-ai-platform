@@ -395,10 +395,14 @@ def whole_wording(product: str) -> list[dict[str, Any]]:
 def claims_that_ask_the_model() -> set[str]:
     """The golden claims whose run must ask the model whether a circumstance
     exclusion applies, decided by the rules' own predicate over the policy and
-    the whole wording (a search that loses nothing finds what these see)."""
+    the whole wording (a search that loses nothing finds what these see). A
+    claim on a policy number no policy has is not asked: there is no cover to
+    read."""
     asking = set()
     for claim_id, claim in CLAIMS.items():
-        policy = POLICIES[claim["policy_number"]]
+        policy = POLICIES.get(claim["policy_number"])
+        if policy is None:
+            continue
         record = PolicyRecord.model_validate(
             {name: policy.get(name) for name in PolicyRecord.model_fields}
         )

@@ -190,10 +190,10 @@ def test_committed_motor_circumstance_claims_are_not_innocent_collisions(
 
 
 def test_committed_apartment_claims_have_no_roof_or_ground_floor_of_their_own(
-    claims, policies
+    policy_claims, policies
 ):
     policy_of = {policy["policy_number"]: policy for policy in policies}
-    for claim in claims:
+    for claim in policy_claims:
         holder_home = policy_of[claim["policy_number"]]["insured_object"]
         if holder_home.get("building_type") == "apartment":
             assert not OWN_ROOF_OR_FLOOR.search(claim["description"]), claim["claim_id"]

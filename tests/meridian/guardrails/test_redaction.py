@@ -351,7 +351,7 @@ def test_a_redaction_copies_the_mapping_it_is_given() -> None:
 def test_the_golden_set_and_the_wordings_pass_through_unchanged(
     claim_descriptions: dict[str, str], wording_texts: dict[str, str]
 ) -> None:
-    assert len(claim_descriptions) == 40
+    assert len(claim_descriptions) == 47
     assert len(wording_texts) == 4
 
     for text in [*claim_descriptions.values(), *wording_texts.values()]:

@@ -40,6 +40,11 @@ from .proposal import TriageProposal
 from .wording import Clause
 
 WORKLOAD = "claims-triage"
+# The reason of a claim on a policy number no policy has; the only claim that
+# may be graded with no policy.
+POLICY_NOT_FOUND = "policy_not_found"
+# Fixed, and it quotes nothing: the files' own text may be a policy number.
+FILES_DISAGREE = "the golden set's files do not agree"
 # The graders that compare the proposal with the oracle (S017).
 RULE_GRADERS = (
     "completed",
@@ -319,6 +324,23 @@ def _check_parts(
         )
 
 
+def _policy_of(
+    expected: Mapping[str, Any],
+    claim: Mapping[str, Any],
+    policies: Mapping[str, Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    """The claim's policy. A claim on a policy number no policy has is graded
+    with an empty policy only when its label says ``policy_not_found`` and cites
+    nothing (so no field of a policy is read); any other claim with no policy is
+    a golden set whose files disagree."""
+    policy = policies.get(claim["policy_number"])
+    if policy is not None:
+        return policy
+    if expected["reason"] == POLICY_NOT_FOUND and not expected["citations"]:
+        return {}
+    raise ReportError(FILES_DISAGREE)
+
+
 def build_report(
     proposals: Mapping[str, TriageProposal | None],
     expected: Mapping[str, Mapping[str, Any]],
@@ -354,7 +376,7 @@ def build_report(
         case = grade(
             proposal,
             expected[claim_id],
-            policies[claims[claim_id]["policy_number"]],
+            _policy_of(expected[claim_id], claims[claim_id], policies),
             limit,
         )
         if judgements is not None and measured is not None and tools is not None:

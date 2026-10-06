@@ -237,8 +237,9 @@ def test_the_golden_texts_lose_one_word_to_an_english_name_and_an_ending() -> No
     "May" and "may"; C4, which let every ending through in any case, added
     "time", "same", "market", "done", "came", "even" and "Leon" (17 words); with
     the capital rule one is added, "Leon" in "Seat Leon" for a claimant named
-    Leo, which is written as a name is, and the family form, the plural and the
-    unassimilated ending (F1n) add none.
+    Leo, which is written as a name is (twice since the seven claims after the
+    first forty were added: one of them is on a Seat Leon too), and the family
+    form, the plural and the unassimilated ending (F1n) add none.
 
     This is the one pin of a count of the data: the words beyond the bare name,
     which a change to the golden descriptions can move. The size of the set is
@@ -261,4 +262,4 @@ def test_the_golden_texts_lose_one_word_to_an_english_name_and_an_ending() -> No
 
     assert {word.lower() for word in before_words} == {"may"}
     assert not before_words - now_words
-    assert now_words - before_words == Counter({"Leon": 1})
+    assert now_words - before_words == Counter({"Leon": 2})

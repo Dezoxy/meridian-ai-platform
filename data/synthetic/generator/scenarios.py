@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 from . import catalogue, people
 from .builders import BUILDERS, build_background
+from .extra import build_extra
 from .oracle import derive_outcome
 from .plan import PLAN, POLICY_COUNT
 from .records import Context, Record, Scenario
@@ -42,13 +43,16 @@ def build_dataset(seed: int) -> Dataset:
         build_background(ctx, number, index)
         for index, number in enumerate(numbers[len(plan) :])
     ]
-    return _assemble(scenarios, background)
+    # The first stream is spent: the extra scenarios draw from a second one, so
+    # nothing above can move (extra.py says why).
+    return _assemble(scenarios + build_extra(seed, ctx), background)
 
 
 def _assemble(
     scenarios: list[Scenario], background: list[tuple[Record, list[Record]]]
 ) -> Dataset:
-    policies = [s.policy for s in scenarios] + [policy for policy, _ in background]
+    policies = [s.policy for s in scenarios if s.policy is not None]
+    policies += [policy for policy, _ in background]
     entries = [e for s in scenarios for e in s.history]
     entries += [e for _, history in background for e in history]
     entries.sort(key=lambda e: (e["policy_number"], e["loss_date"], e["peril"]))

@@ -863,7 +863,10 @@ def test_a_card_number_the_limit_would_cut_is_redacted_before_the_cut() -> None:
     assert not any(char.isdigit() for char in rationale)
 
 
-def test_only_the_golden_claim_that_says_hospital_stops_the_call() -> None:
+def test_only_the_golden_claims_that_say_hospital_stop_the_call() -> None:
+    # Two late reports give "in hospital" as their reason. CLM-0044 is one of the
+    # claims after the first forty: the model is never asked about it, so the
+    # graph never reads its text with this screen.
     claims = synthetic_claims()
     stopped = []
     for claim in claims:
@@ -879,8 +882,11 @@ def test_only_the_golden_claim_that_says_hospital_stops_the_call() -> None:
             assert result.unavailable_because == "special-data", claim["claim_id"]
             stopped.append(claim["claim_id"])
 
-    assert len(claims) == 40
-    assert stopped == ["CLM-0012"]
+    assert len(claims) == 47
+    assert stopped == ["CLM-0012", "CLM-0044"]
+    assert stopped == [
+        claim["claim_id"] for claim in claims if "hospital" in claim["description"]
+    ]
 
 
 def test_assess_without_candidates_raises_and_asks_nothing() -> None:

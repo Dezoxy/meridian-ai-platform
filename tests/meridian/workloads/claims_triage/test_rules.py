@@ -1,6 +1,6 @@
 """The triage rules (S014): pure, no database.
 
-The first group runs the rules over the 40 claims of the synthetic golden set
+The first group runs the rules over the 47 claims of the synthetic golden set
 and compares them with the generator's oracle, whose answers sit in
 ``expected-outcomes.json``. The oracle is the reference and the module never
 imports it. The second group pins what a missing or wrong model assessment
@@ -56,6 +56,9 @@ EXPECTED: dict[str, dict[str, Any]] = {
     e["claim_id"]: e for e in load("expected-outcomes.json")
 }
 CLAIM_IDS = [claim["claim_id"] for claim in CLAIMS]
+# The claim on a policy number no policy has is judged by the first rule alone.
+NO_POLICY_IDS = [c["claim_id"] for c in CLAIMS if c["policy_number"] not in POLICIES]
+POLICY_CLAIM_IDS = [claim_id for claim_id in CLAIM_IDS if claim_id not in NO_POLICY_IDS]
 
 
 def wording_chunks(product_code: str) -> list[dict[str, Any]]:
@@ -129,7 +132,35 @@ def facts_with_assessment(claim_id: str, *, unavailable: bool) -> Facts:
     return replace(facts, assessment=Assessment(status))
 
 
-@pytest.mark.parametrize("claim_id", CLAIM_IDS)
+@pytest.mark.parametrize("claim_id", NO_POLICY_IDS)
+def test_the_rules_reproduce_the_oracle_on_a_claim_on_no_policy(claim_id: str) -> None:
+    facts = facts_with_assessment(claim_id, unavailable=False)
+    expected = EXPECTED[claim_id]
+
+    decision = decide(facts)
+
+    assert facts.policy is None
+    assert expected["reason"] == "policy_not_found"
+    assert (
+        decision.route,
+        decision.reason,
+        decision.recommendation,
+        decision.payable_amount,
+        decision.exclusion_clause,
+    ) == (
+        expected["route"],
+        expected["reason"],
+        expected["recommendation"],
+        expected["payable_amount"],
+        expected["exclusion"],
+    )
+    assert list(decision.fraud_indicators) == expected["fraud_indicators"]
+    assert list(decision.missing_documents) == expected["missing_documents"]
+    assert list(decision.citations) == [c["clause"] for c in expected["citations"]]
+    assert decision.gaps == ()
+
+
+@pytest.mark.parametrize("claim_id", POLICY_CLAIM_IDS)
 def test_the_rules_reproduce_the_oracle_on_every_golden_claim(claim_id: str) -> None:
     facts = facts_with_assessment(claim_id, unavailable=False)
     expected = EXPECTED[claim_id]
@@ -162,8 +193,9 @@ def test_the_rules_reproduce_the_oracle_on_every_golden_claim(claim_id: str) -> 
     assert decision.gaps == ()
 
 
-def test_the_golden_set_has_forty_claims_and_an_outcome_for_each() -> None:
-    assert len(CLAIM_IDS) == 40
+def test_the_golden_set_has_forty_seven_claims_and_an_outcome_for_each() -> None:
+    assert len(CLAIM_IDS) == 47
+    assert len(NO_POLICY_IDS) == 1
     assert set(CLAIM_IDS) == set(EXPECTED)
 
 
@@ -172,18 +204,21 @@ def assessment_needed(claim_id: str) -> bool:
     return needs_assessment(facts.claim, facts.policy, facts.terms)
 
 
-# What the 40 claims come to when the assessment is unavailable wherever it was
+# What the 47 claims come to when the assessment is unavailable wherever it was
 # needed: the 7 within_threshold claims that needed it are unverified, and the 3
 # circumstance exclusions the model would have found are not seen, so those
-# claims go on to the later steps.
+# claims go on to the later steps. The 7 claims after the first forty are never
+# asked about: three on a fraud indicator's boundary and three one day off it
+# (which stay approved) and one on no policy.
 COUNTS_WITHOUT_ASSESSMENT = {
     "excluded": 3,
-    "fraud_indicator": 6,
+    "fraud_indicator": 9,
     "missing_documents": 6,
     "over_threshold": 7,
     "policy_inactive": 6,
+    "policy_not_found": 1,
     "unverified": 7,
-    "within_threshold": 5,
+    "within_threshold": 8,
 }
 
 
@@ -200,7 +235,16 @@ def test_no_claim_that_needed_the_assessment_is_approved_when_it_is_unavailable(
 
     approved = {c for c, d in decisions.items() if d.route == "auto_approve"}
     assert not {c for c in approved if assessment_needed(c)}
-    assert approved == {"CLM-0005", "CLM-0010", "CLM-0016", "CLM-0019", "CLM-0021"}
+    assert approved == {
+        "CLM-0005",
+        "CLM-0010",
+        "CLM-0016",
+        "CLM-0019",
+        "CLM-0021",
+        "CLM-0042",
+        "CLM-0046",
+        "CLM-0047",
+    }
     assert dict(sorted(reasons.items())) == COUNTS_WITHOUT_ASSESSMENT
 
 
@@ -256,7 +300,6 @@ def test_the_vocabularies_cover_the_catalogues() -> None:
     assert set(get_args(rules.Document)) == set(catalogue.DOCUMENT_ORDER)
     assert set(catalogue.REASONS) <= set(get_args(rules.Reason))
     assert set(get_args(rules.Reason)) - set(catalogue.REASONS) == {
-        "policy_not_found",
         "nothing_payable",
         "unverified",
     }

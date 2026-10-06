@@ -184,16 +184,18 @@ def test_ordinary_claimant_text_is_not_special_category(text: str) -> None:
     assert not holds_special_category(text)
 
 
-def test_exactly_one_golden_set_description_is_special_category(
+def test_exactly_two_golden_set_descriptions_are_special_category(
     claim_descriptions: dict[str, str],
 ) -> None:
+    # Two late reports give "in hospital" as their reason. CLM-0044 is one of the
+    # claims after the first forty, which the model is never asked about.
     special = [
         claim_id
         for claim_id, text in claim_descriptions.items()
         if holds_special_category(text)
     ]
 
-    assert special == ["CLM-0012"]
+    assert special == ["CLM-0012", "CLM-0044"]
 
 
 def test_a_long_text_is_screened_in_linear_time() -> None:

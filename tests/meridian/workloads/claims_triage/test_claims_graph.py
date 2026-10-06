@@ -352,7 +352,8 @@ WITHHELD_FROM_THE_MODEL = "CLM-0012"
 @pytest.mark.parametrize("claim_id", list(CLAIMS))
 def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) -> None:
     expected = EXPECTED[claim_id]
-    policy = POLICIES[CLAIMS[claim_id]["policy_number"]]
+    # Empty for the claim on a policy number no policy has: it cites nothing
+    policy = POLICIES.get(CLAIMS[claim_id]["policy_number"], {})
     model = golden_model(claim_id)
     tools = StubTools()
     withheld = claim_id == WITHHELD_FROM_THE_MODEL

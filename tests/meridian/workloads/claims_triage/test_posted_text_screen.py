@@ -74,7 +74,7 @@ def test_a_posted_text_that_is_clean_is_not_flagged() -> None:
 def test_no_golden_description_as_posted_addresses_the_model() -> None:
     claims = synthetic_claims()
 
-    assert len(claims) == 40
+    assert len(claims) == 47
     for claim in claims:
         assert not addresses_the_model(claim["description"]), claim["claim_id"]
         assert posted_text_addresses_the_model(claim["description"]) is False, claim[
