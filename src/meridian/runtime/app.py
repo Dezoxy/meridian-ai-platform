@@ -12,7 +12,7 @@ import ssl
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.serde import _msgpack
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer
 
@@ -45,7 +46,9 @@ from meridian.platform.common.identity import (
     caller_service,
     install_caller_check,
 )
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
+from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -58,6 +61,7 @@ from meridian.runtime import SERVICE_NAME, runs
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import failure_reason
 from meridian.runtime.graphs import GraphFactory, load_graph_factory
+from meridian.runtime.meters import RuntimeMeters, shut_down
 from meridian.runtime.model_client import ModelCallError, ModelCallTimeoutError
 from meridian.runtime.models import (
     Reference,
@@ -427,6 +431,7 @@ def create_app(
     settings: RuntimeSettings,
     *,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     http_client: httpx.Client | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     tool_servers: Mapping[str, ToolTarget] | None = None,
@@ -438,7 +443,9 @@ def create_app(
 
     ``tool_servers`` (tests) replaces the settings' addresses with targets the
     SDK's client accepts, such as an in-process server. ``clock`` times the
-    audit throttle of the runtime's own tool refusals."""
+    audit throttle of the runtime's own tool refusals. A ``meter_provider`` is
+    its caller's to shut down; without one the app builds its own, which it
+    shuts down with the app."""
     _refuse_to_start_if_unsafe()
     # At start, not on the first run: the SDK's log routing and its models.
     prepare_sdk()
@@ -467,6 +474,11 @@ def create_app(
     # at shutdown, with the gateway client when the app made that itself.
     tool_transport = ToolTransport(verify)
     dsn = settings.database_url
+    owns_meter_provider = meter_provider is None
+    app_meter_provider = (
+        make_meter_provider(SERVICE_NAME) if meter_provider is None else meter_provider
+    )
+    meters = RuntimeMeters(app_meter_provider)
 
     # An injected checkpointer (tests) serves every request; otherwise each
     # request opens the PostgreSQL saver on a connection of its own (S015).
@@ -474,13 +486,17 @@ def create_app(
         return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
 
     def close() -> None:
-        # The gateway client is closed only when the app made it: an injected
-        # one is its owner's.
+        # The gateway client and the meter provider are closed only when the
+        # app made them: an injected one is its owner's.
         try:
             tool_transport.close()
         finally:
-            if http_client is None:
-                http.close()
+            try:
+                if http_client is None:
+                    http.close()
+            finally:
+                if owns_meter_provider:
+                    shut_down(app_meter_provider)  # a failure is a WARNING
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -589,24 +605,35 @@ def create_app(
                 transport=tool_transport,
             )
             outcome = runs.execute(
-                factory, saver, http, tools, tracer, identity, run_input, resume=resume
+                factory,
+                saver,
+                http,
+                tools,
+                tracer,
+                identity,
+                run_input,
+                resume=resume,
+                on_model_call=meters.model_call_observer(identity),
             )
         except Exception as exc:
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
-        outcome, failure, unsaved = _settle(dsn, identity, leg, failure, outcome)
-        if outcome.status != "AwaitingApproval":
+        settled, answered, unsaved = _settle(dsn, identity, leg, failure, outcome)
+        # Counted once, after the write, by what the leg itself did (not what
+        # _settle answers for the sweep); not-saved when nothing was written.
+        meters.leg_ended(identity, outcome, failure, saved=unsaved is None)
+        if settled.status != "AwaitingApproval":
             # The checkpoint holds the claim; a finished run needs none,
             # whether or not its status could be recorded.
             _delete_checkpoints(saver, identity, saver_scope)
-        set_span_attributes(span, {"meridian.run_status": outcome.status})
+        set_span_attributes(span, {"meridian.run_status": settled.status})
         if unsaved is not None:
-            return _unsaved_answer(span, identity, outcome.status, unsaved)
-        if failure is not None:
-            response.status_code = _failure_status(failure)
+            return _unsaved_answer(span, identity, settled.status, unsaved)
+        if answered is not None:
+            response.status_code = _failure_status(answered)
         return RunResponse(
-            run_id=identity.run_id, status=outcome.status, output=outcome.output
+            run_id=identity.run_id, status=settled.status, output=settled.output
         )
 
     @app.post(
@@ -641,9 +668,12 @@ def create_app(
         )
         # The saver is opened before the run row is written, so a database
         # that refuses its connection starts no run (same answer as start_run).
-        with start_span(tracer, "runtime.run") as span, saver_scope() as saver:
+        with start_span(tracer, "runtime.run") as span, ExitStack() as opened:
             _set_run_attributes(span, identity.run_id, identity.agent, identity.tenant)
-            runs.start_run(dsn, identity)
+            # Both passed tenant_may_run: a refused start counts under them.
+            with meters.start_counted(identity.tenant, identity.agent):
+                saver = opened.enter_context(saver_scope())
+                runs.start_run(dsn, identity)
             return run_leg(factory, saver, span, identity, response, body.input)
 
     @app.post(
@@ -707,9 +737,14 @@ def create_app(
         # to the claim, which decides.
         # The saver is opened before the claim, so a database that refuses its
         # connection leaves the run paused instead of stuck as Running.
-        with start_span(tracer, "runtime.resume") as span, saver_scope() as saver:
+        with start_span(tracer, "runtime.resume") as span, ExitStack() as opened:
             _set_run_attributes(span, run_id, found.agent, found.tenant)
-            identity = runs.claim_paused_run(dsn, run_id, body.tenant, body.reference)
+            # Both passed tenant_may_run; an empty claim is no error, no count.
+            with meters.start_counted(found.tenant, found.agent):
+                saver = opened.enter_context(saver_scope())
+                identity = runs.claim_paused_run(
+                    dsn, run_id, body.tenant, body.reference
+                )
             if identity is None:
                 # Another request claimed the run between the read and the
                 # claim: it runs the leg, and this one reports where the run is.
@@ -760,4 +795,5 @@ def create_app(
 def create_app_from_env() -> FastAPI:
     """The factory S041 runs under ``uvicorn --factory``."""
     install_log_redaction()
+    configure_logging(SERVICE_NAME)
     return create_app(RuntimeSettings.from_env())
