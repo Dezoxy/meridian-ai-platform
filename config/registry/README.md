@@ -121,6 +121,13 @@ job. Beyond the schemas, validation refuses:
   1,000 (an output without `capacity` is not compared), and a deployed
   model that is not registered (T-12).
 
+`validate` also prints one `NOTE` line, and refuses nothing, for each graph
+agent that `agent-runtime` may name and no tenant lists (S076, T-81): the
+reverse of the service rule above, which `meridian workload new` writes on
+purpose and which admits no call until a tenant lists the agent. The exit code
+is unchanged, and a `job` agent in the runtime's list is not reported, since
+the runtime loads no graph for a job.
+
 Replay is a gateway mode, set per deployment in `policies.yaml`, never a
 route candidate: a real outage must not be answered with canned text (chat) or
 a simulated vector (embeddings). The replay embedding is simulated: a hashed
@@ -337,7 +344,9 @@ an in-memory reader; a dashboard for them is designed (S043).
   it to no tenant: the tools, the workers and the tenant are edits a person
   makes (T-81). It also writes the agent into the `agents` of
   `agent-runtime` in `services.yaml`, so the runtime may name it; no
-  call is admitted before a tenant lists the agent (S061).
+  call is admitted before a tenant lists the agent (S061), and
+  `meridian registry validate` prints a `NOTE` for it on every run until a
+  tenant does (exit code unchanged, S076).
 - **The models themselves:** edit `src/meridian/platform/registry/`, then
   regenerate the schemas with `uv run meridian registry schemas`.
 

@@ -509,7 +509,7 @@ both readings the same hour ("yes both are right, go on").
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | todo | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it; the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | todo | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | todo | — |
-| S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built | todo | S037 |
+| S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 
 ### M3 — Reliability and operations
 
@@ -673,7 +673,7 @@ that day; the rest stand as their step recorded them.
 | `make docs` does not notice a blank line that splits a Markdown table: the threat register showed T-72 and every later row outside its table from S017 until S018 | S018 | open; not built by S057: the checker and its test are copies of development-base's, where the fix goes first and is then re-copied. S057's section says what the check is; tried from a scratch folder, it finds no split table in the tree today | S075 |
 | `make demo` reports "no trace with spans from all of" for a trace whose readings alternate between complete and partial; only the last reading decides the wording | S018 | closed by S062 (a wording of its own; and a service with no span no longer counts as present) | S062 |
 | 104 tests assume one graph agent and fail in a tree with a scaffolded workload: 103 in `test_runtime_app.py` (14 of them without a database) fake the entry points for `claims-triage` only while reading the real registry, one in `test_structured_outputs.py` lists the registry's agents | S039 | closed by S037 (T0: the runtime's tests publish a stand-in for the agent under test alone and load every other agent through its real entry point, and the registry's and scaffold's pins are derived; in a tree with a scaffolded workload only the pin `NAMES` fails, on purpose) | S037 |
-| No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open; narrowed by S037: a workload written by hand, `claim-brief`, ran through the run API in tests and on kind once under replay, and no generated one has | S076 |
+| No generated workload has run through the Agent Runtime's run API or on kind: the first-run test loads and invokes the graph in process | S039 | open; narrowed by S037: a workload written by hand, `claim-brief`, ran through the run API in tests and on kind once under replay, and no generated one has; S076 (done) built nothing that runs one, so the row moves to S073, the nearest step that puts something on kind that smoke does not read | S073 |
 | The first-run test installs a copy of the tree and adds 15 to 40 s to the CI python job | S039 | closed by S057, accepted with its number: 11 s of one worker in CI (pull request 79), 30 to 39 s on a laptop | S057 |
 | The scaffold's comparison "the old agents plus exactly one" has no test that reaches it alone (the YAML parse and the registry validation refuse first) | S039 | closed by S061 (a test calls the comparison with a list the earlier checks would let through) | S061 |
 | The scaffold refuses valid but unusual files without saying which line (a table header with a trailing comment, a flow-style list), and `the name is taken` does not say by what | S039 | closed by S061 (a refusal names the line of the person's own file, and the kinds of thing that hold a taken name; never the name) | S061 |
@@ -727,13 +727,13 @@ that day; the rest stand as their step recorded them.
 | Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | partly closed by S056 (cert-manager's own approver is off and approver-policy lets the issuer sign only a request made in `meridian` with a URI under its prefix; on the cluster a request from another namespace was denied). Open, for before the chart goes to AKS: revocation; a CA key outside a Kubernetes Secret; inside `meridian` the policy does not tell one service's request from another's | S020 |
 | Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | closed by S063: TLS 1.3 to the collector, verified against an authority of its own; on kind | S063 |
 | `meridian workload new` adds a new agent to the registry but not to the Agent Runtime's entry in `services.yaml`, so on a cluster the gateway would refuse the scaffolded workload's calls (S055's name rule) | S055 | closed in part by S055's review: `meridian registry validate` now fails for a graph agent a tenant may run that the runtime may not name, and says where to add it; closed by S061 for the agent (the scaffold writes it into the runtime's entry, the owner's decision of 2026-10-05); a new workload's own API still needs an entry and a chart entry by hand, which the command now says | S061 |
-| The scaffold writes the Agent Runtime's right to name an agent before a tenant lists it: no registry check flags an entry of the runtime's `agents` that no tenant lists, so a stale one survives, and `check_runtime_names_the_graph_agents` no longer stops the tenant edit for a scaffolded agent | S061 | open; the owner's decision ("option 1, write it"), T-81's residual; both reviews rated it low | S076 |
-| `services_edit` taken alone follows a YAML alias or merge key into another service's list and its own comparison accepts that; the command refuses such a file earlier, in the registry's loader, and a test holds that | S061 | open; the Python review rated the function high, the security review the command safe | S076 |
-| The scaffold's small ends: `write_plan` drops the `OSError` that says which write failed; an indented table header in `pyproject.toml` is refused without its line; a save between a file's hash check and its own replacement, followed by a failure, is put back over; four whole-command tests still pin the committed list of the runtime; `plan_workload`'s `except OSError` is reached only by a test's stand-in | S061 | open; low | S076 |
-| The entry-point loader's small ends: the graphs' message quotes the name of the distribution that published a duplicate and chains the import error into the log, where the evaluations' text is fixed; `_inside` resolves the file and not the root; `graphs._in_trusted_root` repeats it; its defaults are never used | S061 | open; low | S076 |
-| The screen fingerprint reads source from disk, so a process that outlives an edit fingerprints the new text, and it covers neither the interpreter's Unicode database nor `re`; `test_injection_imports.py` reads `from` imports only | S061 | open; low | S076 |
-| The claims workload's two report builders do not compare the manifest's workload with their own; only `eval run` does | S061 | open | S076 |
-| `meridian registry schemas` without `--check` ends in a traceback when it cannot write into the directory | S061 | open | S076 |
+| The scaffold writes the Agent Runtime's right to name an agent before a tenant lists it: no registry check flags an entry of the runtime's `agents` that no tenant lists, so a stale one survives, and `check_runtime_names_the_graph_agents` no longer stops the tenant edit for a scaffolded agent | S061 | closed by S076 as a note, not a refusal (the owner's decision "option 1, write it" stands: a refusing check would refuse the tree the scaffold writes): `meridian registry validate` prints a NOTE for each graph agent the runtime lists and no tenant lists, exit code unchanged, and the scaffold's output says so; `load_registry` refuses nothing new. A note can be ignored (T-81's residual); `check_runtime_names_the_graph_agents` still checks the other direction, and still stops nothing for a scaffolded agent, since the scaffold writes the runtime's entry | S076 |
+| `services_edit` taken alone follows a YAML alias or merge key into another service's list and its own comparison accepts that; the command refuses such a file earlier, in the registry's loader, and a test holds that | S061 | closed by S076: `services_edit`'s own read refuses an anchor, an alias or a merge key and names the line (`SERVICES_SHARED_NODE`), before it looks for the runtime's entry, with a test for five shapes | S076 |
+| The scaffold's small ends: `write_plan` drops the `OSError` that says which write failed; an indented table header in `pyproject.toml` is refused without its line; a save between a file's hash check and its own replacement, followed by a failure, is put back over; four whole-command tests still pin the committed list of the runtime; `plan_workload`'s `except OSError` is reached only by a test's stand-in | S061 | closed by S076, each part: a failed write names its kind and the error's class; an indented header is followed and a refusal names the parser's line; the undo puts back every file that still holds the command's bytes and leaves and names only a person's save (the two windows that remain are rows below); the whole-command tests read the lists from the registry (two were untied by S037, the others here); the dead `except OSError` is gone and the real stat that failed is one line (exit 2) | S076 |
+| The entry-point loader's small ends: the graphs' message quotes the name of the distribution that published a duplicate and chains the import error into the log, where the evaluations' text is fixed; `_inside` resolves the file and not the root; `graphs._in_trusted_root` repeats it; its defaults are never used | S061 | closed by S076: both loaders word a refusal from one table of fixed sentences, the graphs' with the registry's agent ID in front, quoting no distribution's name and no import error's text, and the cause is the error's class; `_inside` resolves the root too; `_in_trusted_root` stays on purpose (it checks the factory's own module, which the shared check does not: T-40) and resolves its root; the defaults stay and the docstring says they are for the tests' own loaders | S076 |
+| The screen fingerprint reads source from disk, so a process that outlives an edit fingerprints the new text, and it covers neither the interpreter's Unicode database nor `re`; `test_injection_imports.py` reads `from` imports only | S061 | closed by S076, with the digest unchanged (the session's design: say what it covers, do not widen it): `data/evaluation/README.md` says what the digest covers and what it does not (the interpreter's Unicode database, `re`, the text the screens are applied to, and that a process that outlives an edit fingerprints whatever now sits at the old line numbers of the file, not the new text), a test holds the digest equal to both baselines, and the import test reads plain `import`, alias, `importlib`, `__import__`, `getattr` and star forms, scopes and annotations, and lists what it cannot see | S076 |
+| The claims workload's two report builders do not compare the manifest's workload with their own; only `eval run` does | S061 | closed by S076: both builders (`build_report` and `build_injection_report`, the second for its own manifest and for the golden manifest it names) refuse a manifest that does not name `claims-triage`, in fixed words that do not quote the value, before any file or case is read; `Report.workload` is still not tied to the manifest's by a validator (a row below) | S076 |
+| `meridian registry schemas` without `--check` ends in a traceback when it cannot write into the directory | S061 | closed by S076: one error line and exit 1 that name the `schemas` directory and the error's class and never its text, for a directory that cannot be made, a file that cannot be written and a `schemas` that is a file; a schema file that is a link is refused before any write, and one that is not UTF-8 counts as stale and is repaired. The write is not all-or-nothing, so the line says to fix the directory and run it again (rows below) | S076 |
 | Six functions this step touched by a line or two were over 50 lines before it (`run_command` 73, `build_report` 64, `assess` 59, `render_summary` 58, `build_injection_report` 52, `summarise` 51) | S061 | open; the Python review | S074 |
 | The audit has no column for the calling service: a refused caller's ID is written to `reference`, which a run's rows use for the claim | S055 | open | S033 |
 | A pod's certificate Secret is mounted with the default file mode (0644, owned by root), so the key is readable by any user in the container; each container runs one process as one user. The fix is `fsGroup` in the pod's security context with `defaultMode: 0440`; `0400` alone would stop the non-root process reading it | S055 | closed by S056 (`fsGroup` and mode 0440; on the cluster the key file was mode 440, owner root, group 10001 in all six pods) | S056 |
@@ -797,7 +797,7 @@ that day; the rest stand as their step recorded them.
 | The triage as a supervisor and workers, the worker's name on the wire and migration 0021 have run in tests and in the replayed evaluation, not on a cluster | S031 | closed by S063's cluster runs (2026-10-06): migration 0021 applied, `make demo` passed for a claim approved automatically and one through the adjuster, and Tempo holds each worker's name on the runtime's and the tool servers' spans. The `worker` column was not read on the cluster | S063 |
 | `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | open | S074 |
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
-| One workload declares workers; the scaffold for a new agent writes one without them, and nothing has built a second graph of subgraphs | S031 | open | S076 |
+| One workload declares workers; the scaffold for a new agent writes one without them, and nothing has built a second graph of subgraphs | S031 | closed by S076 as a decision, not built: a second supervisor-and-subgraph example written by the scaffold would be a second graph to keep true with no workload asking for it, and since S037 a new workload may be on either host; the scaffold's output and `config/registry/README.md` say that workers are an edit a person makes in `agents.yaml` | S076 |
 | The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps in every namespace, so either can read the two authorities' keys, overwrite them, or change the ConfigMap `telemetry-ca` that says what the services trust for telemetry (they read it at each new connection: no restart, no alert) | S063 (security review) | open | S072 |
 | Prometheus's OTLP receiver and Loki's push API take writes from Grafana and from the collector directly, past the collector's policy and TLS; the three hops from the collector to Tempo, Loki and Prometheus are clear text inside `observability`; the collector asks a sender for no certificate, so each of the six services can push under another's name (T-68) | S063 (security review) | open | S072 |
 | Egress from `observability` is open (Prometheus scrapes the kubelet and the API server at the node's address), and port 10250 of the three admission webhooks admits any pod: a forged review changes nothing, a flood against the two that fail closed can stall the issuing of certificates | S063 | open | S072 |
@@ -823,13 +823,20 @@ that day; the rest stand as their step recorded them.
 | Renovate has no rule for `agent-framework-core`: a bump arrives in the monthly `python` group and can change the graph's signature and strand paused briefs; `python-dotenv` 1.2.4 was locked five days after its release, under the seven-day rule; the guard today is `test_brief_stored_shapes.py` | S037 (security review) | open | S075 |
 | No runbook names a failure of the claim brief that an operator can act on: a brief that waits for ever, a release that strands paused briefs, a migration (0023, 0024) not applied | S037 (service acceptance, SA-20) | open; no step writes a runbook, so the nearest is the game day that exercises them | S028 |
 | The claim brief has no grader, no baseline and no cases (its golden set is empty and its evaluation raises `NO_GRADERS`), so nothing in CI grades a brief or fingerprints its prompt; the tenant `evaluation` does not list the agent | S037 (service acceptance, SA-15) | open; no step grades a workload, so the nearest is the one that measures with a model | S071 |
-| The scaffold writes a LangGraph workload only; the claim brief's host line, state types, workflow, store and routes were written by hand, and the Agent Runtime's docstring (`runtime/__init__.py`) still says it hosts LangGraph graphs | S037 (service acceptance, SA-30) | open | S076 |
+| The scaffold writes a LangGraph workload only; the claim brief's host line, state types, workflow, store and routes were written by hand, and the Agent Runtime's docstring (`runtime/__init__.py`) still says it hosts LangGraph graphs | S037 (service acceptance, SA-30) | closed in part by S076: the docstring now names both hosts (ADR 9). Open: the scaffold for the second host, and the command's output does not say which host the agent is on (the default, `langgraph`). No step is for it; S069 is the nearest, because the scaffold has to write what the runtime's second host checks at start (`host_wiring`) and S069 is the step in the runtime's edges | S069 |
 | `ToolClient.call` sets no step attribute on its span, so the design's "the tool span carries the step's name" is not true; the second host's step limit is `step-limit` and LangGraph's is `unexpected`, two words for one limit | S037 (reports of R4a, W1a, R1) | open | S069 |
 | The three brief routes have no sign-in (T-69, T-94): whoever reaches the Claims API starts, decides and reads a brief | S037 | open | S021 |
 | A migration that is not applied fails one statement of the sweep (0023: the leftover walk; 0024: the abandoned-run list), so the LangGraph cleanup or the triage's run end goes down with it; how the chart orders the migrate Job against the sweep and the pods was not read | S037 (database review) | open | S073 |
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | open | S074 |
 | `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | open; seen once, under load | S074 |
 | Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
+| The scaffold's undo has windows that only a lock would close, and it names more than it touched: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); the "check by hand" list can name a path the command never touched and a temporary that is already gone; an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; an error the undo raises after an interrupt ends the command as a write error (exit 1), not as the interrupt; `_replace` leaks a descriptor if an interrupt lands inside `os.fdopen`, before it takes the descriptor over | S076 (fifth review; reports of C8, F3, F4, F5) | open; low. No step owns the command-line tool, so S075, the developer's own tools, is the nearest | S075 |
+| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); `one_line` in `services_edit` compares the parser's lines, so a flow list with a U+2028 inside is refused as not on one line; `line_of` at the end of a text that ends with a newline names the line after the last; `yaml.compose` in `_runtime_agents` has no `RecursionError` catch, which the registry's loader makes unreachable from the command; a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | open; low; S075 for the reason in the row above | S075 |
+| `meridian registry schemas`: the write follows a link that is the `schemas` directory itself (`mkdir(exist_ok=True)` succeeds and the writes go through it; only a schema file that is a link is refused); `--check` on a linked file tells the person to run the command, which then refuses with `SchemaPathIsALink`; the write is not all-or-nothing | S076 (reports of C7 and F2) | open; low; S075 for the reason above | S075 |
+| The loaders: `load_trusted_entry_point` catches `Exception`, not `BaseException`, so a `sys.exit()` or an interrupt raised at import by a module under the trusted root reaches the caller with its own message; `_loaded_in` and `_in_trusted_root` read `__file__`, which such a module can set, so they are sanity checks and not a boundary; a directory that calls itself `meridian` can still choose up to ten ID-shaped names and a count for a "known" list, and a class under the trusted root a name of up to 64 identifier characters for a cause (both need a write to the Python path or to the trusted package, T-40) | S076 (security review 2; reports of F1 and F2) | open; low; S069 is the nearest, the step of the runtime's edges, where the graphs' loader is | S069 |
+| The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S067 is the nearest, the next step to touch the evaluation's reports and baselines | S067 |
+| The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
+| A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | open | S075 |
 
 ## Part C — Step details
 
@@ -11008,6 +11015,368 @@ earlier consultation had seen (Part A, step 4).
   brief) and each decision above that the owner may overturn. The brief in
   Azure waits for S020.
 
+### S076 — CLI, scaffold and loader small ends
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** the command-line tool, the workload scaffold and the two
+entry-point loaders lose the small ends that S061's reviews left with this
+step. `meridian registry validate` says when the Agent Runtime may name an
+agent that no tenant lists (T-81); `services_edit` refuses an alias or a
+merge key by itself; the scaffold names the line of a person's file that it
+refuses and, when a write fails, undoes it and names whatever it could not
+undo; both loaders word a refusal in fixed sentences that quote nothing a
+third party wrote (T-40, T-80); the screen's fingerprint is described as
+what it covers (T-72); the claims workload's report builders refuse another
+workload's manifest; `meridian registry schemas` answers a directory it
+cannot write; and the plan says why the scaffold writes no second graph of
+subgraphs.
+
+**Decisions** (the main session's unless marked; the owner may overturn
+any). The first six are `design.md`'s, written from a read-only map of the
+repository before any contract:
+
+- **Item 1 is a note, not a refusal.** `unlisted_runtime_agents`, in
+  `service_checks.py` and not among the registry's checks, returns the graph
+  agents that `agent-runtime` lists and no tenant lists; `validate` prints
+  one `NOTE:` line for each after a clean load, on standard output, and its
+  exit code is unchanged. A check that refused them would refuse exactly the
+  tree the scaffold writes, which the owner chose in S061 ("option 1, write
+  it"). Rejected: a refusing check with an exemption (the registry has no
+  marker for "scaffolded, not yet granted", and adding one is a schema
+  change for a low finding), a refusing check with a scaffold that stops
+  writing `services.yaml` (it reverses the owner's decision), and nothing
+  (the row asks for a check that says so). A job in the runtime's list is
+  not reported, because the runtime loads no graph for a job (C9's
+  decision). The scaffold's own output says that `validate` prints a note
+  until a tenant lists the agent.
+- **Item 5: the documents say what the digest covers, and the digest does
+  not change.** `data/evaluation/README.md` lists what the `screen`
+  fingerprint hashes and four things it does not: the interpreter's Unicode
+  database and `re`, the helpers a pattern is built from, which text the
+  screens are applied to, and the file read at call time. Rejected: hashing
+  the Unicode version and `re` (it would tie both baselines to one
+  interpreter release), and hashing code objects (a changed comment would
+  then ask for no new baseline, which T-72 calls the safe direction). No
+  fingerprint moved, so the evaluation lane was not taken. Two sentences of
+  the design were wrong and the reviews corrected them: the Unicode database
+  changes with the interpreter's minor release, not its patch level, and a
+  process that outlives an edit does not fingerprint "the new text" but
+  whatever now sits at the old line numbers of the file (the reviewer
+  inserted two lines above an unedited function and read it with
+  `inspect.getsource`).
+- **Item 8 is not built.** One workload declares workers; a scaffold that
+  wrote a second supervisor-and-subgraph example would be a second graph to
+  keep true with no workload asking for it, and since S037 a new workload may
+  be on either host. The command's output and `config/registry/README.md`
+  say that workers are an edit a person makes in `agents.yaml`.
+- **Item 3, naming the line.** A refusal about a line of the person's file
+  names it where the parser gives one (`SERVICES_NOT_YAML_AT` from the YAML
+  mark and `PYPROJECT_NOT_TOML_AT` from the message's own "at line N"); a
+  refusal with no line says what is missing. An indented header is accepted
+  and followed instead (a choice below). A
+  failed write names its kind, from a closed set of fixed words (a
+  directory, a new file, the replacement of `pyproject.toml`, `agents.yaml`
+  or `services.yaml`), and the class of the error, never a path a command
+  created, because such a path holds the workload's name. An existing test
+  asserted that the edited file's name is not in the message; it changed on
+  purpose.
+- **Item 4: the graphs' loader takes the evaluations' fixed words.** One
+  table in `platform/common/entry_points.py` (`fixed_text`), with the
+  subject word `evaluation` or `graph`, quotes no distribution's name and
+  chains no import error into the log. `graphs._in_trusted_root` stays,
+  because it checks the factory's own module, which the shared check does
+  not (T-40); `_inside` resolves the root as well as the file. The graphs'
+  message keeps the registry's agent ID in front (C10's choice), because
+  the fixed sentences never name the agent and an operator would not know
+  which one failed at start.
+- **Order.** Four contracts side by side first (items 4, 5, 6 and 7, which
+  touch disjoint files), and the scaffold's cluster (items 2, 3, 1 and 8)
+  after S037's registration contract had landed, because both edit the
+  scaffold's tests and the registry's README. The two changes of order are
+  in the next two bullets.
+- **Change of order 1, about 14:06 UTC, from the advisor.** Item 4 is split:
+  the shared module and the evaluations' loader went out at once, and the
+  graphs' wording waited for S037, which was editing the runtime's
+  `graphs.py`.
+- **Change of order 2, 15:20 UTC.** S037 had landed its registration on its
+  own branch but would not merge for an hour or more, so the scaffold's two
+  contracts (C8: items 2 and 3; C9: items 1 and 8) were sent from this
+  step's branch before it merged, with three guards against a conflict: new
+  tests in new files, item 3d (the tests S037 had already untied) left out,
+  and one new README paragraph at a named anchor, after the `workers`
+  paragraph of S031, which S037 had not touched. The cost showed at the
+  merge: see the work log.
+- **What the six reviews changed** (five by the python reviewer, one by the
+  security reviewer; the contracts that fixed each round are in the work
+  log):
+  - *First review, the loaders' first four commits.* Two high findings: the
+    `; known:` list took names from any directory that calls itself
+    `meridian` (now only names that match the registry's ID pattern, at most
+    64 characters, ten listed and a count), and the class name of an error,
+    kept as the refusal's cause, could carry a newline or a sentence, or
+    crash the loader through a metaclass (`safe_class_name` reads the type's
+    own stored name without running the class's code and keeps an identifier
+    of at most 64 characters, else `Exception`). Medium: an undecodable
+    schema file was a traceback (it counts as stale now) and the import test
+    flagged parameters and dunders. Low: the "run again" wording and the
+    README's "new text".
+  - *Second round, the python reviewer and the security reviewer on the
+    first fix.* The import-time check of the table had no test that could
+    fail (the test now executes a copy of the module with one text removed)
+    and the walker missed annotations, class scopes and aliases of aliases;
+    a schema file that is a link is refused (security, low); the docstrings
+    say what a foreign directory and a class under the trusted root can
+    still choose. No new high or medium finding.
+  - *Third review, the two scaffold commits.* High: `write_plan` threw away
+    what the undo could not put back for every exception but one. Medium:
+    earlier files were left as written when a later one was the person's
+    save (now every file that still holds the command's bytes is put back,
+    and only a person's save is left and named), a deeply nested
+    `pyproject.toml` ended in a traceback, and ending a table at a line that
+    starts with `[` trades one wrong refusal for another (the end is found
+    by asking the TOML parser whether the text before is complete). The
+    write and undo moved to `scaffold_writes.py`, because `scaffold.py` had
+    passed 800 lines.
+  - *Fourth review.* High: a second interrupt, exit or error inside the undo
+    left everything and named nothing (the undo fills a caller-owned record,
+    and `_end_unfinished` names every path not known to be settled). Medium:
+    two shapes of `pyproject.toml` took 18 to 34 seconds to plan (a parse is
+    tried only on a header-shaped line), and a nesting depth of 490 to 492
+    still ended in exit 1 (the copy is guarded too).
+  - *Fifth review.* One medium finding: a temporary file of a replacement
+    that stayed was never named, and the message said "has been removed" (the
+    name is chosen and noted before the file exists). Three of its four low
+    findings were fixed with it (the fourth, an undo error after an
+    interrupt ending as exit 1, is left and listed below): what is left is
+    computed where an interrupt still reaches the lines, the first line is
+    written before the paths are listed, and a header candidate must parse
+    alone.
+- **Choices the design did not settle**, made by the contracts and kept:
+  - The refusal's cause is a `LoadFailure` that holds the error's class
+    name and nothing else (C4a). The repository's JSON log format writes an
+    exception's class and frames but never its message, so Loki shows
+    `LoadFailure` and not the failing error's class; a plain traceback shows
+    both. The alternative, an argument-less instance of the error's own
+    class as the cause, would show the class in Loki and was not taken.
+  - The report builders' refusal does not quote the workload a manifest
+    names, because it is a caller's text, and one text serves both of the
+    injection builder's manifests (C6).
+  - `meridian registry schemas` is not all-or-nothing, because a rollback
+    can fail too and the files are regenerated; the line says to fix the
+    directory and run it again (C7, reworded by F1).
+  - An indented table header is accepted everywhere, because TOML ignores
+    indentation (C8, 3b); an unreadable file is left and named, not
+    replaced (C8, 3c).
+  - The note's text and the README paragraph say nothing of the host (C9),
+    because the field was not on the branch then.
+
+**Advisor:** three consultations by the main session. Before the first
+contract (about 14:06 UTC, on the design): it split item 4, because S037 was
+editing the runtime's loader, so the graphs' wording waited. At 15:20 UTC,
+before the session changed the order of the scaffold's contracts on its own:
+the change stood, with one sharpening, that C9's README paragraph has a
+named anchor and not "somewhere short", which merges badly. Before the pull
+request, because F5 and C10 had been read by no reviewer (Part A, step 4):
+ADVISOR-BEFORE-PR.
+
+**Work log:**
+
+- **A read-only map, a design, then twelve contracts** to the
+  `implementer`, each in a worktree of its own and carried to the step's
+  branch by the session: C4a, C5, C6, C7 (the loaders, the digest's
+  documents, the report builders, the schemas), C8 and C9 (the scaffold,
+  then `validate`'s note), C10, and five fix contracts F1 to F5. Branch
+  order: C7, C5, C6, C4a, F1, F2, C9, C8, F3, F4, F5, the merge, C10.
+- **C7:** `meridian registry schemas` ends in one error line and exit 1 for
+  a directory it cannot make or a file it cannot write.
+- **C5:** the README says what the `screen` digest covers; a test holds the
+  digest equal to both baselines; the import test reads every form of
+  import. The digest did not move.
+- **C6:** both report builders compare the manifest's workload with their
+  own, before any file or case is read.
+- **C4a:** the shared module `platform/common/entry_points.py` gets one
+  table of fixed words, `LoadFailure` as the cause and a resolved root; the
+  evaluations' loader takes the words, unchanged. The graphs' wording waited
+  for S037.
+- **First review, then F1:** the `known` list, the class name, the
+  undecodable schema file, the walker's scopes, the wording of the schemas'
+  line, the README's "new text".
+- **Second round, then F2:** an import-time check that a test can fail, the
+  walker's annotations and class scopes, a schema link refused, the
+  docstrings. F2's contract named a test path that does not exist; the
+  implementer ran the right one and said so.
+- **C9:** `validate`'s note, the scaffold's two texts and the README
+  paragraph on workers (item 8).
+- **C8:** the scaffold's refusals and writes (items 2 and 3): the shared
+  node refused by `services_edit` itself, the kind of a failed write, the
+  indented header, the undo that leaves a person's save, the unreadable
+  registry as one line, the parser's line in two refusals.
+- **Third review, then F3:** what the undo could not put back is named
+  whatever ended the write; every file that still holds the command's bytes
+  is put back; the deep `pyproject.toml`; the table's end by parsing;
+  `line_of`, so that a Unicode line separator does not shift a line number;
+  the write and undo split into `scaffold_writes.py`.
+- **Fourth review, then F4:** the undo ended by a second interrupt, exit or
+  error says so and names every path not known to be settled; a closed
+  standard error cannot replace the interrupt; the table's end costs a
+  parse only on a header-shaped line; the deep file is refused across the
+  whole window; the original error is the cause.
+- **Fifth review, then F5:** a temporary file is noted before it exists and
+  named if it stays; what is left is computed where an interrupt still
+  reaches the lines; the first line is written first; a header candidate
+  must parse alone.
+- **The merge of `main` with S037 (842b977)** was pushed after the cheap
+  gates only and left `test_workload_new_note.py` red: it pinned a tenant
+  list that S037's `claim-brief` changed. C10 found and fixed it.
+- **C10:** the graphs' loader takes the shared words with the agent's ID in
+  front (the second half of item 4), the tests that pinned the committed
+  list of the runtime read it from the registry (item 3d), the registry
+  CLI test reads its lines by content, and the docstring of
+  `src/meridian/runtime/__init__.py` names both hosts.
+- **Two implementers broke the rule against editing through the shell:**
+  F1 appended tests to `test_entry_point_refusals.py` with a heredoc and
+  fixed two with a one-off rewrite, and F4 rewrote `test_workload_new.py`
+  with one. Both said so in their reports; the second round of reviews read
+  F1's diff and the fifth read F4's (40 insertions and one deletion, one
+  test added, no assertion dropped).
+- **F5 and C10 were read by no reviewer.** The session read `_replace` as
+  F5 left it and found nothing; both are what the consultation before the
+  pull request reads (the Advisor line).
+
+**Result / verification:**
+
+- **What "tested" means, and what ran.** Everything here is a
+  command-line tool and loaders, and nothing ran on a cluster. The tests run
+  `meridian workload new`, `registry validate` and `registry schemas`
+  through Typer's `CliRunner` and call the functions directly, on copies of
+  the tree in temporary directories; a failed write, an unreadable file and
+  an interrupt are planted by stand-ins for `Path` and `os` calls; the
+  loaders are run against planted distributions and modules, with a planted
+  name and a planted error text searched for in the message, the formatted
+  traceback and the log; the evaluation's HTTP tests ran against a database
+  where they need one. The fifth review also injected an asynchronous
+  `KeyboardInterrupt` at every line of the write module's undo, which is
+  closer to a signal than a stand-in and is not a terminal's Ctrl-C.
+- **The whole suite**, alone on a quiet machine: 12,161 passed, run before
+  the last three fix contracts and before `main` with S037 was merged in.
+  Its run on the final tree: FINAL-SUITE-RESULT.
+- **Each contract's own run** (from its report; the paths are what the
+  contract named, so the numbers are not additive):
+
+  | Contract | Scope | Last line |
+  |---|---|---|
+  | C4a | `common`, `runtime/test_graphs.py`, `cli` | 965 passed, 2 skipped |
+  | C5 | `guardrails` and the import test | 866 passed |
+  | C6 | `workloads/claims_triage`, no database | 1495 passed, 694 skipped |
+  | C7 | `registry` | 531 passed |
+  | C8 | `cli`, `registry` | 849 passed |
+  | C9 | `registry`, `cli` | 825 passed |
+  | C10 | `runtime`, `registry`, `cli`, `evaluation`, `common`, with a database | 3282 passed |
+  | F1 | the named files and two more | 2644 passed, 2 skipped |
+  | F2 | `common`, `registry`, the import test, the screen's test | 1336 passed, 2 skipped |
+  | F3 | `cli`, `registry` | 883 passed |
+  | F4 | `cli` | 393 passed |
+  | F5 | `cli` | 409 passed |
+
+  Each also ran `ruff check`, `ruff format --check`, `lint-imports` (five
+  contracts kept, six after S037's merge) and `make test`, and read each
+  last line. Several reports (C5, C7, F1, F3, F4, F5) could not read a
+  separate exit status, because the shell kept none between calls, and say
+  that they read success from the printed result. C6's skips need a
+  database; the two skips in each of C4a, F1 and F2 were not read.
+- **The screen digest did not move**: `test_screen_fingerprint.py` holds it
+  equal to both committed baselines and passed in C5, F1 (20 passed) and F2.
+  No contract ran the evaluation gate, whose name the harness refuses an
+  implementer; no baseline, report shape or fingerprint was meant to change.
+- **Red first.** Each contract's report says which tests it saw fail before
+  the change; some it could not (a pin that must pass from the start, and
+  F3, which wrote the implementation before running its tests). F3 and F2
+  showed that their tests discriminate by mutating a scratch copy of the
+  code and seeing the named tests fail (seven mutations in F3, two in F2).
+- **Measured, through `plan_workload`** (a loaded machine): a
+  `pyproject.toml` with 100,000 comment lines took 26.4 s before F4's
+  change and 0.22 s after; 5,000 lines of `  [1],` took 17.3 s and 0.09 s;
+  5,000 lines of `  [1], # ]` took 0.1 s after F5 (the review's figure for
+  the old code was 32 s). Through the CLI, a nesting depth of 486 to 489
+  exits 0 and 490 to 495 exits 2 with `ERROR pyproject.toml cannot be read
+  as TOML` (F4); the fifth review swept depths 380 to 505 with extra stack
+  and found none that ends in exit 1.
+- **`make registry`** on the committed registry (three agents when C9 ran)
+  printed no `NOTE` and its four usual lines; a test holds that. A test runs
+  the real `workload new` on a copy and reads exactly one `NOTE` for the new
+  agent until a tenant lists it, then none.
+- **Not seen:** any of this on a cluster; a terminal's Ctrl-C; a person's
+  editor saving during the write; a failing write on a filesystem that is
+  not the development machine's.
+
+**Not done, by decision or left open:**
+
+- **Item 8 is not built** (the decision above): the scaffold writes an
+  agent with no worker, and a second graph of subgraphs is a person's edit.
+- **The note is advisory.** `validate` prints a `NOTE` for an agent the
+  runtime may name and no tenant lists, and refuses nothing, so the note can
+  be ignored; a tenant's list is still the one edit that admits runs
+  (T-81).
+- **Two windows need a lock that is not built.** A save by the person
+  between a file's own check and its replacement, and between the undo's read
+  and its replacement, is lost to the replacement.
+- **The list of paths "to check by hand" can name a path the command never
+  touched**, and a temporary file that is already gone: on an early failure
+  it names every path of the plan the undo had not settled.
+- **Three endings the undo cannot say.** An interrupt that lands after the
+  undo has returned and before the first line is written leaves no line; a
+  kill the process cannot catch says nothing; an error the undo raises after
+  an interrupt ends the command as a write error (exit 1), not as the
+  interrupt.
+- **A header-shaped line inside a multi-line string of `pyproject.toml`
+  costs one failed parse.** The table's end is found by asking the TOML
+  parser, and a line such as `[x]` inside a string is a candidate until the
+  parse refuses it (the review measured 2.3 s for 20,000 of them). Nothing
+  wrong is written.
+- **A path left behind quotes the workload's name**, which is the person's
+  own argument and the only way to find the path.
+- **The scaffold writes a LangGraph workload only**, and its output does not
+  say which host the agent is on.
+- **The loaders' residuals.** An exit or an interrupt raised at import by a
+  module under the trusted root is not caught (`except Exception`);
+  `_loaded_in` and `_in_trusted_root` read a `__file__` that such a module
+  can set; a directory that calls itself `meridian` can choose up to ten
+  ID-shaped names and a count in a "known" list, and a class under the
+  trusted root a name of up to 64 identifier characters. The last two need a
+  write to the Python path or the trusted package, which T-36 and T-40 call
+  a compromise already.
+- **The digest still depends on source text and on the interpreter the
+  baseline was made with**; the README says so. `Report.workload` is not
+  tied to the golden set's manifest by a validator.
+- **The import test is a tripwire**: its docstring lists what it cannot see.
+- **No contract ran the evaluation gate, and nothing ran on a cluster.**
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the undo's windows and what it names
+  too much, the scaffold's smaller ends, the `schemas` directory that is a
+  link and a `--check` that points at a refusing command, and the merge of
+  `main` that left a test red (S075, the nearest step for the developer's
+  own tools: none owns the command-line tool, and its rule for an
+  implementer that edits through the shell is the one F1 and F4 broke); the
+  loaders' residuals and the scaffold for the second host (S069); the
+  report's workload validator and the manifest read several times (S067);
+  the import test's blind spots (S074); a generated workload that has never
+  run through the run API, re-homed from S076 to S073.
+- Rows closed: the eight that named S076 as home (the note, `services_edit`,
+  the scaffold's small ends, the loaders' small ends, the digest, the report
+  builders, the schemas' traceback, the second graph of subgraphs); one
+  closed in part and re-homed (the scaffold for the second host).
+- For the session: `mapping.md` said that no test pinned the report
+  builders' behaviour on a manifest with no `workload`, and four tests did
+  (C6); `design.md` item 5 says "patch level" and "the new text", both
+  corrected above. A contract's gates should name every directory its change
+  reaches: C10's merge showed it, and S075's row carries it.
+- For the owner: each decision above, and in particular the note in place of
+  a refusal (the owner's S061 decision decides it), the digest left as it is,
+  the second graph not built, a cause that holds `LoadFailure` and not the
+  failing error's class, and the homes chosen for the rows that no step
+  fits.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -11487,3 +11856,16 @@ earlier consultation had seen (Part A, step 4).
   acceptance (6 met, 15 partly met, 9 not met); T-93 to T-99 new (99
   threats) and four checkpoint tables in T-25, T-63 and T-77. Twelve
   backlog rows new, one closed and one narrowed and re-homed.
+- **v0.64, 2026-10-06:** S076 done: `meridian registry validate` prints a
+  note for an agent the Agent Runtime may name and no tenant lists (a note,
+  not a refusal); `meridian workload new` names the line of the file it
+  refuses, undoes a failed or interrupted write and names every path it
+  could not restore; both entry-point loaders word a refusal in one table of
+  fixed sentences that quote no distribution's name and no import error's
+  text; the screen digest's documents say what it covers, with the digest
+  unchanged; the claims workload's report builders refuse another workload's
+  manifest; `registry schemas` answers an unwritable directory in one line.
+  A second graph of subgraphs is not built, as a decision. Command-line tool
+  and loaders, tested, none run on a cluster; six reviews. T-40, T-72, T-80
+  and T-81 rewritten; no new threat. Eight backlog rows closed, one closed
+  in part and re-homed, one re-homed, seven new.
