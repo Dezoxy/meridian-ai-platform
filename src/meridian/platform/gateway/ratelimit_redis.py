@@ -45,7 +45,12 @@ is read as one more than the token limit: that fills the window, a 429 until the
 member leaves, and never the error the sum of an ``inf`` ended in. Every count
 the pattern accepts is a finite whole number or that ``inf``; a sign, an
 exponent, a point, a name or any non-digit stops the match, so the member reads
-as no tokens. And a window holding more members than the script can have written
+as no tokens. The sums stay whole numbers for the limits the registry accepts
+(a tenant's two limits are capped at ``MAX_RATE_LIMIT``, 10**9); a token limit
+near 10**15 and more would lose whole numbers, so the walk that ends the token
+refusal may not come back to zero, and then the script refuses for the whole
+token window, the longest wait it knows, and never ends in an error reply. And a
+window holding more members than the script can have written
 (``_ENTRIES_PER_REQUEST_LIMIT`` times the request limit) is not read to its end:
 one call reads that many and one more, and the one more is answered as a
 refusal for the request window, with that window's wait and no walk, so what one
@@ -122,16 +127,21 @@ _TENANT_ID = re.compile(ENTITY_ID_PATTERN)
 _ADMITTED, _REQUEST_RATE, _TOKEN_RATE = 0, 1, 2
 _REQUEST_WINDOW_MS = round(REQUEST_WINDOW_SECONDS * 1000)
 _TOKEN_WINDOW_MS = round(TOKEN_WINDOW_SECONDS * 1000)
-# The most entries the script can have written per unit of the request limit, and
-# so the most one call reads (times the limit, and one more). The script writes an
-# entry only while fewer than R entries scored after now - 10 s (those in the
-# future too) are there, so any 10 s span of scores holds at most R, whatever the
-# order the clock gave them. After the two removals what is kept is scored in
-# (now - 60 s, now + 60 s], a span of two token windows: twelve request windows,
-# so 12 R. On a clock that only moves forward nothing is scored after now and it
-# is six (the span is one token window); the other six are the server's clock
-# stepping back by up to a window, which leaves what it had written in the
-# future. A bound of seven (six and one for the boundary) would cut that case.
+# What one call reads, per unit of the request limit R: twelve R, and one more.
+# That is a margin of two over the most the script can have written, which is six
+# R whatever the clock did. The script writes an entry only while fewer than R
+# entries scored after now - 10 s are there, and those scored in the future count
+# too (now - score is under the window for them), so after a write at most R sit
+# after ten seconds ago and any 10 s span of scores holds at most R. Each call
+# drops what is a token window old, so what is kept lies in the minute before the
+# newest write: R in the last ten seconds and five more spans of R, six R, with
+# the clock stepping either way (the tests walk it both ways and never see more).
+# An earlier reading took the span the script keeps (a token window each side of
+# now, twelve request windows) for the bound, and six of the twelve for a clock
+# stepping back: it cannot, which is why twelve is a margin and not the bound. It
+# is left at twelve; a bound of seven (six and one for the boundary) would be safe
+# too. The read must exceed what a legitimate tenant keeps, or the script would
+# refuse the tenant it should admit.
 _ENTRIES_PER_REQUEST_LIMIT = 2 * _TOKEN_WINDOW_MS // _REQUEST_WINDOW_MS
 # The longest wait the script can compute from what it keeps. It keeps members
 # scored up to one token window after its own now (the margin below), and a kept
@@ -215,7 +225,13 @@ if used + tokens > max_tokens then
       return {2, tonumber(entries[i + 1]) + token_window - now}
     end
   end
-  return redis.error_reply('tokens fit an empty window')
+  -- Not reached while the sums are whole numbers: the walk ends at zero, and
+  -- zero plus the tokens is within the limit (the call is not too large). A sum
+  -- past 2^53 (a limit near 10^15 and more) loses whole numbers and the walk may
+  -- not come back to zero. A window the script cannot account for is refused for
+  -- the whole token window, the longest it knows, and not answered with an error
+  -- that would be a 503 for every call of the tenant.
+  return {2, token_window}
 end
 
 redis.call('ZADD', KEYS[1], now, ARGV[5])

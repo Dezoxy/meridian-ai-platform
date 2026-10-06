@@ -21,6 +21,7 @@ wrapping the script's own text, not timed.
 """
 
 import itertools
+import random
 import sys
 import threading
 from collections.abc import Callable, Iterator
@@ -46,11 +47,17 @@ TOKENS = 1000
 REQUESTS = 10
 RACERS = 16
 ROUNDS = 20
-# The most the script reads for a limit of R requests: the 120 s the script keeps
-# (a token window each side of now) is twelve request windows, and each admits at
-# most R. The test works it out from the windows, not from the module.
-WINDOWS_KEPT = round(2 * TOKEN_WINDOW_SECONDS / REQUEST_WINDOW_SECONDS)
-CAP = WINDOWS_KEPT * REQUESTS
+# The most the script can ever have kept after a call, for a limit of R requests:
+# six request windows' worth (one token window of them), whichever way the clock
+# stepped. Any 10 s span of scores holds at most R (the script writes only while
+# fewer than R are scored after now minus 10 s, the future ones included), and
+# what is kept is at most R after that point and five spans of R before it. The
+# test works it out from the windows, not from the module.
+WINDOWS_KEPT = round(TOKEN_WINDOW_SECONDS / REQUEST_WINDOW_SECONDS)
+KEPT = WINDOWS_KEPT * REQUESTS
+# What one call reads: the module's margin of two over that bound. Twelve is not
+# the most the script can have written; it is twice what it can.
+CAP = 2 * KEPT
 NOW_MS = 1000 * 1000  # the hand clock reads 1000 s
 
 
@@ -126,6 +133,48 @@ def test_a_planted_huge_count_at_the_edge_of_the_margin_waits_at_most_two_window
     refusal = store.admit(TENANT, limits(), 1)
 
     assert refusal == RateRefusal("tenant-token-rate", 120)
+
+
+def test_a_window_whose_sum_loses_whole_numbers_is_a_429_and_never_a_503(
+    rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
+) -> None:
+    # A token limit near 10^15: the sum of 120 clamped counts is past 2^53, so the
+    # walk that subtracts them one by one does not come back to zero. The registry
+    # no longer lets such a limit in (hence the constructor that skips its check),
+    # and the script must not depend on that: a window it cannot account for is
+    # refused for the token window, not ended in an error.
+    huge = TenantLimits.model_construct(
+        requests_per_10_seconds=1_000,
+        tokens_per_minute=10**15,
+        tokens_per_day=10**15,
+        cost_per_month_eur=Decimal(1),
+    )
+    members = {f"{'9' * 400}:p{n}": clock() * 1000 for n in range(120)}
+    plant(rate_keys, store.key_for(TENANT), members)
+
+    refusal = store.admit(TENANT, huge, 10**15)
+
+    assert refusal == RateRefusal("tenant-token-rate", 60)
+
+
+def test_a_window_the_script_cannot_account_for_waits_the_whole_token_window(
+    rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
+) -> None:
+    huge = TenantLimits.model_construct(
+        requests_per_10_seconds=1_000,
+        tokens_per_minute=10**15,
+        tokens_per_day=10**15,
+        cost_per_month_eur=Decimal(1),
+    )
+    members = {f"{'9' * 400}:p{n}": clock() * 1000 for n in range(120)}
+    plant(rate_keys, store.key_for(TENANT), members)
+    clock.advance(25)
+
+    refusal = store.admit(TENANT, huge, 10**15)
+
+    # Its full wait, 60 s, whatever the members' age: the script cannot say when
+    # enough of them will have left, so it names the longest it knows.
+    assert refusal == RateRefusal("tenant-token-rate", 60)
 
 
 def test_a_planted_huge_count_leaves_with_its_score_and_the_tenant_goes_on(
@@ -407,6 +456,55 @@ def test_the_plant_leaves_with_its_scores_and_the_tenant_is_admitted_again(
     assert store.admit(TENANT, limits(), 1) is None
 
 
+# ── a limit lowered under what the key holds (the runbook says so) ──────────
+OLD_REQUESTS = 100
+
+
+def busy_minute(store: RedisRateLimiter, clock: FakeClock) -> None:
+    """A tenant at its old limit all the time for a minute: ten calls a second,
+    which is exactly 100 in any ten seconds, so every call is admitted."""
+    window = limits(requests=OLD_REQUESTS, tokens=10**9)
+    for _ in range(round(TOKEN_WINDOW_SECONDS)):
+        for _ in range(OLD_REQUESTS // 10):
+            assert store.admit(TENANT, window, 1) is None
+        clock.advance(1)
+
+
+def test_a_limit_lowered_to_a_fifth_refuses_a_busy_tenant_though_it_is_idle(
+    rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
+) -> None:
+    busy_minute(store, clock)
+    clock.advance(REQUEST_WINDOW_SECONDS + 1)  # nothing in the last ten seconds
+
+    refusal = store.admit(TENANT, limits(requests=OLD_REQUESTS // 5), 1)
+
+    # What the key holds (the busy minute's tail) is past twelve times the new
+    # limit, so the script refuses for the request window without counting.
+    assert refusal == RateRefusal("tenant-request-rate", 10)
+
+
+def test_the_same_tenant_is_admitted_under_a_limit_it_still_fits_in(
+    rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
+) -> None:
+    busy_minute(store, clock)
+    clock.advance(REQUEST_WINDOW_SECONDS + 1)
+
+    # The limit is the old one: what the key holds is under twelve times it.
+    assert store.admit(TENANT, limits(requests=OLD_REQUESTS), 1) is None
+
+
+def test_a_tenant_refused_under_a_lowered_limit_is_admitted_when_they_left(
+    rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
+) -> None:
+    busy_minute(store, clock)
+    clock.advance(REQUEST_WINDOW_SECONDS + 1)
+    assert store.admit(TENANT, limits(requests=OLD_REQUESTS // 5), 1) is not None
+
+    clock.advance(TOKEN_WINDOW_SECONDS)
+
+    assert store.admit(TENANT, limits(requests=OLD_REQUESTS // 5), 1) is None
+
+
 # ── the bound is never reached by what the gateway writes itself ────────────
 def hammer(
     store: RedisRateLimiter,
@@ -424,6 +522,12 @@ def hammer(
         clock.advance(0.25)
 
 
+def test_the_read_bound_is_twice_what_the_script_can_ever_have_kept() -> None:
+    # A margin of two over the tight bound, which is six request windows' worth.
+    assert ratelimit_redis._ENTRIES_PER_REQUEST_LIMIT == 2 * WINDOWS_KEPT
+    assert CAP == ratelimit_redis._ENTRIES_PER_REQUEST_LIMIT * REQUESTS
+
+
 def test_a_tenant_at_its_limit_all_the_time_never_leaves_more_than_six_windows(
     rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
 ) -> None:
@@ -431,20 +535,44 @@ def test_a_tenant_at_its_limit_all_the_time_never_leaves_more_than_six_windows(
 
     hammer(store, rate_keys, clock, 150, peak)
 
-    # Six request windows of at most R, on a clock that only goes forward: half
-    # of what the script reads.
-    assert max(peak) <= (WINDOWS_KEPT // 2) * REQUESTS
+    # Six request windows of at most R, on a clock that only goes forward.
+    assert max(peak) <= KEPT
 
 
-def test_a_clock_that_steps_back_a_minute_never_leaves_more_than_the_bound(
+def test_a_clock_that_steps_back_a_minute_still_never_leaves_more_than_six_windows(
     rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock
 ) -> None:
     peak: list[int] = []
     hammer(store, rate_keys, clock, 150, peak)
 
     # Just under a token window back: the entries the clock had already written
-    # are in the future, and still inside what the script keeps.
+    # are in the future, and they count towards the request window, so no more
+    # than R ever sit after ten seconds ago and the bound is the same six.
     clock.advance(-(TOKEN_WINDOW_SECONDS - 1))
     hammer(store, rate_keys, clock, 150, peak)
 
-    assert max(peak) <= CAP
+    assert max(peak) <= KEPT
+
+
+@pytest.mark.parametrize("requests", [1, 3, REQUESTS])
+def test_a_clock_stepping_either_way_never_leaves_more_than_six_windows(
+    rate_keys: RateKeys, store: RedisRateLimiter, clock: FakeClock, requests: int
+) -> None:
+    # A fixed seed: the same walk every run. Mostly small steps either way, now
+    # and then a step back of up to two token windows (so some of what was
+    # written is in the future, and some is dropped as too far ahead).
+    walk = random.Random(66)  # noqa: S311 - a repeatable test walk, not a secret
+    window = limits(requests=requests, tokens=10**9)
+    peak = 0
+
+    for _ in range(1_500):
+        store.admit(TENANT, window, 1)
+        peak = max(peak, rate_keys.client.zcard(store.key_for(TENANT)))
+        if walk.random() < 0.02:
+            clock.advance(-walk.uniform(1, 2 * TOKEN_WINDOW_SECONDS))
+        else:
+            clock.advance(walk.uniform(-2, 4))
+        if clock() < 200:
+            clock.advance(300)
+
+    assert 0 < peak <= WINDOWS_KEPT * requests

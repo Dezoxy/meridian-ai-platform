@@ -316,13 +316,24 @@ def test_the_rate_store_alert_counts_the_word_of_a_refusal_it_cannot_count() -> 
     assert refusals == {word} == {"rate-store-unavailable"}
     assert series_named(alert["expr"]) == {RECORDED}
     assert 'meridian_outcome="refused"' in alert["expr"]
-    # A ratio and a count, as the failing-calls alert has them: one refused call
-    # (the seconds of a certificate renewal's restart) is neither. The delta
-    # holds a count for 15 minutes, so a bare "> 0" paged for one blip.
+    # A share and a count, as the failing-calls alert has them, or a majority
+    # and a smaller count (a store that is down refuses every call, so a quiet
+    # platform needs two): one refused call (the seconds of a certificate
+    # renewal's restart) is neither. The delta holds a count for 15 minutes, so
+    # a bare "> 0" paged for one blip.
     expression = " ".join(alert["expr"].split())
     assert not expression.endswith("> 0")
-    assert re.search(r"> 0\.05 and sum\(.*\) >= 5$", expression), expression
-    assert 'meridian_outcome=~"completed|failed|refused"' in expression
+    share = re.search(r"> 0\.05 and sum\([^()]*\{[^{}]*\}\) >= 5 \)", expression)
+    majority = re.search(r"> 0\.5 and sum\([^()]*\{[^{}]*\}\) >= 2 \)", expression)
+    assert share and majority, expression
+    assert share.start() < majority.start()
+    assert re.search(r"\) or \(", expression), expression
+    # The denominator is the calls that completed or failed and the ones the
+    # store refused: not every refusal. The others are refused before the store
+    # is asked, so a caller could send enough of them to hide an outage.
+    assert 'meridian_outcome=~"completed|failed"' in expression
+    assert "completed|failed|refused" not in expression
+    assert "or vector(0)" in expression
     # In the gateway's group, with the severity and the `for` of the failing-calls
     # alert, and the store's runbook.
     assert alert in groups()["meridian.gateway"]

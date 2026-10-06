@@ -139,23 +139,60 @@ spec:
           # refused call kept "> 0" true for 15 minutes, `for: 5m` filtered
           # nothing, and the seconds of a certificate renewal's restart (a
           # handful of 503s) paged at `critical` five minutes later and stayed
-          # for ten. Now it needs more than 5 percent of the calls that ended in
-          # the window refused by the store (a restart's few seconds are a small
-          # share of 15 minutes of calls at any traffic) and at least 5 calls
-          # (a quiet platform's one or two refused calls are not a share worth
-          # waking for), for 2 minutes. A store that stays down refuses every
-          # call, so it is over both soon after its fifth refused call, and
-          # fires 2 minutes after that (about 4 minutes after the outage began
-          # at 3 calls a minute: the unit test below); a lower rate takes
-          # longer. The severity stays `critical`: with the store down every
-          # model call is a 503 and no fallback exists (the owner's decision).
-          # The numbers are proposals nobody measured, like the group's others.
+          # for ten. Now it has two branches of one expression, for 2 minutes.
+          # The share: more than 5 percent of the calls the store could have
+          # counted refused by it (a restart's few seconds are a small share of
+          # 15 minutes of calls at any traffic), and at least 5 calls. The
+          # majority: more than half of them, and at least 2. A store that stays
+          # down refuses every call, so a quiet platform, where a fifth call may
+          # not come for a long time, still fires on its second.
+          #
+          # "The calls the store could have counted" is the calls that completed
+          # or failed plus the ones the store refused, and not every refusal: a
+          # call refused for its name, its tenant or the policy is refused
+          # BEFORE the store is asked, so a caller with a certificate could send
+          # any number of them and push the share under 5 percent while the
+          # store is down. (A budget refusal comes after the store, and falls to
+          # none when the store is down.) `or vector(0)` keeps the denominator
+          # when no call completed or failed in the window, as in an outage on a
+          # quiet platform.
+          #
+          # Fires 2 minutes after its condition holds: about 4 minutes after an
+          # outage began at 3 calls a minute with other calls around it (the
+          # unit test below); a lower rate takes longer. The severity stays
+          # `critical`: with the store down every model call is a 503 and no
+          # fallback exists (the owner's decision). The numbers are proposals
+          # nobody measured, like the group's others.
+          #
+          # What it still does not see: a store that restarts in a loop while
+          # few calls come, so that each cycle refuses a few seconds of calls (a
+          # few calls a minute make fewer than 2 in 15 minutes, or a share under
+          # half) and resets every tenant's windows each time. That needs a
+          # rule on the container's restart count
+          # (kube_pod_container_status_restarts_total for the rate-store pod),
+          # which is recorded for another step.
           expr: |
-            sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
-            / sum(meridian:gateway_calls:delta15m{meridian_outcome=~"completed|failed|refused"})
-            > 0.05
-            and
-            sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"}) >= 5
+            (
+              sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
+              / (
+                (sum(meridian:gateway_calls:delta15m{meridian_outcome=~"completed|failed"}) or vector(0))
+                + sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
+              )
+              > 0.05
+              and
+              sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"}) >= 5
+            )
+            or
+            (
+              sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
+              / (
+                (sum(meridian:gateway_calls:delta15m{meridian_outcome=~"completed|failed"}) or vector(0))
+                + sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
+              )
+              > 0.5
+              and
+              sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"}) >= 2
+            )
           for: 2m
           labels:
             severity: critical
@@ -163,12 +200,13 @@ spec:
           annotations:
             summary: The Model Gateway refuses calls because the rate store gives no answer.
             description: >-
-              {{ $value | humanizePercentage }} of the calls that ended in the
-              last 15 minutes (and at least 5 of them) were refused with
-              rate-store-unavailable: the gateway could not count them in the
-              rate store (unreachable, frozen, restarting, or refusing its
-              credential) and refuses a call it cannot count, with a 503 and no
-              fallback.
+              {{ $value | humanizePercentage }} of the calls that completed,
+              failed or were refused by the store in the last 15 minutes were
+              refused with rate-store-unavailable (at least 5 calls over 5
+              percent, or at least 2 over 50 percent): the gateway could not
+              count them in the rate store (unreachable, frozen, restarting, or
+              refusing its credential) and refuses a call it cannot count, with
+              a 503 and no fallback.
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rate-store.md
 
     # From kube-state-metrics.

@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 from registrysupport import add_field, apply_changes, remove_field, set_field
+from typer.testing import CliRunner
 
+from meridian.platform.cli import app
 from meridian.platform.registry import compare_with_terraform, load_registry
-from meridian.platform.registry.models import Registry
+from meridian.platform.registry.models import MAX_RATE_LIMIT, Registry, TenantLimits
 
 Plant = Callable[..., Path]
 LoadErrors = Callable[[Path], tuple[str, ...]]
@@ -135,6 +137,60 @@ def test_a_limit_of_zero_or_below_fails_to_load(
 
     assert len(errors) == 1
     assert errors[0].startswith(f"tenants.yaml: tenants[0].limits.{field}: ")
+
+
+@pytest.mark.parametrize(
+    ("field", "seeded"),
+    [("requests_per_10_seconds", "10"), ("tokens_per_minute", "10000")],
+)
+def test_a_rate_limit_of_a_billion_is_accepted_by_the_model(
+    field: str, seeded: str
+) -> None:
+    # The model, not a loaded registry: a tenant allowed a billion tokens a
+    # minute fails the check against its deployment's own limits, which is
+    # another rule.
+    values = {
+        "requests_per_10_seconds": 10,
+        "tokens_per_minute": 10_000,
+        "tokens_per_day": 300_000,
+        "cost_per_month_eur": Decimal(10),
+        field: MAX_RATE_LIMIT,
+    }
+
+    limits = TenantLimits(**values)
+
+    assert getattr(limits, field) == 10**9 == MAX_RATE_LIMIT
+
+
+@pytest.mark.parametrize("above", [str(10**9 + 1), str(10**15), str(10**300)])
+@pytest.mark.parametrize(
+    ("field", "seeded"),
+    [("requests_per_10_seconds", "10"), ("tokens_per_minute", "10000")],
+)
+def test_a_rate_limit_above_a_billion_fails_to_load(
+    plant: Plant, load_errors: LoadErrors, field: str, seeded: str, above: str
+) -> None:
+    errors = load_errors(plant(raise_limit(field, seeded, above)))
+
+    assert len(errors) == 1
+    assert errors[0].startswith(f"tenants.yaml: tenants[0].limits.{field}: ")
+    assert "less than or equal to 1000000000" in errors[0]
+
+
+def test_validate_refuses_a_token_limit_the_rate_store_cannot_count(
+    plant: Plant,
+) -> None:
+    # Past about 10^15 the sums of the rate store's script lose whole numbers.
+    directory = plant(raise_limit("tokens_per_minute", "10000", str(10**15)))
+
+    result = CliRunner().invoke(
+        app, ["registry", "validate", "--registry-dir", str(directory)]
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr.startswith(
+        "ERROR tenants.yaml: tenants[0].limits.tokens_per_minute: "
+    )
 
 
 def test_a_limit_of_one_is_accepted(plant: Plant) -> None:

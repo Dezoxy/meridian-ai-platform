@@ -136,13 +136,16 @@ def test_a_password_hash_that_differs_is_not_an_edit(tmp_path: Path) -> None:
     assert done.returncode == 0, done.stderr
 
 
+MALFORMED_MARK = "ZZmarkZZ"
+
+
 def test_acl_data_that_is_not_base64_is_refused_with_a_sentence_of_its_own(
     tmp_path: Path,
 ) -> None:
     secret = secret_as_made(tmp_path)
     broken = {
         "metadata": secret["metadata"],
-        "data": {**secret["data"], "users.acl": "%%% not base64 %%%"},
+        "data": {**secret["data"], "users.acl": f"{MALFORMED_MARK} %%% not base64"},
     }
 
     done = run_require(tmp_path, answer=broken)
@@ -150,6 +153,24 @@ def test_acl_data_that_is_not_base64_is_refused_with_a_sentence_of_its_own(
     assert done.returncode == 1
     assert "could not read" in done.stderr
     assert "users.acl" in done.stderr
+
+
+def test_acl_data_that_is_not_base64_is_not_quoted_in_any_output(
+    tmp_path: Path,
+) -> None:
+    secret = secret_as_made(tmp_path)
+    broken = {
+        "metadata": secret["metadata"],
+        "data": {**secret["data"], "users.acl": f"{MALFORMED_MARK} %%% not base64"},
+    }
+
+    done = run_require(tmp_path, answer=broken)
+
+    # jq's own error text quotes the first characters of a value it cannot
+    # decode: the script's sentence says what failed, and jq's goes nowhere.
+    assert done.returncode == 1
+    assert MALFORMED_MARK not in done.stdout + done.stderr
+    assert "%%%" not in done.stdout + done.stderr
 
 
 # ── nothing of the Secret is shown ───────────────────────────────────────────
@@ -246,7 +267,7 @@ def test_the_decoded_acl_goes_into_the_hash_through_a_pipe_and_is_kept_nowhere()
     # no assignment holds the text, and nothing echoes it. `-j` prints no newline
     # of jq's own, which the hash would see (the file's own ends in one).
     assert re.search(
-        r'jq -j [^\n]*users\.acl[^\n]*@base64d[^\n]*<<<"\$\{secret\}" \| '
+        r'jq -j [^\n]*users\.acl[^\n]*@base64d[^\n]*<<<"\$\{secret\}" 2>/dev/null \| '
         r"rate_store_acl_rules_hash",
         function,
     ), function

@@ -197,8 +197,10 @@ require_rate_store_secret() {
   annotation="$(jq -r --arg name "${RATE_STORE_ACL_ANNOTATION}" '.metadata.annotations[$name] // ""' <<<"${secret}")"
   # The ACL file itself, decoded by jq and hashed masked in the same pipe: its text
   # is never in a variable, an argument or a message, only the hash is. `-j`: no
-  # newline of jq's own after the text, which the hash would see.
-  acl_hash="$(jq -j '.data["users.acl"] // "" | @base64d' <<<"${secret}" | rate_store_acl_rules_hash)" ||
+  # newline of jq's own after the text, which the hash would see. jq's error output
+  # goes nowhere: on a value it cannot decode it quotes the value's first characters,
+  # and the sentence below already says what failed.
+  acl_hash="$(jq -j '.data["users.acl"] // "" | @base64d' <<<"${secret}" 2>/dev/null | rate_store_acl_rules_hash)" ||
     die "Secret ${RATE_STORE_SECRET}: could not read its key 'users.acl' as base64 text, so the store's ACL file cannot be checked; run 'make up' first, after deleting the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET})"
   secret=""
   local remedy="delete the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}), run 'make up' (it makes the Secret again), restart the rate store (kubectl -n ${NAMESPACE} rollout restart deployment/${RATE_STORE_DEPLOYMENT}) and then the Model Gateway (deployment/model-gateway), which read the ACL file and the address at their start and not before, then run 'make deploy' again; the order is docs/operations/runbooks/rate-store.md's"

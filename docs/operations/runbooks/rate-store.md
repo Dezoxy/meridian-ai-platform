@@ -89,8 +89,12 @@ container); `make deploy` comparing the ACL file the Secret holds and not only
 its annotation; the smoke line failing when kind's policy for its probe is not
 the shape the line needs; the upkeep script saying that the change may have
 been applied after any failure that is not a refusal
-([budget exhaustion](budget-exhaustion.md#the-upkeep-command)); and the alert's
-new condition (a ratio and a count, below), unit-tested with promtool.
+([budget exhaustion](budget-exhaustion.md#the-upkeep-command)), which a refused
+usage (a word the command does not take, exit code 2) prints too, though
+nothing ran: the script cannot tell the two apart, so it is conservative, and
+the answer is to read the command's own error above that line; and the alert's
+condition (a share or a majority, each with a count, below), unit-tested with
+promtool.
 
 Not seen on a cluster, so tested without one: a 503 from the gateway when the
 store is down or refuses (the demo did not run in the seconds the store was down
@@ -123,25 +127,37 @@ its own). The price is that this one pod stands in front of every model call.
   `rate-store-unavailable`.
 - Two alerts. `MeridianServiceUnavailable` fires when the store's pod has been
   unavailable for five minutes (its selector is every Deployment of the
-  namespace). `MeridianRateStoreRefusing` fires when more than 5 percent of
-  the calls that ended in the last 15 minutes were refused with the reason
-  `rate-store-unavailable`, at least 5 calls were, and both have held for 2
-  minutes (a ratio and a count, as `MeridianModelCallsFailing` has them;
-  `critical`, because with the store down every call is a 503 and there is no
-  fallback). It used to fire on any single refused call: the recorded count
-  holds for 15 minutes, so one blip (the seconds of a certificate renewal's
-  restart, which refuse a handful of calls) paged five minutes later and
-  stayed for ten. Now a restart's handful does not fire it, at any traffic:
-  under 5 refused calls is under the count, and a few seconds are well under 5
-  percent of 15 minutes of calls. A store that stays down refuses every call,
-  so the alert fires 2 minutes after the fifth refused call: about 4 minutes
-  after the outage began at 3 calls a minute (the unit test), later at a lower
-  rate (the numbers are proposals nobody measured, as the group's others are);
-  it ends when the refusals have left the 15-minute window. Both alerts are
-  rules checked by `make alerts` (the new condition and its unit tests are not
-  yet loaded on a cluster), `MeridianRateStoreRefusing` as it was before was
-  loaded in Prometheus and healthy on kind (2026-10-06); neither was seen
-  firing there, and kind notifies no one (S028).
+  namespace). `MeridianRateStoreRefusing` fires when, in the last 15 minutes,
+  either more than 5 percent of the calls the store could have counted were
+  refused with the reason `rate-store-unavailable` and at least 5 were, or more
+  than half were and at least 2 were, and the condition has held for 2 minutes
+  (one rule with two branches; `critical`, because with the store down every
+  call is a 503 and there is no fallback). "The calls the store could have
+  counted" are the calls that completed or failed plus the ones the store
+  refused, not every refusal: a call refused for its name, its tenant or the
+  policy is refused before the store is asked, so any number of them can be
+  sent while the store is down, and counting them would hide the outage. It
+  used to fire on any single refused call: the recorded count holds for 15
+  minutes, so one blip (the seconds of a certificate renewal's restart, which
+  refuse a handful of calls) paged five minutes later and stayed for ten. Now a
+  restart's handful among other calls does not fire it, at any traffic: under 5
+  refused calls is under the first branch's count, and a few seconds are well
+  under 5 percent of 15 minutes of calls. A store that stays down refuses every
+  call, so on a quiet platform the second branch fires 2 minutes after the
+  second refused call, and with traffic around the first fires 2 minutes after
+  the fifth: about 4 minutes after the outage began at 3 calls a minute (the
+  unit test), later at a lower rate (the numbers are proposals nobody measured,
+  as the group's others are); it ends when the refusals have left the 15-minute
+  window. **What it does not see:** a store that restarts in a loop while few
+  calls come (seconds of 503 a minute, every tenant's windows reset each time).
+  That wants a rule on the container's restart count, which is left for another
+  step; until then read the pod's restarts yourself
+  (`k get pod -l app.kubernetes.io/name=rate-store`, the RESTARTS column) when
+  the gateway's 503s come and go. Both alerts are rules checked by `make alerts`
+  (the new condition and its unit tests are not yet loaded on a cluster),
+  `MeridianRateStoreRefusing` as it was before was loaded in Prometheus and
+  healthy on kind (2026-10-06); neither was seen firing there, and kind
+  notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
   restarts.
 
@@ -285,6 +301,12 @@ server and restarts it until the clock catches up, at most every five minutes
 (the kubelet's back-off). It is accepted: no small fix exists without writable
 state, and it is stated in the template's header.
 
+No alert fires on a store that restarts in a loop while few calls come (see
+"What you see"): `MeridianRateStoreRefusing` needs at least two refused calls
+in 15 minutes and a share of the calls, and the pod is Available part of each
+cycle, so `MeridianServiceUnavailable` does not hold either. Read the
+RESTARTS column when the gateway's 503s come and go.
+
 ### A script hangs
 
 The store answers BUSY to everyone and logs `Slow script detected: still in
@@ -361,6 +383,47 @@ k rollout status deploy/rate-store
 Someone wrote it there: read [what the credential
 allows](#what-the-credential-allows) and rotate. Not seen on a cluster; the
 planted member was reproduced on the pinned image by the review of this step.
+
+### A tenant's request limit was lowered, and it is refused though it is under the new one
+
+Symptoms: right after a registry change that lowered one tenant's
+`requests_per_10_seconds` by a lot (from 100 to 20, say), that tenant's calls
+are answered 429 `tenant-request-rate` for up to a minute, with a
+`Retry-After` of 10 seconds that does not come true, though the tenant sent
+fewer calls than the new limit in the last 10 seconds. The other tenants are
+not touched and the store is healthy.
+
+Cause: the script reads at most twelve times the request limit of a tenant's
+entries, and one more. A tenant that was busy under the old, higher limit left
+up to six times the old limit in its key, so after the change the key can hold
+more than twelve times the new limit, and the script refuses for the request
+window without counting them. The entries leave one by one as their scores pass
+a minute, so the refusal lasts up to a minute and then goes by itself. How big
+a fall shows it depends on how busy the tenant was: one that was at its old
+limit all the time is refused after a fall to under half (100 to 40), one that
+used a tenth of it only after a fall of more than twenty times. A tenant that
+was quiet is not refused whatever the fall. The tests pin a busy tenant's fall
+to a fifth and its admission under the old limit
+(`test_ratelimit_redis_bounded.py`).
+
+What to do: nothing, if a minute is bearable. To cut it short, restart the store
+(`k rollout restart deploy/rate-store`), which empties every tenant's windows
+and not only this one's. Not seen on a cluster: reproduced on the pinned image
+by the fourth review of this step.
+
+### During a rolling update, a pod of the previous image runs the previous script
+
+Two gateway pods of different images share the store's keys, and each loads its
+own script, which the store keeps under its own hash, so neither replaces the
+other. Both write and read the same entries, so the windows stay one. What
+differs is how they treat an entry nobody wrote: the new script reads what it
+finds up to a bound and refuses a count it cannot account for, and the
+previous one has neither. For the minutes of the overlap a planted entry (see
+[what the credential allows](#what-the-credential-allows)) can still make the
+previous pod's calls for that tenant fail with 503 `ResponseError`, or count as
+a request, until a call of the new pod removes it. Do not read a tenant's 503s
+from one pod during a rollout as a store fault before the old pod is gone
+(`k rollout status deploy/model-gateway`).
 
 ### The store's last state says `OOMKilled`
 
