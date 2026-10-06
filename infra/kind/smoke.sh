@@ -18,8 +18,14 @@
 #                 is the newest file under src/meridian/platform/migrations of
 #                 the checkout this script runs from, so a cluster deployed
 #                 from another checkout says so. One SKIP line replaces the three
-#                 while the database holds no migrated schemas (`make up`
-#                 alone). What the lines do not prove: a count above zero says
+#                 while the migrations ledger table is not there, which is when
+#                 nothing was ever migrated (`make up` alone). A ledger beside a
+#                 store's missing table (a half-applied or renamed migration) is
+#                 that store's FAIL, naming the table; an answer of the probe
+#                 that is not in its form is one FAIL; a failed read of the
+#                 database keeps its message, cleaned and cut to 160 characters,
+#                 in the FAIL line (names of relations and roles, never a row).
+#                 What the lines do not prove: a count above zero says
 #                 the seed and the ingestion wrote something, not what or how
 #                 much (the claims and runs tables are not read: `make demo`
 #                 writes them), nor that the chunks are the running image's (the
@@ -34,10 +40,15 @@
 #   4. telemetry: telemetrygen sends one trace, one log and one metric over OTLP
 #                 to the collector; each is then read back through Grafana's
 #                 datasource proxy (Tempo, Loki, Prometheus), the way an owner
-#                 would see it.
+#                 would see it. What each PASS line prints of an answer (the
+#                 trace ID, the log line, the series count) goes through
+#                 clean_lines and is cut to 120 characters: anyone who can push
+#                 a log line to the collector chooses its text.
 #   5. cost panel: three lines. Grafana serves the provisioned dashboard
 #                 "Meridian: Model Gateway tokens and cost", its queries equal
-#                 the file's and every one of them runs in Prometheus; once the
+#                 the file's and every one of them runs in Prometheus (a
+#                 dashboard with no query, or a target with no expression, is a
+#                 FAIL, and targets of panels nested in rows count); once the
 #                 gateway has settled a call since it started (the ledger says
 #                 so), Prometheus holds its tokens, cost and calls series (the
 #                 series line is skipped while the services are not deployed,
@@ -60,8 +71,11 @@
 #                 was last scheduled more than three periods (15 minutes) after
 #                 that Job finished with nothing running, when that Job finished
 #                 more than three periods before now with nothing running (the
-#                 schedule stopped after a success), and when it was never
-#                 scheduled although it was created more than three periods ago.
+#                 schedule stopped after a success), when no Job of it is left
+#                 (a finished Job is removed a day after it finished) and it was
+#                 last scheduled more than three periods before now with nothing
+#                 running, and when it was never scheduled although it was
+#                 created more than three periods ago.
 #                 The period is read from the CronJob's own .spec.schedule when
 #                 that is "*/N * * * *" (N from 1 to 59), else it is
 #                 SWEEP_PERIOD_SECONDS. Skipped while the Meridian services are
@@ -117,10 +131,12 @@
 #                   network plugin takes a moment): it is the control, one pod
 #                   with and without the label. No Service or Deployment selects
 #                   the name label of the sweep, so the pod takes no traffic.
-#                 The Pod is deleted when the check ends and by the EXIT trap,
-#                 ends on its own after five minutes, and is not created when
-#                 the control failed. The check fails when the policy
-#                 `default-deny` does not exist.
+#                 The Pod is deleted when the check ends and by the EXIT trap
+#                 (a delete that failed is not forgotten: the trap tries again
+#                 and says on stderr, with the command to run by hand, when it
+#                 fails too), ends on its own after five minutes, and is not
+#                 created when the control failed. The check fails when the
+#                 policy `default-deny` does not exist.
 #                 Skipped, one line instead of four, while the Claims API is not
 #                 deployed (`make deploy`). What it does not prove: that
 #                 every other pair of pods is allowed or denied as the chart
@@ -294,9 +310,13 @@
 #                 for the groups to load and be evaluated (a rule not yet
 #                 evaluated has health unknown, which is not ok); one FAIL
 #                 line replaces them when Prometheus does not answer with
-#                 status success. One SKIP line replaces them when the
-#                 PrometheusRule is not there (a cluster made before S024);
-#                 any other failure to look for it is a FAIL. The fourth line
+#                 status success, or when the PrometheusRule is not there
+#                 (`make up` applies it: the line says to run it), and so does
+#                 any other failure to look for it. An answer of status success
+#                 without a usable data.groups list fails each of the three
+#                 lines (the dashboard line still runs), and with no meridian.*
+#                 group loaded the third line fails too: there is nothing to be
+#                 firing, so it cannot tell. The fourth line
 #                 is check 5's dashboard check for the health dashboard (uid
 #                 meridian-platform-health): the provisioned copy has the
 #                 queries of dashboards/platform-health.json, and every query
@@ -334,9 +354,13 @@ readonly SWEEP_CLOCK_SQL='SELECT floor(extract(epoch FROM now()))::bigint'
 # count is CHUNK_COUNT_SQL of common.sh. COLLATE "C": the ledger's names sort as
 # bytes, as the script sorts the files.
 readonly MIGRATIONS_DIR="${KIND_DIR}/../../src/meridian/platform/migrations"
-readonly STORES_READY_SQL="SELECT to_regclass('public.meridian_migrations') IS NOT NULL AND to_regclass('policy.policies') IS NOT NULL AND to_regclass('knowledge.chunks') IS NOT NULL"
+readonly STORES_READY_SQL="SELECT concat_ws(',', (to_regclass('public.meridian_migrations') IS NOT NULL)::int, (to_regclass('policy.policies') IS NOT NULL)::int, (to_regclass('knowledge.chunks') IS NOT NULL)::int)"
 readonly POLICY_COUNT_SQL='SELECT count(*) FROM policy.policies'
 readonly LEDGER_NEWEST_SQL='SELECT name FROM public.meridian_migrations ORDER BY name COLLATE "C" DESC LIMIT 1'
+# STORES_READY_SQL answers "L,P,K": 1 or 0 for the ledger table, the policy
+# table and the knowledge table. QUERY_ERROR_LENGTH cuts the message of a
+# failed read of the database (meridian_query) where a FAIL line carries it.
+readonly QUERY_ERROR_LENGTH=160
 # The connections the network-policy check (8) tries, as host:port. The Agent
 # Runtime is the control: the Claims API's policy and its own name each other. The
 # Model Gateway is a Service which only the Agent Runtime, the knowledge tool
@@ -542,6 +566,9 @@ readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claim
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
 readonly COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4317
+# What the telemetry check (4) prints of an answer of Tempo, Loki or Prometheus
+# is cut to this many characters (see telemetry_answer).
+readonly TELEMETRY_ANSWER_LENGTH=120
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
@@ -649,18 +676,40 @@ platform_db_primary() {
 }
 
 # meridian_query PRIMARY SQL: the answer of `psql -tA` in the `meridian` database
-# of that pod. Every SQL passed is a constant of this script.
+# of that pod. Every SQL passed is a constant of this script. When the read
+# fails it returns 1 and prints the reason instead of an answer: what kubectl or
+# psql wrote on stderr, cleaned and cut to QUERY_ERROR_LENGTH characters, which
+# a caller puts in its FAIL line (`if ! x="$(meridian_query ...)"; then fail
+# "...${x}"`). That message names relations, roles and connections, not rows:
+# no query of this script casts a column, so a message cannot quote a value.
 meridian_query() {
-  kctl -n meridian exec "$1" -c postgres -- psql -d meridian -tAc "$2" 2>/dev/null
+  local answer err_file reason
+  err_file="$(mktemp)"
+  if answer="$(kctl -n meridian exec "$1" -c postgres -- psql -d meridian -tAc "$2" 2>"${err_file}")"; then
+    rm -f "${err_file}"
+    printf '%s' "${answer}"
+    return 0
+  fi
+  reason="$(clean_lines "$(<"${err_file}")")"
+  rm -f "${err_file}"
+  reason="${reason:-no message}"
+  printf '%s' "${reason:0:QUERY_ERROR_LENGTH}"
+  return 1
 }
 
 # store_count PRIMARY SQL: the count the query gives; fails unless the answer is
-# a whole number.
+# a whole number. On failure it prints the reason instead (see meridian_query).
 store_count() {
   local answer
-  answer="$(meridian_query "$1" "$2")" || return 1
+  answer="$(meridian_query "$1" "$2")" || {
+    printf '%s' "${answer}"
+    return 1
+  }
   answer="$(clean_lines "${answer}")"
-  [[ "${answer}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${answer}" =~ ^[0-9]+$ ]] || {
+    printf 'the answer was not a whole number'
+    return 1
+  }
   printf '%s' "${answer}"
 }
 
@@ -677,36 +726,53 @@ newest_migration() {
   printf '%s\n' "${names[@]}" | LC_ALL=C sort | tail -n 1
 }
 
+# store_line PRIMARY PRESENT SQL STORE UNIT TABLE REASON: the line of one store,
+# which holds records of UNIT in TABLE. PRESENT is 1 or 0, the probe's answer for
+# the table: a table that is not there is a FAIL naming it (the ledger says
+# migrations ran, so a missing table is a half-applied or renamed migration).
+# REASON says what writes the records, for the line about an empty store.
+store_line() {
+  local primary=$1 present=$2 sql=$3 store=$4 unit=$5 table=$6 reason=$7 count
+  if [[ "${present}" != 1 ]]; then
+    fail "database: ${table} does not exist in the meridian database in ${primary}, although the migrations ledger does: a migration was half applied or the table was renamed (make deploy)"
+  elif ! count="$(store_count "${primary}" "${sql}")"; then
+    fail "database: the ${store}'s count could not be read (${table} in ${primary}): ${count}"
+  elif ((10#${count} > 0)); then
+    pass "database: the ${store} holds ${count} ${unit} (${table})"
+  else
+    fail "database: the ${store} holds no ${unit} (${table}): ${reason} (make deploy)"
+  fi
+}
+
 # check_stores PRIMARY: the three lines of the stores, or one SKIP before the
-# schemas exist. Prints counts and a file name; no row's content.
+# schemas exist, which is when the migrations ledger table is not there (nothing
+# was ever migrated). A store's table that is missing beside a ledger is that
+# store's FAIL, and an answer of the probe that is not "L,P,K" (STORES_READY_SQL)
+# is one FAIL. Prints counts and a file name; no row's content.
 check_stores() {
-  local primary=$1 ready policies chunks ledger tree
-  if ! ready="$(meridian_query "${primary}" "${STORES_READY_SQL}")"; then
-    fail "database: could not read the meridian database in ${primary} to look for its stores"
+  local primary=$1 probe ledger tree has_ledger has_policies has_chunks
+  if ! probe="$(meridian_query "${primary}" "${STORES_READY_SQL}")"; then
+    fail "database: could not read the meridian database in ${primary} to look for its stores (${probe})"
     return
   fi
-  if [[ "$(clean_lines "${ready}")" != t ]]; then
+  probe="$(clean_lines "${probe}")"
+  if ! [[ "${probe}" =~ ^([01]),([01]),([01])$ ]]; then
+    fail "database: the probe for the stores' tables gave an answer that is not in its form (three of 1 or 0 with commas, as 1,1,1) in ${primary} (answer: ${probe:0:QUERY_ERROR_LENGTH})"
+    return
+  fi
+  has_ledger="${BASH_REMATCH[1]}"
+  has_policies="${BASH_REMATCH[2]}"
+  has_chunks="${BASH_REMATCH[3]}"
+  if [[ "${has_ledger}" != 1 ]]; then
     skip "database: the meridian database holds no migrated schemas yet (make deploy), so its stores are not read"
     return
   fi
-  if ! policies="$(store_count "${primary}" "${POLICY_COUNT_SQL}")"; then
-    fail "database: the policy store's count could not be read (policy.policies in ${primary})"
-  elif ((10#${policies} > 0)); then
-    pass "database: the policy store holds ${policies} policies (policy.policies)"
-  else
-    fail "database: the policy store holds no policies (policy.policies): the seed Job wrote none (make deploy)"
-  fi
-  if ! chunks="$(store_count "${primary}" "${CHUNK_COUNT_SQL}")"; then
-    fail "database: the knowledge store's count could not be read (knowledge.chunks in ${primary})"
-  elif ((10#${chunks} > 0)); then
-    pass "database: the knowledge store holds ${chunks} chunks (knowledge.chunks)"
-  else
-    fail "database: the knowledge store holds no chunks (knowledge.chunks): the ingestion Job stored none (make deploy)"
-  fi
+  store_line "${primary}" "${has_policies}" "${POLICY_COUNT_SQL}" "policy store" policies policy.policies "the seed Job wrote none"
+  store_line "${primary}" "${has_chunks}" "${CHUNK_COUNT_SQL}" "knowledge store" chunks knowledge.chunks "the ingestion Job stored none"
   if ! tree="$(newest_migration)"; then
     fail "database: no migration file under src/meridian/platform/migrations, so the ledger cannot be compared with this checkout"
   elif ! ledger="$(meridian_query "${primary}" "${LEDGER_NEWEST_SQL}")"; then
-    fail "database: the migrations ledger could not be read (public.meridian_migrations in ${primary})"
+    fail "database: the migrations ledger could not be read (public.meridian_migrations in ${primary}): ${ledger}"
   elif [[ -z "$(clean_lines "${ledger}")" ]]; then
     fail "database: the migrations ledger is empty (public.meridian_migrations): the migration Job applied nothing"
   elif [[ "$(clean_lines "${ledger}")" == "${tree}" ]]; then
@@ -870,11 +936,13 @@ poll() {
 }
 
 # network_delete_pod: delete the probe Pod of check 8 when one was named, and
-# forget it. Nothing is waited for: the Pod's process is a sleep, and a pod that
-# never existed is not an error.
+# forget it only when kubectl said it is gone (a pod that never existed is not
+# an error), so a delete that failed is tried again by the EXIT trap, as
+# refused_delete_request does. Returns 1 when the delete failed. Nothing is
+# waited for: the Pod's process is a sleep.
 network_delete_pod() {
   [[ -n "${network_pod}" ]] || return 0
-  kctl -n meridian delete pod "${network_pod}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kctl -n meridian delete pod "${network_pod}" --ignore-not-found --wait=false >/dev/null 2>&1 || return 1
   network_pod=""
 }
 
@@ -891,7 +959,8 @@ refused_delete_request() {
 }
 
 cleanup() {
-  network_delete_pod
+  # On stderr, not stdout: the lines a reader counts do not change.
+  network_delete_pod || echo "smoke: could not delete the probe pod ${network_pod} in meridian; delete it by hand: kubectl -n meridian delete pod ${network_pod}" >&2
   refused_delete_request || true
   if [[ -n "${refused_err_file}" ]]; then rm -f "${refused_err_file}"; fi
   if [[ -n "${pf_pid:-}" ]]; then
@@ -949,6 +1018,16 @@ open_grafana() {
   grafana_url="http://127.0.0.1:${port}"
 }
 
+# telemetry_answer TEXT: what a backend returned, as it may be printed: through
+# clean_lines, then cut to TELEMETRY_ANSWER_LENGTH characters. Anyone who can
+# push a log line to the collector chooses its text, so an escape sequence or a
+# line that starts with PASS must not reach the terminal as one.
+telemetry_answer() {
+  local text
+  text="$(clean_lines "$1")"
+  printf '%s' "${text:0:TELEMETRY_ANSWER_LENGTH}"
+}
+
 check_telemetry() {
   epoch="$(date +%s)"
   service="meridian-smoke-${epoch}"
@@ -973,7 +1052,7 @@ check_telemetry() {
   # Traces: THE done-when of S006.
   if poll '.traces[0].traceID // empty' \
     "${proxy}/tempo/api/search?tags=service.name%3D${service}&limit=5"; then
-    pass "trace: Tempo has trace ${poll_result} for ${service}"
+    pass "trace: Tempo has trace $(telemetry_answer "${poll_result}") for ${service}"
   else
     fail "trace: no trace for ${service} in Tempo after ${POLL_TIMEOUT}s"
   fi
@@ -981,7 +1060,7 @@ check_telemetry() {
   if poll '.data.result[0].values[0][1] // empty' -G \
     "${proxy}/loki/loki/api/v1/query_range" \
     --data-urlencode "query={service_name=\"${service}\"}" --data-urlencode "limit=5"; then
-    pass "log: Loki has a line for ${service}: ${poll_result}"
+    pass "log: Loki has a line for ${service}: $(telemetry_answer "${poll_result}")"
   else
     fail "log: no line for ${service} in Loki after ${POLL_TIMEOUT}s"
   fi
@@ -989,7 +1068,7 @@ check_telemetry() {
   if poll '.data.result | select(length > 0) | length | tostring' -G \
     "${proxy}/prometheus/api/v1/query" \
     --data-urlencode "query={__name__=~\"gen.*\",job=\"${service}\"}"; then
-    pass "metric: Prometheus has ${poll_result} series from telemetrygen for ${service}"
+    pass "metric: Prometheus has $(telemetry_answer "${poll_result}") series from telemetrygen for ${service}"
   else
     fail "metric: no series for ${service} in Prometheus after ${POLL_TIMEOUT}s"
   fi
@@ -1012,21 +1091,48 @@ run_dashboard_query() {
   return 1
 }
 
+# dashboard_targets: the targets of the dashboard JSON on stdin, those of panels
+# nested in rows included, as a JSON list of {title, expr} in document order
+# (the title is the panel's).
+dashboard_targets() {
+  jq -c '[.panels[]? | .. | objects | select(has("targets"))
+    | .title as $title | .targets[]? | {title: ($title // "(untitled)"), expr: .expr}]'
+}
+
+# dashboard_target_problem SERVED: why the served dashboard has nothing to run,
+# on stdout, with status 1; nothing and 0 when every target has an expression and
+# there is at least one. A dashboard with no target would otherwise "run all 0
+# queries" and pass.
+dashboard_target_problem() {
+  local targets empty
+  targets="$(dashboard_targets <<<"$1")"
+  if [[ "$(jq 'length' <<<"${targets}")" == 0 ]]; then
+    printf 'it has no query to run (no panel, nested in a row or not, has a target), so "all queries ran" would prove nothing'
+    return 1
+  fi
+  empty="$(jq -r 'map(select((.expr // "") == "") | .title) | unique | join(", ")' <<<"${targets}")"
+  if [[ -n "${empty}" ]]; then
+    printf 'a target of panel(s) %s has no expression' "$(clean_lines "${empty}")"
+    return 1
+  fi
+}
+
 # run_dashboard_queries SERVED: every target of the served dashboard, with the
 # range variable set to an hour (3600) and, for a target that names $dimension,
 # once per option of that variable. Leaves the count in ${queries_run}; the first
 # refusal returns 1 (see run_dashboard_query).
 run_dashboard_queries() {
-  local served=$1 total i title expr options option
+  local served=$1 targets total i title expr options option
   # shellcheck disable=SC2016 # both are Grafana's variable names, written literally
   local range_ref='${__range_s}' dimension_ref='$dimension'
   queries_run=0
   query_error=""
-  options="$(jq -r '.templating.list[] | select(.name == "dimension") | .options[].value' <<<"${served}")"
-  total="$(jq '[.panels[].targets[]?] | length' <<<"${served}")"
+  options="$(jq -r '(.templating.list // [])[] | select(.name == "dimension") | .options[].value' <<<"${served}")"
+  targets="$(dashboard_targets <<<"${served}")"
+  total="$(jq 'length' <<<"${targets}")"
   for ((i = 0; i < total; i++)); do
-    title="$(clean_lines "$(jq -r --argjson i "${i}" '[.panels[] | .title as $t | .targets[]? | $t][$i]' <<<"${served}")")"
-    expr="$(jq -r --argjson i "${i}" '[.panels[].targets[]?][$i].expr' <<<"${served}")"
+    title="$(clean_lines "$(jq -r --argjson i "${i}" '.[$i].title' <<<"${targets}")")"
+    expr="$(jq -r --argjson i "${i}" '.[$i].expr' <<<"${targets}")"
     expr="${expr//"${range_ref}"/3600}"
     if [[ "${expr}" != *"${dimension_ref}"* ]]; then
       run_dashboard_query "${title}" "${expr}" || return 1
@@ -1045,9 +1151,11 @@ run_dashboard_queries() {
 # check_dashboard UID FILE: the dashboard line, for the cost dashboard (check 5)
 # and the health dashboard (check 11). What Grafana serves under UID must be the
 # file's: a stale provisioned copy fails. Its queries are then run, so a renamed
-# series or a typo shows here.
+# series or a typo shows here. A dashboard with no target, or a target with no
+# expression, is a FAIL: "all 0 queries ran" proves nothing. Targets of panels
+# nested in rows count (dashboard_targets).
 check_dashboard() {
-  local uid=$1 file=$2 served title file_exprs served_exprs
+  local uid=$1 file=$2 served title file_exprs served_exprs problem
   if ! poll '(select(.meta.provisioned == true) | .dashboard) // empty | tojson' \
     "${grafana_url}/api/dashboards/uid/${uid}"; then
     fail "dashboard: Grafana has no provisioned dashboard ${uid} after ${POLL_TIMEOUT}s (run make up) (last answer: ${poll_error})"
@@ -1055,13 +1163,17 @@ check_dashboard() {
   fi
   served="${poll_result}"
   title="$(clean_lines "$(jq -r '.title // empty' <<<"${served}" 2>/dev/null)")"
-  if ! file_exprs="$(jq -c '[.panels[].targets[]?.expr]' "${file}")"; then
+  if ! file_exprs="$(dashboard_targets <"${file}" | jq -c 'map(.expr)')"; then
     fail "dashboard: could not read the queries of ${file}"
     return
   fi
-  served_exprs="$(jq -c '[.panels[].targets[]?.expr]' <<<"${served}" 2>/dev/null || true)"
+  served_exprs="$(dashboard_targets <<<"${served}" 2>/dev/null | jq -c 'map(.expr)' 2>/dev/null || true)"
   if [[ "${served_exprs}" != "${file_exprs}" ]]; then
     fail "dashboard: Grafana serves \"${title}\" but its queries differ from infra/kind/dashboards/${file##*/} (run make up)"
+    return
+  fi
+  if ! problem="$(dashboard_target_problem "${served}")"; then
+    fail "dashboard: Grafana serves \"${title}\" (uid ${uid}) but ${problem} (infra/kind/dashboards/${file##*/})"
     return
   fi
   if run_dashboard_queries "${served}"; then
@@ -1287,13 +1399,23 @@ check_adjuster_pages() {
 # its own, and this laptop's is not the node's (see deploy.sh).
 #
 # server_epoch: the database's now() as whole seconds since the epoch, nothing
-# else on stdout; fails when the primary or the answer cannot be read.
+# else on stdout; fails when the primary or the answer cannot be read, and then
+# prints the reason instead (cleaned and cut: see meridian_query).
 server_epoch() {
   local primary answer
-  primary="$(platform_db_primary)" || return 1
-  answer="$(meridian_query "${primary}" "${SWEEP_CLOCK_SQL}")" || return 1
+  primary="$(platform_db_primary)" || {
+    printf 'no primary pod of platform-db'
+    return 1
+  }
+  answer="$(meridian_query "${primary}" "${SWEEP_CLOCK_SQL}")" || {
+    printf '%s' "${answer}"
+    return 1
+  }
   answer="$(clean_lines "${answer}")"
-  [[ "${answer}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${answer}" =~ ^[0-9]+$ ]] || {
+    printf 'the answer was not a whole number of seconds'
+    return 1
+  }
   printf '%s' "${answer}"
 }
 
@@ -1326,6 +1448,12 @@ sweep_period() {
 #   stopped|JOB|FINISHED_AT|SECONDS    the newest finished Job succeeded more
 #                                      than three periods before NOW, nothing
 #                                      running: the schedule stopped
+#   stopped||SCHEDULED_AT|SECONDS      the same with no Job of the CronJob left
+#                                      (the sweep keeps one success and the
+#                                      cluster removes a Job a day after it
+#                                      finished): last scheduled more than
+#                                      three periods before NOW, nothing
+#                                      running
 #   young|SECONDS|JOB|FINISHED_AT      the same, but the CronJob was created
 #                                      less than one period before NOW: that Job
 #                                      is an earlier CronJob's, not overdue
@@ -1353,6 +1481,7 @@ sweep_verdict() {
       elif $newest == null then
         if $active > 0 then "running"
         elif $scheduled == null then "unscheduled|\($age)|\($cj.metadata.creationTimestamp)"
+        elif ($now - ($scheduled | epoch)) > $tolerance then "stopped||\($scheduled)|\($now - ($scheduled | epoch))"
         else "none|\($scheduled)" end
       elif $scheduled != null and $active == 0 and (($scheduled | epoch) - ($newest.at | epoch)) > $tolerance then
         "stale|\($scheduled)|\($newest.at)"
@@ -1383,7 +1512,11 @@ report_sweep() {
       fail "sweep: the schedule is not producing finished runs: cronjob/${SWEEP_CRONJOB} was last scheduled at ${first}, more than ${bound} s after its newest finished Job finished at ${second}, and no Job is running"
       ;;
     stopped)
-      fail "sweep: the schedule stopped: the newest finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, succeeded at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed, and no Job is running"
+      if [[ -z "${first}" ]]; then
+        fail "sweep: the schedule stopped: cronjob/${SWEEP_CRONJOB} was last scheduled at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed; no Job of cronjob/${SWEEP_CRONJOB} is left (finished Jobs are removed a day after they finish) and none is running"
+      else
+        fail "sweep: the schedule stopped: the newest finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, succeeded at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed, and no Job is running"
+      fi
       ;;
     young)
       skip "sweep: cronjob/${SWEEP_CRONJOB} was deployed ${first} s ago by the database's clock, less than one period (${2} s); its newest finished Job, ${second}, finished at ${third}, which is an earlier CronJob's, so it is not judged yet"
@@ -1436,7 +1569,7 @@ check_sweep() {
     return
   fi
   if ! now="$(server_epoch)"; then
-    fail "sweep: could not read the database's clock (now() in the primary pod of platform-db), so a schedule that stopped cannot be judged"
+    fail "sweep: could not read the database's clock (now() in the primary pod of platform-db: ${now}), so a schedule that stopped cannot be judged"
     return
   fi
   period="$(sweep_period "${cronjob}")"
@@ -1567,7 +1700,7 @@ check_network_database() {
   if network_start_pod; then
     network_database_lines
   fi
-  network_delete_pod
+  network_delete_pod || true # the Pod stays named: the EXIT trap tries again
 }
 
 check_network_policy() {
@@ -2049,8 +2182,10 @@ name_list() {
   tr '\t' '/' | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ',' - | sed 's/,/, /g'
 }
 
-# check_rules_object: 0 when the PrometheusRule is there. Otherwise one line and 1:
-# SKIP for kubectl's NotFound (a cluster made before S024), FAIL for any other error.
+# check_rules_object: 0 when the PrometheusRule is there. Otherwise one FAIL line
+# and 1: for kubectl's NotFound (`make up` applies the object, so on any cluster
+# this repository makes it is missing for a reason, and the line says what to
+# run) and for any other error.
 check_rules_object() {
   local err_file
   err_file="$(mktemp)"
@@ -2060,7 +2195,7 @@ check_rules_object() {
     return 0
   fi
   if grep -q '(NotFound)' "${err_file}"; then
-    skip "alert rules: the PrometheusRule ${ALERT_RULES_OBJECT} is not in ${ALERT_RULES_NAMESPACE} (a cluster made before S024; make up applies it)"
+    fail "alert rules: the PrometheusRule ${ALERT_RULES_OBJECT} is not in ${ALERT_RULES_NAMESPACE}, and make up applies it from infra/kind/alerts/meridian.yaml: run make up"
   else
     fail "alert rules: could not look for the PrometheusRule ${ALERT_RULES_OBJECT} in ${ALERT_RULES_NAMESPACE} (kubectl said: $(clean_lines "$(<"${err_file}")"))"
   fi
@@ -2073,7 +2208,12 @@ check_rules_object() {
 # is loaded and none of the loaded rules is still unevaluated (a rule's health is
 # "unknown" until its group's first evaluation), then takes that answer. When that
 # does not happen the answer of one more request is judged as it is. Returns 1
-# after one FAIL line when Prometheus does not answer with status success.
+# after one FAIL line when Prometheus does not answer with status success. An
+# answer of status success that has no list of groups in the form the later
+# lines read (data.groups: objects with a string name and a list of rules, which
+# are objects) leaves ${rules_body} empty and returns 0: each line that needed
+# the groups then prints its own FAIL (rules_missing_groups), and the dashboard
+# line after them still runs.
 fetch_rules() {
   local wanted status
   wanted="$(tree_groups | jq -R . | jq -sc .)" || wanted="[]"
@@ -2095,6 +2235,20 @@ fetch_rules() {
     fail "alert rules: Prometheus did not answer ${ALERT_RULES_PATH} with status success after ${POLL_TIMEOUT}s (last answer: ${poll_error})"
     return 1
   fi
+  if ! jq -e '(.data.groups | type == "array")
+    and all(.data.groups[]; type == "object" and (.name | type == "string")
+      and (.rules | type == "array") and all(.rules[]; type == "object"))' \
+    <<<"${rules_body}" >/dev/null 2>&1; then
+    rules_body=""
+  fi
+}
+
+# rules_missing_groups BODY WHAT: 0 after one FAIL line for WHAT when BODY is
+# empty (fetch_rules found no usable data.groups in the answer); 1, silently,
+# when there is a body to read.
+rules_missing_groups() {
+  [[ -z "$1" ]] || return 1
+  fail "alert rules: ${2} cannot be checked: Prometheus' answer to ${ALERT_RULES_PATH} has no data.groups list of groups with names and rules"
 }
 
 # check_rules_loaded BODY: the file's groups are loaded and every rule of the
@@ -2103,6 +2257,9 @@ fetch_rules() {
 # ALERT_ERROR_LENGTH characters.
 check_rules_loaded() {
   local body=$1 missing unhealthy problems="" total
+  if rules_missing_groups "${body}" "whether the groups are loaded and the rules healthy"; then
+    return
+  fi
   missing="$(LC_ALL=C comm -23 <(tree_groups) <(cluster_groups "${body}") | name_list)"
   unhealthy="$(jq -r --arg prefix "${ALERT_GROUP_PREFIX}" --argjson cut "${ALERT_ERROR_LENGTH}" \
     '.data.groups[] | select(.name | startswith($prefix)) | .rules[] | select(.health != "ok")
@@ -2124,6 +2281,9 @@ check_rules_loaded() {
 # says which groups and rules differ.
 check_rules_names() {
   local body=$1 not_loaded not_in_file differences="" total
+  if rules_missing_groups "${body}" "whether the loaded rules are the file's"; then
+    return
+  fi
   not_loaded="$({
     LC_ALL=C comm -23 <(tree_groups) <(cluster_groups "${body}")
     LC_ALL=C comm -23 <(tree_rules) <(cluster_rules "${body}")
@@ -2152,8 +2312,17 @@ alerts_in_state() {
 
 # check_rules_firing BODY: no alert of the meridian.* groups is firing. A pending
 # alert has not yet lasted its `for`: it is not a failure, and the line names it.
+# With no meridian.* group loaded there is nothing to be firing, so the line
+# would pass for nothing: it is a FAIL that says it cannot tell.
 check_rules_firing() {
   local body=$1 firing pending count
+  if rules_missing_groups "${body}" "whether a Meridian alert is firing"; then
+    return
+  fi
+  if [[ -z "$(cluster_groups "${body}")" ]]; then
+    fail "alert rules: cannot tell whether a Meridian alert is firing: no group of ${ALERT_GROUP_PREFIX}* is loaded in Prometheus (run make up)"
+    return
+  fi
   firing="$(alerts_in_state firing "${body}")"
   pending="$(alerts_in_state pending "${body}")"
   if [[ -n "${firing}" ]]; then

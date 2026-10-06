@@ -224,8 +224,13 @@ node image, Kubernetes components and the platform).
    file under `src/meridian/platform/migrations` of the checkout the script
    runs from, so a cluster deployed from another checkout says so. The lines
    print counts and a file name, never a row. One SKIP line stands in for them
-   while the database holds no migrated schemas (after `make up`, before
-   `make deploy`). A count above zero says the seed and the ingestion wrote
+   while the migrations ledger table is not there, which is when nothing was
+   ever migrated (after `make up`, before `make deploy`). Once the ledger is
+   there, a store's missing table (a half-applied or renamed migration) is that
+   store's FAIL, naming the table, and an answer of the probe that is not in
+   its form is one FAIL. A failed read of the database keeps its message,
+   cleaned and cut to 160 characters, in the FAIL line: it names relations and
+   roles, never a row. A count above zero says the seed and the ingestion wrote
    something, not what or how much, and not that the chunks are the running
    image's (the ingestion Job of the image's tag, which `make deploy` keeps,
    is that proof); the claims and runs tables are not read, because
@@ -244,9 +249,16 @@ node image, Kubernetes components and the platform).
    through the collector. The script then reads each back through Grafana's
    datasource proxy from Tempo, Loki and Prometheus, waiting up to 120 seconds
    each. It prints the trace ID and how to find the data in Grafana Explore.
+   What a PASS line prints of an answer (the trace ID, the log line, the
+   series count) is cleaned of control characters and newlines and cut to 120
+   characters: anyone who can push a log line to the collector chooses its
+   text.
 5. **Cost panel.** Three lines. The dashboard: Grafana serves
    `meridian-gateway-cost` as provisioned, with the same queries as the
-   file, and Prometheus runs each of them without an error. The gateway's
+   file, and Prometheus runs each of them without an error (a dashboard with
+   no query, or a target with no expression, is a FAIL, and the targets of
+   panels nested in rows count; the health dashboard of line 11 is read the
+   same way). The gateway's
    series: when the gateway is available and its ledger holds an attempt
    settled since its process started, Prometheus must hold its tokens,
    cost and calls series with a sample exported after the first of those
@@ -274,8 +286,11 @@ node image, Kubernetes components and the platform).
    periods) after that Job finished with nothing running, when that Job
    finished more than 15 minutes before now with nothing running (the
    schedule stopped after a success; the line says how long ago and what the
-   bound is), when it was never scheduled although it was created more than
-   15 minutes ago, and when the clock below cannot be read. The period is read
+   bound is), when no Job of it is left (a finished Job is removed a day after
+   it finished) and it was last scheduled more than 15 minutes before now with
+   nothing running, when it was never scheduled although it was created more
+   than 15 minutes ago, and when the clock below cannot be read (the line
+   keeps the reason, cleaned and cut). The period is read
    from the CronJob's own `.spec.schedule` when that is `*/N * * * *`, else it
    is the script's constant, five minutes. "Now" is the database's clock, the
    primary's `now()`: the one the identity check already trusts for its audit
@@ -299,8 +314,10 @@ node image, Kubernetes components and the platform).
    (`kubernetes.default.svc:443`), which no service's policy lists and which
    answers when no policy applies, a target inside the cluster so that smoke
    sends nothing off the machine; and a probe pod, which smoke starts from the
-   Claims API's own image and securityContext and deletes at the end
-   (`smoke-network-<time>`, labelled `app.kubernetes.io/name=meridian-sweep` so
+   Claims API's own image and securityContext and deletes at the end (a
+   delete that fails is not forgotten: the exit trap tries again and says on
+   stderr, with the command to run by hand, when it fails too;
+   `smoke-network-<time>`, labelled `app.kubernetes.io/name=meridian-sweep` so
    that the sweep's policy lets it reach DNS and the database, and not
    `app.kubernetes.io/part-of=meridian`, which the database's ingress admits by),
    cannot reach `platform-db-rw.meridian.svc:5432` until the same pod is given
@@ -443,11 +460,15 @@ node image, Kubernetes components and the platform).
     file's names are read with `awk` by their indentation, and a test keeps
     that equal to a YAML parser's reading). And no alert of the Meridian
     groups is firing: a firing alert is a FAIL that names it, and a pending
-    one is not a failure, so the line names it and passes. One SKIP line
-    replaces the three when the `PrometheusRule` is not in `observability`
-    (a cluster made before S024); any other error looking for it is a FAIL,
-    and one FAIL line stands in for them when Prometheus does not answer with
-    status `success`. The fourth line is the cost dashboard's line (check 5)
+    one is not a failure, so the line names it and passes. With no group of
+    the Meridian prefix loaded the third line fails: there is nothing to be
+    firing, so it cannot tell. One FAIL line replaces the three when the
+    `PrometheusRule` is not in `observability` (`make up` applies it, so the
+    line says to run it; any other error looking for it is a FAIL too), and
+    one FAIL line stands in for them when Prometheus does not answer with
+    status `success`. An answer of status `success` that has no usable
+    `data.groups` list fails each of the three lines, and the dashboard line
+    still runs. The fourth line is the cost dashboard's line (check 5)
     for **Meridian: platform health** (uid `meridian-platform-health`):
     Grafana serves it as provisioned with the queries of
     `dashboards/platform-health.json`, and every query runs in Prometheus

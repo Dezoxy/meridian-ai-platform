@@ -49,6 +49,8 @@ GROUPS = [
 ]
 # The file holds 12 alert rules and 1 recording rule.
 RULE_COUNT = 13
+# Tied to the script in test_smoke_line_count.py: the sum of the lines each
+# check prints when all is well, so a 36th ``pass`` there fails that test.
 SMOKE_LINES_AFTER_DEPLOY = 35
 # Counted from the checks' own skip lines, not measured: edge 1, database 2 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 4, cost panel 2 and one SKIP
@@ -127,6 +129,28 @@ def prometheus_answer(
     return {"status": "success", "data": {"groups": groups}}
 
 
+# One attempt of smoke.sh's ``poll``, with the real jq filter: the stub most of
+# these tests use, since the real one waits until its deadline.
+ONE_ATTEMPT_POLL = """poll() {
+  local filter=$1 body status err
+  shift
+  err=$(mktemp)
+  if body="$(gcurl "$@" 2>"${err}")"; then
+    if poll_result="$(jq -r "${filter}" <<<"${body}" 2>/dev/null)" &&
+      [[ -n "${poll_result}" ]]; then
+      poll_error=""
+      return 0
+    fi
+    poll_error="$(clean_lines "${body:0:160}")"
+  else
+    status=$?
+    poll_error="curl exit ${status}: $(clean_lines "$(<"${err}")")"
+  fi
+  poll_result=""
+  return 1
+}"""
+
+
 def run_alert_rules(
     tmp_path: Path,
     *,
@@ -139,6 +163,9 @@ def run_alert_rules(
     query_answer: str = json.dumps({"status": "success", "data": {"result": []}}),
     asked: list[str] | None = None,
     function: str = "check_alert_rules",
+    rules_sequence: list[dict | str] | None = None,
+    real_poll: bool = False,
+    poll_timeout: int = 120,
 ) -> list[str]:
     """``check_alert_rules`` and the functions it calls, from smoke.sh in bash.
     ``kctl`` answers the lookup of the PrometheusRule: ``present``,
@@ -149,9 +176,25 @@ def run_alert_rules(
     for a uid is a dashboard Grafana does not have) and every instant query
     with ``query_answer`` (success, an empty result). ``poll`` is one attempt
     of the real one, with the real jq filter. The URLs and queries gcurl was
-    asked are appended to ``asked``."""
+    asked are appended to ``asked``.
+
+    ``rules_sequence`` makes ``gcurl`` answer the first request for the rules
+    with its first entry, the second with its second and every later one with
+    its last. ``real_poll`` runs smoke.sh's own ``poll`` (``sleep`` does
+    nothing; ``poll_timeout`` is its ``POLL_TIMEOUT``, 0 for no attempt at all),
+    so the wait for the groups to load is the script's."""
     sent = tmp_path / "gcurl-calls"
     sent.touch()
+    sequence = tmp_path / "rules-sequence"
+    sequence.mkdir()
+    (sequence / "count").write_text("0")
+    for number, entry in enumerate(rules_sequence or [], start=1):
+        text = entry if isinstance(entry, str) else json.dumps(entry)
+        (sequence / f"{number}.json").write_text(text)
+    if rules_sequence:
+        (sequence / "last.json").write_text(
+            (sequence / f"{len(rules_sequence)}.json").read_text()
+        )
     dashboards: dict[str, dict | str] = {
         HEALTH_UID: json.loads(HEALTH_FILE.read_text(encoding="utf-8")),
         "meridian-gateway-cost": json.loads(COST_FILE.read_text(encoding="utf-8")),
@@ -167,10 +210,13 @@ def run_alert_rules(
             'skip() { echo "SKIP  $*"; }',
             *re.findall(
                 r"^readonly (?:DASHBOARD_UID|DASHBOARD_FILE|HEALTH_DASHBOARD_\w+"
-                r"|POLL_TIMEOUT|ALERT_(?!RULES_FILE=)\w+)=.*$",
+                r"|ALERT_(?!RULES_FILE=)\w+)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
+            f"readonly POLL_TIMEOUT={poll_timeout}",
+            "readonly POLL_INTERVAL=0",
+            "sleep() { :; }",
             f'readonly ALERT_RULES_FILE="{rules_file or RULES_FILE}"',
             one_line_function(SMOKE_SH, "clean_lines"),
             "open_grafana() {",
@@ -191,32 +237,27 @@ def run_alert_rules(
             '      if [[ "${PROMETHEUS_DOWN}" == yes ]]; then',
             '        echo "curl: (7) Failed to connect to 127.0.0.1" >&2; return 7',
             "      fi",
-            "      printf '%s' \"${RULES_ANSWER}\" ;;",
+            f'      if [[ -s "{sequence}/1.json" ]]; then',
+            f'        n=$(( $(<"{sequence}/count") + 1 ))',
+            f'        echo "${{n}}" >"{sequence}/count"',
+            f'        file="{sequence}/${{n}}.json"',
+            f'        [[ -e "${{file}}" ]] || file="{sequence}/last.json"',
+            '        cat "${file}"',
+            "      else",
+            "        printf '%s' \"${RULES_ANSWER}\"",
+            "      fi ;;",
             f"    *api/dashboards/uid/{HEALTH_UID}*)",
             '      printf "%s" "${HEALTH_SERVED}" ;;',
             '    *api/dashboards/uid/*) printf "%s" "${COST_SERVED}" ;;',
             "    *) printf '%s' \"${QUERY_ANSWER}\" ;;",
             "  esac",
             "}",
-            "poll() {",
-            "  local filter=$1 body status err",
-            "  shift",
-            "  err=$(mktemp)",
-            '  if body="$(gcurl "$@" 2>"${err}")"; then',
-            '    if poll_result="$(jq -r "${filter}" <<<"${body}" 2>/dev/null)" &&',
-            '      [[ -n "${poll_result}" ]]; then',
-            '      poll_error=""',
-            "      return 0",
-            "    fi",
-            '    poll_error="$(clean_lines "${body:0:160}")"',
-            "  else",
-            "    status=$?",
-            '    poll_error="curl exit ${status}: $(clean_lines "$(<"${err}")")"',
-            "  fi",
-            '  poll_result=""',
-            "  return 1",
-            "}",
+            function_definition(SMOKE_SH, "poll") if real_poll else ONE_ATTEMPT_POLL,
             "kctl() {",
+            '  case "$*" in',
+            '    *"-n observability get prometheusrule meridian -o name"*) ;;',
+            '    *) echo "stub kctl: unexpected $*" >&2; return 99 ;;',
+            "  esac",
             '  case "${RULE_OBJECT}" in',
             "    present) echo prometheusrule.monitoring.coreos.com/meridian ;;",
             "    missing)",
@@ -237,10 +278,13 @@ def run_alert_rules(
                     "name_list",
                     "check_rules_object",
                     "fetch_rules",
+                    "rules_missing_groups",
                     "check_rules_loaded",
                     "check_rules_names",
                     "alerts_in_state",
                     "check_rules_firing",
+                    "dashboard_targets",
+                    "dashboard_target_problem",
                     "run_dashboard_query",
                     "run_dashboard_queries",
                     "check_dashboard",
@@ -441,15 +485,19 @@ def test_a_firing_alert_beside_a_pending_one_names_both_counts(
 
 # ── skip, errors and a Prometheus that does not answer ───────────────────────
 @requires_jq
-def test_without_the_prometheusrule_one_skip_line_replaces_the_three_rule_lines(
+def test_without_the_prometheusrule_one_fail_line_replaces_the_three_rule_lines(
     tmp_path: Path,
 ) -> None:
     asked: list[str] = []
 
     lines = run_alert_rules(tmp_path, rule_object="missing", asked=asked)
 
-    assert verdicts(lines) == ["SKIP", "PASS"]
-    assert "PrometheusRule meridian" in lines[0] and "make up" in lines[0]
+    # `make up` applies the object, so on any cluster this repository makes its
+    # absence is a failure with a remedy, not a cluster that predates it.
+    assert verdicts(lines) == ["FAIL", "PASS"]
+    assert "PrometheusRule meridian" in lines[0]
+    assert "run make up" in lines[0]
+    assert "before S024" not in lines[0]
     assert lines[1].startswith(f'PASS  dashboard: Grafana serves "{HEALTH_TITLE}"')
     assert not any(RULES_PATH in call for call in asked)
 

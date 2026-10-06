@@ -2303,6 +2303,8 @@ def run_cost_panel(
                 function_definition(SMOKE_SH, name)
                 for name in (
                     "deployed_services",
+                    "dashboard_targets",
+                    "dashboard_target_problem",
                     "run_dashboard_query",
                     "run_dashboard_queries",
                     "check_dashboard",
@@ -2656,13 +2658,15 @@ def run_open_grafana(
             "readonly GRAFANA_SERVICE=svc/grafana KUBECONFIG_FILE=/dev/null",
             "readonly KUBE_CONTEXT=ctx",
             *re.findall(
-                r"^(?:grafana_url|grafana_failed|refused_request|refused_err_file)=.*$",
+                r"^(?:grafana_url|grafana_failed|network_pod|refused_request"
+                r"|refused_err_file)=.*$",
                 SMOKE_SH,
                 re.MULTILINE,
             ),
             one_line_function(SMOKE_SH, "clean_lines"),
             f"kctl() {{ printf '%s' '{secret}'; }}",
             f"kubectl() {{ {kubectl}; }}",
+            function_definition(SMOKE_SH, "network_delete_pod"),
             function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             function_definition(SMOKE_SH, "open_grafana"),
@@ -3621,7 +3625,7 @@ def run_sweep_check(
             'pass() { echo "PASS  $*"; }',
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
-            *re.findall(r"^readonly SWEEP_\w+=.*$", SMOKE_SH, re.MULTILINE),
+            *re.findall(r"^readonly (?:SWEEP|QUERY_ERROR)_\w+=.*$", SMOKE_SH, re.M),
             one_line_function(SMOKE_SH, "clean_lines"),
             "kctl() {",
             f'  echo "$*" >>"{asked}"',
