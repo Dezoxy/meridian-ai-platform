@@ -29,6 +29,7 @@ Sku = Literal["Standard", "DataZoneStandard", "GlobalStandard"]
 ProviderKind = Literal["azure-openai", "replay", "recorded"]
 ToolEffect = Literal["read", "write", "decision"]
 AgentKind = Literal["graph", "job"]
+AgentHost = Literal["langgraph", "agent-framework"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 # Also what a caller's service ID must match when it is read from a certificate
@@ -195,16 +196,25 @@ class Agent(RegistryModel):
     # The parts the agent's graph is split into, each with its own tools; empty
     # for an agent that is not split. worker_checks.py refuses a job's workers.
     workers: tuple[Worker, ...] = ()
+    # The framework that runs the agent's entry point: the Agent Runtime picks
+    # its host by this field and refuses to start when the entry point's product
+    # is not what the host runs. "agent-framework" is Microsoft Agent Framework.
+    # checks.py refuses a job that declares it (no host runs a job) and workers
+    # on "agent-framework" (only the langgraph host carries them).
+    host: AgentHost = "langgraph"
 
     @model_serializer(mode="wrap")
-    def _omit_empty_workers(
+    def _omit_what_was_not_there_before(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, Any]:
-        """An agent without workers dumps as it did before the key existed, so
-        the evaluation's ``tools`` fingerprint of such an agent does not move."""
+        """An agent without workers, and an agent on the default host, dump as
+        they did before those keys existed, so the evaluation's ``tools``
+        fingerprint of such an agent does not move."""
         data: dict[str, Any] = handler(self)
         if not self.workers:
             data.pop("workers", None)
+        if self.host == "langgraph":
+            data.pop("host", None)
         return data
 
     def worker(self, worker_id: str) -> Worker | None:

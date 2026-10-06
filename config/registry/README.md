@@ -18,7 +18,7 @@ section and in
 | `providers.yaml` | Provider accounts: Azure OpenAI, the replay provider and the recorded provider |
 | `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits, the vector length of an embedding deployment |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema and output schema, idempotency |
-| `agents.yaml` | Agents, their kind (`graph` or `job`), their tool allowlists and, for an agent split into parts, its workers with a tool list each (S031) |
+| `agents.yaml` | Agents, their kind (`graph` or `job`), the host that runs a graph agent (`langgraph`, the default, or `agent-framework`, S037), their tool allowlists and, for an agent split into parts, its workers with a tool list each (S031) |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, the replay deployment per purpose and the recorded one |
 | `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
 | `services.yaml` | The platform's services: which ones each may call, and the tenants and agents it names when it calls (S055) |
@@ -68,6 +68,8 @@ job. Beyond the schemas, validation refuses:
   tool that does not exist, is not on the agent's list or is listed twice,
   an agent tool that is on no worker, a tool on two workers of one agent, and
   a `job` agent that declares a worker (S031);
+- a `job` agent that declares a `host` (`langgraph` too: no host runs a job),
+  and workers on an agent whose host is not `langgraph` (S037);
 - a purpose without exactly one route, a route candidate of the wrong
   purpose, and a tenant that no route can serve;
 - a replay provider other than `replay`, or a replay deployment of a real
@@ -173,6 +175,21 @@ The runtime loads no graph for it and refuses a run that names it. The one job
 is `knowledge-ingestion` (S012), which embeds the policy wordings for the
 knowledge store and may run for the tenant `claims-triage` only.
 
+An agent may name its `host` (S037): `langgraph` (the default) or
+`agent-framework` (Microsoft Agent Framework), the framework that runs its
+entry point; the Agent Runtime picks its host by it and refuses to start when
+an agent's entry point is not what its host runs. The default is not
+written into an agent's dump, so the `tools` fingerprint of an agent that
+names no host does not move. Validation refuses a `job` that declares a host
+at all (`host: langgraph` too: no host runs a job) and workers on
+`agent-framework` (the worker view of the tool client is built and tested for
+the langgraph host only; the check goes when the second host carries
+workers). Status: implemented and tested, not run on a cluster. One agent
+names the second host, `claim-brief` (S037): five tools, no worker, listed by
+the tenant `claims-triage` alone, and named by `agent-runtime` (which runs it)
+and `claims-api` (which starts it). It has no evaluation grader yet: its
+golden set holds no case.
+
 An agent may declare `workers` (S031): parts of its graph, each with an `id`,
 a `description` and a `tools` list that may be empty (a worker that only asks
 the model). A worker is part of one agent, not an agent of its own: the run,
@@ -252,8 +269,8 @@ calls nobody says `[]`. The lists hold what the code names today, no more:
 
 | Service | Calls | Tenant | Agent | Where the code says so |
 |---|---|---|---|---|
-| `claims-api` | `agent-runtime` | `claims-triage` | `claims-triage` | `ClaimsSettings.tenant`, default `claims-triage` (`MERIDIAN_TENANT` is set nowhere in the chart or `infra/`); `AGENT` in `claims_triage/triaging.py` |
-| `agent-runtime` | `model-gateway` and the three tool servers | `claims-triage` | `claims-triage` | `ModelClient` sends the run's own tenant and agent, which are the Claims API's |
+| `claims-api` | `agent-runtime` | `claims-triage` | `claims-triage`, `claim-brief` | `ClaimsSettings.tenant`, default `claims-triage` (`MERIDIAN_TENANT` is set nowhere in the chart or `infra/`); `AGENT` in `claims_triage/triaging.py` and `BRIEF_AGENT` in `claims_triage/lifecycle.py` |
+| `agent-runtime` | `model-gateway` and the three tool servers | `claims-triage` | `claims-triage`, `claim-brief` | `ModelClient` sends the run's own tenant and agent, which are the Claims API's |
 | `model-gateway`, `policy-mcp`, `claims-mcp` | nothing | none | none | no service URL in their chart `env` |
 | `knowledge-mcp` | `model-gateway` | `claims-triage` | `claims-triage` | `wording_search` embeds under `binding.tenant` and `binding.agent`, the run's |
 | `meridian-ingest` | `model-gateway` | `claims-triage` | `knowledge-ingestion` | `--tenant claims-triage` in the chart's `ingest` Job; `INGESTION_AGENT` in `knowledge_mcp/__init__.py` |
@@ -310,8 +327,9 @@ an in-memory reader; a dashboard for them is designed (S043).
 - **A tool or an agent:** edit `tools.yaml` or `agents.yaml`. A tool that
   changes state has effect `write` and requires an idempotency key.
   `uv run meridian workload new NAME` appends a new workload's agent to
-  `agents.yaml` with no tool and no worker, and adds it to no tenant: both
-  are edits a person makes (T-81). It also writes the agent into the `agents` of
+  `agents.yaml` with no tool, no worker and no host (the default), and adds
+  it to no tenant: the tools, the workers and the tenant are edits a person
+  makes (T-81). It also writes the agent into the `agents` of
   `agent-runtime` in `services.yaml`, so the runtime may name it; no
   call is admitted before a tenant lists the agent (S061).
 - **The models themselves:** edit `src/meridian/platform/registry/`, then

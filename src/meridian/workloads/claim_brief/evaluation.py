@@ -1,0 +1,87 @@
+"""The claim-brief workload's evaluation (S037, W1b).
+
+Its side of ``meridian eval run``, in the form `meridian workload new` writes.
+The golden set holds no case yet, so the run posts nothing: the workload has no
+graders (what makes a brief good is not yet written down). The cases are
+synthetic and come from a seeded generator, as `data/synthetic/` does (hard
+rule 2): add them to the golden set's cases.json, list the SHA-256 of that file
+in manifest.json with the generator's version and seed, then write ``report`` to
+grade the answers.
+
+This module imports nothing from the workflow: loading an evaluation inside the
+platform's command must not bring the agent framework along (T-80).
+
+Published in the entry-point group ``meridian.evaluations`` (pyproject.toml).
+"""
+
+import re
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+
+from pydantic import JsonValue
+
+from meridian.platform.evaluation.report import Report, ReportError, read_json_file
+from meridian.platform.evaluation.workload import Submission
+from meridian.platform.registry.models import Registry
+
+WORKLOAD = "claim-brief"
+CASES_FILE = "cases.json"
+CASES_PATH = "/claim-brief/cases"
+# The shape of a case ID. fullmatch, not match: an end anchor would accept a
+# trailing newline, and the ID goes into a path.
+CASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+# Fixed: the golden set's own text is never quoted.
+NOT_A_LIST = "cases.json is not a list of objects"
+MISSING_CASE_FIELD = "a record in cases.json has no `case` field that is text"
+BAD_CASE = (
+    "a `case` does not match the pattern: letters, digits, `_` and `-`, at most 64 "
+    "characters, starting with a letter or digit"
+)
+DUPLICATE_CASE = "a `case` appears twice in cases.json"
+NO_GRADERS = "this workload has no graders yet: write report() in its evaluation module"
+
+
+class Evaluation:
+    """Satisfies ``WorkloadEvaluation``."""
+
+    workload = WORKLOAD
+    # The field of an answer that names its case.
+    case_field = "case"
+
+    def submissions(self, golden_set: Path) -> Sequence[Submission]:
+        document = read_json_file(golden_set / CASES_FILE)
+        if not isinstance(document, list):
+            raise ReportError(NOT_A_LIST)
+        records: dict[str, Mapping[str, JsonValue]] = {}
+        for record in document:
+            if not isinstance(record, dict):
+                raise ReportError(NOT_A_LIST)
+            case = record.get("case")
+            if not isinstance(case, str):
+                raise ReportError(MISSING_CASE_FIELD)
+            if CASE.fullmatch(case) is None:
+                raise ReportError(BAD_CASE)
+            if case in records:
+                raise ReportError(DUPLICATE_CASE)
+            records[case] = record
+        # Delete this check once report() grades: until then a case could be
+        # posted and never graded, so nothing is posted.
+        if records:
+            raise ReportError(NO_GRADERS)
+        return tuple(
+            Submission(case, CASES_PATH, records[case]) for case in sorted(records)
+        )
+
+    def answer_path(self, case: str) -> str:
+        # The case goes into a path: only the shape of an ID may.
+        if CASE.fullmatch(case) is None:
+            raise ReportError(BAD_CASE)
+        return f"{CASES_PATH}/{case}"
+
+    def report(
+        self, answers: Mapping[str, JsonValue], golden_set: Path, registry: Registry
+    ) -> Report:
+        raise ReportError(NO_GRADERS)
+
+
+EVALUATION = Evaluation()

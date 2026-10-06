@@ -132,7 +132,7 @@ PLANT_APPROVAL = (
 )
 PLANT_NO_AGENTS = (
     "tenants.yaml",
-    "agents: [claims-triage, knowledge-ingestion]",
+    "agents: [claims-triage, knowledge-ingestion, claim-brief]",
     "agents: []",
 )
 PLANT_NO_SERVICE_TENANTS = (

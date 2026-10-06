@@ -30,10 +30,21 @@ TENANT = "development"
 REFERENCE = "CLM-5201"
 PAST_THE_LEASE = RUNNING_LEASE_SECONDS + 60
 INSIDE_THE_LEASE = RUNNING_LEASE_SECONDS - 60
-CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+# The three tables of LangGraph's saver (0008) and the second host's own (0023).
+CHECKPOINT_TABLES = (
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "workflow_checkpoints",
+)
 PRESENT = dict.fromkeys(CHECKPOINT_TABLES, 1)
 GONE = dict.fromkeys(CHECKPOINT_TABLES, 0)
 INSERT_CHECKPOINT = {
+    "workflow_checkpoints": (
+        "INSERT INTO runtime.workflow_checkpoints "
+        "(thread_id, checkpoint_id, workflow_name, checkpointed_at, body) "
+        "VALUES (%s, 'c1', 'claim-brief', now(), '{}')"
+    ),
     "checkpoints": (
         "INSERT INTO runtime.checkpoints (thread_id, checkpoint_id, checkpoint) "
         "VALUES (%s, 'c1', '{}')"
@@ -57,7 +68,10 @@ def test_the_sweep_modules_import_no_agent_framework() -> None:
         "import meridian.runtime.sweep\n"
         "import meridian.workloads.claims_triage.sweep\n"
         "loaded = sorted(m for m in sys.modules if m.split('.')[0] in "
-        "{'langgraph', 'langchain', 'langchain_core', 'fastapi', 'httpx'})\n"
+        "{'langgraph', 'langchain', 'langchain_core', 'agent_framework', "
+        "'fastapi', 'httpx'})\n"
+        "loaded += sorted(m for m in sys.modules if m in "
+        "{'meridian.runtime.workflow_checkpoints'})\n"
         "print(loaded)\n"
         "raise SystemExit(1 if loaded else 0)\n"
     )
@@ -278,6 +292,24 @@ def test_a_thread_in_only_one_checkpoint_table_is_a_leftover(
     found = as_the_sweep(fresh_database, lambda c: leftover_threads(c, limit=100))
 
     assert found == ["only-in-writes"]
+
+
+def test_a_thread_only_the_second_hosts_table_holds_is_found_and_removed(
+    fresh_database: DatabaseHandle,
+) -> None:
+    thread = str(uuid.uuid4())
+    with connect(fresh_database.dsn("agent_runtime"), "test") as conn:
+        conn.execute(INSERT_CHECKPOINT["workflow_checkpoints"], (thread,))
+        conn.commit()
+
+    found = as_the_sweep(fresh_database, lambda c: leftover_threads(c, limit=100))
+    deleted = as_the_sweep(
+        fresh_database, lambda c: delete_thread_checkpoints(c, thread)
+    )
+
+    assert found == [thread]
+    assert deleted == 1
+    assert checkpoint_counts(fresh_database, thread) == GONE
 
 
 def test_the_listing_of_leftovers_is_bounded(fresh_database: DatabaseHandle) -> None:
@@ -583,6 +615,12 @@ INSERT_MANY = {
         "SELECT md5(t::text)::uuid::text, 'c1', 't1', r, 'ch', '\\x00' "
         "FROM generate_series(1, %(threads)s) AS t, generate_series(1, %(rows)s) AS r"
     ),
+    "workflow_checkpoints": (
+        "INSERT INTO runtime.workflow_checkpoints "
+        "(thread_id, checkpoint_id, workflow_name, checkpointed_at, body) "
+        "SELECT md5(t::text)::uuid::text, 'c' || r, 'claim-brief', now(), '{}' "
+        "FROM generate_series(1, %(threads)s) AS t, generate_series(1, %(rows)s) AS r"
+    ),
 }
 # One run per thread number, alternately live and finished, with the thread the
 # checkpoint rows of the same number carry, so every candidate has a run.
@@ -605,7 +643,7 @@ def plant_many_rows(db: DatabaseHandle, threads: int) -> int:
     with connect(db.dsn(OWNER), "test") as conn:
         conn.execute(
             "TRUNCATE runtime.checkpoints, runtime.checkpoint_blobs, "
-            "runtime.checkpoint_writes, runtime.runs"
+            "runtime.checkpoint_writes, runtime.workflow_checkpoints, runtime.runs"
         )
         for table in CHECKPOINT_TABLES:
             conn.execute(

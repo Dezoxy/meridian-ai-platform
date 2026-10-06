@@ -51,6 +51,9 @@ REGISTRY = "config/registry"
 RUNTIME_ENTRY = "  - id: agent-runtime"
 AGENTS_KEY = "    agents:"
 RUNTIME_LINE = "    agents: [claims-triage]"
+# The runtime's line in the committed file: a tenant lists claim-brief too, so a
+# test that rewrites the line in a copy of the committed file keeps it listed.
+COMMITTED_RUNTIME_LINE = "    agents: [claims-triage, claim-brief]"
 RUNTIME_COMMENT = "  # the agent of the run it was asked for"
 # The edit logic is tested on this text, not on the committed file, whose list
 # changes whenever the runtime may name another agent. It holds what the edit
@@ -108,6 +111,13 @@ def read(root: Path, relative: str = SERVICES) -> str:
     return (root / relative).read_bytes().decode("utf-8")
 
 
+def runtime_agents(root: Path) -> tuple[str, ...]:
+    """The agents the registry in ``root`` lets the runtime's identity name."""
+    runtime = load_registry(root / REGISTRY).service("agent-runtime")
+    assert runtime is not None
+    return runtime.agents
+
+
 def runtime_line_index(text: str) -> int:
     """The 0-based index of the line of the runtime's ``agents``."""
     lines = text.split("\n")
@@ -133,7 +143,7 @@ def validate(root: Path) -> Any:
 
 
 def list_in_a_tenant(root: Path) -> None:
-    old = "agents: [claims-triage, knowledge-ingestion]"
+    old = "agents: [claims-triage, knowledge-ingestion, claim-brief]"
     edit(
         root / "config/registry/tenants.yaml",
         lambda text: text.replace(old, old.replace("]", f", {NAME}]")),
@@ -145,6 +155,7 @@ def test_the_runtime_names_the_new_agent_and_one_line_of_services_yaml_changed(
 ) -> None:
     # Arrange
     old = read(root)
+    before = runtime_agents(root)
 
     # Act
     result = new_workload(root)
@@ -157,10 +168,8 @@ def test_the_runtime_names_the_new_agent_and_one_line_of_services_yaml_changed(
     pairs = enumerate(zip(old_lines, new_lines, strict=True))
     differing = [i for i, (a, b) in pairs if a != b]
     assert differing == [runtime_line_index(old)]
-    assert new_lines[differing[0]] == f"    agents: [claims-triage, {NAME}]"
-    runtime = load_registry(root / REGISTRY).service("agent-runtime")
-    assert runtime is not None
-    assert runtime.agents == ("claims-triage", NAME)
+    assert new_lines[differing[0]] == f"    agents: [{', '.join((*before, NAME))}]"
+    assert runtime_agents(root) == (*before, NAME)
     assert validate(root).exit_code == 0
 
 
@@ -198,14 +207,13 @@ def test_the_same_hand_edit_fails_with_the_rules_message_without_the_write(
 
 
 def test_a_second_workload_is_appended_after_the_first(root: Path) -> None:
+    before = runtime_agents(root)
     new_workload(root)
 
     result = new_workload(root, "claim-audit")
 
     assert result.exit_code == 0, result.stderr
-    runtime = load_registry(root / REGISTRY).service("agent-runtime")
-    assert runtime is not None
-    assert runtime.agents == ("claims-triage", NAME, "claim-audit")
+    assert runtime_agents(root) == (*before, NAME, "claim-audit")
 
 
 @pytest.mark.parametrize(
@@ -235,13 +243,14 @@ def test_the_name_goes_inside_the_brackets_and_a_trailing_comment_survives(
 def test_a_comment_on_the_runtime_line_survives_the_whole_command(root: Path) -> None:
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, RUNTIME_LINE + "  # kept"),
+        lambda text: with_runtime_agents(text, COMMITTED_RUNTIME_LINE + "  # kept"),
     )
 
     result = new_workload(root)
 
     assert result.exit_code == 0, result.stderr
-    assert f"    agents: [claims-triage, {NAME}]  # kept" in read(root).split("\n")
+    kept = f"    agents: [claims-triage, claim-brief, {NAME}]  # kept"
+    assert kept in read(root).split("\n")
 
 
 def test_a_file_with_crlf_line_endings_keeps_every_other_line_as_it_was() -> None:
@@ -358,14 +367,18 @@ def test_the_edit_refuses_what_it_cannot_extend_with_the_line_and_never_the_name
 def block_style(root: Path) -> None:
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, "    agents:\n      - claims-triage"),
+        lambda text: with_runtime_agents(
+            text, "    agents:\n      - claims-triage\n      - claim-brief"
+        ),
     )
 
 
 def over_two_lines(root: Path) -> None:
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, "    agents: [claims-triage\n    ]"),
+        lambda text: with_runtime_agents(
+            text, "    agents: [claims-triage, claim-brief\n    ]"
+        ),
     )
 
 

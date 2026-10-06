@@ -8,6 +8,15 @@
           "title": "Description",
           "type": "string"
         },
+        "host": {
+          "default": "langgraph",
+          "enum": [
+            "langgraph",
+            "agent-framework"
+          ],
+          "title": "Host",
+          "type": "string"
+        },
         "id": {
           "maxLength": 64,
           "pattern": "^[a-z0-9][a-z0-9-]*$",
