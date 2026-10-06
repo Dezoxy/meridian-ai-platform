@@ -7,8 +7,9 @@ what the chart rendered before the values existed: ``duration: 2160h`` and no
 ``renewBefore`` (cert-manager's default, a third of the lifetime). The template
 refuses a duration above what the issuer's policy signs
 (``infra/kind/manifests/certificate-policy.yaml``), below cert-manager's
-shortest (one hour), and a ``renewBefore`` that is not shorter than the
-duration; each message names the value. The rest of the certificates is pinned
+shortest (one hour), a ``renewBefore`` that is not shorter than the duration
+and one under five minutes (cert-manager's webhook refuses it); each message
+names the value. The rest of the certificates is pinned
 in ``test_helm_identity.py``.
 """
 
@@ -24,6 +25,8 @@ POLICY_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "certificate-policy.y
 SERVICES_POLICY = "meridian-services"
 # cert-manager's shortest certificate lifetime, in minutes.
 MINIMUM_MINUTES = 60
+# The shortest renewBefore cert-manager's webhook accepts, in minutes.
+MINIMUM_RENEW_BEFORE_MINUTES = 5
 # One Certificate per service (six) and one for the ingestion Job.
 CERTIFICATES = 7
 
@@ -169,6 +172,39 @@ def test_a_renew_before_not_shorter_than_the_duration_fails_and_names_it(
 
     assert "certificate.renewBefore is" in message
     assert "not shorter than certificate.duration" in message
+
+
+@pytest.mark.parametrize("renew_before", ["1m", "4m", "0m", "0h"])
+def test_a_renew_before_under_five_minutes_fails_and_names_the_value_and_the_floor(
+    renew_before: str,
+) -> None:
+    # cert-manager's webhook refused 1m and 4m ("certificate renewBefore must
+    # be greater than 5m0s") and accepted 5m, asked by a server-side dry run
+    # on 2026-10-06. 4m59s is not expressible: the value takes hours and minutes.
+    assert minutes_of(renew_before) < MINIMUM_RENEW_BEFORE_MINUTES
+
+    message = refusal(
+        "certificate.duration=1h", f"certificate.renewBefore={renew_before}"
+    )
+
+    assert f"certificate.renewBefore is {renew_before}" in message
+    assert "below 5m" in message
+    assert "cert-manager" in message
+
+
+def test_a_renew_before_of_exactly_five_minutes_renders() -> None:
+    found = certificates("certificate.duration=1h", "certificate.renewBefore=5m")
+
+    assert len(found) == CERTIFICATES
+    for certificate in found:
+        assert certificate["spec"]["renewBefore"] == "5m"
+
+
+def test_the_floor_applies_to_the_default_duration_too() -> None:
+    message = refusal("certificate.renewBefore=4m")
+
+    assert "below 5m" in message
+    assert certificates("certificate.renewBefore=5m")[0]["spec"]["renewBefore"] == "5m"
 
 
 def test_a_renew_before_one_minute_shorter_than_the_duration_renders() -> None:

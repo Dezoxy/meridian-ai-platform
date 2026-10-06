@@ -42,6 +42,17 @@ APPROVER_STATES = {
     "no-replica-field": "exit 0",
     "zero": "printf 0",
     "ready": "printf 1",
+    # The API answers with an error that says why: the look's own number is in
+    # it (CALLS_FILE is the stubs' log), so the last look's message is known.
+    "api-error": 'echo "Error from server (Forbidden): look $(grep -c '
+    "'get deployment cert-manager-approver-policy' 'CALLS_FILE')\" >&2; exit 1",
+    "api-error-once": "if (($(grep -c 'get deployment cert-manager-approver-policy' "
+    "'CALLS_FILE') == 1)); then echo 'first look failed' >&2; exit 1; "
+    "else printf 0; fi",
+    # Two lines, an escape sequence and a run of blanks, as a hostile or broken
+    # answer could be: the message must reach the terminal as one clean line.
+    "api-error-messy": "printf 'first line\\n\\033[31mlast   line\\033[0m\\n' >&2; "
+    "exit 1",
 }
 
 
@@ -79,7 +90,9 @@ def run_deploy(
     stubs.mkdir()
     for name in ("deploy.sh", "common.sh", "pins.env"):
         shutil.copy(KIND_DIR / name, kind_dir / name)
-    approver_answer = APPROVER_STATES[approver]
+    approver_answer = APPROVER_STATES[approver].replace(
+        "CALLS_FILE", str(tmp_path / "calls")
+    )
     if approver_after is not None:
         # The stub logs its call before it answers, so the count includes it.
         looks = (
@@ -280,6 +293,65 @@ def test_deploy_looks_at_the_add_on_for_the_bounded_time_and_then_says_so(
     assert "predates" in message
     assert "restarting" in message
     assert "kubectl -n cert-manager get pods" in message
+
+
+def test_the_refusal_after_the_wait_carries_the_last_message_kubectl_gave(
+    tmp_path: Path,
+) -> None:
+    wait, pause = approver_bound()
+
+    done, calls = run_deploy(tmp_path, "ready", approver="api-error")
+
+    assert_stopped_before_the_image(done, calls)
+    last = done.stderr.strip().splitlines()[-1]
+    looks = approver_looks(calls)
+    assert looks == wait // pause + 1
+    # The error of the last look, not of an earlier one, and the wording that
+    # tells a person it was an API error and not an absent add-on.
+    assert last.startswith("error: ")
+    assert f"Error from server (Forbidden): look {looks}" in last
+    assert f"look {looks - 1}" not in last
+    assert "kubectl said" in last
+    # The remedies stay.
+    assert "run 'make up'" in last
+    assert "kubectl -n cert-manager get pods" in last
+
+
+def test_the_message_kubectl_gave_reaches_the_terminal_as_one_clean_line(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_deploy(tmp_path, "ready", approver="api-error-messy")
+
+    assert_stopped_before_the_image(done, calls)
+    assert "\x1b" not in done.stderr
+    lines = done.stderr.strip().splitlines()
+    # One `error:` line, and both lines of kubectl's message are in it, the
+    # blanks between words squeezed to one.
+    assert [line for line in lines if line.startswith("error: ")] == [lines[-1]]
+    assert "kubectl said" in lines[-1]
+    assert "first line [31mlast line[0m" in lines[-1]
+
+
+@pytest.mark.parametrize("approver", ["no-replica-field", "zero"])
+def test_the_refusal_names_no_kubectl_message_when_kubectl_gave_none(
+    tmp_path: Path, approver: str
+) -> None:
+    done, _ = run_deploy(tmp_path, "ready", approver=approver)
+
+    assert "was not available for" in done.stderr
+    assert "kubectl said" not in done.stderr
+
+
+def test_an_earlier_looks_message_is_not_kept_when_the_last_look_read_cleanly(
+    tmp_path: Path,
+) -> None:
+    # The first look fails with a message; every later one reads zero replicas.
+    done, calls = run_deploy(tmp_path, "ready", approver="api-error-once")
+
+    assert_stopped_before_the_image(done, calls)
+    assert "was not available for" in done.stderr
+    assert "first look failed" not in done.stderr
+    assert "kubectl said" not in done.stderr
 
 
 def test_the_wait_for_the_add_on_is_about_a_minute_in_steps_of_a_few_seconds() -> None:

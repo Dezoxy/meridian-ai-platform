@@ -14,8 +14,10 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
 from certscriptsupport import KIND_DIR, SECONDS
 from servicesupport import REPO_ROOT
 from test_certificate_deploy import write_stub
@@ -91,22 +93,94 @@ USED = workloads(
 )
 
 
+def rollout(*, replicasets: Sequence[str] = (), pods: Sequence[str] = ()) -> str:
+    """What ``kubectl get replicasets,pods -o json`` answers: one ReplicaSet and
+    one Pod per image given (an old ReplicaSet is one that only ``replicasets``
+    names)."""
+    items = [
+        {"kind": "ReplicaSet", "spec": {"template": pod_spec(image)}}
+        for image in replicasets
+    ] + [{"kind": "Pod", **pod_spec(image)} for image in pods]
+    return json.dumps({"kind": "List", "items": items})
+
+
+def docker_stub(
+    tmp_path: Path, log: str, *, engine_fails: bool, crictl_fails: bool
+) -> str:
+    """The stub ``docker``: ``docker image ls`` answers the file ``engine`` (or
+    fails), ``docker exec NODE crictl images`` the file ``node`` (or fails)."""
+    engine = (
+        'echo "stub: the daemon is gone" >&2; exit 1'
+        if engine_fails
+        else f"cat '{tmp_path / 'engine'}'"
+    )
+    crictl = (
+        'echo "stub: crictl cannot reach containerd" >&2; exit 1'
+        if crictl_fails
+        else f"cat '{tmp_path / 'node'}'"
+    )
+    return (
+        f"{log.format(name='docker')}\n"
+        'case "$*" in\n'
+        f'  "image ls --format "*) {engine} ;;\n'
+        f'  "exec {NODE} crictl images") {crictl} ;;\n'
+        '  *) echo "stub docker: unexpected $*" >&2; exit 99 ;;\n'
+        "esac"
+    )
+
+
+def kubectl_stub(tmp_path: Path, log: str, failing: set[str]) -> str:
+    """The stub ``kubectl``: it answers ``get nodes``, the workloads' JSON (file
+    ``workloads``) and the ReplicaSets' and Pods' (file ``rollout``). Each name
+    in ``failing`` (``nodes``, ``workloads``, ``rollout``) makes that one call
+    fail with a message, the others unchanged."""
+
+    def answer(name: str, otherwise: str) -> str:
+        if name in failing:
+            return f'echo "stub: {name} failed" >&2; exit 1'
+        return otherwise
+
+    nodes = answer("nodes", "true")
+    workloads_json = answer("workloads", f"cat '{tmp_path / 'workloads'}'")
+    rollout_json = answer("rollout", f"cat '{tmp_path / 'rollout'}'")
+    return (
+        f"{log.format(name='kubectl')}\n"
+        'case "$*" in\n'
+        f'  *" get nodes"*) {nodes} ;;\n'
+        '  *" -n meridian get deployments,cronjobs,jobs -o json")'
+        f" {workloads_json} ;;\n"
+        f'  *" -n meridian get replicasets,pods -o json") {rollout_json} ;;\n'
+        '  *) echo "stub kubectl: unexpected $*" >&2; exit 99 ;;\n'
+        "esac"
+    )
+
+
 def run_images(
     tmp_path: Path,
     *,
     engine: str = ENGINE,
     node: str = NODE_TABLE,
     in_use: str = USED,
+    running: str = rollout(),
     cluster: bool = True,
+    kind_clusters: str = "No kind clusters found.",
+    kind_fails: bool = False,
     reachable: bool = True,
     engine_fails: bool = False,
+    workloads_fail: bool = False,
+    rollout_fails: bool = False,
+    crictl_fails: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """images.sh in a scratch copy of ``infra/kind/`` against stub ``docker``
-    and ``kubectl`` that log every call and answer with ``engine`` (the rows of
-    ``docker image ls``), ``node`` (``crictl images``'s table) and ``in_use``
-    (the workloads' JSON). With ``cluster`` false there is no credentials file;
-    with ``reachable`` false the cluster does not answer. Returns the process
-    and the calls the stubs saw, one per line."""
+    """images.sh in a scratch copy of ``infra/kind/`` against stub ``docker``,
+    ``kubectl`` and ``kind`` that log every call and answer with ``engine`` (the
+    rows of ``docker image ls``), ``node`` (``crictl images``'s table),
+    ``in_use`` (the Deployments', CronJobs' and Jobs' JSON) and ``running`` (the
+    ReplicaSets' and Pods'). With ``cluster`` false there is no credentials
+    file, and ``kind get clusters`` prints ``kind_clusters`` (or fails with
+    ``kind_fails``); with ``reachable`` false the cluster does not answer. Each
+    ``*_fails`` makes that one call fail alone: ``docker image ls``, the
+    workloads' listing, the ReplicaSets' and Pods' listing, ``crictl images``.
+    Returns the process and the calls the stubs saw, one per line."""
     kind_dir, stubs = tmp_path / "infra" / "kind", tmp_path / "bin"
     kind_dir.mkdir(parents=True)
     stubs.mkdir()
@@ -114,38 +188,46 @@ def run_images(
         shutil.copy(KIND_DIR / name, kind_dir / name)
     if cluster:
         (kind_dir / "kubeconfig").write_text("stub\n", encoding="utf-8")
-    (tmp_path / "engine").write_text(engine, encoding="utf-8")
-    (tmp_path / "node").write_text(node, encoding="utf-8")
-    (tmp_path / "workloads").write_text(in_use, encoding="utf-8")
+    for name, text in (
+        ("engine", engine),
+        ("node", node),
+        ("workloads", in_use),
+        ("rollout", running),
+    ):
+        (tmp_path / name).write_text(text, encoding="utf-8")
     calls = tmp_path / "calls"
     calls.touch()
     log = f'echo "{{name}} $*" >>"{calls}"'
-    engine_answer = (
-        'echo "stub: the daemon is gone" >&2; exit 1'
-        if engine_fails
-        else f"cat '{tmp_path / 'engine'}'"
-    )
     write_stub(
         stubs,
         "docker",
-        f"{log.format(name='docker')}\n"
-        'case "$*" in\n'
-        f'  "image ls --format "*) {engine_answer} ;;\n'
-        f"  \"exec {NODE} crictl images\") cat '{tmp_path / 'node'}' ;;\n"
-        '  *) echo "stub docker: unexpected $*" >&2; exit 99 ;;\n'
-        "esac",
+        docker_stub(
+            tmp_path, log, engine_fails=engine_fails, crictl_fails=crictl_fails
+        ),
     )
-    nodes_answer = "" if reachable else 'echo "connection refused" >&2; exit 1'
+    failing = {
+        name
+        for name, fails in (
+            ("nodes", not reachable),
+            ("workloads", workloads_fail),
+            ("rollout", rollout_fails),
+        )
+        if fails
+    }
+    write_stub(stubs, "kubectl", kubectl_stub(tmp_path, log, failing))
+    kind_answer = (
+        'echo "stub: kind cannot list" >&2; exit 1'
+        if kind_fails
+        else f"cat '{tmp_path / 'clusters'}'"
+    )
+    (tmp_path / "clusters").write_text(kind_clusters + "\n", encoding="utf-8")
+    unexpected = 'echo "stub kind: unexpected $*" >&2; exit 99'
     write_stub(
         stubs,
-        "kubectl",
-        f"{log.format(name='kubectl')}\n"
-        'case "$*" in\n'
-        f'  *" get nodes"*) {nodes_answer or "true"} ;;\n'
-        '  *" -n meridian get deployments,cronjobs,jobs -o json")'
-        f" cat '{tmp_path / 'workloads'}' ;;\n"
-        '  *) echo "stub kubectl: unexpected $*" >&2; exit 99 ;;\n'
-        "esac",
+        "kind",
+        f"{log.format(name='kind')}\n"
+        f'[[ "$*" == "get clusters" ]] || {{ {unexpected}; }}\n'
+        f"{kind_answer}",
     )
     done = subprocess.run(
         ["bash", str(kind_dir / "images.sh")],
@@ -163,7 +245,7 @@ def marks(output: str) -> dict[str, str]:
     return {
         match[2]: match[1]
         for match in re.finditer(
-            r"^  (in use|unused)\s+(\S+)\s+\S+$", output, re.MULTILINE
+            r"^  (in use|unused|rollback)\s+(\S+)\s+\S+$", output, re.MULTILINE
         )
     }
 
@@ -250,6 +332,87 @@ def test_a_job_template_and_an_init_container_count_as_a_use(tmp_path: Path) -> 
     assert shown[f"meridian:{FIRST}"] == "unused"
 
 
+# ── what an old ReplicaSet or a running Pod names ───────────────────────────
+def test_an_image_only_an_old_replicaset_names_is_a_rollbacks_target_not_unused(
+    tmp_path: Path,
+) -> None:
+    # THIRD is in no pod template now, but a ReplicaSet that a rollback would
+    # scale up again still names it (kind never pulls: pullPolicy is Never).
+    running = rollout(replicasets=[f"meridian:{FIRST}", f"meridian:{THIRD}"])
+
+    done, _ = run_images(tmp_path, running=running)
+
+    assert done.returncode == 0, done.stderr
+    engine_part, node_part = done.stdout.split(f"kind node {NODE}")
+    assert marks(engine_part) == {
+        f"meridian:{FIRST}": "in use",
+        f"meridian:{SECOND}": "in use",
+        f"meridian:{THIRD}": "rollback",
+    }
+    assert "images: 3, in use: 2, unused: 0, rollback target: 1" in engine_part
+    # The node holds FIRST (in use) and FOURTH, which nothing names.
+    assert marks(node_part)[f"docker.io/library/meridian:{FOURTH}"] == "unused"
+    assert "a rollback's target" in done.stdout
+
+
+def test_no_removal_command_names_a_rollbacks_target(tmp_path: Path) -> None:
+    node = NODE_HEADER + node_row(FIRST) + node_row(THIRD) + NODE_OTHERS
+    running = rollout(replicasets=[f"meridian:{THIRD}"])
+
+    done, _ = run_images(tmp_path, node=node, running=running)
+
+    assert done.returncode == 0, done.stderr
+    # Nothing is unused in either place, so there is nothing to remove, and the
+    # listing says why THIRD is kept.
+    assert removal_commands(done.stdout) == []
+    assert "image rm" not in done.stdout
+    assert "crictl rmi" not in done.stdout
+    assert "no unused meridian:* image" in done.stdout
+    (kept,) = [
+        line for line in done.stdout.splitlines() if line.startswith("==> kept, with")
+    ]
+    assert f"meridian:{THIRD}" in kept
+    assert f"docker.io/library/meridian:{THIRD}" in kept
+    assert "a rollback's target" in kept
+
+
+def test_a_rollbacks_target_beside_an_unused_image_is_left_out_of_the_command(
+    tmp_path: Path,
+) -> None:
+    engine = ENGINE + f"meridian:{FOURTH} {FOURTH} 400MB\n"
+    running = rollout(replicasets=[f"meridian:{THIRD}"])
+
+    done, _ = run_images(tmp_path, engine=engine, running=running)
+
+    assert removal_commands(done.stdout)[0] == f"docker image rm meridian:{FOURTH}"
+    assert f"meridian:{THIRD}" not in "\n".join(removal_commands(done.stdout))
+
+
+def test_a_pod_with_no_template_names_its_image_in_use_and_so_does_a_rollout(
+    tmp_path: Path,
+) -> None:
+    # A bare Pod, or a Pod of the new ReplicaSet while the Deployment's template
+    # is not read yet: THIRD runs, so it is in use even though an old
+    # ReplicaSet names it too.
+    running = rollout(replicasets=[f"meridian:{THIRD}"], pods=[f"meridian:{THIRD}"])
+
+    done, _ = run_images(tmp_path, running=running)
+
+    shown = marks(done.stdout.split(f"kind node {NODE}")[0])
+    assert shown[f"meridian:{THIRD}"] == "in use"
+    assert "rollback target" not in done.stdout
+
+
+def test_a_pods_init_container_image_counts_as_in_use(tmp_path: Path) -> None:
+    pod = {"kind": "Pod", **pod_spec("ghcr.io/other/tool:1", init=f"meridian:{THIRD}")}
+    running = json.dumps({"kind": "List", "items": [pod]})
+
+    done, _ = run_images(tmp_path, running=running)
+
+    shown = marks(done.stdout.split(f"kind node {NODE}")[0])
+    assert shown[f"meridian:{THIRD}"] == "in use"
+
+
 def test_an_image_with_no_tag_is_not_listed_as_a_meridian_tag(tmp_path: Path) -> None:
     engine = ENGINE + "meridian:<none> 0123456789ab 100MB\n"
     node = NODE_TABLE + node_row("<none>")
@@ -280,15 +443,18 @@ def test_the_script_runs_no_command_that_removes_or_changes_anything(
     done, calls = run_images(tmp_path)
 
     assert done.returncode == 0, done.stderr
-    # It did look: the engine, the nodes' reachability, the workloads, the node.
+    # It did look: the engine, the nodes' reachability, the workloads, the
+    # ReplicaSets and Pods, the node.
     assert any(call.startswith("docker image ls ") for call in calls)
     assert any(call.endswith(" get nodes") for call in calls)
     assert any(" get deployments,cronjobs,jobs " in call for call in calls)
+    assert any(" get replicasets,pods " in call for call in calls)
     assert f"docker exec {NODE} crictl images" in calls
     for call in calls:
         assert not any(word in call for word in FORBIDDEN_CALLS), call
-    # Every call is one of the four reads.
-    assert len(calls) == 4, calls
+    # Every call is one of the five reads, and none asks `kind`: the
+    # credentials file is there, so the cluster is known to exist.
+    assert len(calls) == 5, calls
 
 
 def test_the_script_names_a_removing_command_only_in_the_suggestions_printf() -> None:
@@ -328,9 +494,45 @@ def test_with_no_cluster_the_engines_images_are_listed_all_unused_and_it_exits_0
     assert removal_commands(done.stdout) == [
         f"docker image rm meridian:{FIRST} meridian:{SECOND} meridian:{THIRD}"
     ]
-    # No cluster to ask and no node to look into.
+    # The cluster was asked for by name, and there is none: no cluster to ask
+    # about workloads and no node to look into.
+    assert "kind get clusters" in calls
     assert not any(call.startswith("kubectl") for call in calls)
     assert not any("crictl" in call for call in calls)
+
+
+def test_with_no_credentials_file_but_a_cluster_it_cannot_tell_and_names_no_command(
+    tmp_path: Path,
+) -> None:
+    # A second checkout while the cluster belongs to another: kind lists it.
+    done, calls = run_images(tmp_path, cluster=False, kind_clusters="meridian")
+
+    assert done.returncode != 0
+    last = done.stderr.strip().splitlines()[-1]
+    assert last.startswith("error: ")
+    assert "cannot tell which images are in use" in last
+    assert "kubeconfig" in last
+    # The old verdict must not appear, and no removal command is printed.
+    assert "unused by definition" not in done.stdout + done.stderr
+    assert removal_commands(done.stdout) == []
+    assert "image rm" not in done.stdout
+    assert not any(call.startswith("kubectl") for call in calls)
+
+
+def test_a_kind_that_fails_is_not_read_as_no_cluster(tmp_path: Path) -> None:
+    done, _ = run_images(tmp_path, cluster=False, kind_fails=True)
+
+    assert done.returncode != 0
+    assert done.stderr.strip().splitlines()[-1].startswith("error: ")
+    assert "unused by definition" not in done.stdout
+    assert removal_commands(done.stdout) == []
+
+
+def test_another_clusters_name_is_not_this_clusters(tmp_path: Path) -> None:
+    done, _ = run_images(tmp_path, cluster=False, kind_clusters="other\nmeridian-2")
+
+    assert done.returncode == 0, done.stderr
+    assert "unused by definition" in done.stdout
 
 
 def test_when_nothing_is_unused_it_says_so_and_prints_no_removal_command(
@@ -370,6 +572,31 @@ def test_a_cluster_that_does_not_answer_is_an_error_not_an_all_unused_listing(
     assert "make up" in done.stderr
     # Taking every image for unused here would suggest removing one in use.
     assert removal_commands(done.stdout) == []
+
+
+@pytest.mark.parametrize(
+    ("failing", "said"),
+    [
+        ({"workloads_fail": True}, "cannot read the workloads"),
+        ({"rollout_fails": True}, "cannot read the replica sets and pods"),
+        ({"crictl_fails": True}, "crictl images failed"),
+    ],
+)
+def test_a_listing_that_fails_alone_is_an_error_and_prints_no_removal_command(
+    tmp_path: Path, failing: dict[str, bool], said: str
+) -> None:
+    # Each of the three reads fails with the others answering: reading its
+    # silence as "nothing in use" (or "no images") would print the commands that
+    # remove an image a workload runs on.
+    done, _ = run_images(tmp_path, **failing)
+
+    assert done.returncode != 0
+    last = done.stderr.strip().splitlines()[-1]
+    assert last.startswith("error: ")
+    assert said in last
+    assert removal_commands(done.stdout) == []
+    assert "image rm" not in done.stdout
+    assert "unused by definition" not in done.stdout
 
 
 def test_an_engine_that_fails_is_an_error_and_prints_no_removal_command(

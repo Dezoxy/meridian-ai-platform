@@ -55,7 +55,8 @@ identity:
 #   renewBefore   how long before the end cert-manager renews. Empty leaves it
 #                 out and cert-manager's default stays, a third of the
 #                 lifetime (30 days of 90); set, it must be shorter than
-#                 duration or the render fails.
+#                 duration and not under 5m (cert-manager's webhook refuses
+#                 less) or the render fails.
 # A service does not reload its certificate: from the smaller of 24 hours and a
 # sixth of the certificate's lifetime before its end (RESTART_MARGIN and
 # RESTART_FRACTION in src/meridian/platform/common/certlife.py) it reads the

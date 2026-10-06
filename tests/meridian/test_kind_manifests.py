@@ -2930,10 +2930,14 @@ case "${url}" in
       { ((reading > STUB_ALTERNATE_UNTIL)) || ((reading % 2 == 0)); }; then
       services="${services#* }"
     fi
-    jq -cn --arg services "${services}" --argjson spans "${spans}" '{batches: [
+    # STUB_SILENT_SERVICES names services that are in the answer with a
+    # resource and no span (the shape of a service that sent nothing yet).
+    jq -cn --arg services "${services}" --argjson spans "${spans}" \
+      --arg silent " ${STUB_SILENT_SERVICES} " '{batches: [
       ($services | split(" ")[] | select(. != "")) as $name
+      | (if ($silent | contains(" " + $name + " ")) then 0 else $spans end) as $count
       | {resource: {attributes: [{key: "service.name", value: {stringValue: $name}}]},
-         scopeSpans: [{spans: [range(0; $spans) | {}]}]}]}'
+         scopeSpans: [{spans: [range(0; $count) | {}]}]}]}'
     printf '\n200' ;;
   *) echo "unexpected curl: ${url}" >&2; exit 1 ;;
 esac
@@ -2992,6 +2996,7 @@ def run_demo(
     late_after: int | None = None,
     alternate_until: int | None = None,
     first_claim_conflict: str | None = None,
+    silent_services: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
     """demo.sh run in a scratch copy of ``infra/kind`` against the stubs, with
     ``poll_interval`` seconds between two readings of a trace (none unless
@@ -3002,7 +3007,9 @@ def run_demo(
     sets the DECISION variable (unset when None).
     ``grow_until``, ``late_after`` and ``alternate_until`` shape what the stub
     Tempo answers (see the stub); ``first_claim_conflict`` is the detail of a
-    409 the stub answers to the first claim (the second is accepted). Returns
+    409 the stub answers to the first claim (the second is accepted);
+    ``silent_services`` lists services (space-separated) that the stub's
+    answers carry with a resource and no span. Returns
     the process and the
     stub curl's calls, each as its words: ``POST``/``GET``, the URL, and for a
     POST the trace ID the traceparent carried and the body."""
@@ -3045,6 +3052,7 @@ def run_demo(
             "" if alternate_until is None else str(alternate_until)
         ),
         "STUB_CONFLICT_DETAIL": first_claim_conflict or "",
+        "STUB_SILENT_SERVICES": silent_services,
     }
     if decision is not None:
         env["DECISION"] = decision
@@ -3385,6 +3393,24 @@ def test_a_trace_whose_readings_alternate_fails_saying_they_alternated(
 
 
 @requires_demo_tools
+def test_one_complete_reading_and_then_only_partial_ones_is_worded_as_alternated(
+    tmp_path: Path,
+) -> None:
+    # Reading 1 has every service, every later one lacks one. The script never
+    # saw complete, partial, complete: "alternated" is its inference from one
+    # complete reading and the partial ones after it, and demo.sh says so.
+    done, calls = run_demo(tmp_path, alternate_until=1, poll_timeout=3)
+
+    lines = done.stdout.splitlines()
+    triage_id, _ = trace_reads(calls)
+    triage, _ = [line for line in lines if line.startswith("FAIL")]
+    assert done.returncode != 0
+    assert triage.startswith(f"FAIL  trace {triage_id}: readings alternated between")
+    assert "(1 complete, " in triage
+    assert "is an inference from those counts" in DEMO_SH
+
+
+@requires_demo_tools
 def test_a_trace_missing_a_service_still_fails_with_the_line_it_had_before(
     tmp_path: Path,
 ) -> None:
@@ -3400,6 +3426,68 @@ def test_a_trace_missing_a_service_still_fails_with_the_line_it_had_before(
         "claims-api agent-runtime policy-mcp knowledge-mcp model-gateway after 6s"
     )
     assert "still growing" not in done.stdout
+
+
+@requires_demo_tools
+def test_a_service_in_the_trace_with_no_span_does_not_count_as_present(
+    tmp_path: Path,
+) -> None:
+    # Tempo's answer names model-gateway (a resource) but carries no span of it:
+    # the per-service list says "model-gateway 0", which is not "spans from".
+    done, _ = run_demo(tmp_path, silent_services="model-gateway", **SLOW_POLL)
+
+    (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
+    assert done.returncode != 0
+    assert failure.startswith("FAIL  no trace ")
+    assert failure.endswith(" after 6s")
+    assert "PASS  trace " not in done.stdout
+    # Every reading was partial, so none counts as complete or as alternating.
+    assert "alternated" not in done.stdout
+    assert "still growing" not in done.stdout
+    # What Tempo returned is listed, the silent service with its zero.
+    assert re.search(r"^ +model-gateway +0 span\(s\)$", done.stdout, re.MULTILINE)
+    # The decision trace, which has all of its services, still passes.
+    assert "PASS  decision trace " in done.stdout
+
+
+@requires_demo_tools
+def test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span(
+    tmp_path: Path,
+) -> None:
+    done, _ = run_demo(tmp_path, silent_services="claims-mcp", **SLOW_POLL)
+
+    # claims-mcp is in the decision trace's three and in the triage's optional
+    # sixth, which is not required: the triage passes, the decision fails.
+    assert done.returncode != 0
+    assert "PASS  trace " in done.stdout
+    (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
+    assert failure.startswith("FAIL  no decision trace ")
+
+
+@pytest.mark.parametrize(
+    ("counts", "present"),
+    [
+        ("claims-api 1\nagent-runtime 12", True),
+        ("claims-api 0\nagent-runtime 12", False),
+        ("claims-api 10\nagent-runtime 0", False),
+        ("claims-api 1", False),
+        ("claims-api-extra 5\nagent-runtime 1", False),
+    ],
+)
+def test_a_service_counts_as_present_from_its_first_span_and_not_before(
+    counts: str, present: bool
+) -> None:
+    script = (
+        function_definition(DEMO_SH, "has_every_service")
+        + f"counts='{counts}'\n"
+        + "has_every_service claims-api agent-runtime\n"
+    )
+
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=False, timeout=30
+    )
+
+    assert (done.returncode == 0) is present, done.stderr
 
 
 def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:

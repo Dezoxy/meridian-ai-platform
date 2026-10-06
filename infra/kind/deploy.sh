@@ -150,15 +150,33 @@ require_issuer() {
 # add-on has no replica, it is looked at again, every APPROVER_INTERVAL seconds
 # for APPROVER_WAIT_SECONDS: right after a cold `make up` it left and came back
 # within twenty seconds, and "run 'make up'" was not the remedy for that.
+#
+# What kubectl said at the last look is kept in ${approver_error}, on one clean
+# line, and the refusal after the wait quotes it: an API error or a refused read
+# is not an absent add-on, and "run 'make up'" is not its remedy. A look that
+# read cleanly leaves it empty.
+approver_error=""
+readonly APPROVER_ERROR_LENGTH=300
+
+# one_line TEXT: TEXT on one line: printable ASCII only (printable_ascii, below),
+# line breaks and runs of blanks squeezed to one blank, trimmed, cut short.
+one_line() {
+  printable_ascii <<<"$1" | tr '\n' ' ' | tr -s ' ' |
+    sed -E 's/^ //; s/ $//' | cut -c "1-${APPROVER_ERROR_LENGTH}"
+}
+
 approver_available() {
-  local available
+  local available errors
+  errors="$(mktemp)"
   available="$(kctl -n "${APPROVER_NAMESPACE}" get deployment "${APPROVER_DEPLOYMENT}" \
-    -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" || available=""
+    -o jsonpath='{.status.availableReplicas}' 2>"${errors}")" || available=""
+  approver_error="$(one_line "$(<"${errors}")")"
+  rm -f "${errors}"
   [[ "${available}" =~ ^[0-9]+$ ]] && ((10#${available} > 0))
 }
 
 require_approval() {
-  local policy ready look looks wrong=""
+  local policy ready look looks said="" wrong=""
   for policy in "${CERTIFICATE_POLICIES[@]}"; do
     ready="$(kctl get certificaterequestpolicy "${policy}" \
       -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" || ready=""
@@ -174,7 +192,10 @@ require_approval() {
     approver_available && return 0
     ((look == looks)) || sleep "${APPROVER_INTERVAL}"
   done
-  die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then: the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} was not available for ${APPROVER_WAIT_SECONDS}s. A cluster that predates S056 does not have it: run 'make up' first. A cluster that has it and shows it restarting or not ready needs a look at the pod instead (kubectl -n ${APPROVER_NAMESPACE} get pods; logs deploy/${APPROVER_DEPLOYMENT}); run 'make deploy' again when it is Running"
+  if [[ -n "${approver_error}" ]]; then
+    said=" (kubectl said at the last look: ${approver_error}; an error from the API or a refused read is not an absent add-on, so read it before running 'make up')"
+  fi
+  die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then: the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} was not available for ${APPROVER_WAIT_SECONDS}s${said}. A cluster that predates S056 does not have it: run 'make up' first. A cluster that has it and shows it restarting or not ready needs a look at the pod instead (kubectl -n ${APPROVER_NAMESPACE} get pods; logs deploy/${APPROVER_DEPLOYMENT}); run 'make deploy' again when it is Running"
 }
 
 # Build the image and tag it by content. Sets ${image} and ${tag}. Docker's

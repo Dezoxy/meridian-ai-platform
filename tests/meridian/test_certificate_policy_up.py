@@ -138,6 +138,20 @@ def test_up_s_wait_for_the_proxy_dies_saying_what_to_look_at() -> None:
     assert "logs deploy/envoy-gateway" in message
 
 
+def test_the_two_edge_messages_do_not_claim_the_wait_ran_five_minutes() -> None:
+    # `kubectl wait` fails at once on "not found" as well as after the timeout,
+    # so "in 5m" would be false for the first. The messages say what is known:
+    # the wait ended without the condition, after at most five minutes, and
+    # kubectl's own message, printed above the error, says which it was.
+    for prefix in (GATEWAY_WAIT + "gateway/edge ", PROXY_WAIT + "deployment "):
+        timeout, message = wait_and_die_message(prefix)
+
+        assert f"in {timeout}" not in message
+        assert f"up to {timeout}" in message
+        assert "ended without" in message
+        assert "kubectl's own message above" in message
+
+
 def test_up_s_last_two_waits_keep_their_conditions_and_timeouts() -> None:
     lines = script_lines()
     programmed = lines[line_index(GATEWAY_WAIT)]

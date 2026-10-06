@@ -201,10 +201,10 @@ node image, Kubernetes components and the platform).
 |---|---|
 | `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
-| `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` or `unused` by the pod templates of the namespace's Deployments, CronJobs and Jobs, with the counts and the size Docker reports for the unused ones, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no cluster it lists the engine's images, all unused; a cluster that does not answer is an error. Tested against stub commands; not yet run on a cluster. |
+| `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Tested against stub commands; not yet run on a cluster. |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross and its span counts have settled (unchanged for three readings, six seconds). |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
@@ -500,14 +500,27 @@ In order, `make deploy`:
    and was back in twenty seconds. The refusal then says the add-on "was not
    available for 60s" and gives both remedies: `make up` for a cluster that
    predates S056, a look at the pod (`kubectl -n cert-manager get pods`) for
-   one that has it and shows it restarting. (Tested against stub commands;
+   one that has it and shows it restarting. When kubectl said something at
+   the last look (an API error, a refused read), the refusal quotes it on one
+   line, because that is not an absent add-on and `make up` is not its remedy.
+   (Tested against stub commands;
    not yet seen on a cluster.)
 2. Builds and loads the image, tagged `meridian:<first 12 hex of its ID>`. A
    deploy of a changed tree leaves the previous image in the Docker engine
    and in the node, and images stay there until a person removes them.
    `make images` lists them, each marked in use or unused by a workload, and
    prints the commands that would remove the unused ones; it removes nothing.
-   (Tested against stub commands; not yet run on a cluster.)
+   "In use" means a pod template names the image now, or a Pod that exists
+   does. The chart sets no `revisionHistoryLimit`, so after a deploy that
+   changed the image the previous tag is what an old ReplicaSet would start
+   again on a rollback, and with `pullPolicy: Never` a removed image cannot be
+   pulled again: an image only an old ReplicaSet names is marked `rollback`
+   (a rollback's target), listed apart, and gets no removal command. In a
+   checkout with no `infra/kind/kubeconfig` it asks kind for the cluster: when
+   none exists every image is unused by definition, and when one does (its
+   credentials are in another checkout) it says it cannot tell which images
+   are in use, prints no command and exits non-zero. (Tested against stub
+   commands; not yet run on a cluster.)
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
    `meridian_owner`. Only the three Jobs read that Secret. The script renders
@@ -722,7 +735,7 @@ cert-manager renews at a third of the lifetime, 60 days in):
 | Value | Meaning | Refused |
 |---|---|---|
 | `certificate.duration` | whole hours and minutes (`2160h`, `1h30m`; no days, no seconds) | above `2160h`, the most the issuer's policy signs (`maxDuration` of `meridian-services`); below `1h`, cert-manager's shortest; anything that is not hours and minutes, empty included |
-| `certificate.renewBefore` | how long before the end cert-manager renews; empty leaves it out | not shorter than `certificate.duration`; anything that is not hours and minutes |
+| `certificate.renewBefore` | how long before the end cert-manager renews; empty leaves it out | under `5m`, which cert-manager's webhook refuses (asked by a server-side dry run on 2026-10-06: `1m` and `4m` refused, `5m` accepted); not shorter than `certificate.duration`; anything that is not hours and minutes |
 
 A refused value fails `helm template`, `helm upgrade` and `make deploy`
 before anything is applied, with a message that names the value. The service's
@@ -995,10 +1008,14 @@ Rerunning `make up` is the first thing to try. If a release is stuck in a
 
 If `make up` times out waiting for the Gateway to be programmed while the
 edge's proxy pod is ready, the condition is stale. The script stops with
-"the Gateway edge was not Programmed in 5m", says the edge may be serving
-all the same, and prints the three commands below. (The wait after it, for
-the proxy Deployment to be `Available`, stops with the pods and the
-controller's log to look at.) Seen twice, with the edge
+"the wait for the Gateway edge to be Programmed ended without the condition
+(it waits up to 5m ...)", says the edge may be serving all the same, and
+prints the three commands below. The message does not say the wait ran five
+minutes, because `kubectl wait` also fails at once, with "not found"; the
+message kubectl prints above the error says which it was. (The wait after
+it, for the proxy Deployment to be `Available`, words its message the same
+way and stops with the pods and the controller's log to look at.) Seen
+twice, with the edge
 serving routes both times: `AddressNotAssigned` on 2026-10-01, on a cluster
 that had run for 18 hours, and `NoResources` ("Envoy replicas unavailable")
 on 2026-10-04, on one that had run for two. `kubectl -n envoy-gateway-system

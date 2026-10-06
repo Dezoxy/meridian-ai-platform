@@ -331,6 +331,9 @@ Refused, with the value's name in the message:
                            value: tests/meridian/test_helm_certificate_lifetime.py
                            reads the policy and fails when the two differ
   a duration below 1h      cert-manager's shortest lifetime
+  a renewBefore below 5m   cert-manager's webhook refuses it ("renewBefore must
+                           be greater than 5m0s"; 5m itself was accepted when
+                           the cluster was asked by a server-side dry run)
   a renewBefore that is    cert-manager would renew a certificate as soon as it
   not shorter than the     is issued, for ever
   duration
@@ -349,6 +352,9 @@ Refused, with the value's name in the message:
 {{- end -}}
 {{- if $renewBefore -}}
 {{- $before := include "meridian.minutes" (dict "name" "certificate.renewBefore" "value" $renewBefore) | int -}}
+{{- if lt $before 5 -}}
+{{- fail (printf "certificate.renewBefore is %s, below 5m, the shortest renewBefore cert-manager's webhook accepts (it refused 1m and 4m and accepted 5m, 2026-10-06)" $renewBefore) -}}
+{{- end -}}
 {{- if ge $before $minutes -}}
 {{- fail (printf "certificate.renewBefore is %s, which is not shorter than certificate.duration (%s): cert-manager would renew a certificate as soon as it is issued, for ever" $renewBefore $duration) -}}
 {{- end -}}

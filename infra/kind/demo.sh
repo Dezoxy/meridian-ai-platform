@@ -199,11 +199,15 @@ readonly SPANS_PER_SERVICE='
   | group_by(.service)[]
   | "\(.[0].service) \(map(.spans) | add)"'
 
-# has_every_service SERVICE...: true when ${counts} lists every service given.
+# has_every_service SERVICE...: true when ${counts} lists every service given
+# with at least one span. The list also names a service that is in Tempo's answer
+# with no span ("model-gateway 0": a resource that has sent nothing yet), which
+# is not "spans from" it, so a zero does not count. Such a line stays in
+# ${counts}, and FAIL prints it under "Tempo returned" with its zero.
 has_every_service() {
   local service
   for service in "$@"; do
-    grep -q "^${service} " <<<"${counts}" || return 1
+    grep -q "^${service} [1-9]" <<<"${counts}" || return 1
   done
 }
 
@@ -254,6 +258,11 @@ wait_for_trace() {
 # counts printed are the settled ones; FAIL says whether a service is missing,
 # the counts were still changing at the deadline, or the readings alternated
 # between complete and partial (some complete, the last one not).
+# "Alternated" is an inference from those counts, and exact for a complete
+# reading followed by a partial one and then a complete one again. It is also
+# what is said when a complete reading is followed only by partial ones or 404s
+# until the deadline (Tempo lost the trace, or a service's spans are gone): the
+# script saw "complete, then not", never "complete, not, complete".
 report_trace() {
   local label=$1 id=$2 service count
   shift 2
