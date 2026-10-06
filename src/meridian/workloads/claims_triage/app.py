@@ -44,6 +44,7 @@ import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 
@@ -55,6 +56,7 @@ from meridian.platform.common.http import (
 )
 from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
+from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -80,6 +82,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     Transition,
     move_claim,
 )
+from meridian.workloads.claims_triage.meters import ClaimsMeters
 from meridian.workloads.claims_triage.models import (
     ClaimDecision,
     ClaimErrorBody,
@@ -304,11 +307,30 @@ def create_app(
     settings: ClaimsSettings,
     *,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     http_client: httpx.Client | None = None,
     today: Callable[[], date] | None = None,
 ) -> FastAPI:
+    """Build the app. A ``meter_provider`` is its caller's to shut down; without
+    one the app builds its own, which it shuts down with the app."""
     http = http_client or make_runtime_client(settings, verify_of(settings.client_tls))
     dsn, tenant = settings.database_url, settings.tenant
+    owns_meter_provider = meter_provider is None
+    app_meter_provider = (
+        make_meter_provider(SERVICE_NAME) if meter_provider is None else meter_provider
+    )
+    meters = ClaimsMeters(app_meter_provider, tenant)
+
+    def close() -> None:
+        # The runtime client and the meter provider are closed only when the app
+        # made them: an injected one is its owner's.
+        try:
+            if http_client is None:
+                http.close()
+        finally:
+            if owns_meter_provider:
+                app_meter_provider.shutdown()
+
     service = create_service_app(
         title="Meridian Claims API",
         description=(
@@ -319,7 +341,7 @@ def create_app(
         tracer_name="meridian.claims",
         max_body_bytes=SMALL_BODY_LIMIT_BYTES,
         tracer_provider=tracer_provider,
-        close=http.close if http_client is None else None,
+        close=close,
         too_large=claimant_too_large,
     )
     app, tracer = service.app, service.tracer
@@ -345,7 +367,7 @@ def create_app(
             except psycopg.Error as exc:
                 mark_error(span, exc)
                 return answer(*claim_database_failure(exc, claim_id), claim_id)
-            return triage_claim(dsn, tenant, http, span, claim_id, submission)
+            return triage_claim(dsn, tenant, http, span, claim_id, submission, meters)
 
     @app.post(
         "/claims/{claim_id}/decision",
@@ -373,7 +395,9 @@ def create_app(
     def triage_claim_again(
         claim_id: ClaimId, body: ClaimMoveRequest
     ) -> ClaimMoveResponse | JSONResponse:
-        return _reply(triage_again(dsn, tenant, http, tracer, claim_id), claim_id)
+        return _reply(
+            triage_again(dsn, tenant, http, tracer, claim_id, meters=meters), claim_id
+        )
 
     @app.post(
         "/claims/{claim_id}/withdrawal",
@@ -400,7 +424,7 @@ def create_app(
         claim_id: ClaimId, body: DocumentsArrival
     ) -> ClaimMoveResponse | JSONResponse:
         return _reply(
-            add_documents(dsn, tenant, http, tracer, claim_id, body.documents),
+            add_documents(dsn, tenant, http, tracer, claim_id, body.documents, meters),
             claim_id,
         )
 
@@ -413,7 +437,7 @@ def create_app(
             dsn, tenant, http, tracer, claim_id, decision, page_run
         ),
         triage_again=lambda claim_id, page_run: triage_again(
-            dsn, tenant, http, tracer, claim_id, page_run=page_run
+            dsn, tenant, http, tracer, claim_id, page_run=page_run, meters=meters
         ),
     )
     add_claimant_pages(
@@ -424,6 +448,7 @@ def create_app(
         tracer=tracer,
         today=today,
         deadline_days=settings.documents_deadline_days,
+        meters=meters,
     )
     return app
 

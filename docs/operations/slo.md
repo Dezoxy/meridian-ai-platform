@@ -229,8 +229,33 @@ namespace; Meridian's file does not repeat them.
   asked on every pull request, not while the platform runs.
 - **The sweep's own findings.** The sweep reports through its exit code and
   one log line. A pass that ran and failed on one item exits 1, so the
-  CronJob does not count it as a success and the indicator sees it; how
-  many claims it referred is in the log line only.
+  CronJob does not count it as a success and the indicator sees it. What a
+  pass found is also a gauge, `meridian_sweep_last_pass` (S064,
+  implemented in tests, not run on a cluster): one series for each number
+  of the log line, under `meridian_finding` (`documents-overdue`,
+  `triage-not-started`, `triage-abandoned`, `runs-ended`, `threads-cleaned`
+  and `failures`), set once from the last pass and sent before the sweep
+  exits, within about 12 seconds of a collector that does not answer (the
+  exit code is the pass's, whatever the flush does). The series reach
+  nothing until the CronJob is given the collector's address, its
+  authority and a network rule to reach it (the cluster half of S064):
+  today's CronJob has none, so the sweep sends nothing. A pass that could
+  not run, because the database was unreachable, has no numbers and sends
+  none. No rule reads the gauge yet. Prometheus keeps a series for five
+  minutes after its last sample and the CronJob runs every five, so a rule
+  over it must look back over several passes, not one.
+- **The assessment's outcomes.** The Claims Triage App counts each stored
+  proposal once (S064, implemented in tests, not run on a cluster):
+  `meridian_claims_assessments_total`, by `meridian_outcome`
+  (`not_needed`, `none_applies`, `applies` or `unavailable`),
+  `meridian_tenant` and, for an unavailable assessment, `meridian_reason`:
+  `truncated`, `not-json`, `not-the-format`, `unknown-clause`, `unsure`,
+  `too-long`, `special-data`, `injection-suspected` or `filtered`. A jump
+  in the last three shows in the series, not only in a warning in the
+  runtime's output. A triage that stores no proposal (a failed run, an
+  answer that is not a proposal, a write that was lost, a triage another
+  request took over) counts nothing here; the runtime's
+  `meridian_runtime_runs_total` has the failed run. No rule reads it yet.
 - **Logs.** No service exports its logs to Loki, so no rule reads one. The
   warnings for an empty knowledge store and for stale vectors stay in the
   knowledge server's own output as well, and are also counted since S064

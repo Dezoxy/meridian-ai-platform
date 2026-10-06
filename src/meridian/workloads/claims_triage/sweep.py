@@ -21,6 +21,8 @@ thread's alone: it is logged by its ID, the exception's class and the sqlstate
 (a message could hold claimant text, T-03), and the pass goes on. A pass is
 bounded in the number of items it takes. Exit codes: 0 for a clean pass, 1 when
 any item or the connection failed, 2 for a setting that is missing or invalid.
+After a pass it sends the counts as gauges (``sweep_meters``), when the
+collector's address is set; that changes neither the exit code nor the summary.
 """
 
 import logging
@@ -405,6 +407,11 @@ def main(environ: Mapping[str, str] = os.environ) -> int:
         # stderr, are outside the redacted log line and can hold anything.
         logger.error("the sweep pass could not run: %s", type(exc).__name__)
         return EXIT_FAILED
+    # Imported here, not at the top: its provider module loads a web stack that
+    # this job otherwise does not (a test holds that). It never raises.
+    from meridian.workloads.claims_triage.sweep_meters import report_pass
+
+    report_pass(result)
     return EXIT_CLEAN if result.failures == 0 else EXIT_FAILED
 
 

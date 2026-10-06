@@ -131,7 +131,11 @@ k logs job/<the newest job's name>
 
 It writes one summary line per pass and exits 0 when the pass was clean,
 1 when an item or a connection failed, 2 for a setting it cannot use. A
-failed run is not retried; the next scheduled run is the retry.
+failed run is not retried; the next scheduled run is the retry. The
+numbers of the line are also the gauge `meridian_sweep_last_pass`
+(implemented in tests, not run on a cluster; the CronJob sends nothing
+until it is given the collector's address), so the log line stays the
+place to read a pass until it is.
 
 | What the log or the CronJob shows | Cause |
 |---|---|

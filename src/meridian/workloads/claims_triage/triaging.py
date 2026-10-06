@@ -51,6 +51,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     Transition,
     move_claim,
 )
+from meridian.workloads.claims_triage.meters import ClaimsMeters
 from meridian.workloads.claims_triage.models import (
     Claimant,
     ClaimFacts,
@@ -653,11 +654,13 @@ def triage_claim(
     span: Span,
     claim_id: str,
     submission: ClaimSubmission,
+    meters: ClaimsMeters | None = None,
 ) -> ClaimResponse | JSONResponse:
     """Take the claim's triage, run it and close it. ``span`` is the caller's
     open span; the run's ID is set on it. A refusal (409) is raised as
     ``HTTPException``; a failure is answered with the claim's ID. The run is
-    sent the submission's facts and the documents that arrived for the claim."""
+    sent the submission's facts and the documents that arrived for the claim.
+    ``meters`` counts the proposal when it is stored (see ``run_taken_triage``)."""
     try:
         taken_at, found_in, arrived, old_run = take_triage(dsn, tenant, claim_id)
     except psycopg.Error as exc:
@@ -678,6 +681,7 @@ def triage_claim(
         claim_id,
         facts_for_run(submission, arrived),
         taken_at,
+        meters=meters,
     )
     if isinstance(result, DecisionFailure):
         return answer(result.status, result.detail, claim_id, result.run_id)
@@ -692,13 +696,18 @@ def run_taken_triage(
     claim_id: str,
     facts: dict[str, Any],
     taken_at: datetime,
+    *,
+    meters: ClaimsMeters | None = None,
 ) -> ClaimResponse | DecisionFailure:
     """Run the triage this request took and close it: start the run, read its
     outcome, store the proposal and move the claim on, or move it to
     ``triage_failed``. A failure is a ``DecisionFailure`` (a status, a fixed
     text and the run's ID when there is one); a triage taken over by another
     request is a 409 raised as ``HTTPException``. ``span`` is the caller's open
-    span; the run's ID is set on it."""
+    span; the run's ID is set on it. Every triage passes here, whichever route
+    took it, so this is where ``meters`` counts the proposal: once, after
+    ``close_triage`` has committed it, and never for a proposal that was not
+    stored (a failed run, a lost write, a triage taken over)."""
     try:
         run = start_run(http, tenant, claim_id, facts)
         proposal, transition = triage_outcome(run)
@@ -742,6 +751,8 @@ def run_taken_triage(
             run.run_id,
         )
         raise HTTPException(409, TAKEN_OVER_DETAIL)
+    if meters is not None:
+        meters.proposal_stored(proposal)
     return ClaimResponse(
         claim_id=claim_id,
         state=transition.target,
