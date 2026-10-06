@@ -2655,10 +2655,15 @@ def run_open_grafana(
             'fail() { echo "FAIL  $*"; failures=$((failures + 1)); }',
             "readonly GRAFANA_SERVICE=svc/grafana KUBECONFIG_FILE=/dev/null",
             "readonly KUBE_CONTEXT=ctx",
-            *re.findall(r"^(?:grafana_url|grafana_failed)=.*$", SMOKE_SH, re.MULTILINE),
+            *re.findall(
+                r"^(?:grafana_url|grafana_failed|refused_request|refused_err_file)=.*$",
+                SMOKE_SH,
+                re.MULTILINE,
+            ),
             one_line_function(SMOKE_SH, "clean_lines"),
             f"kctl() {{ printf '%s' '{secret}'; }}",
             f"kubectl() {{ {kubectl}; }}",
+            function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             function_definition(SMOKE_SH, "open_grafana"),
             function_definition(SMOKE_SH, "gcurl"),
@@ -4295,7 +4300,7 @@ def test_the_readme_describes_what_s056_added_to_deploy_and_smoke_and_the_restar
     # the eleventh the alert rules (test_smoke_alert_rules.py).
     assert "`make smoke` checks eleven things" in readme
     assert "`make smoke` checks nine things" not in readme
-    assert "**Certificate policy.** Three lines" in readme
+    assert "**Certificate policy.** Four lines" in readme
     # The ninth check's description no longer counts three statuses.
     assert "`make smoke`'s ninth check proves 200, 401 and 403" not in readme
     # `make deploy` refuses without the policies and the add-on, too.

@@ -324,22 +324,37 @@ node image, Kubernetes components and the platform).
    its own policy too), so the fourth line reads the audit table in the
    database's primary pod: a row of the gateway's refusal with the reason the
    identity rule writes (`caller-name-not-allowed`), the Agent Runtime as the
-   calling service and the tenant `evaluation`, recorded in the last 120
-   seconds by the database's own clock. The gateway writes it in a worker
-   thread and at most once per reason, tenant and minute, so the check asks
-   for a row that exists and is recent, never for a count that went up, and
-   tries for about ten seconds; the line says the row's age. The fifth line
-   presents a certificate of another CA: the probe makes a throwaway key and a
-   self-signed certificate that carries the runtime's own URI (the right name,
-   the wrong CA) in a directory under `/tmp` that is removed when the probe
-   ends, and the gateway must end the connection with a TLS alert, or close
-   it, before it answers: a status is a FAIL. The key is never printed, passed
+   calling service and the tenant `evaluation`, recorded at or after the start
+   of this run, which is the database's own clock read just before the 403's
+   request. The gateway writes it in a worker thread and at most once per
+   reason, tenant and minute, so the check asks for a row that exists, never
+   for a count that went up, and tries for about ten seconds; the line says the
+   row's age. A second run inside that minute causes no row of its own, and
+   the line is then a SKIP, not a PASS, when the newest row is from the minute
+   before this run started ("the gateway wrote this minute's refusal row for
+   an earlier run; run again in a minute"); with no row at all it is a FAIL.
+   The fifth line presents a certificate of another CA: the probe makes a
+   throwaway key and a self-signed certificate that carries the runtime's own
+   URI (the right name, the wrong CA) in a directory under `/tmp` that is
+   removed when the probe ends, and the gateway must end the connection
+   before it answers: a status is a FAIL. The probe reads before it writes, so
+   that under TLS 1.3, where the alert follows the handshake, it is the first
+   thing read, and it tells two endings apart. `refused` is the TLS alert for
+   an unknown CA (Python's `ssl` reports `TLSV1_ALERT_UNKNOWN_CA`); `reset` is
+   a connection that ended with no alert. uvicorn, which the services run
+   under, ends an unknown CA's connection without delivering the alert (a
+   reset under TLS 1.3 and an EOF under 1.2, measured against the test server
+   that has the services' flags, not yet seen on the cluster), so `reset` is
+   the ending expected of the gateway, and the line passes it, in other words
+   than `refused`. It is wider than a refusal for the unknown CA: a gateway
+   that died in that second would end the connection the same way. Any other
+   TLS error (another alert, say) is a FAIL. The key is never printed, passed
    as an argument or kept. The probe checks the gateway's certificate against
    the CA and its DNS name; a traceback (a name that does not resolve, a
    certificate that does not verify, a refused connection) is a FAIL, never a
    refusal. Before `make deploy` this check prints SKIP.
-10. **Certificate policy.** Three lines, read-only, and never SKIP: the
-    objects exist after `make up`, so a missing one is a FAIL. The three
+10. **Certificate policy.** Four lines, never SKIP, the first three read-only:
+    the objects exist after `make up`, so a missing one is a FAIL. The three
     `CertificateRequestPolicy` objects are Ready. The Deployment
     `cert-manager-approver-policy` in `cert-manager` has an available replica.
     And cert-manager's own approver is off, read two ways that must agree: the
@@ -352,7 +367,38 @@ node image, Kubernetes components and the platform).
     certificate request once the cluster has its certificates, so an update of
     cert-manager or approver-policy that turned the built-in approver back on,
     or left the policies or the add-on gone, would pass the pull request that
-    brings it.
+    brings it. The fourth line is the one request smoke makes on purpose, and
+    one that the issuer must refuse (S062): a `CertificateRequest` named
+    `meridian-smoke-refused-<pid>-<random>` in the namespace `default`, for the
+    issuer `meridian-services`, with a URI under the Meridian prefix and a
+    duration that policy allows, so that only its namespace refuses it: the
+    namespace selector of `meridian-services` does not list `default`, and
+    `meridian-deny-unlisted`, which selects the issuer from every namespace,
+    permits nothing. It passes when the request is Denied (the line says the
+    reason and the approver's message, cut to 120 characters). It fails when
+    the request is Approved or carries a certificate (the issuer signed a
+    request it must refuse), and when neither condition is there after 30
+    seconds (the approver did not answer; a request that no policy the
+    requester may use selects is left the same way). The request is a
+    `CertificateRequest` and not a `Certificate` so that the key is made on
+    this machine, by `openssl`, and written to `/dev/null`: it is in no file, no
+    variable and no output, and the request holds the public half only. A
+    request makes no Secret; the certificate an issuer signed would be in the
+    request's own status, is never printed and is deleted with it. The request
+    is deleted as soon as it is read, by the script's EXIT trap when the run
+    ends first (an error, a FAIL, an interrupt) and, after a run that was
+    killed, at the start of the next one by its label
+    `meridian-smoke=refused-request`; a delete that fails is a FAIL that names
+    the request. Approved: the line says the issuer signed it, and smoke
+    deleted it. What it does not prove: the request is made by whoever runs
+    smoke (kind's cluster-admin, which may use every policy), not by
+    cert-manager's account, so it shows what the namespace selector and the
+    approver do with a request from another namespace, not the role bindings
+    that let cert-manager use a policy (the plan's S056 section made those by
+    hand); and a request for an issuer that is not Meridian's, which no policy
+    answers, is not made. It adds a second or two when the approver is up, 30
+    seconds when it does not answer. Tested without a cluster; it has not yet
+    been run on kind.
 11. **Alert rules and health dashboard.** Four lines, read-only, run last.
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
@@ -384,8 +430,12 @@ node image, Kubernetes components and the platform).
     told, because kind runs no Alertmanager.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
-15 minutes after it finishes. The tool check leaves at most one refused
-`tool.call` row per server in the audit log per throttle window.
+15 minutes after it finishes. It creates one Pod in `meridian` for the network
+check (line 8) and one `CertificateRequest` in `default` for the certificate
+policy check (line 10), and deletes each as soon as its check is done and again
+when the script ends. The tool check leaves at most one refused `tool.call` row
+per server in the audit log per throttle window, and the identity check one
+refusal row per reason and minute.
 
 ## The services: `make deploy` and `make demo`
 

@@ -826,16 +826,20 @@ def run_identity_check(
     deployed: str = "deployment.apps/claims-api",
     answers: str,
     primary: str = "platform-db-1",
-    audit: str = "6",
+    audit: str = "6|t",
     audit_after: int = 0,
+    clock: str = "1759752000.123456",
 ) -> tuple[list[str], str]:
     """``check_service_identity`` from smoke.sh in bash against a stub ``kctl``.
     ``answers`` is what the probe prints for each mode, as ``mode=answer`` pairs
     (``mode=FAIL`` makes the probe exit non-zero with a traceback on stderr).
     ``primary`` is the database's primary pod (empty: none), ``audit`` what
-    ``psql`` prints for the audit query (empty: no row; ``FAIL``: the query
-    fails), after ``audit_after`` queries that print nothing. ``sleep`` does
-    nothing, so a wait for the row costs no time.
+    ``psql`` prints for the audit query, ``<age>|t`` for a row at or after the
+    run's start and ``<age>|f`` for an older one (empty: no row; ``FAIL``: the
+    query fails), after ``audit_after`` queries that print nothing, and
+    ``clock`` what ``psql`` prints for the database's clock before the probes
+    (``FAIL``: the read fails). ``sleep`` does nothing, so a wait for the row
+    costs no time.
     Returns the output lines and what ``kctl`` was asked."""
     asked = tmp_path / "kctl-calls"
     asked.touch()
@@ -855,10 +859,16 @@ def run_identity_check(
             '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
             '    *"get pod"*) printf "%s" "${PRIMARY}" ;;',
             '    *" -c postgres "*)',
+            '      if [[ "$*" != *"audit.events"* ]]; then',
+            '        if [[ "${CLOCK}" == FAIL ]]; then',
+            '          echo "psql: no clock" >&2; return 1',
+            "        fi",
+            '        printf "%s" "${CLOCK}"; return 0',
+            "      fi",
             '      if [[ "${AUDIT}" == FAIL ]]; then',
             '        echo "psql: could not connect" >&2; return 1',
             "      fi",
-            f'      queries="$(grep -c "psql -d meridian" "{asked}")"',
+            f'      queries="$(grep -c "audit.events" "{asked}")"',
             "      if ((queries <= AUDIT_AFTER)); then return 0; fi",
             '      printf "%s" "${AUDIT}"; return 0 ;;',
             '    *" exec "*)',
@@ -876,6 +886,8 @@ def run_identity_check(
             script_function(SMOKE_SH, "deployed_services"),
             script_function(SMOKE_SH, "identity_status"),
             script_function(SMOKE_SH, "expect_identity_status"),
+            script_function(SMOKE_SH, "expect_foreign_ca"),
+            script_function(SMOKE_SH, "identity_mark_start"),
             script_function(SMOKE_SH, "check_gateway_refusal_row"),
             script_function(SMOKE_SH, "check_service_identity"),
             "check_service_identity",
@@ -892,6 +904,7 @@ def run_identity_check(
             "PRIMARY": primary,
             "AUDIT": audit,
             "AUDIT_AFTER": str(audit_after),
+            "CLOCK": clock,
         },
         check=True,
     )

@@ -71,6 +71,8 @@ CHECK_FUNCTIONS = (
 PROBE_DEFINITIONS = (
     re.findall(r"^readonly NETWORK_\w+=\S+$", SMOKE_SH, re.M)
     + re.findall(r'^network_\w+="".*$', SMOKE_SH, re.M)
+    # What the EXIT trap also reads: check 10's request and its message file.
+    + re.findall(r'^refused_(?:request|err_file)="".*$', SMOKE_SH, re.M)
     + [
         match.group(0)
         for match in re.finditer(
@@ -192,6 +194,7 @@ def run_in_bash(
             one_line_function(SMOKE_SH, "clean_lines"),
             STUB,
             *(function_definition(SMOKE_SH, name) for name in CHECK_FUNCTIONS),
+            function_definition(SMOKE_SH, "refused_delete_request"),
             function_definition(SMOKE_SH, "cleanup"),
             *calls,
         ]

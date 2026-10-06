@@ -2,8 +2,11 @@
 # Prove the local platform works end to end: `make smoke`. Changes nothing apart
 # from three short-lived Jobs (unique names, removed by ttlSecondsAfterFinished),
 # one short-lived Pod of the network policy check (unique name, deleted when the
-# check ends and again by the EXIT trap) and, at most once per throttle window
-# per tool server, the refusal's audit row that the tool check below causes.
+# check ends and again by the EXIT trap), one CertificateRequest in default of
+# the certificate policy check (unique name, a request the issuer must refuse,
+# deleted as soon as it is read and again by the EXIT trap) and, at most once
+# per throttle window per tool server, the refusal's audit row that the tool
+# check below causes.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
 #   2. database:  pgvector is installed in platform-db, in the `app` database and
 #                 in the `meridian` database; and three lines for the stores of
@@ -145,37 +148,45 @@
 #                 reason of that 403 from the audit table, in the database's
 #                 primary pod: a row of the gateway's refusal for the identity
 #                 rule's reason (`caller-name-not-allowed`), naming the
-#                 runtime as the calling service, recorded in the last 120
-#                 seconds by the database's clock. The gateway writes it in a
-#                 worker thread, at most one per reason and tenant and minute,
-#                 so the check asks for a row that exists and is recent, never
-#                 for a count that went up, and tries for about ten seconds;
-#                 without it a 403 from the gateway's own policy would pass for
-#                 the wrong reason. The fifth presents a certificate of another
+#                 runtime as the calling service, recorded at or after this
+#                 run's start, which is the database's clock read just before
+#                 the 403's request. The gateway writes it in a worker thread,
+#                 at most one per reason, tenant and minute, so the check asks
+#                 for a row that exists, never for a count that went up, and
+#                 tries for about ten seconds; without it a 403 from the
+#                 gateway's own policy would pass for the wrong reason. A
+#                 second run inside that minute causes no row of its own: when
+#                 the newest row is from the minute before this run started and
+#                 none came after it, the line is a SKIP, not a PASS ("the
+#                 gateway wrote this minute's refusal row for an earlier run;
+#                 run again in a minute"), and with no row at all it is a FAIL.
+#                 The fifth presents a certificate of another
 #                 CA: the probe makes a throwaway key and a self-signed
 #                 certificate with the runtime's own URI (the right name, the
-#                 wrong CA), and the gateway must end the connection (a TLS
-#                 alert, or a close after its own certificate verified) before
-#                 any answer: a status is a FAIL. The tools check above is a
+#                 wrong CA), and the gateway must end the connection before any
+#                 answer, with the TLS alert for an unknown CA (`refused`,
+#                 ssl.SSLError with reason TLSV1_ALERT_UNKNOWN_CA) or with no
+#                 alert at all (`reset`), worded apart; a status is a FAIL, and
+#                 so is any other TLS error. The tools check above is a
 #                 further proof: its calls run over TLS with the runtime's
 #                 certificate. The two refusals (the 401 and the 403) leave two
 #                 refusal rows in the audit table on each run, one per reason
 #                 (the gateway throttles its refusal rows to one per reason and
 #                 minute). Skipped while the Meridian services are not deployed
 #                 (`make deploy`). A traceback is a failure, not a refusal.
-#                 What two of the lines do not prove: the fourth is satisfied
-#                 by a row an earlier run wrote in the last 120 seconds (one row
-#                 per tenant, reason and minute, so a row newer than the probe
-#                 cannot be demanded), so it shows the identity rule refused the
-#                 runtime's name lately, not that it refused this run's 403; and
-#                 `refused` on the fifth is wider than a TLS alert for the
-#                 unknown CA, because any TLS error or reset after the server's
-#                 certificate verified reads as refused, one from a gateway that
-#                 died in that second too (the three requests before it were
-#                 answered by the same gateway).
-#  10. certificate policy: three lines, read-only (S056), run after the first
+#                 What the fifth line does not prove: uvicorn, which the
+#                 services run under, ends an unknown CA's connection without
+#                 delivering the alert (against the test server with its flags:
+#                 a reset under TLS 1.3, an EOF under 1.2; not yet seen on the
+#                 cluster), so `reset` is the answer expected of the gateway,
+#                 and it is wider than a refusal for the unknown CA: a gateway
+#                 that died in that second would end the connection the same
+#                 way (the three requests before it were answered by the same
+#                 gateway). Only `refused`, the alert, names the unknown CA.
+#  10. certificate policy: four lines (S056, S062), run after the first
 #                 nine and never skipped: its objects exist after `make up`, so
-#                 a missing one is a FAIL. The three CertificateRequestPolicies
+#                 a missing one is a FAIL. The first three lines read only: the
+#                 three CertificateRequestPolicies
 #                 (meridian-services, meridian-services-ca,
 #                 meridian-deny-unlisted) are Ready; the Deployment
 #                 cert-manager-approver-policy in cert-manager has an available
@@ -191,7 +202,42 @@
 #                 nothing else makes a certificate request on a cluster that has
 #                 its certificates, so a cert-manager or approver-policy update
 #                 that turned the approver back on, or left the policies or the
-#                 add-on gone, would otherwise pass.
+#                 add-on gone, would otherwise pass. The fourth line makes the
+#                 one request that the issuer must refuse (S062), the one
+#                 change this check makes: a CertificateRequest named
+#                 meridian-smoke-refused-<pid>-<random> in the namespace
+#                 default, for the issuer meridian-services, with a URI under
+#                 the Meridian prefix and a duration that policy allows, so
+#                 that only its namespace refuses it: the namespace selector
+#                 of meridian-services does not list default, and the policy
+#                 meridian-deny-unlisted, which selects the issuer from every
+#                 namespace, permits nothing. It passes when the request is
+#                 Denied (the line says the reason and the approver's message,
+#                 cut to 120 characters). It fails when the request is
+#                 Approved or carries a certificate (the issuer signed a
+#                 request it must refuse), and when neither condition is there
+#                 after 30 s (the approver did not answer; a request nobody
+#                 approves or denies would also be what a policy that can no
+#                 longer be used by the requester leaves). The request is
+#                 deleted as soon as it is read, by the EXIT trap when the run
+#                 ends first (an error, a FAIL, an interrupt) and, for a run
+#                 that was killed, at the start of the next one by its label
+#                 meridian-smoke=refused-request; a failed delete is a FAIL
+#                 that names the request. A CertificateRequest makes no
+#                 Secret: the certificate an issuer signed would be in the
+#                 request's own status, which is deleted with it and never
+#                 printed. openssl makes the key and writes it to /dev/null:
+#                 it is in no file, no variable and no output. What it does
+#                 not prove: the request is made by whoever runs smoke
+#                 (kind's cluster-admin, which may use every policy), not by
+#                 cert-manager's account, so the check shows what the
+#                 namespace selector and the approver do with a request of
+#                 another namespace, not the role bindings that let
+#                 cert-manager use a policy (the plan's S056 section made
+#                 those by hand); and a request for an issuer that is not
+#                 Meridian's, which no policy answers, is not made. It adds
+#                 a second or two when the approver is up, 30 s when it does
+#                 not answer.
 #  11. alert rules and health dashboard: four lines, read-only (S062), run
 #                 last. Three lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for
@@ -300,27 +346,40 @@ except TimeoutError:
 #                   name, the wrong CA. The key and certificate are made here,
 #                   written to a directory under /tmp (the pod's one writable
 #                   path) that is removed when the probe ends, and never printed
-#                   or passed as an argument. It prints "refused" when the
-#                   server ends the connection with a TLS alert or closes it
-#                   (under TLS 1.3 the alert reaches the client with the first
-#                   request, under 1.2 inside the handshake, so the connection
-#                   is opened inside the same try), and the status when an
-#                   answer came, which is a FAIL. That is any TLS error or reset
-#                   after the server's certificate verified, in this mode only.
-#                   Anything else (the server's certificate not verifying, a
-#                   name that does not resolve, a refused connection, a
-#                   timeout) stays a traceback, in every mode.
+#                   or passed as an argument. It reads before it writes (under
+#                   TLS 1.3 the alert follows the handshake, and a request sent
+#                   first can lose it to a reset; under 1.2 it comes inside the
+#                   handshake, so the connection is opened inside the same
+#                   try), and prints one of three answers, in this mode only:
+#                   "refused", when the server sent the TLS alert for an
+#                   unknown CA (ssl.SSLError, reason TLSV1_ALERT_UNKNOWN_CA);
+#                   "reset", when the connection ended with no TLS alert (a
+#                   reset, a broken pipe, an abort, or an EOF in violation of
+#                   protocol: ssl.SSLEOFError); and the status when an answer
+#                   came, which is a FAIL. Measured against the test server
+#                   that has the services' uvicorn flags, the alert never
+#                   arrives: a reset under TLS 1.3, an EOF under 1.2, so `reset`
+#                   is the answer expected of the gateway (not yet seen on the
+#                   cluster), and the check passes it, worded apart from
+#                   `refused`. Anything else (another alert,
+#                   the server's certificate not verifying, a name that does
+#                   not resolve, a refused connection, a timeout) stays a
+#                   traceback, in every mode.
 # The audit line's constants (the row of the 403 above): the gateway's service
 # name, the reason the identity rule writes for a name the caller may not use
 # (a test keeps it equal to NAME_REFUSAL_REASON), the calling service, which is
-# the deployment the probe runs in, and how far back and how long to look.
+# the deployment the probe runs in, the database's clock (read before the 403's
+# request: a row recorded at or after it is this run's), how far before it to
+# look for the row of an earlier run (the gateway's REFUSAL_AUDIT_SECONDS: a
+# test keeps it equal) and how long to wait for this run's own.
 readonly IDENTITY_HOST=model-gateway.meridian.svc
 readonly IDENTITY_PORT=8000
 readonly IDENTITY_FOREIGN_TENANT=evaluation
 readonly IDENTITY_CALLER=agent-runtime
 readonly IDENTITY_GATEWAY_SERVICE=model-gateway
 readonly IDENTITY_AUDIT_REASON=caller-name-not-allowed
-readonly IDENTITY_AUDIT_WINDOW=120
+readonly IDENTITY_CLOCK_SQL='SELECT extract(epoch FROM now())'
+readonly IDENTITY_AUDIT_THROTTLE=60
 readonly IDENTITY_AUDIT_ATTEMPTS=6
 readonly IDENTITY_AUDIT_INTERVAL=2
 readonly IDENTITY_PROBE='import datetime, http.client, json, os, ssl, sys, tempfile, uuid
@@ -334,6 +393,13 @@ def answer():
     connection = http.client.HTTPSConnection(host, port, context=context, timeout=10)
     try:
         connection.connect()
+        if mode == "foreign-ca":
+            connection.sock.settimeout(1)
+            try:
+                if not connection.sock.recv(1):
+                    return "reset"
+            except TimeoutError:
+                connection.sock.settimeout(10)
         if mode == "health":
             connection.request("GET", "/healthz")
         else:
@@ -345,10 +411,16 @@ def answer():
         return str(connection.getresponse().status)
     except ssl.SSLCertVerificationError:
         raise
-    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+    except ssl.SSLError as error:
+        if mode == "foreign-ca" and "TLSV1_ALERT_UNKNOWN_CA" in (error.reason or ""):
+            return "refused"
+        if mode == "foreign-ca" and isinstance(error, ssl.SSLEOFError):
+            return "reset"
+        raise
+    except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
         if mode != "foreign-ca":
             raise
-        return "refused"
+        return "reset"
 if mode == "foreign-ca":
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "foreign-ca probe")])
@@ -389,6 +461,23 @@ readonly POLICY_ADDON=cert-manager-approver-policy
 readonly POLICY_CONTROLLER=cert-manager
 readonly POLICY_BUILTIN_ROLE=cert-manager-controller-approve:cert-manager-io
 readonly POLICY_BUILTIN_OFF_ARG=--controllers=-certificaterequests-approver
+# The request the issuer must refuse (check 10's fourth line): a
+# CertificateRequest in REFUSED_NAMESPACE for the issuer REFUSED_ISSUER, with a
+# URI that meridian-services allows in `meridian` and a duration it allows, so
+# nothing about the request's shape refuses it, only its namespace (a test keeps
+# these equal to certificate-policy.yaml's). The name is
+# REFUSED_NAME_PREFIX and a suffix, the label is what the next run finds a
+# leftover by, and the answer is read for up to REFUSED_ATTEMPTS tries,
+# REFUSED_INTERVAL seconds apart (the approver answers in about a second).
+readonly REFUSED_NAMESPACE=default
+readonly REFUSED_ISSUER=meridian-services
+readonly REFUSED_LABEL=meridian-smoke=refused-request
+readonly REFUSED_NAME_PREFIX=meridian-smoke-refused-
+readonly REFUSED_URI=spiffe://meridian.kind/ns/meridian/sa/meridian-smoke-refused
+readonly REFUSED_DURATION=1h0m0s
+readonly REFUSED_ATTEMPTS=15
+readonly REFUSED_INTERVAL=2
+readonly REFUSED_MESSAGE_LENGTH=120
 
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
@@ -425,9 +514,19 @@ skips=0
 grafana_url=""     # set by open_grafana
 grafana_failed=0   # open_grafana failed once: later calls fail quietly
 identity_answer="" # set by identity_status
+identity_primary="" # set by identity_mark_start: the primary pod of platform-db
+identity_mark=""    # set by identity_mark_start: the database's clock before the 403
+identity_mark_problem="" # set by identity_mark_start: why there is no mark
 rules_body=""      # set by fetch_rules
 network_answer=""  # set by network_probe
 network_pod=""     # the probe Pod of check 8 while it may exist
+refused_request="" # the CertificateRequest of check 10 while it may exist
+refused_err_file="" # the messages of check 10's commands, while it runs
+refused_state=""   # set by refused_read: "<verdict>|<issued>|<reason>|<message>"
+refused_problem="" # set by refused_read: why it could not read the request
+refused_verdict="" # set by refused_wait: Approved, Denied or Issued, or empty
+refused_reason=""  # set by refused_wait: the verdict's reason, cleaned
+refused_message="" # set by refused_wait: the verdict's message, cleaned and cut
 poll_error=""      # what the last failed poll attempt saw
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
@@ -439,7 +538,7 @@ skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
 # inject terminal escape sequences or extra lines.
 clean_lines() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ';' -; }
 
-need_tools docker kubectl curl jq base64
+need_tools docker kubectl curl jq base64 openssl
 require_local_docker
 need_cluster
 
@@ -719,8 +818,22 @@ network_delete_pod() {
   network_pod=""
 }
 
+# refused_delete_request [ERR_FILE]: delete the CertificateRequest of check 10
+# when one was named, and forget it only when kubectl said it is gone (a
+# request that never existed is not an error), so a delete that failed is tried
+# again by the EXIT trap. kubectl's stderr goes to ERR_FILE when one is given.
+# Nothing is waited for: a request has no finalizer.
+refused_delete_request() {
+  [[ -n "${refused_request}" ]] || return 0
+  kctl -n "${REFUSED_NAMESPACE}" delete certificaterequest "${refused_request}" \
+    --ignore-not-found --wait=false >/dev/null 2>"${1:-/dev/null}" || return 1
+  refused_request=""
+}
+
 cleanup() {
   network_delete_pod
+  refused_delete_request || true
+  if [[ -n "${refused_err_file}" ]]; then rm -f "${refused_err_file}"; fi
   if [[ -n "${pf_pid:-}" ]]; then
     kill "${pf_pid}" 2>/dev/null || true
     wait "${pf_pid}" 2>/dev/null || true # kubectl is gone when smoke.sh returns
@@ -1460,6 +1573,52 @@ expect_identity_status() {
   fi
 }
 
+# expect_foreign_ca: the fifth line. The probe's answer for a certificate of
+# another CA is "refused" (the TLS alert for an unknown CA) or "reset" (the
+# connection ended with no alert, which is how uvicorn, the services' server,
+# ends it); both pass, in words that tell them apart. A status or an error is a
+# FAIL.
+expect_foreign_ca() {
+  local what="POST /v1/chat with a certificate of the Agent Runtime's own name from another CA"
+  identity_status foreign-ca
+  case "${identity_answer}" in
+    refused) pass "service identity: ${what} -> refused (the TLS alert for an unknown CA)" ;;
+    reset) pass "service identity: ${what} -> reset (the connection ended with no TLS alert: uvicorn ends an unknown CA's connection so, and a gateway that died in that second would too)" ;;
+    *) fail "service identity: ${what}: expected refused or reset, got ${identity_answer}" ;;
+  esac
+}
+
+# identity_mark_start: before the request that causes the audit row below: the
+# database's primary pod and its clock, in ${identity_primary} and
+# ${identity_mark} (seconds since the epoch, with the fraction). A row recorded
+# at or after the mark is this run's. When either cannot be had, ${identity_mark}
+# stays empty and ${identity_mark_problem} says why: the probes still run, and
+# check_gateway_refusal_row prints the FAIL. The mark goes into SQL later, so it
+# is kept only when it is a number.
+identity_mark_start() {
+  local err_file answer detail
+  identity_primary=""
+  identity_mark=""
+  identity_mark_problem=""
+  err_file="$(mktemp)"
+  if ! identity_primary="$(kctl -n meridian get pod \
+    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>"${err_file}")" || [[ -z "${identity_primary}" ]]; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    identity_primary=""
+    identity_mark_problem="no primary pod found for platform-db to read the audit row of the 403${detail:+ (kubectl said: ${detail})}"
+  elif ! answer="$(kctl -n meridian exec "${identity_primary}" -c postgres -- \
+    psql -d meridian -tAc "${IDENTITY_CLOCK_SQL}" 2>"${err_file}")"; then
+    detail="$(clean_lines "$(<"${err_file}")")"
+    identity_mark_problem="could not read the database's clock in ${identity_primary} before the probe${detail:+ (kubectl said: ${detail})}"
+  elif ! [[ "$(clean_lines "${answer}")" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    identity_mark_problem="the database's clock in ${identity_primary} was not a number of seconds"
+  else
+    identity_mark="$(clean_lines "${answer}")"
+  fi
+  rm -f "${err_file}"
+}
+
 # check_gateway_refusal_row: the audit row of the 403 above, read in the
 # database's primary pod the way check_cost_series reads the ledger. The reason
 # the identity rule writes for a caller that names a tenant it may not
@@ -1468,41 +1627,45 @@ expect_identity_status() {
 # the probe named; `recorded_at` is the database's own clock (a timestamptz its
 # insert trigger sets), so the age is the database's, not this laptop's. The
 # gateway writes in a worker thread and at most one such row per reason, tenant
-# and minute, so the query asks for a row that exists and is recent (never for a
-# count that went up) and runs again for about ten seconds while there is none.
-# Every value in the SQL is a constant of this script; none came from a pod.
+# and minute, so a second run inside that minute causes no row of its own. The
+# query therefore asks for the newest row since ${identity_mark} less one
+# throttle window, and says whether it was recorded at or after the mark (this
+# run's: PASS) or before it (the gateway wrote this minute's row for an earlier
+# run: SKIP, not PASS); no row at all is a FAIL. It never asks for a count that
+# went up, and runs again for about ten seconds while it finds no row of this
+# run's, because the gateway writes in a worker thread. Every value in the SQL
+# is a constant of this script, or the mark, which identity_mark_start kept
+# only because it is a number; none came from a pod unchecked.
 check_gateway_refusal_row() {
-  local primary err_file detail answer attempt what
+  local err_file detail answer="" attempt what
   what="a refusal for ${IDENTITY_AUDIT_REASON} by ${IDENTITY_CALLER} (tenant ${IDENTITY_FOREIGN_TENANT})"
-  err_file="$(mktemp)"
-  if ! primary="$(kctl -n meridian get pod \
-    -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
-    -o jsonpath='{.items[0].metadata.name}' 2>"${err_file}")" || [[ -z "${primary}" ]]; then
-    detail="$(clean_lines "$(<"${err_file}")")"
-    rm -f "${err_file}"
-    fail "service identity: no primary pod found for platform-db to read the audit row of the 403${detail:+ (kubectl said: ${detail})}"
+  if [[ -z "${identity_mark}" ]]; then
+    fail "service identity: ${identity_mark_problem}"
     return
   fi
+  err_file="$(mktemp)"
   for ((attempt = 1; attempt <= IDENTITY_AUDIT_ATTEMPTS; attempt++)); do
-    if ! answer="$(kctl -n meridian exec "${primary}" -c postgres -- \
-      psql -d meridian -tAc "SELECT floor(extract(epoch FROM now() - recorded_at))::bigint FROM audit.events WHERE service = '${IDENTITY_GATEWAY_SERVICE}' AND event = 'model.call' AND outcome = 'refused' AND reason = '${IDENTITY_AUDIT_REASON}' AND reference = '${IDENTITY_CALLER}' AND tenant = '${IDENTITY_FOREIGN_TENANT}' AND recorded_at > now() - interval '${IDENTITY_AUDIT_WINDOW} seconds' ORDER BY recorded_at DESC LIMIT 1" \
+    if ! answer="$(kctl -n meridian exec "${identity_primary}" -c postgres -- \
+      psql -d meridian -tAc "SELECT floor(extract(epoch FROM now() - recorded_at))::bigint, extract(epoch FROM recorded_at) >= ${identity_mark} FROM audit.events WHERE service = '${IDENTITY_GATEWAY_SERVICE}' AND event = 'model.call' AND outcome = 'refused' AND reason = '${IDENTITY_AUDIT_REASON}' AND reference = '${IDENTITY_CALLER}' AND tenant = '${IDENTITY_FOREIGN_TENANT}' AND recorded_at > to_timestamp(${identity_mark}) - interval '${IDENTITY_AUDIT_THROTTLE} seconds' ORDER BY recorded_at DESC LIMIT 1" \
       2>"${err_file}")"; then
       detail="$(clean_lines "$(<"${err_file}")")"
       rm -f "${err_file}"
-      fail "service identity: could not read audit.events in ${primary}${detail:+ (kubectl said: ${detail})}"
+      fail "service identity: could not read audit.events in ${identity_primary}${detail:+ (kubectl said: ${detail})}"
       return
     fi
     answer="$(clean_lines "${answer}")"
-    [[ -z "${answer}" ]] || break
+    if [[ -n "${answer}" && "${answer}" != *"|f" ]]; then break; fi
     ((attempt == IDENTITY_AUDIT_ATTEMPTS)) || sleep "${IDENTITY_AUDIT_INTERVAL}"
   done
   rm -f "${err_file}"
   if [[ -z "${answer}" ]]; then
-    fail "service identity: the gateway's audit log has no row for ${what} in the last ${IDENTITY_AUDIT_WINDOW} s after ${IDENTITY_AUDIT_ATTEMPTS} tries: the 403 was not recorded, or was not the identity rule's"
-  elif [[ "${answer}" =~ ^[0-9]+$ ]]; then
-    pass "service identity: the gateway's audit log has ${what}, ${answer} s old"
+    fail "service identity: the gateway's audit log has no row for ${what} since this run started or in the ${IDENTITY_AUDIT_THROTTLE} s before it, after ${IDENTITY_AUDIT_ATTEMPTS} tries: the 403 was not recorded, or was not the identity rule's"
+  elif [[ "${answer}" =~ ^([0-9]+)\|t$ ]]; then
+    pass "service identity: the gateway's audit log has ${what}, ${BASH_REMATCH[1]} s old, recorded after this run started"
+  elif [[ "${answer}" =~ ^([0-9]+)\|f$ ]]; then
+    skip "service identity: the gateway wrote this minute's refusal row for an earlier run (the newest row for ${what} is ${BASH_REMATCH[1]} s old, and none came after this run started), so this run's 403 left none of its own; run again in a minute"
   else
-    fail "service identity: the audit query's answer was not a number of seconds"
+    fail "service identity: the audit query's answer was not a number of seconds and a flag"
   fi
 }
 
@@ -1518,9 +1681,10 @@ check_service_identity() {
   fi
   expect_identity_status health 200 "GET /healthz on the Model Gateway with no certificate (the kubelet's probe sends none)"
   expect_identity_status anonymous 401 "POST /v1/chat on the Model Gateway with no certificate"
+  identity_mark_start # the database's clock, before the request that causes the row
   expect_identity_status foreign-tenant 403 "POST /v1/chat with the Agent Runtime's certificate, naming a tenant it may not name"
   check_gateway_refusal_row
-  expect_identity_status foreign-ca refused "POST /v1/chat with a certificate of the Agent Runtime's own name from another CA"
+  expect_foreign_ca
 }
 
 # ── 10. certificate policy ───────────────────────────────────────────────────
@@ -1583,10 +1747,142 @@ check_builtin_approver_off() {
   pass "certificate policy: cert-manager's own approver is off (no ClusterRole ${POLICY_BUILTIN_ROLE}; the controller runs with ${POLICY_BUILTIN_OFF_ARG})"
 }
 
+# The fourth line, and the one place where smoke changes the cluster on purpose:
+# a request that the issuer must refuse. It is a CertificateRequest, not a
+# Certificate, so that the key is made here, with openssl, and never leaves this
+# machine (a Certificate has cert-manager make it, in a Secret in the cluster).
+# The request is for the issuer meridian-services with a URI that issuer signs in
+# `meridian`; it is made in REFUSED_NAMESPACE, which no policy but the denying
+# one selects, so it must be Denied. Approved, or carrying a certificate, is a
+# FAIL: the issuer signed a request it must refuse. The request is deleted
+# right after it is read, by the EXIT trap when the run ends first, and, when a
+# run was killed, at the start of the next one by its label.
+
+# refused_make_csr: a signing request in PEM on stdout. openssl makes the key
+# and writes it to /dev/null: this script never wants the certificate, so the key
+# is in no file, no variable and no output.
+refused_make_csr() {
+  openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -keyout /dev/null -subj / -addext "subjectAltName=URI:${REFUSED_URI}"
+}
+
+# refused_manifest NAME CSR: the CertificateRequest as JSON on stdout.
+refused_manifest() {
+  jq -n --arg name "$1" --arg csr "$2" --arg namespace "${REFUSED_NAMESPACE}" \
+    --arg issuer "${REFUSED_ISSUER}" --arg duration "${REFUSED_DURATION}" \
+    --arg label_key "${REFUSED_LABEL%%=*}" --arg label_value "${REFUSED_LABEL#*=}" '{
+      apiVersion: "cert-manager.io/v1",
+      kind: "CertificateRequest",
+      metadata: {name: $name, namespace: $namespace, labels: {($label_key): $label_value}},
+      spec: {
+        request: ($csr + "\n" | @base64),
+        duration: $duration,
+        usages: ["digital signature", "client auth", "server auth"],
+        issuerRef: {name: $issuer, kind: "ClusterIssuer", group: "cert-manager.io"}
+      }
+    }'
+}
+
+# refused_read: the request's verdict in ${refused_state} as
+# "<Approved|Denied|empty>|<true|false: it carries a certificate>|<reason>|<message>",
+# the message on one line. Returns 1 with ${refused_problem} when it cannot read it.
+# The request, and a certificate in it, are read by jq and never printed.
+refused_read() {
+  local json
+  if ! json="$(kctl -n "${REFUSED_NAMESPACE}" get certificaterequest "${refused_request}" \
+    -o json 2>"${refused_err_file}")"; then
+    refused_problem="could not read the request ${refused_request} in ${REFUSED_NAMESPACE} (kubectl said: $(clean_lines "$(<"${refused_err_file}")"))"
+    return 1
+  fi
+  if ! refused_state="$(jq -r '
+    ([(.status.conditions // [])[] | select((.type == "Approved" or .type == "Denied") and .status == "True")] | .[0] // {}) as $verdict
+    | [$verdict.type // "", ((.status.certificate // "") != "" | tostring),
+       ($verdict.reason // "" | gsub("[|\r\n]"; " ")), ($verdict.message // "" | gsub("[\r\n]+"; " "))]
+    | join("|")' <<<"${json}" 2>/dev/null)"; then
+    refused_problem="could not read the conditions of the request ${refused_request} in ${REFUSED_NAMESPACE}"
+    return 1
+  fi
+}
+
+# refused_wait: read the request until it holds a verdict, up to REFUSED_ATTEMPTS
+# times. Sets ${refused_verdict} (Approved, Denied, or Issued for a request that
+# carries a certificate whatever its conditions say), ${refused_reason} and
+# ${refused_message} (cleaned and cut). Returns 1 when a read failed and 2 when
+# the attempts ran out with no verdict.
+refused_wait() {
+  local attempt issued
+  for ((attempt = 1; attempt <= REFUSED_ATTEMPTS; attempt++)); do
+    refused_read || return 1
+    IFS='|' read -r refused_verdict issued refused_reason refused_message <<<"${refused_state}"
+    refused_reason="$(clean_lines "${refused_reason}")"
+    refused_message="$(clean_lines "${refused_message}")"
+    refused_message="${refused_message:0:REFUSED_MESSAGE_LENGTH}"
+    [[ "${issued}" != true ]] || refused_verdict=Issued
+    [[ -z "${refused_verdict}" ]] || return 0
+    ((attempt == REFUSED_ATTEMPTS)) || sleep "${REFUSED_INTERVAL}"
+  done
+  return 2
+}
+
+# refused_report NAME WAIT_STATUS DELETE_PROBLEM: the one line of the fourth
+# check, for the request NAME. DELETE_PROBLEM is what kubectl said when the
+# request could not be deleted, else empty: the line then says what is left.
+refused_report() {
+  local name=$1 waited=$2 delete_problem=$3 left="" where
+  where="the request ${name} in ${REFUSED_NAMESPACE}"
+  [[ -z "${delete_problem}" ]] ||
+    left="; it could not be deleted (kubectl said: ${delete_problem}): kubectl -n ${REFUSED_NAMESPACE} delete certificaterequest ${name}"
+  case "${waited}:${refused_verdict}" in
+    0:Denied)
+      if [[ -n "${left}" ]]; then
+        fail "certificate policy: ${where} was Denied (${refused_reason}: ${refused_message})${left}"
+      else
+        pass "certificate policy: a request for the issuer ${REFUSED_ISSUER} from the namespace ${REFUSED_NAMESPACE}, with a URI under the Meridian prefix, was Denied (${refused_reason}: ${refused_message}), and deleted"
+      fi ;;
+    0:*)
+      fail "certificate policy: the issuer signed a request it must refuse: ${where} was ${refused_verdict} (${refused_reason}: ${refused_message})${left:-; smoke deleted it}; check cert-manager's own approver and the selectors of the policies (make up)" ;;
+    1:*) fail "certificate policy: ${refused_problem}${left}" ;;
+    *) fail "certificate policy: the approver did not answer: ${where} had neither condition Approved nor Denied after $((REFUSED_ATTEMPTS * REFUSED_INTERVAL)) s (is deployment/${POLICY_ADDON} running, and may the user running smoke use the policy meridian-deny-unlisted?)${left}" ;;
+  esac
+}
+
+refused_check() {
+  local csr manifest detail name waited=0 delete_problem=""
+  kctl -n "${REFUSED_NAMESPACE}" delete certificaterequest -l "${REFUSED_LABEL}" \
+    --ignore-not-found --wait=false >/dev/null 2>&1 || true # a killed run's leftover
+  if ! csr="$(refused_make_csr 2>"${refused_err_file}")"; then
+    fail "certificate policy: openssl could not make the request that the issuer must refuse: $(clean_lines "$(<"${refused_err_file}")")"
+    return
+  fi
+  name="${REFUSED_NAME_PREFIX}$$-${RANDOM}"
+  refused_request="${name}"
+  if ! manifest="$(refused_manifest "${name}" "${csr}" 2>"${refused_err_file}")" ||
+    ! kctl -n "${REFUSED_NAMESPACE}" create -f - <<<"${manifest}" >/dev/null 2>"${refused_err_file}"; then
+    detail="$(clean_lines "$(<"${refused_err_file}")")"
+    refused_delete_request || true # the create may have been half done
+    fail "certificate policy: could not create the request that the issuer must refuse in ${REFUSED_NAMESPACE} (said: ${detail})"
+    return
+  fi
+  refused_wait || waited=$?
+  refused_delete_request "${refused_err_file}" ||
+    delete_problem="$(clean_lines "$(<"${refused_err_file}")")"
+  refused_report "${name}" "${waited}" "${delete_problem}"
+}
+
+# The file kubectl's and openssl's messages go to while the request exists; the
+# EXIT trap removes it too, so an interrupted run leaves no temporary file.
+check_refused_request() {
+  refused_err_file="$(mktemp)"
+  refused_check
+  rm -f "${refused_err_file}"
+  refused_err_file=""
+}
+
 check_certificate_policy() {
   check_policies_ready
   check_approver_addon
   check_builtin_approver_off
+  check_refused_request
 }
 
 # ── 11. alert rules and health dashboard ─────────────────────────────────────

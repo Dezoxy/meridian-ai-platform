@@ -49,8 +49,13 @@ GROUPS = [
 ]
 # The file holds 12 alert rules and 1 recording rule.
 RULE_COUNT = 13
-SMOKE_LINES_AFTER_DEPLOY = 34
-SMOKE_LINES_AFTER_UP = 29
+SMOKE_LINES_AFTER_DEPLOY = 35
+# Counted from the checks' own skip lines, not measured: edge 1, database 2 and
+# one SKIP for its stores, tools 1 SKIP, telemetry 4, cost panel 2 and one SKIP
+# for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP,
+# service identity 1 SKIP, certificate policy 4, alert rules 4. This held 29
+# before the refused request was added: six more than the 23 the checks print.
+SMOKE_LINES_AFTER_UP = 24
 
 
 def tree_groups() -> list[dict]:
@@ -665,7 +670,7 @@ def test_the_header_numbers_the_eleventh_check_and_says_what_it_does_not_prove()
     eleventh = header.split("11. alert rules and health dashboard: four lines")[1]
     flat = " ".join(line.removeprefix("#").strip() for line in eleventh.splitlines())
 
-    assert "10. certificate policy: three lines" in header
+    assert "10. certificate policy: four lines" in header
     assert "What it does not prove" in flat
     assert "series" in flat and "by hand" in flat
     assert "every query" in flat and "No query is left out" in flat
@@ -688,7 +693,7 @@ def test_the_documents_count_the_lines_and_the_checks_after_this_step() -> None:
     assert f"{SMOKE_LINES_AFTER_UP} after `make up` alone" in " ".join(
         operations.split()
     )
-    assert f"eight of its {SMOKE_LINES_AFTER_DEPLOY} PASS lines" in root
+    assert f"nine of its {SMOKE_LINES_AFTER_DEPLOY} PASS lines" in root
     assert "27 of 27" not in operations and "# 27 lines" not in demo
     assert "`make smoke` checks eleven things:" in kind
     assert "**Alert rules and health dashboard.** Four lines" in kind

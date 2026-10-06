@@ -162,14 +162,18 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 34 of 34 lines (S055 added three, for service
+7. `make smoke` passes, 35 of 35 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
-   the health dashboard and three for the network policy); 29 after `make up`
-   alone, with SKIP lines for what
-   `make deploy` brings. Items 3, 5 and 6 above are what the eleventh check
-   reads, so they need no hand check once the session that owns the cluster
-   has seen it pass; item 4, the series, stays by hand.
+   the health dashboard, three for the network policy and one for a request
+   the issuer must refuse); 24 after `make up` alone, with SKIP lines for
+   what `make deploy` brings (counted from the script's own skip lines, not
+   measured on a cluster). The 24 is edge 1, database 3, tools 1, telemetry
+   4, cost panel 3, adjuster pages 1, sweep 1, network policy 1, service
+   identity 1, certificate policy 4 and alert rules 4. Items 3, 5 and 6
+   above are what the eleventh check reads, so they need no hand check once
+   the session that owns the cluster has seen it pass; item 4, the series,
+   stays by hand.
 
 A series that is missing in step 4 is a wrong name in the rule file, and
 the fix is there and in the pinned set of the file's test.
