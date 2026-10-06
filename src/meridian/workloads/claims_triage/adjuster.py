@@ -166,11 +166,14 @@ DECISION_SQL = (
 # The states a decision leads to; in any other the page shows no decision.
 DECIDED_STATES = ("approved", "rejected", "documents_requested")
 # audit.claim_trail is the one thing of the audit log the Claims API may read
-# (migration 0011, T-71); the tenant filter is the page's own as well.
+# (migration 0011, T-71); the tenant filter is the page's own as well. Rows of
+# one transaction share a recorded_at; seq (migration 0017) is the order the
+# database inserted them in, so it breaks the tie. It is the order of insertion
+# and not of commit: across concurrent transactions recorded_at comes first.
 TRAIL_SQL = (
     "SELECT recorded_at, db_role, service, event, outcome, reason "
     "FROM audit.claim_trail "
-    "WHERE claim_id = %s AND tenant = %s ORDER BY recorded_at, event LIMIT %s"
+    "WHERE claim_id = %s AND tenant = %s ORDER BY recorded_at, seq LIMIT %s"
 )
 # How the run ended, completed or failed, at or after the decision: its event
 # and reason, or no row while it has not ended (the resend button's test): the
@@ -180,7 +183,7 @@ ENDED_SQL = (
     "SELECT event, reason FROM audit.claim_trail "
     "WHERE claim_id = %s AND tenant = %s "
     "AND event IN ('run.completed', 'run.failed') AND recorded_at >= %s "
-    "ORDER BY recorded_at LIMIT 1"
+    "ORDER BY recorded_at, seq LIMIT 1"
 )
 # The end the page explains: the sweep's, for a run that could not be resumed.
 SWEPT_END = ("run.failed", ABANDONED_REASON)
@@ -190,7 +193,7 @@ SWEPT_END = ("run.failed", ABANDONED_REASON)
 REASON_SQL = (
     "SELECT reason FROM audit.claim_trail "
     "WHERE claim_id = %s AND tenant = %s AND event = %s "
-    "ORDER BY recorded_at DESC LIMIT 1"
+    "ORDER BY recorded_at DESC, seq DESC LIMIT 1"
 )
 # The reason of the sweep's move of a claim whose documents did not come.
 DOCUMENTS_OVERDUE_REASON = DOCUMENTS_OVERDUE.trigger
@@ -199,10 +202,11 @@ DOCUMENTS_OVERDUE_REASON = DOCUMENTS_OVERDUE.trigger
 LATE_DOCUMENTS_SQL = (
     "SELECT 1 FROM audit.claim_trail AS late "
     "WHERE late.claim_id = %(claim)s AND late.tenant = %(tenant)s "
-    "AND late.event = %(late)s AND late.recorded_at > ("
-    "SELECT max(recorded_at) FROM audit.claim_trail "
+    "AND late.event = %(late)s AND (late.recorded_at, late.seq) > ("
+    "SELECT recorded_at, seq FROM audit.claim_trail "
     "WHERE claim_id = %(claim)s AND tenant = %(tenant)s "
-    "AND event = 'claim.awaiting_adjuster') LIMIT 1"
+    "AND event = 'claim.awaiting_adjuster' "
+    "ORDER BY recorded_at DESC, seq DESC LIMIT 1) LIMIT 1"
 )
 
 

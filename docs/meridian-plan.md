@@ -398,7 +398,7 @@ pinned images resolve there.
 | S062 | Smoke and deploy loose ends | On kind: `make smoke` reads the alert rules, the health dashboard and the stores it does not read yet, proves more than one denied path (egress outside the cluster, the database's policy) and notices a schedule that stopped after a success; `make demo` says so when a trace's readings alternate; finished migrate and seed Jobs remove themselves, and a target lists the `meridian:*` images no workload uses (removing them stays the owner's command); `make up`'s wait on the Gateway's `Programmed` condition and the wait after an interrupted deploy each end with a message that names the remedy; the network-policy tests of `test_helm_chart.py` are a file of their own | todo | S056 |
 | S063 | The cluster outside `meridian` | On kind: the `cert-manager` and `observability` namespaces have NetworkPolicies and Pod Security labels, so only Meridian's pods push to the collector (T-68, T-84); the Prometheus operator and kube-state-metrics read no Secret they do not need (T-68); the database pod reaches the API server's address alone; the platform charts' images are pinned by digest; telemetry to the collector is not clear text, or the threat register accepts it with its reason (T-90); the seed and the ingestion Jobs run under a role of their own (T-25); the expiry of the database's certificates, and what a renewed authority needs, are recorded | todo | S062 |
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | todo | S059, S060, S063 |
-| S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | todo | S057, S059, S060 |
+| S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | todo | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
 
@@ -446,7 +446,7 @@ that day; the rest stand as their step recorded them.
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
 | A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
-| Retention for `audit.events` and `gateway.usage` | S011 | open | S065 |
+| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows | none |
 | A connection pool (a request opens about three connections) | S011 | open | S027 |
 | An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open; left by S019 (not in its "done when") | S021 |
 | `create_app` cut into a handler class | S011 | declined in S011, with reasons | none |
@@ -459,7 +459,7 @@ that day; the rest stand as their step recorded them.
 | 8,000 characters of non-Latin text can pass the provider's 8,191 tokens per input, which answers 502 | S045 | closed by S058 (an input of more than 8,191 UTF-8 bytes is a 422) | S058 |
 | Nothing watches the test database image's pin (Dependabot reads Dockerfiles only) | S012 | closed on 2026-10-04 outside a step: Renovate reads it in the `Makefile` and in `python.yml` and moves both in one pull request (the app was installed the same day) | none |
 | After a PostgreSQL major upgrade the knowledge store must be ingested again (lexemes come from that version's dictionary) | S012 | open | S029 |
-| Ingestion tests that run without a database | S012 | open | S065 |
+| Ingestion tests that run without a database | S012 | closed by S065 (56 refusal tests run on a stand-in connection that fails the test when anything is executed on it; 16 keep the database) | S065 |
 | A fallback for the embedding route needs the store to compare rows by model, not by deployment (T-54) | S046 | open | S020 |
 | The runtime's client reads an error answer without a reason as the refusal `unknown` | S046 | closed by S059 (`tool-unavailable`; a reason the client does not know stays `unknown`) | S059 |
 | One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | closed by S059 (the knowledge server's check, moved; the evaluation CLI's check of an option stays where it is) | S059 |
@@ -467,12 +467,12 @@ that day; the rest stand as their step recorded them.
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | closed by S059 (one conditional form, admitted in an output schema only) | S059 |
 | A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open; moved from S060 on 2026-10-05: the one reader of the table is `select_terms`, where a missing pair is never complete and the claim goes to an adjuster as unverified, so a failure there changes how the triage routes a claim | S067 |
 | The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | open; both of S060's reviewers rated it medium | S062 |
-| The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed | S065 |
+| The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed. Not taken by S065 (not in its "done when"); its PostgreSQL review measured 105 ms at 200,000 audit rows, the same with `seq` in the order | none |
 | A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | open | S067 |
 | Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | open | none |
 | The tool-call limits are the same for every agent | S014 | open | S031 |
 | Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | closed by S060 for the Claims API (a stored submission, a stored proposal and the facts a run gets are logged as location and error type); the graph's own validation is S067's row below | S060 |
-| A migration that adds columns locks `claims.claims` for its backfill | S015 | open | S065 |
+| A migration that adds columns locks `claims.claims` for its backfill | S015 | closed by S065 (the rule is written in the migrations' README, column in one file and backfill in the next, and a test refuses a new file that adds a column to a table and updates it; no column was added in the step) | S065 |
 | After a failed resumed leg LangGraph keeps the first leg's value | S015 | open | S031 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
 | The adjuster's queue shows at most 100 claims with no next page | S016 | closed by S060 (a keyset on the queue's own order and index, 100 to a page) | S060 |
@@ -481,7 +481,7 @@ that day; the rest stand as their step recorded them.
 | Hungarian forms of names and identifiers in the screening | S047 | open; not taken by S032, which measures injection (these are forms the redaction misses). S032 did measure injections written in Hungarian and German: none of 9 stopped | S067 |
 | The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | none |
 | `drafted_by` on a completion the filter withheld but the provider billed | S047 | open; left by S050, with its reason there | none |
-| Audit rows of one transaction share a time, so the trail cannot order them | S048 | open | S065 |
+| Audit rows of one transaction share a time, so the trail cannot order them | S048 | closed by S065 (`audit.events.seq`, stamped by the database, migrations 0017 and 0019; the adjuster's queries break a tie by it) | S065 |
 | `database_failure` without the claim's ID | S048 | closed by S060 (a wrapper of the workload's logs the ID at twelve call sites; the queue has no claim) | S060 |
 | A per-phase httpx timeout | S048 | closed by S060 (3 s to connect, 5 s to write, 3 s for the pool, 60 s to read) | S060 |
 | Uploads (T-38) | S048 | open | none |
@@ -495,9 +495,15 @@ that day; the rest stand as their step recorded them.
 | One parallel run of ten workers lost 53 tests to "server closed the connection unexpectedly"; not reproduced in six runs | S054 | seen again twice on 2026-10-04 with ten workers and 7,600 tests (105 and 42 tests lost); the server's log shows no crash and no refused connection, so the connections are dropped before PostgreSQL (Docker Desktop's port forwarding); two runs with four workers were clean and CI was green throughout; the Makefile's default is now 4 | none |
 | `unused_port()` in `toolsupport.py` closes its socket before the test uses the port | S054 | closed by S057 on Linux, where CI runs: the socket stays bound and never listens, so the port is refused and taken; macOS has a row of its own | S057 |
 | Wall-clock limits in four tests (0.5 s to 5 s, thirty times their measured time or more) | S054 | closed by S057 for five of the six there were: four compare CPU time at a length and at four times that length, one records which patterns are searched; the sixth has a row of its own | S057 |
-| `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | open | S065 |
+| `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | closed by S065 (READ COMMITTED and a lock timeout of a minute, with an error that names the lock) | S065 |
 | A coverage gate in CI (measured once: 99.2 % of lines; coverage adds about a third to the run) | S054 | open, the owner's decision | none |
-| Template databases, so a test database is copied and not migrated | S054 | open | S065 |
+| Template databases, so a test database is copied and not migrated | S054 | closed by S065 (one migrated template per set of migrations; the whole suite beside the cluster went from 3 min 00 s to 2 min 11 s with 4 workers) | S065 |
+| A login that is a MEMBER of `claims_sweep` and does not `SET ROLE` has neither of the two names the sweep's triggers test, so it holds the sweep's grants and is not confined (true since 0014); a test holds that no login is a member on a test database, and nothing checks a deployed one | S065 | open; its security review, low; T-77's residual | S063 |
+| Migration 0017 rewrites `audit.events` twice under an exclusive lock, each statement under the connection's 10 s limit: above about five to six million rows the runner cannot apply it (it fails closed), and the ways out, a new table and a switch or a one-off longer timeout, are not built; it writes about twice the table in WAL | S065 | open; measured by its PostgreSQL review (1.5 million rows: 2.4 s and 2.2 s); the Azure database of S020 starts empty | none |
+| The order `seq` gives the audit rows that existed before 0017 rests on a table rewrite reading the heap in the order `CLUSTER` wrote it, which PostgreSQL does not promise; a test pins it, and 500,000 shuffled rows kept it | S065 | open; a PostgreSQL major upgrade is where it could change | S029 |
+| A checkpoint thread whose ID is not UUID text is walked from a fixed place and may never be listed, and a leftover behind a long run of live threads is listed only when the random start lands inside that run; nothing counts or alerts on leftovers that stay | S065 | open; the runtime writes UUID text only; both reviews, low | S064 |
+| The template database is built from the packaged migrations read at import; a test that patches the runner's file list and is the first on its worker to need the template makes the session's fixture fail for the tests after it. A `files` parameter on `apply_migrations` would let the builder pass its own | S065 | open; no test does both today | none |
+| The static check on migrations reads SQL text: it does not see an `UPDATE` inside a function body or dynamic SQL, an `ADD` without the word `COLUMN`, or a table reached by another name | S065 | open; its own docstring and the README say so | none |
 | The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | closed by S057 (kept at 15: twice the slowest of 47 successful runs, 7 min 30 s; the median is 6 min 47 s, and the job prints its slowest tests) | S057 |
 | Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | S022 |
 | A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open; not taken by S032, which makes no live call. A live run of the injection cases (the row below) is where one could be provoked | none |
@@ -520,9 +526,9 @@ that day; the rest stand as their step recorded them.
 | `make smoke` cannot see a schedule that stopped after a success: it has no server clock to compare with (the controller manager's Lease would be one) | S052 | open | S062 |
 | No metric or alert for the sweep: its exit code, one log line and `make smoke` are all there is | S052 | partly closed by S024: an alert on the CronJob's last success, from kube-state-metrics, checked offline and not yet on a cluster. Still open: a metric of the sweep's own (what a pass found is in its log line only) | S064 |
 | A NetworkPolicy for the sweep's pod: egress to DNS and the database only | S052 | done in S019 | S019 |
-| The sweep's listing of leftover threads reads every checkpoint row each pass (160 ms at 390,000 rows) | S052 | open | S065 |
-| The trigger that confines the sweep's role runs, and returns at once, for every role's update of a claim or a run | S052 | open | S065 |
-| Migration numbers collide between parallel steps (S052 and S053 both wrote a 0013); the kind ledger was renamed by hand | S052 | open | S065 |
+| The sweep's listing of leftover threads reads every checkpoint row each pass (160 ms at 390,000 rows) | S052 | closed by S065 (a walk of the thread index from a random start, at most three times the limit, and an index probe into `runs` per candidate; the plan reads the same rows when the tables double) | S065 |
+| The trigger that confines the sweep's role runs, and returns at once, for every role's update of a claim or a run | S052 | closed by S065 (migration 0018: a `WHEN` clause on both triggers; each function keeps its own test) | S065 |
+| Migration numbers collide between parallel steps (S052 and S053 both wrote a 0013); the kind ledger was renamed by hand | S052 | closed by S065 for one tree (the runner refuses two files with one number, and a file whose name does not match, before anything is applied; a test holds the committed files to it without a database). It cannot see another open pull request's files: Part A still takes a number late | S065 |
 | `test_scheduled_sweep_migration.py` and `test_sweep.py` are over the 800-line ceiling | S052 | closed by S057 (each is three files and a support module, cut along its sections; the largest has 649 lines) | S057 |
 | One loader for the two entry-point groups (`meridian.graphs`, `meridian.evaluations`), which copy each other's trust checks | S050 | closed by S061 (one function in `platform/common/entry_points.py`, in the stricter order: a graph's module is placed before its own code runs) | S061 |
 | The evaluation's embeddings are simulated in every run, the recording run included: retrieval with a real embedding is not measured | S050 | open | none |
@@ -615,7 +621,7 @@ that day; the rest stand as their step recorded them.
 | Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | open; a rule for the `implementer` agent is the owner's | none |
 | `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | closed by S059 (the stand-in waits until it is cancelled, and the test reads that) | S059 |
 | The gateway's client of the runtime has a timeout per phase (30 s each), not per call, so "a live leg is bounded near 280 s" (four model calls, sixteen tool calls) understates what a slow, trickling gateway can take; a test holds 280 s under the 600 s lease, and no constant bounds a whole model call | S059 | open | none |
-| A resumed leg that outlives its lease while another resume takes the run over can still write its end over the other leg's `Running` (the guard is the status alone, not who holds the run); it needs a leg hung past 600 s | S059 | open | S065 |
+| A resumed leg that outlives its lease while another resume takes the run over can still write its end over the other leg's `Running` (the guard is the status alone, not who holds the run); it needs a leg hung past 600 s | S059 | open; not taken by S065 (not in its "done when"): the guard needs to know who holds the run, a column on `runtime.runs` and a design of its own | none |
 | `httpx2` logs each request's URL at INFO; the services' loggers stay at WARNING and the settings refuse an address with a query or a password, but nothing sets that logger's level as `quiet_sdk_logging` does for the SDK | S059 | open | S064 |
 | S059 set a request's query aside before the middleware stack; where a middleware forwards a copy of the scope (the caller's identity check), the server's access log no longer has the query, and where none does (the Claims API) it still has | S059 | open; S064's access-log row covers the rest | S064 |
 | `service_url_problem` still accepts some addresses the HTTP client refuses (an address of four numbers over 255, a host with a combining mark or an emoji); the second net, the client's own refusal at start, catches them | S059 | open | none |
@@ -8842,6 +8848,177 @@ repository holds.
   dashboard were not applied to a cluster; S062, which reads them from
   `make smoke`, corrects it.
 
+### S065 — Database and migrations
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** close the database and migration items of the follow-up backlog:
+a bounded `ensure_roles`, ordered audit rows, a sweep that reads a bounded
+number of rows and whose triggers work for its role alone, a check on
+migration numbers, a written rule for adding a column, test databases from
+a template, and ingestion tests that need no database. Retention is not
+part of it.
+
+**Decisions:**
+
+- **Retention is not built, by the owner's decision (2026-10-05): "Leave
+  retention open".** The periods for `audit.events` and `gateway.usage`
+  are the owner's to choose, and an insert-only audit table needs its own
+  way of expiring rows. The backlog row stays open, and the step's row
+  says so.
+- **Run beside S062, S034 and S038, in one session** (the owner,
+  2026-10-06; Part A). It held the database lane. Up to four of its
+  contracts ran at once, each implementer in a worktree and with a test
+  database of its own, where their files did not overlap.
+- **Before any code: the threat-model note.** What is worth protecting
+  here: that the database, not a caller, says who wrote an audit row,
+  when, and now in which order (T-25); that the audit table stays
+  insert-only for everyone; and that the sweep's role is confined, also
+  after `SET ROLE` (T-77). The threats taken: a service that chooses its
+  row's place in the trail; a trigger condition weaker than the function
+  it guards; a migration that leaves a privilege, a default or an index
+  behind on the audit table. Nothing here is in tension with a hard rule.
+- **Audit rows are ordered by `seq`, which the database stamps.** A
+  `bigint` from a sequence, set by the trigger that already stamps the
+  row's ID, time and role, so a caller cannot choose it in any form of
+  insert. The trigger function runs with the owner's rights, with its
+  search path pinned, so that no service role needs a privilege on the
+  sequence; the session's user is still what is stamped as the writer.
+  Rejected: an identity column or a default, which the inserting role
+  would need the sequence for and which a trigger cannot tell from a
+  value the caller forced; `clock_timestamp()` in `recorded_at`, which
+  changes what that column means and can still tie. `seq` is the order of
+  insertion, not of commit, so readers order by time first and break a
+  tie by it.
+- **Migration 0017 takes its lock first, and the view has a file of its
+  own, 0019.** The first version replaced the trail's view inside the
+  file that rewrites the table and let `CREATE INDEX` and `CLUSTER`
+  upgrade a lock. The PostgreSQL review reproduced both deadlocks on its
+  own server: an adjuster opening a claim's trail during the rewrite, and
+  a transaction that reads the audit table and then inserts. Either the
+  migration died and lost its rewrite, or a page failed. Now the file
+  sets a lock timeout and takes ACCESS EXCLUSIVE on the table as its
+  first statements, and the view is replaced after the table's file has
+  committed. This was possible because neither file had reached `main`
+  or any database but a test's: an applied file never changes.
+- **The price of 0017 is in its header.** Two rewrites of the audit
+  table under an exclusive lock, each statement under the connection's
+  10 s limit: measured at 1.5 million rows 2.4 s and 2.2 s, so somewhere
+  near five to six million rows the runner can no longer apply it, and
+  it fails closed. A backfill in batches is not possible on a table
+  nobody may update. The header names the way out for a large table (a
+  new table and a switch) and leaves it out of scope; the backlog has
+  it.
+- **The sweep's triggers get a `WHEN`, and the functions keep their
+  test.** The `WHEN` on the session's and the current user spares every
+  other role's update the call; the function's own test of the role
+  stays the control, so a trigger recreated without its `WHEN` confines
+  as before. Rejected: moving the test into the `WHEN` alone.
+- **The sweep lists leftovers by walking an index, not by reading every
+  checkpoint row.** From a random start it takes the next distinct
+  threads of each checkpoint table, at most three times the limit, and
+  looks each candidate's run up in the unique index of
+  `runs.thread_id`, casting only text in the canonical form of a uuid.
+  Which threads are leftovers does not change. What it gives up is a
+  uniform sample: a thread behind a long run of live ones, or one whose
+  ID is not UUID text, is reached rarely or never, and the docstring
+  says so. Rejected: `TABLESAMPLE` (it samples rows, not threads) and a
+  remembered cursor (state for a job that has none).
+- **Two migrations cannot share a number, and no file is skipped.** The
+  runner refuses, before anything is applied, two packaged files with
+  one number and any `.sql` file whose name does not match the pattern;
+  both used to pass in silence. A check on one tree cannot see another
+  open pull request, so Part A's "numbers are taken late" stands.
+- **How to add a column is a rule with a check.** The column in one
+  file, in a form that only changes the catalog; the backfill in the
+  next, which locks rows and not the table; a constraint as `NOT VALID`
+  and its validation after that. A test refuses a new file that adds a
+  column to a table and updates it, in five spellings of "updates", and
+  asks for a lock timeout before a statement that takes an exclusive
+  lock. The README beside the migrations holds the rules, with the lock
+  of each kind of constraint as the review measured it.
+- **A test database is a copy of a template.** One per set of
+  migrations per server, named by the hash of the packaged files, built
+  once under an advisory lock, checked against the files, closed to
+  connections and renamed into place. A build under a patched file list
+  is refused, so a test that applies a prefix of the migrations cannot
+  poison it.
+- **Two rows homed here are not taken**, because neither is in the
+  "done when": the adjuster's queue lookup (measured again, unchanged)
+  and a leg that outlives its lease (it needs a holder on the run, a
+  design of its own). Both stay open in the backlog.
+
+**Work log:**
+
+- **Mapping first.** An Explore subagent mapped the eleven rows to
+  files, statements and tests, and found that two rows were not in the
+  "done when" and that `ensure_roles` is test support, not platform
+  code.
+- **Seven contracts to the `implementer`**, written before the first
+  returned, the migration numbers handed out in order: the runner's
+  number check and `ensure_roles`; 0017; 0018; the sweep's listing; the
+  migrations' README and its check; the ingestion tests; the template
+  databases. The main session read each diff and committed it. One was
+  sent back (the sweep: an existing test's threads had names no real
+  thread has, and the read of `runs` was still unbounded); one fixture
+  of the second contract broke on the third's migration and was
+  corrected by the main session.
+- **Reviews, at once**, on six commits: `security-reviewer` (nothing
+  above low; it attacked `seq` with twelve forms of insert from each of
+  the seven roles and found no forged value), `database-reviewer` (one
+  high, the two deadlocks of 0017; the size ceiling; the lock queue) and
+  `python-reviewer` (six medium, among them a file with a mistyped name
+  skipped in silence and two lock tests that could hang or flake).
+- **Two more contracts for what they found**, side by side: the
+  migrations, and everything else.
+
+**Result / verification:**
+
+- **`ensure_roles` has a lock timeout and names its isolation level.**
+  Tests: a held lock ends in an error that names it; READ COMMITTED
+  under a server that defaults to SERIALIZABLE.
+- **Audit rows of one transaction can be ordered.** Tests against
+  PostgreSQL: no service role can choose `seq` in eight forms of insert
+  and by `COPY`, or use the sequence; the table is insert-only for the
+  owner still; existing rows are numbered by time and ID; the trail
+  shows two events of one transaction in the order written. The two
+  deadlocks are reproduced against the first version of 0017 and gone.
+- **The sweep's listing does not read every checkpoint row, and its
+  trigger does no work for another role's update.** The plan of the
+  listing reads 31 index rows of each checkpoint table and 15 of `runs`
+  at 3,000 and at 6,000 rows; the function's call count stays 0 for the
+  Claims API, the runtime and the owner, and the whole matrix of moves
+  is refused to the sweep as before, as its login and after `SET ROLE`.
+- **A check refuses two migrations with one number before a pull
+  request merges.** The runner refuses, and a test without a database
+  holds the committed files to it in CI.
+- **A column is backfilled without holding the table's lock, and the
+  rule is written down.** Shown on a scratch table: the one-file shape
+  blocks a reader, the two-file shape blocks neither a reader nor a
+  writer of another row; lock modes read from `pg_locks`.
+- **A test database is copied from a template.** The whole suite beside
+  the deployed cluster: 3 min 00 s before and 2 min 11 s after with 4
+  workers; 1 min 52 s with 10.
+- **The ingestion's tests that need no database run without one.**
+  Without a database 324 of the folder's tests run where 258 did.
+- **Gates, run by the main session with `main` merged in:**
+  `GITHUB_ACTIONS=true make pytest-db PYTEST_WORKERS=10`, 9,864 passed,
+  8 skipped, exit 0, in 1 min 46 s beside the cluster; `make lint`
+  (5 contracts kept), `make registry`, `make docs`, `make test`,
+  `make check` (no ERROR line) and `make secret-scan`, each exit 0.
+- **Not done:** retention (above). **Not run:** the three migrations on
+  the kind cluster's database; S062 owns the cluster, and they reach it
+  with the first deploy after this is on `main`.
+
+**Follow-ups:**
+
+- In the backlog: a login that is a member of the sweep's role (S063);
+  0017's size ceiling (none; S020's database starts empty); the order of
+  rows that existed before 0017 (S029); leftovers the listing rarely
+  reaches (S064); the template and a patched file list, and what the
+  static check cannot see (none).
+- For the owner: the retention periods; and whether the two rows left
+  open here (the queue's lookup, the leg that outlives its lease) get a
+  step.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9194,3 +9371,14 @@ repository holds.
   not started. A step's reviewers run together. Step 7, the checkpoint:
   at every close nothing that matters is left in the conversation alone,
   and the owner is told that it is a good moment to compact.
+- **v0.50, 2026-10-06:** S065 done, beside S062, S034 and S038. Audit rows
+  of one transaction are ordered by a `seq` the database stamps
+  (migrations 0017 and 0019); the sweep's triggers fire for its role alone
+  (0018); the runner refuses two migrations with one number and a file it
+  would have skipped; the sweep lists leftovers by walking an index; the
+  migrations have a README with their rules and a check for two of them;
+  a test database is a copy of a template, which took the whole suite
+  from 3 min 00 s to 2 min 11 s; 56 ingestion tests need no database.
+  Retention is not built, the owner's decision. Its PostgreSQL review
+  found that 0017 could deadlock against traffic; it was corrected before
+  it reached `main`. Nine backlog rows closed, three left open, six new.

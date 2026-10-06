@@ -153,7 +153,8 @@ the release's objects and is the owner's to run; it has not been tried.
 - **Do not edit `public.meridian_migrations`**, and do not change a
   migration file that was applied. The runner refuses a file whose
   checksum differs from the one it recorded; a new file is the way to
-  change the schema.
+  change the schema. How to write one is in the
+  [migrations README](../../../src/meridian/platform/migrations/README.md).
 - **Do not edit the objects with `kubectl edit` or `kubectl scale`.**
   The next deploy applies the chart over them, and until then the
   cluster runs something no commit describes.

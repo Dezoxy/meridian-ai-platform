@@ -4,6 +4,9 @@ import hashlib
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from importlib import resources
+from pathlib import Path
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -18,6 +21,8 @@ from meridian.platform.migrations.runner import (
 )
 
 SCHEMAS = ("audit", "claims", "gateway", "knowledge", "policy", "runtime")
+# "0017_b.sql" in the fullwidth digits U+FF10 to U+FF19, which ``\d`` matches.
+FULLWIDTH_0017 = "".join(chr(0xFF10 + int(digit)) for digit in "0017") + "_b.sql"
 
 
 def test_migration_files_are_numbered_and_sorted() -> None:
@@ -25,7 +30,126 @@ def test_migration_files_are_numbered_and_sorted() -> None:
 
     assert names[0] == "0001_schemas.sql"
     assert names == sorted(names)
-    assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in names)
+    assert all(re.fullmatch(r"[0-9]{4}_[a-z0-9_]+\.sql", name) for name in names)
+    numbers = [name[:4] for name in names]
+    assert len(numbers) == len(set(numbers)), "two migrations share a number"
+
+
+def _package_with(
+    monkeypatch: pytest.MonkeyPatch, directory: Path, names: list[str]
+) -> None:
+    """Make the runner read ``directory``, holding an empty file per name, as
+    the migrations package."""
+    for name in names:
+        (directory / name).write_text("SELECT 1;", encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "resources", SimpleNamespace(files=lambda package: directory)
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "0019_Add_Col.sql",  # an upper-case letter
+        "0019-add.sql",  # a hyphen where the underscore goes
+        "19_x.sql",  # too few digits
+        "00170_x.sql",  # too many digits
+        "0019_.sql",  # no words after the number
+        "0019_add.SQL",  # an upper-case extension
+        FULLWIDTH_0017,  # fullwidth digits, which \d matches
+    ],
+)
+def test_a_sql_file_whose_name_does_not_match_is_refused_naming_it(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _package_with(monkeypatch, tmp_path, ["0001_a.sql", name])
+
+    with pytest.raises(MigrationError) as raised:
+        migration_files()
+
+    assert name in str(raised.value)
+
+
+def test_a_file_that_is_not_sql_is_not_a_migration_and_is_not_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _package_with(monkeypatch, tmp_path, ["0001_a.sql", "README.md", "notes.txt"])
+
+    assert [name for name, _ in migration_files()] == ["0001_a.sql"]
+
+
+def test_a_refused_name_is_refused_before_anything_is_applied(
+    empty_database: DatabaseHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _package_with(monkeypatch, tmp_path, ["0001_a.sql", "0002-b.sql"])
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        with pytest.raises(MigrationError, match=r"0002-b\.sql"):
+            apply_migrations(conn)
+
+        ledger = conn.execute(
+            "SELECT to_regclass('public.meridian_migrations')"
+        ).fetchone()
+
+    assert ledger == (None,)
+
+
+def test_every_sql_file_in_the_package_has_a_name_the_runner_accepts() -> None:
+    # The refusal is read on the directory itself, not through the runner, so a
+    # name the runner skipped would show here.
+    entries = [
+        entry.name
+        for entry in resources.files(runner.__package__).iterdir()
+        if entry.name.lower().endswith(".sql")
+    ]
+
+    assert entries
+    assert sorted(entries) == [name for name, _ in migration_files()]
+
+
+def test_two_files_with_one_number_are_refused_naming_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = [("0017_a.sql", "SELECT 1;"), ("0017_b.sql", "SELECT 2;")]
+    monkeypatch.setattr(runner, "_packaged_files", lambda: files)
+
+    with pytest.raises(MigrationError) as raised:
+        migration_files()
+
+    message = str(raised.value)
+    assert "0017" in message
+    assert "0017_a.sql" in message
+    assert "0017_b.sql" in message
+
+
+def test_a_gap_in_the_numbers_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = [("0001_a.sql", "SELECT 1;"), ("0003_b.sql", "SELECT 2;")]
+    monkeypatch.setattr(runner, "_packaged_files", lambda: files)
+
+    assert migration_files() == files
+
+
+def test_a_refused_tree_applies_nothing_and_creates_no_ledger(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = [
+        ("0017_a.sql", "CREATE SCHEMA first_of_two;"),
+        ("0017_b.sql", "CREATE SCHEMA second_of_two;"),
+    ]
+    monkeypatch.setattr(runner, "_packaged_files", lambda: files)
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        with pytest.raises(MigrationError, match="0017"):
+            apply_migrations(conn)
+
+        ledger = conn.execute(
+            "SELECT to_regclass('public.meridian_migrations')"
+        ).fetchone()
+        schemas = conn.execute(
+            "SELECT count(*) FROM pg_namespace "
+            "WHERE nspname IN ('first_of_two', 'second_of_two')"
+        ).fetchone()
+
+    assert ledger == (None,)
+    assert schemas == (0,)
 
 
 def test_migrations_apply_in_name_order_and_are_recorded(
