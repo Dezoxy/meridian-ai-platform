@@ -29,10 +29,18 @@ The pattern is small whatever the name. What does not depend on a stem is writte
 once: the three blocks of ``_block`` (the assimilated forms, a stem with the shared
 group of endings, the bare stem) hold only each stem's letters and its capital
 check, about 150 characters for a part of three letters on top of the endings'
-600, so the longest name (200 characters, fifty parts of three letters) is below
-8,000 characters, where repeating the group of endings for every part made it
-35,000, compiled in 90 ms and kept by the ``re`` module's cache (512 patterns):
-about 130 claims with distinct names took the Claims API past its memory limit.
+600, so a name of fifty parts of three letters is below 8,000 characters. The
+size grows with the length of a part, not with their number: each letter is
+written about eight times (the stem, the bare word, the assimilated and the
+truncated forms, in the block of the full name and in the block of the parts),
+seven characters for a vowel with its accented forms. The largest found for a name
+of 200 characters, the longest the API accepts, is two words of 99 and 100
+characters of ``o`` and ``u`` ending in ``cs``, joined by a hyphen: 12,141
+characters, compiled in about 55 ms, which a test pins (a search over the number
+of parts, the separator and the letters found nothing larger). Repeating the
+group of endings for every part made it 35,000, compiled in 90 ms and kept by
+the ``re`` module's cache (512 patterns): about 130 claims with distinct names
+took the Claims API past its memory limit.
 The pattern is compiled without that cache (``_compile_uncached``: ``re.compile``
 has no switch for it and the standard library has no public uncached compile, so
 this uses ``re._compiler``, private and present in the Python 3.13 the repository
@@ -251,8 +259,9 @@ def _capital(char: str) -> str:
     """A zero-width check that the text's next character is a capital form of
     ``char``, whatever case ``char`` has itself: the upper-case and the title-case
     form of the letter and of each accented or unaccented form of a vowel (each
-    when it is one code point), and the letter itself when it is not lower case
-    (``İ``, ``ǅ``, a letter with no case, which counts as a capital). The check is
+    when it is one code point). A letter that is not lower case (``İ``, ``ǅ``, a
+    letter with no case) is its own upper-case or title-case form, so it counts
+    as a capital without a rule of its own. The check is
     case-sensitive inside the pattern's ``IGNORECASE``. A letter that has no
     capital of one code point (``ß``) takes only its own form as written, so the
     pattern stays valid and a form of such a name is found when the text writes the
@@ -265,8 +274,6 @@ def _capital(char: str) -> str:
         for form in (letter.upper(), letter.title())
         if len(form) == 1
     }
-    if not char.islower():
-        capitals.add(char)
     return "(?=(?-i:[" + "".join(sorted(map(re.escape, capitals or {char}))) + "]))"
 
 

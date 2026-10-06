@@ -332,11 +332,24 @@ def _policy_of(
     """The claim's policy. A claim on a policy number no policy has is graded
     with an empty policy only when its label says ``policy_not_found`` and cites
     nothing (so no field of a policy is read); any other claim with no policy is
-    a golden set whose files disagree."""
-    policy = policies.get(claim["policy_number"])
+    a golden set whose files disagree. So is a record the grading cannot read: a
+    claim with no policy number, an expected record with no reason or with
+    citations missing or null (the files are a folder a person chose)."""
+    number, reason, citations = (
+        claim.get("policy_number"),
+        expected.get("reason"),
+        expected.get("citations"),
+    )
+    if not (
+        isinstance(number, str)
+        and isinstance(reason, str)
+        and isinstance(citations, list)
+    ):
+        raise ReportError(FILES_DISAGREE)
+    policy = policies.get(number)
     if policy is not None:
         return policy
-    if expected["reason"] == POLICY_NOT_FOUND and not expected["citations"]:
+    if reason == POLICY_NOT_FOUND and not citations:
         return {}
     raise ReportError(FILES_DISAGREE)
 

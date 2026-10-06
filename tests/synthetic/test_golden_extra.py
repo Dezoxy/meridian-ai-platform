@@ -251,18 +251,41 @@ def test_no_extra_claim_asks_the_model_about_a_circumstance(committed_extras):
     assert asked == []
 
 
-def test_the_claim_number_of_an_extra_claim_does_not_reveal_its_scenario(
-    committed_extras,
-):
-    # Arrange
-    reasons = [r["outcome"]["reason"] for r in committed_extras]
-    policy_numbers = [r["claim"]["policy_number"] for r in committed_extras]
+def scenario_of(row: dict) -> str:
+    """Which of the seven scenarios a row is, read from its numbers: the boundary
+    each one sits on is the one thing that tells them apart."""
+    if row["policy"] is None:
+        return "unknown-policy"
+    numbers = row["numbers"]
+    if numbers["since_start"] in (30, 31):
+        return f"early-loss-{numbers['since_start']}"
+    if numbers["delay"] in (30, 31):
+        return f"late-report-{numbers['delay']}"
+    assert numbers["entries"] == 2 and numbers["oldest"] in (365, 366)
+    return f"frequent-claims-{numbers['oldest']}"
 
-    # Assert: neither the reasons nor the policy numbers run in the order of the
-    # plan (each indicator's pair, then the unknown policy) or of the numbers
-    assert reasons != sorted(reasons)
-    assert policy_numbers != sorted(policy_numbers)
-    assert len({n for n in policy_numbers}) == EXTRA_CLAIMS
+
+def test_the_claim_number_of_an_extra_claim_does_not_reveal_its_scenario():
+    # Arrange: for several seeds, the position of each scenario among the new
+    # claims, that is what its claim number says about it
+    positions: dict[str, set[int]] = {}
+    for seed in (catalogue.DEFAULT_SEED, *OTHER_SEEDS):
+        dataset = build_dataset(seed)
+        rows = extras(
+            dataset.claims, dataset.outcomes, dataset.policies, dataset.history
+        )
+
+        # Act
+        order = [scenario_of(row) for row in rows]
+
+        # Assert: all seven are told apart, so each has one position
+        assert len(set(order)) == EXTRA_CLAIMS
+        for position, scenario in enumerate(order):
+            positions.setdefault(scenario, set()).add(position)
+
+    # Assert: no scenario sits at the same position for every seed
+    assert len(positions) == EXTRA_CLAIMS
+    assert {scenario for scenario, held in positions.items() if len(held) == 1} == set()
 
 
 # -- an unknown policy ------------------------------------------------------------

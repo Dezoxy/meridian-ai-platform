@@ -97,6 +97,33 @@ def test_the_pattern_of_the_longest_name_stays_small(name: str, bound: int) -> N
     assert len(pattern_of(name).pattern) < bound
 
 
+def two_long_vowel_words_joined_by_a_hyphen() -> str:
+    """The shape that makes the largest pattern found: the size grows with the
+    length of a part, not with their number. Two words of 99 and 100 characters,
+    each of the vowels that take the most accented forms (``o`` and ``u``, seven
+    characters a class) and ending in a digraph (``cs``), joined by a hyphen so
+    that the name is one word to the full-name block and two to the parts."""
+    first = ("oőoűoú" * 20)[:97] + "cs"
+    second = ("uűuöoő" * 20)[:98] + "cs"
+    return first + "-" + second
+
+
+# Measured, not derived: the literal of each letter is written about eight times
+# (the stem, the bare word, the assimilated and the truncated forms, in the full
+# name's block and in the parts' block). A change that makes the pattern of a
+# name larger, or smaller, moves this number on purpose: measure it again.
+LARGEST_PATTERN_CHARACTERS = 12_141
+
+
+def test_the_pattern_of_two_long_words_is_the_measured_size_the_docstring_states() -> (
+    None
+):
+    name = two_long_vowel_words_joined_by_a_hyphen()
+    assert len(name) == LONGEST_NAME
+
+    assert len(pattern_of(name).pattern) == LARGEST_PATTERN_CHARACTERS
+
+
 def test_a_part_of_a_name_adds_a_few_hundred_characters_to_the_pattern_at_most() -> (
     None
 ):
