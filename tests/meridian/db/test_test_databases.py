@@ -229,9 +229,11 @@ def test_the_template_is_built_once_when_several_threads_ask_at_once(
     builds: list[str] = []
     real_apply = dbsupport.apply_migrations
 
-    def counting_apply(conn: psycopg.Connection) -> list[str]:
+    def counting_apply(
+        conn: psycopg.Connection, files: list[tuple[str, str]] | None = None
+    ) -> list[str]:
         builds.append(own_template_name)
-        return real_apply(conn)
+        return real_apply(conn, files=files)
 
     monkeypatch.setattr(dbsupport, "apply_migrations", counting_apply)
     found: list[str] = []
@@ -340,9 +342,11 @@ def test_a_build_that_fails_leaves_nothing_behind_and_a_retry_builds(
     own_template_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    broken = [*PACKAGED_MIGRATIONS, ("9998_planted.sql", "SELECT 1 / 0;")]
+    broken = (*PACKAGED_MIGRATIONS, ("9998_planted.sql", "SELECT 1 / 0;"))
     with monkeypatch.context() as patched:
-        patched.setattr(runner, "migration_files", lambda: broken)
+        # The builder passes the list read at import, so the failure is planted
+        # there; patching the runner's own list no longer reaches the build.
+        patched.setattr(dbsupport, "PACKAGED_MIGRATIONS", broken)
 
         with pytest.raises(psycopg.errors.DivisionByZero):
             ensure_template(db_admin_dsn, db_passwords, name=own_template_name)
@@ -369,23 +373,50 @@ def test_a_building_database_left_by_a_dead_builder_is_replaced(
     assert _databases_like(db_admin_dsn, own_template_name) == [own_template_name]
 
 
-def test_a_patched_migration_list_cannot_poison_the_template(
+def test_a_patched_migration_list_does_not_change_the_template(
     db_admin_dsn: str,
     db_passwords: dict[str, str],
     own_template_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # What the migration tests do: apply a prefix of the files. A template
-    # built while that is in force would hold fewer migrations than its name
-    # says, so the build refuses and leaves nothing under the name.
+    # What the migration tests do: apply a prefix of the files. The builder
+    # passes the packaged list it read at import, so the template is built from
+    # all the packaged files and matches them.
     prefix = list(PACKAGED_MIGRATIONS[:3])
     monkeypatch.setattr(runner, "migration_files", lambda: prefix)
+    monkeypatch.setattr(runner, "_packaged_files", lambda: prefix)
+
+    ensure_template(db_admin_dsn, db_passwords, name=own_template_name)
+
+    handle = copy_database(db_admin_dsn, db_passwords, own_template_name)
+    try:
+        ledger = _ledger_of(handle)
+    finally:
+        drop_database(handle)
+    assert ledger == _packaged_ledger()
+    assert template_name() == template_name(PACKAGED_MIGRATIONS)
+
+
+def test_a_template_that_does_not_match_the_packaged_files_is_refused(
+    db_admin_dsn: str,
+    db_passwords: dict[str, str],
+    own_template_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The second net: a builder that applied fewer files than the package holds
+    # (reached here without a patch of the runner's list) leaves nothing under
+    # the name.
+    prefix = list(PACKAGED_MIGRATIONS[:3])
+    monkeypatch.setattr(
+        dbsupport,
+        "apply_migrations",
+        lambda conn, files=None: runner.apply_migrations(conn, files=prefix),
+    )
 
     with pytest.raises(RuntimeError, match="does not match"):
         ensure_template(db_admin_dsn, db_passwords, name=own_template_name)
 
     assert _databases_like(db_admin_dsn, own_template_name) == []
-    assert template_name() == template_name(PACKAGED_MIGRATIONS)
 
 
 # ── the lock ────────────────────────────────────────────────────────────────

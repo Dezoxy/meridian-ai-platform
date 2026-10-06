@@ -62,8 +62,8 @@ LEDGER_QUERY = "SELECT name, sha256 FROM public.meridian_migrations ORDER BY nam
 
 # The packaged migrations, read once when this module is first imported, which
 # is before any test runs: a test that patches ``runner.migration_files`` (to
-# apply a prefix of the files) cannot change what the template is named after or
-# checked against.
+# apply a prefix of the files) cannot change what the template is named after,
+# built from or checked against.
 PACKAGED_MIGRATIONS: tuple[tuple[str, str], ...] = tuple(migration_files())
 
 
@@ -242,9 +242,10 @@ def _migrate_and_check(handle: DatabaseHandle, template: str) -> None:
     """Create the extension, migrate as the owner, then compare the ledger with
     the packaged files; raise ``RuntimeError`` when they differ.
 
-    The comparison is what keeps a patched ``runner.migration_files`` (a
-    migration test applying a prefix of the files) from leaving a template
-    that holds fewer migrations than its name says.
+    The migrations are applied from ``PACKAGED_MIGRATIONS``, so a patched
+    ``runner.migration_files`` (a migration test applying a prefix of the
+    files) cannot reach the template. The comparison stays as the second net,
+    against a template that holds fewer migrations than its name says.
     """
     # pgvector is not a trusted extension: the owner cannot create it, so a
     # superuser does, in the new database, as the platform does out of band
@@ -254,7 +255,7 @@ def _migrate_and_check(handle: DatabaseHandle, template: str) -> None:
     ) as in_database:
         in_database.execute("CREATE EXTENSION IF NOT EXISTS vector")
     with connect(handle.dsn(OWNER), "meridian-test-template") as conn:
-        apply_migrations(conn)
+        apply_migrations(conn, files=list(PACKAGED_MIGRATIONS))
         ledger = conn.execute(LEDGER_QUERY).fetchall()
     expected = [
         (name, hashlib.sha256(text.encode("utf-8")).hexdigest())
