@@ -12,15 +12,18 @@ fresh search gives the lists that are stored.
 import json
 import statistics
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from claimgraph import files
 from claimgraph.model import Graph
-from claimgraph.questions import clauses_bearing_on_claim
+from claimgraph.questions import clauses_bearing_on_claim, events_before_loss
 from claimgraph.traverse import Cost
 from retrievalsupport import EMBEDDING_BATCH
+
+from meridian.workloads.claims_triage.rules import FREQUENT_CLAIMS_COUNT
 
 from . import needs, rankings, rule, score
 
@@ -154,6 +157,113 @@ def _unfound(
     return missing
 
 
+def _only(labelled: score.ByClaim, keep: Callable[[str], bool]) -> score.ByClaim:
+    """The labels of ``labelled`` that satisfy ``keep``; a claim left with none
+    is dropped."""
+    kept = {c: tuple(x for x in cs if keep(x)) for c, cs in labelled.items()}
+    return {c: cs for c, cs in kept.items() if cs}
+
+
+def _hits_at_10(
+    by_ranking: Mapping[str, Mapping[str, list[str]]],
+    labelled: score.ByClaim,
+    scope: Mapping[str, int],
+) -> dict[str, Any]:
+    """Each ranking's hits at rank 10 on ``labelled``, and chance's."""
+    found: dict[str, Any] = {
+        "claims": len(labelled),
+        "labelled": sum(len(cs) for cs in labelled.values()),
+    }
+    for name in RANKED:
+        found[name] = score.recall(by_ranking[name], labelled, 10)[0]
+    found["chance"] = round(score.chance_hits(labelled, scope, 10), 2)
+    return found
+
+
+def _by_section(
+    by_ranking: Mapping[str, Mapping[str, list[str]]],
+    everything: score.ByClaim,
+    scope: Mapping[str, int],
+) -> dict[str, Any]:
+    """The 63 labels split by the section of the clause (2 and 3 against 4 to
+    6), and clause 4.1 alone, at rank 10: what decides the failing check."""
+    parts = {
+        "sections_2_3": lambda x: x.split(".")[0] in ("2", "3"),
+        "sections_4_6": lambda x: x.split(".")[0] in ("4", "5", "6"),
+        "clause_4_1": lambda x: x == "4.1",
+    }
+    return {
+        name: _hits_at_10(by_ranking, _only(everything, keep), scope)
+        for name, keep in parts.items()
+    }
+
+
+def _places(
+    by_ranking: Mapping[str, Mapping[str, list[str]]],
+    production: Mapping[str, tuple[str, ...]],
+    everything: score.ByClaim,
+) -> dict[str, Any]:
+    """Over the 40 claims, the places each ranking lists (the graph's whole
+    list, the searches' first ten, the lookup's set) and the labelled clauses
+    among them: precision, which the recall tables do not show."""
+    listed = {"graph": 99, "keyword": 10, "vector": 10, "fused": 10}
+    places: dict[str, Any] = {}
+    for name, k in listed.items():
+        found = by_ranking[name]
+        places[name] = {
+            "places": sum(len(found[c][:k]) for c in found),
+            "labelled": score.recall(found, everything, k)[0],
+        }
+    held = {c: list(s) for c, s in production.items()}
+    places["production"] = {
+        "places": sum(len(s) for s in held.values()),
+        "labelled": score.recall(held, everything, 99)[0],
+    }
+    return places
+
+
+def _exclusion_places(
+    graph_lists: Mapping[str, list[str]], everything: score.ByClaim
+) -> dict[str, int]:
+    """The exclusion clauses (section 3) the graph lists, against the ones a
+    claim cites: it lists every exclusion that names the peril."""
+
+    def exclusions(clauses: Sequence[str]) -> list[str]:
+        return [c for c in clauses if c.startswith(f"{score.EXCLUSION_SECTION}.")]
+
+    listing = [c for c, found in graph_lists.items() if exclusions(found)]
+    return {
+        "listed": sum(len(exclusions(found)) for found in graph_lists.values()),
+        "cited": sum(
+            len(set(exclusions(found)) & set(everything.get(c, ())))
+            for c, found in graph_lists.items()
+        ),
+        "claims_listing_one": len(listing),
+        "claims_listing_one_and_citing_none": sum(
+            not exclusions(everything.get(c, ())) for c in listing
+        ),
+        "claims_citing_one": sum(bool(exclusions(cs)) for cs in everything.values()),
+    }
+
+
+def _frequent_claims(graph: Graph) -> dict[str, int]:
+    """Claims with an earlier event in the 365 days before the loss, and with
+    as many as the triage's ``frequent_claims`` needs (``FREQUENT_CLAIMS_COUNT``
+    claims and history entries)."""
+    events = []
+    for claim in graph.nodes("Claim"):
+        policy = graph.out_edges(claim.id, ("claimed_on",))[0].dst
+        loss = date.fromisoformat(str(claim.attrs["loss_date"]))
+        prior = events_before_loss(graph, policy, loss)
+        events.append(len(prior.claims) + len(prior.history))
+    return {
+        "threshold": FREQUENT_CLAIMS_COUNT,
+        "claims_with_an_earlier_event": sum(n >= 1 for n in events),
+        "claims_with_threshold_events": sum(n >= FREQUENT_CLAIMS_COUNT for n in events),
+        "claims": len(events),
+    }
+
+
 def _lines(module: str) -> int:
     return len(files.read_text(GRAPH_SOURCE / f"{module}.py").splitlines())
 
@@ -231,6 +341,11 @@ def build_results(
         "cost": _cost(graph, inputs, scope, sizes),
     }
     result["rule"] = rule.apply(result)
+    everything = labels.by_set["all"]
+    result["by_section_at_10"] = _by_section(by_ranking, everything, scope)
+    result["places_listed"] = _places(by_ranking, production, everything)
+    result["exclusion_places"] = _exclusion_places(graph_lists, everything)
+    result["frequent_claims_counts"] = _frequent_claims(graph)
     return result
 
 

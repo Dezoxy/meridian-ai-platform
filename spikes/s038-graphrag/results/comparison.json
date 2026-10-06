@@ -3986,5 +3986,69 @@
    "narrative": "not now"
   },
   "readings_agree": false
+ },
+ "by_section_at_10": {
+  "sections_2_3": {
+   "claims": 28,
+   "labelled": 28,
+   "graph": 28,
+   "keyword": 22,
+   "vector": 19,
+   "fused": 23,
+   "chance": 13.31
+  },
+  "sections_4_6": {
+   "claims": 32,
+   "labelled": 35,
+   "graph": 6,
+   "keyword": 8,
+   "vector": 22,
+   "fused": 13,
+   "chance": 16.47
+  },
+  "clause_4_1": {
+   "claims": 20,
+   "labelled": 20,
+   "graph": 0,
+   "keyword": 2,
+   "vector": 16,
+   "fused": 7,
+   "chance": 9.3
+  }
+ },
+ "places_listed": {
+  "graph": {
+   "places": 121,
+   "labelled": 34
+  },
+  "keyword": {
+   "places": 326,
+   "labelled": 30
+  },
+  "vector": {
+   "places": 400,
+   "labelled": 41
+  },
+  "fused": {
+   "places": 400,
+   "labelled": 36
+  },
+  "production": {
+   "places": 312,
+   "labelled": 63
+  }
+ },
+ "exclusion_places": {
+  "listed": 38,
+  "cited": 8,
+  "claims_listing_one": 22,
+  "claims_listing_one_and_citing_none": 14,
+  "claims_citing_one": 8
+ },
+ "frequent_claims_counts": {
+  "threshold": 2,
+  "claims_with_an_earlier_event": 10,
+  "claims_with_threshold_events": 2,
+  "claims": 40
  }
 }
