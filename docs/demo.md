@@ -199,7 +199,7 @@ make registry   # the registry against its schemas and the tool contracts
 ### 11 to 13: what stops a bad change
 
 ```bash
-make lint       # ends with "Contracts: 5 kept, 0 broken."
+make lint       # ends with "Contracts: 6 kept, 0 broken."
 ```
 
 The import contracts are the architecture's rules as a failing build: no

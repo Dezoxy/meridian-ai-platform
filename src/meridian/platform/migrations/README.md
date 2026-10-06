@@ -30,6 +30,25 @@ in silence.
   final is not deployed, since the ledger records the name.
 - Gaps are fine; the runner does not refuse one.
 
+## A file that creates a table says who may apply it
+
+A file that adds a table or grants on one carries, near its start, a `DO` block
+that raises unless the role applying it owns the schema. Run by a superuser, a
+`CREATE TABLE` leaves the table owned by that role, and the owner could then
+neither alter it nor grant on it in a later file; a `GRANT` by a role that is
+not the owner changes nothing and only warns.
+[`0020_gateway_upkeep.sql`](0020_gateway_upkeep.sql) and
+[`0022_job_roles.sql`](0022_job_roles.sql) have the guard; so have the two
+files of S037: [`0023_workflow_checkpoints.sql`](0023_workflow_checkpoints.sql)
+(`runtime.workflow_checkpoints`, the second agent framework's checkpoints) and
+[`0024_claim_briefs.sql`](0024_claim_briefs.sql) (`claims.briefs`). Their tests apply each file as a role that does not own the
+schema and expect the refusal, and the first also as a superuser
+(`test_workflow_checkpoints_migration.py`, `test_claim_briefs_migration.py`). A file that only creates a table takes no
+lock on an existing object, so 0023 sets no lock timeout; 0024 adds a foreign
+key to `claims.claims` and does. Grant column by column where a role needs less
+than the table: `claims_sweep` reads four columns of `claims.briefs` and one of
+`runtime.workflow_checkpoints`, and no body or brief text.
+
 ## An applied file never changes
 
 The ledger records each file's SHA-256, and the runner refuses a file whose

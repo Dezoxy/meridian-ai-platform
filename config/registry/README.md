@@ -18,7 +18,7 @@ section and in
 | `providers.yaml` | Provider accounts: Azure OpenAI, the replay provider and the recorded provider |
 | `models.yaml` | Model deployments: model, version, SKU, region, residency label, allowed data classes, price, retirement date, the deployment's own rate limits, the vector length of an embedding deployment |
 | `tools.yaml` | MCP servers and their tools: effect, scope, input schema and output schema, idempotency |
-| `agents.yaml` | Agents, their kind (`graph` or `job`), their tool allowlists and, for an agent split into parts, its workers with a tool list each (S031) |
+| `agents.yaml` | Agents, their kind (`graph` or `job`), the host that runs a graph agent (`langgraph`, the default, or `agent-framework`, S037), their tool allowlists and, for an agent split into parts, its workers with a tool list each (S031) |
 | `policies.yaml` | Data classes with the residency labels they allow, the ordered routes per purpose, the replay deployment per purpose and the recorded one |
 | `tenants.yaml` | Tenants with their data class, the agents they may run and their limits, and the exchange rate the cost quota uses |
 | `services.yaml` | The platform's services: which ones each may call, and the tenants and agents it names when it calls (S055) |
@@ -68,6 +68,8 @@ job. Beyond the schemas, validation refuses:
   tool that does not exist, is not on the agent's list or is listed twice,
   an agent tool that is on no worker, a tool on two workers of one agent, and
   a `job` agent that declares a worker (S031);
+- a `job` agent that declares a `host` (`langgraph` too: no host runs a job),
+  and workers on an agent whose host is not `langgraph` (S037);
 - a purpose without exactly one route, a route candidate of the wrong
   purpose, and a tenant that no route can serve;
 - a replay provider other than `replay`, or a replay deployment of a real

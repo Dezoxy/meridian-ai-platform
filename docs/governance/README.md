@@ -2,11 +2,12 @@
 
 Two processes that the scope promises: how a model provider is onboarded, and
 when a workload counts as accepted on the platform. Status on 2026-10-06
-(S034): both are **designed**. They are written, and each was applied once, on
-paper, to what the repository holds today. No tool or gate runs them; where a
-check that already exists enforces an item (`meridian registry validate`, the
-import contracts, the evaluation gate, the secret scan), the checklist names it
-and every other item rests on a person reading the document.
+(S034, S037): both are **designed**. They are written, and the provider process
+was applied once and the acceptance process twice, on paper, to what the
+repository holds today. No tool or gate runs them; where a check that already
+exists enforces an item (`meridian registry validate`, the import contracts,
+the evaluation gate, the secret scan), the checklist names it and every other
+item rests on a person reading the document.
 
 | Document | What it holds | Status |
 |---|---|---|
@@ -14,8 +15,9 @@ and every other item rests on a person reading the document.
 | [Provider onboarding applied to Azure OpenAI](provider-onboarding-azure-openai.md) | The checklist applied to the one real provider: 8 met, 11 partly met, 5 not met | Designed, applied once on paper |
 | [Service acceptance](service-acceptance.md) | The process by which a workload is called accepted, and a checklist of 30 items (`SA-01` to `SA-30`) | Designed |
 | [Service acceptance applied to claims triage](service-acceptance-claims-triage.md) | The checklist applied to the reference workload: 9 met, 15 partly met, 6 not met | Designed, applied once on paper; the workload is not called accepted |
+| [Service acceptance applied to the claim brief](service-acceptance-claim-brief.md) | The checklist applied to the second workload, on the second agent framework ([ADR 9](../architecture/decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)): 6 met, 14 partly met, 10 not met, from tests only: it has not run on a cluster | Designed, the second applied example on paper; the workload is not called accepted |
 
-Both applied documents are mostly not green on purpose. The platform runs on a
+The applied documents are mostly not green on purpose. The platform runs on a
 local kind cluster and in tests with synthetic data; the Azure compute
 environment is not built (M2); the runbooks were not exercised; the
 objectives are proposals nobody measured; there is one maintainer and no
@@ -47,5 +49,7 @@ applied documents record it as open.
 ## Where they are not yet used
 
 Mistral (S023, todo) is the next provider the onboarding process would be
-used on. A second workload would use the acceptance checklist; the scaffold
-that starts one is `meridian workload new`.
+used on. The acceptance checklist has been applied to two workloads, claims
+triage and the claim brief (S037); a third would use it again, and the scaffold
+that starts one is `meridian workload new` (it writes a workload on the first
+host, LangGraph).
