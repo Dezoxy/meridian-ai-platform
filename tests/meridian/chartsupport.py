@@ -28,6 +28,25 @@ TEST_TAG = "0123456789ab"
 # tag's.
 TEST_DIGEST = "sha256:" + "fedcba9876543210" * 4
 JOBS = ("migrate", "seed", "ingest")
+SERVICES = (
+    "claims-api",
+    "agent-runtime",
+    "model-gateway",
+    "policy-mcp",
+    "claims-mcp",
+    "knowledge-mcp",
+)
+# The identity values kind's file sets (S055): a rendering without kind's values
+# needs them too, because the chart refuses to render without them.
+IDENTITY_ARGUMENTS = [
+    "--set-string",
+    "identity.trustDomain=meridian.kind",
+    "--set-string",
+    "identity.issuer.name=meridian-services",
+    "--set-string",
+    "identity.issuer.kind=ClusterIssuer",
+]
+POD_KINDS = ("Deployment", "Job", "CronJob")
 HELM_MISSING = (
     "helm is not on PATH: install Helm v4.3.0 (https://helm.sh/docs/intro/install/); "
     "the chart tests render the chart and are never skipped"
@@ -152,3 +171,24 @@ def called_services(container: dict, namespace: str = NAMESPACE) -> set[str]:
     suffix = f".{namespace}.svc"
     hosts = {urlsplit(address).hostname for address in addresses}
     return {host.removesuffix(suffix) for host in hosts if host.endswith(suffix)}
+
+
+def kinds_of(documents: list[dict]) -> list[str]:
+    return sorted(d["kind"] for d in documents)
+
+
+def pod_spec(workload: dict) -> dict:
+    if workload["kind"] == "CronJob":
+        return workload["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    return workload["spec"]["template"]["spec"]
+
+
+def pod_workloads(documents: list[dict]) -> list[dict]:
+    """The objects that run a pod: Deployments, Jobs and the CronJob."""
+    return [d for d in documents if d["kind"] in POD_KINDS]
+
+
+def pod_labels(workload: dict) -> dict[str, str]:
+    if workload["kind"] == "CronJob":
+        return workload["spec"]["jobTemplate"]["spec"]["template"]["metadata"]["labels"]
+    return workload["spec"]["template"]["metadata"]["labels"]
