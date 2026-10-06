@@ -51,11 +51,17 @@ output.
   changed graph and a failed restore, so it cannot be caught by class for either.
 * Every step is a workload's own subclass of ``Executor`` (``check_definition``):
   a step the framework defines would call a model with a chat client of its own,
-  outside the Model Gateway.
+  outside the Model Gateway. That rule is about INHERITANCE only. A step of the
+  workload's own class that holds an agent or a chat client of the framework and
+  calls it passes the rule: composition is held by the workload package's import
+  allowlist (``test_brief_import_allowlist.py``, and the import contract that
+  forbids HTTP clients there) and by review, not here.
 * The framework's own telemetry stays off: ``meridian.runtime`` sets its two
-  environment variables before it is imported, it reads the global tracer
-  provider and the platform sets none, and its loggers are held at WARNING
-  (``HELD_AT_WARNING``). The step spans are made here from its events.
+  environment variables before it is imported, this module sets the framework's
+  settings object off as well (the variables are read too late when something
+  imports the framework first), it reads the global tracer provider and the
+  platform sets none, and its loggers are held at WARNING (``HELD_AT_WARNING``).
+  The step spans are made here from its events.
 
 Nothing here logs an exception's text: the framework's and the store's can quote
 claim content, so a log line has the run, a class name or a fixed word.
@@ -83,6 +89,7 @@ from agent_framework.exceptions import (
     WorkflowCheckpointException,
     WorkflowConvergenceException,
 )
+from agent_framework.observability import OBSERVABILITY_SETTINGS
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 from meridian.platform.common.telemetry import set_span_attributes
@@ -106,6 +113,14 @@ from meridian.runtime.workflow_checkpoints import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The framework reads its two telemetry variables once, when it is first
+# imported, and ``meridian.runtime`` sets them to false before that. A process
+# that imports the framework first (a workload's module, say) reads them too late,
+# so the host also sets the framework's own settings object off, whatever was
+# imported first. It stays off: nothing here switches it back on.
+OBSERVABILITY_SETTINGS.enable_instrumentation = False
+OBSERVABILITY_SETTINGS.enable_sensitive_data = False
 
 # The failure words this host adds to the runtime's own (``failure_reason``
 # passes a ``GraphFailure``'s code on as it is).
@@ -212,7 +227,13 @@ def check_definition(value: object) -> WorkflowDefinition:
     executor) would call a model, or run a workflow, from inside the leg with a
     chat client of the framework's own: that call would not pass the Model
     Gateway (hard rule 4). A workload calls a model through the one client it is
-    given."""
+    given.
+
+    The rule is about inheritance and no more. A step of the workload's own class
+    that HOLDS an agent or a chat client of the framework and calls it is not
+    seen here: composition is held by the workload package's import allowlist
+    (the names it may import of the framework, and no HTTP client) and by
+    review."""
     if not isinstance(value, WorkflowDefinition):
         raise FactoryRefused(
             "an agent-framework agent's factory must return a "

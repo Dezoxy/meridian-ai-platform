@@ -106,6 +106,21 @@ class CodecRefusal(ValueError):
         self.reason = reason
 
 
+# What reading a document may raise to say it is not one this codec can restore:
+# the codec's own refusal (a ``ValueError``), the errors a wrong shape raises (a
+# field missing, a value of the wrong type or kind), and the framework's own
+# exception, which ``WorkflowCheckpoint.from_dict`` raises for a document that is
+# not a checkpoint's fields. Everything else is not a verdict on the row.
+READ_REFUSALS = (
+    CodecRefusal,
+    TypeError,
+    ValueError,
+    KeyError,
+    AttributeError,
+    WorkflowCheckpointException,
+)
+
+
 class CheckpointUnreadable(WorkflowCheckpointException):
     """A stored checkpoint was read from the database and the codec refuses it.
 
@@ -510,12 +525,24 @@ class PostgresCheckpointStore:
 
     # ── the connection ──────────────────────────────────────────────────────
     def _read(self, document: Any) -> WorkflowCheckpoint:
-        failure: str | None = None
+        """The checkpoint a stored document holds. Only a refusal is a refusal:
+        what the codec raises to refuse a document (``READ_REFUSALS``) is
+        ``CheckpointUnreadable``, which ends the run; any other exception (a
+        ``MemoryError``, an ``OSError``) is a fault that may pass, so it is the
+        plain ``WorkflowCheckpointException`` and the run pauses again. Either
+        way only the class name is kept, and nothing is attached to what is
+        raised (it is raised outside the ``except``)."""
+        unreadable: str | None = None
+        failed: str | None = None
         try:
             return self._codec.from_document(document)
+        except READ_REFUSALS as error:
+            unreadable = _refusal_text(error)
         except Exception as error:  # the class name is all that is kept
-            failure = _refusal_text(error)
-        raise CheckpointUnreadable(f"cannot read a checkpoint: {failure}")
+            failed = type(error).__name__
+        if unreadable is not None:
+            raise CheckpointUnreadable(f"cannot read a checkpoint: {unreadable}")
+        raise WorkflowCheckpointException(f"cannot read a checkpoint: {failed}")
 
     async def _query(
         self, what: str, statement: str, params: tuple[Any, ...]

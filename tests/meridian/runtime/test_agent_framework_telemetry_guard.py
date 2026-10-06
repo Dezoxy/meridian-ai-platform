@@ -22,6 +22,10 @@ READ_SETTINGS = """
 import sys
 if sys.argv[1] == "guarded":
     import meridian.runtime
+if sys.argv[1] == "workload-first":
+    # The workload imports the framework before it imports the runtime's host, so
+    # the framework reads its two variables before the runtime has set them.
+    import meridian.workloads.claim_brief.workflow
 from agent_framework.observability import OBSERVABILITY_SETTINGS as settings
 print(settings.enable_instrumentation, settings.enable_sensitive_data)
 """
@@ -64,6 +68,15 @@ def test_with_the_runtime_imported_first_the_framework_has_both_switched_off(
     value: str,
 ) -> None:
     assert run_python(READ_SETTINGS, "guarded", value=value) == "False False"
+
+
+@pytest.mark.parametrize("value", ["true", "1", None])
+def test_with_the_workload_imported_first_the_framework_has_both_switched_off(
+    value: str | None,
+) -> None:
+    # The variables are read too late here, so the host sets the framework's own
+    # settings object off when it imports the framework (F4, low 2).
+    assert run_python(READ_SETTINGS, "workload-first", value=value) == "False False"
 
 
 def test_the_runtime_sets_both_variables_to_false_when_they_were_not_set() -> None:

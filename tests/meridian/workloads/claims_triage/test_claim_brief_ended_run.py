@@ -10,6 +10,9 @@ partial unique index refuses every later brief of the claim while it does.
   (``filed`` for approve, ``rejected`` for reject) and the answer is its view.
 - ``Failed`` with no output: the brief is closed as ``failed``, the answer is the
   fixed 502, and a new brief may start.
+- A 502 whose body says the run is ``Failed`` (a checkpoint the code refuses, a
+  changed graph) closes the brief as ``failed`` in the same request (F4); a 502
+  that leaves the run paused, or names another run, leaves it waiting.
 - An output that CONTRADICTS the decision, or is not a brief, stays a 502 and
   leaves the brief waiting: that is a fault to look at, not an ended run.
 - ``Running``, or paused again: the brief waits (409 or 502), as before.
@@ -35,6 +38,7 @@ from briefsupport import (
     failed,
     make_client,
     paused,
+    resume_failed,
 )
 from briefsupport import world as world  # a fixture: pytest finds it here
 from dbsupport import DatabaseHandle
@@ -125,7 +129,9 @@ def test_a_brief_closed_as_failed_says_so_when_it_is_read_and_is_not_decided_aga
     ("lost_close", "first_status"),
     [
         pytest.param(httpx.ReadTimeout("slow"), 504, id="the app timed out"),
-        pytest.param(failed, 502, id="the runtime answered 502 for a run it ended"),
+        pytest.param(
+            resume_failed, 502, id="the runtime answered 502 and left the run paused"
+        ),
     ],
 )
 def test_a_decision_posted_again_after_a_lost_close_closes_the_brief_by_the_decision(
@@ -177,11 +183,99 @@ def test_a_decision_posted_again_after_a_database_error_in_the_close_closes_the_
     assert brief_rows(world) == [("filed", run_id, BRIEF_TEXT)]
 
 
-def test_a_failed_run_is_closed_when_the_decision_is_posted_again_after_a_502(
+# ── a run that ended as failed closes its brief in the same request (F4) ───
+# The runtime answers a resume that ended the run (a checkpoint the code refuses,
+# a changed graph) with a 502 whose body says the run is ``Failed``. That run can
+# never resume, so the brief is closed as failed before the 502 is answered: it
+# does not wait for a second post that nobody may make, and the claim's later
+# briefs are not refused behind it.
+def test_a_run_that_failed_closes_the_brief_in_the_same_request_and_is_a_502(
     world: DatabaseHandle,
 ) -> None:
     run_id = waiting(world)
-    runtime = Runtime(failed(run_id), answering(run_id, "Failed", None))
+    runtime = Runtime(failed(run_id))
+    client = make_client(world.dsn("claims_api"), runtime)
+
+    response = post_decision(client, "approve", run_id)
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": RESUME_FAILED_DETAIL,
+        "claim_id": CLAIM_ID,
+        "run_id": str(run_id),
+    }
+    assert brief_rows(world) == [("failed", run_id, BRIEF_TEXT)]
+    assert decisions(world) == [(CLAIM_ID, run_id, "approve")]
+    assert len(runtime.requests) == 1
+
+
+def test_a_second_post_after_a_failed_run_is_a_409_and_resumes_nothing(
+    world: DatabaseHandle,
+) -> None:
+    run_id = waiting(world)
+    runtime = Runtime(failed(run_id))
+    client = make_client(world.dsn("claims_api"), runtime)
+    post_decision(client, "approve", run_id)
+
+    again = post_decision(client, "approve", run_id)
+
+    assert again.status_code == 409
+    assert len(runtime.requests) == 1
+
+
+def test_a_claim_whose_run_failed_on_the_resume_accepts_a_new_brief_after_one_post(
+    world: DatabaseHandle,
+) -> None:
+    run_id = waiting(world)
+    new_run = uuid.uuid4()
+    runtime = Runtime(failed(run_id), paused(new_run))
+    client = make_client(world.dsn("claims_api"), runtime)
+    post_decision(client, "approve", run_id)
+
+    started = client.post(START_URL, json={})
+
+    assert started.status_code == 201
+    assert started.json()["state"] == "awaiting_decision"
+    assert sorted(state for state, _, _ in brief_rows(world)) == [
+        "awaiting_decision",
+        "failed",
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            lambda run: (502, {"run_id": str(uuid.uuid4()), "status": "Failed"}),
+            id="a failed run that is not this brief's",
+        ),
+        pytest.param(
+            lambda run: (502, {"run_id": str(run), "status": "Exploded"}),
+            id="a status that is none of the four",
+        ),
+        pytest.param(lambda run: (502, {"run_id": str(run)}), id="no status"),
+        pytest.param(lambda run: (502, {"status": "Failed"}), id="no run"),
+    ],
+)
+def test_only_a_502_that_says_this_run_failed_closes_the_brief_at_once(
+    world: DatabaseHandle, answer: Any
+) -> None:
+    run_id = waiting(world)
+    client = make_client(world.dsn("claims_api"), Runtime(answer(run_id)))
+
+    response = post_decision(client, "approve", run_id)
+
+    assert response.status_code == 502
+    assert brief_rows(world) == [("awaiting_decision", run_id, BRIEF_TEXT)]
+
+
+def test_a_resume_that_failed_and_left_the_run_paused_still_waits_for_the_next_post(
+    world: DatabaseHandle,
+) -> None:
+    # The other side of the same 502: the runtime says the run is paused again, so
+    # it may resume, and the brief waits (a second post resumes it).
+    run_id = waiting(world)
+    runtime = Runtime(resume_failed(run_id), answering(run_id, "Failed", None))
     client = make_client(world.dsn("claims_api"), runtime)
 
     first = post_decision(client, "approve", run_id)

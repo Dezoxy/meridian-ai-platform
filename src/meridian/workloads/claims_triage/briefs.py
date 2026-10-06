@@ -21,12 +21,17 @@ per brief, apart from the claim's own ``run_id`` and state.
   so the Claims API records it and the run only reads it (T-31). A claim that
   closed since the brief was started has the decision recorded as ``reject``
   whatever the body says (the audit reason is ``claim-closed``): the run reads
-  it, files nothing and ends, and the brief closes as ``rejected``. The recorded
-  decision is also the authority when the close was lost: a run the runtime says
-  has ended, with a status and no output, closes the brief by the decision
-  (``Completed``) or as ``failed`` (``Failed``), so a brief never waits for ever
-  and a new one may start; an output that contradicts the decision is a 502 and
-  the brief waits.
+  it, files nothing and ends, and the brief closes as ``rejected``. An approval
+  recorded while the claim was open and never carried out (its resume failed) is
+  not carried out once the claim has closed: the brief is closed as ``rejected``
+  without a resume, whichever word is posted, and the run is left to the sweep.
+  The recorded decision is also the authority when the close was lost: a run the
+  runtime says has ended, with a status and no output, closes the brief by the
+  decision (``Completed``) or as ``failed`` (``Failed``), so a brief never waits
+  for ever and a new one may start; so does a resume the runtime answers with a
+  502 whose body says the run is ``Failed`` (the brief is closed as ``failed`` in
+  that same request); an output that contradicts the decision is a 502 and the
+  brief waits.
 - ``GET /claims/{claim_id}/brief`` reads the claim's latest brief.
 
 The answers carry no ``Cache-Control``, as the triage's JSON routes carry none
@@ -114,7 +119,12 @@ MAX_BRIEFS_PER_CLAIM = 5
 # is referred, ``documents_requested`` takes documents) or are in flight.
 CLOSED_CLAIM_STATES = frozenset({"approved", "rejected", "withdrawn"})
 # The claim's fields the brief's workflow reads (``claim_brief.facts.ClaimInput``
-# names the same, plus the count of documents); a test holds the two equal.
+# names the same, plus the count of documents). The test that holds THIS list to
+# the workflow's model, in ``test_claim_brief_start.py`` (what the route sends
+# equals ``ClaimInput.model_fields``), is:
+# test_the_input_is_what_the_workflow_validates_and_nothing_it_does_not_read
+# The copy in the tests' support module (``claimbriefsupport.py``) is test input,
+# and no test holds it equal.
 BRIEF_INPUT_FIELDS = (
     "claim_id",
     "policy_number",
@@ -474,21 +484,43 @@ def _audit_decision(
     )
 
 
+def _close_unfiled(
+    conn: psycopg.Connection, tenant: str, claim_id: str, run_id: UUID
+) -> BriefView:
+    """Close the brief as rejected, without a resume, because its claim has closed
+    and the approval recorded for it was never carried out (its resume failed).
+    The approval stays in ``claims.decisions`` as what was posted; the audit row
+    says the brief was closed as a rejection because the claim closed. The run is
+    not resumed (it would read the approval and file a note), so it is left to the
+    sweep, which ends the run of a brief that no longer awaits its decision once
+    the lease has passed. The caller holds the claim's and the brief's row locks,
+    and the brief awaits its decision."""
+    row = conn.execute(
+        CLOSE_BRIEF_SQL, ("rejected", run_id, claim_id, tenant)
+    ).fetchone()
+    if row is None:  # the brief's row is locked and awaiting: a never-path
+        raise HTTPException(409, BRIEF_NOT_WAITING_DETAIL)
+    _audit_decision(conn, tenant, claim_id, run_id, "reject", BRIEF_CLOSED_REASON)
+    return _view(row)
+
+
 def _record_decision(
     dsn: str, tenant: str, claim_id: str, body: BriefDecision
-) -> BriefDecisionWord:
+) -> BriefDecisionWord | BriefView:
     """Record the decision for the brief's run and audit it, in one transaction,
     and return the word recorded. The claim's row is locked first (as a start
-    locks it, and as a move of the claim does) and its state read: a claim that
-    closed since the brief was started has its brief's decision recorded as
+    locks it, and as a move of the claim does) and its state read. A brief of a
+    claim that is closed is never filed: a decision made now is recorded as
     ``reject`` whatever the body says, so that the run, which reads the recorded
-    word, files nothing and the brief closes as rejected. The brief's row is
+    word, files nothing and the brief closes as rejected; and an approval that was
+    recorded while the claim was open and never carried out is not carried out
+    now: the brief is closed as rejected without a resume and its view is
+    returned (``_close_unfiled``), whichever word is posted. The brief's row is
     locked; it must be the claim's latest, for the run the caller read, and
-    awaiting its decision. A decision made again is recorded once and the
-    recorded one stands (it may have been made while the claim was open); a
-    different one is a 409, except that an approval posted again for a claim that
-    has closed is the rejection the first post recorded. A refusal is an
-    ``HTTPException``."""
+    awaiting its decision. For a claim that is open a decision made again is
+    recorded once and the recorded one stands; a different one is a 409. For a
+    closed claim whose recorded word is a rejection, an approval posted again is
+    the rejection the first post recorded. A refusal is an ``HTTPException``."""
     with connect(dsn, SERVICE_NAME) as conn:
         (claim_state,) = _require_claim(conn, tenant, claim_id, LOCK_CLAIM_SQL)
         row = conn.execute(LOCK_LATEST_SQL, (claim_id, tenant)).fetchone()
@@ -502,6 +534,8 @@ def _record_decision(
         recorded = conn.execute(DECISION_OF_RUN_SQL, (claim_id, run_id)).fetchone()
         closed = claim_state in CLOSED_CLAIM_STATES
         if recorded is not None:
+            if closed and recorded[0] == "approve":
+                return _close_unfiled(conn, tenant, claim_id, run_id)
             # An approval posted again for a claim that has closed is the one the
             # first post had recorded as a rejection: it is not "otherwise".
             if recorded[0] != body.decision and not (
@@ -584,6 +618,12 @@ def _close_brief(
 def _resume(
     http: httpx.Client, span: Span, tenant: str, claim_id: str, run_id: UUID
 ) -> RunResponse | DecisionFailure:
+    """Resume the run. A resume the runtime answers with an error is a
+    ``DecisionFailure`` (the run may resume again, and the brief waits), except
+    that an error whose body says the run is ``Failed`` is the run's end: the
+    answer is then a ``Failed`` run with no output, and ``_close_brief`` closes the
+    brief as failed in this same request (a run that ended can never resume, and a
+    brief that waited on it would refuse every later brief of the claim)."""
     try:
         return resume_run(http, tenant, claim_id, run_id)
     except RuntimeCallError as exc:
@@ -595,6 +635,8 @@ def _resume(
             exc.status_code,
         )
         mark_error(span, exc)
+        if exc.run_status == "Failed" and exc.run_id == run_id:
+            return RunResponse(run_id=run_id, status="Failed", output=None)
         return DecisionFailure(
             HTTP_GATEWAY_TIMEOUT if exc.timed_out else 502, RESUME_FAILED_DETAIL, run_id
         )
@@ -625,6 +667,10 @@ def decide_brief(
         except psycopg.Error as exc:
             mark_error(span, exc)
             return DecisionFailure(*claim_database_failure(exc, claim_id))
+        if isinstance(recorded, BriefView):
+            # The claim closed after an approval was recorded and never carried
+            # out: the brief is closed as rejected, and no run is resumed.
+            return recorded
         # What the run reads, and so what closes the brief, is the word recorded:
         # a decision for a claim that has closed was recorded as a rejection.
         body = body.model_copy(update={"decision": recorded})

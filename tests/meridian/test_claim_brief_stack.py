@@ -19,6 +19,7 @@ import httpx
 import pytest
 from briefsupport import plant_canaries
 from dbsupport import DatabaseHandle
+from psycopg.types.json import Jsonb
 from servicesupport import GATEWAY_REPLY, audit_events, owner_rows
 from stacksupport import (
     CLAIMS,
@@ -432,3 +433,44 @@ def test_no_text_of_the_claim_is_in_the_runs_checkpoints_or_the_models_request(
     for field, canary in planted.items():
         assert canary not in held, f"{field} is in the checkpoint rows"
         assert canary not in models.brief_requests[0], f"{field} is in the request"
+
+
+def forge_the_pause(db: DatabaseHandle, run_id: uuid.UUID) -> None:
+    """Give the stored request a field the code's state type has not, as a release
+    that took one away leaves a paused run's checkpoint: the codec refuses it."""
+    ((thread,),) = owner_rows(
+        db, "SELECT thread_id::text FROM runtime.runs WHERE run_id = %s", (run_id,)
+    )
+    latest = f"SELECT seq, body FROM {WORKFLOW_TABLE} WHERE thread_id = %s"  # noqa: S608
+    ((seq, body),) = owner_rows(db, f"{latest} ORDER BY seq DESC LIMIT 1", (thread,))
+    ((_, wrapped),) = body["pending_request_info_events"].items()
+    wrapped["__event__"]["data"]["fields"]["extra"] = "a field the code has not"
+    owner_rows(
+        db,
+        f"UPDATE {WORKFLOW_TABLE} SET body = %s WHERE seq = %s RETURNING 1",  # noqa: S608
+        (Jsonb(body), seq),
+    )
+
+
+def test_a_brief_whose_checkpoint_the_code_refuses_is_closed_by_the_first_post(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    # The run ends as failed on its resume and the Claims API closes the brief in
+    # the same request: the claim is not left with a brief that waits for a
+    # second post nobody may make (F4, low 3).
+    triage_paused(stack)
+    started = start_brief(stack)
+    brief_run = uuid.UUID(started["run_id"])
+    forge_the_pause(fresh_database, brief_run)
+
+    decided = decide_brief(stack, started["run_id"], "approve")
+    read = stack.client.get(BRIEF_URL)
+    second = stack.client.post(BRIEF_URL, json={})
+
+    assert decided.status_code == 502, decided.text
+    assert runs(fresh_database)[brief_run] == ("claim-brief", "Failed")
+    assert read.json()["state"] == "failed"
+    assert second.status_code == 201, second.text
+    assert second.json()["state"] == "awaiting_decision"
+    assert brief_run not in notes(fresh_database)
+    assert checkpoints(fresh_database, WORKFLOW_TABLE, brief_run) == 0

@@ -59,6 +59,25 @@ and it is in the run's checkpoint rows until the run ends.
 Five of the registry's six, with no worker: `policy_lookup`, `claim_history`,
 `request_approval`, `approval_outcome` and `add_claim_note`.
 
+## Changing it while a brief waits
+
+A paused brief keeps its graph and its two state types (`Gathered`, `Drafted`)
+in its checkpoint rows, and a run whose stored state no longer fits the code, or
+whose graph changed, ends as failed on its first resume. So a renamed or moved
+step class, a changed edge, a field added to a state type, or a framework
+upgrade that changes how the graph's signature is built fails every brief that
+waits when it is deployed: release it when none waits, or make it compatible.
+Two tests (`test_brief_stored_shapes.py`) pin the graph's signature and the
+state types' fields, so such a change has to touch them on purpose.
+
+## What it may import
+
+Four names of the framework (`Executor`, `WorkflowContext`, `handler`,
+`response_handler`) and no HTTP client, so a step cannot hold the framework's own
+agent or chat client, or post to a model itself, outside the gateway: the host
+refuses a step the framework defines, and this is held where imports are held
+(`test_brief_import_allowlist.py`, and an import contract in `pyproject.toml`).
+
 ## Tests
 
 `tests/meridian/workloads/claim_brief/` (the workload on the second host, its

@@ -60,8 +60,16 @@ def answering(run_id: uuid.UUID, status: str, output: Any) -> Answer:
 
 
 def failed(run_id: uuid.UUID) -> Answer:
-    """A run that failed: 502 with the run's ID, as the real runtime does."""
+    """A run that failed: 502 with the run's ID, as the real runtime does. The run
+    has ended, so a brief whose resume gets this answer is closed as ``failed``."""
     return 502, {"run_id": str(run_id), "status": "Failed", "output": None}
+
+
+def resume_failed(run_id: uuid.UUID) -> Answer:
+    """A resume that failed and left its run paused, to be resumed again: 502 with
+    the run's ID and the status ``AwaitingApproval``, as the real runtime does for
+    a store it could not reach. The brief waits."""
+    return 502, {"run_id": str(run_id), "status": "AwaitingApproval", "output": None}
 
 
 class Runtime:

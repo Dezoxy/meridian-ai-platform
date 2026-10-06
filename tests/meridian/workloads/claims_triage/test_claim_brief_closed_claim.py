@@ -10,8 +10,20 @@ body says: the run, resumed, reads the recorded ``reject``, writes nothing and
 completes, so the brief closes as ``rejected`` and the run ends (it is not left
 for the sweep). The audit row says why (``claim-closed``).
 
-A decision recorded while the claim was open stands: it was made before the
-claim closed, and a different one is a 409 as ever.
+A brief of a closed claim is never filed, whatever was recorded before (F4, the
+second review's low 1). A decision recorded as an approval while the claim was
+open, whose resume failed, is not carried out by a later post after the claim has
+closed: the brief is closed as rejected WITHOUT a resume, whichever word is posted
+(an approve and a reject both get the closed brief). The run is not resumed, so
+it is left to the sweep, which ends the run of a brief that no longer awaits its
+decision after the lease, as it does for any brief that has left waiting. The
+approval stays in ``claims.decisions`` as the record of what was posted. The
+first review's version of this ("a decision recorded while open stands after the
+claim closes") is gone on purpose.
+
+The one case that still files is a race: the close commits between the decision's
+own commit and the resume. That decision was carried out first (the claim was
+open when it was made), so it is filed; the last test of the file says so.
 """
 
 import uuid
@@ -29,9 +41,9 @@ from briefsupport import (
     brief_rows,
     completed,
     decisions,
-    failed,
     make_client,
     record_statements,
+    resume_failed,
 )
 from dbsupport import DatabaseHandle
 from servicesupport import owner_rows
@@ -221,7 +233,7 @@ def test_an_approval_posted_again_after_a_failed_resume_of_a_closed_claim_closes
     # approval posted again must not be told it was decided otherwise.
     run_id = waiting(claim_db)
     set_state(claim_db, "rejected")
-    runtime = Runtime(failed(run_id), completed(run_id, False))
+    runtime = Runtime(resume_failed(run_id), completed(run_id, False))
 
     first = decide(claim_db, runtime, "approve", run_id)
     again = decide(claim_db, runtime, "approve", run_id)
@@ -233,34 +245,110 @@ def test_an_approval_posted_again_after_a_failed_resume_of_a_closed_claim_closes
     assert brief_rows(claim_db) == [("rejected", run_id, BRIEF_TEXT)]
 
 
-def test_a_decision_recorded_while_the_claim_was_open_stands_after_it_closes(
+# ── an approval recorded while the claim was open, not carried out ──────────
+# CHANGED ON PURPOSE (F4, low 1): the first review's tests said an approval
+# recorded while the claim was open "stands" after the claim closes, so the same
+# approval posted again resumed the run and filed a note on a closed claim, and a
+# reject posted then was refused as "decided otherwise".
+def approval_recorded_then_claim_closed(
+    db: DatabaseHandle, state: str = "approved"
+) -> tuple[uuid.UUID, Runtime]:
+    """A brief whose approval was recorded while the claim was open and whose
+    resume failed (the run is paused again); then the claim closes. The runtime
+    would complete the run as filed if it were resumed again."""
+    run_id = waiting(db)
+    runtime = Runtime(resume_failed(run_id), completed(run_id, True))
+    first = decide(db, runtime, "approve", run_id)
+    assert first.status_code == 502
+    assert decisions(db) == [(CLAIM_ID, run_id, "approve")]
+    set_state(db, state)
+    return run_id, runtime
+
+
+@pytest.mark.parametrize("posted", ["approve", "reject"])
+@pytest.mark.parametrize("state", CLOSED_STATES)
+def test_an_approval_not_carried_out_is_closed_as_rejected_without_a_resume(
+    claim_db: DatabaseHandle, state: str, posted: str
+) -> None:
+    run_id, runtime = approval_recorded_then_claim_closed(claim_db, state)
+
+    again = decide(claim_db, runtime, posted, run_id)
+
+    assert again.status_code == 200
+    body = again.json()
+    assert (body["state"], body["brief"], body["run_id"]) == (
+        "rejected",
+        BRIEF_TEXT,
+        str(run_id),
+    )
+    assert brief_rows(claim_db) == [("rejected", run_id, BRIEF_TEXT)]
+    # Only the first, failed resume was ever sent: the run is left to the sweep.
+    assert len(runtime.requests) == 1
+    assert owner_rows(claim_db, "SELECT count(*) FROM claims.notes")[0][0] == 0
+
+
+def test_the_approval_stays_recorded_and_the_closing_is_audited_as_a_rejection(
     claim_db: DatabaseHandle,
 ) -> None:
-    # The first post is recorded and its resume fails; the claim closes; the
-    # same decision posted again resumes the run, which reads the recorded one.
+    run_id, runtime = approval_recorded_then_claim_closed(claim_db)
+
+    decide(claim_db, runtime, "reject", run_id)
+
+    assert decisions(claim_db) == [(CLAIM_ID, run_id, "approve")]
+    assert decided_events(claim_db) == [
+        (BRIEF_DECIDED_EVENT, "approve", BRIEF_DECIDED_REASON),
+        (BRIEF_DECIDED_EVENT, "reject", briefs.BRIEF_CLOSED_REASON),
+    ]
+
+
+def test_a_brief_closed_this_way_is_not_waiting_when_it_is_posted_again(
+    claim_db: DatabaseHandle,
+) -> None:
+    run_id, runtime = approval_recorded_then_claim_closed(claim_db)
+    decide(claim_db, runtime, "approve", run_id)
+
+    again = decide(claim_db, runtime, "approve", run_id)
+
+    assert again.status_code == 409
+    assert again.json() == {"detail": BRIEF_NOT_WAITING_DETAIL}
+    assert len(runtime.requests) == 1
+
+
+def test_an_approval_not_carried_out_is_still_carried_out_while_the_claim_is_open(
+    claim_db: DatabaseHandle,
+) -> None:
+    # The other side of the boundary: the claim has not closed, so the recorded
+    # approval is resumed and files, and a reject posted then is refused.
     run_id = waiting(claim_db)
-    first = decide(claim_db, Runtime(failed(run_id)), "approve", run_id)
-    set_state(claim_db, "approved")
+    runtime = Runtime(resume_failed(run_id), completed(run_id, True))
+    decide(claim_db, runtime, "approve", run_id)
 
-    again = decide(claim_db, Runtime(completed(run_id, True)), "approve", run_id)
+    refused = decide(claim_db, runtime, "reject", run_id)
+    again = decide(claim_db, runtime, "approve", run_id)
 
-    assert first.status_code == 502
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": BRIEF_DECIDED_OTHERWISE_DETAIL}
     assert again.status_code == 200
     assert again.json()["state"] == "filed"
     assert decisions(claim_db) == [(CLAIM_ID, run_id, "approve")]
 
 
-def test_a_different_decision_after_the_close_is_refused_against_the_recorded_one(
+def test_a_close_between_the_decision_and_the_resume_still_files(
     claim_db: DatabaseHandle,
 ) -> None:
+    # The race the review ran: the claim is open when the approval is recorded
+    # and closes while the resume is in flight. The decision was carried out
+    # first, so the brief is filed; nothing here can tell the two apart later.
     run_id = waiting(claim_db)
-    decide(claim_db, Runtime(failed(run_id)), "approve", run_id)
-    set_state(claim_db, "approved")
+    runtime = Runtime(
+        completed(run_id, True), during=lambda: set_state(claim_db, "rejected")
+    )
 
-    again = decide(claim_db, Runtime(completed(run_id, False)), "reject", run_id)
+    response = decide(claim_db, runtime, "approve", run_id)
 
-    assert again.status_code == 409
-    assert again.json() == {"detail": BRIEF_DECIDED_OTHERWISE_DETAIL}
+    assert response.status_code == 200
+    assert response.json()["state"] == "filed"
+    assert claim_state(claim_db) == "rejected"
     assert decisions(claim_db) == [(CLAIM_ID, run_id, "approve")]
 
 

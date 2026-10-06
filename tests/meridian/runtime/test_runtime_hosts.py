@@ -46,7 +46,10 @@ from meridian.runtime.model_client import ModelClient
 from meridian.runtime.runs import RunIdentity
 from meridian.runtime.settings import RuntimeSettings
 from meridian.runtime.tool_client import ToolClient
-from meridian.runtime.workflow_checkpoints import PostgresCheckpointStore
+from meridian.runtime.workflow_checkpoints import (
+    CheckpointCodec,
+    PostgresCheckpointStore,
+)
 
 CLAIM_TEXT = "claimant-secret-text-42"
 TRIAGE_AGENT = "claims-triage"
@@ -703,6 +706,40 @@ def test_a_store_that_cannot_be_reached_still_leaves_the_run_paused_to_be_resume
         fresh_database, run_id
     )
     assert held["workflow_checkpoints"] > 0
+    assert (finished.status_code, finished.json()["status"]) == (200, "Completed")
+
+
+def test_a_fault_of_the_codec_that_is_no_refusal_leaves_the_run_paused_to_resume(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    plant: Callable[..., Path],
+) -> None:
+    # Only a refusal ends a run (F4, low 4): a MemoryError once, while the row is
+    # read, is gone a second later, and the same row then reads and the run ends.
+    case = CASES["agent-framework"]
+    client = started_service(monkeypatch, plant, fresh_database, case, case.pausing)
+    run_id = start(client, case.agent).json()["run_id"]
+    real_read = CheckpointCodec.from_document
+    faults = {"left": 1}
+
+    def faulty(self: CheckpointCodec, document: Any) -> Any:
+        if faults["left"]:
+            faults["left"] -= 1
+            raise MemoryError(FORGED_TEXT)
+        return real_read(self, document)
+
+    monkeypatch.setattr(CheckpointCodec, "from_document", faulty)
+
+    faulted = resume(client, run_id)
+    held = rows_held(fresh_database, case, run_id)
+    finished = resume(client, run_id)
+
+    assert (faulted.status_code, faulted.json()["status"]) == (502, "AwaitingApproval")
+    events = run_events(fresh_database, run_id)
+    assert ("run.resume_failed", "checkpoint-not-read") in events
+    assert "checkpoint-refused" not in [reason for _, reason in events]
+    assert held["workflow_checkpoints"] > 0
+    assert faults["left"] == 0
     assert (finished.status_code, finished.json()["status"]) == (200, "Completed")
 
 

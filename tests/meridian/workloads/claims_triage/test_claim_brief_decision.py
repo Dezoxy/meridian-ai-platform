@@ -27,8 +27,8 @@ from briefsupport import (
     completed,
     decisions,
     everything_audited,
-    failed,
     make_client,
+    resume_failed,
 )
 from briefsupport import world as world  # a fixture: pytest finds it here
 from dbsupport import DatabaseHandle
@@ -329,7 +329,7 @@ def test_a_decision_posted_again_after_a_failed_resume_resumes_again_recorded_on
     world: DatabaseHandle,
 ) -> None:
     run_id = waiting(world)
-    runtime = Runtime(failed(run_id), completed(run_id, True))
+    runtime = Runtime(resume_failed(run_id), completed(run_id, True))
     client = make_client(world.dsn("claims_api"), runtime)
     body = {"decision": "approve", "run": str(run_id)}
 
@@ -351,7 +351,7 @@ def test_a_different_decision_after_one_is_recorded_is_a_409_and_resumes_nothing
     world: DatabaseHandle,
 ) -> None:
     run_id = waiting(world)
-    runtime = Runtime(failed(run_id), completed(run_id, False))
+    runtime = Runtime(resume_failed(run_id), completed(run_id, False))
     client = make_client(world.dsn("claims_api"), runtime)
     client.post(URL, json={"decision": "approve", "run": str(run_id)})
 
@@ -394,7 +394,11 @@ def a_recorded_decision_that_did_not_complete(
     [
         pytest.param(httpx.ReadTimeout("slow"), 504, id="a timeout"),
         pytest.param(httpx.ConnectError("down"), 502, id="unreachable"),
-        pytest.param(lambda run: failed(run), 502, id="a run that failed"),
+        pytest.param(
+            lambda run: resume_failed(run),
+            502,
+            id="a resume that failed and left the run paused",
+        ),
         pytest.param(lambda run: (504, {"run_id": str(run)}), 504, id="a runtime 504"),
         pytest.param(
             lambda run: answering(run, "AwaitingApproval", {"brief": BRIEF_TEXT}),

@@ -240,6 +240,20 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "the claim brief imports no HTTP client (S037)"
+type = "forbidden"
+# A step of the workload's own class could hold something that posts to a model
+# itself, which the second host's rule about step classes cannot see (it is about
+# inheritance). The standard library's clients cannot be named here;
+# tests/meridian/workloads/claim_brief/test_brief_import_allowlist.py holds those
+# and the four names the package may import of the framework.
+source_modules = ["meridian.workloads.claim_brief"]
+forbidden_modules = ["httpx", "requests", "aiohttp"]
+# Direct imports only: the package imports the runtime, which imports httpx for
+# its own clients.
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 name = "the gateway imports neither the evaluation package nor the CLI"
 type = "forbidden"
 # A deployed service must not depend on the package that loads workloads and

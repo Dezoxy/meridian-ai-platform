@@ -8,7 +8,7 @@ message is fixed text, never the runtime's body or the claim's.
 """
 
 import logging
-from typing import Any
+from typing import Any, get_args
 from uuid import UUID
 
 import httpx
@@ -53,9 +53,12 @@ class RuntimeCallError(Exception):
     """The runtime gave no usable answer to a call.
 
     Carries the HTTP status it answered (0: none, it timed out, was unreachable
-    or answered outside its contract) and its run ID when it named one. The
-    message is fixed text: neither the runtime's body nor the claim is kept.
-    ``failure`` is the word the triage's metric counts it under (``meters.py``)."""
+    or answered outside its contract), its run ID when it named one and the
+    run's status when its error body gave one of the four (``run_status``: a
+    resume that ended the run answers 502 with ``Failed``, one that left it paused
+    answers 502 with ``AwaitingApproval``). The message is fixed text: neither the
+    runtime's body nor the claim is kept. ``failure`` is the word the triage's
+    metric counts it under (``meters.py``)."""
 
     def __init__(
         self,
@@ -63,12 +66,14 @@ class RuntimeCallError(Exception):
         *,
         status_code: int = 0,
         run_id: UUID | None = None,
+        run_status: RunState | None = None,
         timed_out: bool = False,
         failure: TriageFailure = "runtime-failed",
     ) -> None:
         super().__init__(reason)
         self.status_code = status_code
         self.run_id = run_id
+        self.run_status = run_status
         self.timed_out = timed_out or status_code == HTTP_GATEWAY_TIMEOUT
         self.failure: TriageFailure = failure
 
@@ -78,6 +83,15 @@ def _run_id_in(response: httpx.Response) -> UUID | None:
         return UUID(response.json()["run_id"])
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+def _run_status_in(response: httpx.Response) -> RunState | None:
+    """The run's status an error answer names, when it is one of the four words."""
+    try:
+        status = response.json()["status"]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return status if status in get_args(RunState) else None
 
 
 def _call_runtime(
@@ -107,6 +121,7 @@ def _call_runtime(
             "the runtime answered an error",
             status_code=response.status_code,
             run_id=_run_id_in(response),
+            run_status=_run_status_in(response),
         )
     try:
         return RunResponse.model_validate(response.json())
