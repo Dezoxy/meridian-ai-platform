@@ -15,18 +15,24 @@ this code; a restart of Redis hands every tenant its windows again.
 
 Time. Left to itself the script reads the server's ``TIME``, so two gateway
 processes agree on what a window is whatever their own clocks say: that is the
-production path, and a request can reach neither path's choice. A ``clock`` (a
-callable giving seconds, as ``TenantRateLimiter`` takes one) makes the caller's
-time the script's: it exists for the tests, which move a clock by hand and do not
-sleep, and nothing else passes one. A key's expiry always runs on the server's
-clock, which a hand-moved clock does not move.
+production path. A ``clock`` (a callable giving seconds, as ``TenantRateLimiter``
+takes one) makes the caller's time the script's instead: it exists for the tests,
+which move a clock by hand and do not sleep, and nothing else passes one; no
+request can reach it. ``TIME`` is wall-clock time, where the in-process store
+counts on a monotonic clock: a step backwards of the clock on the store's host
+keeps entries counted for longer than their window, and the key's expiry (which
+refusals do not extend) bounds how long. A key's expiry always runs on the
+server's clock, which a hand-moved clock does not move.
 
-Failure. A server that cannot be reached, that answers an error or that does not
+Failure. A server that cannot be reached, that answers an error, that answers a
+reply the client library cannot read or that is not the script's, or that does not
 answer in time raises ``RateStoreUnavailable``, whose message holds no address, no
 credential and nothing the server sent. What the gateway does with it is the
 caller's decision (it refuses the call, ``app.py``); this module never falls back
 to anything. The client's timeouts and its no-retry rule are set where the client
-is made (``rate_store.py``), not here.
+is made (``rate_store.py``), not here. A tenant that is not a registry ID and a
+negative token count are a caller's programming error and raise ``ValueError``
+before the store is called.
 
 Every command the store sends to the server (redis-py 8.1.0, read with MONITOR
 on Redis 8.10.2): from the script ``TIME`` (only with no clock),
@@ -34,9 +40,13 @@ on Redis 8.10.2): from the script ``TIME`` (only with no clock),
 ``EVALSHA`` and, when the server does not know the script, ``SCRIPT LOAD`` and
 ``EVALSHA`` again (never ``EVAL``); on every new connection ``HELLO 3`` (with
 ``AUTH`` folded into it when the client has a user and a password; ``AUTH``
-alone under protocol 2), ``CLIENT SETINFO LIB-NAME`` and ``CLIENT SETINFO
-LIB-VER``. Nothing else: no ``SELECT`` for database 0, no ``DEL``, no ``EVAL``.
-The next contract turns the list into the gateway's access list.
+alone under protocol 2). A client built with redis-py's defaults also sends
+``CLIENT MAINT_NOTIFICATIONS`` (Redis answers an unknown subcommand error, which
+MONITOR does not show), ``CLIENT SETINFO LIB-NAME`` and ``CLIENT SETINFO
+LIB-VER``; the gateway's (``rate_store_client``) turns all three off, so its
+connection sends none of them. Nothing else: no ``SELECT`` for database 0, no
+``DEL``, no ``EVAL``. The next contract turns the list into the gateway's access
+list: ``CLIENT`` is not on it.
 """
 
 import re
@@ -50,7 +60,8 @@ from meridian.platform.gateway.ratelimit import (
     TOKEN_WINDOW_SECONDS,
     RateRefusal,
     RateRefusalReason,
-    _retry_after,
+    RateStoreUnavailable,
+    retry_after,
 )
 from meridian.platform.registry.models import ENTITY_ID_PATTERN, TenantLimits
 
@@ -116,11 +127,6 @@ return {0, 0}
 """
 
 
-class RateStoreUnavailable(Exception):
-    """The store gave no answer: it could not be reached, it answered an error
-    or it did not answer in time. The message names none of the details."""
-
-
 class RedisRateLimiter:
     """``RateLimiter`` on a Redis client; thread-safe, as the client is.
 
@@ -154,6 +160,8 @@ class RedisRateLimiter:
     ) -> RateRefusal | None:
         """Record the request and return ``None``, or say why it must wait."""
         key = self.key_for(tenant)
+        if tokens < 0:  # a negative member would break the script's parse
+            raise ValueError("the token count is negative")
         if tokens > limits.tokens_per_minute:
             return RateRefusal("tenant-request-too-large", None)
         now = "" if self._clock is None else round(self._clock() * 1000)
@@ -170,9 +178,14 @@ class RedisRateLimiter:
                     round(TOKEN_WINDOW_SECONDS * 1000),
                 ],
             )
-        except redis.RedisError as exc:
-            # The class name says what kind; the text would carry the address.
-            # Not chained: a logged traceback would print it.
+        except (redis.RedisError, ValueError, OverflowError) as exc:
+            # RedisError is what the client raises for a connection, a timeout and
+            # an error the server answers. A reply it cannot read comes out of
+            # its parser as the builtin ValueError (a length or a number that is
+            # not one) or OverflowError (a length too big): redis-py 8.1.0's
+            # parsers raise nothing else, read and fuzzed. The class name says
+            # what kind; the text would carry the address or the bad bytes. Not
+            # chained: a logged traceback would print them.
             raise RateStoreUnavailable(
                 f"the rate store did not answer ({type(exc).__name__})"
             ) from None
@@ -180,9 +193,13 @@ class RedisRateLimiter:
 
     @staticmethod
     def _refusal(reply: object) -> RateRefusal | None:
-        match reply:
-            case [int(outcome), int(_)] if outcome == _ADMITTED:
-                return None
-            case [int(outcome), int(wait_ms)] if outcome in _REFUSALS:
-                return RateRefusal(_REFUSALS[outcome], _retry_after(wait_ms / 1000))
+        # Exact types: bool is an int in Python, so ``[False, 0]`` would read as
+        # "admitted" and a store that answers booleans is not one that admitted.
+        if isinstance(reply, list) and len(reply) == 2:
+            outcome, wait_ms = reply
+            if type(outcome) is int and type(wait_ms) is int:
+                if outcome == _ADMITTED:
+                    return None
+                if outcome in _REFUSALS:
+                    return RateRefusal(_REFUSALS[outcome], retry_after(wait_ms / 1000))
         raise RateStoreUnavailable("the rate store gave an answer of an unknown shape")

@@ -8,10 +8,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import SettingsError, registry_dir_from, require_env
@@ -144,6 +152,16 @@ class RateStoreAddress:
     password: str = field(repr=False)
 
 
+def _decoded(part: str) -> str:
+    """A user name or password with its percent sequences decoded as UTF-8; raise
+    ``ValueError`` without the text for a sequence that is not (the default would
+    put U+FFFD in its place, a wrong password that nothing explains)."""
+    try:
+        return unquote(part, errors="strict")
+    except UnicodeDecodeError:
+        raise ValueError("has a user name or password not valid as UTF-8") from None
+
+
 def parse_rate_store_url(url: str) -> RateStoreAddress:
     """The address's parts; raise ``ValueError`` with a text that never holds the
     address (it carries the store's password) unless it is one the gateway may
@@ -151,6 +169,8 @@ def parse_rate_store_url(url: str) -> RateStoreAddress:
     user and a password, database 0, and nothing after the address. A query is
     refused because redis-py reads one over the arguments the gateway sets, so
     ``?ssl_cert_reqs=none`` would turn off the check of the server's certificate.
+    A host with a percent sign is refused: nothing decodes a host, so it names
+    nothing, and the first call would fail instead of the start.
     """
     # urlsplit drops a tab and a line feed without a word, so the text is checked
     # first.
@@ -167,6 +187,8 @@ def parse_rate_store_url(url: str) -> RateStoreAddress:
         raise ValueError("must be a rediss:// URL: the store is reached over TLS only")
     if not parts.hostname:
         raise ValueError("must name the store's host")
+    if "%" in parts.hostname:
+        raise ValueError("must name the store's host without a percent sign")
     if not parts.username or not parts.password:
         raise ValueError("must carry the gateway's user name and password")
     if parts.query or parts.fragment or "?" in url or "#" in url:
@@ -176,12 +198,12 @@ def parse_rate_store_url(url: str) -> RateStoreAddress:
     return RateStoreAddress(
         host=parts.hostname,
         port=port or REDIS_PORT,
-        username=unquote(parts.username),
-        password=unquote(parts.password),
+        username=_decoded(parts.username),
+        password=_decoded(parts.password),
     )
 
 
-def _check_rate_store_tls(url: str | None, tls: ClientTls | None) -> None:
+def _check_rate_store_tls(url: str | SecretStr | None, tls: ClientTls | None) -> None:
     """The store asks for a client certificate, so the gateway's own TLS files
     must be set when it is given one; raise ``ValueError`` naming the variables."""
     if url is not None and tls is None:
@@ -194,11 +216,19 @@ def _check_rate_store_tls(url: str | None, tls: ClientTls | None) -> None:
 def _rate_store_url_from(
     environ: Mapping[str, str], tls: ClientTls | None
 ) -> str | None:
-    """The address, or ``None`` when unset or empty; raise ``SettingsError``
-    naming the variable, never showing the address."""
+    """The address, or ``None`` when the variable is unset; raise
+    ``SettingsError`` naming the variable, never showing the address. A variable
+    that is set and empty is an error, not "no store": with a second replica
+    allowed once the store is on, an empty Secret key must not quietly bring the
+    process's own windows back."""
     raw = environ.get(RATE_STORE_URL_ENV)
-    if not raw:
+    if raw is None:
         return None
+    if not raw:
+        raise SettingsError(
+            f"{RATE_STORE_URL_ENV} is set and empty: unset it to keep the rate "
+            "windows in the process"
+        )
     try:
         parse_rate_store_url(raw)
         _check_rate_store_tls(raw, tls)
@@ -208,6 +238,22 @@ def _rate_store_url_from(
 
 
 class GatewaySettings(BaseModel):
+    """What the gateway starts from.
+
+    ``from_env`` reads the three TLS variables (``MERIDIAN_TLS_CERT_FILE``,
+    ``MERIDIAN_TLS_KEY_FILE``, ``MERIDIAN_TLS_CA_FILE``) at every start, with or
+    without a rate store, so a partial set of them stops the start (the chart sets
+    all three together, ``_helpers.tpl``); none of them is allowed only while no
+    store is set. With ``MERIDIAN_GATEWAY_RATE_STORE_URL`` set the three are
+    required, and that variable set and empty is an error.
+
+    The store's address carries its password, so it is held as a ``SecretStr``: it
+    is in no ``repr``, ``model_dump`` or JSON dump, and (through the wrap
+    validator, which must stay the last model validator so it runs first) in no
+    ``ValidationError``'s ``errors()`` or ``json()`` either, whether a plain
+    string or a ``SecretStr`` was passed in.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     registry_dir: Path
@@ -228,22 +274,35 @@ class GatewaySettings(BaseModel):
     # process. The address carries the store's password, so it stays out of the
     # repr and every error. The three TLS files the gateway presents to the store
     # (and the services' CA it verifies the store with) are required with it.
-    rate_store_url: str | None = Field(default=None, repr=False)
+    rate_store_url: SecretStr | None = Field(default=None, repr=False)
     client_tls: ClientTls | None = None
 
     @field_validator("rate_store_url")
     @classmethod
     def _rate_store_is_an_address_the_gateway_may_use(
-        cls, url: str | None
-    ) -> str | None:
+        cls, url: SecretStr | None
+    ) -> SecretStr | None:
         if url is not None:
-            parse_rate_store_url(url)
+            parse_rate_store_url(url.get_secret_value())
         return url
 
     @model_validator(mode="after")
     def _a_store_needs_the_gateways_tls_files(self) -> Self:
         _check_rate_store_tls(self.rate_store_url, self.client_tls)
         return self
+
+    # Declared after the other model validator on purpose: pydantic runs the last
+    # one declared first, so an error of any validator above reports the input
+    # with the address already held as a SecretStr, never the plain string a
+    # caller passed (an error's ``input`` is what the validator was given).
+    @model_validator(mode="wrap")
+    @classmethod
+    def _hold_the_address_as_a_secret(
+        cls, data: Any, handler: ModelWrapValidatorHandler[Self]
+    ) -> Self:
+        if isinstance(data, dict) and isinstance(data.get("rate_store_url"), str):
+            data = {**data, "rate_store_url": SecretStr(data["rate_store_url"])}
+        return handler(data)
 
     @field_validator("azure_openai_endpoints")
     @classmethod

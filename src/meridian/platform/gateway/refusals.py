@@ -75,17 +75,19 @@ class RefusalAudit:
         throttle_tenant: str | None,
         reason: str,
         facts: dict[str, str | None],
-    ) -> None:
+    ) -> bool:
         """Write the row of a refusal when the throttle says it is due, with
-        the count of the refusals it stands in for (T-49). The window starts
-        when the refusal is due, so overlapping refusals leave one row, and a
-        write that fails releases it and loses nothing: the next refusal is due
-        and counts this one. The key is the tenant and the reason, not the
-        purpose: the row's ``purpose`` is that of the call that wrote it, and
-        its ``suppressed`` counts the refusals of both purposes."""
+        the count of the refusals it stands in for (T-49), and say whether it
+        did: a caller that logs a refusal logs it once per window, with the row,
+        and not once per request. The window starts when the refusal is due, so
+        overlapping refusals leave one row, and a write that fails releases it
+        and loses nothing: the next refusal is due and counts this one. The key
+        is the tenant and the reason, not the purpose: the row's ``purpose`` is
+        that of the call that wrote it, and its ``suppressed`` counts the
+        refusals of both purposes."""
         carried = self._throttle.due(throttle_tenant, reason)
         if carried is None:
-            return
+            return False
         try:
             self._audit(
                 MODEL_CALL_EVENT,
@@ -98,6 +100,7 @@ class RefusalAudit:
         except BaseException:
             self._throttle.release(throttle_tenant, reason, carried)
             raise
+        return True
 
     def write_ended(self, *, everything: bool = False) -> None:
         """Write one summary row for each count the throttle hands out: the

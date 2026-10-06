@@ -1,9 +1,10 @@
 """The per-tenant rate windows (S011), on a fake clock.
 
-The 26 cases of the first part run against both stores (S066): the process's own
-windows and the Redis ones, with the same expectations. The cases that follow are
-the Redis store's alone: what two processes share, what the script does with the
-server's clock, and how it fails.
+The cases of the first part run against both stores (S066): the process's own
+windows and the Redis ones, with the same expectations (one case, that a tenant
+whose entries expired disappears, is the in-process store's alone). The cases
+that follow are the Redis store's alone: what two processes share, what the
+script does with the server's clock, and how it fails.
 """
 
 import itertools
@@ -24,12 +25,10 @@ from meridian.platform.gateway.ratelimit import (
     TOKEN_WINDOW_SECONDS,
     RateLimiter,
     RateRefusal,
+    RateStoreUnavailable,
     TenantRateLimiter,
 )
-from meridian.platform.gateway.ratelimit_redis import (
-    RateStoreUnavailable,
-    RedisRateLimiter,
-)
+from meridian.platform.gateway.ratelimit_redis import RedisRateLimiter
 from meridian.platform.registry.models import TenantLimits
 
 TENANT = "claims-triage"
@@ -630,10 +629,15 @@ def test_the_script_is_sent_again_when_the_server_lost_its_script_cache(
     )
     store.admit(TENANT, limits(), 1)
 
-    rate_keys.client.script_flush()
+    # The server-wide SCRIPT FLUSH would take the script from neighbouring tests
+    # that share this Redis under xdist; a hash the server does not know takes
+    # this store down the same path (NOSCRIPT, load, call again) and no other's.
+    unknown = "0" * 40
+    store._script.sha = unknown
 
     assert store.admit(TENANT, limits(), 1) is None
     assert rate_keys.client.zcard(store.key_for(TENANT)) == 2
+    assert store._script.sha != unknown  # the store loaded its script again
 
 
 @pytest.mark.parametrize(

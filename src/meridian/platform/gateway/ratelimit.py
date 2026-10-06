@@ -49,17 +49,29 @@ class RateRefusal:
     retry_after_seconds: int | None  # None for tenant-request-too-large
 
 
+class RateStoreUnavailable(Exception):
+    """The shared store gave no answer: it could not be reached, it answered an
+    error or a reply that cannot be read, or it did not answer in time. The
+    message names none of the details (no address, no credential, nothing the
+    server sent)."""
+
+
 class RateLimiter(Protocol):
     """What the gateway asks of a store of rate windows: one method."""
 
     def admit(
         self, tenant: str, limits: TenantLimits, tokens: int
     ) -> RateRefusal | None:
-        """Record the request and return ``None``, or say why it must wait."""
+        """Record the request and return ``None``, or say why it must wait.
+
+        Raise ``RateStoreUnavailable`` when the store of the windows gives no
+        answer: the process's own store never does, a shared one may, and the
+        caller refuses the call (it never counts as a pass).
+        """
         ...
 
 
-def _retry_after(seconds: float) -> int:
+def retry_after(seconds: float) -> int:
     """Whole seconds, rounded up and at least one."""
     return max(MIN_RETRY_SECONDS, math.ceil(seconds))
 
@@ -112,7 +124,7 @@ class TenantRateLimiter:
         recent = [t for t, _ in entries if now - t < REQUEST_WINDOW_SECONDS]
         if len(recent) >= limits.requests_per_10_seconds:
             wait = recent[0] + REQUEST_WINDOW_SECONDS - now
-            return RateRefusal("tenant-request-rate", _retry_after(wait))
+            return RateRefusal("tenant-request-rate", retry_after(wait))
         used = sum(n for _, n in entries)
         if used + tokens <= limits.tokens_per_minute:
             return None
@@ -120,5 +132,5 @@ class TenantRateLimiter:
             used -= n
             if used + tokens <= limits.tokens_per_minute:
                 wait = t + TOKEN_WINDOW_SECONDS - now
-                return RateRefusal("tenant-token-rate", _retry_after(wait))
+                return RateRefusal("tenant-token-rate", retry_after(wait))
         raise AssertionError("unreachable: tokens fits an empty window")

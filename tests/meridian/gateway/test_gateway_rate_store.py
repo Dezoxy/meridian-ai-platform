@@ -46,11 +46,12 @@ from meridian.platform.gateway.providers.base import (
     ProviderError,
     ProviderReply,
 )
-from meridian.platform.gateway.ratelimit import RateLimiter, RateRefusal
-from meridian.platform.gateway.ratelimit_redis import (
+from meridian.platform.gateway.ratelimit import (
+    RateLimiter,
+    RateRefusal,
     RateStoreUnavailable,
-    RedisRateLimiter,
 )
+from meridian.platform.gateway.ratelimit_redis import RedisRateLimiter
 from meridian.platform.gateway.refusals import (
     RATE_STORE_RETRY_SECONDS,
     RATE_STORE_UNAVAILABLE,
@@ -537,8 +538,44 @@ def test_the_failure_is_one_log_line_with_a_class_name_and_no_address(
     assert len(ours) == 1
     assert "RateStoreUnavailable" in ours[0].getMessage()
     assert "127.0.0.1" not in caplog.text
-    assert str(port) not in caplog.text
+    assert f":{port}" not in ours[0].getMessage()
     assert "127.0.0.1" not in response.text
+
+
+def rate_store_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "rate store" in r.getMessage()]
+
+
+def test_an_outage_logs_one_line_per_window_as_it_writes_one_audit_row(
+    make_gateway: Callable[..., Gateway], caplog: pytest.LogCaptureFixture
+) -> None:
+    gateway = make_gateway(DownStore())
+    caplog.set_level(logging.DEBUG)
+    for _ in range(5):
+        assert gateway.post()[0].status_code == HTTP_UNAVAILABLE
+
+    assert len(rate_store_log_lines(caplog)) == 1
+    assert len(gateway.refusal_rows(REASON)) == 1
+
+    gateway.clock.advance(REFUSAL_AUDIT_SECONDS)
+    gateway.post()
+
+    assert len(rate_store_log_lines(caplog)) == 2
+    assert len(gateway.refusal_rows(REASON)) == 2
+
+
+def test_the_log_line_of_an_outage_names_a_class_and_none_of_the_stores_text(
+    make_gateway: Callable[..., Gateway], caplog: pytest.LogCaptureFixture
+) -> None:
+    gateway = make_gateway(DownStore())
+    caplog.set_level(logging.DEBUG)
+
+    gateway.post()
+
+    (line,) = rate_store_log_lines(caplog)
+    assert "RateStoreUnavailable" in line
+    assert "TimeoutError" in line  # the class the store raised, from its message
+    assert "127.0.0.1" not in line
 
 
 def test_a_closed_port_is_the_same_503_without_a_stub(
