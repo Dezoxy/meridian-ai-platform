@@ -2,8 +2,9 @@
 
 Status on 2026-10-04 (S024): every target on this page is a proposal that
 nobody has measured. Five objectives have an indicator that the kind
-cluster's Prometheus can compute and an alert rule; three have no indicator
-yet and are designed. None of the expressions below has been run against a
+cluster's Prometheus can compute and an alert rule; two have no indicator
+yet and are designed; the eighth, `triage-completion`, has counters since S064
+that no rule or dashboard reads. None of the expressions below has been run against a
 cluster, except those of `certificate-validity` noted next: S024 ran beside
 the step that owned it, and the checks that are still owed are in the
 [operations index](README.md#not-proved-on-a-cluster).
@@ -38,7 +39,7 @@ would be watched while the platform runs.
 | `certificate-validity` | Each certificate that identifies a service, and the CA that signs them, is renewed before it ends (S056) | Time until each certificate's end and whether it is Ready, from cert-manager's metrics | No certificate under 21 days from its end for an hour, none not Ready for 15 minutes; the metrics reach Prometheus and cert-manager and approver-policy run | Implemented on kind (S056); the first two alerts seen loaded and inactive, the other two not seen, unmeasured |
 | `triage-latency` | A claim's triage drafts a proposal quickly (QA-01) | The duration of a triage run, as a histogram | p95 under 10 s with the replay provider, under 30 s with `gpt-4o` | Designed: no service records a duration metric; S027 measures it with a load test |
 | `gateway-overhead` | The gateway adds little to a model call (QA-02) | The gateway's own time per call, excluding the provider's | p95 under 50 ms | Designed: the time is in the gateway's spans only |
-| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented in tests, not run on a cluster (S064): the Claims API counts every triage it takes once, by how it ended, `meridian_claims_triages_total` (`stored`, `failed` with a reason, `taken-over`), so a call that never reached the runtime and an answer it could not use are series; the Agent Runtime's `meridian_runtime_runs_total` counts each leg inside the runtime and calls `completed` a run the Claims API may then fail to use, so it is not this share; no rule reads either's rates and no dashboard reads either (`MeridianRuntimeMetricsMissing` reads the stored triages and the run counter's presence), and the run table holds the answer |
+| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented (S064); the counters were seen on kind on 2026-10-06 (`meridian_claims_triages_total` with outcome `stored`, value 1, after a demo; a `failed` triage was not seen): the Claims API counts every triage it takes once, by how it ended, `meridian_claims_triages_total` (`stored`, `failed` with a reason, `taken-over`), so a call that never reached the runtime and an answer it could not use are series; the Agent Runtime's `meridian_runtime_runs_total` counts each leg inside the runtime and calls `completed` a run the Claims API may then fail to use, so it is not this share; no rule reads either's rates and no dashboard reads either (`MeridianRuntimeMetricsMissing` reads the stored triages and the run counter's presence), and the run table holds the answer |
 
 The proposed window is 28 days, for the Azure environment (S020), where the
 metrics would be kept that long. On kind, Prometheus keeps 24 hours, so no
@@ -157,16 +158,20 @@ proposal, like the targets.
 | `MeridianSweepNotReporting` | The sweep's CronJob succeeded in the last 15 minutes, and Prometheus has no sample of what a pass found, `meridian_sweep_last_pass`, in those 15 minutes (S064: for 5 minutes) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
 | `MeridianLogAgentNotReady` | The log agent's DaemonSet in `logging` has had fewer ready pods than nodes it is scheduled on for 10 minutes: a node ships no output to Loki (S064; a DaemonSet that does not exist leaves no series, and the agent's own drop counters are not scraped) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
 
-The three rules before the last (S064, implemented and unit-tested, not run on
-a cluster)
-look for a series that is not there: each holds a count of something the
-upstream end says happened, and no sample at all of the series the downstream
-end must have written for it, so an idle service, which still has its series,
-does not fire them. The first two read a recorded delta of a counter, which
-counts a new series' first sample, as the gateway's does. The sweep's series
-are the same six from pass to pass: the CronJob sets one instance ID, not the
-SDK's random one. No panel reads the new series yet, and no burn-rate rule
-reads an objective: no threshold of them is measured.
+The three rules before the last (S064, implemented and unit-tested; loaded and
+healthy on kind on 2026-10-06, none of them seen firing or pending: tested
+without a cluster, not seen on one) look for a series that is not there: each
+holds a count of something the upstream end says happened, and no sample at
+all of the series the downstream end must have written for it, so an idle
+service, which still has its series, does not fire them. The first two read a
+recorded delta of a counter, which counts a new series' first sample, as the
+gateway's does. The sweep's series are the same six from pass to pass: the
+CronJob sets one instance ID, not the SDK's random one (seen on kind on
+2026-10-06: one `instance`, `claims-sweep`, with six series).
+`MeridianLogAgentNotReady` could be evaluated there (kube-state-metrics
+exposed the DaemonSet's two numbers) and was not seen firing either. No panel
+reads the new series yet, and no burn-rate rule reads an objective: no
+threshold of them is measured.
 
 The 5 % in the first rule is QA-04's number ("under 5 % of calls in that
 minute fail"), five times the rate the `model-calls` budget allows. The
@@ -210,7 +215,10 @@ namespace; Meridian's file does not repeat them.
   that reached the gateway's handler. When the Agent Runtime or the
   knowledge server cannot reach the gateway at all, nothing is counted, so
   `model-calls` stays where it was. The runtime now counts its own calls
-  (S064, implemented in tests, not run on a cluster): the OTLP counter
+  (S064, implemented; seen on kind on 2026-10-06 with the outcome
+  `completed` in the second run and not in the third, where both demo claims
+  needed no model call, and no failed call or reason was seen: tested without
+  a cluster, not seen on one): the OTLP counter
   `meridian.runtime.model_calls` reaches Prometheus as
   `meridian_runtime_model_calls_total`, by `meridian_outcome` (`completed`
   or `failed`) and, for a failure, `meridian_reason`: `unreachable` (no
@@ -228,13 +236,18 @@ namespace; Meridian's file does not repeat them.
   `failed` with `not-saved`, whatever the leg did. A run the database
   refused before its first leg, or a resume it refused to claim, is
   counted `failed` with `not-started`; a refusal of the caller (a 403, a
-  404) is counted nowhere. Both carry `meridian_tenant` and
+  404) is counted nowhere. The run counter was seen on kind on 2026-10-06
+  with `paused` and `completed` after a demo; a failed leg, `not-saved` and
+  `not-started` were not seen. Both carry `meridian_tenant` and
   `meridian_agent`. Two rules read them, for presence only:
   `MeridianGatewayMetricsMissing` the completed model calls and
   `MeridianRuntimeMetricsMissing` whether the run counter is there; no rule
   reads their rates and no panel reads either.
-  The three tool servers count their calls too (S064, implemented in
-  tests, not run on a cluster): the OTLP counter
+  The three tool servers count their calls too (S064, implemented; seen on
+  kind on 2026-10-06 with six `completed` calls by tool after a demo and
+  three `refused` with `unknown-run` from smoke's own probes; a call that
+  failed with the reason `cancelled` and the knowledge server's gateway
+  reasons below were not seen): the OTLP counter
   `meridian.toolserver.calls` reaches Prometheus as
   `meridian_toolserver_calls_total`, under the server's own `job`
   (`policy-mcp`, `claims-mcp`, `knowledge-mcp`), by `meridian_outcome`
@@ -260,7 +273,8 @@ namespace; Meridian's file does not repeat them.
   one log line. A pass that ran and failed on one item exits 1, so the
   CronJob does not count it as a success and the indicator sees it. What a
   pass found is also a gauge, `meridian_sweep_last_pass` (S064,
-  implemented in tests, not run on a cluster): one series for each number
+  implemented; seen on kind on 2026-10-06, six findings, all 0): one series
+  for each number
   of the log line, under `meridian_finding` (`documents-overdue`,
   `triage-not-started`, `triage-abandoned`, `runs-ended`, `threads-cleaned`
   and `failures`), set once from the last pass and sent before the sweep
@@ -270,9 +284,10 @@ namespace; Meridian's file does not repeat them.
   connection and never answers cost about 15 seconds and a refused
   connection about 12, because the pass is sent twice, by the flush and
   again by the reader's shutdown. The chart gives the CronJob the
-  collector's address, its authority and a network rule to reach it (S064,
-  tested without a cluster, not run on one), and bounds one export at 5
-  seconds (`sweep.telemetryTimeoutSeconds`); with no
+  collector's address, its authority and a network rule to reach it (S064;
+  the pass's six values arrived in Prometheus on kind on 2026-10-06), and
+  bounds one export at 5 seconds (`sweep.telemetryTimeoutSeconds`; tested
+  without a cluster, not seen on one); with no
   `telemetry.otlpEndpoint` it sends nothing. A pass that could not run,
   because the database was unreachable, has no numbers and sends none.
   Prometheus keeps a series for five minutes after its last sample and the
@@ -281,7 +296,8 @@ namespace; Meridian's file does not repeat them.
   SDK gives every process a random instance ID (measured on kind, 2026-10-06:
   two samples a pass, a new `instance` each); since S064's C3 the CronJob sets
   `service.instance.id=claims-sweep`, so the six series are the same from
-  pass to pass (tested without a cluster, not yet seen on one). A send that
+  pass to pass (seen on kind on 2026-10-06, third run: one `instance`,
+  `claims-sweep`, with six series). A send that
   failed leaves no series: the alert `MeridianSweepNotReporting` fires
   when the CronJob succeeded and nothing arrived, about 20 minutes after the
   last pass that did, and the evidence is the output of the last Jobs
@@ -291,7 +307,9 @@ namespace; Meridian's file does not repeat them.
   line for a refused connection names no address (the warnings before it
   do). No rule reads the gauge's values and no panel reads it.
 - **The assessment's outcomes.** The Claims Triage App counts each stored
-  proposal once (S064, implemented in tests, not run on a cluster):
+  proposal once (S064, implemented; seen on kind on 2026-10-06 with outcome
+  `not_needed`, value 1, after a demo; an `unavailable` assessment and its
+  reasons were not seen):
   `meridian_claims_assessments_total`, by `meridian_outcome`
   (`not_needed`, `none_applies`, `applies` or `unavailable`),
   `meridian_tenant` and, for an unavailable assessment, `meridian_reason`:
@@ -309,19 +327,23 @@ namespace; Meridian's file does not repeat them.
   hop worked), `bad-output` (an answer that is not a run, a run that is not
   a proposal, or a proposal its status does not fit), `proposal-lost` (the
   database refused the write) and `unexpected` (an exception no branch
-  expected, a bug, counted and raised). The runtime's
+  expected, a bug, counted and raised); `stored` was seen on kind on
+  2026-10-06 (value 1 after a demo) and no `failed` or `taken-over`
+  triage was (tested without a cluster, not seen on one). The runtime's
   `meridian_runtime_runs_total` does not stand in for it: a call that never
   reached the runtime is nowhere in it, and a run it counts `completed` can
   still end here as `bad-output` or `proposal-lost`. One rule reads the
   `stored` count for its presence next to the runtime's series
   (`MeridianRuntimeMetricsMissing`); none reads the failures, and no panel
   reads either.
-- **Logs.** No service exports its logs to Loki, so no rule reads one. The
+- **Logs.** No service exports its logs itself: on kind a node agent ships
+  the output of the six services and the sweep to Loki (S064, seen on kind on
+  2026-10-06), and no rule reads a log line. The
   warnings for an empty knowledge store and for stale vectors stay in the
   knowledge server's own output as well, and are also counted since S064
   (`meridian_toolserver_calls_total` with `meridian_reason="no-corpus"` or
-  `"stale-vectors"`; implemented in tests, not run on a cluster, no rule
-  reads them yet).
+  `"stale-vectors"`; implemented, tested without a cluster, not seen on
+  one, no rule reads them yet).
 
 ## Controls that are not objectives
 

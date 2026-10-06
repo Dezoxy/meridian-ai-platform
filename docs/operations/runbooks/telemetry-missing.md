@@ -6,12 +6,21 @@ flow. What is wrong is that every alert and panel that reads that service's
 series has gone blind, and a blind alert looks like a healthy one (T-86).
 
 Status (S064): written from the code, not exercised. The four rules and their
-unit tests are checked offline by `make alerts`; none of the alerts has fired
-on a cluster, and the log lines described below were read from the code and
-from what an export that failed printed in tests, not from a cluster that lost
-its collector. The game day (S028) exercises it. The first three alerts are
-about metrics; the fourth, `MeridianLogAgentNotReady`, is about the logs and
-has its own section at the end of "Which hop lost it".
+unit tests are checked offline by `make alerts`; on kind, on 2026-10-06, the
+five groups and all 19 rules were loaded and healthy and no Meridian alert was
+firing or pending, but none of the four alerts has fired on a cluster, and the
+log lines described below were read from the code and from what an export that
+failed printed in tests, not from a cluster that lost its collector (no
+export failed on kind in the three runs). The game day (S028) exercises it. The
+first three alerts are about metrics; the fourth, `MeridianLogAgentNotReady`,
+is about the logs and has its own section at the end of "Which hop lost it".
+Seen on kind on 2026-10-06 after a demo: `meridian_runtime_runs_total`,
+`meridian_claims_triages_total`, `meridian_sweep_last_pass` (one instance,
+six series) and the recorded `meridian:claims_triages:delta15m`; and
+kube-state-metrics' two numbers for the DaemonSet in `logging`.
+`meridian_runtime_model_calls_total` was seen in the second run and not in the
+third (both demo claims needed no model call, so
+`meridian:runtime_model_calls:delta15m` had nothing to record).
 
 ## What you see
 
@@ -161,7 +170,9 @@ Running and ready can still ship nothing**: the agent reads the node's files by
 the group root, and a pod without that group started, logged no error and read
 no file when it was tried on fixture files, so the pod's output proves nothing
 about it. Smoke's line (a record of the Claims API in Loki) and `Started
-watching file` lines in the agent's output are the evidence that it reads.
+watching file` lines in the agent's output are the evidence that it reads
+(seen on kind on 2026-10-06, third run: 14 such lines, all for pods of the six
+services and the sweep, and none with "permission denied").
 
 What a restart loses: a replaced pod (a new release, a deleted pod, a node
 reboot) starts each file it finds at its end, so the lines written to a node's
@@ -170,7 +181,9 @@ exported are lost when it stops. Nothing is re-sent. A container that restarts
 keeps its checkpoint and re-sends nothing. The restart is
 `kubectl -n logging rollout restart daemonset/log-agent-agent`, safe to repeat,
 and after a renewal of the telemetry authority it is the step that makes the
-agent trust the new certificate.
+agent trust the new certificate. A restart of the agent and a renewal of the
+authority were not seen on kind: this paragraph is from the agent's
+configuration and its tests over fixture files.
 
 What the alert does not see. A DaemonSet that does not exist leaves no series,
 so no alert: smoke's line says "the log agent is not there". What a ready agent

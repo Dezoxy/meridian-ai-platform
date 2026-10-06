@@ -130,8 +130,9 @@
 #                 names the first that does not hold, and a SKIP says the
 #                 DaemonSet is not there. It does not prove the pod runs (that is
 #                 the eighth line) or that its security context is complete (the
-#                 capabilities, the seccomp profile and the user are the
-#                 values file's, tested without a cluster).
+#                 capabilities and the seccomp profile are the values file's,
+#                 tested without a cluster; the user, 10001 with runAsNonRoot,
+#                 was seen on kind on 2026-10-06).
 #                 The eighth line (S064) is the Claims API's access line, through
 #                 the same Grafana forward as the three read-backs. Smoke asks the Claims API,
 #                 through the edge the adjuster pages use, for a path that does

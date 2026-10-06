@@ -449,11 +449,12 @@ node image, Kubernetes components and the platform).
    authority, and a cold start. The rule that only a 400 passes, the Jobs'
    deadline and check 8's dependence on the push are tested without a cluster
    until the next run; the eighth line, S064's, passed on kind on 2026-10-06
-   (twice, with the agent as root); the seventh and the ninth, from the infra
-   review, are described at the end of this item and have not run on a
-   cluster). The first two are about TLS and do
-   not need the
-   Meridian services. The ConfigMap `telemetry-ca` in `meridian`, which the six
+   in all three of S064's runs (with the agent as root in the first two and as
+   user 10001 in the third); the seventh and the ninth, from the infra review,
+   are described at the end of this item and passed in the third run, where
+   `make smoke` printed 44 PASS, 0 FAIL and 0 SKIP). The first two are about
+   TLS and do not need the Meridian services. The ConfigMap `telemetry-ca` in
+   `meridian`, which the six
    services and telemetrygen mount to trust the collector, holds the
    certificate its authority has now: the SHA-256 fingerprint of its `ca.crt`
    equals that of `tls.crt` of the Secret `telemetry-ca` in `observability`
@@ -513,8 +514,11 @@ node image, Kubernetes components and the platform).
    does not hold, in a word of the script's own and never a value of the
    object; a SKIP says the DaemonSet is not there. It is read after `make up`
    alone too, so it PASSes there. It does not prove the pod runs, or that its
-   security context is complete (the capabilities, the seccomp profile and the
-   user are the values file's, tested without a cluster).
+   security context is complete. The user was seen on kind on 2026-10-06
+   (the third run: uid and gid 10001, `runAsNonRoot`, the supplementary group
+   0, and a server-side dry run of `enforce=restricted` on `logging` that
+   warned of the hostPath volume alone); the capabilities and the seccomp
+   profile are the values file's, tested without a cluster.
    The eighth line (S064) asks the Claims API, through the edge the adjuster
    pages use, for `/smoke-<epoch>`, a path that does not exist, and expects a
    404; the marker is in the path and not in a query, because the access line
@@ -617,7 +621,10 @@ node image, Kubernetes components and the platform).
    Job it passed was made without `OTEL_EXPORTER_OTLP_ENDPOINT` (the first
    smoke after a deploy that added the address reads a Job made before it: wait
    for a pass), and when Grafana could not be reached. After `make up` alone it
-   prints SKIP, with the first line. Tested without a cluster, not run on one.
+   prints SKIP, with the first line. It passed on kind on 2026-10-06 in the
+   third run (the six values, from one `instance`, `claims-sweep`; all six
+   findings were 0 in the first run); its
+   FAIL and SKIP branches are tested without a cluster and were not seen.
 8. **Network policy.** Five lines. Each opens a TCP connection and sends
    nothing, from Python in a pod (the image has no curl); a denied path passes
    only when it times out (a refused connection or a name that does not
@@ -841,7 +848,9 @@ node image, Kubernetes components and the platform).
     of [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster)
     stays by hand; nor that a threshold is right; nor that anyone would be
     told, because kind runs no Alertmanager. The four lines passed on the
-    cluster on every smoke run of 2026-10-06. Smoke was not run while the
+    cluster on every smoke run of 2026-10-06 (in the third of S064's runs with
+    the five groups and all 19 rules, none firing or pending). Smoke was not
+    run while the
     renewal watch's short certificates were in place and the alert fired; a
     firing alert is a FAIL of the third line, so it would have failed (see
     "How long a certificate lasts" below).
@@ -1199,7 +1208,8 @@ Until S063 a pod of any namespace could push to the collector, and
 `cert-manager` and `observability` had neither a NetworkPolicy nor Pod Security
 labels (threat model T-68, T-84). `make up` now applies three policy files
 before the releases they guard, beside the database's (a fourth, for the log
-agent's namespace, came with S064, below); all of it is **tested
+agent's namespace, came with S064, below, and was applied on kind on
+2026-10-06, where the agent sent through it); all of it is **tested
 without a cluster** (the manifests and the script's lines are checked against
 stub commands, and the pods' specs were read with `helm template`), until the
 first `make up` and `make smoke` after it have run on one.
@@ -1255,7 +1265,7 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 | `meridian` | `restricted` | nothing |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
 | `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
-| `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume alone (it allows no hostPath): the pod runs as user 10001 with `runAsNonRoot` (S064, read as `helm template` renders it, 2026-10-06; the label warns of nothing) |
+| `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume alone (it allows no hostPath): the pod runs as user 10001 with `runAsNonRoot` (S064, read as `helm template` renders it, 2026-10-06, and seen on kind the same day: a server-side dry run of `enforce=restricted` warned of "restricted volume types" alone; the label warns of nothing) |
 
 The Prometheus pods are the operator's, not rendered by Helm, and were not read:
 a server-side dry run on the cluster (`kubectl label --dry-run=server`) is the
@@ -1263,18 +1273,25 @@ check that reads them.
 
 ### The log agent and the namespace `logging` (S064)
 
-Status: **implemented; the first form ran on the kind cluster twice on
-2026-10-06, and the present form is tested without a cluster until the next
-`make up`.** The first form (as root, every pod of `meridian` that a pattern
-matched) ran at 11:10 UTC and, with the reviews' fixes in the services, at 11:34
-UTC: the pod was Running with no permission or TLS error in its output, smoke's
-line found the Claims API's access line in Loki (41 PASS, 0 FAIL, 0 SKIP) and
-the canaries (a query string, an address in a path) were in no line there. Not
-seen: a restart of the agent, a renewal of the authority, a flood of lines.
-The form below changed three things since: the user (10001, no longer root), the
-files it opens (a list of the workloads, no longer the whole namespace) and what
-it does with a line (names removed, `CRITICAL` mapped). Those were run only over
-fixture files with the pinned image, and are tested without a cluster.
+Status: **implemented; it ran on the kind cluster three times on 2026-10-06
+(local only), the third time in the form below.** The first form (as root, every
+pod of `meridian` that a pattern matched) ran at 11:10 UTC and, with the
+reviews' fixes in the services, at 11:34 UTC: the pod was Running with no
+permission or TLS error in its output, smoke's line found the Claims API's
+access line in Loki (41 PASS, 0 FAIL, 0 SKIP) and the canaries (a query string,
+an address in a path) were in no line there. The third run, at the final tip
+(12:56 to 13:06 UTC), ran the form below: the pod 1/1 Running with no restart,
+as uid and gid 10001 with `runAsNonRoot` and the supplementary group 0; 14
+"Started watching file" lines, all for pods of the six services and the sweep,
+and no line with "permission denied", "x509" or "error"; Loki held the six
+services and `sweep` and nothing of the Jobs or smoke's pods; smoke printed 44
+PASS, 0 FAIL, 0 SKIP. Not seen: a restart of the agent, a renewal of the
+authority, a flood of lines. The form below changed three things since the
+first: the user (10001, no longer root), the files it opens (a list of the
+workloads, no longer the whole namespace) and what it does with a line (names
+removed, `CRITICAL` mapped). The first two were seen in the third run; the
+third was run only over fixture files with the pinned image and is tested
+without a cluster, not seen on one.
 The owner chose, on 2026-10-06, that a node agent reads the pods' output and
 ships it to Loki, over each service pushing its own records (which would not
 have carried uvicorn's access line, output before a service's logging was set
@@ -1324,7 +1341,9 @@ and writing under the directory needs the node. What bounds the pod:
   group does not fail loudly: the pinned image, run as 10001 over a tree with
   these modes and without gid 0, started, logged no error and read no file, so
   "no `permission denied` in its output" proves nothing; smoke's line, which
-  looks for a record in Loki, is what notices
+  looks for a record in Loki, is what notices (on kind, in the third run, the
+  pod with the group shipped the services' lines; the pod without it was run
+  only over fixture files)
 - a NetworkPolicy of its own: no ingress, and egress to DNS and the
   collector's 4318 alone, so what it reads can go to Loki and nowhere else (the
   cluster's DNS pods answer any name, which a few bytes can ride; the policy
@@ -1414,7 +1433,9 @@ Jobs', the database's, smoke's and other namespaces' files and a symlink to
 one of them were not shipped, a line that carried the resource's names arrived
 without them, `CRITICAL` arrived as severity fatal, user 10001 with gid 0 read
 the files and wrote its checkpoint, and user 10001 without it read nothing and
-said nothing. That check is by hand and is not a test of the repository.
+said nothing. That check is by hand and is not a test of the repository. The
+third run on kind confirmed the user, the group and the include list (see the
+status above) and not the rest of this paragraph.
 
 What a restart re-sends. The checkpoint, the offset of each file read so far,
 is on an `emptyDir` of at most 32 MiB. It survives a restart of the container
@@ -1426,14 +1447,17 @@ appears later is read from its beginning. Lines read and not yet exported (the
 batch and the exporter's queue are in memory) are lost when the pod stops, and
 an export that keeps failing for the exporter's retry window (five minutes) is
 dropped. Kubelet keeps five rotated files of 10 MiB for each container; the
-agent does not read the rotated ones.
+agent does not read the rotated ones. None of this was seen on kind: the agent
+was not restarted in the three runs.
 
 The agent verifies the collector's certificate against the ConfigMap
 `telemetry-ca` in `logging`. The services re-read that file at each new
 connection; the exporter of the agent is not known to, so after the authority
 is renewed (`make up` publishes the new certificate to both namespaces),
 restart the DaemonSet: `kubectl -n logging rollout restart
-daemonset/log-agent-agent`. Reading the logs in Grafana is in
+daemonset/log-agent-agent` (a renewal of the authority was not seen on kind,
+so this is tested without a cluster, not seen on one). Reading the logs in
+Grafana is in
 [`docs/operations/README.md`](../../docs/operations/README.md), "Reading logs".
 
 The agent ships whatever a service prints. What a line holds is the service's
@@ -1441,7 +1465,13 @@ doing: the JSON log format of this step's code half builds the access line from
 the method, the path without its query and the status, and the redaction of
 personal data runs before it. A service that still ran uvicorn's plain access
 line would send the client's address and the query string to Loki, and the
-agent would ship it unchanged.
+agent would ship it unchanged. The edge's own access log is not the
+services': its pod (`envoy-gateway-system`, container `envoy`) writes one JSON
+line per request that keeps the whole request target, query string included,
+and a client address (seen on kind on 2026-10-06). It stays in that pod's
+output on the node and is not shipped to Loki: the include list names the six
+services and the sweep in `meridian`, and smoke's ninth telemetry line holds
+that Loki has no stream outside `meridian`.
 
 ### Who a service is (S055)
 
@@ -1608,7 +1638,8 @@ renewal, the DNS names `otel-collector.observability.svc` and
   restarts, as it does for a certificate it cannot read (not seen on a
   cluster). That is better than starting with telemetry that fails on every
   export. The Jobs set no endpoint and get none of this; the sweep gets it
-  (S064). Status: tested without a cluster.
+  (S064; its six findings arrived in Prometheus through this path on kind on
+  2026-10-06). Status: tested without a cluster.
 - **What the collector does.** It serves OTLP/HTTP with TLS on `:4318` from the
   Secret `otel-collector-tls`, mounted read-only as a directory, and reads the
   files again at a handshake every five minutes at most (`reload_interval`),
@@ -1746,7 +1777,9 @@ collector from S064, where `telemetry.otlpEndpoint` is set, with the SDK's
 export deadline `sweep.telemetryTimeoutSeconds`, 5 seconds, for the findings it
 sends before it exits, and, in S064's C3, the fixed instance ID
 `service.instance.id=claims-sweep` so that every pass writes the same six
-series; tested without a cluster, not run on one). A by-hand Job beside a
+series; on kind on 2026-10-06 the findings arrived and the six series were one
+`instance`, `claims-sweep`, in the third run; the 5-second deadline is tested
+without a cluster, not seen on one). A by-hand Job beside a
 scheduled one writes the same series too: the later sample wins.
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
@@ -1805,17 +1838,19 @@ three alerts that notice a series that is not there, and a fourth that
 notices the log agent not being ready). It holds 16 alert
 rules and three recording rules: five on the gateway, three on the workloads
 and four on the certificates, and, from S064, four on missing telemetry
-(tested without a cluster, not yet loaded on one): the Model Gateway's, the
-Agent Runtime's and the sweep's metrics, each fired when the upstream end
+(loaded and healthy on kind on 2026-10-06, in the third run, and none seen
+firing; tested without a cluster, not seen firing on one): the Model Gateway's,
+the Agent Runtime's and the sweep's metrics, each fired when the upstream end
 counted something in the last 15 minutes and the downstream end has no
 sample at all, and `MeridianLogAgentNotReady`, which fires when the log
 agent's DaemonSet in `logging` has had fewer ready pods than nodes for 10
 minutes (it reads kube-state-metrics' two numbers of a DaemonSet, which the
-stack serves: only the `secrets` collector is excluded; a DaemonSet that does
+stack serves: only the `secrets` collector is excluded, and the two series
+for `logging` were seen on kind on 2026-10-06; a DaemonSet that does
 not exist leaves no series and so no alert, and smoke's line says it is not
 there). The CronJob of the sweep sets one instance ID
 (`service.instance.id=claims-sweep`), so its six series are the same from
-pass to pass. It
+pass to pass (seen on kind on 2026-10-06). It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:
@@ -1834,8 +1869,8 @@ lose.
 
 `make up` applies both: the rules with `kubectl apply`, the dashboard as a
 ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
-(check 11, passed on the cluster on 2026-10-06 with four groups; five since
-S064): Prometheus has loaded the
+(check 11, passed on the cluster on 2026-10-06 with four groups and, in the
+third of S064's runs, with five groups and all 19 rules): Prometheus has loaded the
 five groups with every rule healthy, the loaded rule names are the file's,
 no Meridian alert is firing, and Grafana serves the health dashboard with
 the file's queries, every one of which runs in Prometheus. What stays by

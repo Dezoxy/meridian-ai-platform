@@ -2,8 +2,8 @@
 # node (values/log-agent.yaml). `make up` applies this before the agent's
 # release is installed, with the other policies. The kind cluster's network
 # plugin (kindnet) enforces both directions. The policies ran on the kind cluster
-# on 2026-10-06 (twice): the agent resolved the collector's name, reached its
-# port 4318 and smoke's line found its records in Loki. That the agent cannot
+# on 2026-10-06 (three times): the agent resolved the collector's name, reached
+# its port 4318 and smoke's line found its records in Loki. That the agent cannot
 # reach the API server or Loki was not probed (the image has no shell, and a
 # probe would need a pod of its own in `logging`).
 #

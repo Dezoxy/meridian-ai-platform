@@ -590,8 +590,11 @@ def test_the_header_says_what_ran_on_a_cluster_and_what_did_not() -> None:
     assert "ran on the kind cluster twice on 2026-10-06" in text
     assert "11:10 UTC" in text and "11:34 UTC" in text
     assert "no permission or TLS error" in text and "41 of 41" in text
-    assert "Not seen: a restart of the agent, a renewal of the authority" in text
-    assert "a flood of lines" in text
+    # The third run, in the present form (the user, the list), was seen.
+    assert "ran a third time (12:56 to 13:06 UTC, 44 of 44)" in text
+    assert "uid and gid 10001" in text and "14 files watched" in text
+    assert "Not seen on a cluster: a restart of the agent, a renewal of the" in text
+    assert "authority, a flood of lines" in text
     assert "tested without a cluster" in text
 
 

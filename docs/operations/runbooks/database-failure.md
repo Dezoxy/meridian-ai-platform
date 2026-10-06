@@ -133,9 +133,10 @@ It writes one summary line per pass and exits 0 when the pass was clean,
 1 when an item or a connection failed, 2 for a setting it cannot use. A
 failed run is not retried; the next scheduled run is the retry. The
 numbers of the line are also the gauge `meridian_sweep_last_pass`
-(implemented in tests, not run on a cluster; the CronJob sends nothing
-until it is given the collector's address), so the log line stays the
-place to read a pass until it is.
+(implemented; seen on kind on 2026-10-06: after a pass Prometheus held
+one instance, `claims-sweep`, with six series, one for each number; the
+CronJob sends nothing until it is given the collector's address), so the
+log line stays the place to read a pass where it is not.
 
 A pass whose numbers did not arrive leaves no series, and the exit code
 does not say so: the gauge is sent after the pass and a failed send is
@@ -149,9 +150,12 @@ k logs job/<the newest job's name> | grep metric_exporter
 
 A collector that is refused shows `Transient error` warnings that name its
 host and port, then one error, "Failed to export metrics batch", that
-names no address. The sweep's own warning, "the sweep's metrics were not
-sent", names only a class. A rule on the gauge's absence is the detector;
-none exists yet.
+names no address (read from tests; no send of the sweep failed on kind).
+The sweep's own warning, "the sweep's metrics were not
+sent", names only a class. A rule on the gauge's absence is the detector:
+`MeridianSweepNotReporting`, whose runbook is
+[telemetry missing](telemetry-missing.md) (loaded and healthy on kind on
+2026-10-06, not seen firing).
 
 | What the log or the CronJob shows | Cause |
 |---|---|

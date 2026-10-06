@@ -144,13 +144,17 @@ stays quiet. What it cannot answer:
 - An alert on a caller that cannot reach the gateway at all. The Agent
   Runtime counts its model calls (S064: `meridian_runtime_model_calls_total`
   with `meridian_reason="unreachable"`, `timeout`, `refused`, `filtered`,
-  `error` or `limit`; implemented in tests, not run on a cluster), and no
-  rule reads it yet. The knowledge server counts its tool calls
+  `error` or `limit`; implemented; the series was seen on kind on
+  2026-10-06 with the outcome `completed` in the second run and not in
+  the third, and no failing reason was seen), and the one rule that reads
+  it, `MeridianGatewayMetricsMissing`, reads completed calls only. The
+  knowledge server counts its tool calls
   (S064: `meridian_toolserver_calls_total{job="knowledge-mcp"}` with
   `meridian_outcome="failed"` and `meridian_reason="gateway-unavailable"`
   or `"timed-out"`, or `meridian_outcome="refused"` and
-  `meridian_reason="gateway-busy"` or `"gateway-refused"`; implemented in
-  tests, not run on a cluster), and no rule reads it yet either. The
+  `meridian_reason="gateway-busy"` or `"gateway-refused"`; implemented;
+  the series was seen on kind on 2026-10-06 with completed calls, and
+  none of these reasons was seen), and no rule reads it. The
   nearest alert is `MeridianServiceUnavailable`.
 - The second region, and Mistral as a second provider (S023).
 - A time window on a circuit's failure count: three failures days apart

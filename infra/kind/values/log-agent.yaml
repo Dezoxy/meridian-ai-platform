@@ -13,12 +13,16 @@
 # 2026-10-06, as root, at 11:10 UTC and (with the reviews' fixes in the
 # services) at 11:34 UTC: the pod was Running with no permission or TLS error in
 # its output, smoke's line found the Claims API's access line in Loki (41 of 41)
-# and the canaries (a query string, an address in a path) were in no line. Not
-# seen: a restart of the agent, a renewal of the authority, a flood of lines.
-# The form below (a user that is not root, a list of the workloads, a filter on
-# the resolved path, the line's own names removed, a severity for CRITICAL) is
-# tested without a cluster: the pinned image ran over fixture files that have
-# the node's modes. It has not run on a cluster until the next `make up`.
+# and the canaries (a query string, an address in a path) were in no line. The
+# form below ran a third time (12:56 to 13:06 UTC, 44 of 44): a user that is
+# not root (uid and gid 10001, the supplementary group 0), a list of the
+# workloads (Loki held the six services and the sweep, and nothing of the Jobs
+# or smoke's pods), 14 files watched and no error in the pod's output. Seen on
+# kind, local only. Not seen on a cluster: a restart of the agent, a renewal of
+# the authority, a flood of lines, and the filter on the resolved path, the
+# line's own names removed and the severity for CRITICAL, which are tested
+# without a cluster (the pinned image ran over fixture files that have the
+# node's modes).
 #
 # What this pod can read, and what it cannot (the price of the owner's decision):
 #   - One hostPath, /var/log/pods, read-only and recursively read-only: the

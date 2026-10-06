@@ -46,9 +46,10 @@ judged yet, and it says why. Seen on 2026-10-06, each leaving 34 PASS and
 one SKIP: the sweep's line until the CronJob has been scheduled once (it
 runs every five minutes, and a smoke run two minutes after `make deploy`
 skips it, and since S064 the findings' line beside it, which asks Prometheus
-for what that pass sent); the cost series line right after the services restart and
-before any claim is sent ("the gateway has settled no call since it
-started"); and the audit line of the service identity check on a second
+for what that pass sent: that skip was designed and tested, and not seen, as
+S064's three runs on 2026-10-06 had none); the cost series line right after
+the services restart and before any claim is sent ("the gateway has settled
+no call since it started"); and the audit line of the service identity check on a second
 run inside the gateway's minute ("the gateway wrote this minute's refusal
 row for an earlier run"). After `make up` alone every line that needs the
 services skips: 24 lines, 17 PASS and 7 SKIP.
@@ -65,7 +66,10 @@ On the Linux virtual machine on 2026-10-06, from nothing: `make up` 5 min
 machine), the first `make deploy` 1 min 30 s, a deploy that builds no new
 image 11 s, `make smoke` 37 s after `make up` alone (24 lines: 17 PASS and
 7 SKIP) and 40 to 52 s over the day on the deployed cluster (35 lines, 35
-PASS once the sweep had run), `make demo` 30 s.
+PASS once the sweep had run), `make demo` 30 s. With S064 on the same
+cluster the same day, on the running cluster and not made again: `make up`
+153 s, `make deploy` 80 s and `make smoke` 64 s, 44 PASS, 0 FAIL and 0 SKIP;
+the log agent's access-line check is among them.
 
 In a second terminal, and keep it open:
 

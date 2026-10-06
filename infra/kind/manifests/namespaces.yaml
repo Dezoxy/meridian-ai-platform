@@ -57,7 +57,10 @@
 #                  supplementary group (containerd writes the files as
 #                  root:root, mode 0640, which the group reads), every
 #                  capability dropped and runAsNonRoot set, so the hostPath
-#                  volume ALONE keeps it out of `restricted` (the header of the
+#                  volume ALONE keeps it out of `restricted` (seen on kind on
+#                  2026-10-06, third run: a server-side dry run of
+#                  enforce=restricted on the namespace warned of "restricted
+#                  volume types" alone; the header of the
 #                  values file says what bounds it). Before G1 the pod ran as
 #                  uid 0 and could not meet runAsNonRoot; the node's files were
 #                  looked at on 2026-10-06 and the group was enough. Unlike
