@@ -671,7 +671,7 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
     container = only_container(job)
     gateway = env_of(containers(deployment("agent-runtime"))[0])[GATEWAY_URL_ENV]
 
-    assert container["command"] == [
+    ingest = [
         "meridian",
         "knowledge",
         "ingest",
@@ -680,7 +680,11 @@ def test_the_ingest_job_embeds_the_wordings_through_the_gateway_and_is_kept() ->
         "--from",
         synthetic_destination(),
     ]
-    assert cli_command_words(container["command"][1:]) == ["knowledge", "ingest"]
+    # Since S067 the same command line then runs `meridian knowledge verify`
+    # (test_ingest_job_verify.py holds the second half and what a failure does).
+    assert container["command"][:2] == ["sh", "-c"]
+    assert container["command"][2].startswith(" ".join(ingest) + " && ")
+    assert cli_command_words(ingest[1:]) == ["knowledge", "ingest"]
     assert set(env_of(container)) == {
         INGEST_DATABASE_URL_ENV,
         GATEWAY_URL_ENV,

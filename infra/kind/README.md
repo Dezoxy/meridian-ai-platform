@@ -1131,7 +1131,12 @@ In order, `make deploy`:
    `meridian knowledge ingest` as `knowledge_ingest` (its audit row names that
    role), which embeds the 85 clauses of the four
    wordings through the gateway and replaces the knowledge store in one
-   transaction. Once per image: the finished Job has no expiry and is the
+   transaction. The same Job then runs `meridian knowledge verify` (S067),
+   which compares each stored clause with the manifest-verified wordings and
+   fails the Job on a difference
+   ([the runbook](../../docs/operations/runbooks/knowledge-store.md); built
+   and tested without a cluster, not yet run on one). Once per image: the
+   finished Job has no expiry and is the
    record that this image's corpus is in the store, so the next deploy of
    the same image skips it, after checking that the store is not empty. The
    Job is a record of what was done, not of what the store holds now: after
