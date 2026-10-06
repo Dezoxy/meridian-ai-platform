@@ -9,6 +9,8 @@ import uuid
 import psycopg
 import pytest
 from dbsupport import OWNER, SERVICE_ROLES, DatabaseHandle
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from meridian.platform.common.db import connect
 from meridian.workloads.claims_triage.lifecycle import MAX_TRIAGES_PER_CLAIM
@@ -278,3 +280,23 @@ def count_rows(db: DatabaseHandle, table: str, thread: str) -> int:
         (thread,),
     )
     return rows[0][0]
+
+
+def as_role_by_set_role(db: DatabaseHandle, role: str) -> psycopg.Connection:
+    """A connection whose session user is the admin and whose role is ``role``.
+
+    A superuser may SET ROLE to any role without a membership, and its own
+    powers do not apply once it has. The SET ROLE is committed, so a statement
+    the server refuses (and the rollback after it) leaves the role as it was.
+    For ``claims_sweep`` this is the session of a login later made a member of
+    the role that runs SET ROLE: session_user is the login, current_user the
+    role (0014).
+    """
+    conn = psycopg.connect(make_conninfo(db.admin_dsn, dbname=db.name))
+    conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+    names = conn.execute("SELECT session_user, current_user").fetchone()
+    assert names is not None
+    assert names[1] == role
+    assert names[0] != role
+    conn.commit()
+    return conn
