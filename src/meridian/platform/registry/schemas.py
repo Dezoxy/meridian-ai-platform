@@ -30,6 +30,16 @@ def stale_schemas(registry_dir: Path) -> tuple[str, ...]:
     return tuple(stale)
 
 
+def unwritable_schemas(registry_dir: Path, exc: OSError) -> str:
+    """The problem of a schemas directory the process cannot write into: the
+    error's class, never its text (which holds a path). The write is not
+    all-or-nothing, so the line says to run the command again."""
+    return (
+        f"{registry_dir / SCHEMAS_SUBDIR}: schemas cannot be written: "
+        f"{type(exc).__name__}; run `meridian registry schemas` again"
+    )
+
+
 def write_schemas(registry_dir: Path) -> tuple[str, ...]:
     """Write every schema; return the names of the files that changed."""
     target = registry_dir / SCHEMAS_SUBDIR

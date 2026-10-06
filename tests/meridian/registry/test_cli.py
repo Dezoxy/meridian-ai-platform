@@ -2,10 +2,19 @@
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
-from directorysupport import CANARY, FAILURES, Failure, make_unreadable
+from directorysupport import (
+    CANARY,
+    FAILURES,
+    WRITE_FAILURES,
+    Failure,
+    WriteFailure,
+    make_unreadable,
+    make_unwritable,
+)
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
@@ -176,6 +185,90 @@ def test_schemas_without_check_rewrites_the_stale_file(registry_copy: Path) -> N
 
     assert written.exit_code == 0, written.output
     assert checked.exit_code == 0, checked.output
+
+
+def test_schemas_without_check_prints_how_many_files_it_changed(
+    registry_copy: Path,
+) -> None:
+    (registry_copy / "schemas" / "models.schema.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "schemas written: 1 changed\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("failure", WRITE_FAILURES)
+def test_schemas_that_cannot_be_written_end_in_an_error_line_not_a_traceback(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch, failure: WriteFailure
+) -> None:
+    (registry_copy / "schemas" / "models.schema.json").unlink()
+    make_unwritable(monkeypatch, registry_copy / "schemas", failure)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be written: "
+        "PermissionError; run `meridian registry schemas` again\n"
+    )
+    assert result.stdout == ""
+    assert CANARY not in result.output
+    assert not isinstance(result.exception, PermissionError)
+
+
+def test_a_schemas_path_that_is_a_file_ends_in_an_error_line_not_a_traceback(
+    registry_copy: Path,
+) -> None:
+    shutil.rmtree(registry_copy / "schemas")
+    (registry_copy / "schemas").write_text("not a directory\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be written: "
+        "FileExistsError; run `meridian registry schemas` again\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, OSError)
+
+
+def test_a_write_that_fails_part_way_says_to_run_the_command_again(
+    registry_copy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("models", "tools"):
+        (registry_copy / "schemas" / f"{name}.schema.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+    make_unwritable(monkeypatch, registry_copy / "schemas", "write", let_through=1)
+
+    failed = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+    monkeypatch.undo()
+    checked = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+    repaired = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert failed.exit_code == 1, failed.output
+    assert "run `meridian registry schemas` again" in failed.stderr
+    assert checked.exit_code == 1
+    assert checked.stderr.count("is out of date") == 1
+    assert repaired.exit_code == 0, repaired.output
+    assert repaired.stdout == "schemas written: 1 changed\n"
 
 
 def test_no_arguments_prints_help() -> None:
