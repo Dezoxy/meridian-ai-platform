@@ -25,6 +25,7 @@ from sweepmigrationsupport import (
     SELECT_CLAIM_COLUMNS,
     STATES,
     SWEEP_HOLDS,
+    SWEEP_HOLDS_SINCE_0023,
     SWEEP_MOVES,
     TENANT,
     TRIGGER_FUNCTIONS,
@@ -105,7 +106,8 @@ def test_the_sweep_holds_exactly_the_grants_of_the_contract(
     migrated_database: DatabaseHandle,
 ) -> None:
     held = privileges(migrated_database, ROLE)
-    expected = SWEEP_HOLDS | BRIEF_SWEEP_HOLDS  # 0014's, and 0024's (S037)
+    # 0014's grants, 0023's (the second host's table) and 0024's (S037).
+    expected = SWEEP_HOLDS_SINCE_0023 | BRIEF_SWEEP_HOLDS
 
     assert held == expected, (held - expected, expected - held)
 

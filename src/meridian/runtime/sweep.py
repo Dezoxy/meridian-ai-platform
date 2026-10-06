@@ -3,9 +3,10 @@
 The sweep is a job of the claims-triage workload, with a database role of its
 own (``claims_sweep``, migration 0014); the statements here are the ones that
 belong to ``runtime.runs`` and the checkpoint tables, so they live beside
-them. This module must stay free of LangGraph: the sweep job loads it, and the
-job needs PostgreSQL and nothing else. Its checkpoint clean-up is SQL for that
-reason, not the saver's ``delete_thread``.
+them. This module must stay free of LangGraph and of every other agent
+framework: the sweep job loads it, and the job needs PostgreSQL and nothing
+else. Its checkpoint clean-up is SQL for that reason, not a saver's or a
+store's own delete.
 
 Every function runs on the connection the caller passes and leaves the commit
 to the caller, so a run's end, its audit event and its checkpoints' removal are
@@ -33,7 +34,17 @@ SWEPT_STATUSES = ("Running", "AwaitingApproval")
 # for a failure (a test keeps the two equal); the sweep's reason word follows.
 RUN_FAILED_EVENT = ("run.failed", "failed")
 ABANDONED_REASON = "abandoned"
-CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+# The three tables of LangGraph's saver (0008) and the second host's own,
+# ``workflow_checkpoints`` (0023, S037), named here and not imported: its store
+# imports the second framework, and this module must not. Every one has a
+# ``thread_id`` text column with an index that leads with it, which is all the
+# statements below assume.
+CHECKPOINT_TABLES = (
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "workflow_checkpoints",
+)
 # How many threads of each checkpoint table the listing of leftovers looks at per
 # thread it may return: a candidate that belongs to a live run is dropped, so the
 # listing looks at more threads than it lists. A multiple, not a fixed number, so
@@ -143,7 +154,7 @@ def _run_thread(thread_id: str) -> uuid.UUID | None:
 
 
 def delete_thread_checkpoints(conn: psycopg.Connection, thread_id: str) -> int:
-    """Delete the thread's rows in the three checkpoint tables, unless a run of
+    """Delete the thread's rows in every checkpoint table, unless a run of
     the thread is unfinished (the check is in each ``DELETE``, so it holds when
     the rows go). Returns how many rows went."""
     run_thread = _run_thread(thread_id)
