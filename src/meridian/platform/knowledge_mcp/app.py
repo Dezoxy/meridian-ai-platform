@@ -6,6 +6,7 @@ from collections.abc import Callable
 from http.cookiejar import DefaultCookiePolicy
 
 import httpx
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
@@ -59,6 +60,7 @@ def create_app(
     *,
     http: httpx.Client | None = None,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> ToolApp:
     """The app. An ``http`` the caller gives is the caller's and is not closed;
@@ -83,6 +85,7 @@ def create_app(
             service_name=SERVICE_NAME,
             handlers=handlers(client),
             tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
             clock=clock,
             on_close=client.close if http is None else None,
         )

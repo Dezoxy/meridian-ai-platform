@@ -3,6 +3,7 @@
 import time
 from collections.abc import Callable
 
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
@@ -17,6 +18,7 @@ def create_app(
     settings: ToolServerSettings,
     *,
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> ToolApp:
     return create_tool_app(
@@ -25,6 +27,7 @@ def create_app(
         service_name=SERVICE_NAME,
         handlers=HANDLERS,
         tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
         clock=clock,
     )
 

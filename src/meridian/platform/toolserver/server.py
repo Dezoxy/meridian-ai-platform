@@ -24,6 +24,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from opentelemetry import context, propagate
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import get_current_span
 from pydantic import ValidationError
@@ -45,6 +46,7 @@ from meridian.platform.common.identity import (
     caller_policy,
     install_caller_check,
 )
+from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.sdklog import quiet_sdk_logging
 from meridian.platform.common.telemetry import (
     configure_propagation,
@@ -56,6 +58,7 @@ from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
 from meridian.platform.toolserver.contracts import tool_listing
 from meridian.platform.toolserver.handlers import TIMED_OUT, Deadline, ToolHandler
+from meridian.platform.toolserver.meters import ToolServerMeters
 from meridian.platform.toolserver.pipeline import (
     Call,
     Finished,
@@ -246,6 +249,7 @@ def create_tool_app(
     service_name: str,
     handlers: Sequence[ToolHandler],
     tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
     on_close: Callable[[], None] | None = None,
 ) -> ToolApp:
@@ -253,6 +257,8 @@ def create_tool_app(
 
     ``on_close`` is called once when the app's lifespan ends, whether or not
     the tracer provider is the caller's (the server's own clients close there).
+    A tracer or meter provider this function made is shut down there; one the
+    caller gave is the caller's.
 
     Raises ``SettingsError`` when the handlers and the registry disagree, or a
     schema or the listing is one the server could not serve.
@@ -278,6 +284,8 @@ def create_tool_app(
     configure_propagation()
     provider = tracer_provider or make_tracer_provider(service_name)
     tracer = provider.get_tracer(TRACER_NAME)
+    meters_provider = meter_provider or make_meter_provider(service_name)
+    meters = ToolServerMeters(meters_provider, registry, entries)
 
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
@@ -298,6 +306,7 @@ def create_tool_app(
             with start_span(tracer, SPAN_NAME) as span:
                 finished = await runner.run(call, params, meta, deadline)
                 set_span_attributes(span, _span_attributes(finished))
+                meters.call_ended(finished)
                 return _answer(finished)
         finally:
             if token is not None:
@@ -375,8 +384,12 @@ def create_tool_app(
                 yield
         finally:
             try:
-                if tracer_provider is None:  # one this function made is its own
-                    provider.shutdown()
+                try:
+                    if tracer_provider is None:  # one this function made is its own
+                        provider.shutdown()
+                finally:
+                    if meter_provider is None:
+                        meters_provider.shutdown()
             finally:
                 if on_close is not None:
                     on_close()

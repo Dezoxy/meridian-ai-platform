@@ -204,9 +204,21 @@ namespace; Meridian's file does not repeat them.
   leg, a `meridian_reason` word of the runtime's own closed set; every
   failure a workload's graph names is the one word `graph-failure`. Both
   carry `meridian_tenant` and `meridian_agent`. No rule reads either yet.
-  The tool servers still export traces only, so the knowledge server's
-  `gateway-unavailable` has no metric; `MeridianServiceUnavailable` is the
-  nearest signal there.
+  The three tool servers count their calls too (S064, implemented in
+  tests, not run on a cluster): the OTLP counter
+  `meridian.toolserver.calls` reaches Prometheus as
+  `meridian_toolserver_calls_total`, under the server's own `job`
+  (`policy-mcp`, `claims-mcp`, `knowledge-mcp`), by `meridian_outcome`
+  (`completed`, `replayed`, `refused`, `failed`), `meridian_reason` for a
+  refusal or a failure, `meridian_tool` (the server's registry tool; a
+  name no registry tool has is counted with no tool label) and, once the
+  kit has read the run's record, `meridian_tenant` and `meridian_agent`.
+  The knowledge server's `gateway-unavailable` and `timed-out` (failed),
+  `gateway-busy` and `gateway-refused` (refused) are series of it:
+  `gateway-unavailable` is any gateway that gave no vector for a call with
+  time left, which includes one that could not be reached and one that
+  answered a status other than 429 and 403. No rule reads them yet;
+  `MeridianServiceUnavailable` stays the alert there.
 - **A gateway that has served nothing.** After a restart the gateway has no
   series until its first call, so the share is absent, not 100 %.
 - **Replay mode.** On kind the gateway answers from the simulated `replay`
@@ -221,7 +233,10 @@ namespace; Meridian's file does not repeat them.
   many claims it referred is in the log line only.
 - **Logs.** No service exports its logs to Loki, so no rule reads one. The
   warnings for an empty knowledge store and for stale vectors stay in the
-  knowledge server's own output.
+  knowledge server's own output as well, and are also counted since S064
+  (`meridian_toolserver_calls_total` with `meridian_reason="no-corpus"` or
+  `"stale-vectors"`; implemented in tests, not run on a cluster, no rule
+  reads them yet).
 
 ## Controls that are not objectives
 
