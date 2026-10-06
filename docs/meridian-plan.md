@@ -379,7 +379,7 @@ pinned images resolve there.
 | S031 | Supervisor and workers | Triage split into a supervisor and workers with per-worker tool allowlists; the evaluation shows no regression | todo | S017 |
 | S032 | Injection evaluation suite | Prompt-injection cases in retrieved content and claimant text; guardrail effectiveness measured in the harness | done | S017, S047 |
 | S033 | Read-only platform console | Four pages: registry with residency, tenants with budgets and usage, evaluation runs, audit search | todo | S011, S021 |
-| S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | todo | S024 |
+| S034 | Governance documents | Provider onboarding process and service acceptance checklist, applied to the reference workload | done | S024 |
 | S035 | M3 exit | Architecture PDF released; demo script v2; every capability labelled | todo | S028, S033, S034 |
 
 ### M4 — Optional, at most one
@@ -408,6 +408,7 @@ that day; the rest stand as their step recorded them.
 | The wait after an interrupted deploy | S044 | open | S062 |
 | `make smoke` does not read the stores | S044 | partly closed by S043 (it reads `gateway.usage`) | S062 |
 | A deployment past its `retires` date still routes | S010 | open | S030 |
+| A recording is keyed on the request alone (messages, output budget, schema), and the evaluation compares who answered by kind and label, so a model swapped behind an unchanged prompt replays the old recording and passes the gate | S034 | open; found while applying the onboarding checklist (PO-19), confirmed by its fact-check in `recorded.py` and `compare.py` | S030 |
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
 | A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
@@ -8708,6 +8709,105 @@ follow-up backlog, without a prompt change and without a live recording.
   builders' own workload check; `registry schemas` and a directory it
   cannot write; six functions over 50 lines that the step only touched.
 
+### S034 — Governance documents
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** the provider onboarding process and the service acceptance
+checklist that the scope and T-20 promise, each applied once to what the
+repository holds.
+
+**Decisions:**
+
+- **Run beside S062 and S065, in one session**, on the owner's word of
+  2026-10-06 ("So back to multisteps… Can we run 3 steps at once?"; Part
+  A). It shares no file with either but the root README and this plan.
+- **Where: `docs/governance/`, beside `docs/operations/`.** These are
+  operating-model documents, not architecture, so they are not under
+  `docs/architecture/` and not in the architecture PDF. Five files: the
+  two processes with their checklists (`PO-01` to `PO-24`, `SA-01` to
+  `SA-30`), each applied once (to Azure OpenAI, to claims triage), and an
+  index. The item IDs are the documents' own, so `make docs` does not
+  read them as citations of the registers.
+- **Designed, and said so.** Each document opens with a dated status: a
+  process written and applied once on paper, enforced by no gate beyond
+  the checks its items name. Each item says what enforces it, a check or
+  a person reading.
+- **"Met" means evidence in tests, CI or on kind, never Azure**, and an
+  item that cites a threat-register row labelled "implemented in part"
+  is at most partly met, unless the row's residual is not what the item
+  asks, which the item then says. An applied checklist that is all green
+  would be wrong here: nothing is deployed to Azure, the runbooks are
+  not exercised, the objectives' targets are proposals.
+- **No law is stated.** Where an item needs a legal judgement (what the
+  provider keeps, its sub-processors, an agreement), it is recorded as
+  open and as the insurer's legal function's to answer. The documents
+  cite the repository's own statements (C-02, the scope, the data
+  classification) and add none.
+- **Every row was checked against its evidence before the close.** The
+  documents' worth is that they are true, so a reviewer read all 54
+  applied rows, every number and every cited step against the files.
+  It found one statement wrong (the schema does not require a
+  retirement date; the validator does, for Azure), two rows marked met
+  that claimed more than tests, CI or kind show, and steps cited for
+  what their rows do not promise. All fifteen findings were corrected.
+- **No threat-model note of its own.** The step builds no feature; it
+  writes down, as T-20 asked, the checklist a provider passes. T-20 now
+  points at it.
+
+**Work log:**
+
+- **Mapping first.** An Explore subagent listed what the repository
+  already says about governance, the conventions a new document must
+  follow and the evidence to build on.
+- **One contract to the `implementer`.** Its first run stopped without
+  writing: the harness refuses a subagent's write outside the session's
+  own worktree. It was resumed to write in the session's worktree, and
+  the commit was carried to this branch with git. It read the registry,
+  the Terraform and the code before writing, and corrected the
+  contract's own brief in one place (the Azure foundation is
+  persistent; only the compute environment is per demo day).
+- **The fact-check**, then a second contract for its fifteen findings,
+  in a worktree of the implementer's own.
+- **Counts corrected on the way**, each recounted from its source: the
+  threat register has 91 rows (the model's opening said 87, the README
+  90), eight objectives of which five have an indicator, six runbooks,
+  twelve alert rules and one recording rule.
+
+**Result / verification:**
+
+- **Provider onboarding**, 24 items, applied to Azure OpenAI: 8 met, 11
+  partly met, 5 not met. Not met: what the provider keeps (PO-08), its
+  sub-processors (PO-09), an agreement (PO-10), all three the legal
+  function's; network exposure (PO-11: public access is enabled on the
+  account and the vault, S020); retirement (PO-17: the date is recorded
+  and nothing reads it, S030). Azure OpenAI is registered and routed
+  for synthetic data only.
+- **Service acceptance**, 30 items, applied to claims triage: 9 met, 15
+  partly met, 6 not met. Not met: people identified (SA-13, S021), the
+  injection suite's target (SA-16), runbooks exercised (SA-21), rollback
+  (SA-26), data recovery (SA-27), retention (SA-28). Claims triage is
+  not called accepted.
+- **The fact-check's tally after the corrections**: every relative link
+  and anchor resolves; no sentence reads as enforced capability; no
+  statement of what a law requires.
+- **Gates, run by the main session on the branch with `main` merged
+  in:** `make docs` (13 checks), `make test`, `make check` (no ERROR
+  line) and `make secret-scan` (no leaks), each exit 0. No Python
+  changed.
+- **Not done:** nothing was read from Azure for these documents; the
+  dated live readings they cite are the plan's own records (S007).
+
+**Follow-ups:**
+
+- In the backlog: a model swapped behind an unchanged prompt replays the
+  old recording and passes the evaluation gate (S030).
+- For the owner, no step: the three items that need the insurer's legal
+  function; and whether a live comparison of the registry with Azure
+  belongs in S022's "done when" (T-12 proposes it, the step's row does
+  not name it).
+- The root README's operations row still says the rules and the health
+  dashboard were not applied to a cluster; S062, which reads them from
+  `make smoke`, corrects it.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -9034,3 +9134,10 @@ follow-up backlog, without a prompt change and without a live recording.
   nothing 5 min 04 s, the first `make deploy` 1 min 30 s, `make smoke`
   43 s with 24 lines passing, and the whole suite beside the deployed
   cluster 3 min 10 s with 4 workers.
+- **v0.47, 2026-10-06:** S034 done, beside S062 and S065.
+  `docs/governance/` holds the provider onboarding process and the
+  service acceptance checklist, each applied once on paper: Azure OpenAI
+  8 met, 11 partly met, 5 not met of 24; claims triage 9, 15 and 6 of 30,
+  and not called accepted. Every applied row was checked against its
+  evidence before the close. Both are designed. One new backlog row, for
+  S030.
