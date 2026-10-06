@@ -146,7 +146,11 @@ For the virtual machine both are recorded below.
   when it does (`CLAUDE.md`, hard rule 8). What still asks is what costs
   money, leaves the machine or cannot be made again from the repository:
   Azure, Terraform, a Helm uninstall, an image push, a release, and a `gh
-  pr merge --admin`, which merges past failing checks.
+  pr merge --admin`, which merges past failing checks. A known limit,
+  older than this change: the hook has ten seconds, and with the machine
+  loaded (a load average near 70) a command that carries a 70 KB heredoc,
+  or one of 4,000 segments, takes it that long (1.3 s when idle). Write a
+  long script with the Write tool and run the file.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.
