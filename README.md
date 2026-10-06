@@ -92,7 +92,7 @@ graph LR
 
 | Capability | Label | Where |
 |---|---|---|
-| Architecture model: context, container, governance and two runtime views | Implemented as a model and compared with the code at the end of M1 (S018); what is not built yet is tagged `Designed` and drawn dotted | `docs/architecture/` |
+| Architecture model: context, container, governance and two runtime views, and a deployment view of Google Cloud | Implemented as a model and compared with the code at the end of M1 (S018); what is not built yet is tagged `Designed` and drawn dotted; the Google Cloud deployment view is designed only, nothing of it exists in a cloud (S077) | `docs/architecture/` |
 | Decisions: Azure and kind with AWS designed; LangGraph behind a framework-agnostic contract; a thin model gateway; mutual TLS and cert-manager for a service's identity | Accepted | `docs/architecture/decisions/` |
 | Engineering harness: reviewers, skills, hooks, slash commands, an MCP server, permissions, documentation gate | Implemented | `.claude/`, `.agents/`, `.codex/`, `.mcp.json`, `scripts/` |
 | Python workspace and CI gates: ruff, pytest, import contracts that keep the agent framework out of platform packages, with a test that plants violations | Implemented | `pyproject.toml`, `tests/meridian/`, `.github/workflows/python.yml` |
