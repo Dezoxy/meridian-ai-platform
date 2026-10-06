@@ -9,7 +9,8 @@ removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
 servers, S043 for the cost dashboard, S015 for the adjuster's decision,
 S016 for the adjuster's pages, S019 for the Helm chart and its hardening).
-Nothing here is deployed anywhere but your laptop; the Azure side is S007
+Nothing here is deployed anywhere but a local cluster (the laptop it was
+built on, and on 2026-10-06 a Linux virtual machine); the Azure side is S007
 onward. The services run in replay mode: no model is called, the model's
 text is canned and simulated, and so are the embeddings. A triage that asks
 the model its one question therefore gets no usable answer and goes to an
@@ -185,12 +186,18 @@ answers 404.
 Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`
 and `make demo` also need `curl`. Tested with:
 
-| Tool | Version |
-|---|---|
-| kind | v0.33.0 (node image Kubernetes v1.36.4) |
-| helm | v4.3.0 |
-| kubectl | v1.37.0 |
-| Docker Desktop | 4.93.0 (engine 29.8.1), 7.65 GiB memory |
+| Tool | A laptop | A Linux virtual machine (2026-10-06) |
+|---|---|---|
+| kind | v0.33.0 (node image Kubernetes v1.36.4) | v0.33.0 (node image Kubernetes v1.36.4, as pinned) |
+| helm | v4.3.0 | v4.3.0 |
+| kubectl | v1.37.0 | v1.37.1 |
+| Docker | Docker Desktop 4.93.0 (engine 29.8.1), 7.65 GiB memory | Docker Engine 29.8.2, rootless, not Docker Desktop |
+| Processor | arm64 | amd64 |
+
+On the virtual machine every image the cluster pins resolved on amd64:
+`make up` from nothing ended with every release installed (5 min 04 s the
+first time, 4 min 28 s the second, with the images on the machine), then
+`make deploy`, `make demo` and `make smoke` passed.
 
 Give Docker at least 6 GiB. The first `make up` downloads about 30 images (the
 node image, Kubernetes components and the platform).
@@ -199,12 +206,12 @@ node image, Kubernetes components and the platform).
 
 | Command | What it does |
 |---|---|
-| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
+| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local, on the laptop; 5 min 04 s and 4 min 28 s on the Linux machine of the table above), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
-| `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Tested against stub commands; not yet run on a cluster. |
+| `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Run on the cluster on 2026-10-06: after three deploys it listed three `meridian:*` images in the engine and in the node, one `in use` and two `rollback` (an old ReplicaSet names each), kept with no removal command, and removed nothing; on the cluster made again from nothing it listed three in the engine, one in use and two unused (no ReplicaSet of the new cluster names them) with the `docker image rm` line printed for them, and one in the node. The refusal in a checkout without the cluster's credentials was tested against stub commands and not tried on the cluster. |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
@@ -234,7 +241,11 @@ node image, Kubernetes components and the platform).
    seconds and a lock timeout of 3 seconds (`PGOPTIONS` in the exec), so a
    migration that holds a lock while smoke runs fails that line with psql's
    message instead of hanging it (the two pgvector lines keep no message: they
-   say the extension is not installed). A count above zero says the seed and
+   say the extension is not installed). Those reads passed on the cluster on
+   2026-10-06, so `env` exists in the database's container; the migrations
+   line named `0019_audit_trail_seq.sql`, "the newest of this checkout", after
+   the deploy applied migrations 0017 to 0019 to the cluster's database. A
+   count above zero says the seed and
    the ingestion wrote something, not what or how much, and not that the chunks
    are the running image's (the ingestion Job of the image's tag, which
    `make deploy` keeps, is that proof); the claims and runs tables are not
@@ -332,10 +343,15 @@ node image, Kubernetes components and the platform).
    by listing the pods with that label and deletes by name those older than 300
    seconds (a younger one is another run's; a list that cannot be read is not
    an error). SIGHUP, SIGINT and SIGTERM each run the exit trap, which deletes
-   the pod. The allowed paths are also the tool check's proof (line 3). It
-   fails when the NetworkPolicy `default-deny` is missing. Before
+   the pod (tested by starting the real script against stub commands; an
+   interrupted run was not tried on the cluster). The allowed paths are also
+   the tool check's proof (line 3). It fails when the NetworkPolicy
+   `default-deny` is missing. Before
    `make deploy` one line prints SKIP in place of the four. It adds about 20
-   seconds. What it does not prove, and stays by hand (S019): that a pod of
+   seconds. On 2026-10-06 the four lines passed on the cluster (the control,
+   the two denied paths out of the Claims API, and the database refusing a pod
+   without the label and taking one with it), and no probe pod was left in
+   `meridian` afterwards. What it does not prove, and stays by hand (S019): that a pod of
    another namespace cannot reach the database, and that an address outside the
    machine is unreachable (smoke sends nothing there); and it does not read the
    policies, which the chart's tests render and compare.
@@ -365,7 +381,9 @@ node image, Kubernetes components and the platform).
    caller and tenant, at or after the mark; not that it is this run's own 403.
    Two runs that overlap can share one row (another run's 403, written after
    this run's mark while this run's own is throttled, passes this line), so the
-   PASS says "recorded at or after this run's mark".
+   PASS says "recorded at or after this run's mark". On the cluster on
+   2026-10-06 the line said "0 s old, recorded at or after this run's mark",
+   and a second run inside the gateway's minute was the SKIP described above.
    The fifth line presents a certificate of another CA: the probe makes a
    throwaway key and a self-signed certificate that carries the runtime's own
    URI (the right name, the wrong CA) in a directory under `/tmp` that is
@@ -378,9 +396,12 @@ node image, Kubernetes components and the platform).
    uvicorn, which the services run
    under, ends an unknown CA's connection without delivering the alert (a
    reset under TLS 1.3 and an EOF under 1.2, measured against the test server
-   that has the services' flags, not yet seen on the cluster), so `reset` is
-   the ending expected of the gateway, and the line passes it, in other words
-   than `refused`. It is wider than a refusal for the unknown CA: a gateway
+   that has the services' flags), so `reset` is the ending expected of the
+   gateway, and the line passes it, in other words than `refused`. On the
+   cluster on 2026-10-06 the answer was `reset` on every run (the connection
+   ended with no TLS alert, before any request was sent) and `refused`, the
+   alert, was never seen; the EOF under TLS 1.2 was measured against the test
+   server only. It is wider than a refusal for the unknown CA: a gateway
    that died in that second would end the connection the same way. A
    connection that ends after the request went out is a third answer,
    `closed-after-request`, and a FAIL: it is what a gateway that accepted the
@@ -456,8 +477,14 @@ node image, Kubernetes components and the platform).
     that let cert-manager use a policy (the plan's S056 section made those by
     hand); and a request for an issuer that is not Meridian's, which no policy
     answers, is not made. It adds a second or two when the approver is up, 30
-    seconds when it does not answer. Tested without a cluster; it has not yet
-    been run on kind.
+    seconds when it does not answer. Run on kind on 2026-10-06: the request in
+    `default` was Denied, with the reason `policy.cert-manager.io` and a message
+    that began "No policy approved this request: [meridian-deny-unlisted:
+    [spec.allowed.uris: Invalid value: ...", and deleted; no request with
+    smoke's label was left in `default`. The three other lines passed too. The
+    FAIL forms (a request Approved, a message in neither form, a request left
+    undecided, a delete that fails) were tested without a cluster and not seen
+    there.
 11. **Alert rules and health dashboard.** Four lines, read-only, run last.
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
@@ -490,7 +517,11 @@ node image, Kubernetes components and the platform).
     and quiet, and a panel with no data is a success, so the series checklist
     of [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster)
     stays by hand; nor that a threshold is right; nor that anyone would be
-    told, because kind runs no Alertmanager.
+    told, because kind runs no Alertmanager. The four lines passed on the
+    cluster on every smoke run of 2026-10-06. Smoke was not run while the
+    renewal watch's short certificates were in place and the alert fired; a
+    firing alert is a FAIL of the third line, so it would have failed (see
+    "How long a certificate lasts" below).
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. It creates one Pod in `meridian` for the network
@@ -582,8 +613,9 @@ In order, `make deploy`:
    checkout with no `infra/kind/kubeconfig` it asks kind for the cluster: when
    none exists every image is unused by definition, and when one does (its
    credentials are in another checkout) it says it cannot tell which images
-   are in use, prints no command and exits non-zero. (Tested against stub
-   commands; not yet run on a cluster.)
+   are in use, prints no command and exits non-zero. (The listing, the three
+   marks and the printed command were seen on the cluster on 2026-10-06; this
+   refusal was tested against stub commands and not run on a cluster.)
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
    `meridian_owner`. Only the three Jobs read that Secret. The script renders
@@ -595,8 +627,9 @@ In order, `make deploy`:
    deleted first; the runner skips what is applied and the seed mirrors its
    source, so a rerun takes seconds) and end after 300 seconds at most. A
    finished migrate or seed Job removes itself an hour later
-   (`ttlSecondsAfterFinished: 3600`); only the ingestion Job of the image in
-   use stays (step 5). The
+   (`ttlSecondsAfterFinished: 3600`; on the cluster on 2026-10-06 the Jobs of
+   earlier images were gone an hour after they finished); only the ingestion
+   Job of the image in use stays (step 5), as its record. The
    seed comes before the services because a claim that meets an empty policy
    table gets a stored proposal "policy not found", and a stored proposal is
    final.
@@ -633,8 +666,10 @@ In order, `make deploy`:
    wait was skipped because this run did not run the ingestion (a repeat
    deploy of the same image prints it too). A first request refused for the
    tenant's token limit within a minute of an interrupted deploy is that
-   window: wait a minute and run it again. (Tested against stub commands;
-   not yet seen on a cluster.) Whether ingestion should spend a workload's
+   window: wait a minute and run it again. (On 2026-10-06 a repeat deploy
+   printed the line that the wait was skipped; the interrupted deploy and
+   the refused request were tested against stub commands and not seen on a
+   cluster.) Whether ingestion should spend a workload's
    budget at all is an open registry decision (threat model T-60).
 
 Each pod gets its own role's connection string from its Secret, and the
@@ -734,7 +769,7 @@ database pod itself may reach DNS, the pods of its own Cluster and TCP port
 address is the node's own and changes with every new cluster, so the rule
 names the port and no address. From the database pod a connection to the
 internet timed out, and 40 of 40 to the API server were made (S019). That
-stays by hand; `make smoke` (line 8, tested without a cluster) tries the
+stays by hand; `make smoke` (line 8, passed on the cluster on 2026-10-06) tries the
 other direction of that policy: a pod without the `part-of` label on 5432.
 
 What the policies do not do:
@@ -808,8 +843,10 @@ the mounted file again, and `/healthz` answers 503 once the file holds a newer
 certificate. With the default `renewBefore` the renewal always comes before
 that margin starts.
 
-Designed, not yet run on a cluster: to watch a renewal, the 503 and the
-restart on kind, give the certificates a one-hour life for a while. In a
+Run on the cluster on 2026-10-06, with the times of what was seen in the
+runbook [certificate-expiry](../../docs/operations/runbooks/certificate-expiry.md#watching-a-renewal-on-kind-run-on-2026-10-06):
+to watch a renewal, the 503 and the restart on kind, give the certificates a
+one-hour life for a while. In a
 working copy of `infra/kind/values/meridian.yaml`, never committed, add
 
 ```yaml
@@ -855,9 +892,19 @@ another hour, so every service restarts again half an hour later: stop after
 one cycle by removing the two lines and running `make deploy`. The services
 keep the one-hour certificates until the end margin of each, then load the
 90-day ones and stay (a restart of the Deployments does it at once). While the
-short certificates are in place `MeridianCertificateNotRenewed` is expected to
-fire after an hour, because the rule counts every certificate under 21 days
-from its end as a late renewal.
+short certificates are in place `MeridianCertificateNotRenewed` fires after an
+hour (seen pending, then firing, on 2026-10-06), because the rule counts every
+certificate under 21 days from its end as a late renewal; any
+`certificate.duration` under 21 days trips it an hour after issuance.
+
+What the watch showed, beyond the marks above: all six services restart in the
+same minute, because one deploy issues their certificates in the same second,
+and with one replica each nothing answered for about a minute; and while the
+short certificates are in place `make smoke` fails on check 11, because a
+Meridian alert is firing (smoke itself was not run then: the failure follows
+from the firing alert and the check's rule). So the last step of the watch is
+to wait until the alert has cleared (within five minutes of the 90-day
+certificates' reissue it had), and only then to trust a smoke run.
 
 | Caller | What it proves | Callee | What the callee checks |
 |---|---|---|---|
@@ -1051,14 +1098,13 @@ lose.
 
 `make up` applies both: the rules with `kubectl apply`, the dashboard as a
 ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
-(check 11, tested without a cluster until the session that owns the
-cluster has run it): Prometheus has loaded the four groups with every rule
-healthy, the loaded rule names are the file's, no Meridian alert is
-firing, and Grafana serves the health dashboard with the file's queries,
-every one of which runs in Prometheus. What stays by hand is whether each
-series a rule or a panel names exists: a rule over a series that is not
-there is healthy and quiet, and a panel with no data is a success. The
-checklist is in
+(check 11, passed on the cluster on 2026-10-06): Prometheus has loaded the
+four groups with every rule healthy, the loaded rule names are the file's,
+no Meridian alert is firing, and Grafana serves the health dashboard with
+the file's queries, every one of which runs in Prometheus. What stays by
+hand is whether each series a rule or a panel names exists: a rule over a
+series that is not there is healthy and quiet, and a panel with no data is a
+success. The checklist is in
 [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster),
 which also links the objectives the rules watch and the runbooks they
 point to.

@@ -6,10 +6,14 @@ Gateway, with a person deciding at the end. Then the evidence a platform
 team would ask for: one trace, the audit trail, the cost by tenant, the
 registry, the gates in CI.
 
-Status: **implemented, laptop only** (S018). Everything below was run on
-2026-10-04 on a kind cluster created from a fresh clone. Three things are
-not what they would be in production, and the demo says so before a viewer
-asks:
+Status: **implemented, local only** (S018): a kind cluster, nothing in
+Azure. Everything below was run on 2026-10-04 on a kind cluster created
+from a fresh clone on a laptop. On 2026-10-06 `make up`, `make deploy`,
+`make smoke` and `make demo` ran again on a kind cluster made from nothing
+on a Linux virtual machine (amd64, Docker Engine, no Docker Desktop) and
+passed; the viewer's tabs and the claimant's form below were not repeated
+there. Three things are not what they would be in production, and the demo
+says so before a viewer asks:
 
 - **The model is simulated on kind.** The gateway runs in replay mode: its
   chat answer is canned text and its embedding is a hashed bag of words. A
@@ -34,14 +38,33 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 35 lines; PASS, or SKIP for the sweep before its first run
+make smoke     # 35 lines; PASS, or SKIP (below)
 ```
 
-Measured from a fresh clone with no cluster: `make up` 283 s, the first
-deploy with one demo claim 103 s (the deploy ends with a wait of one
-minute, so that the ingestion's tokens have left the tenant's rate
-window), `make smoke` 40 s. About seven minutes; a first run on a new
-machine also downloads the Python base image and the dependencies.
+`make smoke` prints a SKIP, and still exits 0, where a line cannot be
+judged yet, and it says why. Seen on 2026-10-06, each leaving 34 PASS and
+one SKIP: the sweep's line until the CronJob has been scheduled once (it
+runs every five minutes, and a smoke run two minutes after `make deploy`
+skips it); the cost series line right after the services restart and
+before any claim is sent ("the gateway has settled no call since it
+started"); and the audit line of the service identity check on a second
+run inside the gateway's minute ("the gateway wrote this minute's refusal
+row for an earlier run"). After `make up` alone every line that needs the
+services skips: 24 lines, 17 PASS and 7 SKIP.
+
+Measured from a fresh clone with no cluster, on the laptop on 2026-10-04:
+`make up` 283 s, the first deploy with one demo claim 103 s (the deploy
+ends with a wait of one minute, so that the ingestion's tokens have left
+the tenant's rate window), `make smoke` 40 s. About seven minutes; a first
+run on a new machine also downloads the Python base image and the
+dependencies.
+
+On the Linux virtual machine on 2026-10-06, from nothing: `make up` 5 min
+04 s the first time and 4 min 28 s the second (the images were on the
+machine), the first `make deploy` 1 min 30 s, a deploy that builds no new
+image 11 s, `make smoke` 37 s after `make up` alone (24 lines: 17 PASS and
+7 SKIP) and 40 to 52 s over the day on the deployed cluster (35 lines, 35
+PASS once the sweep had run), `make demo` 30 s.
 
 In a second terminal, and keep it open:
 

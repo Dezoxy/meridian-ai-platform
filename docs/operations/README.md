@@ -1,24 +1,27 @@
 # Operations
 
 How the platform is watched and what to do when it breaks. Status on
-2026-10-04 (S024): a baseline. The objectives are proposals nobody has
-measured, the alert rules and dashboards are files that were checked
-offline and not yet on a cluster, and the runbooks were written from the
-code and not exercised. S022 exercises the rollback, S027 measures the
+2026-10-04 (S024): a baseline, brought up to date on 2026-10-06 (S062). The
+objectives are proposals nobody has measured. The alert rules and the
+dashboards are applied to the kind cluster, and `make smoke` loads and reads
+them on every run (its eleventh check). One alert was seen pending, firing
+and resolved there, in the renewal watch of the certificate-expiry runbook,
+the one runbook procedure that was run. The other runbooks were written from
+the code and not exercised. S022 exercises the rollback, S027 measures the
 thresholds and S028 runs the game day.
 
 | What | Where | Status |
 |---|---|---|
 | Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, three designed; every target unmeasured |
-| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; evaluated on kind once `make up` has run; notification designed |
-| Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code, not yet seen on a cluster |
-| Runbooks | [runbooks/](#runbooks) | Written from the code; none exercised |
+| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (four groups loaded, every rule healthy, no Meridian alert firing); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; notification designed |
+| Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code and served by Grafana on kind, its queries run in Prometheus by check 11 of `make smoke`; whether each panel shows data stays a hand check |
+| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other five and that runbook's other steps were not exercised |
 
 ## Alerts
 
 Prometheus evaluates the rules and Grafana shows what fires, on the
 dashboard **Meridian: platform health**. Nothing is notified: kind runs no
-Alertmanager. A laptop cluster has nobody on call,
+Alertmanager. A local cluster has nobody on call,
 and a receiver needs an address or a webhook secret this repository does
 not hold. Routing and notification are designed, and the game day (S028)
 is their first use.
@@ -167,12 +170,13 @@ applied to one. The session that owns the cluster checks, on `main`:
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
    the issuer must refuse); 24 after `make up` alone, with SKIP lines for
-   what `make deploy` brings (counted from the script's own skip lines, not
-   measured on a cluster). The 24 is edge 1, database 3, tools 1, telemetry
-   4, cost panel 3, adjuster pages 1, sweep 1, network policy 1, service
-   identity 1, certificate policy 4 and alert rules 4. Items 3, 5 and 6
-   above are what the eleventh check reads, so they need no hand check once
-   the session that owns the cluster has seen it pass; item 4, the series,
+   what `make deploy` brings (counted from the script's own skip lines, and
+   seen on 2026-10-06: 24 lines, 17 PASS and 7 SKIP, no FAIL). The 24 is
+   edge 1, database 3, tools 1, telemetry 4, cost panel 3, adjuster pages 1,
+   sweep 1, network policy 1, service identity 1, certificate policy 4 and
+   alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
+   so they need no hand check now that the session that owns the cluster
+   has seen it pass (35 PASS on 2026-10-06, see below); item 4, the series,
    stays by hand.
 
 A series that is missing in step 4 is a wrong name in the rule file, and
@@ -185,3 +189,14 @@ each (the CA's and seven services'), no Meridian alert fired, and `make
 smoke` printed 24 PASS lines. The first scrape showed every certificate
 under the namespace `cert-manager`, the scrape target's; the
 ServiceMonitor keeps the certificate's own since.
+
+S062 owned the cluster on 2026-10-06 and ran step 7 on a cluster made from
+nothing: `make smoke` after `make up` alone printed 24 lines (17 PASS and
+7 SKIP, no FAIL, exit 0), and after `make deploy` and `make demo` 35 lines,
+34 PASS and one SKIP (the sweep's, the CronJob not yet scheduled) and, after
+the sweep's first run, 35 PASS, no SKIP, exit 0. The eleventh check passed
+on each run that reached it. One alert was seen: `MeridianCertificateNotRenewed`,
+pending from 04:51:46 and firing at 05:52:36 (UTC) while the renewal watch of
+the [certificate-expiry runbook](runbooks/certificate-expiry.md#watching-a-renewal-on-kind-run-on-2026-10-06)
+held one-hour certificates, and clear within five minutes of the 90-day
+reissue. Step 4 (the series) stays by hand.

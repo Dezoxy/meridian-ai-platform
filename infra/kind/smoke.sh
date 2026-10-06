@@ -221,9 +221,12 @@
 #                 What the fifth line does not prove: uvicorn, which the
 #                 services run under, ends an unknown CA's connection without
 #                 delivering the alert (against the test server with its flags:
-#                 a reset under TLS 1.3, an EOF under 1.2; not yet seen on the
-#                 cluster), so `reset` is the answer expected of the gateway,
-#                 and it is wider than a refusal for the unknown CA: a gateway
+#                 a reset under TLS 1.3, an EOF under 1.2), so `reset` is the
+#                 answer expected of the gateway, and it is the answer the
+#                 cluster gave on every run of 2026-10-06 (`refused`, the
+#                 alert, was never seen there; the EOF under 1.2 is the test
+#                 server's only). It is wider than a refusal for the unknown
+#                 CA: a gateway
 #                 that died in that second would end the connection the same
 #                 way (the three requests before it were answered by the same
 #                 gateway). Only `refused`, the alert, names the unknown CA.
@@ -462,8 +465,9 @@ except TimeoutError:
 #                   Measured against the test server
 #                   that has the services' uvicorn flags, the alert never
 #                   arrives: a reset under TLS 1.3, an EOF under 1.2, so `reset`
-#                   is the answer expected of the gateway (not yet seen on the
-#                   cluster), and the check passes it, worded apart from
+#                   is the answer expected of the gateway (the cluster gave it
+#                   on every run of 2026-10-06; `refused` was never seen
+#                   there), and the check passes it, worded apart from
 #                   `refused`. Anything else (another alert,
 #                   the server's certificate not verifying, a name that does
 #                   not resolve, a refused connection, a timeout) stays a

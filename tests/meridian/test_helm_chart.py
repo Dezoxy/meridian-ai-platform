@@ -364,15 +364,17 @@ def workflow_steps() -> list[dict]:
 
 
 def test_the_workflow_installs_the_helm_version_the_readme_documents() -> None:
-    (documented,) = re.findall(
-        r"^\| helm \| (v\d+\.\d+\.\d+) \|$", README, re.MULTILINE
+    # One column for the laptop and one for the Linux virtual machine (S062).
+    ((laptop, linux),) = re.findall(
+        r"^\| helm \| (v\d+\.\d+\.\d+) \| (v\d+\.\d+\.\d+) \|$", README, re.MULTILINE
     )
     (setup,) = [
         s for s in workflow_steps() if s.get("uses", "").startswith("azure/setup-helm@")
     ]
 
     assert re.fullmatch(r"azure/setup-helm@[0-9a-f]{40}", setup["uses"])
-    assert setup["with"]["version"] == documented
+    assert setup["with"]["version"] == laptop
+    assert setup["with"]["version"] == linux
 
 
 def test_the_workflow_lints_the_chart_before_the_tests_run() -> None:
