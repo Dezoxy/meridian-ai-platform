@@ -544,3 +544,51 @@ def test_importing_the_services_loads_no_provider_sdk_or_credential_library() ->
     # Assert
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "loaded:", completed.stdout
+
+
+def test_the_upkeep_command_loads_no_provider_sdk_and_no_gateway_module() -> None:
+    # Arrange: a fresh interpreter. `meridian gateway` (S066) calls database
+    # functions; the gateway package, which reaches a provider SDK, is not its
+    # business (hard rule 4).
+    code = (
+        "import sys\n"
+        "import meridian.platform.cli\n"
+        "import meridian.platform.cli.gateway\n"
+        "watched = ('openai', 'azure', 'azure.identity', 'azure.core')\n"
+        "loaded = [m for m in watched if m in sys.modules]\n"
+        "gateway = 'meridian.platform.gateway'\n"
+        "loaded += [m for m in sys.modules if m.startswith(gateway)]\n"
+        "print('loaded:' + ','.join(loaded))\n"
+    )
+
+    # Act
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=LINT_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    # Assert
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "loaded:", completed.stdout
+
+
+def test_a_cli_module_importing_the_gateway_app_breaks_the_sdk_contract(
+    project_copy: Path,
+) -> None:
+    # Arrange: what `meridian gateway` must never do; the gateway's app reaches
+    # the adapter and so openai, and indirect imports count outside the gateway.
+    probe = add_probe_in(
+        project_copy, "meridian.platform.cli", "import meridian.platform.gateway.app\n"
+    )
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code != 0, output
+    assert SDK_CONTRACT in output, output
+    assert f"{probe} -> meridian.platform.gateway.app" in " ".join(output.split())

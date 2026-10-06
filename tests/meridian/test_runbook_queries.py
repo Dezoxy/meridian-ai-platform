@@ -369,3 +369,29 @@ def test_the_open_reservations_query_returns_the_one_attempt_left_open(
 
     assert [row["attempt_id"] for row in found] == [ledger_run.open_attempt]
     assert found[0]["tenant"] == TENANT
+
+
+def test_the_upkeep_audit_query_lists_each_change_newest_first_under_the_role(
+    ledger_run: LedgerRun,
+) -> None:
+    db = ledger_run.db
+    stale = plant_usage(db, tenant=TENANT, tokens=7, micro_eur=3)
+    run(db, UPKEEP_ROLE, CLOSE, (stale, False, "dead-process"))
+    run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    run(db, UPKEEP_ROLE, EXPIRE, (utc_month(db), "retention-test"))
+    sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
+
+    columns, rows = run_read_only(db, sql)
+
+    found = [dict(zip(columns, row, strict=True)) for row in rows]
+    assert [row["event"] for row in found] == [
+        "ledger.expired",
+        "budget.credited",
+        "ledger.reservation-closed",
+    ]
+    assert {row["db_role"] for row in found} == {UPKEEP_ROLE}
+    assert [row["reason"] for row in found] == [
+        "retention-test",
+        "goodwill",
+        "dead-process",
+    ]

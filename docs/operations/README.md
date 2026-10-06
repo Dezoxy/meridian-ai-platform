@@ -62,7 +62,9 @@ the owner's to run (hard rule 8 in `CLAUDE.md`); a session asks first.
 - [Provider outage](runbooks/provider-outage.md): model calls fail at the
   provider.
 - [Budget exhaustion](runbooks/budget-exhaustion.md): a tenant is refused
-  for its token budget or its cost quota.
+  for its token budget or its cost quota; also how `meridian gateway`
+  closes a reservation a dead process left, credits a tenant and expires
+  old ledger rows.
 - [Database failure](runbooks/database-failure.md): the Platform Database
   is not ready or is lost; also where a stale sweep leads.
 - [Rollback](runbooks/rollback.md): a release or a registry change made
@@ -76,7 +78,8 @@ the owner's to run (hard rule 8 in `CLAUDE.md`); a session asks first.
 
 The runbooks' queries read tables no service role may read: no role
 reads the table `audit.events` (the Claims API reads one filtered view of
-it), and only the gateway's role reads its ledger. On kind the one way in
+it), and only the gateway's role and the upkeep role (S066) read its
+ledger. On kind the one way in
 is `psql` inside the database's own pod, which connects as the superuser
 over the local socket; that is how `make deploy` and `make smoke` ask
 their questions too.
