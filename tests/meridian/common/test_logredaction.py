@@ -15,6 +15,7 @@ import pytest
 from uvicorn.logging import AccessFormatter
 
 from meridian.platform.common import logredaction
+from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 
 EMAIL = "ana.kovacs@example.com"
@@ -366,3 +367,20 @@ def test_each_service_factory_installs_it_before_reading_its_settings(
     assert "install_log_redaction()" in source
     assert source.index("install_log_redaction()") < source.index(".from_env()")
     assert module.install_log_redaction is install_log_redaction
+
+
+@pytest.mark.parametrize("module_name", FACTORY_MODULES)
+def test_each_service_factory_configures_logging_right_after_the_redaction(
+    module_name: str,
+) -> None:
+    # S064: the format goes after the record factory and before the settings.
+    module = importlib.import_module(module_name)
+    source = inspect.getsource(module.create_app_from_env)
+
+    assert "configure_logging(SERVICE_NAME)" in source
+    assert module.configure_logging is configure_logging
+    assert (
+        source.index("install_log_redaction()")
+        < source.index("configure_logging(SERVICE_NAME)")
+        < source.index(".from_env()")
+    )

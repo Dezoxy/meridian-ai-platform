@@ -7,6 +7,7 @@ from pathlib import Path
 
 import psycopg
 from dbsupport import OWNER, DatabaseHandle
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -236,6 +237,20 @@ def audit_events(db: DatabaseHandle, run_id: uuid.UUID) -> list[dict]:
         (run_id,),
     )
     return [dict(zip(AUDIT_COLUMNS, row, strict=True)) for row in rows]
+
+
+def metric_points(reader: InMemoryMetricReader, name: str) -> list[tuple[dict, float]]:
+    """The data points of one metric a reader has collected: attributes and
+    value. An empty list when the meter provider has recorded nothing."""
+    data = reader.get_metrics_data()
+    found: list[tuple[dict, float]] = []
+    for resource in data.resource_metrics if data else ():
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                if metric.name == name:
+                    points = metric.data.data_points
+                    found += [(dict(p.attributes), p.value) for p in points]
+    return found
 
 
 def database_error(canary: str) -> psycopg.Error:

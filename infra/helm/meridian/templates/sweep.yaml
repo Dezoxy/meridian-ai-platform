@@ -32,7 +32,48 @@ The pod takes the migration Job's shape: the 'db-ca' volume holds only the CA's
 public certificate, no service-account token, no extra privilege, a read-only
 root filesystem and a writable /tmp. No PodDisruptionBudget, as for the Jobs. The
 schedule, the deadline and the documents' deadline are values.
+
+Telemetry (S064). With telemetry.otlpEndpoint set, the pod sends the six gauges
+of what its pass found (meridian_sweep_last_pass) to the collector before it
+exits, and gets what a service gets for that, from the same helpers: the address,
+and with telemetry.caConfigMap the mounted authority and the variable that names
+it. Its NetworkPolicy then also allows the collector's port (networkpolicy.yaml).
+With no address it gets none of the three and sends nothing.
+  OTEL_EXPORTER_OTLP_TIMEOUT  sweep.telemetryTimeoutSeconds, the SDK's deadline
+                              for one export, in SECONDS (the variable's unit
+                              at the pinned exporter; 5000 would be 83 minutes).
+                              Retries run inside that one deadline, so it bounds
+                              what a collector that does not answer can cost the
+                              pass's exit: the flush and the shutdown each try
+                              once, so a few times the value, far inside
+                              activeDeadlineSeconds. The chart refuses a value
+                              that is not above 0 and under that deadline. It is
+                              the sweep's alone: a service's exports run in the
+                              background and need no bound. Rendered only with
+                              an address
+  OTEL_RESOURCE_ATTRIBUTES    service.instance.id=claims-sweep (C3). Each pass is
+                              a new process, and the SDK gives a process a
+                              random instance ID, which Prometheus keeps as the
+                              `instance` label: every pass would write six new
+                              series, and no rule or panel could read them
+                              without knowing it. With one fixed ID the six
+                              series are the same from pass to pass, and the
+                              sample with the later timestamp is kept, which
+                              is what "the last pass" means. A sample that
+                              arrives with an earlier timestamp is refused as
+                              out of order (the collector logs it). Only a Job
+                              run by hand can overlap a scheduled one
+                              (concurrencyPolicy: Forbid). The SDK
+                              takes the ID from this variable and the service's
+                              name from the code, so the variable cannot rename
+                              the service (tested). A service must not get it:
+                              two replicas would write one series. Rendered only
+                              with an address, with the timeout
 */ -}}
+{{- $timeout := float64 .Values.sweep.telemetryTimeoutSeconds }}
+{{- if not (and (gt $timeout 0.0) (lt $timeout (float64 .Values.sweep.activeDeadlineSeconds))) }}
+{{- fail (printf "sweep.telemetryTimeoutSeconds is %v, which is not above 0 and under sweep.activeDeadlineSeconds (%v): it is the SDK's deadline for one export, in seconds, and a send that could outlast the pass's deadline would end the pass as a failure" .Values.sweep.telemetryTimeoutSeconds .Values.sweep.activeDeadlineSeconds) }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -82,6 +123,15 @@ spec:
                 {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_DATABASE_URL" "secret" .Values.sweep.dbSecret) | nindent 16 }}
                 - name: MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS
                   value: {{ include "meridian.documentsDeadlineDays" . | quote }}
+                {{- with include "meridian.telemetryEnv" . | trim }}
+                {{- . | nindent 16 }}
+                {{- end }}
+                {{- if .Values.telemetry.otlpEndpoint }}
+                - name: OTEL_EXPORTER_OTLP_TIMEOUT
+                  value: {{ $timeout | quote }}
+                - name: OTEL_RESOURCE_ATTRIBUTES
+                  value: service.instance.id=claims-sweep
+                {{- end }}
               resources:
                 {{- toYaml .Values.sweep.resources | nindent 18 }}
               securityContext:
@@ -89,6 +139,12 @@ spec:
               volumeMounts:
                 {{- include "meridian.caMount" . | nindent 16 }}
                 {{- include "meridian.tmpMount" . | nindent 16 }}
+                {{- with include "meridian.telemetryCaMount" . | trim }}
+                {{- . | nindent 16 }}
+                {{- end }}
           volumes:
             {{- include "meridian.caVolume" . | nindent 12 }}
             {{- include "meridian.tmpVolume" . | nindent 12 }}
+            {{- with include "meridian.telemetryCaVolume" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}

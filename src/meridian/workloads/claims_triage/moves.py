@@ -56,6 +56,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     Transition,
     move_claim,
 )
+from meridian.workloads.claims_triage.meters import ClaimsMeters
 from meridian.workloads.claims_triage.models import (
     MAX_DOCUMENTS,
     ClaimMoveResponse,
@@ -272,11 +273,13 @@ def triage_again(
     claim_id: str,
     *,
     page_run: str | None = None,
+    meters: ClaimsMeters | None = None,
 ) -> ClaimMoveResponse | DecisionFailure:
     """Triage the claim again: a claim waiting for an adjuster is sent back (its
     paused run is ended), a claim whose triage failed is tried again. The
     adjuster's page passes the run it showed as ``page_run``: a claim that has
-    changed run since is a 409 and nothing moves (see ``refuse_stale_page``)."""
+    changed run since is a 409 and nothing moves (see ``refuse_stale_page``).
+    ``meters`` counts the proposal the new triage stores."""
     with start_span(tracer, "claims.triage_again") as span:
         set_span_attributes(
             span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
@@ -293,7 +296,14 @@ def triage_again(
             end_run(http, tenant, claim_id, taken.old_run)
         return _move_answer(
             run_taken_triage(
-                dsn, tenant, http, span, claim_id, taken.facts, taken.taken_at
+                dsn,
+                tenant,
+                http,
+                span,
+                claim_id,
+                taken.facts,
+                taken.taken_at,
+                meters=meters,
             )
         )
 
@@ -484,6 +494,7 @@ def add_documents(
     tracer: Tracer,
     claim_id: str,
     documents: Sequence[str],
+    meters: ClaimsMeters | None = None,
 ) -> ClaimMoveResponse | DecisionFailure:
     """Take the names of documents that arrived for a claim that waits for them
     and triage it with all it holds. At the triage cap the names are stored and
@@ -512,7 +523,7 @@ def add_documents(
         taken_at, facts = arrival.taken
         try:
             result = run_taken_triage(
-                dsn, tenant, http, span, claim_id, facts, taken_at
+                dsn, tenant, http, span, claim_id, facts, taken_at, meters=meters
             )
         except HTTPException as exc:
             raise RefusedAfterStoring(exc.status_code, exc.detail) from None

@@ -69,11 +69,12 @@ meridian.evals -> meridian.claimsApp "Submits golden-set claims to and reads the
 meridian.evals -> meridian.platformDb "Reads each run's proposals and the gateway's usage ledger from" "PostgreSQL, CI's own instance" "Layer Services"
 meridian.evals -> meridian.gateway "Asks the judge's question through" "HTTP/JSON, tenant, agent and run headers; in process in CI" "Layer Services"
 
-// Telemetry, one arrow per emitting service. No service exports its logs yet:
-// they stay in the pods' output.
-meridian.claimsApp -> meridian.observability "Exports traces to" "OTLP" "Layer Workload"
-meridian.runtime -> meridian.observability "Exports traces to" "OTLP" "Layer Services"
+// Telemetry, one arrow per emitting service. No service exports its logs: each
+// writes JSON lines to its output, and on kind an agent on the node ships them
+// to the stack (S064). The agent is part of the cluster, not a container here.
+meridian.claimsApp -> meridian.observability "Exports traces and metrics to" "OTLP" "Layer Workload"
+meridian.runtime -> meridian.observability "Exports traces and metrics to" "OTLP" "Layer Services"
 meridian.gateway -> meridian.observability "Exports traces and metrics to" "OTLP" "Layer Services"
-meridian.policyMcp -> meridian.observability "Exports traces to" "OTLP" "Layer Services"
-meridian.knowledgeMcp -> meridian.observability "Exports traces to" "OTLP" "Layer Services"
-meridian.claimsMcp -> meridian.observability "Exports traces to" "OTLP" "Layer Workload"
+meridian.policyMcp -> meridian.observability "Exports traces and metrics to" "OTLP" "Layer Services"
+meridian.knowledgeMcp -> meridian.observability "Exports traces and metrics to" "OTLP" "Layer Services"
+meridian.claimsMcp -> meridian.observability "Exports traces and metrics to" "OTLP" "Layer Workload"
