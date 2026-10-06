@@ -882,13 +882,17 @@ that day; the rest stand as their step recorded them.
 | A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open | S070 |
 | A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | open; S070 is the nearest, since it holds what the adjuster is told | S070 |
 | Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | open | S070 |
-| The redaction's residuals after S067 (T-73): a Budapest number written `06-1x-YYYY-xx` with one separator reads as a date and is left in the clear; a dotted international number is cut at a group that begins `06` or `00`; redaction is not idempotent where two numbers touch at a `+` or a `(`; a date followed by an amount shaped like a phone number (`Total 06 30 1250000 HUF`) is replaced; the rules cost about fifty times more per character on text made of the national prefix, still linear (the security review measured it, no test pins the factor); identity card, passport and licence numbers, vehicle plates, an account number without separators, and a social security or tax identification number after a word the list does not hold are not found | S067 (reviews) | open; the step's contract named none for these, and S069 holds the gateway's edges, the nearest | S069 |
+| The redaction's residuals after S067 that are not the matcher's own fix (T-73): a Budapest number written `06-1x-YYYY-xx` with one separator reads as a date and is left in the clear (a named shape of the differential test; no other number can be written so, and no fix is planned); redaction is not idempotent where two numbers touch at a `+` or a `(`; a date followed by an amount shaped like a phone number (`Total 06 30 1250000 HUF`) is replaced; the rules cost about fifty times more per character on text made of the national prefix, still linear (the security review measured it, no test pins the factor); identity card, passport and licence numbers, vehicle plates, an account number without separators, and a social security or tax identification number after a word the list does not hold are not found. The matcher's own gaps have the four rows below, and every shape is pinned by `test_redaction_residuals.py` or held by `test_redaction_differential.py` | S067 (reviews) | open; the step's contract named none for these, and S069 holds the gateway's edges, the nearest | S069 |
+| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | open | S070 |
+| A dotted or slashed international number is not found when one of its groups begins `06` or `00` (`+36.30.123.0630`, `+36/30/123/0630` and `+36.30.123.0030` stay whole; `+36/30/123/4567/0630` gives `[phone]/0630`), because the cut before such a group leaves fewer than 8 digits; about 2 % of the groups of a number written so. Not a regression (the matcher before the separator change found none of them), and pinned by `test_redaction_residuals.py`. The reviewer's wider cut (the validated cut of the row above, taken at `/` and `.` with `PHONE_JOIN` neutralised) cost two failing tests, one new shape in the differential (`12 +36.36.0679.55(06/36)/7660/10/`) and one over-redaction (`+36 30 123 4567/06/22` gives `[phone]`), so it is a decision of its own and not the row above's | S067 (fourth review) | open | S070 |
+| The redaction's differential test has gaps (`test_redaction_differential.py`): it files a lost run under its first lost digit only, so a new leak in a later number of a text that already holds a named shape is filed under the named one (the mutation that brings back the parenthesised second number hid behind `30.06.30.8336.687 +36 30 123 4567/(06) 20 765 4321`; over the whole corpus it still fails); `00.` and `00/` forms and a date of three groups are not generated (a mutation that lets `_after_date_tail(2)` take three groups moved the hit counts and passed, one that hides `00.` after a date's tail changed nothing); the two date-lead guards, `DATE_LEAD` and `DATE_MONTH_LEAD`, can be loosened (the year dropped, any four-digit year, any day) with no failure, and only a month of 13 to 31 is caught; and the reference is the matcher before the guard, so a leak that both have is invisible (12,147 of the 12,281 texts that leave a digit of an inserted number in the clear leave it in the reference too). Classify every lost run, add the forms and the date of three groups to the generator, and bring the two guards under a test that fails when they are loosened | S067 (fourth review) | open | S070 |
+| Two small ends of the redaction: `_replace_email` writes `EMAIL_PLACEHOLDER` directly, where `_replace_cards` now reads `PLACEHOLDERS["card"]`, so a test that swaps the mapping misses e-mail addresses; and a date whose day or month is `06` followed by eight or nine digits (`2026.10.06 12345678` gives `2026.10.[phone]`, `10.06 12345678` gives `10.[phone]`) is replaced, the date's own digits with it, though it is no number: over-redaction, which fails safe, and the matcher before the date guard replaced it too; pinned by `test_redaction_residuals.py` | S067 (fourth review, low) | open | S070 |
 | Claims filed against a policy that is not the claimant's count towards the holder's next claim while they are open (T-76): until S021 anyone may file against any policy, so planted open claims send the holder's next claim to an adjuster; it costs a review, not a payment or a refusal | S067 (the owner's decision of 2026-10-06) | open | S021 |
 | Not seen on a cluster after S067: migrations 0025 and 0026 applied by the migrate Job, the ingestion Job's second command (`meridian knowledge verify`) and its audit row, an open claim counted through the real services, a Hungarian form redacted in a service's log line, and the posted-text boolean reaching the runtime over mutual TLS | S067 | open; tests hold each (the Job's command line was run in a shell with a stand-in for `meridian`) | S073 |
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own | S068 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open | S074 |
-| Left by S067's reviews, all low: `redact` is 54 lines with its docstring; `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | open | S074 |
+| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | open | S074 |
 
 ## Part C — Step details
 
@@ -12000,7 +12004,11 @@ replay does for a claim with no recorded judgement and whether the grader is
 in a fingerprint were read first (it could have called the judge live, which
 costs money); the baseline run came before the replay; the grader change went
 to the Python review owed; `GENERATOR_VERSION` stays "1" and Part C says so.
-Before the pull request: ADVISOR-BEFORE-PR.
+Before the pull request (2026-10-06, about 19:57 UTC, on the merge of `main`
+(4c85951), the fourth review and whether to open a fifth round for the
+reviewer's cut at a space): its reading was to ship with the residuals named
+and pinned, and to send the cut and the differential test's gaps to the
+backlog (S070); nothing else changed.
 
 **Work log:**
 
@@ -12054,7 +12062,16 @@ Before the pull request: ADVISOR-BEFORE-PR.
   brief's redaction, which the merge made false), and the documents the last
   four contracts made false.
 - **A third review round** (a Python reviewer and a database reviewer on F2r,
-  M1s, C4v and C1o) is out; its outcome is under Result.
+  M1s, C4v and C1o); its outcome is under Result. **F3** closed the redaction's
+  two high findings and added a differential test of today's matcher against
+  the one before the date guard; it also made a malformed policy record of
+  the golden set a refusal of the files, gave the verify command a cursor and
+  an audit row when the database fails, and tied the two views to the
+  lifecycle's states by a test. **A fourth pass on the redaction alone**,
+  then **D3**: the residuals named in `redact`'s docstring and in T-73, each
+  pinned by `test_redaction_residuals.py`, the backlog rows for what the pass
+  found and the threat model's T-73 and T-76 brought to the code. The matcher
+  did not change in D3.
 
 **Result / verification:**
 
@@ -12112,7 +12129,15 @@ Before the pull request: ADVISOR-BEFORE-PR.
   finding; the security one found no privacy regression and one high, the
   availability of the name's pattern; the Python one a high on the capital
   gate), the second Python review (block, one regression of F1r), the third
-  round on F2r, M1s, C4v and C1o: REVIEW-3-RESULT.
+  round on F2r, M1s, C4v and C1o: the verdict on the redaction was to block
+  (two high: a parenthesised second number, and a list number or a year
+  hiding a number), fixed by F3 with a differential test against the matcher
+  before the date guard; the database review had no critical or high finding,
+  and its three mediums are tests or a cursor, done in F3; a fourth pass on
+  the redaction alone (062cf5f) found no critical or high finding, one medium
+  in the matcher that is not a regression (the dotted or slashed
+  international number with a `06` or `00` group), one medium in the
+  differential test (it files a loss by its first lost digit only) and lows.
 - **Seen on a cluster: nothing of this step.** The migrate Job's two new
   files, the ingestion Job's second command and every code change were
   tested without a cluster (PostgreSQL in the tests; the Job's command line
@@ -12154,12 +12179,35 @@ Before the pull request: ADVISOR-BEFORE-PR.
 - **The redaction still leaves what has no check and no word**: identity
   card, passport and licence numbers, vehicle plates, an account number
   without separators, a social security or tax identification number after a
-  word the list does not hold; and four residuals of the last review round: a
-  Budapest number written `06-1x-YYYY-xx` with one separator reads as a date, a
-  dotted international number is cut at a group that begins `06` or `00`,
-  redaction is not idempotent where two numbers touch at a `+` or a `(`, and
-  the rules are about fifty times slower per character on text made of the
-  national prefix, still linear, with no test that pins the factor (T-73).
+  word the list does not hold. F3 closed the third round's two high findings
+  (the second number after `/` or `.` in parentheses, and a list number or a
+  year in front of a number), and a differential test of today's matcher
+  against the one before the date guard (24,000 seeded texts of two or three
+  valid numbers) files every digit that matcher hid and today's leaves under
+  five named shapes, here with their counts: a number after one date group
+  (252 texts, `30.06.30.8336.687`), after two date groups (64), a Budapest
+  number written as a date (48, `06-12-2026-14`), a mobile number that starts
+  at the month of a date (5, `30 06 2026 12345 Ft`), and a national number run
+  on into by a dotted or slashed international one (62,
+  `+36/83/701/902 00 36/73/48/9525`); 427 texts hold one or more, four hold two.
+  The run-on is F1r's separator change, not the date guard's price, and it
+  exposes fewer digits than the matcher before it did. Three more shapes
+  came from the fourth pass, and each is pinned by
+  `test_redaction_residuals.py` with today's exact output: a national number
+  after an international one and a plain space (`+36 30 123 4567 06 20 765
+  4321` leaves its last seven digits, as it did before the guard), a dotted or
+  slashed international number with a group that begins `06` or `00`
+  (`+36.30.123.0630`, not found at all), and, the other way round, a date
+  whose day or month is `06` followed by eight or nine digits
+  (`2026.10.06 12345678`), which is replaced though it is no number. The
+  tests also pin two shapes the docstring claimed without one: two numbers
+  joined by a hyphen and `(+36 30) 123 4567`. The matcher did not change after
+  the fourth pass: the reviewer's cut of an international span at a space is
+  a backlog row (S070), since this matcher regressed twice on a fix made at
+  the end of a round. Also open: redaction is not idempotent where two numbers
+  touch at a `+` or a `(`, and the rules are about fifty times slower per
+  character on text made of the national prefix, still linear, with no test
+  that pins the factor (T-73).
 - **The name's forms the closed lists lack** are not found, and the pattern of
   the worst 200-character name is 12,141 characters, about 55 ms to compile
   (the first version gave about 35,000 characters, and in the security
@@ -12187,8 +12235,12 @@ Before the pull request: ADVISOR-BEFORE-PR.
 
 - In the backlog, each with its step: the name made of an exclusion's words,
   the true flag that hides a poisoned clause, and the name's lacking forms with
-  the pattern's size and its private compile (S070); the redaction's residuals
-  (S069, the nearest); planted open claims (S021); what a cluster run of the
+  the pattern's size and its private compile, and the redaction's cut of an
+  international span at a space, its dotted number with a `06` or `00` group,
+  the differential test's gaps and two small ends (S070, the next step that
+  can hold the evaluation lane); the redaction's residuals that are not the
+  matcher's own (S069, the nearest); planted open claims (S021); what a
+  cluster run of the
   migrations, the Job's second command and the rest would show, and a Job that
   only verifies (S073); the audit row's column (S068); the tests that failed
   under load and the small ends (S074).
@@ -12726,7 +12778,11 @@ Before the pull request: ADVISOR-BEFORE-PR.
   is 47 claims with no new recording; claims that are still open count towards
   `frequent_claims` (migration 0025, the owner's reversal of half of S053's
   decision, 18:02 UTC); `meridian knowledge verify` compares the stored clauses
-  with the manifest (migration 0026). Nothing seen on a cluster. Two
-  review rounds and a third out; T-73 corrected where F2r made two clauses
-  false, T-76, T-66, T-57, T-27, T-30, T-25 and T-13 brought to the code.
-  Seven backlog rows closed (one in part) and ten new.
+  with the manifest (migration 0026). Nothing seen on a cluster. Four
+  review passes: F3 closed the third round's two high findings in the
+  redaction, and the fourth pass, on the redaction alone, found none, so the
+  matcher goes to its pull request with its residuals named in T-73 and
+  pinned by tests, and the reviewer's cut at a space and the differential
+  test's gaps in the backlog (S070); T-73 and T-76 corrected, T-66, T-57,
+  T-27, T-30, T-25 and T-13 brought to the code. Seven backlog rows closed
+  (one in part) and fourteen new.

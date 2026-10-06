@@ -338,11 +338,17 @@ def redact(text: str) -> Redaction:
     ("30/06/06/22270/67/2"), a Budapest number written "06-12-2026-14" (a month
     from 10 to 12, a year, one separator), or a mobile number "06 2026 12345"
     after a day and the same separator ("30 06 2026 12345"); and a national
-    number after an international one with no slash or dot between them
-    ("+36/83/701/902 00 36/73/48/9525"), whose first digits the international
-    span takes. Not found, and not found before the guard either: two numbers
-    joined by a hyphen ("06301234567-06201234567") and a number written
-    "(+36 30) 123 4567".
+    number after an international one and a plain space ("+36 30 123 4567 06
+    20 765 4321" gives "[phone] 765 4321": the international span takes the
+    first digits and the last seven stay, as before the guard; with dots or
+    slashes ("+36/83/701/902 00 36/73/48/9525") it is F1r's separator change).
+    Not found, and not found before the guard either: two numbers joined by a
+    hyphen ("06301234567-06201234567"), a number written "(+36 30) 123 4567",
+    and a dotted or slashed international number one of whose groups begins
+    "06" or "00" ("+36.30.123.0630"), which is cut at that group. Replaced
+    though it is no number: a date whose day or month is "06" and then eight or
+    nine digits ("2026.10.06 12345678" gives "2026.10.[phone]").
+    ``test_redaction_residuals.py`` pins each of these.
     It does not find names, addresses, identity card, passport or driving
     licence numbers (no check digit), vehicle plates, an account number written
     without separators (a card's Luhn rule already reads 16 digits, so one that

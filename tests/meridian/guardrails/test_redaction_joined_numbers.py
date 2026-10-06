@@ -93,6 +93,9 @@ def test_a_list_number_or_a_year_and_a_separator_before_a_number_hides_nothing(
     ],
 )
 def test_a_date_followed_by_an_amount_is_still_not_a_phone_number(text: str) -> None:
+    """The amounts here are too short to be a number (seven digits or fewer).
+    An amount of eight or nine digits after a date on the 6th is replaced:
+    ``test_redaction_residuals.py`` pins that."""
     assert redact(text) == Redaction(text=text, found={})
 
 
