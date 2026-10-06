@@ -12,7 +12,8 @@ views and the decisions.
 step list (S000…), the session protocol and the open questions.
 
 - Take the next `todo` step whose dependencies are `done`, unless the owner
-  names another. One step per session, on its own branch off `main`.
+  names another. Each step has its own branch off `main` and its own
+  worktree; one session runs up to three at a time (the plan's Part A).
 - Read the plan's Part A before starting; it says what to read, how to
   delegate, which gates to run and how to close the step.
 - Record decisions and evidence in the step's Part C section, not in chat.
