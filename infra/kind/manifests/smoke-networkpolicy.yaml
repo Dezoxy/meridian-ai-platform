@@ -1,0 +1,56 @@
+# The NetworkPolicy of smoke's telemetry Jobs (S063). `make smoke` (check 4)
+# sends one trace, one log and one metric to the collector with telemetrygen,
+# in three short Jobs. They run in `meridian`, not in `observability`, so the
+# collector's ingress can admit the pods of `meridian` alone and no pod of
+# another namespace, with no exception that exists only while smoke runs
+# (observability-networkpolicy.yaml). `make up` applies this before the
+# releases, with the other policies.
+#
+# Why a policy of kind's own: the Meridian chart's `default-deny` selects every
+# pod of `meridian`, whatever its labels, and its other policies select the
+# services, the Jobs and the sweep by name. A Job pod that none of them names can
+# neither send nor receive once the chart is installed. This one selects the
+# Jobs' pods by the label the script gives them (app.kubernetes.io/name=
+# meridian-smoke) and allows two things:
+#   egress  DNS (the cluster's DNS pods, UDP and TCP 53) and the collector's
+#           OTLP HTTP port, 4318, the one the six services push to and the one
+#           the collector's ingress admits; the same peers as the chart's
+#           (networkPolicy.peers in values/meridian.yaml)
+#   ingress none: a Job's pod takes no call
+# The pods do not carry app.kubernetes.io/part-of=meridian, the label the
+# database's ingress admits by, so they cannot reach the database even where no
+# egress rule stands in the way. Applied on a cluster where the chart is not
+# installed, it restricts these pods the same way.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: meridian-smoke-telemetrygen
+  namespace: meridian
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: meridian-smoke
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+      ports:
+        - port: 4318
+          protocol: TCP

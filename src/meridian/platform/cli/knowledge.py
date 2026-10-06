@@ -11,7 +11,7 @@ import httpx
 import psycopg
 import typer
 
-from meridian.platform.cli.db import MIGRATIONS_DATABASE_URL_ENV
+from meridian.platform.cli.db import INGEST_DATABASE_URL_ENV
 from meridian.platform.common.audit import record_event
 from meridian.platform.common.db import connect
 from meridian.platform.common.env import SettingsError, registry_dir_from
@@ -117,7 +117,7 @@ def ingest(
     ] = DEFAULT_SOURCE,
 ) -> None:
     """Embed the policy wordings and replace the knowledge store with them (S012)."""
-    dsn = _required(MIGRATIONS_DATABASE_URL_ENV)
+    dsn = _required(INGEST_DATABASE_URL_ENV)
     gateway_url = _gateway_url()
     try:
         registry = load_registry(registry_dir_from(os.environ))

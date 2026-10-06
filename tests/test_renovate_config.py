@@ -10,6 +10,7 @@ another shape (a new file, a variable that does not end in _IMAGE or
 _VERSION) needs a line there as well as a reader.
 """
 
+import fnmatch
 import json
 import re
 import unittest
@@ -179,6 +180,71 @@ class Readers(unittest.TestCase):
         self.assertEqual(
             version, re.search(r"^APPROVER_POLICY_VERSION=(\S+)$", text, re.M).group(1)
         )
+
+    def test_cert_manager_and_approver_policy_arrive_in_one_group(self) -> None:
+        # approver-policy v0.28.0 is built against one cert-manager release, so
+        # the two charts and cert-manager's images move together (S063).
+        text = (ROOT / PINS).read_text(encoding="utf-8")
+        names = [m.group("depName") for m in self.comment_reader(PINS).finditer(text)]
+        rules = self.config["packageRules"]
+        (group,) = [r for r in rules if r.get("groupName") == "cert-manager"]
+        (platform,) = [r for r in rules if r.get("groupName") == "kind platform"]
+
+        def in_group(name: str) -> bool:
+            return any(fnmatch.fnmatchcase(name, p) for p in group["matchPackageNames"])
+
+        family = [
+            name
+            for name in names
+            if name in ("cert-manager", "cert-manager-approver-policy")
+            or name.startswith("quay.io/jetstack/")
+        ]
+        self.assertEqual(len(family), 7)
+        self.assertEqual([name for name in names if in_group(name)], family)
+        self.assertFalse(in_group("quay.io/prometheus/prometheus"))
+        # A later rule wins, so the group must come after the platform's.
+        self.assertGreater(rules.index(group), rules.index(platform))
+        note = " ".join(group["prBodyNotes"])
+        for words in ("approver-policy", "cert-manager", "`make up`", "`make smoke`"):
+            self.assertIn(words, note)
+
+    def test_promtool_and_the_prometheus_pin_arrive_in_one_group(self) -> None:
+        # The Makefile's PROMTOOL_IMAGE follows the Prometheus image the chart
+        # installs (pins.env): one group, so they move in one pull request.
+        name = "quay.io/prometheus/prometheus"
+        pins = (ROOT / PINS).read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        in_pins = [m.group("depName") for m in self.comment_reader(PINS).finditer(pins)]
+        readers = readers_for("Makefile", self.config)
+        (image_reader,) = [r for r in readers if "currentDigest" in r.pattern]
+        in_makefile = [m.group("depName") for m in image_reader.finditer(makefile)]
+        rules = self.config["packageRules"]
+        (group,) = [r for r in rules if name in r.get("matchPackageNames", [])]
+        (platform,) = [r for r in rules if r.get("groupName") == "kind platform"]
+
+        self.assertIn(name, in_pins)
+        self.assertIn(name, in_makefile)
+        self.assertTrue(group["groupName"])
+        self.assertNotEqual(group["groupName"], platform["groupName"])
+        # No file restriction: the rule reaches the pins file and the Makefile.
+        self.assertNotIn("matchFileNames", group)
+        self.assertNotIn("matchManagers", group)
+        # A later rule wins, so the group must come after the platform's.
+        self.assertGreater(rules.index(group), rules.index(platform))
+
+    def test_the_platform_note_names_the_collector_as_the_tag_that_is_not_the_charts(
+        self,
+    ) -> None:
+        (platform,) = [
+            r
+            for r in self.config["packageRules"]
+            if r.get("groupName") == "kind platform"
+        ]
+        note = " ".join(platform["prBodyNotes"])
+
+        self.assertIn("collector", note)
+        self.assertIn("appVersion", note)
+        self.assertNotIn("are the tags that chart version installs by default.", note)
 
     def test_a_split_image_carries_its_digest(self) -> None:
         digest = "sha256:" + "a" * 64

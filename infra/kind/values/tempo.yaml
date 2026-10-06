@@ -5,6 +5,24 @@ tempo:
   retention: 24h
   # No usage reporting to Grafana Labs.
   reportingEnabled: false
+  # The container meets the Pod Security level `restricted` (S063), which the
+  # namespace warns and audits at. The chart's pod-level context already runs
+  # it as user 10001, non-root (the image's own: `USER 10001:10001`); this adds
+  # the container's fields, which the chart leaves empty. The root filesystem
+  # is read-only: the traces and the WAL are under /var/tempo (the volume
+  # below) and the image makes no other directory writable. The chart's own
+  # example for this key enables it; the one place its values say it fails is
+  # the query UI's container (`tempoQuery`), which is not deployed.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+    readOnlyRootFilesystem: true
   resources:
     requests:
       cpu: 100m

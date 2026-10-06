@@ -9,10 +9,14 @@
 image:
   pullPolicy: Never
 
-# Traces go to the collector's HTTP port (4317 is gRPC; the exporter speaks
-# HTTP).
+# Traces and metrics go to the collector's HTTP port over TLS (4317 is gRPC and
+# is closed on the collector; the exporter speaks HTTP). The collector's
+# certificate comes from an authority of its own (manifests/telemetry-ca.yaml),
+# whose public certificate `make up` publishes as the ConfigMap below in this
+# namespace; the services mount it and trust it for the collector alone.
 telemetry:
-  otlpEndpoint: http://otel-collector.observability.svc.cluster.local:4318
+  otlpEndpoint: https://otel-collector.observability.svc.cluster.local:4318
+  caConfigMap: telemetry-ca
 
 # Who a service is, to the one it calls: the trust domain of the certificates'
 # URIs and the issuer `make up` installs with cert-manager (manifests/service-

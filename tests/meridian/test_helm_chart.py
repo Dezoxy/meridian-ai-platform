@@ -466,10 +466,13 @@ def test_every_pod_has_a_writable_tmp_of_16mi_and_no_other_writable_path() -> No
         # one would count against the container's memory limit).
         assert [n for n, v in volumes.items() if "emptyDir" in v] == ["tmp"], name
         assert volumes["tmp"]["emptyDir"] == {"sizeLimit": TMP_SIZE_LIMIT}, name
-        # Every other volume is a Secret mounted read-only: no hostPath, no
-        # ConfigMap, no second emptyDir.
+        # Every other volume is a Secret mounted read-only: no hostPath, no second
+        # emptyDir, and no ConfigMap but the collector's authority, which the six
+        # services mount (S063; tests/meridian/test_helm_telemetry.py).
         for volume_name, volume in volumes.items():
-            if volume_name != "tmp":
+            if volume_name == "telemetry-ca":
+                assert set(volume) == {"name", "configMap"}, (name, volume_name)
+            elif volume_name != "tmp":
                 assert set(volume) == {"name", "secret"}, (name, volume_name)
         for container in pod["containers"]:
             mounts = {m["name"]: m for m in container["volumeMounts"]}

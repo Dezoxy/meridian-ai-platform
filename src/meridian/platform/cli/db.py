@@ -11,9 +11,14 @@ from meridian.platform.common.db import connect
 from meridian.platform.migrations.runner import MigrationError, apply_migrations
 from meridian.platform.policy_mcp.seed import SeedError, seed_policies
 
-# The owner role's DSN. Services read MERIDIAN_DATABASE_URL instead, for their
-# own role, which cannot create or alter anything.
+# The owner role's DSN, read by `db migrate` alone. Services read
+# MERIDIAN_DATABASE_URL instead, for their own role, which cannot create or alter
+# anything. The seed and the ingestion each read a variable of their own, for a
+# role that holds what its statements need and no more (S063, T-25), and never
+# fall back to the owner's: a fallback would be the old privilege, silently.
 MIGRATIONS_DATABASE_URL_ENV = "MERIDIAN_MIGRATIONS_DATABASE_URL"
+SEED_DATABASE_URL_ENV = "MERIDIAN_SEED_DATABASE_URL"
+INGEST_DATABASE_URL_ENV = "MERIDIAN_INGEST_DATABASE_URL"
 APPLICATION_NAME = "meridian-migrate"
 # Relative to the working directory, which is the repository root for `make`.
 DEFAULT_SEED_SOURCE = Path("data/synthetic")
@@ -57,9 +62,9 @@ def seed_policies_command(
     ] = DEFAULT_SEED_SOURCE,
 ) -> None:
     """Load the simulated policy store from the synthetic data (S013)."""
-    dsn = os.environ.get(MIGRATIONS_DATABASE_URL_ENV)
+    dsn = os.environ.get(SEED_DATABASE_URL_ENV)
     if not dsn:
-        _fail(f"{MIGRATIONS_DATABASE_URL_ENV} is not set")
+        _fail(f"{SEED_DATABASE_URL_ENV} is not set")
     try:
         with connect(dsn, APPLICATION_NAME) as conn:
             counts = seed_policies(conn, source)

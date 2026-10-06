@@ -425,7 +425,7 @@ def test_the_readme_says_what_the_stores_lines_read() -> None:
 
     # The count of lines the documents state is pinned in
     # test_smoke_alert_rules.py, the latest check to add lines.
-    assert "**Database.** Five lines" in readme
+    assert "**Database.** Six lines" in readme
     assert "`policy.policies` holds policies" in readme
     assert "the database's clock" in readme
     assert "not this laptop's `date`" in readme

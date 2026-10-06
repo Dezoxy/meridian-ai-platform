@@ -424,11 +424,12 @@ def test_public_has_no_privilege_on_the_knowledge_schema_or_its_table(
     assert tables == []
 
 
-def test_only_the_owner_and_the_knowledge_servers_column_grant_touch_the_chunks(
+def test_only_the_owner_the_ingestion_and_the_servers_column_grant_touch_the_chunks(
     migrated_database: DatabaseHandle,
 ) -> None:
     # Migration 0006 (S046) gave knowledge_mcp a SELECT on ten columns; the
-    # table's own ACL still names the owner alone.
+    # table's own ACL names the owner and, since 0022 (S063), the ingestion's
+    # role (test_job_roles_migration.py holds what it may do).
     table_grantees = owner_run(
         migrated_database,
         "SELECT DISTINCT a.grantee::regrole::text "
@@ -442,5 +443,5 @@ def test_only_the_owner_and_the_knowledge_servers_column_grant_touch_the_chunks(
         "WHERE t.attrelid = 'knowledge.chunks'::regclass",
     )
 
-    assert table_grantees in ([], [(OWNER,)])
+    assert {grantee for (grantee,) in table_grantees} == {OWNER, "knowledge_ingest"}
     assert column_grants == [("knowledge_mcp", "SELECT")]
