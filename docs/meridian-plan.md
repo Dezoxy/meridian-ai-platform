@@ -10154,8 +10154,11 @@ had been read by a reviewer or put to a consultation (Part A, step 4).
   included, and a client address** (read on the cluster): it stays in
   the edge's pod output on the node and is not shipped, since the
   agent's list names `meridian`'s services alone.
-- **Gates, run by the main session with `main` merged in:**
-  SUITE_LINE_PENDING
+- **Gates, run by the main session with `main` merged in:** the whole
+  suite with a database, 11,923 passed, 8 skipped, exit 0; `make lint`
+  (5 contracts kept), `make test`, `make docs`, `make check` (no ERROR
+  line), `make alerts` (19 rules, both `promtool` suites), `make
+  helm-lint` and the secret scan, each exit 0.
 - **Not seen on the cluster:** any of the four new alerts firing; a line
   with an `exception` field (nothing failed); an `unparsed` access
   record; the fixed line of a failed write; a count that raised; a run
