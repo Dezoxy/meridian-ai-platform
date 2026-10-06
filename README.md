@@ -128,7 +128,7 @@ graph LR
 | M0 Bootstrap | Repository, harness, model, first ADRs, synthetic data generator, kind cluster with the observability stack | `make docs` and `make check` pass; the generator produces the golden set |
 | M1 Claims triage on kind | Gateway, three MCP servers, retrieval, triage graph with approval, adjuster UI, evaluation harness | The fifteen-minute demo runs from a clean checkout with `make` |
 | M2 Azure, identity, delivery | Terraform, AKS, Entra ID, hardened charts, CI/CD with SBOM, scanning, signing and a manual approval gate | Environment created, demo on AKS, environment removed, all recorded |
-| M3 Reliability and operations | Load test, game day and incident record, restore drill, provider swap, supervisor and worker agents, read-only console | SLO thresholds measured; the incident record comes from a real timeline |
+| M3 Reliability and operations | Load test, game day and incident record, restore drill, provider swap, read-only console; the triage as a supervisor and workers is built (S031, ADR 5; in tests, not run on a cluster since) | SLO thresholds measured; the incident record comes from a real timeline |
 | M4 Optional | AWS mapping with validate-only Terraform, or a second-framework workload, or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item, if time allows; a second by the owner's choice of 2026-10-06 |
 
 The step-by-step version, with dependencies, demo checkpoints and status, is
