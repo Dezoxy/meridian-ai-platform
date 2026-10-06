@@ -15,14 +15,23 @@ run by then, whatever the check decides; only the module itself waits for it.
 ``load_trusted_entry_point`` does these checks, in that order, and returns the
 loaded object or raises ``EntryPointRefused`` with a closed reason. Each caller
 turns the reason into its own error; ``fixed_text`` gives both the same words,
-which hold nothing a foreign package chose, except that a refusal for a name
-nobody published lists the names the trusted distribution did publish, and a
-name is listed only when it is shaped like a registry ID and short, and only
-the first few are. What the loaded object must be
-(callable, a protocol) is the caller's to check.
+which hold nothing a foreign package chose, with two exceptions that a foreign
+directory can still use. A refusal for a name nobody published lists the names
+the distribution called ``meridian`` did publish, and a directory that calls
+itself that can publish any: up to ``MAX_KNOWN_LISTED`` (ten) names of the
+registry's ID shape, 64 characters each at most, and a count of the rest. And
+the class name of an error the trusted package's own module raised at import is
+kept when it is a run of up to 64 identifier characters (``safe_class_name``):
+a class there can name itself like a sentence without spaces. Both need a write
+to the Python path or to the trusted package, which is already a compromise, so
+neither is closed here. What the loaded object must be (callable, a protocol) is
+the caller's to check.
 
-This module imports the standard library and ``meridian`` only, so it brings in
-neither the agent framework nor a workload.
+Importing this module imports the registry's models (for the ID pattern and its
+length, so the two cannot drift), and through them ``pydantic``, but neither the
+agent framework nor a workload. Its importers (the evaluation's loader, the
+graphs' loader and the scaffold) already import the registry, so nothing is
+brought in that they did not have.
 """
 
 import importlib.util
@@ -83,14 +92,17 @@ class LoadFailure(Exception):
 
 
 def safe_class_name(exc: BaseException) -> str:
-    """The name of ``type(exc)`` when it is a short identifier, else
-    ``"Exception"``. A foreign class chooses its own name: a metaclass can make
-    ``__name__`` raise, and the name can hold a newline and a sentence. The name
-    is read from the type's own slot, which runs none of the class's code, and
-    only an ASCII identifier of at most 64 characters is kept (an exact ``str``,
-    never a subclass with methods of its own). Not run: the class's ``__new__``
-    and ``__init__`` (the exception exists already) and ``type(exc)`` itself,
-    which reads the object's type and nothing else."""
+    """The name of ``type(exc)`` when it is an ASCII identifier of at most 64
+    characters, else ``"Exception"``. A class chooses its own name: a metaclass
+    can make ``__name__`` raise, and the name can hold a newline and a sentence.
+
+    What is read: the name stored in the type itself, taken straight from
+    ``type.__dict__``, and returned as an exact ``str``, never a subclass with
+    methods of its own. What is never run: the class's own code (its metaclass'
+    ``__name__``, ``__getattribute__``, ``__str__``), because ``type(exc)`` reads
+    the object's real type and the stored name is read without asking the class.
+    What a class can still choose is any name that passes: it may read like a
+    message, but it is one token."""
     try:
         name = _CLASS_NAME_OF_TYPE.__get__(type(exc))
         if isinstance(name, str) and _CLASS_NAME.fullmatch(name):
@@ -161,10 +173,14 @@ _TEXTS: dict[Refusal, str] = {
 
 
 def _require_a_text_for_every_reason(texts: dict[Refusal, str]) -> None:
-    """Raise when a ``Refusal`` member has no text, so a member added later
-    fails when this module is imported, not at the first refusal it causes."""
-    if set(texts) != set(Refusal) or not all(texts.values()):
-        raise AssertionError("every refusal reason needs a fixed text")
+    """Raise when a ``Refusal`` member has no text (or an empty one), naming the
+    members, so a member added later fails when this module is imported, not at
+    the first refusal it causes. The names are this module's own."""
+    lacking = sorted(member.name for member in Refusal if not texts.get(member))
+    if lacking or set(texts) != set(Refusal):
+        raise AssertionError(
+            "every refusal reason needs a fixed text: " + ", ".join(lacking)
+        )
 
 
 _require_a_text_for_every_reason(_TEXTS)
@@ -184,7 +200,10 @@ def fixed_text(refused: EntryPointRefused, subject: str) -> str:
     quotes neither the distribution nor the entry point's value nor an error's
     message; ``NOT_PUBLISHED`` adds the names the trusted distribution did
     publish that the registry would accept as IDs (or "none"), at most
-    ``MAX_KNOWN_LISTED`` of them and the rest as a count."""
+    ``MAX_KNOWN_LISTED`` of them and the rest as a count. What a directory that
+    calls itself the trusted distribution can still choose there: up to ten
+    names of the registry's ID shape, 64 characters each, and the count (which
+    carries no text of its own)."""
     text = reason_text(refused.reason, subject)
     if refused.reason is Refusal.NOT_PUBLISHED:
         known = ", ".join(refused.known) if refused.known else "none"

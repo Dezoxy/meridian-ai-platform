@@ -11,8 +11,8 @@ from meridian.platform.registry.loader import (
     unreadable_directory,
 )
 from meridian.platform.registry.schemas import (
+    schemas_not_updated,
     stale_schemas,
-    unwritable_schemas,
     write_schemas,
 )
 from meridian.platform.registry.terraform import (
@@ -116,7 +116,7 @@ def schemas(
     try:
         changed = write_schemas(registry_dir)
     except OSError as exc:
-        _fail((unwritable_schemas(registry_dir, exc),))
+        _fail((schemas_not_updated(registry_dir, exc),))
     typer.echo(f"schemas written: {len(changed)} changed")
 
 

@@ -75,9 +75,8 @@ The digest is not widened to the interpreter's Unicode version and `re`: the
 Unicode database changes with the interpreter's minor release, not its patch
 release, so that would tie both baselines to one Python minor release, and
 every move to the next one would become a baseline change. It does not hash
-code objects either: a
-changed comment would then ask for no new baseline, and asking is the safe
-direction (T-72).
+code objects either: a changed comment would then ask for no new baseline, and
+asking is the safe direction (T-72).
 
 ## The recording
 

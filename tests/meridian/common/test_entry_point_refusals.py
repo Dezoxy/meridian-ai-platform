@@ -7,6 +7,7 @@ refusal is the error's class and nothing else.
 
 import importlib
 import importlib.util
+import inspect
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -391,3 +392,55 @@ def test_a_reason_with_no_text_is_found_when_the_table_is_checked() -> None:
         shared._require_a_text_for_every_reason(texts)
 
     shared._require_a_text_for_every_reason(shared._TEXTS)
+
+
+def test_the_error_for_a_reason_with_no_text_names_the_member() -> None:
+    texts = dict(shared._TEXTS)
+    del texts[Refusal.OUTSIDE_ROOT]
+    texts[Refusal.UNLOCATABLE] = ""
+
+    with pytest.raises(AssertionError) as error:
+        shared._require_a_text_for_every_reason(texts)
+
+    assert str(error.value).endswith(": OUTSIDE_ROOT, UNLOCATABLE")
+
+
+def run_the_module_source_with(old: str, new: str) -> None:
+    """Run this module's own source in a fresh namespace with one line changed,
+    as if it were imported: the module itself is not reloaded, because other
+    tests hold references to its classes."""
+    source = inspect.getsource(shared)
+    changed = source.replace(old, new, 1)
+    assert changed != source, "the line to change is not in the module's source"
+    code = compile(changed, shared.__file__, "exec")
+
+    exec(code, {"__name__": "entry_points_with_a_changed_table"})  # noqa: S102
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(
+            "    Refusal.OUTSIDE_ROOT: _NOT_FROM_THE_PACKAGE,\n",
+            "",
+            id="a-member-loses-its-text",
+        ),
+        pytest.param(
+            '    MOVED_OUTSIDE_ROOT = "outside the trusted root once loaded"\n',
+            '    MOVED_OUTSIDE_ROOT = "outside the trusted root once loaded"\n'
+            '    A_REASON_ADDED_LATER = "added later"\n',
+            id="a-member-is-added-without-a-text",
+        ),
+    ],
+)
+def test_importing_the_module_fails_when_a_reason_has_no_text(
+    old: str, new: str
+) -> None:
+    with pytest.raises(AssertionError, match="every refusal reason needs a fixed text"):
+        run_the_module_source_with(old, new)
+
+
+def test_importing_the_module_passes_when_nothing_is_changed() -> None:
+    run_the_module_source_with(
+        "MAX_KNOWN_LISTED = 10\n", "MAX_KNOWN_LISTED = 10  # unchanged in effect\n"
+    )

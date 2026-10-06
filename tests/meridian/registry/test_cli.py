@@ -307,6 +307,86 @@ def test_a_schema_file_that_is_not_text_is_repaired_by_the_write(
     assert checked.exit_code == 0, checked.output
 
 
+def linked_to_a_file_outside(registry_copy: Path, outside: Path) -> Path:
+    """Replace one schema file by a symbolic link to ``outside``, which holds the
+    schema's own text (so the link's target would not differ) or other text."""
+    link = registry_copy / "schemas" / "models.schema.json"
+    link.unlink()
+    link.symlink_to(outside)
+    return link
+
+
+def test_a_schema_path_that_is_a_link_is_refused_and_the_target_is_not_written(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside, not a schema\n")
+    link = linked_to_a_file_outside(registry_copy, outside)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"SchemaPathIsALink; {FIX_AND_RERUN}\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, OSError)
+    assert outside.read_bytes() == b"outside, not a schema\n"
+    assert link.is_symlink()
+    assert str(outside) not in result.output
+
+
+def test_a_link_refuses_the_whole_write_before_any_other_file_is_written(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside, not a schema\n")
+    linked_to_a_file_outside(registry_copy, outside)
+    other = registry_copy / "schemas" / "tools.schema.json"
+    other.write_text("{}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert other.read_text(encoding="utf-8") == "{}\n"
+
+
+def test_the_check_names_a_link_as_out_of_date_even_when_its_target_is_right(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes((registry_copy / "schemas" / "models.schema.json").read_bytes())
+    linked_to_a_file_outside(registry_copy, outside)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "schemas/models.schema.json is out of date" in result.stderr
+    assert str(outside) not in result.output
+
+
+def test_a_link_to_nothing_is_refused_and_nothing_is_created_at_its_target(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    missing = tmp_path / "not-there.json"
+    linked_to_a_file_outside(registry_copy, missing)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "SchemaPathIsALink" in result.stderr
+    assert not missing.exists()
+
+
 def test_a_write_that_fails_part_way_says_to_run_the_command_again(
     registry_copy: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
