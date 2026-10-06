@@ -210,7 +210,7 @@ node image, Kubernetes components and the platform).
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks ten things:
+`make smoke` checks eleven things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -336,6 +336,35 @@ node image, Kubernetes components and the platform).
     cert-manager or approver-policy that turned the built-in approver back on,
     or left the policies or the add-on gone, would pass the pull request that
     brings it.
+11. **Alert rules and health dashboard.** Four lines, read-only, run last.
+    The first three read Prometheus' `/api/v1/rules` through Grafana's
+    datasource proxy, for the `PrometheusRule` `meridian` that `make up`
+    applies. The four groups of `alerts/meridian.yaml` are loaded and every
+    rule in them has health `ok`: a FAIL names each rule that has not, with
+    its health and Prometheus' last error, cut to 120 printable characters
+    (a rule that has not been evaluated yet is `unknown`, which is not `ok`;
+    the line waits up to 120 seconds for the first evaluation). The loaded
+    group and rule names are the file's, in both directions, so a cluster
+    that runs an older rule file says which groups and rules differ (the
+    file's names are read with `awk` by their indentation, and a test keeps
+    that equal to a YAML parser's reading). And no alert of the Meridian
+    groups is firing: a firing alert is a FAIL that names it, and a pending
+    one is not a failure, so the line names it and passes. One SKIP line
+    replaces the three when the `PrometheusRule` is not in `observability`
+    (a cluster made before S024); any other error looking for it is a FAIL,
+    and one FAIL line stands in for them when Prometheus does not answer with
+    status `success`. The fourth line is the cost dashboard's line (check 5)
+    for **Meridian: platform health** (uid `meridian-platform-health`):
+    Grafana serves it as provisioned with the queries of
+    `dashboards/platform-health.json`, and every query runs in Prometheus
+    with the range at an hour. No query is left out: the range variable
+    becomes 3600, and a query that finds no series on a quiet cluster still
+    answers with status `success`. The check does not prove that each series
+    a rule or a panel names exists: a rule over a missing series is healthy
+    and quiet, and a panel with no data is a success, so the series checklist
+    of [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster)
+    stays by hand; nor that a threshold is right; nor that anyone would be
+    told, because kind runs no Alertmanager.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. The tool check leaves at most one refused
@@ -853,8 +882,12 @@ What the numbers are, which the dashboard also says on its first panel:
 ## The alert rules and the health dashboard
 
 [`alerts/meridian.yaml`](alerts/meridian.yaml) is one `PrometheusRule`
-(S024): a recorded series for the gateway's calls of the last 15 minutes,
-five alerts on it and three on the workloads, from kube-state-metrics. It
+(S024, S056) in four groups: `meridian.gateway.recording` (a recorded series
+for the gateway's calls of the last 15 minutes), `meridian.gateway` (alerts
+on that series), `meridian.workloads` (from kube-state-metrics) and
+`meridian.certificates` (from cert-manager's controller). It holds 12 alert
+rules and one recording rule: five on the gateway, three on the workloads
+and four on the certificates. It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:
@@ -871,12 +904,19 @@ The gateway's counter is read without `increase()` or `rate()`, for the
 cost dashboard's reason (above); a unit test holds the case those would
 lose.
 
-Neither the rules nor the health dashboard has been applied to a cluster
-yet: S024 ran beside the step that owned it. What to look for on the
-first `make up` is in
+`make up` applies both: the rules with `kubectl apply`, the dashboard as a
+ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
+(check 11, tested without a cluster until the session that owns the
+cluster has run it): Prometheus has loaded the four groups with every rule
+healthy, the loaded rule names are the file's, no Meridian alert is
+firing, and Grafana serves the health dashboard with the file's queries,
+every one of which runs in Prometheus. What stays by hand is whether each
+series a rule or a panel names exists: a rule over a series that is not
+there is healthy and quiet, and a panel with no data is a success. The
+checklist is in
 [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster),
 which also links the objectives the rules watch and the runbooks they
-point to. `make smoke` checks neither.
+point to.
 
 ## If `make up` was interrupted
 

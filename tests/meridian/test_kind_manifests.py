@@ -2305,7 +2305,7 @@ def run_cost_panel(
                     "deployed_services",
                     "run_dashboard_query",
                     "run_dashboard_queries",
-                    "check_cost_dashboard",
+                    "check_dashboard",
                     "check_cost_series",
                     "check_grafana_rights",
                     "check_cost_panel",
@@ -4291,8 +4291,9 @@ def test_the_readme_describes_what_s056_added_to_deploy_and_smoke_and_the_restar
 ):
     readme = " ".join((KIND_DIR / "README.md").read_text(encoding="utf-8").split())
 
-    # `make smoke` checks ten things; the tenth is the certificate policy.
-    assert "`make smoke` checks ten things" in readme
+    # `make smoke` checks eleven things; the tenth is the certificate policy and
+    # the eleventh the alert rules (test_smoke_alert_rules.py).
+    assert "`make smoke` checks eleven things" in readme
     assert "`make smoke` checks nine things" not in readme
     assert "**Certificate policy.** Three lines" in readme
     # The ninth check's description no longer counts three statuses.

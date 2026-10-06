@@ -277,15 +277,11 @@ def test_the_newest_migration_of_the_real_tree_is_the_one_smoke_reads(
     assert packaged[-1] == NEWEST
 
 
-def test_the_documents_count_the_lines_smoke_prints_and_say_what_it_reads() -> None:
-    root = KIND_DIR.parent.parent
-    operations = (root / "docs" / "operations" / "README.md").read_text("utf-8")
-    demo = (root / "docs" / "demo.md").read_text("utf-8")
+def test_the_readme_says_what_the_stores_lines_read() -> None:
     readme = " ".join((KIND_DIR / "README.md").read_text("utf-8").split())
 
-    # Twenty-four lines before the stores, three more with them.
-    assert "`make smoke` passes, 27 of 27 lines" in operations
-    assert "make smoke     # 27 lines" in demo
+    # The count of lines the documents state is pinned in
+    # test_smoke_alert_rules.py, the latest check to add lines.
     assert "**Database.** Five lines" in readme
     assert "`policy.policies` holds policies" in readme
     assert "the database's clock" in readme

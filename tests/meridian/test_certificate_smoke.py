@@ -413,12 +413,14 @@ def test_the_policy_check_never_skips(tmp_path: Path) -> None:
     assert "SKIP" not in "".join(lines)
 
 
-def test_the_policy_check_is_the_tenth_and_last_and_is_documented() -> None:
+def test_the_policy_check_is_the_tenth_and_is_documented() -> None:
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
 
+    # The alert rules check (S062, test_smoke_alert_rules.py) runs after it.
     assert calls[8:10] == ["check_service_identity", "check_certificate_policy"]
-    assert calls[10].startswith("if ((failures")
+    assert calls[10] == "check_alert_rules"
+    assert calls[11].startswith("if ((failures")
     assert "10. certificate policy: three lines" in SMOKE_SH
 
 

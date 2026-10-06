@@ -125,9 +125,9 @@
 #                 certificate verified reads as refused, one from a gateway that
 #                 died in that second too (the three requests before it were
 #                 answered by the same gateway).
-#  10. certificate policy: three lines, read-only (S056), run after the others
-#                 and never skipped: its objects exist after `make up`, so a
-#                 missing one is a FAIL. The three CertificateRequestPolicies
+#  10. certificate policy: three lines, read-only (S056), run after the first
+#                 nine and never skipped: its objects exist after `make up`, so
+#                 a missing one is a FAIL. The three CertificateRequestPolicies
 #                 (meridian-services, meridian-services-ca,
 #                 meridian-deny-unlisted) are Ready; the Deployment
 #                 cert-manager-approver-policy in cert-manager has an available
@@ -144,6 +144,39 @@
 #                 its certificates, so a cert-manager or approver-policy update
 #                 that turned the approver back on, or left the policies or the
 #                 add-on gone, would otherwise pass.
+#  11. alert rules and health dashboard: four lines, read-only (S062), run
+#                 last. Three lines read Prometheus' /api/v1/rules through
+#                 Grafana's datasource proxy (the port-forward of check 4) for
+#                 the PrometheusRule `meridian` that `make up` applies. The
+#                 four groups of infra/kind/alerts/meridian.yaml are loaded and
+#                 every rule of the loaded meridian.* groups has health ok (a
+#                 FAIL names the rule, its health and Prometheus' lastError,
+#                 cut to 120 printable ASCII characters). The loaded group and
+#                 rule names equal the file's (the file's names are read with
+#                 awk by their indentation, and a test keeps that equal to a
+#                 YAML parser's reading; a cluster that runs an older file
+#                 says which groups and rules differ). No alert of those
+#                 groups is firing (a FAIL names it; a pending alert is not a
+#                 failure, and the line names it). The three wait up to 120 s
+#                 for the groups to load and be evaluated (a rule not yet
+#                 evaluated has health unknown, which is not ok); one FAIL
+#                 line replaces them when Prometheus does not answer with
+#                 status success. One SKIP line replaces them when the
+#                 PrometheusRule is not there (a cluster made before S024);
+#                 any other failure to look for it is a FAIL. The fourth line
+#                 is check 5's dashboard check for the health dashboard (uid
+#                 meridian-platform-health): the provisioned copy has the
+#                 queries of dashboards/platform-health.json, and every query
+#                 of it runs in Prometheus with a range of an hour. No query
+#                 is left out: ${__range_s} becomes 3600, and a query that
+#                 finds no series on a quiet cluster still answers with status
+#                 success. What it does not prove: that the series a rule or a
+#                 panel names exist (an absent series leaves a rule healthy
+#                 and quiet, and a panel with no data is a success; that stays
+#                 by hand, in docs/operations/README.md), that a threshold is
+#                 right, or that anyone would be told (kind has no
+#                 Alertmanager). It adds one request for the rules, one for
+#                 the dashboard and its nine queries: a few seconds.
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -306,6 +339,20 @@ readonly JOB_TIMEOUT=120s
 readonly DASHBOARD_UID=meridian-gateway-cost
 readonly DASHBOARD_FILE="${KIND_DIR}/dashboards/gateway-cost.json"
 readonly COST_SERIES=(meridian_gateway_tokens_total meridian_gateway_cost_EUR_total meridian_gateway_calls_total)
+# The health dashboard (infra/kind/dashboards/platform-health.json), checked as
+# the cost dashboard is, by check_dashboard (check 11).
+readonly HEALTH_DASHBOARD_UID=meridian-platform-health
+readonly HEALTH_DASHBOARD_FILE="${KIND_DIR}/dashboards/platform-health.json"
+# The alert rules check (11): the PrometheusRule `meridian` that up.sh applies
+# from ALERT_RULES_FILE; Prometheus names a rule's group by the file's group
+# name, and every group of the file starts with ALERT_GROUP_PREFIX (a test keeps
+# it so). A rule's lastError is cut to ALERT_ERROR_LENGTH characters.
+readonly ALERT_RULES_NAMESPACE=observability
+readonly ALERT_RULES_OBJECT=meridian
+readonly ALERT_RULES_FILE="${KIND_DIR}/alerts/meridian.yaml"
+readonly ALERT_GROUP_PREFIX="meridian."
+readonly ALERT_ERROR_LENGTH=120
+readonly ALERT_RULES_PATH=/api/datasources/proxy/uid/prometheus/api/v1/rules
 # The service account the chart makes for Grafana (release name + "-grafana").
 readonly GRAFANA_ACCOUNT=system:serviceaccount:observability:kube-prometheus-stack-grafana
 
@@ -314,6 +361,7 @@ skips=0
 grafana_url=""     # set by open_grafana
 grafana_failed=0   # open_grafana failed once: later calls fail quietly
 identity_answer="" # set by identity_status
+rules_body=""      # set by fetch_rules
 poll_error=""      # what the last failed poll attempt saw
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
@@ -745,28 +793,30 @@ run_dashboard_queries() {
   done
 }
 
-# The dashboard line. What Grafana serves must be the file's: a stale provisioned
-# copy fails. Its queries are then run, so a renamed series or a typo shows here.
-check_cost_dashboard() {
-  local served title file_exprs served_exprs
+# check_dashboard UID FILE: the dashboard line, for the cost dashboard (check 5)
+# and the health dashboard (check 11). What Grafana serves under UID must be the
+# file's: a stale provisioned copy fails. Its queries are then run, so a renamed
+# series or a typo shows here.
+check_dashboard() {
+  local uid=$1 file=$2 served title file_exprs served_exprs
   if ! poll '(select(.meta.provisioned == true) | .dashboard) // empty | tojson' \
-    "${grafana_url}/api/dashboards/uid/${DASHBOARD_UID}"; then
-    fail "dashboard: Grafana has no provisioned dashboard ${DASHBOARD_UID} after ${POLL_TIMEOUT}s (run make up) (last answer: ${poll_error})"
+    "${grafana_url}/api/dashboards/uid/${uid}"; then
+    fail "dashboard: Grafana has no provisioned dashboard ${uid} after ${POLL_TIMEOUT}s (run make up) (last answer: ${poll_error})"
     return
   fi
   served="${poll_result}"
   title="$(clean_lines "$(jq -r '.title // empty' <<<"${served}" 2>/dev/null)")"
-  if ! file_exprs="$(jq -c '[.panels[].targets[]?.expr]' "${DASHBOARD_FILE}")"; then
-    fail "dashboard: could not read the queries of ${DASHBOARD_FILE}"
+  if ! file_exprs="$(jq -c '[.panels[].targets[]?.expr]' "${file}")"; then
+    fail "dashboard: could not read the queries of ${file}"
     return
   fi
   served_exprs="$(jq -c '[.panels[].targets[]?.expr]' <<<"${served}" 2>/dev/null || true)"
   if [[ "${served_exprs}" != "${file_exprs}" ]]; then
-    fail "dashboard: Grafana serves \"${title}\" but its queries differ from infra/kind/dashboards/gateway-cost.json (run make up)"
+    fail "dashboard: Grafana serves \"${title}\" but its queries differ from infra/kind/dashboards/${file##*/} (run make up)"
     return
   fi
   if run_dashboard_queries "${served}"; then
-    pass "dashboard: Grafana serves \"${title}\" (uid ${DASHBOARD_UID}), provisioned, with the file's queries; all ${queries_run} queries ran in Prometheus (range 3600s)"
+    pass "dashboard: Grafana serves \"${title}\" (uid ${uid}), provisioned, with the file's queries; all ${queries_run} queries ran in Prometheus (range 3600s)"
   else
     fail "dashboard: a query of \"${title}\" failed in Prometheus: ${query_error}"
   fi
@@ -894,7 +944,7 @@ check_grafana_rights() {
 
 check_cost_panel() {
   if open_grafana; then # otherwise it printed the one FAIL line
-    check_cost_dashboard
+    check_dashboard "${DASHBOARD_UID}" "${DASHBOARD_FILE}"
     check_cost_series
   fi
   check_grafana_rights
@@ -1337,6 +1387,169 @@ check_certificate_policy() {
   check_builtin_approver_off
 }
 
+# ── 11. alert rules and health dashboard ─────────────────────────────────────
+# What the file holds, read with awk by the file's indentation (the group
+# names at four spaces, the rules at eight; a test compares both with a YAML
+# parser's reading): tree_groups prints the group names, tree_rules prints
+# "<group><TAB><rule>" per alert and recording rule, both sorted bytewise.
+tree_groups() {
+  awk '/^    - name: / { print $3 }' "${ALERT_RULES_FILE}" | LC_ALL=C sort
+}
+
+tree_rules() {
+  awk '/^    - name: / { group = $3 } /^        - (alert|record): / { print group "\t" $3 }' \
+    "${ALERT_RULES_FILE}" | LC_ALL=C sort
+}
+
+# cluster_groups BODY and cluster_rules BODY: the same two lists for the
+# meridian.* groups in Prometheus' /api/v1/rules answer BODY.
+cluster_groups() {
+  jq -r --arg prefix "${ALERT_GROUP_PREFIX}" \
+    '.data.groups[].name | select(startswith($prefix))' <<<"$1" | LC_ALL=C sort
+}
+
+cluster_rules() {
+  jq -r --arg prefix "${ALERT_GROUP_PREFIX}" \
+    '.data.groups[] | select(.name | startswith($prefix)) | .name as $group
+      | .rules[] | $group + "\t" + .name' <<<"$1" | LC_ALL=C sort
+}
+
+# name_list: the lines of stdin as one line of names ("group/rule" for a tab),
+# separated by ", ", without any byte that is not printable ASCII.
+name_list() {
+  tr '\t' '/' | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ',' - | sed 's/,/, /g'
+}
+
+# check_rules_object: 0 when the PrometheusRule is there. Otherwise one line and 1:
+# SKIP for kubectl's NotFound (a cluster made before S024), FAIL for any other error.
+check_rules_object() {
+  local err_file
+  err_file="$(mktemp)"
+  if kctl -n "${ALERT_RULES_NAMESPACE}" get prometheusrule "${ALERT_RULES_OBJECT}" \
+    -o name >/dev/null 2>"${err_file}"; then
+    rm -f "${err_file}"
+    return 0
+  fi
+  if grep -q '(NotFound)' "${err_file}"; then
+    skip "alert rules: the PrometheusRule ${ALERT_RULES_OBJECT} is not in ${ALERT_RULES_NAMESPACE} (a cluster made before S024; make up applies it)"
+  else
+    fail "alert rules: could not look for the PrometheusRule ${ALERT_RULES_OBJECT} in ${ALERT_RULES_NAMESPACE} (kubectl said: $(clean_lines "$(<"${err_file}")"))"
+  fi
+  rm -f "${err_file}"
+  return 1
+}
+
+# fetch_rules: Prometheus' /api/v1/rules, through Grafana's datasource proxy, left
+# in ${rules_body}. It polls (up to POLL_TIMEOUT) until every group of the file
+# is loaded and none of the loaded rules is still unevaluated (a rule's health is
+# "unknown" until its group's first evaluation), then takes that answer. When that
+# does not happen the answer of one more request is judged as it is. Returns 1
+# after one FAIL line when Prometheus does not answer with status success.
+fetch_rules() {
+  local wanted status
+  wanted="$(tree_groups | jq -R . | jq -sc .)" || wanted="[]"
+  if [[ "${wanted}" == "[]" ]]; then
+    fail "alert rules: found no group in ${ALERT_RULES_FILE}"
+    return 1
+  fi
+  if poll "select(.status == \"success\")
+    | [.data.groups[] | select(.name | startswith(\"${ALERT_GROUP_PREFIX}\"))] as \$loaded
+    | select((${wanted} - [\$loaded[].name] | length) == 0
+      and ([\$loaded[].rules[].health] | all(. != \"unknown\")))
+    | tojson" "${grafana_url}${ALERT_RULES_PATH}"; then
+    rules_body="${poll_result}"
+    return 0
+  fi
+  rules_body="$(gcurl "${grafana_url}${ALERT_RULES_PATH}" 2>/dev/null || true)"
+  status="$(jq -r '.status // empty' <<<"${rules_body}" 2>/dev/null || true)"
+  if [[ "${status}" != success ]]; then
+    fail "alert rules: Prometheus did not answer ${ALERT_RULES_PATH} with status success after ${POLL_TIMEOUT}s (last answer: ${poll_error})"
+    return 1
+  fi
+}
+
+# check_rules_loaded BODY: the file's groups are loaded and every rule of the
+# loaded meridian.* groups has health ok. A rule that is not is named with its
+# health and its lastError, newlines and tabs as spaces and cut to
+# ALERT_ERROR_LENGTH characters.
+check_rules_loaded() {
+  local body=$1 missing unhealthy problems="" total
+  missing="$(LC_ALL=C comm -23 <(tree_groups) <(cluster_groups "${body}") | name_list)"
+  unhealthy="$(jq -r --arg prefix "${ALERT_GROUP_PREFIX}" --argjson cut "${ALERT_ERROR_LENGTH}" \
+    '.data.groups[] | select(.name | startswith($prefix)) | .rules[] | select(.health != "ok")
+      | .name + " (health " + (.health // "unknown")
+        + (if (.lastError // "") != "" then ": " + (.lastError | gsub("[\\r\\n\\t]"; " ") | .[0:$cut]) else "" end)
+        + ")"' <<<"${body}" | name_list)"
+  [[ -z "${missing}" ]] || problems="group(s) ${missing} of infra/kind/alerts/meridian.yaml not loaded in Prometheus (run make up)"
+  [[ -z "${unhealthy}" ]] || problems+="${problems:+; }rules not healthy: ${unhealthy}"
+  if [[ -n "${problems}" ]]; then
+    fail "alert rules: ${problems}"
+    return
+  fi
+  total="$(cluster_rules "${body}" | wc -l)"
+  pass "alert rules: the $(tree_groups | wc -l | tr -d ' ') groups of infra/kind/alerts/meridian.yaml are loaded in Prometheus and all ${total//[[:space:]]/} rules in them are healthy"
+}
+
+# check_rules_names BODY: the loaded meridian.* groups and their rules are the
+# file's, by name, in both directions. A cluster that runs another rule file
+# says which groups and rules differ.
+check_rules_names() {
+  local body=$1 not_loaded not_in_file differences="" total
+  not_loaded="$({
+    LC_ALL=C comm -23 <(tree_groups) <(cluster_groups "${body}")
+    LC_ALL=C comm -23 <(tree_rules) <(cluster_rules "${body}")
+  } | name_list)"
+  not_in_file="$({
+    LC_ALL=C comm -13 <(tree_groups) <(cluster_groups "${body}")
+    LC_ALL=C comm -13 <(tree_rules) <(cluster_rules "${body}")
+  } | name_list)"
+  [[ -z "${not_loaded}" ]] || differences="not loaded: ${not_loaded}"
+  [[ -z "${not_in_file}" ]] || differences+="${differences:+; }not in the file: ${not_in_file}"
+  if [[ -n "${differences}" ]]; then
+    fail "alert rules: the rules Prometheus runs are not infra/kind/alerts/meridian.yaml's (a cluster that runs an older file: run make up): ${differences}"
+    return
+  fi
+  total="$(tree_rules | wc -l)"
+  pass "alert rules: the loaded rules are the file's: the same $(tree_groups | wc -l | tr -d ' ') groups and ${total//[[:space:]]/} rule names"
+}
+
+# alerts_in_state STATE BODY: the names of the rules of the meridian.* groups
+# that have an alert in STATE (firing or pending), sorted, one per line.
+alerts_in_state() {
+  jq -r --arg prefix "${ALERT_GROUP_PREFIX}" --arg state "$1" \
+    '.data.groups[] | select(.name | startswith($prefix)) | .rules[]
+      | select(any(.alerts[]?; .state == $state)) | .name' <<<"$2" | LC_ALL=C sort -u
+}
+
+# check_rules_firing BODY: no alert of the meridian.* groups is firing. A pending
+# alert has not yet lasted its `for`: it is not a failure, and the line names it.
+check_rules_firing() {
+  local body=$1 firing pending count
+  firing="$(alerts_in_state firing "${body}")"
+  pending="$(alerts_in_state pending "${body}")"
+  if [[ -n "${firing}" ]]; then
+    fail "alert rules: Meridian alert(s) firing: $(name_list <<<"${firing}") (the health dashboard's table and Prometheus' Alerts page show them)"
+    return
+  fi
+  if [[ -z "${pending}" ]]; then
+    pass "alert rules: no Meridian alert is firing (none pending)"
+    return
+  fi
+  count="$(wc -l <<<"${pending}")"
+  pass "alert rules: no Meridian alert is firing (${count//[[:space:]]/} pending, not a failure: $(name_list <<<"${pending}"))"
+}
+
+# The rules, then the health dashboard as check 5 reads the cost dashboard.
+check_alert_rules() {
+  open_grafana || return 0 # otherwise it printed the one FAIL line
+  if check_rules_object && fetch_rules; then
+    check_rules_loaded "${rules_body}"
+    check_rules_names "${rules_body}"
+    check_rules_firing "${rules_body}"
+  fi
+  check_dashboard "${HEALTH_DASHBOARD_UID}" "${HEALTH_DASHBOARD_FILE}"
+}
+
 trap cleanup EXIT
 check_edge
 check_database
@@ -1348,6 +1561,7 @@ check_sweep
 check_network_policy
 check_service_identity
 check_certificate_policy
+check_alert_rules
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

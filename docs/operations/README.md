@@ -133,9 +133,11 @@ applied to one. The session that owns the cluster checks, on `main`:
 3. Prometheus loaded the four groups and each is healthy: its
    `/api/v1/rules` lists `meridian.gateway.recording`, `meridian.gateway`,
    `meridian.workloads` and `meridian.certificates`, and every rule's
-   `health` is `ok`.
-4. Every series a rule or the new dashboard names exists. Each of these
-   returns a number in Grafana's Explore:
+   `health` is `ok`. `make smoke` reads this (the eleventh check): the
+   groups and rule names are the file's and every rule is `ok`.
+4. Every series a rule or the new dashboard names exists. `make smoke`
+   does not read this: a rule over a missing series is healthy and quiet.
+   Each of these returns a number in Grafana's Explore:
    - `count(kube_deployment_status_replicas_available{namespace="meridian"})`,
      expected 6;
    - `count(kube_pod_status_ready{namespace="meridian", pod=~"platform-db-[0-9]+", condition="true"})`,
@@ -153,15 +155,20 @@ applied to one. The session that owns the cluster checks, on `main`:
    - `count(meridian:gateway_calls:delta15m)`, after one `make demo` and a
      minute's wait.
 5. No Meridian alert fires on a healthy cluster:
-   `ALERTS{platform="meridian"}` is empty.
+   `ALERTS{platform="meridian"}` is empty. `make smoke` fails on a firing
+   alert and names it; a pending one passes, and the line names it.
 6. Grafana serves **Meridian: platform health** (uid
    `meridian-platform-health`) and every panel shows data or, for the
-   alert table, nothing.
-7. `make smoke` passes, 27 of 27 lines (S055 added three, for service
+   alert table, nothing. `make smoke` reads that Grafana serves it under
+   that uid with the file's queries and that every query runs in
+   Prometheus; whether a panel shows data stays by hand.
+7. `make smoke` passes, 31 of 31 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
-   three for the stores of the `meridian` database).
-   It does not check the rules or the new dashboard; that is in the plan's
-   backlog.
+   three for the stores of the `meridian` database and four for the rules and
+   the health dashboard); 29 after `make up` alone, with SKIP lines for what
+   `make deploy` brings. Items 3, 5 and 6 above are what the eleventh check
+   reads, so they need no hand check once the session that owns the cluster
+   has seen it pass; item 4, the series, stays by hand.
 
 A series that is missing in step 4 is a wrong name in the rule file, and
 the fix is there and in the pinned set of the file's test.

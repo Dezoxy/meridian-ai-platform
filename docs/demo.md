@@ -34,7 +34,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 27 lines; PASS, or SKIP for the sweep before its first run
+make smoke     # 31 lines; PASS, or SKIP for the sweep before its first run
 ```
 
 Measured from a fresh clone with no cluster: `make up` 283 s, the first
