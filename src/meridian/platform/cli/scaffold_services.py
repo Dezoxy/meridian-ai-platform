@@ -97,27 +97,35 @@ def _runtime_entries(document: yaml.Node | None) -> list[yaml.MappingNode]:
     return entries
 
 
+def line_of(text: str, mark: yaml.Mark) -> int:
+    """The 1-based line of ``text`` at ``mark``, as an editor counts it: only a line
+    feed ends a line. The parser also counts U+0085, U+2028 and U+2029 (and a lone
+    carriage return), which a person does not see as breaks. At the very end of a
+    text that ends with a line feed this is the line after the last one."""
+    return text.count("\n", 0, mark.index) + 1
+
+
 def _not_yaml(old: str, exc: yaml.YAMLError) -> str:
     """The refusal for a text the parser stopped on: with the line it gave (a
     mark, or the position of a character it cannot read), else without one."""
     mark = getattr(exc, "problem_mark", None)
     if mark is not None:
-        return SERVICES_NOT_YAML_AT.format(mark.line + 1)
+        return SERVICES_NOT_YAML_AT.format(line_of(old, mark))
     if isinstance(exc, yaml.reader.ReaderError):
         return SERVICES_NOT_YAML_AT.format(old.count("\n", 0, max(exc.position, 0)) + 1)
     return SERVICES_NOT_YAML
 
 
-def _merge_key_lines(node: yaml.Node) -> list[int]:
-    """The 0-based lines of the merge keys in the tree under ``node``. Meant for a
-    tree without aliases: with one a node can be its own descendant."""
+def _merge_key_indexes(node: yaml.Node) -> list[int]:
+    """The character indexes of the merge keys in the tree under ``node``. Meant
+    for a tree without aliases: with one a node can be its own descendant."""
     if isinstance(node, yaml.SequenceNode):
-        return [line for child in node.value for line in _merge_key_lines(child)]
+        return [index for child in node.value for index in _merge_key_indexes(child)]
     if not isinstance(node, yaml.MappingNode):
         return []
-    found = [key.start_mark.line for key, _ in node.value if key.tag == MERGE_TAG]
+    found = [key.start_mark.index for key, _ in node.value if key.tag == MERGE_TAG]
     for key, value in node.value:
-        found += _merge_key_lines(key) + _merge_key_lines(value)
+        found += _merge_key_indexes(key) + _merge_key_indexes(value)
     return found
 
 
@@ -129,9 +137,9 @@ def _shared_node_line(old: str, document: yaml.Node | None) -> int | None:
     the loader refuses only when it constructs) in the composed tree."""
     for event in yaml.parse(old, Loader=yaml.SafeLoader):
         if getattr(event, "anchor", None) is not None:
-            return event.start_mark.line + 1
-    merges = _merge_key_lines(document) if document is not None else []
-    return min(merges) + 1 if merges else None
+            return line_of(old, event.start_mark)
+    merges = _merge_key_indexes(document) if document is not None else []
+    return old.count("\n", 0, min(merges)) + 1 if merges else None
 
 
 def _runtime_agents(old: str) -> tuple[yaml.Node, yaml.Node]:
@@ -139,7 +147,7 @@ def _runtime_agents(old: str) -> tuple[yaml.Node, yaml.Node]:
     ``ServicesEditError`` when the text is not YAML, uses an anchor, an alias or a
     merge key, has no entry for the runtime, two, or no ``agents`` key."""
     try:
-        document = yaml.compose(old)
+        document = yaml.compose(old, Loader=yaml.SafeLoader)
     except yaml.YAMLError as exc:
         raise ServicesEditError(_not_yaml(old, exc)) from None
     line = _shared_node_line(old, document)
@@ -148,7 +156,7 @@ def _runtime_agents(old: str) -> tuple[yaml.Node, yaml.Node]:
     entries = _runtime_entries(document)
     if not entries:
         raise ServicesEditError(SERVICES_RUNTIME_MISSING)
-    lines = [str(entry.start_mark.line + 1) for entry in entries]
+    lines = [str(line_of(old, entry.start_mark)) for entry in entries]
     if len(entries) > 1:
         numbers = ", ".join(lines[:-1]) + " and " + lines[-1]
         raise ServicesEditError(SERVICES_RUNTIME_TWICE.format(numbers))
@@ -162,7 +170,7 @@ def services_edit(old: str, name: str) -> str:
     """``old``, the text of ``services.yaml``, with ``name`` appended to the
     ``agents`` of the Agent Runtime's entry, verified."""
     key, value = _runtime_agents(old)
-    line = key.start_mark.line + 1
+    line = line_of(old, key.start_mark)
     one_line = value.start_mark.line == value.end_mark.line
     if not (isinstance(value, yaml.SequenceNode) and value.flow_style and one_line):
         raise ServicesEditError(SERVICES_AGENTS_UNUSABLE.format(line))

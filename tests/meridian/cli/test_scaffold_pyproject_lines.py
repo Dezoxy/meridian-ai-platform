@@ -10,15 +10,20 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from meridian.platform.cli import app
 from meridian.platform.cli.scaffold import (
     PYPROJECT_NOT_TOML,
     PYPROJECT_NOT_TOML_AT,
+    PYPROJECT_TABLE_UNVERIFIED,
     ScaffoldError,
     plan_workload,
     write_plan,
 )
 
+runner = CliRunner()
+EXIT_REFUSED = 2
 NAME = "fraud-review"
 MODULE = "fraud_review"
 PYPROJECT = "pyproject.toml"
@@ -115,6 +120,74 @@ def test_a_pyproject_error_with_no_line_to_give_is_refused_without_one(
         plan_workload(root, NAME)
 
     assert str(refused.value) == PYPROJECT_NOT_TOML
+
+
+def test_a_pyproject_nested_too_deeply_is_refused_as_not_toml_with_no_traceback(
+    root: Path,
+) -> None:
+    # The parser's recursion error is not a decode error, and gave no line.
+    deep = "a = " + "[" * 5000 + "]" * 5000 + "\n"
+    old = (root / PYPROJECT).read_text(encoding="utf-8")
+    (root / PYPROJECT).write_text(old + deep, encoding="utf-8")
+
+    result = runner.invoke(app, ["workload", "new", NAME, "--root", str(root)])
+
+    assert result.exit_code == EXIT_REFUSED
+    assert result.stderr == f"ERROR {PYPROJECT_NOT_TOML}\n"
+    assert not isinstance(result.exception, RecursionError)
+
+
+NESTED_ARRAY = 'nested = [\n  ["a", "b"],\n  ["c"],\n]\n'
+BRACKET_IN_A_STRING = 'doc = """\n  [x]\n  y"""\n'
+ARRAY_OF_STRINGS = 'many = [\n  "a",\n  "b",\n]\ninline = { x = 1 }\n'
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [NESTED_ARRAY, BRACKET_IN_A_STRING, ARRAY_OF_STRINGS],
+    ids=["a nested array", "a bracket line in a string", "an array of strings"],
+)
+def test_a_table_ends_where_the_document_says_not_at_a_line_that_looks_like_a_header(
+    root: Path, shape: str
+) -> None:
+    # Arrange: the shape sits first in the graphs table, before the existing key.
+    header = f'[project.entry-points."{GRAPHS}"]\n'
+    old = (root / PYPROJECT).read_text(encoding="utf-8")
+    old = old.replace(header, header + shape)
+    (root / PYPROJECT).write_text(old, encoding="utf-8")
+
+    # Act
+    plan = plan_workload(root, NAME)
+
+    # Assert: the entry lands in its table and nothing else of the file moves.
+    new = plan.changed[PYPROJECT]
+    graph = f'{NAME} = "meridian.workloads.{MODULE}.graph:build"\n'
+    evaluation = f'{NAME} = "meridian.workloads.{MODULE}.evaluation:EVALUATION"\n'
+    assert new.replace(graph, "", 1).replace(evaluation, "", 1) == old
+    assert NAME in entry_points(new, GRAPHS)
+    assert NAME in entry_points(new, EVALUATIONS)
+
+
+def test_an_edit_that_does_not_verify_names_the_header_of_the_table(
+    root: Path,
+) -> None:
+    # Arrange: the string holds a copy of the header, which the edit takes for the
+    # real one (the real header is written with a space, so it is not found).
+    old = (root / PYPROJECT).read_text(encoding="utf-8")
+    header = f'[project.entry-points."{GRAPHS}"]'
+    text = old.replace(
+        header + "\n",
+        'x = """\n' + header + '\n"""\n[ project.entry-points."' + GRAPHS + '" ]\n',
+    )
+    (root / PYPROJECT).write_text(text, encoding="utf-8")
+    line = text.splitlines().index(header) + 1
+
+    # Act
+    with pytest.raises(ScaffoldError) as refused:
+        plan_workload(root, NAME)
+
+    # Assert
+    assert str(refused.value) == PYPROJECT_TABLE_UNVERIFIED.format(line)
 
 
 def test_a_parser_text_that_ends_like_a_position_is_not_read_as_one(

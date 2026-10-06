@@ -9,13 +9,20 @@ the bytes this command wrote. Every test builds a small tree in ``tmp_path`` (th
 
 import errno
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from meridian.platform.cli import scaffold
+from meridian.platform.cli import scaffold_writes
 from meridian.platform.cli.scaffold import (
+    AN_INTERRUPT,
+    AN_UNEXPECTED_ERROR,
+    CHECKING_THE_PLAN,
+    LEFT_AS_SAVED,
+    LEFT_BEHIND,
+    PLAN_CHANGED,
     ROLLBACK_FAILED,
     WRITE_FAILED,
     ScaffoldWriteError,
@@ -79,7 +86,7 @@ def fail_open_of(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
             raise OSError(errno.ENOSPC, LEAKED)
         return real_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(scaffold, "open", fake_open, raising=False)
+    monkeypatch.setattr(scaffold_writes, "open", fake_open, raising=False)
 
 
 @pytest.mark.parametrize(
@@ -177,17 +184,21 @@ def test_a_rollback_that_fails_names_the_kind_of_the_write_that_failed(
 def fail_services_after_saving(
     monkeypatch: pytest.MonkeyPatch, root: Path, saved: str
 ) -> None:
-    """Make the replacement of ``services.yaml`` fail, and have the person save
-    ``saved`` (a path under ``root``) with their own bytes just before it does."""
-    real = scaffold._replace
+    """Make the first replacement of ``services.yaml`` fail, and have the person
+    save ``saved`` (a path under ``root``) with their own bytes just before it
+    does. Only that first call fails: the undo's own write is the real one, so a
+    file the undo leaves alone is left by its rule and not by a failing write."""
+    real = scaffold_writes._replace
+    failed: list[Path] = []
 
     def replace(path: Path, data: bytes) -> None:
-        if path == root / SERVICES:
+        if path == root / SERVICES and not failed:
+            failed.append(path)
             (root / saved).write_bytes(PERSONS_SAVE)
             raise PermissionError(errno.EACCES, LEAKED)
         real(path, data)
 
-    monkeypatch.setattr(scaffold, "_replace", replace)
+    monkeypatch.setattr(scaffold_writes, "_replace", replace)
 
 
 def test_a_save_of_the_file_being_replaced_is_left_as_it_is_and_named(
@@ -202,18 +213,14 @@ def test_a_save_of_the_file_being_replaced_is_left_as_it_is_and_named(
     with pytest.raises(ScaffoldWriteError) as refused:
         write_plan(root, plan)
 
-    # Assert: the person's bytes stay; agents.yaml, replaced before it, is left
-    # too (undoing it alone would leave the registry in a state nobody chose);
-    # the rest is as it was.
+    # Assert: the person's bytes stay and are named as theirs; agents.yaml, which
+    # still holds this command's bytes, goes back (changed on purpose: it used
+    # to be left, and the registry validated with an agent that had no graph).
     assert str(refused.value) == ROLLBACK_FAILED.format(
         "replacing services.yaml", DENIED
     )
-    assert refused.value.details == (
-        f"left behind: {SERVICES}",
-        f"left behind: {AGENTS}",
-    )
-    expected = {**before, SERVICES: PERSONS_SAVE, AGENTS: plan.changed[AGENTS].encode()}
-    assert snapshot(root) == expected
+    assert refused.value.details == (LEFT_AS_SAVED.format(SERVICES),)
+    assert snapshot(root) == {**before, SERVICES: PERSONS_SAVE}
 
 
 def test_a_save_of_a_file_replaced_earlier_is_left_as_it_is_and_named(
@@ -233,7 +240,7 @@ def test_a_save_of_a_file_replaced_earlier_is_left_as_it_is_and_named(
     assert str(refused.value) == ROLLBACK_FAILED.format(
         "replacing services.yaml", DENIED
     )
-    assert refused.value.details == (f"left behind: {AGENTS}",)
+    assert refused.value.details == (LEFT_AS_SAVED.format(AGENTS),)
     assert snapshot(root) == {**before, AGENTS: PERSONS_SAVE}
 
 
@@ -269,7 +276,7 @@ def test_a_file_the_undo_cannot_read_is_left_as_it_is_and_named(
     assert str(refused.value) == ROLLBACK_FAILED.format(
         "replacing pyproject.toml", DENIED
     )
-    assert refused.value.details == (f"left behind: {AGENTS}",)
+    assert refused.value.details == (LEFT_BEHIND.format(AGENTS),)
     assert LEAKED not in str(refused.value)
     assert (root / AGENTS).read_bytes() == plan.changed[AGENTS].encode()
 
@@ -286,4 +293,161 @@ def test_a_file_still_holding_what_the_command_wrote_is_put_back(
         write_plan(root, plan)
 
     assert refused.value.details == ()
+    assert snapshot(root) == before
+
+
+def hook_replacements(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    *,
+    before: dict[str, Callable[[], None]] | None = None,
+    after: dict[str, Callable[[], None]] | None = None,
+) -> None:
+    """Run a callable just before, or just after, the real replacement of the
+    file it is keyed by (a path relative to ``root``)."""
+    real = scaffold_writes._replace
+    before = before or {}
+    after = after or {}
+
+    def replace(path: Path, data: bytes) -> None:
+        relative = path.relative_to(root).as_posix()
+        before.get(relative, lambda: None)()
+        real(path, data)
+        after.get(relative, lambda: None)()
+
+    monkeypatch.setattr(scaffold_writes, "_replace", replace)
+
+
+def interrupt() -> None:
+    raise KeyboardInterrupt
+
+
+def fail_unlink_of(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    real = Path.unlink
+
+    def unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        if self.name == name:
+            raise PermissionError(errno.EACCES, LEAKED)
+        real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+
+def save_services(root: Path) -> None:
+    (root / SERVICES).write_bytes(PERSONS_SAVE)
+
+
+def test_a_stale_plan_met_mid_write_with_a_failing_undo_names_what_is_left(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: services.yaml is saved after agents.yaml was replaced (the refusal
+    # that used to say "nothing was written"), and graph.py cannot be removed.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    hook_replacements(monkeypatch, root, after={AGENTS: lambda: save_services(root)})
+    fail_unlink_of(monkeypatch, "graph.py")
+
+    # Act
+    with pytest.raises(ScaffoldWriteError) as refused:
+        write_plan(root, plan)
+
+    # Assert: a write failure with its details, not the refusal; the file and the
+    # directories above it that could not go are named; agents.yaml went back.
+    assert str(refused.value) == ROLLBACK_FAILED.format(CHECKING_THE_PLAN, PLAN_CHANGED)
+    assert "nothing was written" not in str(refused.value)
+    graph = f"src/meridian/workloads/{MODULE}/graph.py"
+    assert LEFT_BEHIND.format(graph) in refused.value.details
+    assert all(line.startswith("left behind: ") for line in refused.value.details)
+    after = snapshot(root)
+    assert after[AGENTS] == before[AGENTS]
+    assert after[SERVICES] == PERSONS_SAVE
+    assert graph in after
+
+
+def test_an_interrupt_with_a_save_prints_what_is_left_and_still_interrupts(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Arrange: Ctrl-C at the replacement of pyproject.toml, after services.yaml
+    # was replaced and then saved by the person.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    hook_replacements(
+        monkeypatch,
+        root,
+        before={PYPROJECT: interrupt},
+        after={SERVICES: lambda: save_services(root)},
+    )
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    # Assert
+    assert capsys.readouterr().err == (
+        "ERROR "
+        + ROLLBACK_FAILED.format(AN_INTERRUPT, "KeyboardInterrupt")
+        + f"\nERROR {LEFT_AS_SAVED.format(SERVICES)}\n"
+    )
+    assert snapshot(root) == {**before, SERVICES: PERSONS_SAVE}
+
+
+def test_an_interrupt_with_nothing_left_prints_nothing_and_propagates(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other side of the rule: the undo is complete, so nothing is said.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    hook_replacements(monkeypatch, root, before={PYPROJECT: interrupt})
+
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    assert capsys.readouterr().err == ""
+    assert snapshot(root) == before
+
+
+def test_any_other_exception_with_a_save_is_a_write_failure_naming_its_class_only(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: a RuntimeError whose text must not reach the person.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+
+    def fail() -> None:
+        raise RuntimeError(LEAKED)
+
+    hook_replacements(
+        monkeypatch,
+        root,
+        before={PYPROJECT: fail},
+        after={SERVICES: lambda: save_services(root)},
+    )
+
+    # Act
+    with pytest.raises(ScaffoldWriteError) as refused:
+        write_plan(root, plan)
+
+    # Assert
+    assert str(refused.value) == ROLLBACK_FAILED.format(
+        AN_UNEXPECTED_ERROR, "RuntimeError"
+    )
+    assert refused.value.details == (LEFT_AS_SAVED.format(SERVICES),)
+    assert LEAKED not in str(refused.value)
+    assert snapshot(root) == {**before, SERVICES: PERSONS_SAVE}
+
+
+def test_any_other_exception_with_nothing_left_propagates_unchanged(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+
+    def fail() -> None:
+        raise RuntimeError(LEAKED)
+
+    hook_replacements(monkeypatch, root, before={PYPROJECT: fail})
+
+    with pytest.raises(RuntimeError, match=LEAKED):
+        write_plan(root, plan)
+
     assert snapshot(root) == before

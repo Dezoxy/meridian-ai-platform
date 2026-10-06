@@ -19,8 +19,8 @@ from meridian.platform.cli import scaffold
 from meridian.platform.cli.scaffold import (
     AGENTS_EDIT_UNVERIFIED,
     AGENTS_NO_FINAL_NEWLINE,
-    PYPROJECT_EDIT_UNVERIFIED,
     PYPROJECT_HEADER_UNUSABLE,
+    PYPROJECT_TABLE_UNVERIFIED,
     ScaffoldError,
     plan_workload,
 )
@@ -319,7 +319,9 @@ TOML_WITH_A_HEADER_TWICE = (
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_EDIT_UNVERIFIED),
+        # Changed on purpose (S076): the refusal names the table, by its header's
+        # line (4, inside the string), instead of saying only "does not verify".
+        (TOML_WITH_A_HEADER_IN_A_STRING, PYPROJECT_TABLE_UNVERIFIED.format(4)),
         (
             TOML_WITH_A_HEADER_TWICE,
             # The header is on lines 4 and 12 of the text.

@@ -9,10 +9,12 @@ never the agent (S076, T-81). These tests call the function directly.
 import pytest
 import yaml
 
-from meridian.platform.cli import scaffold_services
+from meridian.platform.cli import scaffold, scaffold_services
 from meridian.platform.cli.scaffold_services import (
+    SERVICES_AGENTS_UNUSABLE,
     SERVICES_NOT_YAML,
     SERVICES_NOT_YAML_AT,
+    SERVICES_RUNTIME_TWICE,
     SERVICES_SHARED_NODE,
     ServicesEditError,
     services_edit,
@@ -179,7 +181,8 @@ def test_a_text_that_is_not_yaml_is_refused_with_its_line_and_none_of_its_conten
 def test_a_parse_error_that_gives_no_line_is_refused_without_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail(text: str) -> None:
+    # Changed on purpose (S076): `compose` is now given the safe loader.
+    def fail(text: str, Loader: object = None) -> None:
         raise yaml.YAMLError(CANARY)
 
     monkeypatch.setattr(scaffold_services.yaml, "compose", fail)
@@ -189,3 +192,85 @@ def test_a_parse_error_that_gives_no_line_is_refused_without_one(
 
     assert str(refused.value) == SERVICES_NOT_YAML
     assert CANARY not in str(refused.value)
+
+
+def test_the_text_is_composed_with_the_safe_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The default loader would resolve a python tag; it constructs nothing at
+    # compose time, but the scan of the events already uses the safe one.
+    real = yaml.compose
+    loaders: list[object] = []
+
+    def compose(text: str, Loader: object = yaml.Loader) -> yaml.Node | None:
+        loaders.append(Loader)
+        return real(text, Loader=Loader)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scaffold_services.yaml, "compose", compose)
+
+    services_edit(PLAIN, NAME)
+
+    assert loaders == [yaml.SafeLoader]
+
+
+# A note with a Unicode line separator in it: the parser counts it as a line break,
+# an editor does not, and the line a person is told is the editor's.
+LINE_SEPARATOR = chr(0x2028)
+SEPARATED = f"# a note{LINE_SEPARATOR}# more of the same line\n"
+
+
+def test_a_line_number_does_not_count_a_unicode_separator_as_a_break() -> None:
+    # The error is on line 2 for an editor.
+    text = f"a: 1 # note{LINE_SEPARATOR}# more\nb: ]\n"
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_NOT_YAML_AT.format(2)
+
+
+def test_the_lines_of_two_runtime_entries_are_the_editors_lines() -> None:
+    text = (
+        SEPARATED
+        + "services:\n  - id: agent-runtime\n    agents: [a]\n"
+        + "  - id: agent-runtime\n    agents: [b]\n"
+    )
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_RUNTIME_TWICE.format("3 and 5")
+
+
+def test_the_line_of_an_anchor_is_the_editors_line() -> None:
+    text = SEPARATED + "services:\n  - id: agent-runtime\n    agents: &x [a]\n"
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_SHARED_NODE.format(4)
+
+
+def test_the_line_of_a_merge_key_is_the_editors_line() -> None:
+    text = SEPARATED + "services:\n  - id: agent-runtime\n    <<: {agents: [a]}\n"
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_SHARED_NODE.format(4)
+
+
+def test_the_line_of_the_agents_key_is_the_editors_line() -> None:
+    # A block list, which the text edit does not extend.
+    text = SEPARATED + "services:\n  - id: agent-runtime\n    agents:\n      - a\n"
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_AGENTS_UNUSABLE.format(4)
+
+
+def test_the_line_of_the_agents_list_of_agents_yaml_is_the_editors_line() -> None:
+    text = SEPARATED + "agents:\n  - id: a\n"
+
+    assert scaffold._agents_list_line(text) == 3

@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import yaml
 
-from meridian.platform.cli import scaffold
+from meridian.platform.cli import scaffold, scaffold_writes
 from meridian.platform.cli.scaffold import (
     NAME_TAKEN,
     PATH_EXISTS,
@@ -413,7 +413,7 @@ def test_a_write_that_fails_after_the_file_was_created_leaves_nothing_behind(
         stream = real_open(path, *args, **kwargs)
         return FailingStream(stream) if Path(path).name == "graph.py" else stream
 
-    monkeypatch.setattr(scaffold, "open", fake_open, raising=False)
+    monkeypatch.setattr(scaffold_writes, "open", fake_open, raising=False)
 
     with pytest.raises(ScaffoldWriteError) as refused:
         write_plan(root, plan)
@@ -528,7 +528,7 @@ def interrupt_after_replacing(
     """Make the first replacement of ``relative`` raise ``KeyboardInterrupt`` once
     the real replacement is done; the undo's own replacement is left alone. The
     returned list holds the path once the interrupt was raised."""
-    real = scaffold._replace
+    real = scaffold_writes._replace
     interrupted: list[Path] = []
 
     def replace(path: Path, data: bytes) -> None:
@@ -537,7 +537,7 @@ def interrupt_after_replacing(
             interrupted.append(path)
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(scaffold, "_replace", replace)
+    monkeypatch.setattr(scaffold_writes, "_replace", replace)
     return interrupted
 
 
@@ -573,7 +573,7 @@ def test_an_interrupt_right_after_a_file_was_created_leaves_the_tree_byte_identi
             raise KeyboardInterrupt
         return stream
 
-    monkeypatch.setattr(scaffold, "open", fake_open, raising=False)
+    monkeypatch.setattr(scaffold_writes, "open", fake_open, raising=False)
 
     with pytest.raises(KeyboardInterrupt):
         write_plan(root, plan)
@@ -623,13 +623,13 @@ def save_after_the_stale_check(
     monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]
 ) -> None:
     """Make ``change`` happen right after the check that the plan is current."""
-    real = scaffold._refuse_a_stale_plan
+    real = scaffold_writes._refuse_a_stale_plan
 
     def check(root: Path, plan: Plan) -> None:
         real(root, plan)
         change()
 
-    monkeypatch.setattr(scaffold, "_refuse_a_stale_plan", check)
+    monkeypatch.setattr(scaffold_writes, "_refuse_a_stale_plan", check)
 
 
 @pytest.mark.parametrize("relative", scaffold.WRITE_ORDER)
