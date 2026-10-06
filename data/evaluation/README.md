@@ -37,8 +37,10 @@ new baseline in the same reviewed change (T-29, T-72):
   the text normalisation they read through (`guardrails/screening.py`); a
   baseline made before it existed asks for a new one. It is not part of the
   prompt's version, which labels the recording.
-- `tools`: the agent's registry entry, with its allowlist, and the registry
-  entries of the tools on it; not the tool servers' entries.
+- `tools`: the agent's registry entry, with its allowlist and its workers (each
+  worker's ID, description and tool list, S031), and the registry entries of
+  the tools on it; not the tool servers' entries. A change to a worker's list
+  changes this fingerprint, so the baselines change in the same pull request.
 - `golden_set`: the workload the manifest names, the generator's version
   and seed, the hash of the whole manifest and of every file it lists, each
   checked against the file's bytes; a file in the golden set's directory
@@ -157,7 +159,11 @@ Six graders, the same on every case:
   with a fraud indicator, and no rejection off the adjuster's route.
   Absolute.
 - `tools_allowlisted`: every tool the run called is on the agent's
-  allowlist, and a run that proposed called at least one. Absolute.
+  allowlist, and a run that proposed called at least one. Absolute. It
+  compares tool names with the agent's whole list: the capture stores the name
+  and the arguments of a call, not the worker that made it, and a worker field
+  would change the report's shape. A worker's own list is held by the runtime's
+  view and the tool servers, and by the stack tests of S031.
 - `ended`: the run ended as designed, with a proposal or with the wording
   check's failure, and with nothing else. Absolute.
 

@@ -129,3 +129,39 @@ def test_the_graph_itself_has_no_node_span(exporter: InMemorySpanExporter) -> No
     compiled.invoke({}, config)
 
     assert [s.name for s in exporter.get_finished_spans()] == ["langgraph.node only"]
+
+
+def test_a_node_labelled_with_a_worker_carries_it_on_its_span_and_others_do_not(
+    exporter: InMemorySpanExporter,
+) -> None:
+    """S031: a worker's nodes are labelled in their metadata; the span of a node
+    of a subgraph built with the label carries it, and the span of the node of
+    the parent that runs it, with no label, carries none."""
+    inner = StateGraph(State)
+    inner.add_node(
+        "read",
+        lambda s: {"note": "a"},
+        metadata={"meridian.worker": "approvals"},
+    )
+    inner.add_edge(START, "read")
+    inner.add_edge("read", END)
+    parent = StateGraph(State)
+    parent.add_node("decide", lambda s: {"output": inner.compile().invoke(s)})
+    parent.add_node("plain", lambda s: {"note": "b"})
+    parent.add_edge(START, "decide")
+    parent.add_edge("decide", "plain")
+    parent.add_edge("plain", END)
+    provider = make_tracer_provider("agent-runtime", exporter)
+    handler = NodeSpans(provider.get_tracer("t"), run_id=RUN_ID, agent="claims-triage")
+
+    parent.compile().invoke({}, {"callbacks": [handler]})
+
+    workers = {
+        s.name: s.attributes.get("meridian.worker")
+        for s in exporter.get_finished_spans()
+    }
+    assert workers == {
+        "langgraph.node read": "approvals",
+        "langgraph.node decide": None,
+        "langgraph.node plain": None,
+    }

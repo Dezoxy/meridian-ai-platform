@@ -17,6 +17,8 @@ from opentelemetry.trace import Span, Tracer
 from meridian.platform.common.telemetry import mark_error, set_span_attributes
 
 NODE_TAG_PREFIX = "graph:step:"
+# The key of a node's metadata that names the worker the node belongs to.
+WORKER_KEY = "meridian.worker"
 
 
 class NodeSpans(BaseCallbackHandler):
@@ -40,14 +42,17 @@ class NodeSpans(BaseCallbackHandler):
             return
         node = str((metadata or {}).get("langgraph_node", "unknown"))
         span = self._tracer.start_span(f"langgraph.node {node}")
-        set_span_attributes(
-            span,
-            {
-                "meridian.node": node,
-                "meridian.run_id": self._run_id,
-                "meridian.agent": self._agent,
-            },
-        )
+        attributes = {
+            "meridian.node": node,
+            "meridian.run_id": self._run_id,
+            "meridian.agent": self._agent,
+        }
+        # A workload labels the nodes of a worker in their metadata (S031); a
+        # node with no label belongs to no worker.
+        worker = (metadata or {}).get(WORKER_KEY)
+        if isinstance(worker, str):
+            attributes["meridian.worker"] = worker
+        set_span_attributes(span, attributes)
         token = context.attach(trace.set_span_in_context(span))
         self._open[run_id] = (span, token)
 
