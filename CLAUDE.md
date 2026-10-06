@@ -11,9 +11,11 @@ views and the decisions.
 [docs/meridian-plan.md](docs/meridian-plan.md) is the single living plan: the
 step list (S000…), the session protocol and the open questions.
 
-- Take the next `todo` step whose dependencies are `done`, unless the owner
-  names another. Each step has its own branch off `main` and its own
-  worktree; one session runs up to three at a time (the plan's Part A).
+- Take the next `todo` steps whose dependencies are `done`, unless the owner
+  names others: two or three side by side by default, at most one that
+  needs the cluster, one that adds a migration and one that changes what
+  the evaluation fingerprints (the plan's Part A). Each step has its own
+  branch off `main` and its own worktree.
 - Read the plan's Part A before starting; it says what to read, how to
   delegate, which gates to run and how to close the step.
 - Before running steps or implementers side by side, read "Working fast on
