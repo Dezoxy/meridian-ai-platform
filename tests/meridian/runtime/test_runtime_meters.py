@@ -128,6 +128,7 @@ def test_every_word_a_runtime_error_can_give_is_in_the_closed_set(
         "no-pending-pause",
         "wording-version-unknown",
         "claim-not-valid",
+        "posted-flag-not-valid",
     ],
 )
 def test_a_graph_failure_is_the_one_word_whatever_its_code(code: str) -> None:

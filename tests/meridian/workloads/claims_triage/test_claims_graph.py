@@ -2273,3 +2273,24 @@ def test_a_clean_claim_is_sent_and_triaged_as_before() -> None:
     assert sent[POSTED_TEXT_FLAG] is False
     assert len(model.calls) == 1
     assert result["output"]["assessment"] == "none_applies"
+
+
+def test_a_paused_run_still_has_the_flag_in_its_checkpoint_and_after_the_resume() -> (
+    None
+):
+    saver = MemorySaver()
+    compiled(StubModel(), StubTools(), saver).invoke(
+        {"claim": facts("CLM-0011"), POSTED_TEXT_FLAG: True}, THREAD
+    )
+    tools = StubTools(recorded="approve")
+    graph = compiled(StubModel(), tools, saver)
+
+    paused_state = graph.get_state(THREAD)
+    resume(graph, {})
+
+    # A graph built anew on the same saver reads the flag from the stored
+    # checkpoint, not from the object that ran the first leg.
+    assert paused_state.next == ("await_decision",)
+    assert paused_state.values[POSTED_TEXT_FLAG] is True
+    assert graph.get_state(THREAD).values[POSTED_TEXT_FLAG] is True
+    assert graph.get_state(THREAD).values["decision"] == "approve"

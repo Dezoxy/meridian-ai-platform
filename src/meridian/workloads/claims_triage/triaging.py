@@ -179,6 +179,16 @@ def facts_for_run(
     return facts
 
 
+def triage_run_input(
+    submission: ClaimSubmission, arrived: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The whole input of a triage run, built here and nowhere else: the claim's
+    facts (``facts_for_run``) and, beside them, the screen of the description as
+    posted (``posted_text.input_for_run``, S067). ``start_run`` sends it as it
+    is, so the claim is under ``claim`` once."""
+    return input_for_run(submission, facts_for_run(submission, arrived))
+
+
 def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...]:
     """The names of the documents that arrived for the claim, on the caller's
     connection (so inside its transaction)."""
@@ -462,7 +472,8 @@ def triage_claim(
     """Take the claim's triage, run it and close it. ``span`` is the caller's
     open span; the run's ID is set on it. A refusal (409) is raised as
     ``HTTPException``; a failure is answered with the claim's ID. The run is
-    sent the submission's facts and the documents that arrived for the claim.
+    sent the submission's facts and the documents that arrived for the claim, and
+    the screen of its description as posted (``triage_run_input``).
     ``meters`` counts the proposal when it is stored (see ``run_taken_triage``)."""
     try:
         taken_at, found_in, arrived, old_run = take_triage(dsn, tenant, claim_id)
@@ -482,7 +493,7 @@ def triage_claim(
         http,
         span,
         claim_id,
-        input_for_run(submission, facts_for_run(submission, arrived)),
+        triage_run_input(submission, arrived),
         taken_at,
         meters=meters,
     )
@@ -497,7 +508,7 @@ def run_taken_triage(
     http: httpx.Client,
     span: Span,
     claim_id: str,
-    facts: dict[str, Any],
+    run_input: dict[str, Any],
     taken_at: datetime,
     *,
     meters: ClaimsMeters | None = None,
@@ -512,7 +523,9 @@ def run_taken_triage(
     words are in ``meters.py``); a failure no branch expected is counted
     ``unexpected`` and raised, the 409 excepted: it is counted where it is raised."""
     try:
-        return _run_triage(dsn, tenant, http, span, claim_id, facts, taken_at, meters)
+        return _run_triage(
+            dsn, tenant, http, span, claim_id, run_input, taken_at, meters
+        )
     except Exception as exc:
         if meters is not None and not isinstance(exc, HTTPException):
             meters.triage_failed("unexpected")
@@ -525,12 +538,12 @@ def _run_triage(
     http: httpx.Client,
     span: Span,
     claim_id: str,
-    facts: dict[str, Any],
+    run_input: dict[str, Any],
     taken_at: datetime,
     meters: ClaimsMeters | None,
 ) -> ClaimResponse | DecisionFailure:
     try:
-        run = start_run(http, tenant, claim_id, facts)
+        run = start_run(http, tenant, claim_id, run_input)
         proposal, transition = triage_outcome(run)
     except RuntimeCallError as exc:
         logger.error(

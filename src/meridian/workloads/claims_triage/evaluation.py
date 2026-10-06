@@ -324,6 +324,42 @@ def _check_parts(
         )
 
 
+def _is_list_of(kind: type, value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(v, kind) for v in value)
+
+
+def _is_readable(expected: Mapping[str, Any]) -> bool:
+    """Whether ``_wanted`` and ``grade`` can read the expected record: each field
+    they index is there and of the kind they use. A recommendation and a payable
+    amount may be null (an integer is not a boolean); an ``excluded`` record's
+    first citation names the exclusion's clause."""
+    amount = expected.get("payable_amount")
+    recommendation = expected.get("recommendation")
+    citations = expected.get("citations")
+    return (
+        # A null is a value, a missing key is not: both read as None by ``get``.
+        "payable_amount" in expected
+        and "recommendation" in expected
+        and isinstance(expected.get("route"), str)
+        and isinstance(expected.get("reason"), str)
+        and (recommendation is None or isinstance(recommendation, str))
+        and (amount is None or _is_integer(amount))
+        and _is_list_of(str, expected.get("fraud_indicators"))
+        and _is_list_of(str, expected.get("missing_documents"))
+        and isinstance(citations, list)
+        and all(_names_a_clause(c) for c in citations)
+        and (expected["reason"] != "excluded" or bool(citations))
+    )
+
+
+def _is_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _names_a_clause(citation: Any) -> bool:
+    return isinstance(citation, dict) and isinstance(citation.get("clause"), str)
+
+
 def _policy_of(
     expected: Mapping[str, Any],
     claim: Mapping[str, Any],
@@ -333,19 +369,14 @@ def _policy_of(
     with an empty policy only when its label says ``policy_not_found`` and cites
     nothing (so no field of a policy is read); any other claim with no policy is
     a golden set whose files disagree. So is a record the grading cannot read: a
-    claim with no policy number, an expected record with no reason or with
-    citations missing or null (the files are a folder a person chose)."""
-    number, reason, citations = (
-        claim.get("policy_number"),
-        expected.get("reason"),
-        expected.get("citations"),
-    )
-    if not (
-        isinstance(number, str)
-        and isinstance(reason, str)
-        and isinstance(citations, list)
-    ):
+    claim with no policy number, an expected record that ``_is_readable`` refuses
+    (a field missing or of another kind, citations that name no clause; the
+    files are a folder a person chose). This is the one place the record is
+    checked, before ``grade`` indexes it."""
+    number = claim.get("policy_number")
+    if not (isinstance(number, str) and _is_readable(expected)):
         raise ReportError(FILES_DISAGREE)
+    reason, citations = expected["reason"], expected["citations"]
     policy = policies.get(number)
     if policy is not None:
         return policy

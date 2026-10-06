@@ -65,7 +65,6 @@ from meridian.workloads.claims_triage.models import (
     DecisionFailure,
     Outcome,
 )
-from meridian.workloads.claims_triage.posted_text import input_for_run
 from meridian.workloads.claims_triage.triaging import (
     BEING_TRIAGED_DETAIL,
     TRIAGE_AGE_SQL,
@@ -74,10 +73,10 @@ from meridian.workloads.claims_triage.triaging import (
     arrived_documents,
     claim_database_failure,
     end_run,
-    facts_for_run,
     invalid_fields,
     run_taken_triage,
     take_over_lapsed_triage,
+    triage_run_input,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,11 +107,11 @@ TRIAGEABLE_AGAIN: tuple[LifecycleState, ...] = ("awaiting_adjuster", "triage_fai
 class _Taken(NamedTuple):
     """A triage this request took: the run it ends first (a paused one), the
     moment the claim moved to ``triaging`` and the input to run it with: the facts
-    and the screen of the description as posted (``input_for_run``, S067)."""
+    and the screen of the description as posted (``triage_run_input``, S067)."""
 
     old_run: UUID | None
     taken_at: datetime
-    facts: dict[str, Any]
+    run_input: dict[str, Any]
 
 
 def _lock_claim(
@@ -211,10 +210,8 @@ def _take_from_state(
         NOT_TRIAGEABLE_DETAIL,
     )
     submission = _submission(conn, claim_id)
-    facts = input_for_run(
-        submission, facts_for_run(submission, arrived_documents(conn, claim_id))
-    )
-    return _Taken(old_run, taken_at, facts)
+    run_input = triage_run_input(submission, arrived_documents(conn, claim_id))
+    return _Taken(old_run, taken_at, run_input)
 
 
 def _take_over(
@@ -249,10 +246,8 @@ def _take_over(
             else BEING_TRIAGED_DETAIL
         )
     submission = _submission(conn, claim_id)
-    facts = input_for_run(
-        submission, facts_for_run(submission, arrived_documents(conn, claim_id))
-    )
-    return _Taken(lapsed.old_run, lapsed.taken_at, facts)
+    run_input = triage_run_input(submission, arrived_documents(conn, claim_id))
+    return _Taken(lapsed.old_run, lapsed.taken_at, run_input)
 
 
 def _take_again(dsn: str, tenant: str, claim_id: str, page_run: str | None) -> _Taken:
@@ -307,7 +302,7 @@ def triage_again(
                 http,
                 span,
                 claim_id,
-                taken.facts,
+                taken.run_input,
                 taken.taken_at,
                 meters=meters,
             )
@@ -474,10 +469,8 @@ def _take_documents(
         move_claim(conn, DOCUMENTS_ARRIVED, claim_id=claim_id, tenant=tenant),
         NOT_AWAITING_DOCUMENTS_DETAIL,
     )
-    facts = input_for_run(
-        submission, facts_for_run(submission, arrived_documents(conn, claim_id))
-    )
-    return _Arrival(old_run, (taken_at, facts))
+    run_input = triage_run_input(submission, arrived_documents(conn, claim_id))
+    return _Arrival(old_run, (taken_at, run_input))
 
 
 class RefusedAfterStoring(HTTPException):
@@ -528,10 +521,10 @@ def add_documents(
             end_run(http, tenant, claim_id, arrival.old_run)
         if arrival.taken is None:
             return ClaimMoveResponse(claim_id=claim_id, state="awaiting_adjuster")
-        taken_at, facts = arrival.taken
+        taken_at, run_input = arrival.taken
         try:
             result = run_taken_triage(
-                dsn, tenant, http, span, claim_id, facts, taken_at, meters=meters
+                dsn, tenant, http, span, claim_id, run_input, taken_at, meters=meters
             )
         except HTTPException as exc:
             raise RefusedAfterStoring(exc.status_code, exc.detail) from None

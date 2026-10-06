@@ -1,9 +1,12 @@
 """A golden set whose files disagree is a report error, not a crash (S067, F2r).
 
 A person feeds ``meridian eval`` a folder. A claim with no ``policy_number``, an
-expected record with no ``reason`` or with ``citations`` missing or null is a
-``ReportError`` with the fixed text, never a ``KeyError`` or a ``TypeError``,
-and the text names neither the field's value nor the claim's policy."""
+expected record with a field the grading indexes (``route``, ``reason``,
+``recommendation``, ``payable_amount``, ``fraud_indicators``,
+``missing_documents``, ``citations`` and the first citation's ``clause``)
+missing, of another kind or, for citations, naming no clause is a ``ReportError``
+with the fixed text, never a ``KeyError`` or a ``TypeError``, and the text names
+neither the field's value nor the claim's policy."""
 
 import json
 import shutil
@@ -15,6 +18,7 @@ import pytest
 from toolsupport import SYNTHETIC_DIR
 from workloads.claims_triage.test_evaluation_http import REGISTRY, answer, drafted
 
+from meridian.platform.evaluation.fingerprints import FILES_DIFFER
 from meridian.platform.evaluation.report import ReportError
 from meridian.workloads.claims_triage.evaluation import POLICY_NOT_FOUND
 from meridian.workloads.claims_triage.evaluation_http import EVALUATION, FILES_DISAGREE
@@ -99,6 +103,110 @@ def test_an_expected_record_with_citations_missing_or_null_is_files_disagree(
     golden_copy(tmp_path, claim_id, expected=edit)
 
     assert report_refused(tmp_path, claim_id) == FILES_DISAGREE
+
+
+def set_to(field: str, value: Any) -> Callable[[Any], None]:
+    return lambda entry: entry.update({field: value})
+
+
+def first_citation(edit: Callable[[Any], None]) -> Callable[[Any], None]:
+    return lambda entry: edit(entry["citations"][0])
+
+
+@pytest.mark.parametrize("claim_id", [ANY_CLAIM, NOT_FOUND])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "route",
+        "recommendation",
+        "payable_amount",
+        "fraud_indicators",
+        "missing_documents",
+    ],
+)
+def test_an_expected_record_missing_a_field_the_grading_reads_is_files_disagree(
+    tmp_path: Path, claim_id: str, field: str
+) -> None:
+    golden_copy(tmp_path, claim_id, expected=drop(field))
+
+    assert report_refused(tmp_path, claim_id) == FILES_DISAGREE
+
+
+@pytest.mark.parametrize("claim_id", [ANY_CLAIM, NOT_FOUND])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("route", None),
+        ("route", ["adjuster"]),
+        ("recommendation", 7),
+        ("recommendation", ["reject"]),
+        ("payable_amount", "1800"),
+        ("payable_amount", True),
+        ("payable_amount", 1.5),
+        ("fraud_indicators", None),
+        ("fraud_indicators", "high_amount"),
+        ("fraud_indicators", [3]),
+        ("missing_documents", None),
+        ("missing_documents", {"photos": 1}),
+        ("missing_documents", [None]),
+    ],
+)
+def test_an_expected_record_with_a_field_of_the_wrong_kind_is_files_disagree(
+    tmp_path: Path, claim_id: str, field: str, value: Any
+) -> None:
+    golden_copy(tmp_path, claim_id, expected=set_to(field, value))
+
+    assert report_refused(tmp_path, claim_id) == FILES_DISAGREE
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        first_citation(drop("clause")),
+        first_citation(null("clause")),
+        first_citation(set_to("clause", 3.1)),
+        set_to("citations", ["3.1"]),
+        set_to("citations", [None]),
+        set_to("citations", []),
+    ],
+    ids=[
+        "no-clause",
+        "null-clause",
+        "clause-not-a-string",
+        "citation-not-an-object",
+        "citation-null",
+        "excluded-cites-nothing",
+    ],
+)
+def test_an_excluded_record_whose_citations_cannot_be_read_is_files_disagree(
+    tmp_path: Path, edit: Callable[[Any], None]
+) -> None:
+    golden_copy(tmp_path, ANY_CLAIM, expected=edit)
+
+    assert report_refused(tmp_path, ANY_CLAIM) == FILES_DISAGREE
+
+
+def test_the_text_of_a_refusal_holds_no_value_of_the_record(tmp_path: Path) -> None:
+    canary = "a-value-the-person-typed-42"
+    golden_copy(tmp_path, ANY_CLAIM, expected=set_to("route", [canary]))
+
+    refusal = report_refused(tmp_path, ANY_CLAIM)
+
+    assert canary not in refusal
+
+
+@pytest.mark.parametrize("field", ["recommendation", "payable_amount"])
+def test_a_null_recommendation_or_payable_amount_is_a_record_the_grading_reads(
+    tmp_path: Path, field: str
+) -> None:
+    # Both are null in real records. The record is read and graded, and the
+    # edited copy is then refused by the manifest's hash, which is checked last:
+    # the text is the manifest's, not the files-disagree one.
+    golden_copy(tmp_path, ANY_CLAIM, expected=null(field))
+
+    refusal = report_refused(tmp_path, ANY_CLAIM)
+
+    assert refusal.startswith(FILES_DIFFER)
 
 
 def test_a_policy_number_that_is_not_a_string_is_files_disagree(
