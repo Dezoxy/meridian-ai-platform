@@ -23,9 +23,9 @@ container meridian "Governance" "How are models, policies, budgets and evidence 
 
 // The deployment views are of designed environments and say so in their titles.
 deployment meridian aws "DeploymentAws" "Where would the platform run on AWS, and which infrastructure would it share?" {
-    title "Meridian AI Platform: deployment on AWS, DESIGNED and not built (skeleton: the gateway and the database)"
+    title "Meridian AI Platform: deployment on AWS in eu-central-1, DESIGNED and not built (what the cloud changes)"
     include *
-    autoLayout lr 300 150
+    autoLayout tb 300 150
 }
 
 dynamic meridian "ClaimsTriage" "What happens between a claim being submitted and a triage proposal waiting for an adjuster?" {
