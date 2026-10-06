@@ -18,6 +18,14 @@ from claimgraph.variant import build_variant  # noqa: E402
 DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "synthetic"
 
 
+# The comparison needs the repository's own database fixtures
+# (`fresh_database`, `gateway`). They live in conftest files that pytest does
+# not load from here, so they are registered as plugins, not copied: both
+# modules resolve through the root `pythonpath` (tests/meridian). Without
+# MERIDIAN_TEST_DATABASE_URL the fixtures skip, as they do under tests/.
+pytest_plugins = ["conftest", "knowledge_mcp.conftest"]
+
+
 @pytest.fixture(scope="session")
 def data_dir() -> Path:
     return DATA_DIR
