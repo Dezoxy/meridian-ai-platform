@@ -30,7 +30,7 @@ _QUEUE_SELECT = (
     "LEFT JOIN LATERAL (SELECT reason FROM audit.claim_trail "
     "WHERE claim_id = c.claim_id AND tenant = c.tenant "
     "AND event = 'claim.awaiting_adjuster' AND c.state = 'awaiting_adjuster' "
-    "ORDER BY recorded_at DESC LIMIT 1) AS r ON true "
+    "ORDER BY recorded_at DESC, seq DESC LIMIT 1) AS r ON true "
     "WHERE c.tenant = %s AND c.state IN ('awaiting_adjuster', 'triage_failed') "
 )
 _QUEUE_AFTER = "AND (c.state_changed_at, c.claim_id) > (%s, %s) "

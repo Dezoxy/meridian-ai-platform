@@ -820,6 +820,29 @@ def test_the_claim_page_shows_the_trail_of_the_claim_in_order_and_no_other(
     assert "run.of-another-claim" not in html
 
 
+def test_two_events_of_one_transaction_are_shown_in_the_order_written(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db, "CLM-9301")
+    # One transaction, so one recorded_at: only seq tells the order. Named so
+    # that the alphabetical order, the old tie-break, is the wrong one.
+    with connect(claims_dsn(db), "claims-api") as conn:
+        for event in ("claim.zulu-first", "claim.alpha-second"):
+            conn.execute(
+                "INSERT INTO audit.events (service, event, outcome, tenant, "
+                "reference) VALUES ('claims-api', %s, 'ok', %s, %s)",
+                (event, TENANT, "CLM-9301"),
+            )
+        conn.commit()
+
+    response = client_for(db).get(url_of("CLM-9301"))
+
+    assert response.status_code == 200
+    html = response.text
+    assert html.index("claim.zulu-first") < html.index("claim.alpha-second")
+
+
 def test_a_draft_only_proposal_is_said_to_have_no_structured_proposal(
     fresh_database: DatabaseHandle,
 ) -> None:

@@ -18,7 +18,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import threading
 import time
 import uuid
@@ -30,17 +29,14 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
-import psycopg
 import pytest
-from dbsupport import OWNER, DatabaseHandle
+from dbsupport import DatabaseHandle, copy_database, drop_database, ensure_template
 from fastapi.testclient import TestClient
 from knowledgesupport import Gateway
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from psycopg import sql
-from psycopg.conninfo import make_conninfo
 from servicesupport import REGISTRY_DIR, REPO_ROOT, FakeClock, owner_rows
 from stacksupport import (
     CLAIMS,
@@ -55,7 +51,6 @@ from stacksupport import (
     whole_wording,
 )
 
-from meridian.platform.common.db import connect
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.evaluation.judge import (
@@ -83,7 +78,6 @@ from meridian.platform.gateway.settings import (
     TENANT_ID_ENV,
     GatewaySettings,
 )
-from meridian.platform.migrations.runner import apply_migrations
 from meridian.platform.registry import Registry, load_registry
 from meridian.runtime.tool_client import ToolClient
 from meridian.workloads.claims_triage import assessment
@@ -129,34 +123,14 @@ UNSTABLE = re.compile(
 def another_database(like: DatabaseHandle) -> Iterator[DatabaseHandle]:
     """A new migrated database on the same server as ``like``, dropped
     afterwards: ``conftest.py`` makes one per fixture, and a test that runs the
-    stack on a fresh database more than once needs more than one."""
-    name = f"meridian_test_{secrets.token_hex(4)}"
-    handle = DatabaseHandle(
-        name=name, admin_dsn=like.admin_dsn, passwords=like.passwords
-    )
-    with psycopg.connect(like.admin_dsn, autocommit=True) as admin:
-        admin.execute(
-            sql.SQL("CREATE DATABASE {} OWNER {}").format(
-                sql.Identifier(name), sql.Identifier(OWNER)
-            )
-        )
+    stack on a fresh database more than once needs more than one. A copy of the
+    migrated template, as ``fresh_database`` is (``dbsupport.copy_database``)."""
+    template = ensure_template(like.admin_dsn, like.passwords)
+    handle = copy_database(like.admin_dsn, like.passwords, template)
     try:
-        # pgvector is not a trusted extension: a superuser creates it, as the
-        # platform does out of band.
-        with psycopg.connect(
-            make_conninfo(like.admin_dsn, dbname=name), autocommit=True
-        ) as in_database:
-            in_database.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        with connect(handle.dsn(OWNER), "meridian-test-migrate") as conn:
-            apply_migrations(conn)
         yield handle
     finally:
-        with psycopg.connect(like.admin_dsn, autocommit=True) as admin:
-            admin.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                    sql.Identifier(name)
-                )
-            )
+        drop_database(handle)
 
 
 # ── the second gateway ──────────────────────────────────────────────────────

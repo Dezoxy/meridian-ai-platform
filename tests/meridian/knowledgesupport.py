@@ -5,9 +5,10 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
+import pytest
 from dbsupport import OWNER, DatabaseHandle
 from fastapi.testclient import TestClient
 from servicesupport import REPO_ROOT, FakeClock, owner_rows
@@ -22,6 +23,7 @@ REAL_SOURCE = REPO_ROOT / "data" / "synthetic"
 WORDING_NAMES = ("HOME-PLUS", "HOME-STD", "MOTOR-COMP", "MOTOR-TPL")
 TENANT = "claims-triage"
 CANARY = "CANARY-wording-text-2290"
+WORDING = "wordings/HOME-STD.md"
 
 SELECT_CHUNKS = (
     "SELECT product, wording_version, clause, section, title, body, source_sha256, "
@@ -128,6 +130,72 @@ class Waits:
         self.seconds.append(wait)
         if self.also is not None:
             self.also(wait)
+
+
+def canary_source(source: Source) -> Path:
+    """A source whose first wording carries the canary in a title and a body."""
+
+    def plant_canary(content: dict[str, str]) -> None:
+        text = content[WORDING]
+        assert "### 1.1 You and we" in text
+        content[WORDING] = text.replace(
+            "### 1.1 You and we", f"### 1.1 {CANARY} title", 1
+        ).replace("In this wording", f"{CANARY} body. In this wording", 1)
+
+    return source(plant_canary)
+
+
+class RefusalOnlyConnection:
+    """The connection of a test that expects ``ingest_wordings`` to be refused
+    before it writes: it has the ``autocommit`` attribute the first check reads
+    and nothing else. Any other use (a statement, a cursor, a commit) fails the
+    test, so "nothing was written" holds by construction, not by reading two
+    empty tables afterwards."""
+
+    def __init__(self, *, autocommit: bool = False) -> None:
+        self.autocommit = autocommit
+
+    def __getattr__(self, name: str) -> NoReturn:
+        # Python and tools probe names of their own (``__wrapped__``,
+        # ``__setstate__``, ``_mock_methods``); that is not a use of the
+        # database, so a name with a leading underscore is just absent.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        self._reached(name)
+
+    # ``with conn:`` looks these up on the type, where ``__getattr__`` is not
+    # consulted, and would otherwise raise a plain TypeError, an ``Exception``
+    # that code under test could swallow; a failed test is not one.
+    def __enter__(self) -> NoReturn:
+        self._reached("__enter__")
+
+    def __exit__(self, *exc_info: object) -> NoReturn:
+        self._reached("__exit__")
+
+    @staticmethod
+    def _reached(name: str) -> NoReturn:
+        pytest.fail(
+            f"a refusal test reached the database: the connection's {name!r} was "
+            "used, so the ingestion went past its refusal checks",
+            pytrace=False,
+        )
+
+
+def ingest_without_database(
+    http: httpx.Client,
+    registry: Registry,
+    *,
+    tenant: str = TENANT,
+    agent: str = INGESTION_AGENT,
+    source: Path = REAL_SOURCE,
+    sleep: Sleep | None = None,
+) -> None:
+    """Call ``ingest_wordings`` as ``ingest`` does, on a connection that fails
+    the test when it is used. For a test that expects ``IngestError`` before any
+    write; a run that completes needs the database and ``ingest``."""
+    client = EmbeddingClient(http, tenant=tenant, agent=agent, run_id=uuid.uuid4())
+    extra = {} if sleep is None else {"sleep": sleep}
+    ingest_wordings(RefusalOnlyConnection(), source, client, registry, **extra)
 
 
 def ingest(

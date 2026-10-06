@@ -3,10 +3,24 @@
 ``MERIDIAN_TEST_DATABASE_URL`` is a superuser DSN of a throwaway server on this
 machine (a remote host is refused unless ``MERIDIAN_TEST_DATABASE_ALLOW_REMOTE=1``:
 the fixtures reset role passwords and create and drop databases). The
-fixtures create the four roles with random passwords held only in memory,
-create a fresh database per use, migrate it as ``meridian_owner`` and drop it
-afterwards. Without the variable the tests skip, unless
-``MERIDIAN_REQUIRE_DB=1`` (CI), where a missing database is a failure.
+fixtures create the roles with random passwords held only in memory and a
+database per use, and drop it afterwards. Without the variable the tests skip,
+unless ``MERIDIAN_REQUIRE_DB=1`` (CI), where a missing database is a failure.
+
+How a test database is made (S065): applying every migration was most of the
+cost of a database test, so a migrated database is COPIED. One template per set
+of migrations per server, named after the SHA-256 of the packaged files, is
+built once (``db_template``: the extension created by a superuser, the
+migrations applied as ``meridian_owner`` and checked against the files) under an
+advisory lock, so the xdist workers that share a server build it once and the
+others find it. ``fresh_database`` and ``migrated_database`` are
+``CREATE DATABASE ... TEMPLATE`` of it; nothing ever connects to the template,
+for PostgreSQL refuses to copy one that has a session. ``empty_database`` is
+still an unmigrated database: the migration tests need that, and the ones that
+apply a prefix of the files do so themselves. A template of another hash is left
+alone: a throwaway server dies with its run, and a long-lived one keeps a few
+small ``meridian_template_*`` databases, which another worktree may be using.
+See ``dbsupport.ensure_template``.
 """
 
 import logging
@@ -28,16 +42,16 @@ from dbsupport import (
     WORKERINPUT_KEY,
     DatabaseHandle,
     RemoteDatabaseRefusedError,
+    copy_database,
+    drop_database,
     ensure_roles,
+    ensure_template,
     new_passwords,
     require_loopback,
     session_passwords,
 )
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
-
-from meridian.platform.common.db import connect
-from meridian.platform.migrations.runner import apply_migrations
 
 # (file name, text to find, replacement); the first occurrence is replaced.
 Edit = tuple[str, str, str]
@@ -119,20 +133,6 @@ def _create_database(admin_dsn: str, passwords: dict[str, str]) -> DatabaseHandl
     return DatabaseHandle(name=name, admin_dsn=admin_dsn, passwords=passwords)
 
 
-def _drop_database(handle: DatabaseHandle) -> None:
-    with psycopg.connect(handle.admin_dsn, autocommit=True) as admin:
-        admin.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                sql.Identifier(handle.name)
-            )
-        )
-
-
-def _migrate(handle: DatabaseHandle) -> None:
-    with connect(handle.dsn(OWNER), "meridian-test-migrate") as conn:
-        apply_migrations(conn)
-
-
 @pytest.fixture
 def empty_database(
     db_admin_dsn: str, db_passwords: dict[str, str]
@@ -142,25 +142,35 @@ def empty_database(
     try:
         yield handle
     finally:
-        _drop_database(handle)
+        drop_database(handle)
+
+
+@pytest.fixture(scope="session")
+def db_template(db_admin_dsn: str, db_passwords: dict[str, str]) -> str:
+    """The name of the migrated template database the copies are made from.
+
+    Built by the first worker that needs it, found by the others, once per
+    session and worker (``dbsupport.ensure_template``). A test never connects to
+    it: it takes a copy.
+    """
+    return ensure_template(db_admin_dsn, db_passwords)
 
 
 @pytest.fixture(scope="session")
 def migrated_database(
-    db_admin_dsn: str, db_passwords: dict[str, str]
+    db_admin_dsn: str, db_passwords: dict[str, str], db_template: str
 ) -> Iterator[DatabaseHandle]:
-    """One database per test session, migrated as ``meridian_owner``."""
-    handle = _create_database(db_admin_dsn, db_passwords)
+    """One database per test session, a migrated copy of the template."""
+    handle = copy_database(db_admin_dsn, db_passwords, db_template)
     try:
-        _migrate(handle)
         yield handle
     finally:
-        _drop_database(handle)
+        drop_database(handle)
 
 
 @pytest.fixture
 def fresh_database(
-    db_admin_dsn: str, db_passwords: dict[str, str]
+    db_admin_dsn: str, db_passwords: dict[str, str], db_template: str
 ) -> Iterator[DatabaseHandle]:
     """A migrated database for one test, dropped afterwards.
 
@@ -168,12 +178,11 @@ def fresh_database(
     audit rows from the privilege tests, and the audit log cannot be emptied,
     so the service tests that post claims each get a database of their own.
     """
-    handle = _create_database(db_admin_dsn, db_passwords)
+    handle = copy_database(db_admin_dsn, db_passwords, db_template)
     try:
-        _migrate(handle)
         yield handle
     finally:
-        _drop_database(handle)
+        drop_database(handle)
 
 
 # ── a scratch copy of the registry to plant a variant in ────────────────────

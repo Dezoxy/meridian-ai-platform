@@ -40,10 +40,13 @@ PYTEST_DB_PORT      ?= 55432
 # file, or --durations=25 as CI passes.
 PYTEST_ARGS         ?=
 # Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
-# number, or auto for one per CPU core; 0 runs the tests in one process. Four,
-# as CI's runner has: with ten on a laptop, connections to the database
-# container were dropped before PostgreSQL saw them (Docker Desktop, S054).
-PYTEST_WORKERS      ?= 4
+# number, or auto for one per CPU core; 0 runs the tests in one process. Ten,
+# the owner's decision of 2026-10-06 for the 12-core development machine,
+# where the whole suite takes 1 min 55 s with ten and 2 min 42 s with four.
+# CI sets its own (4, its runner's cores) in the workflow, and so does a step
+# that runs beside others. On a laptop under Docker Desktop ten dropped
+# connections to the database container (S054): pass PYTEST_WORKERS=4 there.
+PYTEST_WORKERS      ?= 10
 # promtool for `make alerts` (S024): the one of the Prometheus that the
 # kube-prometheus-stack chart in infra/kind/pins.env runs (chart 91.8.2 runs
 # v3.15.0), so a rule is checked by the parser that will load it. The digest is
@@ -156,7 +159,7 @@ lint:
 	uv run ruff format --check .
 	uv run lint-imports
 
-## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process)
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process)
 pytest:
 	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
 
@@ -166,7 +169,7 @@ alerts:
 	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
 	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml
 
-## pytest-db       pytest in parallel (PYTEST_WORKERS, default 4; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER and PYTEST_DB_PORT); the database tests run instead of skipping
 pytest-db:
 	@set -e; \
 	docker rm -f $(PYTEST_DB_CONTAINER) >/dev/null 2>&1 || true; \

@@ -34,6 +34,16 @@ SWEPT_STATUSES = ("Running", "AwaitingApproval")
 RUN_FAILED_EVENT = ("run.failed", "failed")
 ABANDONED_REASON = "abandoned"
 CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+# How many threads of each checkpoint table the listing of leftovers looks at per
+# thread it may return: a candidate that belongs to a live run is dropped, so the
+# listing looks at more threads than it lists. A multiple, not a fixed number, so
+# that a larger ``limit`` still has candidates to fill it.
+CANDIDATES_PER_LIMIT = 3
+# The one spelling of a uuid that equals ``runs.thread_id::text``: PostgreSQL
+# prints a uuid in lower case, hyphenated, with no braces. Text of any other
+# shape (a thread of no run, ``orphan-1``, an upper-case copy of a run's ID)
+# equals no run's thread, and the listing never casts it.
+CANONICAL_UUID = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 # The compare-and-set: the run moves only while it is still unfinished and idle
 # past the lease, so a resume that claimed it first (and so freshened it) wins.
@@ -44,24 +54,72 @@ WHERE run_id = %(run_id)s AND status = ANY(%(statuses)s)
 RETURNING thread_id, agent, tenant, reference
 """
 # A thread is a leftover when no run of it is unfinished. The checkpoint tables
-# hold the thread as text and ``runtime.runs`` as a uuid. This comparison casts
-# the run's thread to text, so it cannot use the index on ``runs.thread_id``; it
-# is one statement per pass, over the runs of one database, and it takes a
-# sample: the order is random, so that threads whose delete fails every pass
-# cannot fill every pass (every leftover thread is due, none is more so).
-LEFTOVER_THREADS = """
-SELECT held.thread_id FROM (
-    SELECT thread_id FROM runtime.checkpoints
-    UNION SELECT thread_id FROM runtime.checkpoint_blobs
-    UNION SELECT thread_id FROM runtime.checkpoint_writes
-) AS held
-WHERE NOT EXISTS (
-    SELECT 1 FROM runtime.runs AS r
-    WHERE r.thread_id::text = held.thread_id AND r.status = ANY(%(statuses)s)
+# hold the thread as text and ``runtime.runs`` as a uuid. Comparing the run's
+# thread cast to text would read every run, so a candidate is cast to a uuid
+# instead and looked up in the unique index of ``runs.thread_id``. The cast
+# happens only for text in the canonical form (a ``CASE``, which PostgreSQL
+# does not evaluate eagerly, so ``orphan-1`` never reaches it); a candidate of
+# another form equals no ``r.thread_id::text`` and so has no run. For text in
+# the canonical form, equal as a uuid is equal as text, so no second comparison
+# of the text is needed. The lookup is a ``LEFT JOIN LATERAL`` with ``LIMIT 1``,
+# a probe per candidate: the planner turned the same test written as ``NOT
+# EXISTS`` into a hash anti-join that read every run. It is one statement per
+# pass.
+#
+# It reads a bounded number of checkpoint rows, not every row: in each table a
+# recursive CTE walks the index on ``thread_id`` (a loose index scan) from
+# ``start``, taking the next distinct thread after the last, at most ``walk``
+# times, and wraps to the start of the index once if it runs off the end (it
+# stops when it comes back to its first thread). Only these candidates meet the
+# anti-join on ``runs``, and the ones at or after ``start`` come first, in
+# ``thread_id`` order, then the wrapped ones. The sweep draws ``start`` at random
+# on every pass, so the sample varies from pass to pass and threads whose delete
+# fails every pass cannot fill every pass.
+_THREAD_WALK = """
+{table}_walk(thread_id, n, first_thread) AS (
+    SELECT first.thread_id, 1, first.thread_id
+    FROM (SELECT COALESCE(
+        (SELECT thread_id FROM runtime.{table}
+            WHERE thread_id >= %(start)s ORDER BY thread_id LIMIT 1),
+        (SELECT thread_id FROM runtime.{table} ORDER BY thread_id LIMIT 1)
+    ) AS thread_id) AS first
+    WHERE first.thread_id IS NOT NULL
+    UNION ALL
+    SELECT nxt.thread_id, w.n + 1, w.first_thread
+    FROM {table}_walk AS w
+    CROSS JOIN LATERAL (SELECT COALESCE(
+        (SELECT thread_id FROM runtime.{table}
+            WHERE thread_id > w.thread_id ORDER BY thread_id LIMIT 1),
+        (SELECT thread_id FROM runtime.{table} ORDER BY thread_id LIMIT 1)
+    ) AS thread_id) AS nxt
+    WHERE w.n < %(walk)s AND nxt.thread_id <> w.first_thread
+)"""
+_LEFTOVER_THREADS = """
+WITH RECURSIVE {walks},
+held AS (
+    {candidates}
 )
-ORDER BY random()
+SELECT held.thread_id FROM held
+LEFT JOIN LATERAL (
+    SELECT 1 AS live FROM runtime.runs AS r
+    WHERE r.thread_id = CASE WHEN held.thread_id ~ '{canonical_uuid}'
+        THEN held.thread_id::uuid END
+        AND r.status = ANY(%(statuses)s)
+    LIMIT 1
+) AS run ON true
+WHERE run.live IS NULL
+ORDER BY held.thread_id < %(start)s, held.thread_id
 LIMIT %(limit)s
 """
+# The tables are this module's constants; no value of a caller is in the text.
+LEFTOVER_THREADS = _LEFTOVER_THREADS.format(
+    canonical_uuid=CANONICAL_UUID,
+    walks=",".join(_THREAD_WALK.format(table=table) for table in CHECKPOINT_TABLES),
+    candidates="\n    UNION ".join(
+        f"SELECT thread_id FROM {table}_walk"  # noqa: S608
+        for table in CHECKPOINT_TABLES
+    ),
+)
 # One delete per thread and table, so these compare as uuids and use the index of
 # ``runs.thread_id``. A thread that is not the canonical text of a uuid cannot be
 # any run's (the saver writes ``str(thread_id)``), so its rows go unguarded.
@@ -101,13 +159,52 @@ def delete_thread_checkpoints(conn: psycopg.Connection, thread_id: str) -> int:
     return deleted
 
 
-def leftover_threads(conn: psycopg.Connection, *, limit: int) -> list[str]:
-    """The threads, at most ``limit``, that hold checkpoint rows and have no run
-    in ``Running`` or ``AwaitingApproval``: a finished run whose delete failed,
-    or a thread with no run at all. The sweep's role reads ``thread_id`` only."""
-    rows = conn.execute(
-        LEFTOVER_THREADS, {"statuses": list(SWEPT_STATUSES), "limit": limit}
-    ).fetchall()
+def _new_start() -> uuid.UUID:
+    """The random start of one pass of the listing (a test replaces this)."""
+    return uuid.uuid4()
+
+
+def leftover_threads(
+    conn: psycopg.Connection, *, limit: int, start: uuid.UUID | None = None
+) -> list[str]:
+    """Up to ``limit`` threads that hold checkpoint rows and have no run in
+    ``Running`` or ``AwaitingApproval``: a finished run whose delete failed, or
+    a thread with no run at all. The sweep's role reads ``thread_id`` only.
+
+    The listing is a sample from where ``start`` falls in the order of the
+    threads' IDs (a random uuid when none is given): the threads after it, then
+    the ones before it. It reads at most ``CANDIDATES_PER_LIMIT * limit``
+    threads of each table, through its index, so what a pass reads in index
+    probes does not grow with the tables. The bound is in probes, not in dead
+    index entries: after many deletes and before a vacuum a probe steps over
+    them, and one pass read far more buffers (about 512k, then about 14k on the
+    next pass). The sample is not uniform: a thread that follows a long gap in
+    the ID space is drawn more often. A thread is listed only when fewer than
+    ``CANDIDATES_PER_LIMIT * limit`` threads of its table lie between the start
+    and it, and a thread of a live run uses up a candidate. A leftover that is
+    preceded in ID order by at least that many threads of live runs is
+    therefore reached only when the start falls within the last
+    ``CANDIDATES_PER_LIMIT * limit`` threads of that run: some start reaches it
+    (a thread whose ID is the text of a uuid, as the saver writes, is never out
+    of reach), but a given pass need not, and how often one does depends on the
+    live runs' threads before it. A thread that is no uuid text may sort after
+    every random start (``orphan-1`` does) and is then reached only when fewer
+    than ``CANDIDATES_PER_LIMIT * limit`` threads follow the start; that is
+    acceptable because the runtime is the only writer of checkpoint threads and
+    writes the text of a uuid. A pass may list fewer than ``limit`` when
+    candidates belong to a live run; the next pass starts elsewhere.
+
+    A ``limit`` of zero or below lists nothing and runs no statement (a
+    negative ``LIMIT`` is a server error)."""
+    if limit <= 0:
+        return []
+    params = {
+        "statuses": list(SWEPT_STATUSES),
+        "limit": limit,
+        "walk": CANDIDATES_PER_LIMIT * limit,
+        "start": str(start if start is not None else _new_start()),
+    }
+    rows = conn.execute(LEFTOVER_THREADS, params).fetchall()
     return [thread for (thread,) in rows]
 
 
