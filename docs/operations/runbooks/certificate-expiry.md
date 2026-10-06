@@ -1,7 +1,8 @@
 # Runbook: Certificate expiry
 
-A certificate that identifies a Meridian service, or the CA that signs
-them, is close to its end and cert-manager has not renewed it, or it is
+A certificate that identifies a Meridian service, the CA that signs
+them, the collector's server certificate or the authority that signs that
+(S063), is close to its end and cert-manager has not renewed it, or it is
 not Ready.
 
 Status (S056, S062): written from the policies, the chart and the alert
@@ -20,7 +21,9 @@ A service's certificate lasts 90 days and cert-manager renews it 30 days
 before its end; the CA's lasts a year and is renewed about four months
 before its end. A service that holds a certificate within 24 hours of its
 end answers 503 on `/healthz`, so the kubelet restarts it and the new
-process loads the renewed one.
+process loads the renewed one. The collector's certificate, in
+`observability`, lasts 90 days and is renewed at 60; its authority's lasts a
+year like the CA's (the next section).
 
 The chart's values `certificate.duration` (90 days, `2160h`, by default) and
 `certificate.renewBefore` (empty: cert-manager's default, a third of the
@@ -39,8 +42,9 @@ and `renewBefore: 30m` on the kind cluster on 2026-10-06.
 
 ## What you see
 
-- `MeridianCertificateNotRenewed`: a certificate in `meridian` or
-  `cert-manager` has been under 21 days from its end for an hour. The
+- `MeridianCertificateNotRenewed`: a certificate in `meridian`,
+  `cert-manager` or `observability` has been under 21 days from its end for
+  an hour. The
   renewal is due at 30 days, so it has failed for nine days.
 - `MeridianCertificateNotReady`: a certificate has not been Ready for 15
   minutes. Since S056 approver-policy decides every certificate request:
@@ -89,11 +93,13 @@ k get certificaterequestpolicy
 - The pods of cert-manager and of approver-policy are in the namespace
   `cert-manager`. One that is not Running explains a request nobody
   decides.
-- The three CertificateRequestPolicies are `meridian-services`,
-  `meridian-services-ca` and `meridian-deny-unlisted`
-  (`infra/kind/manifests/certificate-policy.yaml`); each should be Ready.
-  A request for either Meridian issuer that no other policy permits is
-  denied by `meridian-deny-unlisted`.
+- The five CertificateRequestPolicies are `meridian-services`,
+  `meridian-services-ca`, `meridian-deny-unlisted`, `telemetry-ca` and
+  `otel-collector` (`infra/kind/manifests/certificate-policy.yaml`); each
+  should be Ready. A request for either Meridian ClusterIssuer that no other
+  policy permits is denied by `meridian-deny-unlisted`; a request for either
+  of the collector's two Issuers in `observability` that its own policy does
+  not permit is denied by that policy (it is selected and permits nothing).
 
 ## What to do
 
@@ -127,6 +133,112 @@ k get certificaterequestpolicy
    run. The health check restarts a service on its own a day before the
    end; do not wait for it.
 
+## The collector's certificate and its authority (S063)
+
+Two Certificates in `observability` (`infra/kind/manifests/telemetry-ca.yaml`)
+encrypt the telemetry the services send to the collector. Status: issuance and
+serving were seen on the kind cluster on 2026-10-06 (both Certificates Ready,
+the collector serving TLS, `make smoke` and `make demo` passing with the
+services' spans arriving over it). Not seen: a renewal of the collector's
+certificate or of its authority, and a cold start.
+
+| Certificate | Secret | Lasts | Renewed | What reads it |
+|---|---|---|---|---|
+| `otel-collector` | `otel-collector-tls` | 90 days | at 60 days, a new key | the collector, from a mounted directory |
+| `telemetry-ca` | `telemetry-ca` | one year | about eight months in, the same key (`rotationPolicy: Never`) | cert-manager; its public certificate is copied by `make up` into the ConfigMap `telemetry-ca` in `meridian` |
+
+The collector re-reads its pair itself: at a handshake, once five minutes have
+passed since it last read the files (`reload_interval`; the name and the
+behaviour are from the `configtls` source of the collector's release, not seen
+on the cluster). The kubelet refreshes the mounted files a little after the
+Secret changes, so a renewed certificate is served within about ten minutes
+and the collector needs no restart. If `k -n observability get certificate
+otel-collector` shows a new `notBefore` and the collector still serves the old
+certificate after half an hour, restarting it
+(`k -n observability rollout restart deployment/otel-collector`, the owner's
+to run) loads the new one.
+
+When the authority `telemetry-ca` is renewed, its certificate changes and its
+key does not, so the ConfigMap `telemetry-ca` holds the old certificate until
+`make up` runs again, which publishes the new one (it applies the ConfigMap on
+every run and changes nothing when it is the same). Run `make up` after the
+authority's `notBefore` moves, and nothing more: the six services mount the
+ConfigMap as a directory, the kubelet refreshes the mounted file within about a
+minute, and their exporters read the file at each new connection, not once at
+start, so the next new connection uses the new certificate and no restart is
+needed. That was measured outside a cluster: the security review of S063
+swapped the file under a live exporter (the repository's own, on its urllib3
+transport) and the next new connection failed with the wrong file and
+succeeded with the right one; it was not seen on the cluster, where a renewal
+has not happened. If `make up` is not run: the old certificate still verifies
+what the same key signs, up to its own end (reasoned from the kept key, not
+tried),
+and after that a service's exporter cannot verify the collector. Its exports
+fail and are dropped (the exporters run on their own threads and log the
+failure: `telemetry.py` uses a batch span processor and `metrics.py` a
+periodic reader, and a failed export returns a failure that is logged), and
+the service keeps serving requests; what is lost is its traces and metrics, and
+the dashboards and `make smoke`'s telemetry checks show it. The first of those
+lines compares the ConfigMap with the authority's current certificate (the
+fingerprints of `ca.crt` and of `tls.crt` of the Secret) and says to run
+`make up` when they differ, and once `make up` has run it passes within about a
+minute, with no restart. The services read the file through the SDK's variable
+`OTEL_EXPORTER_OTLP_CERTIFICATE` (the chart's `telemetry.caConfigMap`, mounted
+at `/etc/meridian/telemetry-ca`). A
+service whose endpoint is `https` and whose variable is unset, or names a file
+that cannot be loaded as a CA certificate, does not start: the factory raises a
+`SettingsError` that names the variable and never the path (the last line of
+the traceback in the pod's log), and the container restarts, as it does for a
+certificate it cannot read, so an empty or unreadable file shows as a restarting
+Deployment and not as missing traces (not seen on a cluster). Status: tested
+without a cluster.
+
+What follows from the refresh: whoever may write the ConfigMap `telemetry-ca`
+in `meridian` changes what the six services trust, live and with no restart,
+and so who may receive their telemetry (a certificate chain that ends in a CA
+of their own, served by a pod that carries the collector Service's labels).
+On kind those who may write it are the cluster administrator and, by the
+rendered charts' RBAC (read, not exercised), the Prometheus operator and the
+CloudNativePG operator, which hold ConfigMap write rights cluster-wide. Treat
+the ConfigMap's write rights as part of the telemetry's trust boundary.
+
+A request for either certificate that a policy refuses is Denied, with the
+policy's reason, and the Certificate stays not Ready (a first issuance) or
+keeps the certificate it has (a renewal): `MeridianCertificateNotReady` and
+`MeridianCertificateNotRenewed` read `observability` since S063.
+
+## The database's certificates (S063)
+
+The database's three certificates are not cert-manager's. CloudNativePG makes
+and renews them itself: an authority (`platform-db-ca`), the server's
+certificate (`platform-db-server`) and the one its replicas use
+(`platform-db-replication`). None of the alerts above reads them, and
+cert-manager's series do not cover them.
+
+Where to read their end, without printing a Secret: the Cluster's own status.
+
+```sh
+k -n meridian get cluster platform-db \
+  -o jsonpath='{.status.certificates.expirations}'
+```
+
+On the cluster made on 2026-10-06 all three end on 2027-01-04, ninety days
+after the cluster was made, which is the operator's default lifetime; its
+documentation says it renews a certificate seven days before the end. A
+cluster made again starts the ninety days again, and `make down` and `make up`
+do that.
+
+What a renewal needs of the services, read from the code and not seen on a
+cluster: each service mounts the authority's public certificate as a file
+(`/etc/meridian/db-ca/ca.crt`, a directory mount the kubelet refreshes) and
+its database address names that file with `sslmode=verify-full`; a connection
+is opened for each piece of work and none is kept in a pool, so a renewed
+authority is read at the next connection, with no restart. Whether the
+operator keeps the authority's key at a renewal, and whether a connection made
+in the minute before the kubelet refreshed the file fails once, is not known.
+If the services report `certificate verify failed` against the database after
+a renewal, restart them, and write down what was seen.
+
 ## What not to do
 
 - **Never print a Secret.** `kubectl get secret -o yaml` or `describe`
@@ -136,7 +248,10 @@ k get certificaterequestpolicy
   needs.
 - **Do not delete the CA's Secret or the CA Certificate** to force a new
   one. Every service's certificate hangs on it, and a new CA means every
-  service must be reissued and restarted together.
+  service must be reissued and restarted together. The same holds for the
+  Secret `telemetry-ca` in `observability`: a new key means a new ConfigMap,
+  which `make up` publishes and the services pick up for their next new
+  connection; until then none of them can verify the collector.
 - **Do not approve a request by hand** (`cmctl approve`, or an edit of
   its conditions) to get past a denial. The policies say who may ask for
   what; an approval that skips them defeats the control (T-88).

@@ -1,5 +1,6 @@
-# kube-prometheus-stack: Prometheus (with its operator, kube-state-metrics and
-# node-exporter) and Grafana (bundled subchart). Sized for a laptop.
+# kube-prometheus-stack: Prometheus (with its operator and kube-state-metrics;
+# node-exporter is off, see below) and Grafana (bundled subchart). Sized for a
+# laptop.
 # Release name is kube-prometheus-stack; services are named after it.
 
 # No Alertmanager on kind (S024): Prometheus evaluates Meridian's rules
@@ -28,6 +29,17 @@ defaultRules:
     kubeSchedulerAlerting: false
     kubeSchedulerRecording: false
     kubeProxy: false
+    # The four groups that read node-exporter's series (node_cpu_seconds_total,
+    # node_network_up and the like) go with node-exporter, which is off below:
+    # they would evaluate to nothing, and an alert that can never fire is worse
+    # than none. `node` (node.rules) stays on: its first rule records
+    # node_namespace_pod:kube_pod_info: from kube-state-metrics, which the
+    # chart's other rules and dashboards use; its other four records read
+    # node-exporter and record nothing here (a recording rule cannot fire).
+    nodeExporterAlerting: false
+    nodeExporterRecording: false
+    kubePrometheusNodeRecording: false
+    network: false
 
 prometheusOperator:
   resources:
@@ -38,6 +50,14 @@ prometheusOperator:
       memory: 128Mi
 
 kube-state-metrics:
+  # Not the `secrets` collector (S063, threat model T-68): it is the chart's only
+  # reason to give kube-state-metrics' ClusterRole a list and watch of Secrets in
+  # every namespace, and it exists to report kube_secret_* series, which no rule
+  # or dashboard here or in the chart reads (a test and the README say how that
+  # was checked). The chart derives the rule from the collectors, so the rule
+  # goes with the collector; every other collector stays as the chart has it.
+  collectorsExclude:
+    - secrets
   resources:
     requests:
       cpu: 10m
@@ -45,17 +65,23 @@ kube-state-metrics:
     limits:
       memory: 64Mi
 
-prometheus-node-exporter:
-  # Docker Desktop cannot propagate the host root mount ("path / is mounted on
-  # / but it is not a shared or slave mount"); node-exporter would not start.
-  hostRootFsMount:
-    enabled: false
-  resources:
-    requests:
-      cpu: 10m
-      memory: 16Mi
-    limits:
-      memory: 48Mi
+# node-exporter is off on kind (S063). It is the one pod of `observability` that
+# needs the node's own network and PID namespaces and /proc and /sys from the
+# host, which would hold the whole namespace's Pod Security level at
+# `privileged` (manifests/namespaces.yaml), and nothing here reads a series of
+# it: no alert rule and no dashboard of this repository uses a `node_*` series
+# (a test keeps it so). The chart's own node-exporter dashboards (Node Exporter
+# / Nodes, USE Method, and the AIX and Darwin ones) are not installed with it
+# (forceDeployDashboards is false), so they show no data on kind because there
+# are none; its four rule groups that read node-exporter are off above. The
+# "Compute Resources / Node" dashboards read kube-state-metrics and cAdvisor,
+# and stay. The block that configured it here
+# (hostRootFsMount off, because Docker Desktop cannot propagate the host root
+# mount, and its resources) went with it. Turn it back on when a rule needs a
+# node's CPU, memory or disk, and then label `observability` `privileged`, or
+# run it in a namespace of its own.
+nodeExporter:
+  enabled: false
 
 prometheus:
   prometheusSpec:

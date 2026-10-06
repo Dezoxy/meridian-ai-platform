@@ -14,7 +14,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
-from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
+from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV, require_otlp_ca
 
 # The only attribute keys our code may put on a metric: registry identifiers and
 # fixed words, never a caller-supplied value. ``meridian.tool`` is a registry
@@ -52,12 +52,14 @@ def make_meter_provider(
 
     An explicit reader is used as it is (tests pass an ``InMemoryMetricReader``).
     Otherwise, with ``OTEL_EXPORTER_OTLP_ENDPOINT`` set, metrics go to it over
-    OTLP/HTTP from a periodic reader. With neither, nothing is exported.
+    OTLP/HTTP from a periodic reader; an ``https`` endpoint needs the CA file
+    (``require_otlp_ca``). With neither, nothing is exported.
     """
     readers: list[MetricReader] = []
     if reader is not None:
         readers.append(reader)
     elif os.environ.get(OTLP_ENDPOINT_ENV):
+        require_otlp_ca()
         readers.append(PeriodicExportingMetricReader(OTLPMetricExporter()))
     return MeterProvider(
         resource=Resource.create({"service.name": service_name}),

@@ -50,14 +50,25 @@ GROUPS = [
 # The file holds 12 alert rules and 1 recording rule.
 RULE_COUNT = 13
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
-# check prints when all is well, so a 36th ``pass`` there fails that test.
-SMOKE_LINES_AFTER_DEPLOY = 35
-# Counted from the checks' own skip lines, not measured: edge 1, database 2 and
-# one SKIP for its stores, tools 1 SKIP, telemetry 4, cost panel 2 and one SKIP
-# for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP,
-# service identity 1 SKIP, certificate policy 4, alert rules 4. This held 29
-# before the refused request was added: six more than the 23 the checks print.
-SMOKE_LINES_AFTER_UP = 24
+# check prints when all is well, so a ``pass`` beyond this count fails that test. S063
+# added the fifth line of the network policy check (the collector), the two
+# TLS lines that open the telemetry check (the authority's ConfigMap, a push in
+# clear text), the fourth line of the cost panel check (kube-state-metrics'
+# rights) and the first line of the database check (its policy names the API
+# server's address): 35 before.
+SMOKE_LINES_AFTER_DEPLOY = 40
+# Counted from the checks' own skip lines, not measured: edge 1, database 3 and
+# one SKIP for its stores, tools 1 SKIP, telemetry 6, cost panel 3 and one SKIP
+# for the series, adjuster pages 1 SKIP, sweep 1 SKIP, network policy 1 SKIP
+# (the collector's line is skipped with the other four: it is part of the same
+# check, which stops at the Claims API), service identity 1 SKIP, certificate
+# policy 4, alert rules 4. This held 29 before the refused request was added: six
+# more than the 23 the checks print. S063's two telemetry lines make it 26: the
+# authority's Secret and the collector exist after `make up`, and the services
+# are not needed. The kube-state-metrics line makes it 27: it reads the stack's
+# RBAC, which `make up` makes. The database policy's line makes it 28: it reads
+# the policy and the endpoint, which `make up` makes.
+SMOKE_LINES_AFTER_UP = 28
 
 
 def tree_groups() -> list[dict]:
@@ -731,8 +742,8 @@ def test_the_documents_count_the_lines_and_the_checks_after_this_step() -> None:
     kind = " ".join((KIND_DIR / "README.md").read_text("utf-8").split())
     root = " ".join((ROOT / "README.md").read_text("utf-8").split())
 
-    # Twenty-seven lines after `make deploy` (25 after `make up` alone), four
-    # more with the rules and the health dashboard.
+    # Both counts are the constants above: SMOKE_LINES_AFTER_DEPLOY after `make
+    # deploy` and SMOKE_LINES_AFTER_UP after `make up` alone.
     assert (
         f"`make smoke` passes, {SMOKE_LINES_AFTER_DEPLOY} of "
         f"{SMOKE_LINES_AFTER_DEPLOY} lines" in operations
@@ -742,7 +753,14 @@ def test_the_documents_count_the_lines_and_the_checks_after_this_step() -> None:
         operations.split()
     )
     assert f"nine of its {SMOKE_LINES_AFTER_DEPLOY} PASS lines" in root
-    assert "27 of 27" not in operations and "# 27 lines" not in demo
+    # No other count stands beside the current one: every "N of N lines" of the
+    # operations page and every "# N lines" of the demo's command is it.
+    assert re.findall(r"(\d+) of \1 lines", operations) == [
+        str(SMOKE_LINES_AFTER_DEPLOY)
+    ]
+    assert re.findall(r"make smoke +# (\d+) lines", demo) == [
+        str(SMOKE_LINES_AFTER_DEPLOY)
+    ]
     assert "`make smoke` checks eleven things:" in kind
     assert "**Alert rules and health dashboard.** Four lines" in kind
     assert "checks ten things" not in kind

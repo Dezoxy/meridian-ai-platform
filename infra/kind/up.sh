@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
-#   2. namespaces, the database's NetworkPolicy, Envoy Gateway and the edge Gateway
+#   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
+#      the edge Gateway: the database's and cert-manager's (each applied with
+#      the API server's address, read from the `kubernetes` EndpointSlice in
+#      `default` on every run, so a cluster whose node got another address is
+#      repaired by running this again), the one of observability
+#      and the one for smoke's telemetrygen Jobs, all before the releases they
+#      guard,
 #      cert-manager (its own approver off), approver-policy with the policies
-#      that say who may ask for a certificate, and the CA that signs the
-#      services' certificates
+#      that say who may ask for a certificate, the CA that signs the
+#      services' certificates, and the CA of its own in `observability` that
+#      signs the collector's certificate (its public certificate goes into the
+#      ConfigMap telemetry-ca in `meridian`, on every run)
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
-#      the database "meridian" and its nine roles (the owner, six services, the
-#      scheduled sweep's and the gateway's ledger upkeep's); their password
-#      Secrets are created first, only if absent
+#      the database "meridian" and its eleven roles (the owner, six services, the
+#      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
+#      the knowledge ingestion's); their password Secrets are created first,
+#      only if absent
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
@@ -30,6 +39,14 @@ readonly POLICY_INTERVAL=3
 # certificate, so verify-full checks it. The CA reaches each pod at this path.
 readonly DATABASE_HOST=platform-db-rw.meridian.svc
 readonly DATABASE_CA_PATH=/etc/meridian/db-ca/ca.crt
+# The database's NetworkPolicy and the text in it that stands for the API
+# server's addresses (S063). The placeholder is not a CIDR, so the API server
+# refuses the file as it stands; a test keeps this string equal to the file's.
+readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.yaml"
+# cert-manager's policies take the same placeholder, on the one egress rule for
+# TCP 6443 (S063, contract FB); its three 10250 ingress rules name no address.
+readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml"
+readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
 # REPO is empty for an OCI chart. Helm's output is shown only when it fails.
@@ -72,6 +89,44 @@ create_cluster() {
     --config "${KIND_DIR}/cluster.yaml" --kubeconfig "${KUBECONFIG_FILE}" --wait 120s
 }
 
+# api_server_policy_manifest FILE PEERS: the policy file FILE with PEERS (the
+# text of a flow-style list of ipBlocks) in place of the placeholder, on stdout.
+# Stops when the file does not hold the placeholder exactly once: a file that
+# lost it would be applied as it stands, and one that holds it twice would be
+# half filled. The text is cut and joined with bash's own expansions, not sed or
+# a pattern, so nothing in PEERS can be read as an expression.
+api_server_policy_manifest() {
+  local file=$1 peers=$2 manifest before after
+  manifest="$(<"${file}")"
+  [[ "${manifest}" == *"${API_SERVER_PEERS_PLACEHOLDER}"* ]] ||
+    die "${file} does not hold the placeholder ${API_SERVER_PEERS_PLACEHOLDER}"
+  before="${manifest%%"${API_SERVER_PEERS_PLACEHOLDER}"*}"
+  after="${manifest#*"${API_SERVER_PEERS_PLACEHOLDER}"}"
+  [[ "${after}" != *"${API_SERVER_PEERS_PLACEHOLDER}"* ]] ||
+    die "${file} holds the placeholder ${API_SERVER_PEERS_PLACEHOLDER} more than once"
+  printf '%s%s%s\n' "${before}" "to: [${peers}]" "${after}"
+}
+
+# apply_api_server_policy FILE WHOSE: apply the NetworkPolicy file FILE with the
+# API server's address (S063), on every run: a cluster whose node was given
+# another address by a Docker restart is repaired by running `make up` again.
+# WHOSE ("the database's", "cert-manager's") is what the messages call the
+# policy. The address is read and checked first (read_api_server_addresses,
+# common.sh), so a bad answer stops here with the policy as it was, and the
+# manifest is rendered whole before kubectl sees it. The database's file and
+# cert-manager's are applied through this one function.
+apply_api_server_policy() {
+  local file=$1 whose=$2 address peers="" manifest
+  read_api_server_addresses ||
+    die "${api_server_problem}; ${whose} NetworkPolicy was not changed"
+  while IFS= read -r address; do
+    peers+="${peers:+, }{ipBlock: {cidr: ${address}/32}}"
+  done <<<"${api_server_addresses}"
+  manifest="$(api_server_policy_manifest "${file}" "${peers}")" || exit 1
+  kctl apply --server-side --force-conflicts -f - <<<"${manifest}" >/dev/null
+  log "network: ${whose} pods may reach TCP 6443 at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
+}
+
 # Apply the policies for approver-policy, trying again until the API server
 # accepts them. Helm's --wait returns when the pod is Ready (its /readyz, port
 # 6060), which on the first run came eight seconds after the container started
@@ -87,6 +142,28 @@ apply_certificate_policy() {
       die "approver-policy's webhook did not accept the policies in ${POLICY_TIMEOUT}s (look with: kubectl -n cert-manager get pods, and the logs of the approver-policy pod); kubectl said: ${out}"
     sleep "${POLICY_INTERVAL}"
   done
+}
+
+# Publish the public certificate of the collector's authority (S063) as the
+# ConfigMap telemetry-ca (key ca.crt) in `meridian`, for the services to mount
+# and trust it. Only the field tls.crt of the authority's Secret is read (a
+# jsonpath; never the object and never tls.key), the text is checked to be a
+# certificate and not to hold a key, and nothing is printed. Server-side apply,
+# on every run: a renewed authority reaches the ConfigMap at the next `make up`,
+# and a rerun changes nothing when the certificate is the same.
+publish_telemetry_ca() {
+  local pem
+  pem="$(kctl -n observability get secret telemetry-ca \
+    -o 'jsonpath={.data.tls\.crt}' | base64 -d)" ||
+    die "could not read tls.crt of the Secret telemetry-ca in observability (is the Certificate telemetry-ca Ready? kubectl -n observability get certificate)"
+  [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* && "${pem}" != *"PRIVATE KEY"* ]] ||
+    die "tls.crt of the Secret telemetry-ca in observability does not hold a certificate; the ConfigMap telemetry-ca was not changed"
+  kctl -n meridian create configmap telemetry-ca --from-literal=ca.crt="${pem}" \
+    --dry-run=client -o json |
+    jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian"}
+      | del(.metadata.creationTimestamp)' |
+    kctl -n meridian apply --server-side --force-conflicts -f - >/dev/null
+  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian"
 }
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
@@ -180,17 +257,35 @@ create_cluster
 log "namespaces"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.yaml" >/dev/null
 
-log "network: the database's NetworkPolicy (before the database exists)"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/platform-db-networkpolicy.yaml" >/dev/null
+log "network: the database's NetworkPolicy, with the API server's address (before the database exists)"
+apply_api_server_policy "${DATABASE_POLICY_FILE}" "the database's"
+
+log "network: cert-manager's NetworkPolicies, with the API server's address (before cert-manager is installed)"
+apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
+
+log "network: observability's NetworkPolicies (before Prometheus, Tempo, Loki and the collector)"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observability-networkpolicy.yaml" >/dev/null
+
+log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null
 
 log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
-  "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml
+  "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml \
+  --set "global.images.envoyGateway.image=${ENVOY_GATEWAY_IMAGE_REPOSITORY}:${ENVOY_GATEWAY_IMAGE_TAG}@${ENVOY_GATEWAY_IMAGE_DIGEST}"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yaml" >/dev/null
 
 log "identity: cert-manager, who may ask for a certificate, and the CA for the services"
 install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
-  "${CERT_MANAGER_VERSION}" "${CERT_MANAGER_REPO}" cert-manager.yaml
+  "${CERT_MANAGER_VERSION}" "${CERT_MANAGER_REPO}" cert-manager.yaml \
+  --set "image.tag=${CERT_MANAGER_CONTROLLER_IMAGE_TAG}" \
+  --set "image.digest=${CERT_MANAGER_CONTROLLER_IMAGE_DIGEST}" \
+  --set "webhook.image.tag=${CERT_MANAGER_WEBHOOK_IMAGE_TAG}" \
+  --set "webhook.image.digest=${CERT_MANAGER_WEBHOOK_IMAGE_DIGEST}" \
+  --set "cainjector.image.tag=${CERT_MANAGER_CAINJECTOR_IMAGE_TAG}" \
+  --set "cainjector.image.digest=${CERT_MANAGER_CAINJECTOR_IMAGE_DIGEST}" \
+  --set "startupapicheck.image.tag=${CERT_MANAGER_STARTUPAPICHECK_IMAGE_TAG}" \
+  --set "startupapicheck.image.digest=${CERT_MANAGER_STARTUPAPICHECK_IMAGE_DIGEST}"
 # cert-manager's own approver is off (values/cert-manager.yaml), so nothing is
 # approved until approver-policy and its policies are there. On a cluster where
 # cert-manager already ran with its approver on, this order turns the approver
@@ -198,13 +293,17 @@ install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
 # not touched, and a request made in between waits and is then decided. Later
 # can be minutes (Helm's wait for approver-policy, then the apply's retries).
 install_release approver-policy cert-manager "${APPROVER_POLICY_CHART}" \
-  "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml
+  "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml \
+  --set "image.tag=${APPROVER_POLICY_IMAGE_TAG}" \
+  --set "image.digest=${APPROVER_POLICY_IMAGE_DIGEST}"
 apply_certificate_policy
 # The policies must be Ready before the CA is requested, or its request would
 # find none that is appropriate and wait.
 kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/meridian-services-ca \
-  certificaterequestpolicy/meridian-deny-unlisted --timeout=2m >/dev/null ||
+  certificaterequestpolicy/meridian-deny-unlisted \
+  certificaterequestpolicy/telemetry-ca \
+  certificaterequestpolicy/otel-collector --timeout=2m >/dev/null ||
   die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
@@ -214,9 +313,21 @@ kctl wait --for=condition=Ready clusterissuer/meridian-services \
   --timeout=5m >/dev/null ||
   die "the issuer meridian-services was not Ready in 5m: read the CertificateRequest of the Certificate meridian-services-ca in cert-manager (kubectl -n cert-manager get certificaterequest; describe it) for its Approved or Denied condition, and the Certificate's events"
 
+# The collector's own authority (S063, T-90): namespaced Issuers in
+# observability, so no policy for the services' issuer changes. The collector's
+# Certificate being Ready means the authority's was issued before it. The
+# release of the collector, further on, mounts the Secret it makes.
+log "telemetry: the CA for the collector's certificate, in observability"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/telemetry-ca.yaml" >/dev/null
+kctl -n observability wait --for=condition=Ready certificate/otel-collector \
+  --timeout=5m >/dev/null ||
+  die "the Certificate otel-collector in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca and otel-collector (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca and otel-collector (the add-on's pod logs say why one was not applied), and the Certificates' events"
+publish_telemetry_ca
+
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
-  "${CNPG_REPO}" cnpg.yaml
+  "${CNPG_REPO}" cnpg.yaml \
+  --set "image.tag=${CNPG_OPERATOR_IMAGE_TAG}@${CNPG_OPERATOR_IMAGE_DIGEST}"
 ensure_database_secrets
 log "database: platform-db (PostgreSQL 17, pgvector)"
 install_release platform-db meridian "${CNPG_CLUSTER_CHART}" "${CNPG_CLUSTER_VERSION}" \
@@ -236,7 +347,21 @@ log "observability: Grafana's Role (ConfigMaps in observability only)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/grafana-rbac.yaml" >/dev/null
 log "observability: Prometheus and Grafana"
 install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" \
-  "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml
+  "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml \
+  --set "prometheusOperator.image.tag=${PROMETHEUS_OPERATOR_IMAGE_TAG}" \
+  --set "prometheusOperator.image.sha=${PROMETHEUS_OPERATOR_IMAGE_DIGEST#sha256:}" \
+  --set "prometheusOperator.prometheusConfigReloader.image.tag=${PROMETHEUS_CONFIG_RELOADER_IMAGE_TAG}" \
+  --set "prometheusOperator.prometheusConfigReloader.image.sha=${PROMETHEUS_CONFIG_RELOADER_IMAGE_DIGEST#sha256:}" \
+  --set "prometheusOperator.admissionWebhooks.patch.image.tag=${KUBE_WEBHOOK_CERTGEN_IMAGE_TAG}" \
+  --set "prometheusOperator.admissionWebhooks.patch.image.sha=${KUBE_WEBHOOK_CERTGEN_IMAGE_DIGEST#sha256:}" \
+  --set "prometheus.prometheusSpec.image.tag=${PROMETHEUS_IMAGE_TAG}" \
+  --set "prometheus.prometheusSpec.image.sha=${PROMETHEUS_IMAGE_DIGEST#sha256:}" \
+  --set "kube-state-metrics.image.tag=${KUBE_STATE_METRICS_IMAGE_TAG}" \
+  --set "kube-state-metrics.image.sha=${KUBE_STATE_METRICS_IMAGE_DIGEST}" \
+  --set "grafana.image.tag=${GRAFANA_IMAGE_TAG}" \
+  --set "grafana.image.sha=${GRAFANA_IMAGE_DIGEST#sha256:}" \
+  --set "grafana.sidecar.image.tag=${GRAFANA_SIDECAR_IMAGE_TAG}" \
+  --set "grafana.sidecar.image.sha=${GRAFANA_SIDECAR_IMAGE_DIGEST#sha256:}"
 kctl -n observability wait --for=condition=Available \
   prometheus/kube-prometheus-stack-prometheus --timeout=10m >/dev/null
 apply_dashboards
@@ -246,10 +371,13 @@ log "observability: Prometheus scrapes cert-manager's metrics"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
-  "${GRAFANA_COMMUNITY_REPO}" tempo.yaml
+  "${GRAFANA_COMMUNITY_REPO}" tempo.yaml \
+  --set "tempo.tag=${TEMPO_IMAGE_TAG}@${TEMPO_IMAGE_DIGEST}"
 log "observability: Loki"
 install_release loki observability "${LOKI_CHART}" "${LOKI_VERSION}" \
-  "${GRAFANA_COMMUNITY_REPO}" loki.yaml
+  "${GRAFANA_COMMUNITY_REPO}" loki.yaml \
+  --set "loki.image.tag=${LOKI_IMAGE_TAG}" \
+  --set "loki.image.digest=${LOKI_IMAGE_DIGEST}"
 log "observability: OpenTelemetry Collector"
 install_release otel-collector observability "${OTEL_COLLECTOR_CHART}" \
   "${OTEL_COLLECTOR_VERSION}" "${OTEL_REPO}" otel-collector.yaml \

@@ -1,0 +1,157 @@
+# NetworkPolicies of the `cert-manager` namespace (S063): cert-manager v1.21.2,
+# approver-policy v0.28.0 and the CA's private key (service-ca.yaml). kind's
+# platform, not the Meridian chart's. `make up` applies this before either
+# release is installed, as it does the database's policy. Pod labels and ports
+# are those `helm template` renders with infra/kind/values (read 2026-10-06);
+# the kind cluster's network plugin (kindnet) enforces both directions, and a
+# rule by pod selector holds for traffic sent to a Service's address. Tested
+# without a cluster until `make up` and `make smoke` have run on one.
+#
+# Ingress: nothing, except
+#   10250 TCP  to cert-manager's webhook and to approver-policy's, each in its
+#              own policy. Both webhooks are `failurePolicy: Fail`, so a webhook
+#              the API server cannot reach refuses every Certificate and every
+#              policy. The caller is the API server, which on kind is the node
+#              itself, at an address that changes with every new cluster and
+#              that no pod selector can name, so these two rules name the port
+#              and no peer. Unlike the egress rule below they are not filled in
+#              by `make up`: that the address the API server's calls arrive from
+#              is the endpoint's (the `kubernetes` EndpointSlice) is not known,
+#              nobody has measured it, and a wrong peer on a `Fail` webhook
+#              refuses every Certificate. So any pod of the cluster may open a
+#              connection to 10250 of these two pods. What it reaches is a TLS
+#              endpoint that answers admission reviews, and it answers anyone:
+#              any pod can post a forged review and read the verdict. A review
+#              applies nothing, so a forged one changes nothing. A flood of
+#              them against the two webhooks, which fail closed, can stall the
+#              issuance and the renewal of certificates until it stops (the
+#              alert on a certificate 21 days from its end is the only net)
+#   9402 TCP   to the controller's metrics, from Prometheus alone (the pods of
+#              the Prometheus resource in `observability`). The ServiceMonitor
+#              in cert-manager-metrics.yaml scrapes the controller only, and
+#              the policy selects the pods by the labels that ServiceMonitor
+#              selects the Service by, so the two cannot name different pods.
+#              The cainjector's and the webhook's metrics port (9402 too) and
+#              the approver's are scraped by nobody and stay closed
+# The kubelet's probes (6080, 6060, 9403) are not blocked by a policy.
+#
+# Egress, for every pod of the namespace: DNS and the API server, nothing else.
+# Every component only watches and writes API objects (the controller, the
+# cainjector, the webhooks, the startup check Job and approver-policy), and
+# the CA is a Secret, so there is no other peer: no ACME, no external issuer,
+# and nothing in another namespace. The API server's rule is the database's
+# (platform-db-networkpolicy.yaml): TCP 6443 to the API server's address alone.
+# The policy is evaluated after the Service's address is translated to the
+# node's own, which changes when the cluster is re-created, so this file does
+# not hold it: it holds a placeholder that is not a CIDR (the API server
+# refuses the file as it stands, so a plain `kubectl apply -f` of it cannot
+# install a policy with a wrong address), and `make up` reads the addresses of
+# the `kubernetes` EndpointSlice in `default`, validates each as an IPv4
+# address and applies this file with one ipBlock of /32 for each, on every run,
+# through the function that does the same for the database's policy. Until S063
+# closed it the rule named the port and no peer, so a compromised pod of this
+# namespace, whose controller reads every Secret of the cluster, could have
+# sent them out through port 6443 of any host (the review found it); DNS to the
+# cluster's DNS pods is the other way out and stays.
+# `make deploy` and `make smoke` compare the database's policy with the
+# endpoint; they do not compare this one. A stale address shows itself: if the
+# node's address changes under a running cluster (Docker restarted),
+# cert-manager's pods lose the API server and its Certificates stop being
+# issued; `make up` fills the new address in.
+# If a component turns out to need another peer, `make up` shows it as a
+# release that does not become ready (the webhook) or a Certificate that stays
+# pending; the cluster's first run of this file is its test. Not proved: that
+# kindnet enforces an ipBlock egress rule after the Service's address is
+# translated to the node's, and that cert-manager's pods still reach the API
+# server with it, on a cluster made cold; `make up` and the issued
+# Certificates are that test, and they were not run on this change.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: cert-manager
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress
+  namespace: cert-manager
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]
+      ports:
+        - port: 6443
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-webhook
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: webhook
+      app.kubernetes.io/instance: cert-manager
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 10250
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: approver-policy-webhook
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: cert-manager-approver-policy
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 10250
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-metrics
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
+        - port: 9402
+          protocol: TCP

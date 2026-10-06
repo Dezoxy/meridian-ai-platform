@@ -155,11 +155,11 @@ namespace; Meridian's file does not repeat them.
 
 ## An alert is a hint, not a record
 
-- **Anyone inside the cluster can forge the gateway's series.** The
-  collector takes metrics from any pod without asking who sends them
-  (T-68), so a pod outside `meridian` can push a series under the
-  gateway's name: failures that never happened, or completed calls that
-  hide an outage. An alert sends an operator to a runbook; before a
+- **A pod of `meridian` can forge the gateway's series.** Since S063
+  the collector admits the pods of `meridian` alone, but it asks none of
+  them who it is (T-68), so each of the six services can push a series
+  under the gateway's name: failures that never happened, or completed
+  calls that hide an outage. An alert sends an operator to a runbook; before a
   runbook's step that deletes or rolls back anything, confirm with the
   audit rows and the ledger, which the gateway's own role wrote.
 - **A caller can move the numbers too**, until people are identified

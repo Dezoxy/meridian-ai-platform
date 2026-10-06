@@ -203,7 +203,7 @@ def test_the_timeouts_and_tries_are_the_ones_the_header_states(
     (wait,) = [c for c in asked.splitlines() if " wait " in c]
     assert wait.endswith(" --timeout=60s")
     header = SMOKE_SH.split("set -euo pipefail")[0]
-    eighth = header.split("8. network policy: four lines")[1].split("9. service")[0]
+    eighth = header.split("8. network policy: five lines")[1].split("9. service")[0]
     flat = " ".join(line.removeprefix("#").strip() for line in eighth.splitlines())
     (each,) = re.findall(r"three timeouts of (\d+) s", flat)
     (ready,) = re.findall(r"at most (\d+) s for the Pod to be Ready", flat)
