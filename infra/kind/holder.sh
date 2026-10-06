@@ -27,7 +27,7 @@ if [[ "${holder_state}" == none ]]; then
 fi
 printf 'holder: %s\ncommit: %s\ntime:   %s\n' "${holder_name}" "${holder_commit}" "${holder_time}"
 if [[ "${holder_last_run}" == changing ]]; then
-  printf 'state:  changing (a make up or make deploy is running, or the last one did not end well; look at what failed before anything is deleted)\n'
+  printf 'state:  changing (%s; look at what failed before anything is deleted)\n' "${HOLDER_CHANGING_MEANS}"
 else
   printf 'state:  ok\n'
 fi

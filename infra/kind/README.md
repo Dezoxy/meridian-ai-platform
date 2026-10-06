@@ -2162,7 +2162,8 @@ goes on: this is the one case nothing protects, so a cluster that predates the
 record is anybody's until the first `make up` or `make deploy` writes it. With
 the same holder it goes on, whatever commit the record names and whatever the
 state (a retry after a failure is the ordinary case); when the state is
-`changing` it says so in one line (the last run did not end well). With
+`changing` it says so in one line, with what that means (a `make up` or
+`make deploy` is running, or the last one did not end well). With
 another holder it stops before it changes anything, whatever the state, with
 one sentence that names the holder, its commit and its time, for example:
 
@@ -2170,11 +2171,12 @@ one sentence that names the holder, its commit and its time, for example:
 error: the cluster is held by s075-f1 (commit abc1234, since 2026-10-06T12:00:00Z), not by s075-m2; nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 make deploy) takes it
 ```
 
-When the state is `changing` the sentence says that the last run did not end
-well and to look at what failed before anything is deleted:
+When the state is `changing` the sentence says what that means, a run going
+or one that failed, and to wait for it or to look at what failed before
+anything is deleted (the take and `make cluster-holder` use the same words):
 
 ```text
-error: the cluster is held by s075-f1 (commit abc1234, since 2026-10-06T12:00:00Z), whose last run did not end well: look at what failed before anything is deleted; it is not held by s075-m2, nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 make down) takes it
+error: the cluster is held by s075-f1 (commit abc1234, since 2026-10-06T12:00:00Z), whose record says changing (a make up or make deploy is running, or the last one did not end well): wait for it, or look at what failed before anything is deleted; it is not held by s075-m2, nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 make down) takes it
 ```
 
 `TAKE_CLUSTER=1` (exactly `1`) in front of the same command takes the cluster:

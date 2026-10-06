@@ -46,6 +46,8 @@ COMMIT = "abc1234"
 RECORD = f"{OTHER}|{COMMIT}|{TIME}"
 CONFIGMAP = "meridian-cluster-holder"
 TIME_FORMAT = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+# What the state `changing` means, in the one wording every place shares.
+CHANGING_MEANS = "a make up or make deploy is running, or the last one did not end well"
 
 # ── the functions of common.sh, in bash ──────────────────────────────────────
 
@@ -381,7 +383,7 @@ def test_the_state_of_the_record_reads_ok_when_it_is_ok_or_missing_else_changing
     assert done.stdout.splitlines() == [state]
 
 
-def test_the_same_holder_goes_on_after_a_failed_run_and_is_told_in_one_line(
+def test_the_same_holder_goes_on_while_changing_and_is_told_in_one_line(
     tmp_path: Path,
 ) -> None:
     done, _, _, _ = run_functions(
@@ -393,12 +395,12 @@ def test_the_same_holder_goes_on_after_a_failed_run_and_is_told_in_one_line(
     assert done.returncode == 0, done.stderr
     (line,) = done.stdout.splitlines()
     assert line == (
-        f"==> the cluster is held by {ME}, and its last run did not end well "
-        "(the record says changing); going on"
+        f"==> the cluster is held by {ME}, and the record says changing "
+        f"({CHANGING_MEANS}); going on"
     )
 
 
-def test_another_holder_is_told_the_last_run_did_not_end_well_and_is_stopped(
+def test_another_holder_is_told_a_run_is_going_or_failed_and_is_stopped(
     tmp_path: Path,
 ) -> None:
     done, _, _, _ = run_functions(
@@ -411,13 +413,14 @@ def test_another_holder_is_told_the_last_run_did_not_end_well_and_is_stopped(
     assert done.stdout == ""
     assert done.stderr == (
         f"error: the cluster is held by {OTHER} (commit {COMMIT}, since {TIME}), "
-        "whose last run did not end well: look at what failed before anything is "
-        f"deleted; it is not held by {ME}, nothing was changed, and TAKE_CLUSTER=1 "
-        "in front of the same command (TAKE_CLUSTER=1 make down) takes it\n"
+        f"whose record says changing ({CHANGING_MEANS}): wait for it, or look at "
+        f"what failed before anything is deleted; it is not held by {ME}, nothing "
+        "was changed, and TAKE_CLUSTER=1 in front of the same command "
+        "(TAKE_CLUSTER=1 make down) takes it\n"
     )
 
 
-def test_take_cluster_one_takes_a_cluster_whose_last_run_did_not_end_well(
+def test_take_cluster_one_takes_a_cluster_that_is_changing_and_says_what_that_means(
     tmp_path: Path,
 ) -> None:
     done, _, _, _ = run_functions(
@@ -429,9 +432,43 @@ def test_take_cluster_one_takes_a_cluster_whose_last_run_did_not_end_well(
 
     assert done.returncode == 0, done.stderr
     (line,) = done.stdout.splitlines()
-    assert "taking" in line
-    assert OTHER in line
-    assert "last run did not end well" in line
+    assert line == (
+        f"==> taking the cluster from {OTHER} (commit {COMMIT}, since {TIME}), "
+        f"whose record says changing ({CHANGING_MEANS})"
+    )
+
+
+def test_the_four_places_that_speak_of_changing_share_one_wording(
+    tmp_path: Path,
+) -> None:
+    same, _, _, _ = run_functions(
+        tmp_path / "same",
+        'check_cluster_holder "make deploy"',
+        record=f"{ME}|{COMMIT}|{TIME}|changing",
+    )
+    other, _, _, _ = run_functions(
+        tmp_path / "other",
+        'check_cluster_holder "make deploy"',
+        record=f"{RECORD}|changing",
+    )
+    taken, _, _, _ = run_functions(
+        tmp_path / "taken",
+        'check_cluster_holder "make deploy"',
+        record=f"{RECORD}|changing",
+        environment={"TAKE_CLUSTER": "1"},
+    )
+    holder, _ = run_script(
+        tmp_path / "holder", "holder.sh", record=f"{RECORD}|changing"
+    )
+
+    assert CHANGING_MEANS in same.stdout
+    assert CHANGING_MEANS in other.stderr
+    assert CHANGING_MEANS in taken.stdout
+    assert CHANGING_MEANS in holder.stdout
+    # Defined once, in common.sh; the other scripts use it and do not restate it.
+    for script in sorted(KIND_DIR.glob("*.sh")):
+        count = script.read_text(encoding="utf-8").count("or the last one did not end")
+        assert count == (1 if script.name == "common.sh" else 0), script.name
 
 
 def test_a_holder_whose_last_run_ended_well_is_not_said_to_have_failed(
@@ -864,8 +901,8 @@ def test_down_stops_at_the_cluster_of_a_run_that_did_not_end_well_of_another_hol
     done, calls = run_script(tmp_path, "down.sh", record=f"{RECORD}|changing")
 
     assert done.returncode == 1
-    assert "whose last run did not end well: look at what failed" in done.stderr
-    assert "before anything is deleted" in done.stderr
+    assert f"whose record says changing ({CHANGING_MEANS}): wait for it" in done.stderr
+    assert "or look at what failed before anything is deleted" in done.stderr
     assert "TAKE_CLUSTER=1 make down" in done.stderr
     assert not any(call.startswith("kind delete") for call in calls)
 
@@ -878,7 +915,7 @@ def test_down_goes_on_for_its_own_holder_after_a_run_that_did_not_end_well(
     )
 
     assert done.returncode == 0, done.stderr
-    assert "last run did not end well" in done.stdout
+    assert f"the record says changing ({CHANGING_MEANS})" in done.stdout
     assert any(call.startswith("kind delete cluster") for call in calls)
     assert record_writes(calls) == []
 
@@ -955,8 +992,8 @@ def test_cluster_holder_says_in_a_sentence_when_the_last_run_did_not_end_well(
         f"holder: {OTHER}",
         f"commit: {COMMIT}",
         f"time:   {TIME}",
-        "state:  changing (a make up or make deploy is running, or the last one "
-        "did not end well; look at what failed before anything is deleted)",
+        f"state:  changing ({CHANGING_MEANS}; look at what failed before anything "
+        "is deleted)",
     ]
     assert not changed_something(calls)
 
@@ -1121,8 +1158,8 @@ def test_the_readme_says_what_the_record_shows_after_a_run_that_failed() -> None
     body = " ".join(section(KIND_README, "\n## Who holds the cluster").split())
 
     assert "changing" in body
-    assert "did not end well" in body
-    assert "look" in body
+    assert CHANGING_MEANS in body
+    assert "wait for it, or look at what failed before anything is deleted" in body
     # The one case nothing protects: a cluster from before the record.
     assert "nothing protects" in body
     assert "no record" in body

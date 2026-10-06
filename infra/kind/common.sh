@@ -284,6 +284,12 @@ holder_time=""
 # but "ok" or nothing (a record from before the state) reads as "changing".
 # shellcheck disable=SC2034  # read by the scripts that source this file
 holder_last_run=""
+# What the state "changing" means, in the one wording that the refusal, the take,
+# the line to the same holder and `make cluster-holder` all use: the record is
+# written when a run starts to change the cluster, so while it goes on the record
+# looks as it does after a run that failed.
+# shellcheck disable=SC2034  # read by holder.sh
+readonly HOLDER_CHANGING_MEANS='a make up or make deploy is running, or the last one did not end well'
 
 # own_holder_name: the name this checkout records itself under, on stdout. A
 # failure prints its sentence on stderr and returns 1 (call it as
@@ -373,7 +379,7 @@ decide_cluster_holder() {
   esac
   if [[ "${holder_name}" == "${me}" ]]; then
     if [[ "${holder_last_run}" == changing ]]; then
-      log "the cluster is held by ${me}, and its last run did not end well (the record says changing); going on"
+      log "the cluster is held by ${me}, and the record says changing (${HOLDER_CHANGING_MEANS}); going on"
     else
       log "the cluster is held by ${me}"
     fi
@@ -383,14 +389,14 @@ decide_cluster_holder() {
   [[ "${holder_last_run}" != changing ]] || failed=yes
   if [[ "${TAKE_CLUSTER:-}" == 1 ]]; then
     if [[ -n "${failed}" ]]; then
-      log "taking the cluster from ${whose}, whose last run did not end well"
+      log "taking the cluster from ${whose}, whose record says changing (${HOLDER_CHANGING_MEANS})"
     else
       log "taking the cluster from ${whose}"
     fi
     return 0
   fi
   if [[ -n "${failed}" ]]; then
-    die "the cluster is held by ${whose}, whose last run did not end well: look at what failed before anything is deleted; it is not held by ${me}, nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 ${command}) takes it"
+    die "the cluster is held by ${whose}, whose record says changing (${HOLDER_CHANGING_MEANS}): wait for it, or look at what failed before anything is deleted; it is not held by ${me}, nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 ${command}) takes it"
   fi
   die "the cluster is held by ${whose}, not by ${me}; nothing was changed, and TAKE_CLUSTER=1 in front of the same command (TAKE_CLUSTER=1 ${command}) takes it"
 }
