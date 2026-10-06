@@ -207,6 +207,38 @@ policy's reason, and the Certificate stays not Ready (a first issuance) or
 keeps the certificate it has (a renewal): `MeridianCertificateNotReady` and
 `MeridianCertificateNotRenewed` read `observability` since S063.
 
+## The database's certificates (S063)
+
+The database's three certificates are not cert-manager's. CloudNativePG makes
+and renews them itself: an authority (`platform-db-ca`), the server's
+certificate (`platform-db-server`) and the one its replicas use
+(`platform-db-replication`). None of the alerts above reads them, and
+cert-manager's series do not cover them.
+
+Where to read their end, without printing a Secret: the Cluster's own status.
+
+```sh
+k -n meridian get cluster platform-db \
+  -o jsonpath='{.status.certificates.expirations}'
+```
+
+On the cluster made on 2026-10-06 all three end on 2027-01-04, ninety days
+after the cluster was made, which is the operator's default lifetime; its
+documentation says it renews a certificate seven days before the end. A
+cluster made again starts the ninety days again, and `make down` and `make up`
+do that.
+
+What a renewal needs of the services, read from the code and not seen on a
+cluster: each service mounts the authority's public certificate as a file
+(`/etc/meridian/db-ca/ca.crt`, a directory mount the kubelet refreshes) and
+its database address names that file with `sslmode=verify-full`; a connection
+is opened for each piece of work and none is kept in a pool, so a renewed
+authority is read at the next connection, with no restart. Whether the
+operator keeps the authority's key at a renewal, and whether a connection made
+in the minute before the kubelet refreshed the file fails once, is not known.
+If the services report `certificate verify failed` against the database after
+a renewal, restart them, and write down what was seen.
+
 ## What not to do
 
 - **Never print a Secret.** `kubectl get secret -o yaml` or `describe`
