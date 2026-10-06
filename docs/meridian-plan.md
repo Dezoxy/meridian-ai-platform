@@ -412,7 +412,7 @@ and Pydantic, at the cost of one dependency.
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | done | S007, S019 |
-| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | todo | S007, S019 |
+| S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | done | S007, S019 |
 | S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
 
 ### Backlog steps
@@ -774,6 +774,7 @@ that day; the rest stand as their step recorded them.
 | The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
 | The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
 | The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
+| The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; they are corrected when a module is applied, not from documentation | S078 |
 
 ## Part C — Step details
 
@@ -10303,6 +10304,119 @@ request: documents and the model alone (Part A, step 4).
   edge without a managed firewall in front, are the session's decisions
   to overturn.
 
+### S077 — GCP mapping
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** a Google Cloud deployment view and a decision record that maps
+every Azure service Meridian uses or designs to its Google Cloud
+equivalent, as S025 does for AWS and from the same Azure document (the
+owner, 2026-10-06: "add another step for gcp like aws too and start it
+too"). Documents and the architecture model only: nothing is built,
+applied or paid for.
+
+**Decisions** (the main session's unless marked; the owner may
+overturn any):
+
+- **One record per cloud**: ADR 7 maps the Azure platform to Google
+  Cloud and says nothing twice that S025's Azure document says once (the
+  table of what Azure is used for, the residency rule in words no cloud
+  owns). The owner asked for the step and did not name its form; the
+  form is the session's.
+- **Every equivalent has a source and the date it was read**, from
+  Google's own pages; a cell without one says "not verified", and the
+  ADR lists the open questions that matter to S078.
+- **GKE in Standard mode, one zonal cluster, Dataplane V2**, so the
+  chart's NetworkPolicies are enforced and the node log agent runs as on
+  kind. Autopilot is the alternative the ADR weighs: cheaper for a demo
+  by its sketch, and it changes cert-manager's values and what a
+  DaemonSet may mount.
+- **The edge stays Envoy Gateway behind a passthrough load balancer**,
+  as in the AWS mapping, so the chart is the same on every cluster. The
+  cost, stated in the ADR: Cloud Armor's HTTP rules do not sit in front
+  of a passthrough load balancer, so T-02's firewall has no counterpart
+  in this form; whether Envoy Gateway runs with the Standard-channel
+  Gateway API alone is not verified. The GKE Gateway controller is the
+  managed alternative, not taken.
+- **Cloud SQL for PostgreSQL, Enterprise edition, over AlloyDB**, with
+  the three traps a Terraform module meets written down (the default
+  edition for PostgreSQL 16 and later, backups off through Terraform,
+  who may create the `vector` extension).
+- **The Region for the test is `europe-west3` (Frankfurt)**, the same
+  city as the AWS test; the model's location is a second variable that
+  does not depend on it. The research preferred `europe-west4` (8 to 15
+  % cheaper on the regional lines, and the only EU region with the
+  regional endpoints of Mistral and of a 1,024-dimension embedding
+  model); the ADR weighs it. Put to the owner with the AWS Region
+  (`eu-central-1`) as the session's suggestions, the owner answered on
+  2026-10-06: "Go with your suggestion".
+- **The view places what the cloud changes**, in the shape the AWS step
+  found: the edge, the Model Gateway, the Platform Database, the secret
+  store and the model provider; the registry is not drawn.
+
+**Advisor:** consulted once, before the first contracts of this step, of
+S025 and of S075 together (about 12:55 UTC); what it changed for this
+step was not written down beyond the order (the research first, the view
+only after the AWS step had found the shape). The contract for the ADR
+reported that its own consultation was refused by a rate limit. Not
+consulted before the pull request: documents and the model alone (Part
+A, step 4).
+
+**Work log:**
+
+- **A research report** of the Google Cloud equivalents with sources,
+  the models and their residency, a region comparison and a cost sketch;
+  **two contracts to the `implementer`**: the ADR, and the deployment
+  environment with its view, written from the AWS step's reports.
+- No reviewer agent: no code, chart, Terraform or registry entry
+  changed. The main session read each diff and the exported picture, and
+  corrected one sentence of the ADR that said the owner had adopted the
+  form.
+
+**Result / verification:**
+
+- **What the mapping found:** pay-as-you-go Gemini in the EU is
+  `eu-zone` through the `eu` multi-region endpoint, and the one
+  in-country option (Gemini 3.5 Flash in `europe-west3`) is a fixed-term
+  purchase, about USD 1,300 for one unit for a week; the Gemini 2.5
+  family, which had regional endpoints across the EU, retires on
+  2026-10-20; Google Cloud hosts no OpenAI model, so a deployment there
+  is a change of model (new recordings, new baselines, a re-embedded
+  corpus: an inference from those facts); no embedding model has an
+  in-country commitment in an EU member state; the label is a function
+  of model and location together; `europe-west2` and `europe-west6` are
+  in Google's "Europe" and not in the EU.
+- **What differs from the other clouds and matters to the register:** a
+  budget can pause model spend at most, never infrastructure (T-15);
+  prompts that abuse monitoring flags may be logged for up to 90 days
+  for an account on the online terms, and a 24-hour in-memory cache is
+  on by default (T-20); whether a project with no organization can carry
+  the policy that denies the global endpoint is not verified, so
+  refusing `global` stays the gateway's job.
+- **What the test would cost, as a sketch from list prices read on
+  2026-10-06:** about USD 0.37 an hour and 2.93 for eight hours in
+  `europe-west3`, less the cluster-fee credit, without model calls, tax
+  or conversion. The free trial's credit cannot pay for a partner model.
+  The amount is stated again from fresh prices before any apply, and
+  nothing is applied without the owner's yes (S078).
+- **The view**: `DeploymentGcp`, 10 boxes and 4 arrows inside the budget
+  of 12 and 8, every node and instance tagged `Designed`. Exported and
+  read at full size on 2026-10-06: every label legible; the same two
+  flaws as the AWS view, recorded in the register.
+- **Gates:** `make check` (no ERROR line), `make docs` and `make test`,
+  each exit 0, on the branch with `main` merged in.
+- **Not done, by design:** no Terraform, no project, no call to Google
+  Cloud.
+
+**Follow-ups:**
+
+- In the backlog, with its step: the threat model's rows on the edge's
+  firewall, the budget, egress and provider-side retention speak of
+  Azure alone (S078). The registry's Azure-shaped label derivation has
+  S025's row.
+- For the owner: Standard mode over Autopilot and the edge without a
+  managed firewall in front are the session's decisions to overturn. The
+  two test Regions are confirmed (above), which also settles the Region
+  S025's section left open.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -10754,3 +10868,8 @@ request: documents and the model alone (Part A, step 4).
   deployment view, of AWS and designed. Claude on Bedrock from Frankfurt
   is `eu-zone`, not `eu-region`. Nothing is built or applied. Three
   backlog rows new.
+- **v0.60, 2026-10-06:** S077: ADR 7 maps the Azure platform to Google
+  Cloud with a source for every equivalent, and the model has a second
+  designed deployment view. Pay-as-you-go Gemini in the EU is `eu-zone`;
+  Google Cloud hosts no OpenAI model. Nothing is built or applied. One
+  backlog row new.
