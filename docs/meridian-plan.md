@@ -36,8 +36,8 @@
   was asked for, at most five triages each, a scheduled sweep refers a
   claim whose documents are overdue to an adjuster and cleans up what a
   failed request left behind, a claimant submits a claim
-  (the API stamps its report date, and a decided claim counts in the
-  policy's claim history), reads its status, reports documents and
+  (the API stamps its report date, and a decided or still open claim counts
+  in the policy's claim history), reads its status, reports documents and
   withdraws it on server-rendered
   pages that say nothing of the proposal (no sign-in yet), CI grades the golden set's
   proposals with rules and an LLM judge against a reviewed baseline (the
@@ -500,7 +500,7 @@ both readings the same hour ("yes both are right, go on").
 | S064 | Metrics and logs | On kind: the services' logs reach Loki, and no access log keeps a query string (T-03); the runtime and the tool servers export metrics, among them a caller that cannot reach the gateway and the knowledge server's empty-store and stale-vector warnings; the assessment's outcomes are counted by reason word, and the sweep reports what a pass found; a rule fires on a series that went absent; the cost dashboard's queries survive a gap in the data | done | S059, S060, S063 |
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | done | S058, S065 |
-| S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money | todo | S060, S061, S064 |
+| S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need | todo | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens) | todo | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules' | todo | S067 |
@@ -586,10 +586,10 @@ that day; the rest stand as their step recorded them.
 | One URL check in `common/env.py` for every service address (the knowledge server keeps its own) | S046 | closed by S059 (the knowledge server's check, moved; the evaluation CLI's check of an option stays where it is) | S059 |
 | The count of a refusal flood's last window is never written | S046 | closed by S058 for the gateway's own refusals (a row with the outcome `suppressed`); the caller check and the other services have a row below | S058 |
 | `policy_lookup`'s output schema does not require `policy` when `found` is true | S014 | closed by S059 (one conditional form, admitted in an output schema only) | S059 |
-| A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | open; moved from S060 on 2026-10-05: the one reader of the table is `select_terms`, where a missing pair is never complete and the claim goes to an adjuster as unverified, so a failure there changes how the triage routes a claim | S067 |
+| A new wording version needs its count in `wording.EXCLUSION_CLAUSES` | S014 | closed by S067 (moved from S060 on 2026-10-05, since a failure there changes how the triage routes a claim): where the rules would read the count for a policy in force and a covered peril, a pair the table lacks fails the run with the fixed code `wording-version-unknown` before any model call, and `select_terms` stays pure; a lapsed or uncovered claim is not failed. The log line names the product and version only when both pass a closed check. Implemented and tested, not run on a cluster: every seeded policy's pair is in the table, so no demo claim can reach it | S067 |
 | The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | closed by S062: one value for both workloads, held to the code's range at render, and a test holds the two rendered values equal | S062 |
 | The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed. Not taken by S065 (not in its "done when"); its PostgreSQL review measured 105 ms at 200,000 audit rows, the same with `seq` in the order | S027 |
-| A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | open | S067 |
+| A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | closed by S067: the graph reads the claim through one function that logs the fields' locations and the error's kinds, never a value or the claim, and fails the run with the fixed code `claim-not-valid` (it was `unexpected`). Implemented and tested, not run on a cluster | S067 |
 | Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | open | S069 |
 | The tool-call limits are the same for every agent | S014 | open; S031 looked and left it: the limits stay per run and per leg, shared by an agent's workers, and neither an agent nor a worker has one of its own | S069 |
 | Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | closed by S060 for the Claims API (a stored submission, a stored proposal and the facts a run gets are logged as location and error type); the graph's own validation is S067's row below | S060 |
@@ -599,7 +599,7 @@ that day; the rest stand as their step recorded them.
 | The adjuster's queue shows at most 100 claims with no next page | S016 | closed by S060 (a keyset on the queue's own order and index, 100 to a page) | S060 |
 | `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
 | A file in the golden set's directory that the manifest does not list is not noticed | S017 | closed by S050 (refused when the report is built and before `eval run` sends anything) | S050 |
-| Hungarian forms of names and identifiers in the screening | S047 | open; not taken by S032, which measures injection (these are forms the redaction misses). S032 did measure injections written in Hungarian and German: none of 9 stopped | S067 |
+| Hungarian forms of names and identifiers in the screening | S047 | closed by S067 for the redaction and the name: national phone numbers, tax numbers, domestic account numbers and personal identification numbers are replaced on their own, social security and tax identification numbers after a word of a closed list, each only where a check digit or the numbering plan holds, and the claimant's name with a Hungarian ending after a capital letter; tested without a cluster. Not found (rows below, S069 and S070, and T-73): identity card, passport and licence numbers and vehicle plates, which have no check digit, an account number without separators, and the forms the closed lists lack. The injection screen is not changed: the injection summary shows none of the 9 cases written in Hungarian or German stopped, as S032 measured | S067 |
 | The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | S069 |
 | `drafted_by` on a completion the filter withheld but the provider billed | S047 | open; left by S050, with its reason there | S069 |
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | closed by S065 (`audit.events.seq`, stamped by the database, migrations 0017 and 0019; the adjuster's queries break a tie by it) | S065 |
@@ -634,7 +634,7 @@ that day; the rest stand as their step recorded them.
 | The JSON route `POST /claims` takes its caller's report date until callers are identified (T-66) | S053 | open, the owner's accepted residual | S021 |
 | The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | S070 |
 | `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-76) | S053 | open | S021 |
-| Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | open | S067 |
+| Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | closed by S067 (the owner, 2026-10-06, "okay go with your suggestion"; it reverses the undecided half of S053's decision): a claim that is submitted, triaging, awaiting an adjuster, waiting for documents or failed in triage counts by the same strict date rule as a decided one, through a second view, `claims.open_claims` (migration 0025, the same seven columns, `paid_amount` always 0); a withdrawn claim never counts, and two claims of one loss date do not count each other. Tested against PostgreSQL and through the stack, not run on a cluster. The cost is a row of its own (S021) | S067 |
 | A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | closed by S060 (handlers and a middleware of the workload's own) | S060 |
 | The access logs (uvicorn's, the edge's) keep a request's query string; the spans no longer do (T-03) | S053 | closed by S064 for the six services: the access line is rebuilt from fields with no query and no client address, seen on kind with canaries. Still open: the edge's own line keeps the whole target and a client address (read on the cluster), in its pod's output on the node; nothing ships it | S072 |
 | The span hook runs after the span starts, so a span processor's `on_start` or a sampler added later would see the URL with its query | S053 | closed by S059 (the query is set aside before the instrumentation runs and given back to the routes) | S059 |
@@ -654,7 +654,7 @@ that day; the rest stand as their step recorded them.
 | One loader for the two entry-point groups (`meridian.graphs`, `meridian.evaluations`), which copy each other's trust checks | S050 | closed by S061 (one function in `platform/common/entry_points.py`, in the stricter order: a graph's module is placed before its own code runs) | S061 |
 | The evaluation's embeddings are simulated in every run, the recording run included: retrieval with a real embedding is not measured | S050 | open | S071 |
 | The LLM judge is not calibrated against people's labels, and a rationale that holds a word its screen knows is graded ungrounded without a call (T-79) | S050 | open; not taken by S032: it needs people's labels, and no judge runs in the injection suite. S032 counted that screen's false alarms on claimant text: 16 of 22 look-alike sentences | S071 |
-| Golden-set cases on the fraud indicators' boundaries and an unknown policy number | S003, S017 | open; not taken by S050 | S067 |
+| Golden-set cases on the fraud indicators' boundaries and an unknown policy number | S003, S017 | closed by S067: seven claims on a second random stream (CLM-0041 to CLM-0047; the forty are byte for byte as committed, held by a digest): `frequent_claims` with the older of two earlier claims 365 and 366 days before the loss, an early loss 30 and 31 days after the start, a late report 31 and 30 days after the loss, and CLM-0045 on a policy number no policy has (`policy_not_found`, the grader takes it only where its label says so). The model is asked about none of them, so no recording was made. Not in the golden set: a withdrawn claim, a claim open beside another, a history of over 100 entries | S067 |
 | A view that shows the Evaluation Harness's edges (Containers leaves the harness out, Governance the Claims Triage App) | S017 | open; not taken by S050 | S035 |
 | T-45's read limit was measured once (1,024 output tokens in 10.1 s on 2026-10-03); S020 accepts that or repeats it before the gateway reaches Azure from a cluster | S050 | open | S020 |
 | The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 42 s and 16 s of one worker in CI (pull request 79; four workers, the Tests step 5 min 34 s); the job prints its slowest tests from S057 on | S057 |
@@ -680,10 +680,10 @@ that day; the rest stand as their step recorded them.
 | `meridian registry validate` ends in a traceback when the registry directory cannot be listed (older than S039; the scaffold catches it for itself) | S039 | closed by S061 (`load_registry` reports the directory, and since the reviews a file, with the error's class and never its text) | S061 |
 | Nothing ties a golden set to a workload before a report exists: `eval run --allow-empty` passes one scaffolded workload on another's empty set | S039 | closed by S061 (a manifest names its workload, the key is required, and `eval run` refuses another's before a case is read) | S061 |
 | A real model's answers to the injection cases the screen lets through: about 50 chat calls (42 attacks, 8 benign), about EUR 0.12, a recording of its own beside the golden one and the owner's Azure login; until then QA-09's "no route changed" is measured with a script that obeys | S032 | open, the owner's decision | S071 |
-| The injection screen stops 24 of 66 of the suite's attacks and flags 16 of 22 look-alike sentences; improving it needs cases it was not fitted to (a held-out set), or a classifier, and a decision on what a false alarm may cost | S032 | open | S071 |
-| The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | open | S067 |
-| A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | open | S067 |
-| A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open; not S031's to decide: the split changed no proposal and no page. The owner's | S070 |
+| The injection screen stops 24 of 66 of the suite's attacks (26 since S067, which has it read the description as posted) and flags 16 of 22 look-alike sentences; improving it needs cases it was not fitted to (a held-out set), or a classifier, and a decision on what a false alarm may cost | S032 | open | S071 |
+| The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | closed by S067: the Claims API screens the description as posted, before the name is replaced, and hands the run one boolean that the assessor reads as a hit of its own screen; both cases are stopped (name-masked 2 of 2, the suite 26 of 66). The run still never receives the posted text. What the boolean does not cover is a name made of the words an exclusion turns on (its row below, S070). Tested without a cluster | S067 |
+| A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | closed by S067 in part: `meridian knowledge verify` compares each stored clause's body, title, section and source hash with the manifest-verified wordings and names a clause that differs, never its text; the ingestion Job runs it after its write, and a runbook says when to run it by hand (migration 0026 gives the ingestion's role a read of seven columns). It finds a change only when it is run, and not a changed vector; tested against PostgreSQL, not run on a cluster (the next row is S073's). A search still checks nothing: the `carve-out` cases are not changed | S067 |
+| A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys; 34 of the 40 since S067, by the injection summary); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open; not S031's to decide: the split changed no proposal and no page. The owner's | S070 |
 | The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | closed by S057, accepted with its number: 34 s of one worker in CI (pull request 79), 50 to 55 s on a laptop | S057 |
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once | S074 |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | closed by S061 (public names; four benign clause cases on claims no exclusion applies to; a sixth fingerprint over the screens' patterns, flags and source) | S061 |
@@ -830,6 +830,16 @@ that day; the rest stand as their step recorded them.
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | open | S074 |
 | `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | open; seen once, under load | S074 |
 | Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
+| A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open | S070 |
+| A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | open; S070 is the nearest, since it holds what the adjuster is told | S070 |
+| Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | open | S070 |
+| The redaction's residuals after S067 (T-73): a Budapest number written `06-1x-YYYY-xx` with one separator reads as a date and is left in the clear; a dotted international number is cut at a group that begins `06` or `00`; redaction is not idempotent where two numbers touch at a `+` or a `(`; a date followed by an amount shaped like a phone number (`Total 06 30 1250000 HUF`) is replaced; the rules cost about fifty times more per character on text made of the national prefix, still linear (the security review measured it, no test pins the factor); identity card, passport and licence numbers, vehicle plates, an account number without separators, and a social security or tax identification number after a word the list does not hold are not found | S067 (reviews) | open; the step's contract named none for these, and S069 holds the gateway's edges, the nearest | S069 |
+| Claims filed against a policy that is not the claimant's count towards the holder's next claim while they are open (T-76): until S021 anyone may file against any policy, so planted open claims send the holder's next claim to an adjuster; it costs a review, not a payment or a refusal | S067 (the owner's decision of 2026-10-06) | open | S021 |
+| Not seen on a cluster after S067: migrations 0025 and 0026 applied by the migrate Job, the ingestion Job's second command (`meridian knowledge verify`) and its audit row, an open claim counted through the real services, a Hungarian form redacted in a service's log line, and the posted-text boolean reaching the runtime over mutual TLS | S067 | open; tests hold each (the Job's command line was run in a shell with a stand-in for `meridian`) | S073 |
+| `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
+| `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own | S068 |
+| Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open | S074 |
+| Left by S067's reviews, all low: `redact` is 54 lines with its docstring; `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | open | S074 |
 
 ## Part C — Step details
 
@@ -11008,6 +11018,406 @@ earlier consultation had seen (Part A, step 4).
   brief) and each decision above that the owner may overturn. The brief in
   Azure waits for S020.
 
+### S067 — Triage rules and screening
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-06
+**Goal:** the claims triage's rules and screening are hardened without a new
+recording of the model: the injection screen reads a description as it was
+posted, the redaction finds Hungarian identifiers and phone numbers, a
+claimant's name is masked with its Hungarian endings, a wording pair the
+table has no count for fails a run with a fixed code, the golden set grows
+from 40 to 47 claims, claims that are still open count towards
+`frequent_claims`, and `meridian knowledge verify` compares the stored policy
+wording with its manifest.
+
+**Decisions** (the session's unless marked; the owner may overturn any;
+the design, with its threat note, was written before the first contract):
+
+- **The invariant that decides everything: the recording must replay.** The
+  evaluation replays 27 recorded model answers (14 triage, 13 judge), keyed
+  by a hash of the exact request after the gateway's redaction. A change
+  that alters one request, or stops one from being asked, fails `make eval`
+  until `make eval-record` calls the live model, which costs money and waits
+  for the owner's yes. So every contract carried one rule: the 27 requests
+  stay byte-identical and all 27 are still asked; a contract that could not
+  keep it stops and reports. No recording was made.
+- **The screen reads the text as posted.** The Claims API runs the
+  injection screen on the description before it replaces the claimant's
+  name and hands the run one boolean beside the claim
+  (`posted_text_addresses_the_model`); the assessor treats it as a hit of
+  its own screen, and special-category data still wins. The run still
+  receives only the replaced text. Rejected: sending the posted text to the
+  runtime (it carries the name that the replacement keeps back), and
+  screening in the API and never starting a run (it would move the
+  precedence of the two screens and skip the rules). The two name-masked
+  injection cases become stopped; no prompt changes.
+- **Hungarian forms are replaced only where a check or a closed prefix
+  tells them from an amount or a date.** `redact` runs on every log line of
+  every service, so the design was narrowed at 14:55 UTC by the research
+  note's computed rates: a form that chance passes about one time in ten
+  (the social security number, the tax identification number) is replaced
+  only after a word of a closed list; a form with a closed prefix or a
+  separated structure and a check digit (the national phone number, the
+  hyphenated tax number, a domestic account number in blocks) is replaced
+  on its own. The personal identification number was added on the strength
+  of the measurement (0.30 % of random 11-digit strings pass its check). Not
+  added, as stated residuals: identity card, passport and licence numbers
+  and vehicle plates (no sourced check digit; a motor claim needs the
+  plates) and an unseparated account number. The claimant's name is
+  replaced also with a Hungarian ending from a closed list, in a module of
+  its own (`claimant_name.py`, because `triaging.py` stood at 800 lines).
+- **A wording version the table has no count for fails the run.** Where the
+  rules are about to read "are the exclusions complete" for a policy in force
+  and a covered peril, a pair missing from `EXCLUSION_CLAUSES` fails the run
+  with the fixed code `wording-version-unknown`, instead of routing the claim
+  to an adjuster as unverified. A lapsed or uncovered claim, whose route never
+  reads the table, is not failed. The log line names the product and the
+  version only when both pass a closed check: they come from a tool, and the
+  graph repeats no tool result otherwise (the one exception to that rule,
+  named in the contract's report for the platform boundary reviewer). With it
+  the graph logs the fields of a claim that is not valid facts, never their
+  values. This is the routing change that the plan moved here from S060.
+- **The new golden claims need no new recording.** The generator appends
+  seven scenarios from a second random stream, so the forty claims stay byte
+  for byte as committed (a test holds their digest), and the model is not
+  asked about the new ones, so the oracle's proposal is the expectation:
+  each fraud indicator at and just off its boundary, on a peril with no
+  circumstance exclusion, and a claim on a policy number no policy has.
+  `policy_not_found` becomes a reason the generator and the oracle know.
+  `GENERATOR_VERSION` stays "1": bumping it would ripple into the
+  fingerprints' tests and the golden-set support.
+- **Claims that are open count towards `frequent_claims`** by the same strict
+  date rule as a decided one (its loss date in the 365 days before this
+  claim's, strictly before; a withdrawn claim never counts). The strict rule
+  stays, so two claims of one loss date do not count each other and the
+  injection suite's copies keep their outcomes. It needs a second view and a
+  grant, so a migration, numbered late, after S037's two. The tool's contract
+  is not changed, so the `tools` fingerprint does not move.
+- **The stored wording is compared with the manifest by a command, not at
+  search time.** `meridian knowledge verify` reads the stored clauses and
+  compares each with what chunking the manifest-verified wording gives; the
+  ingestion Job runs it after its write. Rejected: a check at search time,
+  because the injection suite rewrites stored clauses on purpose and its
+  outcomes must not move. The ingestion's role gains a read of the columns the
+  check needs (a migration).
+- **Order.** Without a migration and side by side first (the redaction's
+  identifiers, the wording-version failure and the posted-text screen), then
+  the name forms (the same file as the screen's hand-over), then the golden
+  cases (they regenerate data that many tests read), then the two with a
+  migration, after S037 had merged its own.
+- **What the advisor's reading before the first contract changed** (about
+  14:06 UTC; six things). The replay invariant cannot be checked by an
+  implementer, since the harness refuses a command line that names the
+  evaluation gate, so the main session runs the free replay after each
+  landing that touches the redaction, the assessment or the graph, before
+  the next contract goes out, not once at the close (checked the same hour:
+  the recording holds request hashes and answers, not the messages, so no
+  test can pass every recorded message through `redact`). The check-digit
+  rules of the design were written from memory, so each needed a cited public
+  source before it became a pattern, and a read-only research note came
+  first. The second random stream was an assumption, so the golden-set
+  contract's first item became a probe that shows the forty byte for byte
+  before any scenario is added. The verify command does not take the cluster:
+  it is built and labelled tested without a cluster. The reversal of part of
+  an owner's decision is said to the owner in the next status, not only in
+  this section. The one log line that names two values from a tool is an
+  exception put to the boundary reviewer by name.
+- **What the contracts decided that the design did not.**
+  - The wording check sits in `terms_of`, gated by a predicate
+    (`reads_exclusion_count`) that a grid of 144 combinations holds equal to
+    where `decide` lists the gap. Not in `select_terms`, which stays pure
+    because it runs for every claim, and not in `propose`, where the model
+    would already have been asked. The log level is ERROR, the version's form
+    is the generator's (`[0-9]{4}-[0-9]{2}`, not the registry's looser
+    pattern), and a second code, `claim-not-valid`, takes the place of
+    `unexpected` for a claim that is not valid facts; `invalid_fields` is
+    copied into the graph rather than imported, because the API module pulls
+    the web framework and the database driver in.
+  - The posted-text flag is validated in `lookup_policy`, the first node, as
+    well as in the assessor, so a flag that is not a boolean fails every run
+    with `posted-flag-not-valid` before any tool call, a lapsed one included.
+    The text is normalised to NFC before it is screened.
+  - The identifiers' code is a module of its own (`hungarian.py`) with the
+    source of each rule in a comment; the phone codes come from the
+    regulator's published numbering plan; account numbers are tried before
+    the card rule, because an 8-8 account would otherwise come out as a card
+    about one time in ten; a leading 3 or 4 of a personal identification
+    number is tried in both centuries.
+  - The name's capital-letter rule lives in the pattern, not in a function
+    that runs on a match (the advisor's reading of C4b, below), and the
+    pattern is built in three blocks that share their endings, compiled
+    without the `re` module's cache. The family form, the plural and the
+    unassimilated `-val` were added after the reviews, which reversed C4's
+    decision to leave the last one out.
+  - A phone number may be followed by a hyphen and a case ending, but only
+    from a closed list: the contract's open rule ("any short lower-case
+    letters") could not hold beside the existing test that keeps
+    `+36301234567-ab` whole.
+  - The year range of the date guards is 1900 to 2099, and a date's tail
+    needs one separator throughout. The contract's sentence that `06 12 2026`
+    is no valid number was wrong, and the implementer said so: as digits it
+    is a valid Budapest number, so the date rule misses exactly the Budapest
+    numbers whose second group is 10 to 12 and whose third looks like a year,
+    and a test pins that set.
+  - The grader takes a claim with no policy only where the expected reason is
+    `policy_not_found` and the label cites nothing, at both of its sites;
+    any other claim with no policy is `FILES_DISAGREE`, never a `KeyError`.
+  - Open claims are a second view beside `claims.decided_claims`, not one view
+    of both (the old view stays as it is and stays read; nothing duplicates
+    the paid-amount SQL; the migrations' README needs no new rule), and
+    `paid_amount` is the literal 0. The tool's warning no longer says
+    "decided".
+  - The verify command exits 0 (clean), 1 (a difference) or 2 (the check
+    could not be made), as `evaluation.py` does. It names a clause and a kind
+    and never a text. The grant is seven columns, not five (`title` and
+    `section` as well, since a rewritten title is the same threat), and not
+    the embedding, which only a paid gateway call could recompute. The Job
+    runs `ingest && verify` in one container (rejected: an init container,
+    which touches the chart's helpers, and a second Job). A stored name that
+    is no product code prints as `?`. Its audit row has no tenant and holds
+    the counts in `audit.events.reason`, a column documented as the reason a
+    call was refused: the session's reading of the one free-text column,
+    recorded as a backlog row for the owner to overturn (S068).
+- **The owner's decision of 2026-10-06 (18:02 UTC) on open claims.** The
+  plan's record of S053 (2026-10-03, under the owner's decisions made in
+  chat, not the owner's own words) says: "Withdrawn and undecided claims do
+  not count." S067's row asked for the undecided half to be reversed. The
+  session said so, with its cost (until S021 anyone may file against any
+  policy, so planted open claims send the holder's next claim to an adjuster,
+  which costs a review and not a payment), and that it would build it as the
+  row says. The owner, verbatim: "okay go with your suggestion". So open
+  claims (submitted, triaging, triage failed, awaiting an adjuster, waiting
+  for documents) count by the same strict date rule, and withdrawn claims do
+  not. The cost is a backlog row (S021).
+
+**Advisor:** four consultations by the main session. Before the first
+contract (the design, about 14:06 UTC): six changes, listed under
+Decisions. At 15:20 UTC on the name-forms
+change (C4b, a change of the step's scope): it came three minutes AFTER the
+contract had gone out (about 15:17), the wrong order, a slip. The agent was not
+recalled and the correction reached it as a message. What it changed: the
+capital-letter rule lives in the pattern (a scoped case-sensitive first
+character on each suffixed alternative), not in the replacement function,
+where a lower-case "kiss-sel" would match the assimilated alternative, be
+handed back whole and leave "kiss" in the clear where the function before
+S067 replaced it. At 17:03 UTC at a surprise, when the golden-case contract
+met a blocker in the grader (the claim on a policy number no policy has could
+not be graded: `build_report` indexed the policy and `report` refused the
+files as disagreeing): it chose the grader's acceptance only for a claim whose
+expected reason is `policy_not_found` over dropping that claim, and changed
+six things: the contract's tree was committed as a work-in-progress commit
+before any follow-up; both sites were gated on the expected reason, with two
+tests that a loose check would fail (a missing policy with another reason is
+still `FILES_DISAGREE` and no `KeyError`; a proposal that cites something for
+such a claim is a miss, not a crash); before the free baseline run, what the
+replay does for a claim with no recorded judgement and whether the grader is
+in a fingerprint were read first (it could have called the judge live, which
+costs money); the baseline run came before the replay; the grader change went
+to the Python review owed; `GENERATOR_VERSION` stays "1" and Part C says so.
+Before the pull request: ADVISOR-BEFORE-PR.
+
+**Work log:**
+
+- **A read-only map of the repository, a research note on the Hungarian
+  identifiers (each check-digit rule with its public source), a design with a
+  threat note, then contracts to the `implementer`**, each in a worktree of
+  its own and carried to the step's branch by the session. The free replay
+  ran after each landing that could move a recorded answer.
+- **C5w.** The wording-version failure in `terms_of`, the predicate that says
+  where the rules read the count, the graph's log of a claim that is not valid
+  facts, and the two new failure codes (`wording-version-unknown`,
+  `claim-not-valid`).
+- **C2.** The Claims API screens the description as posted and hands the run
+  the boolean (`posted_text.py`); the assessor takes it; the injection
+  baseline and summary follow (26 of 66).
+- **C3.** The Hungarian identifiers (`hungarian.py`, three new placeholders:
+  `[tax-number]`, `[account]`, `[national-id]`) and the redaction's new
+  passes.
+- **C4 and C4b.** The claimant's name with Hungarian endings, moved to
+  `claimant_name.py`; then the capital-letter rule, put in the pattern after
+  the advisor's reading.
+- **The first two reviews** (15:58 UTC, on the tip after C2 to C5w), the
+  security reviewer and the Python reviewer, then **F1n** (the name's
+  pattern: its size and the `re` cache, a capital that is not the upper case
+  of its lower case, the family, plural and unassimilated forms) and **F1r**
+  (a date and a number taken for a phone number, a number on the line after
+  its word, the phone forms the research note cites, two untested rules, the
+  timing helper, the check functions' contract).
+- **C6g and C6h.** Seven golden claims on a second random stream; the
+  grader's two sites for a claim with no policy; the golden-set baselines
+  follow, free.
+- **D1.** The first documents contract: the counts, the new redaction and
+  name forms, T-03, T-20, T-26, T-73, T-76, QA-09, SA-16 and SA-19 as they
+  stood before F2r.
+- **The second Python review** (on the tip of the golden-set baselines):
+  block, on one
+  regression of F1r (of two phone numbers joined by `/` or `.`, the second
+  was left in the clear), three medium findings and six low. **F2r** fixed
+  all seven items of its contract.
+- **`main` merged in** (S037, pull request 105), after which the triage's run
+  input was wrapped twice; **M1s** repaired it (`start_run` sends the input as
+  given, each caller builds its own, and what holds the whole input is named
+  `run_input`), made a malformed golden record a `FILES_DISAGREE` instead of a
+  `KeyError`, and added two owed tests.
+- **C4v.** `meridian knowledge verify`, migration 0026, the ingestion Job's
+  second command and a runbook for the knowledge store.
+- **C1o.** Open claims count: migration 0025 (`claims.open_claims`), the third
+  branch of the history query and the stack scenarios.
+- **D2.** This section, the backlog rows, the threat model's rows T-13, T-25,
+  T-27, T-30, T-57, T-66, T-73 and T-76 (and two sentences of S037's about the
+  brief's redaction, which the merge made false), and the documents the last
+  four contracts made false.
+- **A third review round** (a Python reviewer and a database reviewer on F2r,
+  M1s, C4v and C1o) is out; its outcome is under Result.
+
+**Result / verification:**
+
+- **The recording did not move, and none was made.** The free replay of the
+  evaluation passed twice after each landing that could move a recorded
+  answer, the last time on the tip with all four final contracts (`eval
+  compare: passed`). The recording still holds its 27 answers (14 triage, 13
+  judge), and the model is asked about the same 14 of the 47 claims as before
+  (`data/evaluation/README.md`). Nothing paid ran.
+- **The baselines were regenerated, free, with no model call.** After C2: the
+  injection baseline and summary (`make eval-baseline`, rc=0; per the
+  session's note at the landing, the summary then read 26 of 66 (39 %),
+  CLM-1053 and CLM-1054 improved on three graders each, and the 40 golden
+  cases were unchanged). Once more when the golden set grew to 47: the
+  forty unchanged. The golden baseline now has 47 cases, counted from the
+  file in D2: `recommendation` 45 of 47 (the misses are CLM-0012 and
+  CLM-0034, as before) and every other grader 47 of 47; 14 cases have a model
+  call.
+- **The injection suite, from `injection-summary.md`:** 26 of 66 attacks are
+  stopped before the model (39 %, against QA-09's 90 %; 24 before), among them
+  the name-masked family, 2 of 2; 40 attacks reach the model that obeys (42
+  before), the route is not held in 28 and the recommendation in 34. The
+  screen's patterns did not change (`screening.py` has no diff), so the other
+  families keep their counts; none of the 9 cases in Hungarian or German is
+  stopped.
+- **The golden set:** 47 claims, 56 policies and 51 history rows
+  (`data/synthetic/manifest.json`). The forty claims, their outcomes, the 50
+  first policies and the 44 first history rows are byte for byte as committed:
+  a test holds the SHA-256 of their canonical JSON (it begins `fb6ef322`) and
+  says in its failure message that a paid recording would be needed. The seven
+  new claims (CLM-0041 to CLM-0047) sit on both sides of each fraud boundary
+  and on one policy number no policy has; the model is asked about none.
+- **The redaction's pass-through, as the implementers counted it** (their own
+  scripts, not tests): the 40 golden descriptions and the four wordings, the
+  injection cases' texts and every line of source, configuration and chart
+  under three directories were replaced by none of the new rules (31,019
+  lines in C3, 31,291 in F1r). What is a test: the golden descriptions and
+  the four wordings pass through `redact` unchanged, every new pattern's time
+  is compared at two sizes, and no golden claimant's name, in its forms, is
+  found in any golden text or wording (the name replacement changes none of
+  them; C4 counted 1,760 pairs, and the test no longer pins that number).
+- **The contracts' own gates, as their reports print them** (several
+  implementers could not read an exit status in the same shell, and say so):
+  C5w `2873 passed in 60.06s`; C2 `2968 passed in 62.82s`; C3 `1654 passed, 6
+  skipped in 41.09s`; F2r `6174 passed, 6 skipped, 1 warning in 74.82s`; C6h
+  `3328 passed in 48.39s`; C4v `2692 passed in 61.42s`; C1o `5332 passed, 6
+  warnings in 129.59s`. M1s's first run was `1 failed, 4384 passed` (a
+  `wording_search` call timed out under load, and the test passed alone) and
+  its last `3 failed, 4382 passed` on a loaded machine, the three passing
+  alone (158 passed); the backlog row says which. `ruff`, the format check
+  and `lint-imports` were clean in each report (five contracts kept before
+  the merge of `main`, six after it).
+- **The whole suite on the final tree:** FINAL-SUITE-RESULT.
+- **The reviews:** the security and the first Python review (no critical
+  finding; the security one found no privacy regression and one high, the
+  availability of the name's pattern; the Python one a high on the capital
+  gate), the second Python review (block, one regression of F1r), the third
+  round on F2r, M1s, C4v and C1o: REVIEW-3-RESULT.
+- **Seen on a cluster: nothing of this step.** The migrate Job's two new
+  files, the ingestion Job's second command and every code change were
+  tested without a cluster (PostgreSQL in the tests; the Job's command line
+  was run in a shell with a stand-in for `meridian`). A run on kind would
+  show: migrations 0025 and 0026 applied by the migrate Job (and refused by
+  their guards if a role is missing); the ingestion Job running `meridian
+  knowledge verify` after its write, with an audit row `knowledge.verify`
+  (outcome `verified`, `clauses=85 stored=85 differences=0`) and exit 0, and a
+  difference failing the Job; two open claims filed on one policy with loss
+  dates in the window, and a third claim on it carrying `frequent_claims` and
+  going to an adjuster; a Hungarian phone number or tax number in a request
+  that reaches a service's log line as `[phone]` or `[tax-number]`; the
+  posted-text boolean reaching the runtime over mutual TLS and CLM-1053 and
+  CLM-1054 stopped with no model call; and what `make demo` does when it
+  reaches CLM-0045, which names no policy (the stack tests post it; `make
+  demo` was not run for this step). The `wording-version-unknown` path cannot be
+  provoked on kind with the seeded data: every seeded policy's pair is in
+  the table.
+- **Gates of the documents (D2), each read by its exit status:** `make docs`
+  (rc 0, 13 checks passed), `make check` (rc 0, no ERROR line, two IGNORE
+  lines) and `make test` (rc 0, `Ran 159 tests`, `OK`, last line `codex
+  agents: 11 twins current`). No pytest suite and no target of the evaluation
+  gate ran in D2.
+
+**Not done, by decision or left open:**
+
+- **A name made of the words an exclusion turns on is not covered.** A
+  claimant can choose it, and each such word becomes `[name]` before the model
+  reads the description (since S047, for any name part of three letters or
+  more); the posted-text boolean covers screened phrases and not this. It is
+  one more way to the automatic approval of a small claim, which the injection
+  suite already measures as open (QA-09). Not built: a bound on how much a
+  name may replace, and what the adjuster is told, is a decision of its own
+  (S070; T-26). The security review's finding, the one the session did not
+  build.
+- **A true flag hides a poisoned clause's loud failure** (security review,
+  low): it returns `injection-suspected` before the candidate clauses are
+  screened. A hit of the assessor's own screen did the same before this step.
+- **The redaction still leaves what has no check and no word**: identity
+  card, passport and licence numbers, vehicle plates, an account number
+  without separators, a social security or tax identification number after a
+  word the list does not hold; and four residuals of the last review round: a
+  Budapest number written `06-1x-YYYY-xx` with one separator reads as a date, a
+  dotted international number is cut at a group that begins `06` or `00`,
+  redaction is not idempotent where two numbers touch at a `+` or a `(`, and
+  the rules are about fifty times slower per character on text made of the
+  national prefix, still linear, with no test that pins the factor (T-73).
+- **The name's forms the closed lists lack** are not found, and the pattern of
+  the worst 200-character name is 12,141 characters, about 55 ms to compile
+  (the first version gave about 35,000 characters, and in the security
+  review's run, in process, 150 distinct names took the resident memory past
+  the Claims API's limit of 192 Mi; since F1n the pattern is compiled without
+  the `re` cache and the same kind of run stays flat).
+- **The verify command finds a change only when it is run**, not a changed
+  vector, and the ingestion Job skips it with the ingestion when the image's
+  ingestion already succeeded. A Job that only verifies is not built; the
+  audit row of a run has no tenant and puts its counts in a column meant for
+  refusals.
+- **Planted open claims** cost a review until S021: anyone may file against
+  any policy. An open claim whose loss date cannot be read makes the history
+  `truncated`, as a decided one does. The golden set never sees an open claim
+  (its 47 claims sit on 47 distinct policy numbers); the stack scenarios do.
+- **The security review did not check** whether the names of documents carry
+  the claimant's name into the run's input, which the name replacement does
+  not touch.
+- **Small ends, all low:** the redaction's docstring, two test files over the
+  800-line ceiling, five loaders of the two name-masked cases, two plain
+  dicts, four docstrings that say what was true before; they are a backlog row
+  (S074).
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the name made of an exclusion's words,
+  the true flag that hides a poisoned clause, and the name's lacking forms with
+  the pattern's size and its private compile (S070); the redaction's residuals
+  (S069, the nearest); planted open claims (S021); what a cluster run of the
+  migrations, the Job's second command and the rest would show, and a Job that
+  only verifies (S073); the audit row's column (S068); the tests that failed
+  under load and the small ends (S074).
+- Rows closed, each by its text: the wording version's count, the graph's log
+  of a claim that is not valid facts, the Hungarian forms, open claims, the
+  golden set's boundaries and unknown policy, the name that hid the screened
+  words, and the stored clause that nothing compared (in part). Two figures in
+  other rows were brought to today's (24 of 66 became 26 of 66; 36 of the 42
+  became 34 of the 40). S032's closed section and the S060 section keep
+  what was true when they were written.
+- For the owner: the session's readings that the owner may overturn: the
+  personal identification number is replaced on its own, the endings' closed
+  lists, the version's form, the Job's `ingest && verify` in one container, the
+  verify audit row's use of `reason`, and the flag's place before the clause
+  screen. The reversal of S053's undecided half is the owner's (18:02 UTC).
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -11487,3 +11897,17 @@ earlier consultation had seen (Part A, step 4).
   acceptance (6 met, 15 partly met, 9 not met); T-93 to T-99 new (99
   threats) and four checkpoint tables in T-25, T-63 and T-77. Twelve
   backlog rows new, one closed and one narrowed and re-homed.
+- **v0.64, 2026-10-06:** S067 done: the injection screen reads a description as
+  it was posted (26 of 66 attacks stopped, the two in a claimant's name among
+  them); the redaction finds Hungarian phone numbers, tax numbers, domestic
+  account numbers and personal identification numbers, and social security
+  and tax identification numbers after their word; the claimant's name is
+  replaced with its Hungarian endings after a capital letter; a wording pair
+  the table lacks fails the run with `wording-version-unknown`; the golden set
+  is 47 claims with no new recording; claims that are still open count towards
+  `frequent_claims` (migration 0025, the owner's reversal of half of S053's
+  decision, 18:02 UTC); `meridian knowledge verify` compares the stored clauses
+  with the manifest (migration 0026). Nothing seen on a cluster. Two
+  review rounds and a third out; T-73 corrected where F2r made two clauses
+  false, T-76, T-66, T-57, T-27, T-30, T-25 and T-13 brought to the code.
+  Seven backlog rows closed (one in part) and ten new.

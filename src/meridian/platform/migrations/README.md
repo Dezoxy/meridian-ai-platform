@@ -49,6 +49,21 @@ key to `claims.claims` and does. Grant column by column where a role needs less
 than the table: `claims_sweep` reads four columns of `claims.briefs` and one of
 `runtime.workflow_checkpoints`, and no body or brief text.
 
+The two files of S067 have the guard too.
+[`0025_open_claims.sql`](0025_open_claims.sql) adds a view of the claims still
+open, `claims.open_claims`, a partial index on `claims.claims` and a `SELECT`
+grant on the view to `policy_mcp`; it also checks that `policy_mcp` exists, and
+it starts with `SET LOCAL lock_timeout`, because `CREATE INDEX` takes a SHARE
+lock on the table (the sections below). It is a second view beside
+[`0013_decided_claims.sql`](0013_decided_claims.sql)'s, which stays and stays
+read, and it lists its states by name, so a state added later is in neither
+view until a file puts it in one.
+[`0026_knowledge_verify.sql`](0026_knowledge_verify.sql) only grants: `SELECT`
+on seven named columns of `knowledge.chunks` to `knowledge_ingest`, which it
+checks as 0022 does, for `meridian knowledge verify`. It leaves out the vector,
+takes no lock and sets none, and says in its header the statement that undoes
+it.
+
 ## An applied file never changes
 
 The ledger records each file's SHA-256, and the runner refuses a file whose

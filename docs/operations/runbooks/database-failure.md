@@ -189,3 +189,8 @@ cleaned up. None of it is lost: the next successful pass does it.
   row.
 - After a PostgreSQL major upgrade the knowledge store must be ingested
   again; its search terms come from that version's dictionary.
+- After any ingestion done by hand, a restore or a re-ingestion, run
+  `meridian knowledge verify` (S067): it names a stored clause that is not the
+  manifest's wording and must print zero differences. `make deploy` runs it
+  only after an ingestion it makes itself; see the
+  [knowledge store runbook](knowledge-store.md).

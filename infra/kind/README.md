@@ -352,8 +352,9 @@ can log in and nothing more (no superuser, createdb, createrole, bypassrls or
 replication, and a member of no role: migrations 0020 and 0022 refuse the
 three newest otherwise). The seed Job runs as `policy_seed`, which holds the
 two policy tables and nothing else, and the ingestion Job as
-`knowledge_ingest`, which holds the knowledge chunks and an insert on the
-audit log: only the migration Job holds the owner's Secret, and each of the
+`knowledge_ingest`, which holds the knowledge chunks, an insert on the audit
+log and, since S067, a read of seven columns of the chunks (not the vector):
+only the migration Job holds the owner's Secret, and each of the
 other two Jobs alone holds its role's. Those two roles have no connection
 limit, as the owner's Jobs had none. The sweep's role may hold at most 4
 connections: its job runs one pod at a time and holds one connection at a
