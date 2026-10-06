@@ -9773,7 +9773,9 @@ question the main session's and not an implementer's, staggered the
 launches and set one cluster run per wave. Consulted again before the
 pull request of S031 on what this step's cluster would meet (migration
 0021 behind an applied 0022: the runner applies every file its ledger
-lacks), and before this pull request.
+lacks), and before this pull request (about 10:20 UTC: it had one
+sentence of the certificate runbook checked against CloudNativePG's own
+documentation before it went in).
 
 **Work log:**
 
