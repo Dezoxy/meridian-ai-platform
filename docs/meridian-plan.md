@@ -460,7 +460,7 @@ that day; the rest stand as their step recorded them.
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
 | A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
-| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows | none |
+| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows. S066 (2026-10-06) built the mechanism for the ledger: `meridian gateway expire` removes whole past months when an operator names the month, and nothing schedules it; the period is still the owner's to choose, and audit rows are not expired | none |
 | A connection pool (a request opens about three connections) | S011 | open | S027 |
 | An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open; left by S019 (not in its "done when") | S021 |
 | `create_app` cut into a handler class | S011 | declined in S011, with reasons | none |
