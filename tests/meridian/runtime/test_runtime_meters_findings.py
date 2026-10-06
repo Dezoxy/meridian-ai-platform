@@ -12,7 +12,6 @@ The helpers are the ones ``test_runtime_meters`` has, kept small here (that
 file is near the size limit).
 """
 
-import importlib
 import logging
 import uuid
 from collections.abc import Callable
@@ -30,10 +29,10 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricExportResult
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from runtimesupport import register
 from servicesupport import (
     GATEWAY_REPLY,
     REGISTRY_DIR,
-    REPO_ROOT,
     audit_events,
     metric_points,
     owner_rows,
@@ -43,8 +42,8 @@ from meridian.platform.common import http as common_http
 from meridian.platform.common import metrics as common_metrics
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.runtime import app as runtime_app
-from meridian.runtime import graphs, runs
 from meridian.runtime import meters as runtime_meters
+from meridian.runtime import runs
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.meters import RuntimeMeters
 from meridian.runtime.model_client import ModelCallError, ModelClient
@@ -199,26 +198,6 @@ def test_a_run_that_could_not_start_is_counted_with_the_tenant_and_agent_it_name
 # ── stand-ins for the graph, the gateway and the runtime's writes ───────────
 class State(TypedDict, total=False):
     output: Any
-
-
-class Entry:
-    name = "claims-triage"
-    value = "meridian.workloads.claims_triage.graph:build"
-
-    class dist:
-        name = "meridian"
-
-    def __init__(self, factory: Callable[[ModelClient, ToolClient], StateGraph]):
-        self.factory = factory
-
-    def load(self) -> Callable[[ModelClient, ToolClient], StateGraph]:
-        return self.factory
-
-
-def register(monkeypatch: pytest.MonkeyPatch, factory: Callable) -> None:
-    monkeypatch.setattr(graphs, "entry_points", lambda *, group: [Entry(factory)])
-    importlib.import_module("meridian.workloads.claims_triage.graph")
-    monkeypatch.setattr(graphs, "TRUSTED_ROOT", REPO_ROOT)
 
 
 def graph_of(node: Callable[[State], State]) -> StateGraph:

@@ -21,8 +21,14 @@ from meridian.workloads.claims_triage.models import Peril
 PACKAGE = Path(__file__).resolve().parents[4] / "src/meridian/workloads/claim_brief"
 REPO_ROOT = PACKAGE.parents[3]
 IMPORT_SECONDS = 120
-# What the package may import of the platform, and nothing more.
-PLATFORM_ALLOWED = {"meridian.platform.registry.models"}
+# What the package may import of the platform, and nothing more: the registry's
+# models, and what ``evaluation.py`` (the scaffold's form, W1b) is written
+# against.
+PLATFORM_ALLOWED = {
+    "meridian.platform.registry.models",
+    "meridian.platform.evaluation.report",
+    "meridian.platform.evaluation.workload",
+}
 FORBIDDEN_PREFIXES = (
     "meridian.workloads.claims_triage",
     "langgraph",

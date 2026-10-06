@@ -42,3 +42,16 @@ agents:
     kind: job
     tools: []
     structured_outputs: true
+  # The second workload, on the second agent framework (S037): a plain-text brief
+  # of a claim that an adjuster decides whether to file. It has no worker (the
+  # registry refuses workers on this host) and no wording_search.
+  - id: claim-brief
+    description: Drafts a short brief of a claim for an adjuster, who decides whether it is filed; it decides nothing about the claim.
+    host: agent-framework
+    structured_outputs: false
+    tools:
+      - policy_lookup
+      - claim_history
+      - request_approval
+      - approval_outcome
+      - add_claim_note

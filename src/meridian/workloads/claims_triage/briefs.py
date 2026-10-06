@@ -36,8 +36,10 @@ The routes take what the JSON decision route beside them takes: no sign-in and
 no same-origin check (T-69; the pages carry that one), a JSON body that a browser
 cannot send without a preflight (T-01) and the app's tenant. The model's text is
 returned by these three answers and nowhere else: never in a log line, a span, an
-audit row or an error (T-03). The runtime's output is validated here as
-``BriefOutput``; whatever else it answers is a failure with fixed text.
+audit row or an error (T-03). It is redacted (``_redacted``) before it is stored,
+so the row and every answer hold the redacted form. The runtime's output is
+validated here as ``BriefOutput``; whatever else it answers is a failure with
+fixed text.
 """
 
 import logging
@@ -66,6 +68,7 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.platform.common.wire import NoNul, WireModel
+from meridian.platform.guardrails import redact
 from meridian.runtime.models import RunResponse
 from meridian.runtime.sweep import RUNNING_LEASE_SECONDS
 from meridian.workloads.claims_triage.adjuster import NO_SUCH_CLAIM_DETAIL, ClaimId
@@ -325,6 +328,15 @@ def _output_of(run: RunResponse, *, resumed: bool) -> BriefOutput:
         ) from None
 
 
+def _redacted(text: str) -> str:
+    """The brief as it is stored and shown: the model saw only facts of the
+    claim, but it can make up an e-mail address, an IBAN, a card or a phone
+    number, so the text is redacted by the function that redacts the triage's
+    rationale, then cut to the bound (a placeholder can be longer than the
+    address it replaces, and the table's CHECK holds the bound; threat h)."""
+    return redact(text).text[:MAX_BRIEF_CHARS]
+
+
 def _mark_failed(dsn: str, claim_id: str, brief_id: UUID, run_id: UUID | None) -> None:
     """Mark the brief failed and keep the run's ID when there is one. If that
     fails too the brief stays ``drafting`` until the lease runs out; the log says
@@ -408,7 +420,7 @@ def start_brief(
         except RuntimeCallError as exc:
             return _fail_first_leg(dsn, span, claim_id, taken.brief_id, exc)
         set_span_attributes(span, {"meridian.run_id": str(run.run_id)})
-        return _store_brief(dsn, span, claim_id, taken, run, output.brief)
+        return _store_brief(dsn, span, claim_id, taken, run, _redacted(output.brief))
 
 
 def _record_decision(dsn: str, tenant: str, claim_id: str, body: BriefDecision) -> None:

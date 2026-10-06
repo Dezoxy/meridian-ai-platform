@@ -7,10 +7,16 @@ the claim and never moves its state.
 
 **Status.** Implemented and tested through the Agent Runtime's second host
 (`meridian.runtime.agent_framework_host`), against PostgreSQL, the real tool
-servers and a stub gateway. It is **not registered** (no entry in
-`config/registry/` or in `pyproject.toml`), **not reachable through the run
-API** and **has not run on a cluster**. The registration comes with the change
-that wires the host into the runtime.
+servers and a stub gateway. It is **registered** (S037): the agent
+`claim-brief` is in `config/registry/agents.yaml` with `host: agent-framework`,
+the tenant `claims-triage` lists it, and its entry point is in the
+`meridian.graphs` group of `pyproject.toml`. It is **reachable through the run
+API** (the Claims API's three brief routes start it, record the decision and
+read the brief), and it **has run in tests** through the real runtime, the three
+tool servers and a stub model (`tests/meridian/test_claim_brief_stack.py`). It
+**has not run on a cluster**. Its evaluation is published and empty: the golden
+set (`data/evaluation/claim-brief/golden/`) holds no case, because the workload
+has no graders yet (designed, not built).
 
 ## The four steps
 
@@ -44,8 +50,9 @@ the cap and the class.
 Two rows, both keyed by its own run and both of fixed text: an approval request
 (`claims.approval_requests`) and, on an approve, one claim note
 (`claims.notes`). Never the model's text. The brief is the run's output, which
-the Claims Triage App stores in its own table, and it is in the run's checkpoint
-rows until the run ends.
+the Claims Triage App redacts (the function that redacts the triage's rationale:
+e-mail addresses, IBANs, card and phone numbers) and stores in its own table,
+and it is in the run's checkpoint rows until the run ends.
 
 ## Tools
 
@@ -54,4 +61,8 @@ Five of the registry's six, with no worker: `policy_lookup`, `claim_history`,
 
 ## Tests
 
-`tests/meridian/workloads/claim_brief/`.
+`tests/meridian/workloads/claim_brief/` (the workload on the second host, its
+registration and its empty evaluation) and
+`tests/meridian/test_claim_brief_stack.py` (a brief from its start through the
+pause to a filed note, beside a triage of the same claim, through the real
+runtime and tool servers).

@@ -137,7 +137,11 @@ def test_the_real_registry_has_no_agent_this_test_does_not_pin(
 ) -> None:
     registry = load_registry(real_registry)
 
-    assert sorted(a.id for a in registry.agents) == sorted(DUMPS_BEFORE_THE_HOST)
+    # claim-brief (S037, W1b) is the second host's agent: it never had a dump
+    # "before the host", and test_claim_brief_registration.py holds its own.
+    assert sorted(a.id for a in registry.agents) == sorted(
+        [*DUMPS_BEFORE_THE_HOST, "claim-brief"]
+    )
 
 
 def test_a_default_host_is_left_out_of_the_dump_even_when_it_is_written() -> None:

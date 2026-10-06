@@ -189,7 +189,8 @@ def test_summary_uses_singular_and_plural_correctly(registry_copy: Path) -> None
     text = tenants.read_text(encoding="utf-8")
     tenants.write_text(
         text[: text.index("  - id: evaluation")].replace(
-            "agents: [claims-triage, knowledge-ingestion]", "agents: [claims-triage]"
+            "agents: [claims-triage, knowledge-ingestion, claim-brief]",
+            "agents: [claims-triage]",
         ),
         encoding="utf-8",
     )

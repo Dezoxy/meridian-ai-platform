@@ -1935,7 +1935,7 @@ def test_a_tenant_the_registry_no_longer_allows_is_refused_and_the_run_stays_pau
     directory = plant(
         (
             "tenants.yaml",
-            "    agents: [claims-triage, knowledge-ingestion]\n",
+            "    agents: [claims-triage, knowledge-ingestion, claim-brief]\n",
             "    agents: [knowledge-ingestion]\n",
         ),
         # The three services that name claims-triage and the agent it no longer

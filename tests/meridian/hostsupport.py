@@ -1,11 +1,9 @@
 """Support for the tests of the Agent Runtime's hosts (S037, R4a).
 
-The agent of these tests, ``claim-brief``, is planted into a scratch copy of the
-registry: the registry's one real agent declares workers, and the second host
-offers no worker's view of the tool client, so a client built for it would
-refuse every call. The scratch agent lists the tools the test workflow calls
-and no workers, and a tenant lists it. The tool client and the real tool servers
-are both built from that copy, since each checks the agent against its own.
+The agent of these tests, ``claim-brief``, is the registry's own (it declares
+the second host, lists the tools the workflow calls and no workers, and a tenant
+lists it). The tool client and the real tool servers are both built from a
+scratch copy of the registry, since each checks the agent against its own.
 """
 
 import contextvars
@@ -44,39 +42,12 @@ NOTE_STEP = "file-note"
 APPROVAL_STEP = "request-approval"
 LEG_SECONDS = 60
 
-NEW_AGENT = """\
-  - id: claim-brief
-    description: A test agent of the second host, with no workers.
-    tools:
-      - policy_lookup
-      - claim_history
-      - add_claim_note
-      - request_approval
-      - approval_outcome
-"""
-PLANT = (
-    (
-        "agents.yaml",
-        "  - id: knowledge-ingestion\n",
-        NEW_AGENT + "  - id: knowledge-ingestion\n",
-    ),
-    (
-        "tenants.yaml",
-        "    agents: [claims-triage, knowledge-ingestion]\n",
-        "    agents: [claims-triage, knowledge-ingestion, claim-brief]\n",
-    ),
-    (
-        "services.yaml",
-        "    agents: [claims-triage]\n  - id: model-gateway\n",
-        "    agents: [claims-triage, claim-brief]\n  - id: model-gateway\n",
-    ),
-)
-
 
 def planted_registry(plant: Callable[..., Path]) -> tuple[Path, Registry]:
-    """The scratch registry's directory, with ``claim-brief`` in it, and its
-    loaded form."""
-    directory = plant(*PLANT)
+    """The scratch copy's directory and its loaded form. ``claim-brief`` is in
+    the real registry since S037's registration (W1b), so nothing is planted:
+    the copy is for the tests that edit it."""
+    directory = plant()
     return directory, load_registry(directory)
 
 

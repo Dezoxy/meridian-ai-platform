@@ -175,14 +175,18 @@ knowledge store and may run for the tenant `claims-triage` only.
 
 An agent may name its `host` (S037): `langgraph` (the default) or
 `agent-framework` (Microsoft Agent Framework), the framework that runs its
-entry point; the Agent Runtime will pick its host by it. The default is not
+entry point; the Agent Runtime picks its host by it and refuses to start when
+an agent's entry point is not what its host runs. The default is not
 written into an agent's dump, so the `tools` fingerprint of an agent that
 names no host does not move. Validation refuses a `job` that declares a host
 at all (`host: langgraph` too: no host runs a job) and workers on
 `agent-framework` (the worker view of the tool client is built and tested for
 the langgraph host only; the check goes when the second host carries
-workers). Status: declared and checked, implemented in tests; no agent names
-it yet and nothing reads it at run time.
+workers). Status: implemented and tested, not run on a cluster. One agent
+names the second host, `claim-brief` (S037): five tools, no worker, listed by
+the tenant `claims-triage` alone, and named by `agent-runtime` (which runs it)
+and `claims-api` (which starts it). It has no evaluation grader yet: its
+golden set holds no case.
 
 An agent may declare `workers` (S031): parts of its graph, each with an `id`,
 a `description` and a `tools` list that may be empty (a worker that only asks
@@ -263,8 +267,8 @@ calls nobody says `[]`. The lists hold what the code names today, no more:
 
 | Service | Calls | Tenant | Agent | Where the code says so |
 |---|---|---|---|---|
-| `claims-api` | `agent-runtime` | `claims-triage` | `claims-triage` | `ClaimsSettings.tenant`, default `claims-triage` (`MERIDIAN_TENANT` is set nowhere in the chart or `infra/`); `AGENT` in `claims_triage/triaging.py` |
-| `agent-runtime` | `model-gateway` and the three tool servers | `claims-triage` | `claims-triage` | `ModelClient` sends the run's own tenant and agent, which are the Claims API's |
+| `claims-api` | `agent-runtime` | `claims-triage` | `claims-triage`, `claim-brief` | `ClaimsSettings.tenant`, default `claims-triage` (`MERIDIAN_TENANT` is set nowhere in the chart or `infra/`); `AGENT` in `claims_triage/triaging.py` and `BRIEF_AGENT` in `claims_triage/lifecycle.py` |
+| `agent-runtime` | `model-gateway` and the three tool servers | `claims-triage` | `claims-triage`, `claim-brief` | `ModelClient` sends the run's own tenant and agent, which are the Claims API's |
 | `model-gateway`, `policy-mcp`, `claims-mcp` | nothing | none | none | no service URL in their chart `env` |
 | `knowledge-mcp` | `model-gateway` | `claims-triage` | `claims-triage` | `wording_search` embeds under `binding.tenant` and `binding.agent`, the run's |
 | `meridian-ingest` | `model-gateway` | `claims-triage` | `knowledge-ingestion` | `--tenant claims-triage` in the chart's `ingest` Job; `INGESTION_AGENT` in `knowledge_mcp/__init__.py` |

@@ -96,6 +96,11 @@ IDENTITY = "meridian.platform.common.identity"
 # With no collector address a factory says once, through this logger, that its
 # metrics are not exported (S064): the one record of ours before uvicorn's.
 METRICS = "meridian.platform.common.metrics"
+# The agent runtime starts with the second host's agent, whose workflow the
+# framework validates when the host checks it: one INFO line from the
+# framework's own logger ("dead-end executors", naming a step's ID only). S037
+# W1b found it; the host could quiet that logger, which is not this file's call.
+FRAMEWORK = "agent_framework._workflows._validation"
 MEASURED = {
     "model-gateway": {IDENTITY},
     "agent-runtime": {IDENTITY},
@@ -144,9 +149,9 @@ def test_the_factory_takes_over_the_loggers_uvicorn_configured_before_it(
     logging.getLogger("uvicorn.error").info("after the factory")
     lines = _json_lines(capsys.readouterr().out)
     assert {line["service"] for line in lines} == {service}
-    assert [line["logger"] for line in lines if line["logger"] != METRICS] == [
-        "uvicorn.error"
-    ]
+    assert [
+        line["logger"] for line in lines if line["logger"] not in (METRICS, FRAMEWORK)
+    ] == ["uvicorn.error"]
 
 
 # ── uvicorn serving, with the factory loaded by uvicorn itself ──────────────

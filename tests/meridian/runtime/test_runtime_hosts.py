@@ -21,7 +21,6 @@ from dbsupport import DatabaseHandle
 from fastapi.testclient import TestClient
 from hostflows import Dials, chain_factory, loop_factory, yield_factory
 from hostsupport import AGENT as BRIEF_AGENT
-from hostsupport import PLANT
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -50,12 +49,6 @@ TENANT = "claims-triage"
 CLAIM = "CLM-0001"
 BRIEF_MODULE = "meridian.workloads.claim_brief.workflow"
 DELETE_LOG = "its checkpoints were not deleted"
-HOST_LINE = (
-    "agents.yaml",
-    "    description: A test agent of the second host, with no workers.\n",
-    "    description: A test agent of the second host, with no workers.\n"
-    "    host: agent-framework\n",
-)
 LANGGRAPH_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 SECOND_HOST_TABLES = ("workflow_checkpoints",)
 
@@ -154,10 +147,10 @@ def service_of(
     db: DatabaseHandle | None,
     *entries: FakeEntryPoint,
 ) -> TestClient:
-    """The runtime over the scratch registry that holds ``claim-brief`` on the
-    second host, with ``entries`` published (the registry's own agent keeps its
-    real entry point when none is given)."""
-    directory = plant(*PLANT, HOST_LINE)
+    """The runtime over a scratch copy of the registry, which holds
+    ``claim-brief`` on the second host, with ``entries`` published (the
+    registry's own agent keeps its real entry point when none is given)."""
+    directory = plant()
     register_agents(monkeypatch, *entries)
     return make_client(db, directory)
 

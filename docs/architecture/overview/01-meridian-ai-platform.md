@@ -79,7 +79,7 @@ stateDiagram-v2
 |---|---|---|---|
 | Ingress | TLS termination and routing | Envoy Gateway (Gateway API) on kind; Application Gateway WAF in the Azure design | Edge |
 | Model Gateway | Provider and region policy, fallback, quotas, budgets, cost, redaction, audit | Python, FastAPI | Control |
-| Agent Runtime | Hosts workload graphs: start, pause for approval, resume, checkpoint, guardrails | Python, LangGraph host | Control |
+| Agent Runtime | Hosts workload graphs and workflows: start, pause for approval, resume, checkpoint, guardrails | Python, LangGraph and Microsoft Agent Framework hosts | Control |
 | Policy MCP Server | Policy lookup and claim history as tools | Python, MCP SDK | Control |
 | Knowledge MCP Server | Hybrid search over policy wording with citations; ingestion | Python, MCP SDK, pgvector | Control |
 | Evaluation Harness | Golden-set replay, graders, CI gate | Python, pytest | Control |
