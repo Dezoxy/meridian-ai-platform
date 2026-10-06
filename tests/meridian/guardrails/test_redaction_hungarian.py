@@ -7,10 +7,10 @@ examples of the sourced note, or built by the helpers below from the published
 rule); none is a lookup of a person."""
 
 import json
-import time
 from collections.abc import Callable
 
 import pytest
+from cputime import MAX_GROWTH, growth
 
 from meridian.platform.guardrails import (
     ACCOUNT_PLACEHOLDER,
@@ -176,10 +176,6 @@ OWN_VALUES = [
     ("national_id", NATIONAL_IDS[0]),
     ("national_id", NATIONAL_IDS[6]),
 ]
-
-
-def _expected(kind: str) -> str:
-    return PLACEHOLDERS[kind]
 
 
 def test_the_new_placeholders_are_fixed_and_safe_inside_a_json_string() -> None:
@@ -656,8 +652,6 @@ def test_an_identifier_after_its_word_is_replaced_and_the_word_stays(
         "adószám: 123456762421",
         "tax number: 1234567624",
         "personal ID: 1-800101-1239",
-        "TAJ: abc\n123456788",
-        "TAJ:\r\n123456788",
         "TAJ:" + " " * (WORD_GAP_MAX_CHARS + 1) + "123456788",
         "TAJ" + "." * (WORD_GAP_MAX_CHARS + 1) + "123456788",
     ],
@@ -794,10 +788,17 @@ def test_a_word_after_a_json_escape_still_finds_its_number(
     }
 
 
-def test_a_json_escape_between_the_word_and_its_number_is_a_line_break() -> None:
+def test_a_json_escape_between_the_word_and_its_number_is_one_line_break() -> None:
+    # Changed on purpose (F1r, security M2): this test used to pin that a line
+    # break between the word and its number leaves the number alone. A form
+    # that puts the number on the next line leaked it; one break is allowed now
+    # (test_redaction_findings.py holds the bounds and what two breaks do).
     text = json.dumps({"description": "TAJ:\n123456788"}, ensure_ascii=False)
 
-    assert redact(text) == Redaction(text=text, found={})
+    result = redact(text)
+
+    assert json.loads(result.text) == {"description": "TAJ:\n[national-id]"}
+    assert dict(result.found) == {"national_id": 1}
 
 
 @pytest.mark.parametrize("space", [NBSP, THIN_SPACE, "\t"], ids=["nbsp", "thin", "tab"])
@@ -812,13 +813,10 @@ def test_another_space_joins_the_groups_of_a_national_number_and_an_account(
 
 
 # Linear time (T-73): a text four times as long takes four times as long, not
-# sixteen. The limit sits at twice the linear growth, as in test_redaction.py;
-# the thread's CPU time is measured, never the wall clock, and the best of RUNS
-# runs is taken at each size.
+# sixteen. ``cputime.growth`` measures the thread's CPU time, never the wall
+# clock, and the limit sits at twice the linear growth.
 SMALL_LENGTH = 10_000
 LARGE_LENGTH = 40_000
-MAX_GROWTH = 8
-RUNS = 5
 Shape = Callable[[int], str]
 ADVERSARIAL: dict[str, Shape] = {
     "phone-prefix": lambda n: "06 " * (n // 3),
@@ -851,21 +849,10 @@ ADVERSARIAL: dict[str, Shape] = {
 }
 
 
-def _best_time(text: str) -> float:
-    best = float("inf")
-    for _ in range(RUNS):
-        started = time.thread_time()
-        redact(text)
-        best = min(best, time.thread_time() - started)
-    return best
-
-
 @pytest.mark.parametrize("name", list(ADVERSARIAL))
 def test_an_adversarial_text_is_redacted_in_linear_time(name: str) -> None:
     small, large = ADVERSARIAL[name](SMALL_LENGTH), ADVERSARIAL[name](LARGE_LENGTH)
     assert len(small) >= SMALL_LENGTH - 20
     assert len(large) >= LARGE_LENGTH - 20
 
-    growth = _best_time(large) / _best_time(small)
-
-    assert growth < MAX_GROWTH
+    assert growth(redact, small, large) < MAX_GROWTH

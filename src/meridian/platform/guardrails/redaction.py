@@ -105,16 +105,35 @@ CARD_MAX_DIGITS = 19
 CARD_MIN_GROUP_DIGITS = 4
 
 # International form: "+", a country code and 7 to 14 more digits, with single
-# spaces or hyphens and one pair of parentheses around a group. The national
+# spaces, hyphens, slashes or dots between groups and one pair of parentheses
+# around a group (the country code and the area code together too, with the
+# "+" inside the parenthesis, as the research note's spelling advice has it).
+# The national
 # Hungarian forms have a rule of their own below: written without the "+", a
 # number is told from an amount, a claim number or a date only by a closed
-# prefix and a length that the numbering plan gives.
-PHONE = re.compile(rf"\+[0-9(][0-9{SPACE_CHARS}()-]{{6,32}}")
+# prefix and a length that the numbering plan gives. The hyphen goes last, so
+# that a character class built from the separators holds no range.
+PHONE = re.compile(rf"\+[0-9(][0-9{SPACE_CHARS}()/.-]{{6,32}}")
 PHONE_MIN_DIGITS = 8
 PHONE_MAX_DIGITS = 17
-PHONE_SHAPE = re.compile(rf"\+[0-9]+(?:[{SPACE_CHARS}-][0-9]+)*")
-PAREN_GROUP = re.compile(r"\([0-9]+\)")
-PHONE_SEPARATORS = SPACE_CHARS + JOINING_HYPHEN
+PHONE_SEPARATORS = SPACE_CHARS + "/." + JOINING_HYPHEN
+PHONE_SHAPE = re.compile(rf"\+[0-9]+(?:[{PHONE_SEPARATORS}][0-9]+)*")
+PAREN_GROUP = re.compile(r"\(\+?[0-9]+\)")
+# A phone number may be followed by a hyphen and a Hungarian case ending (the
+# number, then "-es" or "-val"): the ending stays and the number is replaced.
+# The endings are a closed list, lower case, as a word has them, so that the
+# start of a longer hyphenated identifier (a number, then "-ab", or "-es" and a
+# year) is still no phone number.
+PHONE_ENDINGS = (
+    *("as", "es", "ba", "be", "ban", "ben", "ból", "ből", "en", "et", "ig"),
+    *("hez", "hoz", "höz", "nak", "nek", "nál", "nél", "on", "ön", "ot", "öt"),
+    *("ra", "re", "ról", "ről", "tól", "től", "val", "vel", "ért", "ként", "at"),
+    # The ending after the last digit's spoken name: "-tel" after 5 or 7, "-tal"
+    # after 6, "-mal" after 3, "-gyel" after 1 or 4, "-cal" after 8, "-cel"
+    # after 9, and the adjective "-ös" after 5 and "-os" after 6.
+    *("tel", "tal", "mal", "gyel", "cal", "cel", "ös", "os"),
+)
+PHONE_ENDING = re.compile(rf"-(?:{'|'.join(PHONE_ENDINGS)})(?!\w)")
 
 # Hungarian forms (S067). A candidate starts at a token boundary, as an IBAN
 # does: not inside a longer word or number, unless a JSON escape sits right
@@ -125,8 +144,11 @@ NON_DIGITS = re.compile(r"[^0-9]")
 
 # National phone number: "06" or "0036" ("00 36" too), then digit groups joined
 # by one space, hyphen, slash or dot, with one pair of parentheses round any run
-# of groups (the prefix, the code, or both). The candidate is at most 36
-# characters; the numbering plan's code and length decide.
+# of groups (the prefix, the code, or both). The candidate is at most 35
+# characters (the "(" and the prefix, 3, and 32 more); the numbering plan's code
+# and length decide. One that follows a digit and a dot or a slash is the tail
+# of a date ("2026/06/30 1250000"), not a phone number.
+DATE_SEPARATORS = "./"
 NATIONAL_PHONE_SEPARATORS = SPACE_CHARS + "/.-"
 NATIONAL_PHONE = re.compile(
     rf"{TOKEN_START}\(?(?:06|00)[0-9(){NATIONAL_PHONE_SEPARATORS}]{{6,32}}"
@@ -154,16 +176,21 @@ PERSONAL_ID = re.compile(rf"{TOKEN_START}[0-9](?:-[0-9]{{6}}-[0-9]{{4}}|[0-9]{{1
 
 # An identifier with no structure of its own that an amount or a date does not
 # share (a bare run of digits that chance passes one time in ten) is replaced
-# only when one of a closed list of words stands before it on the same line:
-# the word, then at most WORD_GAP_MAX_CHARS characters that are neither digits,
-# a backslash nor a line break (a colon, "szám", "number", "no.", spaces), then
-# the number. The word is a whole word: no letter or digit before it (a JSON
-# escape before it does not count) and no letter right after it. The word
-# stays; only the number is replaced.
+# only when one of a closed list of words stands before it on the same line or
+# the next: the word, then at most WORD_GAP_MAX_CHARS characters that are
+# neither digits nor a backslash (a colon, "szám", "number", "no.", spaces),
+# then the number. One line break may stand in the gap (a form puts "TAJ szám:"
+# on one line and the number on the next): a real one or the escape
+# ``json.dumps`` writes, with at most WORD_GAP_MAX_CHARS characters on each
+# side of it, and no second break. The word is a whole word: no letter or digit
+# before it (a JSON escape before it does not count) and no letter right after
+# it. The word stays; only the number is replaced.
 WORD_GAP_MAX_CHARS = 12
 WORD_START = rf"(?:(?<![^\W_])|(?<={JSON_ESCAPE_BEFORE}))"
 WORD_END = r"(?![^\W\d_])"
-WORD_GAP = rf"[^0-9\\\r\n]{{0,{WORD_GAP_MAX_CHARS}}}(?=[0-9])"
+LINE_BREAK = r"(?:\r\n|[\r\n]|\\r\\n|\\[nr])"
+WORD_GAP_RUN = rf"[^0-9\\\r\n]{{0,{WORD_GAP_MAX_CHARS}}}"
+WORD_GAP = rf"{WORD_GAP_RUN}(?:{LINE_BREAK}{WORD_GAP_RUN})?(?=[0-9])"
 # The words, matched ignoring case, with and without accents: the social
 # security number's (TAJ, tajszám, TAJ-szám, its official name, "social
 # security", "social insurance"), the tax identification number's (adóazonosító
@@ -246,7 +273,12 @@ def redact(text: str) -> Redaction:
     of the numbering plan and its length), the tax number as 8-1-2, a domestic
     account number of two or three blocks of eight digits, and the personal
     identification number; the social security number, the tax identification
-    number and the unhyphenated tax number only after a word of a closed list.
+    number and the unhyphenated tax number only after a word of a closed list
+    (the number may stand on the next line: one line break, real or as JSON
+    writes it). A national phone number right after a digit and a dot or a
+    slash is the tail of a date and is left alone; a phone number may be
+    followed by a hyphen and a Hungarian case ending of a closed list, which
+    stays.
     It does not find names, addresses, identity card, passport or driving
     licence numbers (no check digit), vehicle plates, an account number written
     without separators (a card's Luhn rule already reads 16 digits, so one that
@@ -345,6 +377,15 @@ def _joins_after(text: str, end: int) -> bool:
     return (
         after == JOINING_HYPHEN and end + 1 < len(text) and text[end + 1] in TOKEN_CHARS
     )
+
+
+def _joins_after_phone(text: str, end: int) -> bool:
+    """Like ``_joins_after``, except that a hyphen and a Hungarian case ending
+    from ``PHONE_ENDINGS`` do not join, when nothing joins after the ending."""
+    if not _joins_after(text, end):
+        return False
+    ending = PHONE_ENDING.match(text, end)
+    return ending is None or _joins_after(text, ending.end())
 
 
 def _is_whole_token(text: str, start: int, end: int) -> bool:
@@ -494,7 +535,15 @@ def _choose_phone_span(text: str, start: int, end: int) -> tuple[int, int] | Non
     """The longest prefix of the candidate, cut after a digit or a closing
     parenthesis, whose shape is an international number and that is a whole
     token: the "+" is not preceded by a letter, a digit or "_", unless a JSON
-    escape sits between."""
+    escape sits between. A number written with the "+" inside its parentheses
+    round the country code and the area code is taken with the "(" before it."""
+    span = _international_span(text, start, end)
+    if span is None and start > 0 and text[start - 1] == "(":
+        span = _international_span(text, start - 1, end)
+    return span
+
+
+def _international_span(text: str, start: int, end: int) -> tuple[int, int] | None:
     joined_before = (
         start > 0
         and text[start - 1] in TOKEN_CHARS
@@ -505,8 +554,9 @@ def _choose_phone_span(text: str, start: int, end: int) -> tuple[int, int] | Non
     trimmed = text[start:end]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed)
-        if not _joins_after(text, start + len(trimmed)) and _phone_shape_holds(trimmed):
-            return start, start + len(trimmed)
+        stop = start + len(trimmed)
+        if not _joins_after_phone(text, stop) and _phone_shape_holds(trimmed):
+            return start, stop
         cut = max(trimmed.rfind(sep) for sep in PHONE_SEPARATORS)
         trimmed = trimmed[:cut] if cut > 0 else ""
     return None
@@ -528,19 +578,30 @@ def _national_shape_holds(text: str) -> bool:
     )
 
 
+def _follows_date_separator(text: str, start: int) -> bool:
+    """Whether a digit and a ``DATE_SEPARATORS`` character end right before
+    ``start``."""
+    return (
+        start >= 2
+        and text[start - 1] in DATE_SEPARATORS
+        and text[start - 2] in string.digits
+    )
+
+
 def _choose_national_phone_span(
     text: str, start: int, end: int
 ) -> tuple[int, int] | None:
     """The longest prefix of the candidate, cut after a digit or a closing
     parenthesis, that is a national number of the numbering plan and a whole
-    token. Parentheses that round the whole number stay outside the span."""
-    if _joins_before(text, start):
+    token. Parentheses that round the whole number stay outside the span. A
+    candidate right after a digit and a dot or a slash is the tail of a date."""
+    if _joins_before(text, start) or _follows_date_separator(text, start):
         return None
     trimmed = text[start:end]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed, NATIONAL_PHONE_SEPARATORS)
         stop = start + len(trimmed)
-        if not _joins_after(text, stop) and _national_shape_holds(trimmed):
+        if not _joins_after_phone(text, stop) and _national_shape_holds(trimmed):
             if trimmed.startswith("(") and trimmed.endswith(")"):
                 return start + 1, stop - 1
             return start, stop

@@ -7,7 +7,12 @@ digits are a number of the kind. Each rule cites its public source.
 
 A number that passes a check can still be someone's or no one's: the
 algorithms are public, so a check cuts the false positives, it does not prove
-that a number was issued."""
+that a number was issued.
+
+Every check function takes a string and returns a bool, and never raises: a
+string that is not made of ASCII digits (a superscript or full-width digit,
+which ``str.isdigit`` accepts and ``int`` may not, an underscore, a letter, the
+empty string) is not a number of any kind."""
 
 import datetime
 from collections.abc import Sequence
@@ -23,15 +28,17 @@ from types import MappingProxyType
 # plan lists as test numbers (no subscriber).
 BUDAPEST_CODE = "1"
 BUDAPEST_LENGTH = 8
-_CODES_BY_LENGTH = {
-    8: (
-        "22 23 24 25 26 27 28 29 32 33 34 35 36 37 42 44 45 46 47 48 49 52 53 54"
-        " 56 57 59 62 63 66 68 69 72 73 74 75 76 77 78 79 80 82 83 84 85 87 88 89"
-        " 90 91 92 93 94 95 96 99"
-    ),
-    9: "20 21 30 31 38 50 70",
-    12: "71",
-}
+_CODES_BY_LENGTH = MappingProxyType(
+    {
+        8: (
+            "22 23 24 25 26 27 28 29 32 33 34 35 36 37 42 44 45 46 47 48 49 52 53"
+            " 54 56 57 59 62 63 66 68 69 72 73 74 75 76 77 78 79 80 82 83 84 85 87"
+            " 88 89 90 91 92 93 94 95 96 99"
+        ),
+        9: "20 21 30 31 38 50 70",
+        12: "71",
+    }
+)
 DOMESTIC_LENGTHS = MappingProxyType(
     {
         code: length
@@ -53,6 +60,8 @@ SOCIAL_SECURITY_WEIGHTS = (3, 7, 3, 7, 3, 7, 3, 7)
 # summed, divided by 11: the remainder is the tenth digit, and a prefix whose
 # remainder is 10 is never issued.
 TAX_ID_LEADING_DIGIT = "8"
+TAX_ID_LENGTH = 10
+TAX_ID_PLACES = tuple(range(1, TAX_ID_LENGTH))
 
 # Tax number (adószám) and domestic account number: the check of GIRO's
 # "Általános Üzletszabályzat" IG1 Annex 6 and MNB decree 35/2017 Annex 1.
@@ -114,9 +123,16 @@ def _giro_check(digits: str) -> int:
     return (10 - _weighted_sum(digits, GIRO_WEIGHTS) % 10) % 10
 
 
+def _ascii_digits(digits: str) -> bool:
+    """Whether the string is one or more ASCII digits and nothing else."""
+    return digits.isascii() and digits.isdigit()
+
+
 def national_phone_holds(digits: str) -> bool:
     """Whether the digits are a domestic number after the prefix ``06`` or
     ``0036``: a code of the numbering plan and exactly its length."""
+    if not _ascii_digits(digits):
+        return False
     for prefix in DOMESTIC_PREFIXES:
         if digits.startswith(prefix):
             number = digits[len(prefix) :]
@@ -128,17 +144,18 @@ def national_phone_holds(digits: str) -> bool:
 
 def social_security_holds(digits: str) -> bool:
     """Whether nine digits are a social security number (TAJ)."""
-    return len(digits) == len(SOCIAL_SECURITY_WEIGHTS) + 1 and _weighted_sum(
-        digits[:-1], SOCIAL_SECURITY_WEIGHTS
-    ) % 10 == int(digits[-1])
+    if not _ascii_digits(digits) or len(digits) != len(SOCIAL_SECURITY_WEIGHTS) + 1:
+        return False
+    return _weighted_sum(digits[:-1], SOCIAL_SECURITY_WEIGHTS) % 10 == int(digits[-1])
 
 
 def tax_id_holds(digits: str) -> bool:
     """Whether ten digits are a tax identification number (adóazonosító jel)."""
-    if len(digits) != 10 or digits[0] != TAX_ID_LEADING_DIGIT:
+    if not _ascii_digits(digits) or len(digits) != TAX_ID_LENGTH:
         return False
-    places = tuple(range(1, 10))
-    remainder = _weighted_sum(digits[:-1], places) % TAX_ID_MODULUS
+    if digits[0] != TAX_ID_LEADING_DIGIT:
+        return False
+    remainder = _weighted_sum(digits[:-1], TAX_ID_PLACES) % TAX_ID_MODULUS
     return remainder == int(digits[-1])
 
 
@@ -146,8 +163,10 @@ def tax_number_holds(digits: str) -> bool:
     """Whether eleven digits are a tax number (adószám): its first eight, the
     stem, are seven digits and their check digit. The VAT code and the county
     code that follow are not checked: a list of them is not sourced."""
+    if not _ascii_digits(digits) or len(digits) != TAX_NUMBER_DIGITS:
+        return False
     stem = digits[:TAX_NUMBER_STEM_DIGITS]
-    return len(digits) == TAX_NUMBER_DIGITS and _giro_check(stem[:-1]) == int(stem[-1])
+    return _giro_check(stem[:-1]) == int(stem[-1])
 
 
 def account_holds(digits: str) -> bool:
@@ -155,7 +174,7 @@ def account_holds(digits: str) -> bool:
     the account run each end in their check digit, and the length decides
     which digits the second run covers."""
     runs = ACCOUNT_RUNS.get(len(digits))
-    if runs is None:
+    if runs is None or not _ascii_digits(digits):
         return False
     account_run, account_check = runs
     return _giro_check(digits[ACCOUNT_BANK_RUN]) == int(
@@ -167,7 +186,7 @@ def personal_id_holds(digits: str) -> bool:
     """Whether eleven digits are a personal identification number: a leading
     digit, a date of birth that is a date in a century that digit allows, and
     the check digit of the variant that date selects."""
-    if len(digits) != PERSONAL_ID_LENGTH:
+    if not _ascii_digits(digits) or len(digits) != PERSONAL_ID_LENGTH:
         return False
     return any(
         _personal_id_born_in(digits, century)
