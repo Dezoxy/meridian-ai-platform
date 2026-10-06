@@ -30,13 +30,19 @@ Each tenant has four, in `config/registry/tenants.yaml`:
 
 | Limit | Window | Kept in | When it is reached |
 |---|---|---|---|
-| `requests_per_10_seconds` | Sliding 10 seconds | The gateway's memory | 429 with `Retry-After`, reason `tenant-request-rate` |
-| `tokens_per_minute` | Sliding 60 seconds | The gateway's memory | 429 with `Retry-After`, reason `tenant-token-rate`; 413, reason `tenant-request-too-large`, for one request larger than the window |
+| `requests_per_10_seconds` | Sliding 10 seconds | The gateway's memory, or the shared store | 429 with `Retry-After`, reason `tenant-request-rate` |
+| `tokens_per_minute` | Sliding 60 seconds | The gateway's memory, or the shared store | 429 with `Retry-After`, reason `tenant-token-rate`; 413, reason `tenant-request-too-large`, for one request larger than the window |
 | `tokens_per_day` | The UTC day | PostgreSQL | 429, reason `tenant-token-budget` |
 | `cost_per_month_eur` | The UTC month | PostgreSQL | 429, reason `tenant-cost-budget` |
 
 The two rate limits come back by themselves within their window, and no
 alert watches them: wait. This runbook is about the last two.
+
+A gateway given the address of the shared store keeps the two windows there
+(implemented and tested; not run on a cluster). When it cannot reach the store
+it refuses the call: 503 `the rate store is unavailable` with `Retry-After: 5`,
+audit reason `rate-store-unavailable`. That is not a tenant's limit: the store
+is down or unreachable, so look at the store, not at the tenant.
 
 ## Confirm
 
@@ -303,7 +309,9 @@ names the database role, not a person, until people sign in (S021).
   charged.
 - **Do not restart the gateway** to give a tenant room. The budgets are
   in PostgreSQL and survive it; the restart only hands every tenant its
-  rate windows again.
+  rate windows again (without the shared store; with it, the windows
+  survive a gateway restart, and a restart of the store hands them out
+  again).
 - **Do not price a simulated deployment** to see the cost quota work on
   kind: a price for the replay provider would spend a tenant's real
   quota.

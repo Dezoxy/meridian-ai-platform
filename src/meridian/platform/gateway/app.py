@@ -9,8 +9,11 @@ when nothing is allowed or the class is ``special`` (T-13). The tenant's rate
 windows come next, one set for both purposes, on the estimate of the text as
 sent: a request over them is refused (429, or 413 when it alone is larger than
 the tenant's token limit) before any redaction, circuit, reservation or
-provider is touched (T-73). Only a request that passes has its text redacted
-(T-20), whatever its class, so nothing below sees an e-mail address, an IBAN or
+provider is touched (T-73). The windows are the process's own or, given the
+store's address, shared through it (S066); a store that cannot be reached
+refuses the call the same way (503, ``rate-store-unavailable``), never a pass.
+Only a request that passes has its text redacted (T-20),
+whatever its class, so nothing below sees an e-mail address, an IBAN or
 a card number; a request a policy or a window refuses costs no redaction, one
 the budget refuses has been redacted. Then the allowed candidates are walked in
 order under one deadline (S042), each one reserved in the ledger before it is
@@ -44,6 +47,7 @@ counts as input tokens in the estimate, and is sent to the provider as it is.
 The span says only that one was sent, as a boolean: never a word of it.
 """
 
+import logging
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -106,10 +110,13 @@ from meridian.platform.gateway.providers.recorded import (
     RecordingError,
     load_recording,
 )
-from meridian.platform.gateway.ratelimit import TenantRateLimiter
+from meridian.platform.gateway.rate_store import limiter_from_settings
+from meridian.platform.gateway.ratelimit import RateLimiter, TenantRateLimiter
+from meridian.platform.gateway.ratelimit_redis import RateStoreUnavailable
 from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.refusals import (
     LIMIT_ANSWERS,
+    RATE_STORE_RETRY_SECONDS,
     LimitRefusalReason,
     RefusalAudit,
 )
@@ -127,6 +134,8 @@ from meridian.platform.gateway.walk import (
 )
 from meridian.platform.registry import Registry, load_registry
 from meridian.platform.registry.models import DataClass, Deployment, Service
+
+logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "model-gateway"
 CHAT_PURPOSE = "chat"
@@ -167,7 +176,8 @@ NOT_RECORDED = "no recording answers this request; record again (make eval-recor
 NOT_CALLED_REASON = "unavailable"
 # The route's own description of 503; the shared one names the database only.
 CHAT_UNAVAILABLE = (
-    "The audit log is unavailable, or no model deployment can be tried now."
+    "The audit log or the rate store is unavailable, or no model deployment can "
+    "be tried now."
 )
 # The route's own description of 413: the shared one names the body limit only.
 CHAT_TOO_LARGE = (
@@ -385,6 +395,7 @@ def create_app(
     providers: Mapping[str, ModelProvider] | None = None,
     clock: Callable[[], float] = time.monotonic,
     today: Callable[[], date] = utc_today,
+    limiter: RateLimiter | None = None,
 ) -> FastAPI:
     """Build the app; raise when the registry fails to load or the mode,
     environment and providers are not an allowed combination.
@@ -396,10 +407,14 @@ def create_app(
     asked for the method of the purpose of the request only, so a fake with
     ``chat`` alone serves chat, and nothing checks at the start that it has
     ``embed``. ``clock`` times the circuit
-    breaker (one per app), the tenants' rate windows and each request's
-    deadline; ``today`` is the UTC day the ledger charges to. A test injects
-    fakes of both. A ``meter_provider`` is its caller's to shut down; without
-    one the app builds its own.
+    breaker (one per app), the tenants' rate windows (unless ``limiter`` is
+    given) and each request's deadline; ``today`` is the UTC day the ledger
+    charges to. A test injects fakes of both. ``limiter`` keeps the tenants'
+    rate windows (S066): without one they are the process's own, on ``clock``;
+    ``create_app_from_env`` passes the shared store's when its address is set. A
+    limiter that raises ``RateStoreUnavailable`` refuses the call (503). A
+    ``meter_provider`` is its caller's to shut down; without one the app builds
+    its own.
     """
     _check_start_allowed(settings, providers)
     registry = load_registry(settings.registry_dir)
@@ -464,7 +479,7 @@ def create_app(
     )
     app, tracer = service.app, service.tracer
     meters = GatewayMeters(app_meter_provider)
-    limiter = TenantRateLimiter(clock=clock)
+    limiter = limiter if limiter is not None else TenantRateLimiter(clock=clock)
 
     walker = CandidateWalker(
         tracer=tracer,
@@ -746,7 +761,23 @@ def create_app(
         # refuses has been. The limiter and the ledger see one number, the size
         # of the text as sent, and nothing else below sees the original.
         sized = estimate()
-        rate_refusal = limiter.admit(caller.tenant, limits, sized.tokens)
+        try:
+            rate_refusal = limiter.admit(caller.tenant, limits, sized.tokens)
+        except RateStoreUnavailable as error:
+            # No limit is known, so no call is made: never a pass and never the
+            # process's own windows (S066). The message holds no address.
+            logger.error(
+                "the rate store is unavailable (%s): %s", type(error).__name__, error
+            )
+            refuse_limit(
+                span,
+                record,
+                caller,
+                route,
+                decision.data_class,
+                "rate-store-unavailable",
+                retry_after=RATE_STORE_RETRY_SECONDS,
+            )
         if rate_refusal is not None:
             refuse_limit(
                 span,
@@ -784,4 +815,5 @@ def create_app(
 def create_app_from_env() -> FastAPI:
     """The factory S041 runs under ``uvicorn --factory``."""
     install_log_redaction()
-    return create_app(GatewaySettings.from_env())
+    settings = GatewaySettings.from_env()
+    return create_app(settings, limiter=limiter_from_settings(settings))

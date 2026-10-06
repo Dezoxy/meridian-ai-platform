@@ -24,7 +24,10 @@ from test_kind_manifests import GATEWAY_SERIES
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS
 from meridian.platform.gateway.budget import BudgetRefusalReason
 from meridian.platform.gateway.providers.base import ProviderErrorKind
-from meridian.platform.gateway.ratelimit import RateRefusalReason
+from meridian.platform.gateway.ratelimit import (
+    RateRefusalReason,
+    RateStoreRefusalReason,
+)
 from meridian.platform.gateway.routing import RefusalReason
 from meridian.platform.gateway.walk import INTERNAL_REASON
 
@@ -70,13 +73,15 @@ SERVICE_CA_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "service-ca.yaml"
 # test_kind_manifests.py's METRIC_LABELS), and "job" from the collector.
 GATEWAY_LABELS = {key.replace(".", "_") for key in METRIC_ATTRIBUTE_KEYS} | {"job"}
 # Every word the gateway can put in the reason label of a call: a provider
-# error's kind, a policy refusal, a budget refusal, a rate refusal and the
-# word for a failure that was not a provider's. Read from the code's own types.
+# error's kind, a policy refusal, a budget refusal, a rate refusal, the word for
+# a rate store that cannot be reached and the word for a failure that was not a
+# provider's. Read from the code's own types.
 REASONS = (
     set(get_args(ProviderErrorKind))
     | set(get_args(RefusalReason))
     | set(get_args(BudgetRefusalReason))
     | set(get_args(RateRefusalReason))
+    | set(get_args(RateStoreRefusalReason))
     | {INTERNAL_REASON}
 )
 PROMQL_WORDS = {

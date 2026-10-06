@@ -13,9 +13,12 @@ A refused request records nothing, so a flood cannot extend its own lockout.
 Two stores keep the windows behind one method (S066, T-45): ``TenantRateLimiter``
 here, the process's own, and ``RedisRateLimiter`` in ``ratelimit_redis.py``,
 which shares them between processes. Both answer the same refusals with the
-same hints; ``RateLimiter`` is what a caller may rely on. ``RedisRateLimiter``
-is implemented and tested against a real Redis; it is not yet wired into the
-gateway and has not run on a cluster.
+same hints; ``RateLimiter`` is what a caller may rely on. A gateway given the
+address of the shared store (``rate_store.py``) uses it and nothing else: one
+that cannot be reached is a refusal of the call, ``rate-store-unavailable``,
+never a fall back to the process's own windows. Both stores are implemented and
+tested against a real Redis, on loopback and without TLS; the shared one has
+not run on a cluster.
 """
 
 import math
@@ -35,6 +38,9 @@ MIN_RETRY_SECONDS = 1
 RateRefusalReason = Literal[
     "tenant-request-rate", "tenant-token-rate", "tenant-request-too-large"
 ]
+# Not an answer of a limiter: ``RedisRateLimiter.admit`` raises when its store
+# gives none, and the gateway refuses the call with this word (S066).
+RateStoreRefusalReason = Literal["rate-store-unavailable"]
 
 
 @dataclass(frozen=True, slots=True)

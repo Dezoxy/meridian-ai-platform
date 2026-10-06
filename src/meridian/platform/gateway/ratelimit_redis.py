@@ -24,7 +24,9 @@ clock, which a hand-moved clock does not move.
 Failure. A server that cannot be reached, that answers an error or that does not
 answer in time raises ``RateStoreUnavailable``, whose message holds no address, no
 credential and nothing the server sent. What the gateway does with it is the
-caller's decision; this module never falls back to anything.
+caller's decision (it refuses the call, ``app.py``); this module never falls back
+to anything. The client's timeouts and its no-retry rule are set where the client
+is made (``rate_store.py``), not here.
 
 Every command the store sends to the server (redis-py 8.1.0, read with MONITOR
 on Redis 8.10.2): from the script ``TIME`` (only with no clock),
@@ -42,8 +44,6 @@ import secrets
 from collections.abc import Callable
 
 import redis
-from redis.backoff import NoBackoff
-from redis.retry import Retry
 
 from meridian.platform.gateway.ratelimit import (
     REQUEST_WINDOW_SECONDS,
@@ -55,12 +55,6 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.registry.models import ENTITY_ID_PATTERN, TenantLimits
 
 DEFAULT_PREFIX = "meridian:rate"
-# What a local Redis answers in well under a millisecond. A store that is not
-# there is one answer after at most this long, far inside the gateway's attempt
-# budget (``resilience.MIN_ATTEMPT_SECONDS``, ten seconds) and its call deadline
-# (twenty-five), so a dead store never stands in for a slow one.
-DEFAULT_CONNECT_TIMEOUT_SECONDS = 1.0
-DEFAULT_READ_TIMEOUT_SECONDS = 1.0
 
 _TENANT_ID = re.compile(ENTITY_ID_PATTERN)
 _ADMITTED, _REQUEST_RATE, _TOKEN_RATE = 0, 1, 2
@@ -130,11 +124,11 @@ class RateStoreUnavailable(Exception):
 class RedisRateLimiter:
     """``RateLimiter`` on a Redis client; thread-safe, as the client is.
 
-    ``client`` is built by the caller (its address, TLS and credentials are not
-    this module's business) and should not have connected yet: the store sets the
-    timeouts and the no-retry rule on the connections the client's pool opens
-    from now on, and drops the idle ones it opened before. Nothing is retried: a
-    retry after a read timeout would run a script that may already have run.
+    ``client`` is used as it is: its address, TLS, credentials, timeouts and
+    retry rule are the caller's (the gateway's is ``rate_store_client``, which
+    sets a connect and a read timeout and no retry). Nothing here retries, and a
+    client built with retries would run a script a second time after a read
+    timeout that may already have run it.
     """
 
     def __init__(
@@ -143,18 +137,9 @@ class RedisRateLimiter:
         *,
         prefix: str = DEFAULT_PREFIX,
         clock: Callable[[], float] | None = None,
-        connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
-        read_timeout: float = DEFAULT_READ_TIMEOUT_SECONDS,
     ) -> None:
         self._prefix = prefix
         self._clock = clock
-        pool = client.connection_pool
-        pool.update_connection_kwargs(
-            socket_connect_timeout=connect_timeout,
-            socket_timeout=read_timeout,
-            retry=Retry(NoBackoff(), 0),
-        )
-        pool.disconnect(inuse_connections=False)
         self._script = client.register_script(_SCRIPT)
 
     def key_for(self, tenant: str) -> str:

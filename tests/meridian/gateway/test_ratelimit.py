@@ -15,6 +15,8 @@ from decimal import Decimal
 
 import pytest
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 from redissupport import RateKeys
 from servicesupport import FakeClock
 
@@ -28,7 +30,6 @@ from meridian.platform.gateway.ratelimit_redis import (
     RateStoreUnavailable,
     RedisRateLimiter,
 )
-from meridian.platform.gateway.resilience import MIN_ATTEMPT_SECONDS
 from meridian.platform.registry.models import TenantLimits
 
 TENANT = "claims-triage"
@@ -417,6 +418,19 @@ def closed_port() -> int:
         return probe.getsockname()[1]
 
 
+def bare_client(port: int) -> redis.Redis:
+    """A client as ``rate_store_client`` makes one, without TLS: short timeouts
+    and no retry (the client of the gateway is tested in
+    ``test_gateway_rate_store_settings.py``)."""
+    return redis.Redis(
+        host="127.0.0.1",
+        port=port,
+        socket_connect_timeout=0.1,
+        socket_timeout=0.1,
+        retry=Retry(NoBackoff(), 0),
+    )
+
+
 @pytest.fixture
 def two_stores(
     rate_keys: RateKeys, clock: FakeClock
@@ -660,7 +674,7 @@ def test_a_registry_id_with_digits_and_hyphens_is_a_tenant(
 # ── how the Redis store fails ───────────────────────────────────────────────
 def test_an_unreachable_store_raises_the_one_exception_without_its_address() -> None:
     port = closed_port()
-    store = RedisRateLimiter(redis.Redis(host="127.0.0.1", port=port))
+    store = RedisRateLimiter(bare_client(port))
 
     with pytest.raises(RateStoreUnavailable) as raised:
         store.admit(TENANT, limits(), 1)
@@ -675,11 +689,7 @@ def test_a_store_that_does_not_answer_raises_the_one_exception() -> None:
         silent.bind(("127.0.0.1", 0))
         silent.listen()  # takes the connection and never replies
         port = silent.getsockname()[1]
-        store = RedisRateLimiter(
-            redis.Redis(host="127.0.0.1", port=port),
-            connect_timeout=0.1,
-            read_timeout=0.1,
-        )
+        store = RedisRateLimiter(bare_client(port))
 
         with pytest.raises(RateStoreUnavailable) as raised:
             store.admit(TENANT, limits(), 1)
@@ -703,30 +713,8 @@ def test_an_error_the_server_answers_is_the_same_exception_without_its_text(
 
 
 def test_a_request_too_large_is_answered_before_the_server_is_called() -> None:
-    store = RedisRateLimiter(redis.Redis(host="127.0.0.1", port=closed_port()))
+    store = RedisRateLimiter(bare_client(closed_port()))
 
     refusal = store.admit(TENANT, limits(), TOKENS + 1)
 
     assert refusal == RateRefusal("tenant-request-too-large", None)
-
-
-def test_the_store_gives_its_clients_connections_timeouts_and_no_retries() -> None:
-    client = redis.Redis(host="127.0.0.1", port=closed_port())
-
-    RedisRateLimiter(client, connect_timeout=0.25, read_timeout=0.5)
-
-    kwargs = client.connection_pool.connection_kwargs
-    assert kwargs["socket_connect_timeout"] == 0.25
-    assert kwargs["socket_timeout"] == 0.5
-    # A retry after a read timeout would run a script that already ran.
-    assert kwargs["retry"].get_retries() == 0
-
-
-def test_the_default_timeouts_are_far_inside_the_gateways_attempt_budget() -> None:
-    client = redis.Redis(host="127.0.0.1", port=closed_port())
-
-    RedisRateLimiter(client)
-
-    kwargs = client.connection_pool.connection_kwargs
-    spent = kwargs["socket_connect_timeout"] + kwargs["socket_timeout"]
-    assert 0 < spent <= MIN_ATTEMPT_SECONDS / 4

@@ -49,6 +49,7 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.gateway.settings import (
     ENVIRONMENT_ENV,
     MODE_ENV,
+    RATE_STORE_URL_ENV,
     GatewaySettings,
 )
 from meridian.platform.knowledge_mcp import INGESTION_AGENT
@@ -125,6 +126,7 @@ KNOWN_ENV = {
     ENVIRONMENT_ENV,
     OTLP_ENDPOINT_ENV,
     SWEEP_DEADLINE_ENV,
+    RATE_STORE_URL_ENV,
 }
 FACTORIES = {
     "claims-api": "meridian.workloads.claims_triage.app:create_app_from_env",

@@ -22,7 +22,9 @@
 #          and rewrites the files under data/evaluation/ (S050). Same login and
 #          throwaway PostgreSQL as gateway-live; PYTEST_DB_CONTAINER and
 #          PYTEST_DB_PORT in the environment name the database container and
-#          port. Also one long answer under the output cap (T-45).
+#          port, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT those of the
+#          throwaway Redis that starts beside it (S066). Also one long answer
+#          under the output cap (T-45).
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
 set -euo pipefail
@@ -359,6 +361,8 @@ cmd_eval_record() {
   local -a overrides=()
   [[ -z "${PYTEST_DB_CONTAINER:-}" ]] || overrides+=("PYTEST_DB_CONTAINER=${PYTEST_DB_CONTAINER}")
   [[ -z "${PYTEST_DB_PORT:-}" ]] || overrides+=("PYTEST_DB_PORT=${PYTEST_DB_PORT}")
+  [[ -z "${PYTEST_REDIS_CONTAINER:-}" ]] || overrides+=("PYTEST_REDIS_CONTAINER=${PYTEST_REDIS_CONTAINER}")
+  [[ -z "${PYTEST_REDIS_PORT:-}" ]] || overrides+=("PYTEST_REDIS_PORT=${PYTEST_REDIS_PORT}")
   log "about 60 chat calls on the live models, under EUR 0.50; rewrites files under data/evaluation/ (synthetic text only)"
   MERIDIAN_LIVE_AZURE=1 \
     MERIDIAN_EVAL_RECORD=1 \

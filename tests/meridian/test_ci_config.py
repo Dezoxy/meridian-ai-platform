@@ -219,6 +219,32 @@ def test_make_eval_record_runs_the_script_that_records_and_says_what_it_spends()
     assert "PYTEST_DB_PORT" in foundation
 
 
+def test_the_recording_run_passes_the_redis_container_and_port_on_as_well() -> None:
+    foundation = (REPO_ROOT / "infra" / "terraform" / "foundation.sh").read_text(
+        encoding="utf-8"
+    )
+    recording = foundation.split("cmd_eval_record() {", 1)[1].split("\n}\n", 1)[0]
+
+    for name in ("PYTEST_REDIS_CONTAINER", "PYTEST_REDIS_PORT"):
+        # Forwarded to `make pytest-db` only when the caller set it, as the
+        # database's two are.
+        assert f'[[ -z "${{{name}:-}}" ]] || overrides+=("{name}=${{{name}}}")' in (
+            recording
+        )
+
+
+def test_eval_and_eval_baseline_pass_command_line_variables_to_pytest_db() -> None:
+    # A command-line variable reaches a recursive make through MAKEFLAGS, so
+    # `make eval PYTEST_REDIS_PORT=...` names the Redis of the `make pytest-db`
+    # these two targets call; they set only the worker count and the arguments.
+    for target in ("eval", "eval-baseline"):
+        recipe = MAKEFILE.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+        (call,) = re.findall(r"\$\(MAKE\) pytest-db ([^\n]*)", recipe)
+
+        assert "PYTEST_REDIS" not in call
+        assert "PYTEST_DB" not in call
+
+
 def test_the_python_workflow_never_enables_a_live_or_recording_run() -> None:
     # Neither variable may appear in the workflow at all, in a step, an env
     # block or a comment: CI replays a recording and spends nothing.
