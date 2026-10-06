@@ -118,7 +118,13 @@ series that has existed for hours would be counted as new, with everything
 it ever counted as its last 15 minutes. The recorded series looks for the
 earlier value as far back as kind's Prometheus keeps data, 24 hours. The
 review of S024 found this with a unit test, which the rules now carry. The
-cost dashboard of S043 still has the older form (the plan's backlog).
+cost dashboard of S043 had the older form and now has the same one (S064):
+its queries look 24 hours back for the earlier value, and `make alerts`
+evaluates them with promtool against counters that stop for thirty
+minutes, beside the old form, which shows the lifetime total. The figure
+for a range that starts inside a gap also holds what was counted during the
+gap, and a series with no sample for more than 24 hours is new, as it
+always was.
 
 The series from kube-state-metrics are scraped, not pushed, and are gauges
 or timestamps, so this does not apply to them.

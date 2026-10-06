@@ -30,8 +30,9 @@ The rules are one `PrometheusRule` object, which `make up` applies. The
 file is that object, so the cluster gets exactly what was reviewed.
 `make alerts` takes the rule groups out of it and runs Prometheus's own
 checker on them, then the unit tests in `meridian.test.yaml`: each test
-feeds invented series to the rules and says which alert must fire. CI runs
-it on every pull request.
+feeds invented series to the rules and says which alert must fire. It then
+runs a second file that `scripts/cost_dashboard_gap.py` writes from the cost
+dashboard's own queries (S064). CI runs it on every pull request.
 
 What that proves and what it does not: the checker proves the syntax, and
 the unit tests prove the arithmetic on series the tests invent. Neither
@@ -49,7 +50,10 @@ objective and runbook.
 that Grafana loads; `make grafana` opens Grafana.
 
 - **Meridian: Model Gateway tokens and cost** (S043): what each tenant,
-  agent, model and provider used.
+  agent, model and provider used. Its queries look 24 hours back for a
+  series' value at the start of the range, so a gap in the data (a laptop
+  that slept) does not show a lifetime total as the range's; `make alerts`
+  proves it offline with promtool (S064), and it has not run on a cluster.
 - **Meridian: platform health** (S024): the six services, the database,
   the sweep, the share of model calls answered and the alerts that fire.
 

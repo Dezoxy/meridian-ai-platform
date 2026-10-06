@@ -1869,9 +1869,32 @@ def test_no_target_uses_increase_or_rate_or_a_range_that_is_not_in_seconds() -> 
         assert not re.search(r"\$\{?__range(?!_s)", expr), expr
         assert not re.search(r"\$__rate_interval|\$__interval", expr), expr
         # The form that matched the ledger: the last value minus the value at
-        # the start of the window, or the last value alone for a new process.
-        assert expr.count("last_over_time(") == 2, expr
+        # the start of the window (looked for 24 hours back, see the test
+        # below), or the last value alone for a new process.
+        assert expr.count("last_over_time(") == 3, expr
         assert " offset " in expr and " or " in expr, expr
+
+
+def test_every_target_looks_24_hours_back_for_the_earlier_value_as_health_does() -> (
+    None
+):
+    # The health dashboard's form (test_health_dashboard.py): the series' last
+    # value at or before the start of the window, looked for 24 hours back, or
+    # the last value alone for a series with no sample before the window. A bare
+    # `selector offset` looks back only Prometheus's 5 minutes and, after a gap
+    # longer than that, counts a whole series as new and shows its lifetime
+    # total as the range's (S043's review, S024's, S064).
+    health = (KIND_DIR / "dashboards" / "platform-health.json").read_text("utf-8")
+    assert "[24h] offset " in health
+    for target in dashboard_targets():
+        expr = target["expr"]
+        deltas = expr.count(" offset ")
+        assert deltas == 1, expr
+        assert expr.count("last_over_time(") == 3 * deltas, expr
+        assert expr.count("[24h] offset ") == deltas, expr
+        assert len(selectors_of(expr)) == 3 * deltas, expr
+        assert expr.count(" or ") == deltas, expr
+        assert not re.search(r"\}\s*offset\b", expr), expr
 
 
 def test_every_label_a_target_groups_or_selects_by_is_one_the_gateway_exports() -> None:
@@ -1948,6 +1971,8 @@ def test_the_dashboard_has_the_panels_the_plan_asks_for_in_order() -> None:
     series = panel_titled("Tokens per 5 minutes, by model")
     assert "[5m]" in series["targets"][0]["expr"]
     assert series["interval"] == "1m"
+    # The point after a gap holds the gap's tokens, and the panel says so.
+    assert "first point after a gap" in series["description"]
 
 
 def test_up_applies_labelled_dashboard_configmaps_after_prometheus_is_ready() -> None:
@@ -2658,7 +2683,7 @@ def test_the_dashboard_check_runs_each_query_over_an_hour_and_for_each_dimension
     for query in asked:
         assert "${__range_s}" not in query and "$dimension" not in query
     assert len([q for q in asked if "[3600s]" in q]) == len(asked) - 1
-    assert all("offset 3600s" in q for q in asked if "[3600s]" in q)
+    assert all("[24h] offset 3600s" in q for q in asked if "[3600s]" in q)
     # The two panels that name $dimension run once per option, each a different
     # grouping; the table and the stat panels run once.
     over_the_range = [q for q in asked if "[3600s]" in q]
@@ -2666,8 +2691,8 @@ def test_the_dashboard_check_runs_each_query_over_an_hour_and_for_each_dimension
         grouped = [q for q in over_the_range if q.startswith(f"sum by ({option}) (")]
         assert len(grouped) == 2, option
     assert [q for q in asked if "[5m]" in q] == [
-        q for q in asked if "offset 5m" in q
-    ]  # a window that is not the range stays as it is
+        q for q in asked if "[24h] offset 5m" in q
+    ]  # a window that is not the range keeps its width, and the same lookback
 
 
 @pytest.mark.parametrize(
@@ -2896,9 +2921,11 @@ def test_the_dashboard_refuses_a_custom_dimension_and_says_the_retention() -> No
 
     # A crafted link must not put PromQL into `by (...)`.
     assert variable_named("dimension")["allowCustomValue"] is False
+    assert "looked for up to 24 hours back" in text
     assert text.endswith(
         "Choose a range of at least two minutes. Prometheus keeps 24 hours on kind, "
-        "so a longer range shows what it still holds."
+        "so a longer range shows what it still holds, and a series with no sample "
+        "for longer than that is a new series."
     )
 
 
