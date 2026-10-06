@@ -10900,7 +10900,8 @@ earlier consultation had seen (Part A, step 4).
   call that timed out in the triage's stack test; that file passed alone
   right after (10 passed). The row is in the backlog (S074).
 - **The evaluation's free replay** passed twice on the step's tip before
-  that merge and twice on the final tree (`eval compare: passed`): no baseline, recording or golden
+  that merge and twice on the final tree (`eval compare: passed`):
+  no baseline, recording or golden
   file of the triage moved, and the `tools` fingerprint of `claims-triage`
   is pinned unchanged (`tests/meridian/registry/test_hosts.py`). The
   claim brief's evaluation is published and empty (its golden set holds no
