@@ -36,7 +36,7 @@ and the harness asks the owner before a session may run it.
 | Grafana's admin password | Secret `grafana-admin` in `observability` | `make up`, once, only if absent | Below; not exercised |
 | The database's certificate authority and server certificate | Secret `platform-db-ca` and CloudNativePG's own | CloudNativePG | CloudNativePG issues and renews them; the repository records no expiry to watch (the plan's backlog) |
 | The password of the role `app` | Secret `platform-db-app` | CloudNativePG | Not used: that role cannot reach the `meridian` database |
-| The cluster's admin credentials | `infra/kind/kubeconfig`, gitignored | `make up` | A new cluster: `make down`, `make up` (the owner's) |
+| The cluster's admin credentials | `infra/kind/kubeconfig`, gitignored | `make up` | A new cluster: `make down`, `make up` (disposable on the development machine, hard rule 8) |
 | A key for Azure OpenAI | Does not exist: key authentication is off on the account | — | Nothing to rotate; `make azure-smoke` checks it stays off |
 | The gateway's identity in live mode | The developer's own `az login` on the laptop | The owner | Below |
 | Secrets in Key Vault | None yet | — | Designed (S020) |

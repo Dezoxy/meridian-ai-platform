@@ -264,7 +264,7 @@ grafana-password:
 helm-lint:
 	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true
 
-## down            delete the kind cluster "meridian" and its credentials file (destructive; the owner runs it)
+## down            delete the kind cluster "meridian" and its credentials file (destructive; for a test that needs a fresh cluster, never to clear a fault; hard rule 8)
 down:
 	infra/kind/down.sh
 

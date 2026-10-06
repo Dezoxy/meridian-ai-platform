@@ -101,7 +101,9 @@ A change that violates one is wrong even if it works.
    need is the owner's. The local kind cluster is not on that list: it is
    disposable on the development machine, the session may delete it and
    make it again when a test needs it (the owner, 2026-10-06), and it says
-   so when it does.
+   so when it does. Never after an incident: on kind the cluster's database
+   is the only copy of the audit log, so deleting the cluster to clear a
+   fault nobody has looked at destroys evidence.
 9. **Never claim a check passed without evidence.** Say what ran and what it
    printed.
 10. **Keep diffs tight.** No drive-by refactors, no reformatting unrelated
@@ -192,10 +194,10 @@ A change that violates one is wrong even if it works.
   operations, migrations, error handling, coding standards and GateGuard.
 - Hooks in `.claude/settings.json`: `guard-bash.sh` denies destructive
   commands and git hook bypasses, and asks before a command that deletes,
-  costs money, leaves the machine or would change a cluster it cannot
-  tell is the local one (heredoc bodies are ignored, so documentation
-  that mentions a dangerous command is not blocked for the mention);
-  `check-py.sh`, `check-iac.sh`,
+  costs money, leaves the machine, merges past failing checks or would
+  change a cluster it cannot tell is the local one (heredoc bodies are
+  ignored, so documentation that mentions a dangerous command is not
+  blocked for the mention); `check-py.sh`, `check-iac.sh`,
   `check-docs.sh` and `check-boundary.sh` inject advisory findings after an
   edit. GateGuard, vendored from ECC under `.claude/hooks/node/` and
   `.claude/hooks/lib/`, denies the first edit of each file and destructive

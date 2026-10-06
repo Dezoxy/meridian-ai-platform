@@ -57,7 +57,10 @@ change made in its editor to a provisioned dashboard.
 
 Each runbook starts from what an operator sees, says how to confirm it,
 what to do and what not to do. Commands that change or delete anything are
-the owner's to run (hard rule 8 in `CLAUDE.md`); a session asks first.
+the owner's to run (hard rule 8 in `CLAUDE.md`); a session asks first. The
+one exception is the local kind cluster, which is disposable on the
+development machine: a session may delete it and make it again when a test
+needs it, never to clear a fault nobody has looked at.
 
 - [Provider outage](runbooks/provider-outage.md): model calls fail at the
   provider.

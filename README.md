@@ -193,7 +193,7 @@ make up       # the local platform on kind; safe to rerun (Docker, kind, kubectl
 make demo     # build the image, migrate, seed, deploy the six services, ingest the wordings, post a claim, find its trace in Tempo; decide it when it waits for an adjuster (DECISION=reject)
 make smoke    # edge, pgvector, one call per tool server through the runtime's client, a test trace, log and metric read back through Grafana, the cost dashboard with the gateway's series, the adjuster's and claimant's pages, and the scheduled sweep's last run
 make grafana  # Grafana at http://127.0.0.1:3000; make grafana-password prints the password
-make down     # delete the kind cluster; destructive
+make down     # delete the kind cluster; destructive, but disposable on the development machine (hard rule 8)
 make azure-state  # once: the Terraform state storage in Azure (creates Azure resources)
 make azure-plan   # plan the Azure foundation into a saved plan file
 make azure-apply  # apply exactly that saved plan (changes Azure; the owner confirms)
