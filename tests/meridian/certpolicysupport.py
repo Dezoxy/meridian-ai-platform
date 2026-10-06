@@ -4,7 +4,7 @@
 ``service-ca.yaml`` define against the policies of
 ``infra/kind/manifests/certificate-policy.yaml``; ``test_certificate_policy_up.py``
 checks that ``infra/kind/up.sh`` installs, applies and waits for them. Both need
-the folder of the kind files and the names of the three policies. The model of
+the folder of the kind files and the names of the policies. The model of
 approver-policy's rules that judges a request (selector, allowed, constraints)
 lives here so the test file stays under the length the repository asks for; the
 RBAC ``use`` that binds a policy to the requester reads the policy file and stays
@@ -20,7 +20,17 @@ KIND_DIR = REPO_ROOT / "infra" / "kind"
 SERVICES_POLICY = "meridian-services"
 CA_POLICY = "meridian-services-ca"
 DENY_POLICY = "meridian-deny-unlisted"
-POLICY_NAMES = {SERVICES_POLICY, CA_POLICY, DENY_POLICY}
+# The two policies of the collector's own authority in `observability` (S063,
+# manifests/telemetry-ca.yaml): its CA certificate's and the collector's.
+AUTHORITY_POLICY = "telemetry-ca"
+COLLECTOR_POLICY = "otel-collector"
+POLICY_NAMES = {
+    SERVICES_POLICY,
+    CA_POLICY,
+    DENY_POLICY,
+    AUTHORITY_POLICY,
+    COLLECTOR_POLICY,
+}
 
 
 # ── a model of approver-policy ───────────────────────────────────────────────

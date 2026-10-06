@@ -2,13 +2,17 @@
 # Put the walking skeleton on the local platform: `make deploy`. Safe to run
 # again; it converges. Needs `make up` first.
 #   0. the preconditions, before anything is built or run: the Database, its
-#      NetworkPolicy, its roles and their Secrets from `make up`; and the
+#      NetworkPolicy, its roles and their Secrets from `make up`, and the
+#      ConfigMap `telemetry-ca` (S063: the public certificate of the authority
+#      that signed the collector's certificate, which the services mount to
+#      verify it); and the
 #      ClusterIssuer `meridian-services` (S056), which must exist and be Ready:
 #      without it the Certificates of step 3 are never issued, and a cluster
 #      made before S055 does not know the Certificate kind, so the upgrade would
 #      fail after the Jobs of step 2 had run; and what approves them (S056): the
-#      three CertificateRequestPolicies (meridian-services, meridian-services-ca,
-#      meridian-deny-unlisted) Ready and approver-policy running, because the
+#      five CertificateRequestPolicies (meridian-services, meridian-services-ca,
+#      meridian-deny-unlisted, telemetry-ca, otel-collector) Ready and
+#      approver-policy running, because the
 #      issuer is Ready without them and with cert-manager's own approver off
 #      nothing would approve a request, so the wait of step 4 would run out. A
 #      cluster made before S056 does not know the policy kind: the same refusal
@@ -62,7 +66,7 @@ readonly ISSUER_NAME=meridian-services
 # What approves the Certificates' requests (S056): the CertificateRequestPolicies
 # that manifests/certificate-policy.yaml applies (a test keeps the two equal) and
 # the Deployment of approver-policy, which `make up` installs.
-readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted)
+readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted telemetry-ca otel-collector)
 readonly APPROVER_NAMESPACE=cert-manager
 readonly APPROVER_DEPLOYMENT=cert-manager-approver-policy
 # How long require_approval looks for an available replica of the add-on, and
@@ -114,6 +118,11 @@ require_database() {
   # (it admits the operator and the services) the Cluster would go unhealthy.
   kctl -n "${NAMESPACE}" get networkpolicy platform-db >/dev/null 2>&1 ||
     die "the NetworkPolicy 'platform-db' is missing, and the chart's default-deny would cut the database off from its operator; run 'make up' first"
+  # The public certificate of the authority that signed the collector's
+  # certificate (S063): `make up` writes it, and the services mount it to verify
+  # the collector. Without it their pods would not start, after the Jobs had run.
+  kctl -n "${NAMESPACE}" get configmap telemetry-ca >/dev/null 2>&1 ||
+    die "the ConfigMap 'telemetry-ca' is missing in ${NAMESPACE}: it holds the certificate the services verify the collector with, so their pods could not start, and the Jobs would already have run by then; run 'make up' first"
   for role in "${DATABASE_ROLES[@]}"; do
     secret="$(role_secret_name "${role}")"
     kctl -n "${NAMESPACE}" get secret "${secret}" >/dev/null 2>&1 ||

@@ -687,6 +687,54 @@ tests:
               description: "Certificate meridian-services-ca in cert-manager ends in 20d 22h 59m 0s; cert-manager should have renewed it 30 days before its end (proposed threshold: 21 days left, for an hour)."
               runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
 
+  # The collector's certificate and its authority are in observability (S063),
+  # and the issuers that signed them are namespaced Issuers.
+  - name: the collector's certificate under 21 days from its end fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="otel-collector", namespace="observability", issuer_name="telemetry-ca", issuer_kind="Issuer", issuer_group="cert-manager.io"}'
+        values: "1815000x100"
+    alert_rule_test:
+      - eval_time: 71m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: otel-collector
+              namespace: observability
+              issuer_name: telemetry-ca
+              issuer_kind: Issuer
+              issuer_group: cert-manager.io
+            exp_annotations:
+              summary: "A certificate is close to its end and has not been renewed."
+              description: "Certificate otel-collector in observability ends in 20d 22h 59m 0s; cert-manager should have renewed it 30 days before its end (proposed threshold: 21 days left, for an hour)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  - name: the collector's authority under 21 days from its end fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="telemetry-ca", namespace="observability", issuer_name="telemetry-selfsigned", issuer_kind="Issuer", issuer_group="cert-manager.io"}'
+        values: "1815000x100"
+    alert_rule_test:
+      - eval_time: 71m
+        alertname: MeridianCertificateNotRenewed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: telemetry-ca
+              namespace: observability
+              issuer_name: telemetry-selfsigned
+              issuer_kind: Issuer
+              issuer_group: cert-manager.io
+            exp_annotations:
+              summary: "A certificate is close to its end and has not been renewed."
+              description: "Certificate telemetry-ca in observability ends in 20d 22h 59m 0s; cert-manager should have renewed it 30 days before its end (proposed threshold: 21 days left, for an hour)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
   - name: a certificate in another namespace does not fire
     interval: 1m
     input_series:
@@ -804,6 +852,34 @@ tests:
             exp_annotations:
               summary: "A certificate is not Ready."
               description: "Certificate meridian-services-ca in cert-manager has reported Ready=Unknown for 15 minutes (proposed threshold). A request that was denied, or one waiting for an approval, is the usual cause."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  # The collector's certificate is in observability (S063): a request that no
+  # policy permits, or that waits, leaves it not Ready.
+  - name: the collector's certificate with an Unknown condition fires
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_ready_status{name="otel-collector", namespace="observability", issuer_name="telemetry-ca", issuer_kind="Issuer", issuer_group="cert-manager.io", condition="Unknown"}'
+        values: "1x40"
+      - series: 'certmanager_certificate_ready_status{name="otel-collector", namespace="observability", issuer_name="telemetry-ca", issuer_kind="Issuer", issuer_group="cert-manager.io", condition="True"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MeridianCertificateNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              name: otel-collector
+              namespace: observability
+              issuer_name: telemetry-ca
+              issuer_kind: Issuer
+              issuer_group: cert-manager.io
+              condition: Unknown
+            exp_annotations:
+              summary: "A certificate is not Ready."
+              description: "Certificate otel-collector in observability has reported Ready=Unknown for 15 minutes (proposed threshold). A request that was denied, or one waiting for an approval, is the usual cause."
               runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
 
   - name: a Ready certificate stays quiet

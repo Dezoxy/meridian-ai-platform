@@ -6,8 +6,10 @@
 #      and the one for smoke's telemetrygen Jobs, all before the releases they
 #      guard,
 #      cert-manager (its own approver off), approver-policy with the policies
-#      that say who may ask for a certificate, and the CA that signs the
-#      services' certificates
+#      that say who may ask for a certificate, the CA that signs the
+#      services' certificates, and the CA of its own in `observability` that
+#      signs the collector's certificate (its public certificate goes into the
+#      ConfigMap telemetry-ca in `meridian`, on every run)
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its nine roles (the owner, six services, the
 #      scheduled sweep's and the gateway's ledger upkeep's); their password
@@ -90,6 +92,28 @@ apply_certificate_policy() {
       die "approver-policy's webhook did not accept the policies in ${POLICY_TIMEOUT}s (look with: kubectl -n cert-manager get pods, and the logs of the approver-policy pod); kubectl said: ${out}"
     sleep "${POLICY_INTERVAL}"
   done
+}
+
+# Publish the public certificate of the collector's authority (S063) as the
+# ConfigMap telemetry-ca (key ca.crt) in `meridian`, for the services to mount
+# and trust it. Only the field tls.crt of the authority's Secret is read (a
+# jsonpath; never the object and never tls.key), the text is checked to be a
+# certificate and not to hold a key, and nothing is printed. Server-side apply,
+# on every run: a renewed authority reaches the ConfigMap at the next `make up`,
+# and a rerun changes nothing when the certificate is the same.
+publish_telemetry_ca() {
+  local pem
+  pem="$(kctl -n observability get secret telemetry-ca \
+    -o 'jsonpath={.data.tls\.crt}' | base64 -d)" ||
+    die "could not read tls.crt of the Secret telemetry-ca in observability (is the Certificate telemetry-ca Ready? kubectl -n observability get certificate)"
+  [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* && "${pem}" != *"PRIVATE KEY"* ]] ||
+    die "tls.crt of the Secret telemetry-ca in observability does not hold a certificate; the ConfigMap telemetry-ca was not changed"
+  kctl -n meridian create configmap telemetry-ca --from-literal=ca.crt="${pem}" \
+    --dry-run=client -o json |
+    jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian"}
+      | del(.metadata.creationTimestamp)' |
+    kctl -n meridian apply --server-side --force-conflicts -f - >/dev/null
+  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian"
 }
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
@@ -227,7 +251,9 @@ apply_certificate_policy
 # find none that is appropriate and wait.
 kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/meridian-services-ca \
-  certificaterequestpolicy/meridian-deny-unlisted --timeout=2m >/dev/null ||
+  certificaterequestpolicy/meridian-deny-unlisted \
+  certificaterequestpolicy/telemetry-ca \
+  certificaterequestpolicy/otel-collector --timeout=2m >/dev/null ||
   die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
@@ -236,6 +262,17 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.
 kctl wait --for=condition=Ready clusterissuer/meridian-services \
   --timeout=5m >/dev/null ||
   die "the issuer meridian-services was not Ready in 5m: read the CertificateRequest of the Certificate meridian-services-ca in cert-manager (kubectl -n cert-manager get certificaterequest; describe it) for its Approved or Denied condition, and the Certificate's events"
+
+# The collector's own authority (S063, T-90): namespaced Issuers in
+# observability, so no policy for the services' issuer changes. The collector's
+# Certificate being Ready means the authority's was issued before it. The
+# release of the collector, further on, mounts the Secret it makes.
+log "telemetry: the CA for the collector's certificate, in observability"
+kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/telemetry-ca.yaml" >/dev/null
+kctl -n observability wait --for=condition=Ready certificate/otel-collector \
+  --timeout=5m >/dev/null ||
+  die "the Certificate otel-collector in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca and otel-collector (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca and otel-collector (the add-on's pod logs say why one was not applied), and the Certificates' events"
+publish_telemetry_ca
 
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \

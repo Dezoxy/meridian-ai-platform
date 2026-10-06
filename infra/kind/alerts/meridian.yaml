@@ -197,8 +197,10 @@ spec:
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md
 
     # From cert-manager's controller, which manifests/cert-manager-metrics.yaml
-    # has Prometheus scrape (S056). Only the two namespaces where Meridian's
-    # certificates are: the chart's, in meridian, and the CA's, in cert-manager.
+    # has Prometheus scrape (S056). Only the three namespaces where Meridian's
+    # certificates are: the chart's, in meridian, the services' CA's, in
+    # cert-manager, and the collector's authority and certificate, in
+    # observability (S063).
     - name: meridian.certificates
       rules:
         # The numbers keep an order. A service's certificate lasts 90 days and
@@ -214,7 +216,7 @@ spec:
         # below any threshold; that Certificate is MeridianCertificateNotReady's.
         - alert: MeridianCertificateNotRenewed
           expr: |
-            (certmanager_certificate_expiration_timestamp_seconds{namespace=~"meridian|cert-manager"} > 0) - time() < 21 * 86400
+            (certmanager_certificate_expiration_timestamp_seconds{namespace=~"meridian|cert-manager|observability"} > 0) - time() < 21 * 86400
           for: 1h
           labels:
             severity: warning
@@ -240,7 +242,7 @@ spec:
         # cause, early by MeridianCertificateApproverDown.
         - alert: MeridianCertificateNotReady
           expr: |
-            certmanager_certificate_ready_status{namespace=~"meridian|cert-manager", condition!="True"} == 1
+            certmanager_certificate_ready_status{namespace=~"meridian|cert-manager|observability", condition!="True"} == 1
           for: 15m
           labels:
             severity: warning

@@ -1,0 +1,114 @@
+# The certificate authority for the telemetry that the Meridian services send to
+# the OpenTelemetry collector (S063, threat T-90): the issuer that signs the one
+# server certificate the collector holds, so the services can verify that what
+# they send their traces and metrics to is the collector. cert-manager must be
+# installed first (values/cert-manager.yaml) and approver-policy with its
+# policies after it (certificate-policy.yaml): nothing here is approved without
+# them. up.sh applies this file after the policies, waits for the collector's
+# Certificate to be Ready and writes the authority's public certificate into the
+# ConfigMap `telemetry-ca` in `meridian` (key ca.crt), which the services mount to
+# trust it. The collector's release comes after that, and mounts the Secret
+# `otel-collector-tls` below.
+#
+#   telemetry-selfsigned  self-signed Issuer; it signs only the CA below
+#   telemetry-ca          the CA certificate (ECDSA P-256, one year), and the
+#                         Issuer of the same name that signs with its key
+#   otel-collector        the collector's server certificate (90 days)
+#
+# Why an authority of its own and not the `meridian-services` issuer: S056 made
+# "that issuer signs only for the `meridian` namespace and its URI prefix" the
+# boundary the owner approved (T-88), and a policy that let it sign for
+# `observability` too would reopen that boundary for one server certificate. The
+# price is a second trust root: the services' `MERIDIAN_TLS_CA_FILE` trusts the
+# service CA, so the collector's authority has to reach them by the ConfigMap
+# above, and it goes stale there when this authority's certificate is renewed
+# (the runbook certificate-expiry.md says what to do).
+#
+# The issuers are namespaced `Issuer`s, not ClusterIssuers. cert-manager looks an
+# Issuer up in the request's own namespace, so only a request made in
+# `observability` can name them: "this authority signs only in `observability`"
+# holds by construction, and the deny policy for `meridian-*` ClusterIssuers is
+# untouched. The authority's private key is the Secret `telemetry-ca` in
+# `observability`: no Meridian pod and no Role in `meridian` can read it. It is
+# readable by whatever holds a read of Secrets in `observability` or
+# cluster-wide: cert-manager's controller, and in the rendered
+# kube-prometheus-stack chart Prometheus's operator and kube-state-metrics.
+# Whoever reads it can issue a certificate for the collector's name, and so can
+# intercept the services' telemetry.
+#
+# Who can ask for a certificate: approver-policy decides, by the policies
+# `telemetry-ca` and `otel-collector` in certificate-policy.yaml, each of which
+# selects one of the Issuers below in `observability`. A request for either that
+# its policy does not permit is denied, not left waiting. The collector's
+# certificate has the two names the services and smoke use for the collector, the
+# usages `server auth` and `digital signature`, no URI, no address and no CA, and
+# at most 90 days (the services' lifetime, cert-manager's default renewal at a
+# third before the end); a new key at every renewal, as the services'
+# certificates have. The collector reads the renewed files by itself (the
+# `reload_interval` of its TLS settings, values/otel-collector.yaml).
+#
+# The CA keeps its key at renewal by an explicit setting, `privateKey:
+# rotationPolicy: Never`, not by a default, for the reason service-ca.yaml gives
+# for its own: cert-manager's default is `Always` since v1.18.0, and with it a
+# renewal about eight months in would give the authority a new key, so a service
+# that held the old ConfigMap would not trust the collector's renewed
+# certificate. What a renewed CA certificate does to the ConfigMap is in the
+# runbook.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: telemetry-selfsigned
+  namespace: observability
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: telemetry-ca
+  namespace: observability
+spec:
+  isCA: true
+  commonName: telemetry-ca
+  secretName: telemetry-ca
+  duration: 8760h # one year
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never # the CA's key survives its renewal (see the header)
+  issuerRef:
+    name: telemetry-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: telemetry-ca
+  namespace: observability
+spec:
+  ca:
+    secretName: telemetry-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  secretName: otel-collector-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - otel-collector.observability.svc
+    - otel-collector.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io

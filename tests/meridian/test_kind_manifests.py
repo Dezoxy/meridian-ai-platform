@@ -1318,7 +1318,7 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # Secret that cert-manager makes from one of them (S055). The issuer is a
     # precondition like the database: it is checked before the image is built
     # and before any Job runs (S056); so is the approval of the Certificates:
-    # approver-policy with its three policies.
+    # approver-policy with its five policies.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
