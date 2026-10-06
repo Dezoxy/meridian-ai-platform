@@ -1396,5 +1396,175 @@
       "year": 2019,
       "registration": "SYN-6463"
     }
+  },
+  {
+    "policy_number": "POL-0051",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Eva Varga",
+      "email": "eva.varga51@example.com",
+      "address": {
+        "street": "Cedar Court 88",
+        "city": "Vienna",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-10-16",
+    "end_date": "2026-10-15",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 30500,
+    "limit": 30500,
+    "insured_object": {
+      "make": "Seat",
+      "model": "Leon",
+      "year": 2015,
+      "registration": "SYN-3157"
+    }
+  },
+  {
+    "policy_number": "POL-0052",
+    "product": "MOTOR-COMP",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Dávid Müller",
+      "email": "david.muller52@example.com",
+      "address": {
+        "street": "Orchard Lane 1",
+        "city": "Bratislava",
+        "country": "SK"
+      }
+    },
+    "start_date": "2025-10-09",
+    "end_date": "2026-10-08",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 300,
+    "sum_insured": 8500,
+    "limit": 8500,
+    "insured_object": {
+      "make": "Volkswagen",
+      "model": "Passat",
+      "year": 2016,
+      "registration": "SYN-5016"
+    }
+  },
+  {
+    "policy_number": "POL-0053",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Marek Bauer",
+      "email": "marek.bauer53@example.com",
+      "address": {
+        "street": "Linden Road 6",
+        "city": "Vienna",
+        "country": "AT"
+      }
+    },
+    "start_date": "2026-07-02",
+    "end_date": "2027-07-01",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 190000,
+    "limit": 190000,
+    "insured_object": {
+      "address": {
+        "street": "Linden Road 6",
+        "city": "Vienna",
+        "country": "AT"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0054",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lena Kovács",
+      "email": "lena.kovacs54@example.com",
+      "address": {
+        "street": "Maple Street 68",
+        "city": "Graz",
+        "country": "AT"
+      }
+    },
+    "start_date": "2025-11-14",
+    "end_date": "2026-11-13",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 340000,
+    "limit": 340000,
+    "insured_object": {
+      "address": {
+        "street": "Maple Street 68",
+        "city": "Graz",
+        "country": "AT"
+      },
+      "building_type": "apartment"
+    }
+  },
+  {
+    "policy_number": "POL-0055",
+    "product": "HOME-PLUS",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Lukas Wagner",
+      "email": "lukas.wagner55@example.com",
+      "address": {
+        "street": "Mill Road 65",
+        "city": "Ljubljana",
+        "country": "SI"
+      }
+    },
+    "start_date": "2026-06-20",
+    "end_date": "2027-06-19",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 150,
+    "sum_insured": 340000,
+    "limit": 340000,
+    "insured_object": {
+      "address": {
+        "street": "Mill Road 65",
+        "city": "Ljubljana",
+        "country": "SI"
+      },
+      "building_type": "house"
+    }
+  },
+  {
+    "policy_number": "POL-0056",
+    "product": "HOME-STD",
+    "wording_version": "2026-01",
+    "holder": {
+      "name": "Petra Kováč",
+      "email": "petra.kovac56@example.com",
+      "address": {
+        "street": "Meadow Close 22",
+        "city": "Split",
+        "country": "HR"
+      }
+    },
+    "start_date": "2025-11-07",
+    "end_date": "2026-11-06",
+    "status": "active",
+    "lapsed_on": null,
+    "deductible": 250,
+    "sum_insured": 230000,
+    "limit": 230000,
+    "insured_object": {
+      "address": {
+        "street": "Meadow Close 22",
+        "city": "Split",
+        "country": "HR"
+      },
+      "building_type": "house"
+    }
   }
 ]

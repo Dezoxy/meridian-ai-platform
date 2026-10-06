@@ -28,7 +28,7 @@ from meridian.platform.evaluation.workload import Submission
 from meridian.platform.registry.models import Registry
 
 from .assessment import PROMPT_VERSION
-from .evaluation import WORKLOAD, build_report
+from .evaluation import FILES_DISAGREE, POLICY_NOT_FOUND, WORKLOAD, build_report
 from .proposal import TriageProposal
 
 CLAIMS_PATH = "/claims"
@@ -52,7 +52,6 @@ CLAIM_ID = re.compile(r"CLM-[0-9]{4}")
 # path, a log line and a CI annotation.
 NOT_A_CLAIM_ID = "a claim in the golden set has an ID that is not a claim ID"
 NOT_A_LIST = "a golden set file is not a list of records"
-FILES_DISAGREE = "the golden set's files do not agree"
 UNKNOWN_CASE = "an answer is for a claim the golden set does not hold"
 NO_ANSWER_TO_GRADE = "no case has an answer to grade"
 UNKNOWN_MODE = "a proposal names a mode this evaluation does not know"
@@ -147,7 +146,14 @@ class ClaimsEvaluation:
             raise ReportError(UNKNOWN_CASE)
         if not set(answers) <= set(expected):
             raise ReportError(FILES_DISAGREE)
-        if not {claims[c].get("policy_number") for c in answers} <= set(policies):
+        # A claim on a policy number no policy has is expected only when its
+        # label says so; build_report grades it with no policy.
+        held = {
+            claims[c].get("policy_number")
+            for c in answers
+            if expected[c].get("reason") != POLICY_NOT_FOUND
+        }
+        if not held <= set(policies):
             raise ReportError(FILES_DISAGREE)
         proposals = {case: _proposal_of(answer) for case, answer in answers.items()}
         return build_report(

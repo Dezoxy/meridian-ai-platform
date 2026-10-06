@@ -372,7 +372,8 @@ def test_a_fake_model_records_and_replays_the_whole_golden_set(
         assert was.measured is not None
         assert now.measured == was.measured.model_copy(update={"latency_ms": None})
     # The fake answers as the oracle's model: every grade passes, but the
-    # recommendation of the claim the model is never asked about (S047).
+    # recommendation of a claim the model is due to be asked about and never
+    # is (S047, ``withheld``).
     failing = {
         case.case: sorted(name for name, ok in case.grades.items() if not ok)
         for case in recorded.cases
@@ -399,9 +400,14 @@ def test_a_fake_model_records_and_replays_the_whole_golden_set(
 
 
 def withheld(claim_id: str) -> bool:
-    """Whether the model is never asked about the claim: its description holds
-    special-category data (S047)."""
-    return holds_special_category(CLAIMS[claim_id]["description"])
+    """Whether the claim is one the run would ask the model about (the rules do
+    not decide it: ``claims_that_ask_the_model``) and the model is never asked,
+    because its description holds special-category data (S047). A claim the
+    rules decide is not withheld whatever its description holds: no call was
+    due, and its recommendation is the rules' own."""
+    return claim_id in claims_that_ask_the_model() and holds_special_category(
+        CLAIMS[claim_id]["description"]
+    )
 
 
 # ── 3. the committed recording holds only answers ───────────────────────────

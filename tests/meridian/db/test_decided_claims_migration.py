@@ -134,6 +134,8 @@ def test_the_view_is_a_security_barrier(migrated_database: DatabaseHandle) -> No
 def test_the_view_holds_the_approved_and_the_rejected_claims_and_no_others(
     fresh_database: DatabaseHandle,
 ) -> None:
+    # 0025 gave the open claims a view of their own (claims.open_claims); this
+    # one, an applied file, still holds the two decided states and nothing else.
     states = (
         "submitted",
         "triaging",
@@ -398,7 +400,11 @@ def test_the_tool_s_query_reads_the_view_through_the_partial_index(
             line
             for (line,) in conn.execute(
                 "EXPLAIN " + SELECT_HISTORY,
-                ("POL-0001", "POL-0001", TENANT, "CLM-9999", 101),
+                # The seeded history, then each view's policy, tenant and claim.
+                (
+                    *("POL-0001", "POL-0001", TENANT, "CLM-9999"),
+                    *("POL-0001", TENANT, "CLM-9999", 101),
+                ),
             ).fetchall()
         )
 

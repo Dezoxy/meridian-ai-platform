@@ -802,5 +802,146 @@
     "documents": [
       "photos"
     ]
+  },
+  {
+    "claim_id": "CLM-0041",
+    "policy_number": "POL-0056",
+    "reported_on": "2026-07-04",
+    "loss_date": "2026-06-30",
+    "peril": "fire",
+    "claimed_amount": 1030,
+    "loss_location": {
+      "city": "Split",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Petra Kováč",
+      "email": "petra.kovac56@example.com"
+    },
+    "description": "On 30 June 2026 a fire started in the kitchen of my house in Split. The fire brigade put it out, but there is heavy smoke and fire damage in several rooms.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0042",
+    "policy_number": "POL-0054",
+    "reported_on": "2026-07-15",
+    "loss_date": "2026-07-11",
+    "peril": "fire",
+    "claimed_amount": 880,
+    "loss_location": {
+      "city": "Graz",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Lena Kovács",
+      "email": "lena.kovacs54@example.com"
+    },
+    "description": "On 11 July 2026 an electrical fault caused a fire in my apartment in Graz. Most of the damage was caused by the smoke and by the water used to put out the fire.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0043",
+    "policy_number": "POL-0055",
+    "reported_on": "2026-07-24",
+    "loss_date": "2026-07-20",
+    "peril": "fire",
+    "claimed_amount": 2140,
+    "loss_location": {
+      "city": "Ljubljana",
+      "country": "SI"
+    },
+    "claimant": {
+      "name": "Lukas Wagner",
+      "email": "lukas.wagner55@example.com"
+    },
+    "description": "On 20 July 2026 a fire broke out in my house in Ljubljana while I was at work. Most of the damage was caused by the smoke and by the water used to put out the fire.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0044",
+    "policy_number": "POL-0051",
+    "reported_on": "2026-06-27",
+    "loss_date": "2026-05-27",
+    "peril": "glass",
+    "claimed_amount": 700,
+    "loss_location": {
+      "city": "Zagreb",
+      "country": "HR"
+    },
+    "claimant": {
+      "name": "Eva Varga",
+      "email": "eva.varga51@example.com"
+    },
+    "description": "On 27 May 2026 the side window of my Seat Leon was smashed while it stood in Zagreb. The glass has to be replaced before the car can be used again. I am sorry for the delay; I was in hospital for several weeks afterwards and could not deal with the claim.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0045",
+    "policy_number": "POL-9213",
+    "reported_on": "2026-05-04",
+    "loss_date": "2026-05-04",
+    "peril": "burglary",
+    "claimed_amount": 2730,
+    "loss_location": {
+      "city": "Košice",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Zsófia Novak",
+      "email": "zsofia.novak9213@example.com"
+    },
+    "description": "On 4 May 2026 burglars entered my house in Košice through a window. They took a laptop, some jewellery and cash.",
+    "documents": [
+      "police_report",
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0046",
+    "policy_number": "POL-0052",
+    "reported_on": "2026-08-06",
+    "loss_date": "2026-07-07",
+    "peril": "glass",
+    "claimed_amount": 2300,
+    "loss_location": {
+      "city": "Bratislava",
+      "country": "SK"
+    },
+    "claimant": {
+      "name": "Dávid Müller",
+      "email": "david.muller52@example.com"
+    },
+    "description": "On 7 July 2026 the rear window of my Volkswagen Passat shattered while it was parked in Bratislava. The glass has to be replaced before the car can be used again. I could not report it earlier because I left on a long business trip abroad soon afterwards.",
+    "documents": [
+      "photos"
+    ]
+  },
+  {
+    "claim_id": "CLM-0047",
+    "policy_number": "POL-0053",
+    "reported_on": "2026-08-02",
+    "loss_date": "2026-08-02",
+    "peril": "fire",
+    "claimed_amount": 1160,
+    "loss_location": {
+      "city": "Vienna",
+      "country": "AT"
+    },
+    "claimant": {
+      "name": "Marek Bauer",
+      "email": "marek.bauer53@example.com"
+    },
+    "description": "On 2 August 2026 a fire started in the kitchen of my house in Vienna. Most of the damage was caused by the smoke and by the water used to put out the fire.",
+    "documents": [
+      "photos"
+    ]
   }
 ]

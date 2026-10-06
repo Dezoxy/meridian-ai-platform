@@ -44,6 +44,7 @@ from meridian.workloads.claims_triage.evaluation import (
     grade,
     judge_inputs,
 )
+from meridian.workloads.claims_triage.evaluation_http import FILES_DISAGREE
 from meridian.workloads.claims_triage.proposal import TriageProposal
 from meridian.workloads.claims_triage.wording import select_terms
 
@@ -74,7 +75,9 @@ EXPECTED = {e["claim_id"]: e for e in load("expected-outcomes.json")}
 
 
 def policy_of(claim_id: str) -> dict[str, Any]:
-    return POLICIES[CLAIMS[claim_id]["policy_number"]]
+    """The claim's policy; empty for the claim on a policy number no policy has,
+    which cites nothing, so no field of the policy is read."""
+    return POLICIES.get(CLAIMS[claim_id]["policy_number"], {})
 
 
 def oracle(claim_id: str) -> TriageProposal:
@@ -143,7 +146,7 @@ def failed(claim_id: str, **changes: Any) -> set[str]:
 
 # ── the graders ─────────────────────────────────────────────────────────────
 def test_the_golden_set_has_the_claims_these_tests_need() -> None:
-    assert len(EXPECTED) == 40
+    assert len(EXPECTED) == 47
     assert EXPECTED[AUTO]["route"] == "auto_approve"
     assert EXPECTED[EXCLUDED]["recommendation"] == "reject"
     assert EXPECTED[EXCLUDED]["fraud_indicators"] == []
@@ -301,7 +304,7 @@ def test_the_report_has_one_sorted_case_per_claim_and_the_real_golden_set() -> N
     report = report_for(proposals)
 
     ids = [case.case for case in report.cases]
-    assert len(ids) == 40
+    assert len(ids) == 47
     assert ids == sorted(EXPECTED)
     assert all(all(case.grades.values()) for case in report.cases)
     assert report.workload == WORKLOAD == "claims-triage"
@@ -337,6 +340,79 @@ def test_screens_whose_source_cannot_be_read_stop_the_report_with_a_fixed_text(
     assert "CANARY" not in str(raised.value)
 
 
+NOT_FOUND = first_claim("policy_not_found")
+
+
+def test_a_claim_with_no_policy_and_another_reason_is_refused_not_a_key_error() -> None:
+    claim_id = AUTO
+    policies = {
+        number: policy
+        for number, policy in POLICIES.items()
+        if number != CLAIMS[claim_id]["policy_number"]
+    }
+
+    with pytest.raises(ReportError) as raised:
+        build_report(
+            {claim_id: oracle(claim_id)},
+            {claim_id: EXPECTED[claim_id]},
+            {claim_id: CLAIMS[claim_id]},
+            policies,
+            manifest_path=MANIFEST,
+            registry=load_registry(REGISTRY_DIR),
+            answered_by=SCRIPTED,
+            prompt=PROMPT,
+        )
+
+    assert FILES_DISAGREE in str(raised.value)
+    assert CLAIMS[claim_id]["policy_number"] not in str(raised.value)
+
+
+def test_a_policy_not_found_claim_whose_label_cites_a_clause_is_refused() -> None:
+    expected = {
+        NOT_FOUND: EXPECTED[NOT_FOUND]
+        | {"citations": [{"wording": "HOME-STD", "clause": "2.1"}]}
+    }
+
+    with pytest.raises(ReportError, match=FILES_DISAGREE):
+        build_report(
+            {NOT_FOUND: oracle(NOT_FOUND)},
+            expected,
+            {NOT_FOUND: CLAIMS[NOT_FOUND]},
+            POLICIES,
+            manifest_path=MANIFEST,
+            registry=load_registry(REGISTRY_DIR),
+            answered_by=SCRIPTED,
+            prompt=PROMPT,
+        )
+
+
+def test_a_policy_not_found_claim_is_graded_with_no_policy_at_all() -> None:
+    report = report_for({NOT_FOUND: oracle(NOT_FOUND)})
+    case = next(c for c in report.cases if c.case == NOT_FOUND)
+
+    assert CLAIMS[NOT_FOUND]["policy_number"] not in POLICIES
+    assert all(case.grades.values())
+
+
+def test_a_proposal_that_cites_and_recommends_for_no_policy_is_a_miss() -> None:
+    proposal = oracle(NOT_FOUND).model_copy(
+        update={"recommendation": "approve", "citations": oracle(AUTO).citations}
+    )
+
+    grades = graded(NOT_FOUND, proposal)
+
+    assert grades["recommendation"] is False
+    assert grades["citations"] is False
+    assert grades["completed"] is True
+
+
+def test_a_policy_not_found_claim_with_no_proposal_fails_every_grader() -> None:
+    report = report_for({c: oracle(c) for c in EXPECTED if c != NOT_FOUND})
+    case = next(c for c in report.cases if c.case == NOT_FOUND)
+
+    assert not any(case.grades.values())
+
+
 def test_a_claim_with_no_proposal_is_a_case_that_fails_every_grader() -> None:
     proposals: dict[str, TriageProposal | None] = {c: oracle(c) for c in EXPECTED}
     del proposals[AUTO]
@@ -345,7 +421,7 @@ def test_a_claim_with_no_proposal_is_a_case_that_fails_every_grader() -> None:
     report = report_for(proposals)
 
     cases = {case.case: case for case in report.cases}
-    assert len(cases) == 40
+    assert len(cases) == 47
     assert not any(cases[AUTO].grades.values())
     assert not any(cases[EXCLUDED].grades.values())
     others = [c for k, c in cases.items() if k not in (AUTO, EXCLUDED)]
@@ -698,7 +774,9 @@ def test_a_proposal_with_no_rationale_gives_the_judge_nothing_to_judge() -> None
     assert judge_inputs(CLAIMS[AUTO], with_rationale(AUTO, None), ()) is None
 
 
-@pytest.mark.parametrize("claim_id", sorted(EXPECTED))
+# The claim on a policy number no policy has is left out: it has no clause to
+# show, no rationale, and so nothing for the judge.
+@pytest.mark.parametrize("claim_id", sorted(c for c in EXPECTED if policy_of(c) != {}))
 def test_the_judge_is_shown_no_claimant_name_email_policy_number_or_claim_id(
     claim_id: str,
 ) -> None:

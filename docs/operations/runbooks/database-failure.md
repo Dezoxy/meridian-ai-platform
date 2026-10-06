@@ -95,7 +95,7 @@ database still answers, the owner first copies `audit.events` and
 cluster is the only copy of the evidence.
 
 `make deploy` rebuilds what comes from this repository, in this order: the
-migrations (Job `meridian-migrate-<tag>`), the 50 policies and their
+migrations (Job `meridian-migrate-<tag>`), the 56 policies and their
 claim history (Job `meridian-seed-<tag>`), the release, and the 85 chunks
 of the policy wordings (Job `meridian-ingest-<tag>`, which runs again
 whenever the store is empty).
@@ -189,3 +189,8 @@ cleaned up. None of it is lost: the next successful pass does it.
   row.
 - After a PostgreSQL major upgrade the knowledge store must be ingested
   again; its search terms come from that version's dictionary.
+- After any ingestion done by hand, a restore or a re-ingestion, run
+  `meridian knowledge verify` (S067): it names a stored clause that is not the
+  manifest's wording and must print zero differences. `make deploy` runs it
+  only after an ingestion it makes itself; see the
+  [knowledge store runbook](knowledge-store.md).

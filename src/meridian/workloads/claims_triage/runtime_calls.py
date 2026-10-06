@@ -135,11 +135,13 @@ def start_run(
     http: httpx.Client,
     tenant: str,
     reference: str,
-    facts: dict[str, Any],
+    run_input: dict[str, Any],
     agent: str = AGENT,
 ) -> RunResponse:
-    """Start a run of ``agent`` (the triage's, unless one is named) over the
-    claim's facts."""
+    """Start a run of ``agent`` (the triage's, unless one is named) with
+    ``run_input`` as the run's whole input, sent as it is given: each caller
+    builds its own (the triage's is ``triaging.triage_run_input``, the brief's is
+    ``{"claim": …}``), as the two workflows read different fields."""
     return _call_runtime(
         http,
         "/runs",
@@ -147,7 +149,7 @@ def start_run(
             "agent": agent,
             "tenant": tenant,
             "reference": reference,
-            "input": {"claim": facts},
+            "input": run_input,
         },
     )
 
