@@ -305,3 +305,52 @@ cost the same as on the committed graph.
 - The cut-off of `clauses_bearing_on_claim` is the number of places kept, `top`.
 - The census defines "more than the trivial answer" once per question, in the
   docstring of `census.py` and in the table above.
+
+## The decision rule, set before anything was compared
+
+Written on 2026-10-06, after the graph and its census and before the first
+comparison ran, so that the numbers cannot choose their own reading. The
+commit history shows the order.
+
+The question is whether retrieval over a graph deserves a step of its own
+on this platform. The answer is **yes** only if all three hold on the
+committed data:
+
+1. **It finds a claim's clauses better than the search does.** On the
+   claims of the golden set, with the clauses each claim cites as the
+   labels: the graph's ordered list holds more of the labelled clauses
+   within the same cut-off than the fused hybrid search and than its
+   keyword half alone, at rank 5 and at rank 10, for all labels and for
+   the exclusion labels on their own; and query by query it wins at least
+   as often as it loses.
+2. **It finds what the production triage does not already find by
+   structure.** The triage does not send free text to the search: it asks
+   by the claim's peril and picks clauses by section and title
+   (`select_terms`). If the graph returns the same labelled clauses as
+   that lookup for the 40 claims, the gain of point 1 is the gain of
+   using structure at all, which the platform already has, and the graph
+   adds nothing.
+3. **It answers a question the plan asks that one hop cannot.** At least
+   one relational need written down in the plan, the backlog or the
+   threat model has an answer on the committed data that needs more than
+   a lookup by policy number.
+
+If 1 holds and 2 or 3 does not, the answer is **not now**: the graph is a
+tidier way to hold what the platform already does, worth returning to when
+the data has customers with several policies or assets with several
+claims. If 1 does not hold, the answer is **no**.
+
+What no outcome here can say, and the result must not be read as saying:
+
+- **Anything about real embeddings.** The only embedding available without
+  a paid call is the platform's simulated one, a hashed bag of words. The
+  vector half of the hybrid search therefore ranks by shared word forms.
+  A real model might close the gap that the comparison shows, or widen
+  it; that is unmeasured.
+- **Anything about free-text questions.** The graph is asked with the
+  claim's structured fields (its policy, its peril). The search is asked
+  with the claim's description. They are two different inputs for the
+  same task, "given this claim, find its clauses", and the comparison is
+  of the task, not of the inputs.
+- **Anything about a larger or richer data set.** Fifty policies, forty
+  claims, eighty-five clauses.
