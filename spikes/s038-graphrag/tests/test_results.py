@@ -5,11 +5,13 @@ gives); a number that moves is a decision for a person, not a regeneration."""
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 from comparison import score, tables
+from retrievalsupport import EMBEDDING_BATCH
 
 SPIKE = Path(__file__).resolve().parents[1]
 README = SPIKE / "README.md"
@@ -383,3 +385,63 @@ def test_the_table_parser_reads_a_table_and_ignores_the_rule_line() -> None:
     text = "Table: T\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nafter"
 
     assert _parse_tables(text) == {"T": [["A", "B"], ["1", "2"]]}
+
+
+def _blocks_after_the_comparison_heading(text: str) -> list[tuple[str, str]]:
+    """Each blank-line block of the README from "## The comparison" on, outside
+    fences, with the block before it (a table's caption)."""
+    body = text.split("\n## The comparison\n", 1)[1]
+    blocks: list[tuple[str, str]] = []
+    before = ""
+    fenced = False
+    for block in body.split("\n\n"):
+        fences = block.count("```")
+        if fenced or fences:
+            fenced = fenced != bool(fences % 2)
+        else:
+            blocks.append((block, before))
+        before = block
+    return blocks
+
+
+def test_a_block_that_names_the_vector_or_fused_search_says_simulated_embedding() -> (
+    None
+):
+    text = README.read_text(encoding="utf-8")
+
+    def flat(block: str) -> str:
+        return " ".join(block.replace("*", "").split())
+
+    unlabelled = [
+        flat(block)[:70]
+        for block, caption in _blocks_after_the_comparison_heading(text)
+        if re.search(r"\b(fused|vector)\b", block, re.IGNORECASE)
+        and "simulated embedding" not in flat(block)
+        and "simulated embedding" not in flat(caption)
+    ]
+
+    assert unlabelled == []
+
+
+def test_the_readme_line_counts_are_the_files_line_counts() -> None:
+    rows = re.findall(
+        r"^\| `(src/\w+/\w+\.py)` \|[^|]*\| (\d+) \|$",
+        README.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+
+    stated = {name: int(lines) for name, lines in rows}
+    counted = {
+        name: len((SPIKE / name).read_text(encoding="utf-8").splitlines())
+        for name in stated
+    }
+
+    assert len(stated) >= 14
+    assert stated == counted
+
+
+def test_the_texts_to_a_call_in_the_cost_table_are_the_platforms_batch() -> None:
+    assert (
+        f"{EMBEDDING_BATCH} texts to a call"
+        in tables.cost_rows(json.loads(RESULTS.read_text(encoding="utf-8")))[3][2]
+    )

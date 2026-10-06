@@ -20,6 +20,8 @@ SEARCH_NAMES = {
     "fused": "fused (simulated embedding)",
 }
 Rows = list[list[str]]
+# Added to the caption of a table that names the vector or the fused search.
+LABEL = "simulated embedding"
 
 
 def load(path: Path = RESULTS) -> dict[str, Any]:
@@ -227,10 +229,14 @@ def all_tables(results: dict[str, Any]) -> dict[str, Rows]:
         f"Recall, {SET_TITLES[s]}": recall_rows(results, s)
         for s in ("narrative", "exclusion", "all")
     }
-    tables["List sizes"] = size_rows(results)
-    tables["Wins, ties and losses of the graph, query by query"] = win_rows(results)
-    tables["Point 1, all labels read as every citation"] = point1_rows(results, "all")
-    tables["Point 1, all labels read as the narrative labels"] = point1_rows(
+    tables[f"List sizes ({LABEL})"] = size_rows(results)
+    tables[f"Wins, ties and losses of the graph, query by query ({LABEL})"] = win_rows(
+        results
+    )
+    tables[f"Point 1, all labels read as every citation ({LABEL})"] = point1_rows(
+        results, "all"
+    )
+    tables[f"Point 1, all labels read as the narrative labels ({LABEL})"] = point1_rows(
         results, "narrative"
     )
     tables["Point 2, graph against production"] = point2_summary_rows(results)
@@ -239,7 +245,7 @@ def all_tables(results: dict[str, Any]) -> dict[str, Rows]:
     )
     tables["Labelled clauses no ranking finds at 10"] = unfound_rows(results)
     tables["Point 3, the written needs"] = need_rows(results)
-    tables["Costs, as counts"] = cost_rows(results)
+    tables[f"Costs, as counts ({LABEL})"] = cost_rows(results)
     return tables
 
 
