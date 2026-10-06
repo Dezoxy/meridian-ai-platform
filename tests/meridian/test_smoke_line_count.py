@@ -6,7 +6,8 @@ them. Here the number is tied to ``infra/kind/smoke.sh``: the sum of what each
 check prints when everything is as it should be. Of the eleven checks, eight have
 at least one harness of their own that runs the function in bash against stubs:
 the database (its stores, and its policy's address line), telemetry (the round
-trip, and the two TLS lines that open it), the cost panel, the sweep, the network
+trip, and the two TLS lines that open it), the cost panel, the sweep (the Job's
+line, and the findings' apart), the network
 policy (four lines, and the collector's apart), service identity, the certificate
 policy (the policy, and the refused request apart) and the alert rules. Three
 have none (the edge, the tools, the adjuster pages), and the pgvector lines of
@@ -38,6 +39,7 @@ from test_smoke_log_agent import healthy_log_agent_lines
 from test_smoke_network_collector import run_collector_check
 from test_smoke_network_policy import run_network_policy_check
 from test_smoke_stores import run_stores_check
+from test_smoke_sweep_findings import healthy_sweep_findings_lines
 from test_smoke_telemetry import run_telemetry_check
 from test_smoke_telemetry_tls import healthy_ca_lines, healthy_clear_text_lines
 
@@ -98,9 +100,11 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         + all_pass(healthy_log_agent_lines(fresh())),
         "check_cost_panel": all_pass(lines_of(run_cost_panel)),
         "check_adjuster_pages": pass_sites("check_adjuster_pages"),
+        # Two lines since S064 (C3): the Job's and, apart harness, the findings'.
         "check_sweep": all_pass(
             lines_of(lambda path: run_sweep_check(path, jobs=healthy_sweep))
-        ),
+        )
+        + all_pass(healthy_sweep_findings_lines(fresh())),
         # Four lines and, since S063, the collector's: its harness is apart.
         "check_network_policy": all_pass(lines_of(run_network_policy_check))
         + all_pass(lines_of(run_collector_check)),

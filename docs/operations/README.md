@@ -13,9 +13,9 @@ thresholds and S028 runs the game day.
 | What | Where | Status |
 |---|---|---|
 | Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, three designed; every target unmeasured |
-| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (four groups loaded, every rule healthy, no Meridian alert firing); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; notification designed |
+| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (five groups loaded since S064, every rule healthy, no Meridian alert firing); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; notification designed |
 | Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code and served by Grafana on kind, its queries run in Prometheus by check 11 of `make smoke`; whether each panel shows data stays a hand check |
-| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other five and that runbook's other steps were not exercised |
+| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other six (the newest, telemetry missing, S064) and that runbook's other steps were not exercised |
 
 ## Alerts
 
@@ -40,6 +40,14 @@ knows whether the cluster has a series of that name. Tests on the file
 hold the gateway's series and labels to the code that produces them; the
 names from kube-state-metrics are pinned from its documentation and the
 chart's own rules, and are confirmed only on a cluster.
+
+Three of the rules look for a series that is not there (S064, the group
+`meridian.telemetry`): the Model Gateway's, the Agent Runtime's and the
+sweep's. Each fires when the upstream end counted something in the last 15
+minutes and the downstream end has no sample at all, and waits 5 minutes
+first; an idle service does not fire them. Their runbook,
+[telemetry missing](runbooks/telemetry-missing.md), tells the hops apart.
+They are implemented and unit-tested and have not fired on a cluster.
 
 [slo.md](slo.md#what-the-alert-rules-watch) lists each alert with its
 objective and runbook.
@@ -83,6 +91,8 @@ needs it, never to clear a fault nobody has looked at.
   a provider refuses the gateway's.
 - [Certificate expiry](runbooks/certificate-expiry.md): a certificate is
   close to its end and was not renewed, or is not Ready.
+- [Telemetry missing](runbooks/telemetry-missing.md): a service's metrics
+  stopped arriving while it does the work they count (S064).
 
 ## Looking into the database on kind
 
@@ -212,11 +222,12 @@ applied to one. The session that owns the cluster checks, on `main`:
    applied`; a second run changes nothing.
 2. The rule object exists:
    `kubectl -n observability get prometheusrule meridian`.
-3. Prometheus loaded the four groups and each is healthy: its
+3. Prometheus loaded the five groups and each is healthy: its
    `/api/v1/rules` lists `meridian.gateway.recording`, `meridian.gateway`,
-   `meridian.workloads` and `meridian.certificates`, and every rule's
-   `health` is `ok`. `make smoke` reads this (the eleventh check): the
-   groups and rule names are the file's and every rule is `ok`.
+   `meridian.workloads`, `meridian.certificates` and (S064)
+   `meridian.telemetry`, and every rule's `health` is `ok`. `make smoke`
+   reads this (the eleventh check): the groups and rule names are the
+   file's and every rule is `ok`.
 4. Every series a rule or the new dashboard names exists. `make smoke`
    does not read this: a rule over a missing series is healthy and quiet.
    Each of these returns a number in Grafana's Explore:
@@ -235,7 +246,15 @@ applied to one. The session that owns the cluster checks, on `main`:
      expected one per certificate (the CA's and the services'), which
      needs the ServiceMonitor `cert-manager` in `observability` (S056);
    - `count(meridian:gateway_calls:delta15m)`, after one `make demo` and a
-     minute's wait.
+     minute's wait;
+   - the series of S064's rules (not seen on a cluster before): after one
+     `make demo` and a minute, `count(meridian_runtime_model_calls_total{job="agent-runtime"})`,
+     `count(meridian_claims_triages_total{job="claims-api"})` (not yet seen:
+     the counter is newer than the last cluster run) and
+     `count(meridian:runtime_model_calls:delta15m)` and
+     `count(meridian:claims_triages:delta15m)`; and after one sweep pass,
+     `count by (instance) (meridian_sweep_last_pass{job="claims-sweep"})`,
+     expected one `instance`, `claims-sweep`, holding six series.
 5. No Meridian alert fires on a healthy cluster:
    `ALERTS{platform="meridian"}` is empty. `make smoke` fails on a firing
    alert and names it; a pending one passes, and the line names it.
@@ -244,7 +263,7 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 41 of 41 lines (S055 added three, for service
+7. `make smoke` passes, 42 of 42 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
@@ -255,12 +274,14 @@ applied to one. The session that owns the cluster checks, on `main`:
    database's policy, which must name the API server's address (a FAIL says
    "run make up"), tested
    without a cluster until they have run on one; S064 one for the log agent,
-   the Claims API's own access line found in Loki: the 35 below are S062's
-   count); 29 after `make up` alone, with SKIP lines for
+   the Claims API's own access line found in Loki, and one for the sweep's
+   findings, the six values of `meridian_sweep_last_pass` found in
+   Prometheus: the 35 below are S062's count); 30 after `make up` alone, with
+   SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   29 is edge 1, database 4, tools 1, telemetry 7, cost panel 4, adjuster
-   pages 1, sweep 1, network policy 1, service identity 1, certificate policy 4
+   30 is edge 1, database 4, tools 1, telemetry 7, cost panel 4, adjuster
+   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 4
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster
    has seen it pass (35 PASS on 2026-10-06, see below); item 4, the series,

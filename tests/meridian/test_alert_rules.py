@@ -185,13 +185,14 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
         "meridian.gateway",
         "meridian.workloads",
         "meridian.certificates",
+        "meridian.telemetry",
     ]
 
 
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 12
+    assert len(found) == 15
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -303,9 +304,28 @@ def test_a_reason_word_that_is_not_emitted_would_be_caught() -> None:
     assert "made-up" not in REASONS
 
 
+def is_meridians_own(name: str) -> bool:
+    """A series of the runtime, the Claims Triage App or the sweep (S064): held
+    to the code that produces it in test_alert_rules_telemetry.py, not pinned
+    here."""
+    return name.startswith(
+        (
+            "meridian_runtime_",
+            "meridian:runtime_",
+            "meridian_claims_",
+            "meridian:claims_",
+            "meridian_sweep_",
+        )
+    )
+
+
 def test_every_other_series_is_a_pinned_one() -> None:
     for name, expression in expressions():
-        others = {s for s in series_named(expression) if not is_gateway(s)}
+        others = {
+            s
+            for s in series_named(expression)
+            if not is_gateway(s) and not is_meridians_own(s)
+        }
         assert others <= OTHER_SERIES, (name, others - OTHER_SERIES)
     named = set().union(*(series_named(e) for _, e in expressions()))
     assert named >= OTHER_SERIES

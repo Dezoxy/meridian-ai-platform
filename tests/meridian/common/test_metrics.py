@@ -198,3 +198,56 @@ def test_a_wrapped_function_does_not_hide_an_exit_that_is_not_an_exception() -> 
 
     with pytest.raises(KeyboardInterrupt):
         count()
+
+
+# ── The resource's instance ID and name under the environment (S064, C3) ─────
+# The sweep is a process that lives seconds, so by default each pass is a new
+# set of series under a random ``service.instance.id``. The chart gives the
+# CronJob ``OTEL_RESOURCE_ATTRIBUTES=service.instance.id=claims-sweep`` so the
+# six series are the same from pass to pass. These pin what the pinned SDK does
+# with that variable: the instance ID follows it, the service's name does not.
+def resource_of(service_name: str) -> dict:
+    reader = InMemoryMetricReader()
+    provider = make_meter_provider(service_name, reader)
+    provider.get_meter("test").create_counter("things").add(1)
+    data = reader.get_metrics_data()
+    assert data is not None
+    return dict(data.resource_metrics[0].resource.attributes)
+
+
+def test_the_environment_sets_the_instance_id_and_the_name_passed_in_stays(
+    monkeypatch: pytest.MonkeyPatch, no_endpoint: None
+) -> None:
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "service.instance.id=claims-sweep")
+
+    attributes = resource_of("claims-sweep-test")
+
+    assert attributes["service.instance.id"] == "claims-sweep"
+    assert attributes["service.name"] == "claims-sweep-test"
+
+
+def test_the_environment_cannot_rename_the_service(
+    monkeypatch: pytest.MonkeyPatch, no_endpoint: None
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "service.instance.id=claims-sweep,service.name=renamed",
+    )
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "renamed-too")
+
+    attributes = resource_of("claims-sweep-test")
+
+    assert attributes["service.name"] == "claims-sweep-test"
+    assert attributes["service.instance.id"] == "claims-sweep"
+
+
+def test_without_the_variable_the_instance_id_is_a_generated_one(
+    monkeypatch: pytest.MonkeyPatch, no_endpoint: None
+) -> None:
+    monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
+
+    attributes = resource_of("claims-sweep-test")
+
+    instance = str(attributes["service.instance.id"])
+    assert instance != "claims-sweep"
+    assert len(instance) == 36 and instance.count("-") == 4

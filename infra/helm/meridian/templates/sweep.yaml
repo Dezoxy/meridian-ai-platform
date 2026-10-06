@@ -51,6 +51,21 @@ With no address it gets none of the three and sends nothing.
                               the sweep's alone: a service's exports run in the
                               background and need no bound. Rendered only with
                               an address
+  OTEL_RESOURCE_ATTRIBUTES    service.instance.id=claims-sweep (C3). Each pass is
+                              a new process, and the SDK gives a process a
+                              random instance ID, which Prometheus keeps as the
+                              `instance` label: every pass would write six new
+                              series, and no rule or panel could read them
+                              without knowing it. With one fixed ID the six
+                              series are the same from pass to pass, and the
+                              later sample wins, which is what "the last pass"
+                              means: two passes at once (a by-hand Job beside a
+                              scheduled one) write the same series. The SDK
+                              takes the ID from this variable and the service's
+                              name from the code, so the variable cannot rename
+                              the service (tested). A service must not get it:
+                              two replicas would write one series. Rendered only
+                              with an address, with the timeout
 */ -}}
 {{- $timeout := float64 .Values.sweep.telemetryTimeoutSeconds }}
 {{- if not (and (gt $timeout 0.0) (lt $timeout (float64 .Values.sweep.activeDeadlineSeconds))) }}
@@ -111,6 +126,8 @@ spec:
                 {{- if .Values.telemetry.otlpEndpoint }}
                 - name: OTEL_EXPORTER_OTLP_TIMEOUT
                   value: {{ $timeout | quote }}
+                - name: OTEL_RESOURCE_ATTRIBUTES
+                  value: service.instance.id=claims-sweep
                 {{- end }}
               resources:
                 {{- toYaml .Values.sweep.resources | nindent 18 }}

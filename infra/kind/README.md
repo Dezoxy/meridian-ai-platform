@@ -545,7 +545,8 @@ node image, Kubernetes components and the platform).
    the same policy and carries the banner's second sentence, which says that
    every value entered must be fictional (T-04); the request is a GET and
    changes no claim. Before `make deploy` this check prints SKIP.
-7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, and
+7. **Sweep.** Two lines, read-only (the second is S064's, below). The first:
+   the CronJob `meridian-sweep` exists, and
    the last of its Jobs to finish, scheduled or made by hand, succeeded; the
    line says when it finished. It fails when the CronJob is missing, when the
    last finished Job failed (the line gives its reason, and `describe` and
@@ -570,6 +571,21 @@ node image, Kubernetes components and the platform).
    and while it is suspended (`.spec.suspend`: it makes no runs, so none is
    overdue), this line prints SKIP. A PASS does not say the sweep did its
    work, only that a Job finished.
+   The second line (S064) asks Prometheus, through Grafana's datasource proxy
+   as check 5 does, whether the six findings of the pass have arrived: the
+   gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of
+   `documents-overdue`, `triage-not-started`, `triage-abandoned`, `runs-ended`,
+   `threads-cleaned` and `failures` with a sample in the last 15 minutes, in
+   one query that takes the last value of each over every `instance`, waited
+   for up to 120 seconds. PASS names the six values. FAIL tells three causes
+   apart: Prometheus did not answer with status `success`, it has no finding at
+   all, or it has some (the line names the ones missing). Only the six words
+   the script holds are printed, never a label from the answer. SKIP, in one
+   line, when the first line was not a PASS (no pass has finished), when the
+   Job it passed was made without `OTEL_EXPORTER_OTLP_ENDPOINT` (the first
+   smoke after a deploy that added the address reads a Job made before it: wait
+   for a pass), and when Grafana could not be reached. After `make up` alone it
+   prints SKIP, with the first line. Tested without a cluster, not run on one.
 8. **Network policy.** Five lines. Each opens a TCP connection and sends
    nothing, from Python in a pod (the image has no curl); a denied path passes
    only when it times out (a refused connection or a name that does not
@@ -763,7 +779,7 @@ node image, Kubernetes components and the platform).
 11. **Alert rules and health dashboard.** Four lines, read-only, run last.
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
-    applies. The four groups of `alerts/meridian.yaml` are loaded and every
+    applies. The five groups of `alerts/meridian.yaml` are loaded and every
     rule in them has health `ok`: a FAIL names each rule that has not, with
     its health and Prometheus' last error, cut to 120 printable characters
     (a rule that has not been evaluated yet is `unknown`, which is not `ok`;
@@ -1620,7 +1636,10 @@ mounts only the CA's public certificate and the collector's, and may reach DNS,
 the database and the collector's port 4318, and nothing else (S019; the
 collector from S064, where `telemetry.otlpEndpoint` is set, with the SDK's
 export deadline `sweep.telemetryTimeoutSeconds`, 5 seconds, for the findings it
-sends before it exits; tested without a cluster, not run on one).
+sends before it exits, and, in S064's C3, the fixed instance ID
+`service.instance.id=claims-sweep` so that every pass writes the same six
+series; tested without a cluster, not run on one). A by-hand Job beside a
+scheduled one writes the same series too: the later sample wins.
 
 To run one pass now, beside the schedule (the name is yours; it must be new):
 
@@ -1668,12 +1687,21 @@ What the numbers are, which the dashboard also says on its first panel:
 ## The alert rules and the health dashboard
 
 [`alerts/meridian.yaml`](alerts/meridian.yaml) is one `PrometheusRule`
-(S024, S056) in four groups: `meridian.gateway.recording` (a recorded series
-for the gateway's calls of the last 15 minutes), `meridian.gateway` (alerts
-on that series), `meridian.workloads` (from kube-state-metrics) and
-`meridian.certificates` (from cert-manager's controller). It holds 12 alert
-rules and one recording rule: five on the gateway, three on the workloads
-and four on the certificates. It
+(S024, S056, S064) in five groups: `meridian.gateway.recording` (a recorded
+series for the gateway's calls of the last 15 minutes), `meridian.gateway`
+(alerts on that series), `meridian.workloads` (from kube-state-metrics),
+`meridian.certificates` (from cert-manager's controller) and
+`meridian.telemetry` (two recorded series of the same kind, for the
+runtime's completed model calls and the Claims API's stored triages, and
+three alerts that notice a series that is not there). It holds 15 alert
+rules and three recording rules: five on the gateway, three on the workloads
+and four on the certificates, and, from S064, three on missing telemetry
+(tested without a cluster, not yet loaded on one): the Model Gateway's, the
+Agent Runtime's and the sweep's metrics, each fired when the upstream end
+counted something in the last 15 minutes and the downstream end has no
+sample at all. The CronJob of the sweep sets one instance ID
+(`service.instance.id=claims-sweep`), so its six series are the same from
+pass to pass. It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:
@@ -1692,8 +1720,9 @@ lose.
 
 `make up` applies both: the rules with `kubectl apply`, the dashboard as a
 ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
-(check 11, passed on the cluster on 2026-10-06): Prometheus has loaded the
-four groups with every rule healthy, the loaded rule names are the file's,
+(check 11, passed on the cluster on 2026-10-06 with four groups; five since
+S064): Prometheus has loaded the
+five groups with every rule healthy, the loaded rule names are the file's,
 no Meridian alert is firing, and Grafana serves the health dashboard with
 the file's queries, every one of which runs in Prometheus. What stays by
 hand is whether each series a rule or a panel names exists: a rule over a

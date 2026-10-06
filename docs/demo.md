@@ -38,14 +38,15 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 41 lines; PASS, or SKIP (below)
+make smoke     # 42 lines; PASS, or SKIP (below)
 ```
 
 `make smoke` prints a SKIP, and still exits 0, where a line cannot be
 judged yet, and it says why. Seen on 2026-10-06, each leaving 34 PASS and
 one SKIP: the sweep's line until the CronJob has been scheduled once (it
 runs every five minutes, and a smoke run two minutes after `make deploy`
-skips it); the cost series line right after the services restart and
+skips it, and since S064 the findings' line beside it, which asks Prometheus
+for what that pass sent); the cost series line right after the services restart and
 before any claim is sent ("the gateway has settled no call since it
 started"); and the audit line of the service identity check on a second
 run inside the gateway's minute ("the gateway wrote this minute's refusal

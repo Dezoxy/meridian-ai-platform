@@ -38,7 +38,7 @@ would be watched while the platform runs.
 | `certificate-validity` | Each certificate that identifies a service, and the CA that signs them, is renewed before it ends (S056) | Time until each certificate's end and whether it is Ready, from cert-manager's metrics | No certificate under 21 days from its end for an hour, none not Ready for 15 minutes; the metrics reach Prometheus and cert-manager and approver-policy run | Implemented on kind (S056); the first two alerts seen loaded and inactive, the other two not seen, unmeasured |
 | `triage-latency` | A claim's triage drafts a proposal quickly (QA-01) | The duration of a triage run, as a histogram | p95 under 10 s with the replay provider, under 30 s with `gpt-4o` | Designed: no service records a duration metric; S027 measures it with a load test |
 | `gateway-overhead` | The gateway adds little to a model call (QA-02) | The gateway's own time per call, excluding the provider's | p95 under 50 ms | Designed: the time is in the gateway's spans only |
-| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented in tests, not run on a cluster (S064): the Claims API counts every triage it takes once, by how it ended, `meridian_claims_triages_total` (`stored`, `failed` with a reason, `taken-over`), so a call that never reached the runtime and an answer it could not use are series; the Agent Runtime's `meridian_runtime_runs_total` counts each leg inside the runtime and calls `completed` a run the Claims API may then fail to use, so it is not this share; no rule or dashboard reads either yet, and the run table holds the answer |
+| `triage-completion` | A triage run ends in a proposal or a referral, not in a failure | Runs that end without failing over all runs that end | 99 % of runs | Implemented in tests, not run on a cluster (S064): the Claims API counts every triage it takes once, by how it ended, `meridian_claims_triages_total` (`stored`, `failed` with a reason, `taken-over`), so a call that never reached the runtime and an answer it could not use are series; the Agent Runtime's `meridian_runtime_runs_total` counts each leg inside the runtime and calls `completed` a run the Claims API may then fail to use, so it is not this share; no rule reads either's rates and no dashboard reads either (`MeridianRuntimeMetricsMissing` reads the stored triages and the run counter's presence), and the run table holds the answer |
 
 The proposed window is 28 days, for the Azure environment (S020), where the
 metrics would be kept that long. On kind, Prometheus keeps 24 hours, so no
@@ -152,6 +152,19 @@ proposal, like the targets.
 | `MeridianCertificateNotReady` | A certificate of `meridian` or `cert-manager` has not been Ready for 15 minutes, as when a first request was denied or waits for an approval (a renewal that waits leaves the Certificate Ready) | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
 | `MeridianCertificateMetricsMissing` | For 15 minutes Prometheus has no expiry series for the CA's certificate `meridian-services-ca`, or its scrape of cert-manager's controller is down: the two alerts above are blind | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
 | `MeridianCertificateApproverDown` | The Deployment of cert-manager's controller or of approver-policy has had no available replica for 15 minutes: nothing is requested or approved, and a renewal that waits leaves the Certificate Ready | `certificate-validity` | [Certificate expiry](runbooks/certificate-expiry.md) |
+| `MeridianGatewayMetricsMissing` | In the last 15 minutes the Agent Runtime counted a model call that completed, and Prometheus has no sample of the Model Gateway's call counter in those 15 minutes (S064: for 5 minutes) | none: it says the gateway's alerts are blind | [Telemetry missing](runbooks/telemetry-missing.md) |
+| `MeridianRuntimeMetricsMissing` | In the last 15 minutes the Claims API stored a triage, and Prometheus has no sample of the Agent Runtime's run counter in those 15 minutes (S064: for 5 minutes) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
+| `MeridianSweepNotReporting` | The sweep's CronJob succeeded in the last 15 minutes, and Prometheus has no sample of what a pass found, `meridian_sweep_last_pass`, in those 15 minutes (S064: for 5 minutes) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
+
+The three last rules (S064, implemented and unit-tested, not run on a cluster)
+look for a series that is not there: each holds a count of something the
+upstream end says happened, and no sample at all of the series the downstream
+end must have written for it, so an idle service, which still has its series,
+does not fire them. The first two read a recorded delta of a counter, which
+counts a new series' first sample, as the gateway's does. The sweep's series
+are the same six from pass to pass: the CronJob sets one instance ID, not the
+SDK's random one. No panel reads the new series yet, and no burn-rate rule
+reads an objective: no threshold of them is measured.
 
 The 5 % in the first rule is QA-04's number ("under 5 % of calls in that
 minute fail"), five times the rate the `model-calls` budget allows. The
@@ -181,9 +194,13 @@ namespace; Meridian's file does not repeat them.
 - **Silence is not health.** When the collector or the path to Prometheus
   stops, the gateway's series end, the recorded series is empty and every
   gateway alert goes quiet. A Deployment or a CronJob that was deleted
-  leaves kube-state-metrics, and its alert with it. Nothing here alerts
-  on missing data, and the chart's `Watchdog` alert has no Alertmanager
-  to report to.
+  leaves kube-state-metrics, and its alert with it. Three rules look for
+  the gap for the gateway, the runtime and the sweep (S064, the table
+  above): they fire only when the upstream end says something happened that
+  the downstream end must have counted, so a hop with no traffic, a tool
+  server's series and a log line are not covered, and a service that is
+  down is `MeridianServiceUnavailable`'s. The chart's `Watchdog` alert has
+  no Alertmanager to report to.
 
 ## What the indicators do not see
 
@@ -210,7 +227,10 @@ namespace; Meridian's file does not repeat them.
   refused before its first leg, or a resume it refused to claim, is
   counted `failed` with `not-started`; a refusal of the caller (a 403, a
   404) is counted nowhere. Both carry `meridian_tenant` and
-  `meridian_agent`. No rule reads either yet.
+  `meridian_agent`. Two rules read them, for presence only:
+  `MeridianGatewayMetricsMissing` the completed model calls and
+  `MeridianRuntimeMetricsMissing` whether the run counter is there; no rule
+  reads their rates and no panel reads either.
   The three tool servers count their calls too (S064, implemented in
   tests, not run on a cluster): the OTLP counter
   `meridian.toolserver.calls` reaches Prometheus as
@@ -253,16 +273,21 @@ namespace; Meridian's file does not repeat them.
   seconds (`sweep.telemetryTimeoutSeconds`); with no
   `telemetry.otlpEndpoint` it sends nothing. A pass that could not run,
   because the database was unreachable, has no numbers and sends none.
-  No rule reads the gauge yet. Prometheus keeps a series for five minutes
-  after its last sample and the CronJob runs every five, so a rule over it
-  must look back over several passes, not one. A send that failed leaves
-  no series and no alert: the evidence is the output of the last Jobs
+  Prometheus keeps a series for five minutes after its last sample and the
+  CronJob runs every five, so a rule over it looks back over 15 minutes, three
+  passes, not one. Each pass used to be a new set of six series, because the
+  SDK gives every process a random instance ID (measured on kind, 2026-10-06:
+  two samples a pass, a new `instance` each); since S064's C3 the CronJob sets
+  `service.instance.id=claims-sweep`, so the six series are the same from
+  pass to pass (tested without a cluster, not yet seen on one). A send that
+  failed leaves no series: the alert `MeridianSweepNotReporting` fires
+  when the CronJob succeeded and nothing arrived, about 20 minutes after the
+  last pass that did, and the evidence is the output of the last Jobs
   (`kubectl -n meridian logs job/<name>`; a finished Job is kept for a
   day), in the exporter's logger,
   `opentelemetry.exporter.otlp.proto.http.metric_exporter`, whose last
   line for a refused connection names no address (the warnings before it
-  do). A rule on the gauge's absence is the detector, and it is a later
-  contract's.
+  do). No rule reads the gauge's values and no panel reads it.
 - **The assessment's outcomes.** The Claims Triage App counts each stored
   proposal once (S064, implemented in tests, not run on a cluster):
   `meridian_claims_assessments_total`, by `meridian_outcome`
@@ -285,8 +310,10 @@ namespace; Meridian's file does not repeat them.
   expected, a bug, counted and raised). The runtime's
   `meridian_runtime_runs_total` does not stand in for it: a call that never
   reached the runtime is nowhere in it, and a run it counts `completed` can
-  still end here as `bad-output` or `proposal-lost`. No rule reads either
-  yet.
+  still end here as `bad-output` or `proposal-lost`. One rule reads the
+  `stored` count for its presence next to the runtime's series
+  (`MeridianRuntimeMetricsMissing`); none reads the failures, and no panel
+  reads either.
 - **Logs.** No service exports its logs to Loki, so no rule reads one. The
   warnings for an empty knowledge store and for stale vectors stay in the
   knowledge server's own output as well, and are also counted since S064

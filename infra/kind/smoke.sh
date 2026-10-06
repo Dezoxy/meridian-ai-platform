@@ -13,7 +13,7 @@
 # rows in the audit table on each run (a 401's and a 403's, which the gateway
 # throttles to one a minute per reason) and puts a throwaway key in the probe
 # pod's /tmp, which the probe removes when it ends; and the checks that read
-# Grafana (4, 5 and 11) read its admin Secret, never printing it.
+# Grafana (4, 5, 7 and 11) read its admin Secret, never printing it.
 #   1. edge:      laptop -> 127.0.0.1:8088 -> kind port mapping -> NodePort -> Envoy
 #   2. database:  the database's NetworkPolicy names the API server's address
 #                 (S063, first line, read from two objects and run even when no
@@ -171,7 +171,8 @@
 #                 start page answers 200 with the same policy and the banner's
 #                 fictional-data sentence (T-04), and changes no claim. Skipped
 #                 while the Meridian services are not deployed (`make deploy`).
-#   7. sweep:     one line, read-only. The CronJob meridian-sweep exists, and the
+#   7. sweep:     two lines, read-only (the second is below). The first: the
+#                 CronJob meridian-sweep exists, and the
 #                 last of its Jobs to finish (the scheduled ones and any made by
 #                 hand) succeeded; the line prints when it finished. It fails
 #                 when the last one failed (with its reason), when the CronJob
@@ -201,6 +202,28 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
+#                 The second line (S064, C3) asks Prometheus, through the same
+#                 Grafana forward as check 5, whether the pass that line passed
+#                 sent its findings: the gauge meridian_sweep_last_pass for job
+#                 claims-sweep, each of the six findings (documents-overdue,
+#                 triage-not-started, triage-abandoned, runs-ended,
+#                 threads-cleaned, failures) with a sample in the last 15
+#                 minutes, in one query that takes the newest value of each
+#                 over every instance, waited for with `poll` as the cost series
+#                 are. PASS names the six values. FAIL tells three causes apart:
+#                 Prometheus did not answer with status success, it has no
+#                 finding at all, or it has some and the line names the ones
+#                 missing (only the six words the script holds are printed,
+#                 never a label of the answer: any pod of meridian can push a
+#                 series under the sweep's name). SKIP, one line, when the first
+#                 line was not a PASS (no pass has finished: so also after `make
+#                 up` alone), when the Job that line passed was made without the
+#                 collector's address (the first smoke after a deploy that added
+#                 it reads a Job made before: wait for a pass), and when Grafana
+#                 could not be reached. What it does not prove: that the values
+#                 are the pass's own (a pod of meridian can push the same
+#                 series) or that the series are one instance's (the query
+#                 takes the newest of each).
 #   8. network policy: five lines (S019, S062, S063). Each opens a TCP connection and
 #                 nothing more; a path that no rule allows is a PASS only when it
 #                 times out, and a connection refused or a name that does not
@@ -460,7 +483,7 @@
 #                 last. Three lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for
 #                 the PrometheusRule `meridian` that `make up` applies. The
-#                 four groups of infra/kind/alerts/meridian.yaml are loaded and
+#                 five groups of infra/kind/alerts/meridian.yaml are loaded and
 #                 every rule of the loaded meridian.* groups has health ok (a
 #                 FAIL names the rule, its health and Prometheus' lastError,
 #                 cut to 120 printable ASCII characters). The loaded group and
@@ -512,6 +535,16 @@ readonly SWEEP_PERIOD_SECONDS=300
 readonly SWEEP_STALE_PERIODS=3
 # The clock the sweep check trusts: the database's, as whole seconds.
 readonly SWEEP_CLOCK_SQL='SELECT floor(extract(epoch FROM now()))::bigint'
+# The sweep's findings line (S064): the gauge the pass sends before it exits, its
+# `job` (the sweep's service name), the six findings under `meridian_finding` in
+# the order of the pass's summary line, the variable that tells a Job was given
+# the collector's address and the window the line looks back over (the rule
+# MeridianSweepNotReporting's 15 minutes: three passes).
+readonly SWEEP_SERIES=meridian_sweep_last_pass
+readonly SWEEP_JOB_LABEL=claims-sweep
+readonly SWEEP_FINDINGS=(documents-overdue triage-not-started triage-abandoned runs-ended threads-cleaned failures)
+readonly SWEEP_ENDPOINT_ENV=OTEL_EXPORTER_OTLP_ENDPOINT
+readonly SWEEP_SERIES_WINDOW=15m
 # The stores check (2): the newest migration file of this checkout, the probe
 # for the schemas, the policy count and the ledger's newest name. The chunk
 # count is CHUNK_COUNT_SQL of common.sh. COLLATE "C": the ledger's names sort as
@@ -867,6 +900,7 @@ refused_reason=""  # set by refused_wait: the verdict's reason, cleaned
 refused_message="" # set by refused_wait: the verdict's message, cleaned and cut
 refused_message_full="" # set by refused_wait: the same message, cleaned, not cut
 poll_error=""      # what the last failed poll attempt saw
+sweep_job_finished="" # set by report_sweep: the Job whose success check 7's first line passed
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
 skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
@@ -2035,6 +2069,7 @@ report_sweep() {
   third="$(clean_lines "${third}")"
   case "${kind}" in
     succeeded)
+      sweep_job_finished="${first}"
       pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}"
       ;;
     failed)
@@ -2073,8 +2108,11 @@ report_sweep() {
 
 # Same skip rule as the tool check: only when no Meridian Deployment exists. Only
 # reads (kubectl get, and one SELECT of the database's clock); the Jobs of the
-# whole namespace are listed and filtered by owner.
-check_sweep() {
+# whole namespace are listed and filtered by owner. The first of the check's two
+# lines (the second is check_sweep_findings'): it leaves the name of the Job
+# whose success it passed in ${sweep_job_finished}, and nothing for any other
+# line.
+check_sweep_job() {
   local found cronjob jobs verdict now period
   if ! found="$(deployed_services)"; then
     fail "sweep: could not look for the Meridian deployments (kubectl's error is above)"
@@ -2110,6 +2148,100 @@ check_sweep() {
     return
   fi
   report_sweep "${verdict}" "${period}"
+}
+
+# sweep_findings_query: the instant query of check 7's second line. `max by`
+# takes the last value of each finding whatever its `instance`: a pass sent
+# before the CronJob set one instance ID is a series of its own, which
+# Prometheus keeps five minutes.
+sweep_findings_query() {
+  printf 'max by (meridian_finding) (last_over_time(%s{job="%s"}[%s]))' \
+    "${SWEEP_SERIES}" "${SWEEP_JOB_LABEL}" "${SWEEP_SERIES_WINDOW}"
+}
+
+# sweep_findings_report ANSWER JOB: the FAIL line, once the poll found no answer
+# with all six findings; ANSWER is one more look at the query, for the message.
+# It tells three causes apart: Prometheus did not answer, it has no finding at
+# all, or it has some and not all. Only the six words the script holds are
+# printed, never a label from the answer: any pod of meridian can push a series
+# under the sweep's name (T-68).
+sweep_findings_report() {
+  local answer=$1 job=$2 status word found=0 missing=""
+  status="$(jq -r '.status // empty' <<<"${answer}" 2>/dev/null || true)"
+  if [[ "${status}" != success ]]; then
+    fail "sweep findings: Prometheus did not answer the query with status success after ${POLL_TIMEOUT}s (last answer: ${poll_error:-none})"
+    return
+  fi
+  for word in "${SWEEP_FINDINGS[@]}"; do
+    if jq -e --arg word "${word}" 'any(.data.result[]?; .metric.meridian_finding == $word)' \
+      <<<"${answer}" >/dev/null 2>&1; then
+      found=$((found + 1))
+    else
+      missing="${missing:+${missing}, }${word}"
+    fi
+  done
+  if ((found == 0)); then
+    fail "sweep findings: Prometheus has no ${SWEEP_SERIES} series of job ${SWEEP_JOB_LABEL} from the last ${SWEEP_SERIES_WINDOW} after ${POLL_TIMEOUT}s, though job/${job} succeeded with ${SWEEP_ENDPOINT_ENV} set (the pass sends them before it exits; the runbook telemetry-missing says where to look)"
+    return
+  fi
+  fail "sweep findings: Prometheus has ${found} of ${#SWEEP_FINDINGS[@]} findings of ${SWEEP_SERIES} from the last ${SWEEP_SERIES_WINDOW} after ${POLL_TIMEOUT}s, though job/${job} succeeded; missing: ${missing}"
+}
+
+# check_sweep_findings: the second line of check 7. The pass sends its six
+# findings (meridian_sweep_last_pass) to the collector before it exits, and this
+# asks Prometheus, through Grafana's datasource proxy as check 5 does, whether
+# each of the six has a sample in the last 15 minutes: one query, waited for with
+# `poll` as the cost series are. It looks for what the Job whose success the line
+# above passed should have sent, so the Job's own spec says whether it was given
+# the collector's address (the first smoke after a deploy that added it reads a
+# Job made before: a SKIP, not a FAIL). A SKIP in every case where no pass has
+# finished (the line above was a SKIP or a FAIL), the Job has no address or
+# Grafana's forward is not open. Only reads.
+check_sweep_findings() {
+  local job=${sweep_job_finished} spec addressed query query_url final
+  if [[ -z "${job}" ]]; then
+    skip "sweep findings: no pass of the sweep has finished (see the line above), so there is nothing to look for"
+    return
+  fi
+  if ! spec="$(kctl -n meridian get job "${job}" -o json)"; then
+    fail "sweep findings: could not read job/${job} (kubectl's error is above)"
+    return
+  fi
+  addressed="$(jq -r --arg name "${SWEEP_ENDPOINT_ENV}" \
+    '[.spec.template.spec.containers[]?.env[]? | select(.name == $name)] | length' \
+    <<<"${spec}" 2>/dev/null || true)"
+  if ! [[ "${addressed}" =~ ^[0-9]+$ ]]; then
+    fail "sweep findings: could not read the environment of job/${job}"
+    return
+  fi
+  if ((addressed == 0)); then
+    skip "sweep findings: job/${job} was made without ${SWEEP_ENDPOINT_ENV}, so it sent nothing (the chart gives the CronJob the collector's address: a pass made after make deploy has it)"
+    return
+  fi
+  if ! open_grafana; then # the grafana line above said why
+    skip "sweep findings: not looked for, because Grafana could not be reached"
+    return
+  fi
+  query_url="${grafana_url}/api/datasources/proxy/uid/prometheus/api/v1/query"
+  query="$(sweep_findings_query)"
+  if poll "([.data.result[]? | {(.metric.meridian_finding // \"\"): (.value[1] | tostring)}] | add // {}) as \$got
+    | $(printf '%s\n' "${SWEEP_FINDINGS[@]}" | jq -R . | jq -sc .) as \$words
+    | if all(\$words[]; \$got[.] != null)
+      then [\$words[] | \"\(.)=\(\$got[.])\"] | join(\", \") else empty end" \
+    -G "${query_url}" --data-urlencode "query=${query}"; then
+    pass "sweep findings: job/${job} succeeded and Prometheus has all ${#SWEEP_FINDINGS[@]} findings of ${SWEEP_SERIES} (job ${SWEEP_JOB_LABEL}) from the last ${SWEEP_SERIES_WINDOW}: $(clean_lines "${poll_result}")"
+    return
+  fi
+  # One more look, for the message only; ${poll_error} is what the last attempt saw.
+  final="$(gcurl -G "${query_url}" --data-urlencode "query=${query}" 2>/dev/null || true)"
+  sweep_findings_report "${final}" "${job}"
+}
+
+# Check 7: the sweep's two lines, the Job's and its findings'.
+check_sweep() {
+  sweep_job_finished=""
+  check_sweep_job
+  check_sweep_findings
 }
 
 # ── 8. network policy ────────────────────────────────────────────────────────

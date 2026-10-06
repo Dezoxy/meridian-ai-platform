@@ -704,13 +704,15 @@ def test_the_sweep_takes_its_own_roles_connection_string_and_the_deadline() -> N
     # The role's Secret is named as common.sh's role_secret_name names it.
     secret = SWEEP_ROLE.replace("_", "-") + "-db"
     # Beside them, the three variables of the collector (S064, C2): its address,
-    # the file that verifies it and the bound on the send.
+    # the file that verifies it and the bound on the send; and (C3) the instance
+    # ID that keeps the pass's series the same from one pass to the next.
     assert set(environment) == {
         DATABASE_URL_ENV,
         SWEEP_DEADLINE_ENV,
         "OTEL_EXPORTER_OTLP_ENDPOINT",
         "OTEL_EXPORTER_OTLP_CERTIFICATE",
         "OTEL_EXPORTER_OTLP_TIMEOUT",
+        "OTEL_RESOURCE_ATTRIBUTES",
     }
     assert environment[DATABASE_URL_ENV]["valueFrom"]["secretKeyRef"] == {
         "name": secret,
@@ -3619,7 +3621,7 @@ def test_a_service_counts_as_present_from_its_first_span_and_not_before(
 def test_smoke_runs_the_sweep_check_after_the_adjuster_pages_check() -> None:
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
-    body = function_body(SMOKE_SH, "check_sweep")
+    body = function_body(SMOKE_SH, "check_sweep_job")
 
     assert calls[6] == "check_sweep"
     # Same skip rule as the tool check: only when no Meridian Deployment exists,
@@ -3726,7 +3728,9 @@ def run_sweep_check(
     jobs: list[dict] | str | None = None,
     now: int | str | None = None,
 ) -> tuple[list[str], str]:
-    """``check_sweep`` from smoke.sh in bash against a stub ``kctl``. ``cronjob``
+    """``check_sweep_job``, the first line of check 7 (the second, the findings',
+    has its own harness: test_smoke_sweep_findings.py), from smoke.sh in bash
+    against a stub ``kctl``. ``cronjob``
     is the CronJob's answer (an empty string: it does not exist; ``FAIL``: the
     lookup fails) and ``jobs`` the Jobs of the namespace. ``now`` is what the
     database's clock answers, in epoch seconds (``FAIL``: the query fails; any
@@ -3779,8 +3783,8 @@ def run_sweep_check(
             function_definition(SMOKE_SH, "sweep_period"),
             function_definition(SMOKE_SH, "sweep_verdict"),
             function_definition(SMOKE_SH, "report_sweep"),
-            function_definition(SMOKE_SH, "check_sweep"),
-            "check_sweep",
+            function_definition(SMOKE_SH, "check_sweep_job"),
+            "check_sweep_job",
         ]
     )
     done = subprocess.run(

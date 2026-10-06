@@ -307,3 +307,120 @@ spec:
               Without cert-manager nothing is requested and without
               approver-policy nothing is approved, so no certificate is renewed.
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md
+
+    # Rules that notice a series that is not there (S064, T-86). Every rule
+    # above reads a rate or a count, and a service whose metrics stop arriving
+    # reads as one with nothing to report: nothing fires. Each hop now counts
+    # what the next one must also have counted, so a missing series can be told
+    # from an idle one: each alert holds a count of something the upstream end
+    # says happened in the last 15 minutes AND no sample at all of the series
+    # the downstream end must have written for it. A service that is idle has
+    # its series (a cumulative counter is exported once a minute after its first
+    # add), so an idle service does not fire.
+    #
+    # The two recorded series are the gateway's delta, for the same reason (see
+    # meridian:gateway_calls:delta15m): a counter's first sample counts, and the
+    # value at the start of the window is the last one before it, however long
+    # ago inside the 24 hours kind's Prometheus keeps. The alerts read them in
+    # the same group, after them, so they see the same evaluation's value.
+    #
+    # `for: 5m` on each, not 0m: the two ends of a hop export on periodic
+    # readers of their own (a minute), and a counter nothing has added to
+    # exports no series, so after the first call the upstream sample can land up
+    # to a minute before the downstream one. The window of 15 minutes is the
+    # file's; with the `for` an alert fires 20 minutes after the last sample of
+    # a series that stopped. Thresholds are proposals nobody measured, like all
+    # of them here. The runbook tells the three hops apart.
+    - name: meridian.telemetry
+      rules:
+        - record: meridian:runtime_model_calls:delta15m
+          expr: |
+            last_over_time(meridian_runtime_model_calls_total{job="agent-runtime"}[15m])
+            - (
+              last_over_time(meridian_runtime_model_calls_total{job="agent-runtime"}[24h] offset 15m)
+              or last_over_time(meridian_runtime_model_calls_total{job="agent-runtime"}[15m]) * 0
+            )
+
+        - record: meridian:claims_triages:delta15m
+          expr: |
+            last_over_time(meridian_claims_triages_total{job="claims-api"}[15m])
+            - (
+              last_over_time(meridian_claims_triages_total{job="claims-api"}[24h] offset 15m)
+              or last_over_time(meridian_claims_triages_total{job="claims-api"}[15m]) * 0
+            )
+
+        # A completed call is one the gateway answered, so the gateway counted
+        # it: its series must be there. absent_over_time() is true for a
+        # series with no sample in the 15 minutes, whatever the series' labels.
+        - alert: MeridianGatewayMetricsMissing
+          expr: |
+            sum(meridian:runtime_model_calls:delta15m{meridian_outcome="completed"}) > 0
+            and on ()
+            absent_over_time(meridian_gateway_calls_total{job="model-gateway"}[15m])
+          for: 5m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: The Model Gateway's metrics are missing while the Agent Runtime counts its calls.
+            description: >-
+              The Agent Runtime counted {{ $value }} model call(s) that
+              completed in the last 15 minutes, and Prometheus has no sample of
+              the Model Gateway's call counter in those 15 minutes. A completed
+              call is one the gateway answered, so it counted it: its metrics
+              are not arriving (proposed threshold: 15 minutes, for 5).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md
+
+        # A stored triage came from a run the runtime counted, whatever the
+        # leg's outcome: the run counter, in any outcome, must be there.
+        - alert: MeridianRuntimeMetricsMissing
+          expr: |
+            sum(meridian:claims_triages:delta15m{meridian_outcome="stored"}) > 0
+            and on ()
+            absent_over_time(meridian_runtime_runs_total{job="agent-runtime"}[15m])
+          for: 5m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: The Agent Runtime's metrics are missing while the Claims API stores triages.
+            description: >-
+              The Claims Triage App stored {{ $value }} triage(s) in the last 15
+              minutes, and Prometheus has no sample of the Agent Runtime's run
+              counter in those 15 minutes. A stored triage came from a run the
+              runtime counted: its metrics are not arriving (proposed
+              threshold: 15 minutes, for 5).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md
+
+        # The sweep's CronJob succeeded within 15 minutes (900 s: the other
+        # side of MeridianSweepStale's threshold) and its gauge has no sample in
+        # them: the sweep runs and its findings do not arrive. A sweep that does
+        # not run at all is MeridianSweepStale's. The pass sends its six gauges
+        # before it exits, but only when the chart gives the CronJob the
+        # collector's address (telemetry.otlpEndpoint): this file is kind's, and
+        # there the chart does, so a pass that sends nothing is a fault here. The
+        # CronJob sets service.instance.id=claims-sweep (templates/sweep.yaml),
+        # so the six series are the same from pass to pass and a pass at once
+        # beside another writes the same series: the later sample wins. A random
+        # ID, the SDK's default, would be six new series a pass, which no rule
+        # could read. A pass every 5 minutes leaves the series a sample never
+        # older than that, and the first sample of a new series counts.
+        - alert: MeridianSweepNotReporting
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"} < 900
+            and on ()
+            absent_over_time(meridian_sweep_last_pass{job="claims-sweep"}[15m])
+          for: 5m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: The sweep runs, and what its pass found does not arrive.
+            description: >-
+              Cronjob {{ $labels.cronjob }} succeeded in the last 15 minutes,
+              and Prometheus has no sample of what a pass found
+              (meridian_sweep_last_pass) in those 15 minutes. The sweep sends
+              its findings to the collector before it exits: the send is
+              failing, or the CronJob was given no collector address (proposed
+              threshold: 15 minutes, for 5).
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md

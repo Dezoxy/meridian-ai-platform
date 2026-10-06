@@ -28,10 +28,16 @@ from chartsupport import (
 )
 
 from meridian.platform.common.telemetry import OTLP_CERTIFICATE_ENV, OTLP_ENDPOINT_ENV
+from meridian.workloads.claims_triage.sweep import SERVICE_NAME as SWEEP_SERVICE_NAME
 
 SWEEP = "meridian-sweep"
 # The SDK's variable for an export's deadline, in seconds (a float).
 OTLP_TIMEOUT_ENV = "OTEL_EXPORTER_OTLP_TIMEOUT"
+# The SDK's variable for resource attributes. The sweep sets the instance ID
+# alone, to its own service name, so each pass writes the same six series
+# (S064, C3); the name itself is not set here (see test_metrics.py).
+RESOURCE_ENV = "OTEL_RESOURCE_ATTRIBUTES"
+SWEEP_INSTANCE = f"service.instance.id={SWEEP_SERVICE_NAME}"
 CONFIGMAP = "telemetry-ca"
 CA_DIRECTORY = "/etc/meridian/telemetry-ca"
 CA_FILE = f"{CA_DIRECTORY}/ca.crt"
@@ -160,6 +166,7 @@ def test_no_job_gets_the_authority_or_the_variable() -> None:
         assert OTLP_CERTIFICATE_ENV not in env_of(container), name
         assert OTLP_ENDPOINT_ENV not in env_of(container), name
         assert OTLP_TIMEOUT_ENV not in env_of(container), name
+        assert RESOURCE_ENV not in env_of(container), name
         assert not [v for v in pod["volumes"] if v.get("configMap")], name
 
 
@@ -224,7 +231,28 @@ def test_no_service_gets_the_sweeps_timeout() -> None:
         assert OTLP_TIMEOUT_ENV not in env_of(only_container(pods[name])), name
 
 
-def test_the_sweep_without_an_endpoint_and_a_name_gets_none_of_the_four() -> None:
+def test_the_sweep_has_one_fixed_instance_id_so_each_pass_writes_the_same_series() -> (
+    None
+):
+    environment = env_of(only_container(sweep_pod()))
+
+    assert SWEEP_SERVICE_NAME == "claims-sweep"
+    assert environment[RESOURCE_ENV] == "service.instance.id=claims-sweep"
+    assert environment[RESOURCE_ENV] == SWEEP_INSTANCE
+    # The instance ID alone: the service's name is the code's (``job``).
+    assert "service.name" not in environment[RESOURCE_ENV]
+
+
+def test_no_service_gets_the_sweeps_instance_id() -> None:
+    # Six services share a name each with its own replicas: a fixed instance ID
+    # would make two replicas write one series.
+    pods = pods_of(rendered_chart())
+
+    for name in SERVICES:
+        assert RESOURCE_ENV not in env_of(only_container(pods[name])), name
+
+
+def test_the_sweep_without_an_endpoint_and_a_name_gets_none_of_the_five() -> None:
     documents = render([*helm_arguments(), *NO_TELEMETRY])
     container = only_container(sweep_pod(documents))
 
@@ -232,10 +260,11 @@ def test_the_sweep_without_an_endpoint_and_a_name_gets_none_of_the_four() -> Non
     assert OTLP_CERTIFICATE_ENV not in env_of(container)
     assert OTLP_ENDPOINT_ENV not in env_of(container)
     assert OTLP_TIMEOUT_ENV not in env_of(container)
+    assert RESOURCE_ENV not in env_of(container)
     assert not [v for v in sweep_pod(documents)["volumes"] if v.get("configMap")]
 
 
-def test_the_sweep_with_an_http_endpoint_gets_the_address_and_the_bound_only() -> None:
+def test_the_sweep_on_http_gets_the_address_the_bound_and_the_id() -> None:
     arguments = [
         "--set-string",
         f"telemetry.otlpEndpoint={HTTP_ENDPOINT}",
@@ -247,6 +276,7 @@ def test_the_sweep_with_an_http_endpoint_gets_the_address_and_the_bound_only() -
 
     assert env_of(container)[OTLP_ENDPOINT_ENV] == HTTP_ENDPOINT
     assert env_of(container)[OTLP_TIMEOUT_ENV] == "5"
+    assert env_of(container)[RESOURCE_ENV] == SWEEP_INSTANCE
     assert OTLP_CERTIFICATE_ENV not in env_of(container)
     assert mount_of_ca(container) == []
 
