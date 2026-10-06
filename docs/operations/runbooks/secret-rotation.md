@@ -32,7 +32,7 @@ and the harness asks the owner before a session may run it.
 
 | Secret | Where | Made by | Rotation |
 |---|---|---|---|
-| The eight database roles' passwords | Kubernetes Secrets in `meridian`: `meridian-owner-db`, `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`, `claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db` (keys `username`, `password`, `uri`) | `make up`, once, only if absent | Below; not exercised |
+| The nine database roles' passwords | Kubernetes Secrets in `meridian`: `meridian-owner-db`, `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`, `claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db`, `gateway-upkeep-db` (keys `username`, `password`, `uri`) | `make up`, once, only if absent | Below; not exercised |
 | Grafana's admin password | Secret `grafana-admin` in `observability` | `make up`, once, only if absent | Below; not exercised |
 | The database's certificate authority and server certificate | Secret `platform-db-ca` and CloudNativePG's own | CloudNativePG | CloudNativePG issues and renews them; the repository records no expiry to watch (the plan's backlog) |
 | The password of the role `app` | Secret `platform-db-app` | CloudNativePG | Not used: that role cannot reach the `meridian` database |
@@ -102,6 +102,7 @@ k rollout status deploy/claims-api
   |---|---|---|
   | `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`, `claims-mcp-db`, `knowledge-mcp-db` | The Deployment of the same name without `-db` | `rollout restart` of that Deployment |
   | `claims-sweep-db` | The sweep's CronJob | Nothing: every run reads it afresh |
+  | `gateway-upkeep-db` | No workload: the operator's `meridian gateway` command (designed on kind: nothing yet reads the Secret there) | Nothing restarts: the next run of the command reads the new Secret |
   | `meridian-owner-db` | The migration, seed and ingestion Jobs | Nothing: every `make deploy` reads it afresh |
 
 - Restarting the Model Gateway while calls are in flight leaves their
@@ -118,7 +119,7 @@ After a leak:
 
 - Rotate every role whose Secret could have been read, not only the one
   that was seen: on kind one reader of the namespace's Secrets reads all
-  eight.
+  nine.
 - **A new password does not end a session that is already open.** After
   the restart the owner ends that role's remaining sessions, as the
   superuser: `pg_terminate_backend` over the rows of `pg_stat_activity`

@@ -16,8 +16,20 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from dbsupport import OWNER, DatabaseHandle
+from dbsupport import OWNER, UPKEEP_ROLE, DatabaseHandle
 from servicesupport import REGISTRY_DIR
+from upkeepsupport import (
+    CLOSE,
+    CREDIT,
+    EXPIRE,
+    plant_ledger_of_a_month,
+    plant_usage,
+    previous_month,
+    run,
+    usage_row,
+    utc_day,
+    utc_month,
+)
 
 from meridian.platform.common.db import connect
 from meridian.platform.gateway.budget import (
@@ -34,7 +46,7 @@ from meridian.platform.registry.models import Deployment, ExchangeRate, TenantLi
 
 OPERATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "operations"
 # Fewer than this means a fence was renamed or a runbook lost a query.
-EXPECTED_QUERIES = 7
+EXPECTED_QUERIES = 8
 FENCE_OPEN = re.compile(r"^(?P<indent>[ \t]*)```sql[ \t]*$")
 FENCE_CLOSE = re.compile(r"^[ \t]*```[ \t]*$")
 # Data-changing keywords, as whole words, in any case.
@@ -270,9 +282,71 @@ def test_the_reconciliation_reports_no_drift_after_every_way_to_close(
     assert all(row["ledger"] > 0 for row in rows)
 
 
+def ledger_by_kind(db: DatabaseHandle) -> dict[str, int]:
+    """What the query says each counter's ledger is (charges less credits), for
+    the tenant's current periods."""
+    this_month = utc_month(db)
+    return {
+        row["kind"]: row["ledger"]
+        for row in drift_rows(db)
+        if row["tenant"] == TENANT and row["period_start"] >= this_month
+    }
+
+
+def test_the_reconciliation_reports_no_drift_after_a_credit(
+    ledger_run: LedgerRun,
+) -> None:
+    before = ledger_by_kind(ledger_run.db)
+
+    run(ledger_run.db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    run(ledger_run.db, UPKEEP_ROLE, CREDIT, (TENANT, COST_KIND, 3, "goodwill"))
+
+    rows = drift_rows(ledger_run.db)
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    # The credit is in the query's ledger column: charges less credits.
+    after = ledger_by_kind(ledger_run.db)
+    assert after == {
+        TOKENS_KIND: before[TOKENS_KIND] - 10,
+        COST_KIND: before[COST_KIND] - 3,
+    }
+
+
+def test_the_reconciliation_reports_no_drift_after_upkeep_releases_a_reservation(
+    ledger_run: LedgerRun,
+) -> None:
+    # A reservation a dead process left: written by the owner, thirty minutes ago.
+    stale = plant_usage(ledger_run.db, tenant=TENANT, tokens=7, micro_eur=3)
+
+    run(ledger_run.db, UPKEEP_ROLE, CLOSE, (stale, True, "dead-process"))
+
+    rows = drift_rows(ledger_run.db)
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    assert usage_row(ledger_run.db, stale) == ("released", 0, 0, True)
+
+
+def test_the_reconciliation_reports_no_drift_after_upkeep_expires_a_month(
+    ledger_run: LedgerRun,
+) -> None:
+    current = utc_month(ledger_run.db)
+    old = previous_month(current)
+    plant_ledger_of_a_month(ledger_run.db, old)
+    before = drift_rows(ledger_run.db)
+    assert {row["period_start"] for row in before} >= {old, old.replace(day=28)}
+    assert [row["drift"] for row in before] == [0] * len(before)
+
+    run(ledger_run.db, UPKEEP_ROLE, EXPIRE, (current, "retention-test"))
+
+    rows = drift_rows(ledger_run.db)
+    assert {row["period_start"] for row in rows}.isdisjoint({old, old.replace(day=28)})
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+    assert rows
+
+
 def test_the_reconciliation_reports_a_counter_changed_by_hand(
     ledger_run: LedgerRun,
 ) -> None:
+    # After a credit, so that the hand change is found against charges less credits.
+    run(ledger_run.db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
     with connect(ledger_run.db.dsn(OWNER), "runbook-query-test-edit") as conn:
         conn.execute(
             "UPDATE gateway.budget_counters SET amount = amount + %s "
@@ -296,3 +370,113 @@ def test_the_open_reservations_query_returns_the_one_attempt_left_open(
 
     assert [row["attempt_id"] for row in found] == [ledger_run.open_attempt]
     assert found[0]["tenant"] == TENANT
+
+
+def test_the_upkeep_audit_query_lists_each_change_newest_first_under_the_role(
+    ledger_run: LedgerRun,
+) -> None:
+    db = ledger_run.db
+    stale = plant_usage(db, tenant=TENANT, tokens=7, micro_eur=3)
+    run(db, UPKEEP_ROLE, CLOSE, (stale, False, "dead-process"))
+    run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    plant_ledger_of_a_month(db, previous_month(utc_month(db)))
+    run(db, UPKEEP_ROLE, EXPIRE, (utc_month(db), "retention-test"))
+    sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
+
+    columns, rows = run_read_only(db, sql)
+
+    found = [dict(zip(columns, row, strict=True)) for row in rows]
+    assert [row["event"] for row in found] == [
+        "ledger.expired",
+        "budget.credited",
+        "ledger.reservation-closed",
+    ]
+    assert {row["db_role"] for row in found} == {UPKEEP_ROLE}
+    assert [row["reason"] for row in found] == [
+        "retention-test",
+        "goodwill",
+        "dead-process",
+    ]
+
+
+FORGED_ROW = (
+    "INSERT INTO audit.events "
+    "(service, event, outcome, tenant, reference, reason) "
+    "VALUES ('gateway-upkeep', 'budget.credited', 'completed', %s, 'forged', "
+    "'goodwill')"
+)
+
+
+def test_the_upkeep_audit_query_does_not_list_a_row_another_role_wrote_as_the_upkeep(
+    ledger_run: LedgerRun,
+) -> None:
+    # The gateway's own role may append to the audit log and chooses `service`
+    # and `event` itself; `db_role` is stamped by the database from the session.
+    db = ledger_run.db
+    run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    run(db, "model_gateway", FORGED_ROW, (TENANT,))
+    sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
+
+    columns, rows = run_read_only(db, sql)
+
+    found = [dict(zip(columns, row, strict=True)) for row in rows]
+    assert [row["reference"] != "forged" for row in found] == [True]
+    assert {row["db_role"] for row in found} == {UPKEEP_ROLE}
+    # The control: the forged row is in the log under the upkeep's service name.
+    forged = run(
+        db, OWNER, "SELECT db_role FROM audit.events WHERE reference = 'forged'"
+    )
+    assert forged == [("model_gateway",)]
+
+
+def orphan_rows(db: DatabaseHandle) -> list[dict]:
+    sql = runbook_query("runbooks/budget-exhaustion.md", "missing_cost_counter")
+    columns, rows = run_read_only(db, sql)
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def test_the_orphan_query_finds_nothing_on_a_sound_ledger(
+    ledger_run: LedgerRun,
+) -> None:
+    assert orphan_rows(ledger_run.db) == []
+
+
+def test_the_orphan_query_finds_a_usage_row_whose_counters_are_missing(
+    ledger_run: LedgerRun,
+) -> None:
+    # What a reservation that outlived its month's expiry would leave: a usage row
+    # and no counter row. The drift query starts from the counters and cannot see it.
+    orphan = plant_usage(ledger_run.db, tenant="orphan-tenant", counted=False)
+
+    found = orphan_rows(ledger_run.db)
+
+    assert [row["attempt_id"] for row in found] == [orphan]
+    assert (found[0]["missing_tokens_counter"], found[0]["missing_cost_counter"]) == (
+        True,
+        True,
+    )
+    rows = drift_rows(ledger_run.db)
+    assert [row["drift"] for row in rows] == [0] * len(rows)
+
+
+def test_the_orphan_query_names_which_of_the_two_counters_is_missing(
+    ledger_run: LedgerRun,
+) -> None:
+    db = ledger_run.db
+    # The day's counter is there, the month's is not.
+    orphan = plant_usage(db, tenant="orphan-tenant", counted=False)
+    run(
+        db,
+        OWNER,
+        "INSERT INTO gateway.budget_counters (tenant, kind, period_start, amount) "
+        "VALUES ('orphan-tenant', 'tokens-day', %s, 100)",
+        (utc_day(db),),
+    )
+
+    found = orphan_rows(db)
+
+    assert [row["attempt_id"] for row in found] == [orphan]
+    assert (found[0]["missing_tokens_counter"], found[0]["missing_cost_counter"]) == (
+        False,
+        True,
+    )

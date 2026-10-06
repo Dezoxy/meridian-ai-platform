@@ -82,6 +82,7 @@ from meridian.workloads.claims_triage.triaging import (
 KIND_DIR = REPO_ROOT / "infra" / "kind"
 SWEEP_MODULE = "meridian.workloads.claims_triage.sweep"
 SWEEP_ROLE = "claims_sweep"
+UPKEEP_ROLE = "gateway_upkeep"
 TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
 SERVER_PORT = 8000
 # The tenant whose limits the ingestion's embedding calls count against.
@@ -882,6 +883,7 @@ def test_the_database_declares_its_roles_with_login_only() -> None:
         "claims_mcp",
         "knowledge_mcp",
         SWEEP_ROLE,
+        UPKEEP_ROLE,
     }
     for name, role in roles.items():
         assert role["login"] is True
@@ -903,7 +905,7 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     limits = {
         r["name"]: r["connectionLimit"]
         for r in PLATFORM_DB["cluster"]["roles"]
-        if "connectionLimit" in r and r["name"] != SWEEP_ROLE
+        if "connectionLimit" in r and r["name"] not in (SWEEP_ROLE, UPKEEP_ROLE)
     }
 
     # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one

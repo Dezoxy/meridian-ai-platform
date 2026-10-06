@@ -9,9 +9,9 @@
 #      that say who may ask for a certificate, and the CA that signs the
 #      services' certificates
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
-#      the database "meridian" and its eight roles (the owner, six services and
-#      the scheduled sweep's); their password Secrets are created first, only if
-#      absent
+#      the database "meridian" and its nine roles (the owner, six services, the
+#      scheduled sweep's and the gateway's ledger upkeep's); their password
+#      Secrets are created first, only if absent
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
