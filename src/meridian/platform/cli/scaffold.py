@@ -467,11 +467,16 @@ def _parsed(text: str) -> dict[str, Any] | None:
 
 def _could_be_a_header(line: str) -> bool:
     """Whether ``line`` can be a table header: with a trailing comment and the space
-    around it removed, it starts with ``[`` and ends with ``]``. A line of an array
-    (``  [1],``) or of a key is no candidate, so it costs no parse. A ``#`` inside a
-    quoted key (``["a#b"]``) does not hide a header: the pattern asks for a ``]``
-    followed by a comment or by nothing, wherever the ``]`` is."""
-    return HEADER_SHAPE.fullmatch(line.strip()) is not None
+    around it removed, it starts with ``[`` and ends with ``]``, and it is valid TOML
+    on its own, as every header is. A line of an array (``  [1],``, ``  [1], # ]``)
+    or of a key is no candidate, so it costs no parse of the text before it. A ``#``
+    inside a quoted key (``["a#b"]``) does not hide a header: the pattern asks for a
+    ``]`` followed by a comment or by nothing, wherever the ``]`` is. The parse of
+    one line is as long as the line."""
+    stripped = line.strip()
+    return HEADER_SHAPE.fullmatch(stripped) is not None and (
+        _parsed(stripped + "\n") is not None
+    )
 
 
 def _table_end(lines: list[str], start: int) -> int:

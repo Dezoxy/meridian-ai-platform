@@ -76,6 +76,10 @@ EDITED_CORRECTLY = [
         first_in_graphs("many = [\n  [1],\n  [2],\n]\n"), id="an array of arrays"
     ),
     pytest.param(
+        first_in_graphs("many = [\n  [1], # ]\n  [2],\n]\n"),
+        id="an array of arrays with a ] in a comment",
+    ),
+    pytest.param(
         first_in_graphs("inline = { a = [1], b = 2 }\n"), id="an inline table"
     ),
     pytest.param(first_in_graphs("a.b = 1\n"), id="a dotted key"),
@@ -169,6 +173,9 @@ def test_a_header_followed_by_a_comment_is_refused_naming_its_line(root: Path) -
         pytest.param("# [x]\n", False, id="a comment"),
         pytest.param("\n", False, id="a blank line"),
         pytest.param("[x] y\n", False, id="text after the bracket"),
+        pytest.param("  [1], # ]\n", False, id="an element, a ] in its comment"),
+        pytest.param("[1, 2] # ]\n", False, id="a bracket pair that is no key"),
+        pytest.param("[a b]\n", False, id="a key with a space in it"),
     ],
 )
 def test_only_a_line_that_can_be_a_header_is_a_candidate(

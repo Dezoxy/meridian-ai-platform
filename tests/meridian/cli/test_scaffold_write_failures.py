@@ -193,12 +193,12 @@ def fail_services_after_saving(
     real = scaffold_writes._replace
     failed: list[Path] = []
 
-    def replace(path: Path, data: bytes) -> None:
+    def replace(path: Path, data: bytes, *rest: Any) -> None:
         if path == root / SERVICES and not failed:
             failed.append(path)
             (root / saved).write_bytes(PERSONS_SAVE)
             raise PermissionError(errno.EACCES, LEAKED)
-        real(path, data)
+        real(path, data, *rest)
 
     monkeypatch.setattr(scaffold_writes, "_replace", replace)
 
@@ -311,10 +311,10 @@ def hook_replacements(
     before = before or {}
     after = after or {}
 
-    def replace(path: Path, data: bytes) -> None:
+    def replace(path: Path, data: bytes, *rest: Any) -> None:
         relative = path.relative_to(root).as_posix()
         before.get(relative, lambda: None)()
-        real(path, data)
+        real(path, data, *rest)
         after.get(relative, lambda: None)()
 
     monkeypatch.setattr(scaffold_writes, "_replace", replace)

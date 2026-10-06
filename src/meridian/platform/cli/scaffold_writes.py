@@ -8,7 +8,16 @@ puts back every file that still holds the bytes this command wrote, leaves a fil
 the person saved since and says so, and names each path it could not restore. When
 something ends the undo itself (a second interrupt, an exit, an error), what it had
 done is known to the caller, which says so and names every path of the plan that is
-not known to be settled, to be checked by hand.
+not known to be settled, to be checked by hand. A temporary file ``_replace`` makes
+is noted before it exists, removed by the undo and named like any other path when
+it stays. The fixed line "check the working tree" is written before the paths are
+listed.
+
+What cannot be closed: an interrupt that comes before that first line is written
+(after the undo has returned, while the error is built) leaves the person no
+line, and a kill the process cannot catch leaves nothing said at all; and an
+error the undo raises after an interrupt ends the command as a write error
+(exit 1), not as the interrupt.
 
 The errors and the plan are here and not in ``scaffold``, which imports this
 module: the write needs them and must not import its importer. ``scaffold``
@@ -25,12 +34,14 @@ when the failure is reported.
 
 import hashlib
 import os
+import secrets
 import stat
 import sys
-import tempfile
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
+from itertools import chain
 from pathlib import Path
 from typing import NoReturn
 
@@ -125,20 +136,32 @@ def _refuse_a_stale_plan(root: Path, plan: Plan) -> None:
         raise ScaffoldError(STALE_PLAN)
 
 
-def _replace(path: Path, data: bytes) -> None:
+def _replace(path: Path, data: bytes, temporaries: list[Path]) -> None:
     """Replace ``path`` with ``data`` in one step, keeping its mode: the bytes go
-    to a temporary file beside it, which then takes its place."""
+    to a temporary file beside it, which then takes its place. The temporary's path
+    is chosen and noted in ``temporaries`` (the caller's) before the file exists, so
+    that the undo can remove it whatever ends this call; it is taken out of the list
+    once it has replaced ``path`` or has been removed. A failure removing it is not
+    this call's to report: it stays noted, and the undo tries again and names it."""
     mode = stat.S_IMODE(path.stat().st_mode)
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    temporaries.append(temporary)
     try:
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:  # not ours, and not to be removed
+            temporaries.remove(temporary)
+            raise
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
         os.chmod(temporary, mode)
         os.replace(temporary, path)
+        temporaries.remove(temporary)
     except BaseException:
-        Path(temporary).unlink(missing_ok=True)
+        if temporary in temporaries:
+            with suppress(OSError):
+                temporary.unlink(missing_ok=True)
+                temporaries.remove(temporary)
         raise
 
 
@@ -189,7 +212,7 @@ def _failure(exc: OSError) -> str:
     return f"{type(exc).__name__}: {os.strerror(exc.errno)}"
 
 
-def _put_back(path: Path, old: bytes, new: bytes) -> bool:
+def _put_back(path: Path, old: bytes, new: bytes, temporaries: list[Path]) -> bool:
     """Make ``path`` hold ``old`` again, only over ``new``, the bytes this command
     wrote; ``False`` when it holds anything else and was left as it is. A file
     that already holds ``old`` (its replacement never happened, perhaps because it
@@ -207,8 +230,16 @@ def _put_back(path: Path, old: bytes, new: bytes) -> bool:
         return True
     if current != new:
         return False
-    _replace(path, old)
+    _replace(path, old, temporaries)
     return True
+
+
+def _settle(
+    root: Path, outcome: dict[str, str | None], path: Path, template: str | None = None
+) -> None:
+    """Note in ``outcome`` how ``path`` ended: ``None``, or ``template`` with it."""
+    relative = path.relative_to(root).as_posix()
+    outcome[relative] = None if template is None else template.format(relative)
 
 
 def _undo(
@@ -216,6 +247,7 @@ def _undo(
     files: list[Path],
     directories: list[Path],
     replaced: list[tuple[Path, bytes, bytes]],
+    temporaries: list[Path],
     outcome: dict[str, str | None],
 ) -> None:
     """Put back what a failed write changed. ``outcome`` is the caller's, filled as
@@ -231,20 +263,19 @@ def _undo(
     person and is the only kind left as it is (``LEFT_AS_SAVED``: what the person
     saved decides what is consistent); one the undo could not read or replace, a
     file in ``files`` or a directory in ``directories`` that would not go, is
-    ``LEFT_BEHIND``. A file or directory that was never created is skipped."""
+    ``LEFT_BEHIND``. A file or directory that was never created is skipped. The
+    temporary files ``_replace`` noted in ``temporaries`` are removed last, the
+    undo's own among them, and one that will not go is ``LEFT_BEHIND`` too."""
 
-    def settle(path: Path, template: str | None = None) -> None:
-        relative = path.relative_to(root).as_posix()
-        outcome[relative] = None if template is None else template.format(relative)
-
+    settle = partial(_settle, root, outcome)
     for path, old, new in reversed(replaced):
         try:
-            put_back = _put_back(path, old, new)
+            put_back = _put_back(path, old, new, temporaries)
         except OSError:
             settle(path, LEFT_BEHIND)
         else:
             settle(path, None if put_back else LEFT_AS_SAVED)
-    for file in files:
+    for file in (*files, *temporaries):
         try:
             file.unlink(missing_ok=True)
         except OSError:
@@ -295,20 +326,23 @@ def _read_as_planned(path: Path, digest: str) -> bytes:
 
 
 def _replace_files(
-    root: Path, plan: Plan, replaced: list[tuple[Path, bytes, bytes]]
+    root: Path,
+    plan: Plan,
+    replaced: list[tuple[Path, bytes, bytes]],
+    temporaries: list[Path],
 ) -> None:
     """Replace the edited files in ``WRITE_ORDER``. Each is noted, with the bytes
     it was planned from and the bytes it is given, before it is replaced, so that
     an interrupt between the two is undone; a file that is not what the plan was
     made from (saved after the check at the start of ``write_plan``) is not
-    touched."""
+    touched. ``temporaries`` is where ``_replace`` notes its temporary files."""
     for relative in WRITE_ORDER:
         path = root / relative
         old = _read_as_planned(path, plan.base[relative])
         new = plan.changed[relative].encode("utf-8")
         replaced.append((path, old, new))
         with _writing(REPLACING[relative]):
-            _replace(path, new)
+            _replace(path, new, temporaries)
 
 
 def _what_stopped(exc: BaseException) -> tuple[str, str]:
@@ -322,12 +356,15 @@ def _what_stopped(exc: BaseException) -> tuple[str, str]:
     return kind, type(exc).__name__
 
 
-def _say(message: str, lines: tuple[str, ...]) -> None:
-    """Write ``message`` and ``lines`` to standard error, as the command prints an
-    error. A stream that cannot be written (a pipe the reader closed) says nothing
-    and must not replace what ended the command, so its error is dropped."""
+def _say(message: str, lines: Iterable[str]) -> None:
+    """Write ``message`` and then ``lines`` to standard error, as the command prints
+    an error. ``lines`` may be built as it is written: ``message`` is out before the
+    first of them is worked out. A stream that cannot be written (a pipe the reader
+    closed) says nothing and must not replace what ended the command, so its error
+    is dropped."""
     try:
-        for line in (message, *lines):
+        sys.stderr.write(f"ERROR {message}\n")
+        for line in lines:
             sys.stderr.write(f"ERROR {line}\n")
     except (OSError, ValueError):
         pass
@@ -337,25 +374,37 @@ def _end_unfinished(
     root: Path,
     plan: Plan,
     directories: list[Path],
+    temporaries: list[Path],
     outcome: dict[str, str | None],
     ended: BaseException,
 ) -> NoReturn:
     """End ``write_plan`` after ``ended`` (an interrupt, an exit or an error) ended
     the undo itself. What it left is in ``outcome``; the plan knows every path it
-    creates or replaces, so each one the undo had not settled is named to be checked
-    by hand. An error becomes a ``ScaffoldWriteError`` with the lines as details, an
-    interrupt or an exit is said on standard error and goes on."""
-    here = (path.relative_to(root).as_posix() for path in directories)
-    unsettled = (*plan.created, *here, *WRITE_ORDER)
-    lines = (
-        *(line for line in outcome.values() if line),
-        *(CHECK_BY_HAND.format(path) for path in unsettled if path not in outcome),
-    )
+    creates or replaces, and ``temporaries`` those of the files being replaced, so
+    each one the undo had not settled is named to be checked by hand. An error
+    becomes a ``ScaffoldWriteError`` with the lines as details, an interrupt or an
+    exit is said on standard error and goes on: the fixed line first, then the paths,
+    which are worked out only as they are written."""
     message = UNDO_UNFINISHED.format(type(ended).__name__)
+    lines = chain(
+        (line for line in outcome.values() if line),
+        _to_check(root, plan, (*directories, *temporaries), outcome),
+    )
     if isinstance(ended, Exception):
-        raise ScaffoldWriteError(message, details=lines) from ended
+        raise ScaffoldWriteError(message, details=tuple(lines)) from ended
     _say(message, lines)
     raise ended
+
+
+def _to_check(
+    root: Path, plan: Plan, made: tuple[Path, ...], outcome: dict[str, str | None]
+) -> Iterator[str]:
+    """The lines to check by hand: each path of the plan, and each directory or
+    temporary file in ``made``, that ``outcome`` does not hold."""
+    relative = (path.relative_to(root).as_posix() for path in made)
+    for path in (*plan.created, *relative, *WRITE_ORDER):
+        if path not in outcome:
+            yield CHECK_BY_HAND.format(path)
 
 
 def write_plan(root: Path, plan: Plan) -> None:
@@ -382,16 +431,17 @@ def write_plan(root: Path, plan: Plan) -> None:
     files: list[Path] = []
     directories: list[Path] = []
     replaced: list[tuple[Path, bytes, bytes]] = []
+    temporaries: list[Path] = []
     try:
         _create_files(targets, files, directories)
-        _replace_files(root, plan, replaced)
+        _replace_files(root, plan, replaced, temporaries)
     except BaseException as exc:
         outcome: dict[str, str | None] = {}
         try:
-            _undo(root, files, directories, replaced, outcome)
+            _undo(root, files, directories, replaced, temporaries, outcome)
+            left = tuple(line for line in outcome.values() if line)
         except BaseException as ended:
-            _end_unfinished(root, plan, directories, outcome, ended)
-        left = tuple(line for line in outcome.values() if line)
+            _end_unfinished(root, plan, directories, temporaries, outcome, ended)
         if not left:
             if isinstance(exc, _StepFailed):
                 raise ScaffoldWriteError(

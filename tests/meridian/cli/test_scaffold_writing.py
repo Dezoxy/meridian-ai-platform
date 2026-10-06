@@ -531,8 +531,8 @@ def interrupt_after_replacing(
     real = scaffold_writes._replace
     interrupted: list[Path] = []
 
-    def replace(path: Path, data: bytes) -> None:
-        real(path, data)
+    def replace(path: Path, data: bytes, *rest: Any) -> None:
+        real(path, data, *rest)
         if path == root / relative and not interrupted:
             interrupted.append(path)
             raise KeyboardInterrupt
