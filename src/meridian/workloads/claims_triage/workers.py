@@ -11,9 +11,9 @@ the assessor's builder gets the model client and no tool client at all: its
 nodes could not call a tool if they tried. No builder gets both.
 
 The nodes are the ones the graph had before the split, with their bodies,
-failure codes and idempotency step labels unchanged (S067 added two codes,
-``claim-not-valid`` and ``wording-version-unknown``, and read the claim through
-``claim_of``). Every node is labelled with
+failure codes and idempotency step labels unchanged (S067 added three codes,
+``claim-not-valid``, ``wording-version-unknown`` and ``posted-flag-not-valid``,
+and read the claim through ``claim_of``). Every node is labelled with
 its worker (``meridian.worker`` in the node's metadata), which the runtime puts
 on the node's span. The state is one ``ClaimState`` for the supervisor and every
 worker: plain data only, as the runtime runs LangGraph in strict msgpack mode.
@@ -24,7 +24,7 @@ refuse the step; parallel workers would need an output schema each.
 """
 
 import logging
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
@@ -40,6 +40,7 @@ from meridian.runtime.tracing import WORKER_KEY
 
 from .assessment import Assessed, assess
 from .models import DECISION_NOTES, ClaimFacts, Outcome
+from .posted_text import POSTED_TEXT_FLAG
 from .proposal import TriageProposal
 from .rules import (
     Assessment,
@@ -76,6 +77,9 @@ APPROVALS = "approvals"
 
 class ClaimState(TypedDict):
     claim: dict[str, Any]
+    # The Claims API's screen of the description as posted (S067), beside the
+    # claim: absent means false. ``posted_flag_of`` reads it.
+    posted_text_addresses_the_model: NotRequired[bool]
     policy: dict[str, Any] | None
     history: list[dict[str, Any]]
     history_truncated: bool
@@ -161,6 +165,18 @@ def claim_of(state: ClaimState) -> ClaimFacts:
         raise GraphFailure("claim-not-valid") from None
 
 
+def posted_flag_of(state: ClaimState) -> bool:
+    """The Claims API's screen of the description as posted (S067): absent is
+    false, and anything that is not a boolean fails the run with a fixed code,
+    never read as a truth value: the input is the caller's. A flag can only make
+    a run more careful, so a caller that sends true for clean text sends the
+    claim to an adjuster, which is what the screen's own hit does."""
+    flag = state.get(POSTED_TEXT_FLAG, False)
+    if not isinstance(flag, bool):
+        raise GraphFailure("posted-flag-not-valid")
+    return flag
+
+
 def _unknown_wording(policy: PolicyRecord) -> GraphFailure:
     """The failure of a policy whose wording the table of exclusion counts does
     not know, after one log line that says so."""
@@ -227,6 +243,7 @@ def build_intake(intake: ToolClient) -> CompiledStateGraph:
 
     def lookup_policy(state: ClaimState) -> dict[str, Any]:
         claim = claim_of(state)
+        posted_flag_of(state)  # the run's input is checked once, before any call
         number = {"policy_number": claim.policy_number}
         found = intake.call("policy_lookup", number).data
         # The later keys start empty so that every node reads a key that is set,
@@ -305,12 +322,19 @@ def build_assessor(model: ModelClient) -> CompiledStateGraph:
 
     def assess_exclusions(state: ClaimState) -> dict[str, Any]:
         claim = claim_of(state)
+        # Read here and nowhere else; only a claim that is asked about uses it.
+        posted = posted_flag_of(state)
         policy = policy_of(state)
         terms = terms_of(claim, policy, state)
         if not needs_assessment(claim, policy, terms):
             return {"assessed": assessed_to_state(NOT_NEEDED)}
         assessed = assess(
-            model, claim, policy.product, policy.wording_version, terms.candidates
+            model,
+            claim,
+            policy.product,
+            policy.wording_version,
+            terms.candidates,
+            posted_text_addresses_the_model=posted,
         )
         return {"assessed": assessed_to_state(assessed)}
 

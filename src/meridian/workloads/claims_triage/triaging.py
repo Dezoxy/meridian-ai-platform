@@ -61,6 +61,7 @@ from meridian.workloads.claims_triage.models import (
     ProposalSummary,
     Route,
 )
+from meridian.workloads.claims_triage.posted_text import input_for_run
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
 # Ending a run is best effort (the claim's move stands), and ``add_documents``
@@ -349,7 +350,7 @@ def start_run(
             "agent": AGENT,
             "tenant": tenant,
             "reference": reference,
-            "input": {"claim": facts},
+            "input": facts,
         },
     )
 
@@ -691,7 +692,7 @@ def triage_claim(
         http,
         span,
         claim_id,
-        facts_for_run(submission, arrived),
+        input_for_run(submission, facts_for_run(submission, arrived)),
         taken_at,
         meters=meters,
     )
