@@ -108,8 +108,10 @@ plan's Part A rests its rule on a suite beside the cluster on that number.
   cluster unless the machine was measured to carry both. Measured on the
   virtual machine on 2026-10-05, alone: the whole suite takes 2 min 42 s
   with the default 4 workers, 2 min 03 s with 8 and 1 min 55 s with 10
-  (`PYTEST_WORKERS=10`); the default stays 4, which is what CI's runner
-  has.
+  (`PYTEST_WORKERS=10`). Ten is the Makefile's default since 2026-10-06,
+  the owner's decision; CI sets 4 for its four-core runner, and a step
+  that runs beside others passes 4. Beside the deployed cluster the
+  suite took 3 min 10 s with 4 workers, with 5.5 GB still available.
 - **An unattended session runs in the Remote Control service on the
   machine, in tmux, not in a desktop session over SSH.** On the night of
   2026-10-05 a desktop session stood still for six hours while its

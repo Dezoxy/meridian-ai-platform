@@ -81,6 +81,9 @@ jobs:
       - name: Tests
         run: make pytest
         env:
+          # The Makefile's default is the development machine's (10); this
+          # runner has four cores.
+          PYTEST_WORKERS: "4"
           # make hands this to pytest, which then prints the slowest tests: what
           # one test adds to the job can be read from any run (S057).
           PYTEST_ARGS: --durations=25

@@ -9027,3 +9027,10 @@ follow-up backlog, without a prompt change and without a live recording.
   84 nor 85), and a question does not stop a session while the owner is
   away. `docs/development-environment.md` says where an unattended session
   runs. S062, S065 and S034 open together.
+- **v0.46, 2026-10-06:** `PYTEST_WORKERS` defaults to 10, the owner's
+  decision ("My machine can handle 10 worker so it should be the default
+  from now"); the python workflow sets 4 for its runner, and a test holds
+  the two apart. Measured on the virtual machine that day: `make up` from
+  nothing 5 min 04 s, the first `make deploy` 1 min 30 s, `make smoke`
+  43 s with 24 lines passing, and the whole suite beside the deployed
+  cluster 3 min 10 s with 4 workers.
