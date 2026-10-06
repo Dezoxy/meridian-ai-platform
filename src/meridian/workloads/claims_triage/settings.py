@@ -34,9 +34,9 @@ class ClaimsSettings(BaseModel):
     # How many days a claim waits for documents: what the status page says is the
     # due day. The sweep acts on the same variable: one name, one parser and one
     # sum (``lifecycle``), so the page and the sweep agree when both are given the
-    # same value. The chart sets it on the sweep's CronJob alone today (a step that
-    # works on the chart will set it on the Claims API too), so a deployment that
-    # changes it sets it on both.
+    # same value. The chart sets it on the sweep's CronJob and on the Claims API's
+    # Deployment from one value (``sweep.documentsDeadlineDays``), and a test holds
+    # the two rendered values equal.
     documents_deadline_days: int = Field(
         DOCUMENTS_DEADLINE_DAYS, ge=MIN_DEADLINE_DAYS, le=MAX_DEADLINE_DAYS
     )

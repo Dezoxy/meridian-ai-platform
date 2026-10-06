@@ -81,7 +81,7 @@ spec:
               env:
                 {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_DATABASE_URL" "secret" .Values.sweep.dbSecret) | nindent 16 }}
                 - name: MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS
-                  value: {{ .Values.sweep.documentsDeadlineDays | quote }}
+                  value: {{ include "meridian.documentsDeadlineDays" . | quote }}
               resources:
                 {{- toYaml .Values.sweep.resources | nindent 18 }}
               securityContext:

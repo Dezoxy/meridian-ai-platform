@@ -101,6 +101,87 @@ def test_up_s_wait_for_the_issuer_dies_naming_what_to_look_at() -> None:
     assert "Denied" in message
 
 
+GATEWAY_WAIT = "kctl -n envoy-gateway-system wait --for=condition=Programmed "
+PROXY_WAIT = "kctl -n envoy-gateway-system wait --for=condition=Available "
+
+
+def test_up_s_wait_for_the_gateway_dies_saying_the_edge_may_serve_and_the_remedy() -> (
+    None
+):
+    timeout, message = wait_and_die_message(GATEWAY_WAIT + "gateway/edge ")
+
+    # The wait itself is as it was: five minutes, for Programmed.
+    assert timeout == "5m"
+    assert timeout in message
+    assert "Programmed" in message
+    # Envoy Gateway leaves the condition False while the edge serves.
+    assert "serving" in message
+    # The remedy, as the three commands of the README's section, in order.
+    restart = message.index("rollout restart deploy/envoy-gateway")
+    status = message.index("rollout status deploy/envoy-gateway")
+    nudge = message.index("annotate gateway edge")
+    assert restart < status < nudge
+    assert "meridian.local/reconcile-nudge" in message[nudge:]
+    # Where the reason is, and the section that has the commands to copy.
+    assert "get gateway edge -o yaml" in message
+    assert "infra/kind/README.md" in message
+
+
+def test_up_s_wait_for_the_proxy_dies_saying_what_to_look_at() -> None:
+    timeout, message = wait_and_die_message(PROXY_WAIT + "deployment ")
+
+    assert timeout == "5m"
+    assert timeout in message
+    assert "Available" in message
+    assert "kubectl -n envoy-gateway-system get pods" in message
+    assert "gateway.envoyproxy.io/owning-gateway-name=edge" in message
+    assert "logs deploy/envoy-gateway" in message
+
+
+def test_the_two_edge_messages_do_not_claim_the_wait_ran_five_minutes() -> None:
+    # `kubectl wait` fails at once on "not found" as well as after the timeout,
+    # so "in 5m" would be false for the first. The messages say what is known:
+    # the wait ended without the condition, after at most five minutes, and
+    # kubectl's own message, printed above the error, says which it was.
+    for prefix in (GATEWAY_WAIT + "gateway/edge ", PROXY_WAIT + "deployment "):
+        timeout, message = wait_and_die_message(prefix)
+
+        assert f"in {timeout}" not in message
+        assert f"up to {timeout}" in message
+        assert "ended without" in message
+        assert "kubectl's own message above" in message
+
+
+def test_up_s_last_two_waits_keep_their_conditions_and_timeouts() -> None:
+    lines = script_lines()
+    programmed = lines[line_index(GATEWAY_WAIT)]
+    available = lines[line_index(PROXY_WAIT)]
+
+    assert programmed.startswith(GATEWAY_WAIT + "gateway/edge --timeout=5m >/dev/null")
+    assert available.startswith(
+        PROXY_WAIT
+        + "deployment -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m"
+    )
+    assert line_index(GATEWAY_WAIT) + 1 < line_index(PROXY_WAIT)
+
+
+def test_the_readme_has_the_section_and_the_commands_the_gateway_message_names() -> (
+    None
+):
+    readme = (KIND_DIR / "README.md").read_text(encoding="utf-8")
+    _, message = wait_and_die_message(GATEWAY_WAIT + "gateway/edge ")
+
+    assert "\n## If `make up` was interrupted\n" in readme
+    assert "If make up was interrupted" in message
+    section = readme.split("\n## If `make up` was interrupted\n")[1].split("\n## ")[0]
+    for command in (
+        "rollout restart deploy/envoy-gateway",
+        "rollout status deploy/envoy-gateway",
+        "annotate gateway edge meridian.local/reconcile-nudge=",
+    ):
+        assert command in section
+
+
 def test_up_s_comment_does_not_promise_that_a_request_made_in_between_is_quick() -> (
     None
 ):

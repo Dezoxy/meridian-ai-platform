@@ -4,19 +4,38 @@ A certificate that identifies a Meridian service, or the CA that signs
 them, is close to its end and cert-manager has not renewed it, or it is
 not Ready.
 
-Status (S056): written from the policies, the chart and the alert rules,
-not exercised. cert-manager's metrics reach Prometheus through the
-ServiceMonitor `cert-manager` in `observability`. That monitor and the
-first two alerts have been seen on the kind cluster (2026-10-05): the
-target up, the series for the CA and the seven services, the rules
-loaded and inactive. `MeridianCertificateMetricsMissing` and
-`MeridianCertificateApproverDown` have not been seen on a cluster.
+Status (S056, S062): written from the policies, the chart and the alert
+rules. The procedure at the end of this page, which watches a renewal, was
+run on the kind cluster on 2026-10-06 and its table says what was seen; the
+steps of "Confirm" and "What to do" were not exercised. cert-manager's
+metrics reach Prometheus through the ServiceMonitor `cert-manager` in
+`observability`. That monitor and the first two alerts have been seen on
+the kind cluster (2026-10-05): the target up, the series for the CA and the
+seven services, the rules loaded and inactive. `MeridianCertificateNotRenewed`
+was also seen pending and firing on 2026-10-06, in the renewal watch.
+`MeridianCertificateMetricsMissing` and `MeridianCertificateApproverDown`
+have not been seen on a cluster.
 
 A service's certificate lasts 90 days and cert-manager renews it 30 days
 before its end; the CA's lasts a year and is renewed about four months
 before its end. A service that holds a certificate within 24 hours of its
 end answers 503 on `/healthz`, so the kubelet restarts it and the new
 process loads the renewed one.
+
+The chart's values `certificate.duration` (90 days, `2160h`, by default) and
+`certificate.renewBefore` (empty: cert-manager's default, a third of the
+lifetime) change this for the seven service certificates, never the CA's. A
+duration above `2160h` (the most the issuer's policy signs) or below `1h`
+(cert-manager's shortest), and a `renewBefore` that is not shorter than the
+duration, fail the render with a message that names the value. The service's
+restart margin is the application's, the smaller of 24 hours and a sixth of
+the certificate's lifetime
+(`src/meridian/platform/common/certlife.py`), so it is 10 minutes for a
+certificate of one hour. A `renewBefore` under 5 minutes is refused by
+cert-manager's webhook too (asked by a server-side dry run on 2026-10-06:
+1 minute and 4 minutes refused, 5 accepted). The values are tested without
+a cluster; the procedure at the end of this page ran with `duration: 1h`
+and `renewBefore: 30m` on the kind cluster on 2026-10-06.
 
 ## What you see
 
@@ -128,3 +147,75 @@ k get certificaterequestpolicy
   `k -n <namespace> get certificate <name>`.
 - If the cause was a policy that did not match a legitimate request, the
   fix is a change to the policy or to the Certificate, with a test.
+
+## Watching a renewal on kind (run on 2026-10-06)
+
+To see a renewal, the 503 and the restart in an hour instead of in 60 days,
+give the certificates a short life, then put it back. Nothing here deletes a
+Secret or approves a request by hand. `k` is the function under "Confirm".
+Run on the kind cluster on 2026-10-06; what it showed is under the steps.
+While the short certificates are in place `make smoke` fails on check 11,
+because a Meridian alert is firing: do not run it as the check of this
+procedure before step 5.
+
+1. In a working copy of `infra/kind/values/meridian.yaml`, never committed,
+   add `certificate:` with `duration: 1h` and `renewBefore: 30m` beneath it,
+   and run `make deploy`. It reissues the seven certificates and waits for
+   them to be Ready.
+2. The services still hold the certificates they loaded, which last 90 days,
+   and a service reads its file again only near the end of the one it
+   loaded. Restart them once, which is the owner's to run:
+   `k -n meridian rollout restart deployment`.
+3. Watch, counting from the issuance. About 30 minutes in cert-manager
+   renews (a new CertificateRequest, Approved; the Certificate's
+   `notAfter` moves an hour on); at 50 minutes each service sees the newer
+   file and answers 503; about a minute later the kubelet restarts the
+   container. Each of these only reads:
+
+   ```sh
+   k -n meridian get certificate -o custom-columns=NAME:.metadata.name,READY:.status.conditions[0].status,NOTAFTER:.status.notAfter,RENEWAL:.status.renewalTime
+   k -n meridian get certificaterequest
+   k -n meridian get pods
+   k -n meridian get events --field-selector type=Warning
+   k -n meridian logs deployment/agent-runtime --previous
+   ```
+
+4. Remove the two lines again after one cycle (the renewed certificate lasts
+   an hour too, so every service restarts again half an hour later) and run
+   `make deploy`. A service keeps its one-hour certificate until its own
+   margin, then loads the 90-day one; restart the Deployments as in step 2 to
+   do it at once.
+5. Wait until no Meridian alert is pending or firing (it cleared within five
+   minutes on 2026-10-06), and only then run `make smoke`: its check 11 fails
+   on a firing alert, so a smoke run before that says nothing about the
+   change you put back.
+
+`MeridianCertificateNotRenewed` fires while the short certificates are in
+place (seen on 2026-10-06): it counts any certificate under 21 days from its
+end as a renewal that failed, so any `certificate.duration` under 21 days
+trips it an hour after issuance. Do not leave the value set: every service
+would restart every half hour.
+
+What was seen, on 2026-10-06 (UTC), on a kind cluster on a Linux virtual
+machine:
+
+| Time | What was seen |
+|---|---|
+| 04:50:33 | `make deploy` with `certificate.duration: 1h` and `renewBefore: 30m` in an uncommitted copy of kind's values: the seven Certificates were reissued at once (revision 2, `notAfter` 05:50:33), so a changed duration does make cert-manager reissue |
+| 04:53 | the six Deployments restarted once by hand, to load the one-hour certificates |
+| 05:20:34 | cert-manager renewed all seven (revision 3, `notAfter` 06:20:33), thirty minutes in |
+| between 05:40:40 and 05:41:10 | every service stopped reporting ready: 503 on `/healthz`, ten minutes before the end of the certificate it had loaded |
+| 05:41:40 | all six containers had been restarted once by the kubelet (`RESTARTS 1`); the Warning events say "Liveness probe failed: HTTP probe failed with statuscode: 503"; the previous container's log says "the certificate this process loaded ends 2026-10-06T05:50:33+00:00 and a renewed one is on disk; reporting unhealthy so the container is restarted with it" |
+| 04:51:46 to 05:51:46 | `MeridianCertificateNotRenewed` pending for the seven certificates, then firing (seen firing at 05:52:36) |
+| 05:54:53 | the two lines removed and `make deploy` run: the seven Certificates reissued for 90 days at once; the Deployments restarted once; within five minutes no Meridian alert was pending or firing, and `make smoke` passed |
+
+Two things the watch showed:
+
+1. All six services restart in the same minute, because one deploy issues
+   their certificates in the same second. With one replica each, nothing
+   answered for about a minute.
+2. While the short certificates are in place `make smoke` fails on check 11,
+   because a Meridian alert is firing (smoke was not run then: the failure
+   follows from the alert firing and from the check's rule). Any
+   `certificate.duration` under 21 days trips the alert an hour after
+   issuance.

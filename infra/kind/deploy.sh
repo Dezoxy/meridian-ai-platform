@@ -55,7 +55,6 @@ readonly REPO_ROOT
 readonly CHART_DIR="${REPO_ROOT}/infra/helm/meridian"
 readonly VALUES_FILE="${KIND_DIR}/values/meridian.yaml"
 readonly RELEASE=meridian
-readonly IMAGE_REPOSITORY=meridian
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
 # The ClusterIssuer of kind's values (identity.issuer.name), made by `make up`.
@@ -66,6 +65,12 @@ readonly ISSUER_NAME=meridian-services
 readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted)
 readonly APPROVER_NAMESPACE=cert-manager
 readonly APPROVER_DEPLOYMENT=cert-manager-approver-policy
+# How long require_approval looks for an available replica of the add-on, and
+# the pause between two looks. Right after a cold `make up` approver-policy lost
+# its leader election, exited and was back in twenty seconds; a minute covers a
+# restart and ends before it hides a real fault. The tests put a sleep that only logs on PATH.
+readonly APPROVER_WAIT_SECONDS=60
+readonly APPROVER_INTERVAL=5
 # One list: each service is a Deployment of the same name, and each has a
 # Secret <service>-db (tests/meridian/test_kind_manifests.py checks the
 # chart against it). The role Secrets come from DATABASE_ROLES (common.sh).
@@ -132,6 +137,32 @@ require_issuer() {
     die "the ClusterIssuer '${ISSUER_NAME}' is missing or not Ready (a cluster made before S055 does not even know the kind), so the chart's Certificates would never be issued, and the Jobs would already have run by then; run 'make up' first"
 }
 
+# What kubectl said at the last look at the add-on is kept in ${approver_error},
+# on one clean line, and require_approval's refusal after the wait quotes it: an
+# API error or a refused read is not an absent add-on, and "run 'make up'" is
+# not its remedy. A look that read cleanly leaves it empty.
+approver_error=""
+readonly APPROVER_ERROR_LENGTH=300
+
+# one_line TEXT: TEXT on one line: printable ASCII only (printable_ascii, below),
+# line breaks and runs of blanks squeezed to one blank, trimmed, cut short.
+one_line() {
+  printable_ascii <<<"$1" | tr '\n' ' ' | tr -s ' ' |
+    sed -E 's/^ //; s/ $//' | cut -c "1-${APPROVER_ERROR_LENGTH}"
+}
+
+# approver_available: true when the add-on's Deployment has an available
+# replica. It leaves what kubectl said in ${approver_error}.
+approver_available() {
+  local available errors
+  errors="$(mktemp)"
+  available="$(kctl -n "${APPROVER_NAMESPACE}" get deployment "${APPROVER_DEPLOYMENT}" \
+    -o jsonpath='{.status.availableReplicas}' 2>"${errors}")" || available=""
+  approver_error="$(one_line "$(<"${errors}")")"
+  rm -f "${errors}"
+  [[ "${available}" =~ ^[0-9]+$ ]] && ((10#${available} > 0))
+}
+
 # What approves the services' certificates (S056). cert-manager's own approver
 # is off, so a Certificate's request waits for approver-policy: the three
 # CertificateRequestPolicies must exist and be Ready and the add-on must have a
@@ -139,21 +170,33 @@ require_issuer() {
 # see this; the deploy would build, run its Jobs and die at the wait for the
 # Certificates. A cluster made before S056 does not know the policy kind, and
 # kubectl then fails: that is the same refusal, with its own error left out.
-# Every one that is wrong is named, not the first.
+# Every policy that is wrong is named, not the first, and the add-on is named
+# with them. A policy that is missing or not Ready is not what a restart
+# explains, so the refusal is at once. When the policies are fine and only the
+# add-on has no replica, it is looked at again, every APPROVER_INTERVAL seconds
+# for APPROVER_WAIT_SECONDS: right after a cold `make up` it left and came back
+# within twenty seconds, and "run 'make up'" was not the remedy for that.
 require_approval() {
-  local policy ready available wrong=""
+  local policy ready look looks said="" wrong=""
   for policy in "${CERTIFICATE_POLICIES[@]}"; do
     ready="$(kctl get certificaterequestpolicy "${policy}" \
       -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" || ready=""
     [[ "${ready}" == True ]] || wrong+="; the CertificateRequestPolicy '${policy}' is missing or not Ready"
   done
-  available="$(kctl -n "${APPROVER_NAMESPACE}" get deployment "${APPROVER_DEPLOYMENT}" \
-    -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" || available=""
-  if ! [[ "${available}" =~ ^[0-9]+$ ]] || ((10#${available} == 0)); then
-    wrong+="; the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} has no available replica"
-  fi
-  [[ -z "${wrong}" ]] ||
+  if [[ -n "${wrong}" ]]; then
+    approver_available ||
+      wrong+="; the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} has no available replica"
     die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then${wrong} (a cluster made before S056 does not know the policy kind); run 'make up' first"
+  fi
+  looks=$((APPROVER_WAIT_SECONDS / APPROVER_INTERVAL + 1))
+  for ((look = 1; look <= looks; look++)); do
+    approver_available && return 0
+    ((look == looks)) || sleep "${APPROVER_INTERVAL}"
+  done
+  if [[ -n "${approver_error}" ]]; then
+    said=" (kubectl said at the last look: ${approver_error}; an error from the API or a refused read is not an absent add-on, so read it before running 'make up')"
+  fi
+  die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then: the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} was not available for ${APPROVER_WAIT_SECONDS}s${said}. A cluster that predates S056 does not have it: run 'make up' first. A cluster that has it and shows it restarting or not ready needs a look at the pod instead (kubectl -n ${APPROVER_NAMESPACE} get pods; logs deploy/${APPROVER_DEPLOYMENT}); run 'make deploy' again when it is Running"
 }
 
 # Build the image and tag it by content. Sets ${image} and ${tag}. Docker's
@@ -258,7 +301,8 @@ install_release() {
     die "helm could not install release ${RELEASE} (its error is above; to see why: helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${NAMESPACE} status ${RELEASE}, or history ${RELEASE})"
 }
 
-# stored_chunk_count: the number of rows in knowledge.chunks, read in the
+# stored_chunk_count: the number of rows in knowledge.chunks (the query is
+# CHUNK_COUNT_SQL of common.sh, which smoke.sh reads too), read in the
 # database's primary pod the way smoke.sh reaches psql. Fails when it cannot be
 # read.
 stored_chunk_count() {
@@ -268,7 +312,7 @@ stored_chunk_count() {
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
   [[ -n "${primary}" ]] || return 1
   kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
-    psql -d meridian -tAc 'SELECT count(*) FROM knowledge.chunks' 2>/dev/null
+    psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>/dev/null
 }
 
 # The ingestion of this image's corpus, at most once per image. Its Job is kept
@@ -335,9 +379,15 @@ wait_for_route() {
 # When an ingestion ran in this deploy, wait until its token reservation has
 # left the window. The time is the script's own clock (SECONDS): the node's
 # clock is not the laptop's, so no Kubernetes timestamp is compared with it.
+# When this run did not run the ingestion (its Job had already succeeded, as
+# after a deploy that was interrupted and run again) there is no moment of the
+# script's own to count from, and it does not guess: it says that it skipped.
 wait_for_token_window() {
   local remaining
-  [[ -n "${ingested_at}" ]] || return 0
+  if [[ -z "${ingested_at}" ]]; then
+    log "the wait for the claims-triage tenant's token window is skipped: this run did not run the ingestion, so it cannot tell when the ingestion's tokens were reserved. If a first request is refused for the tenant's token limit within a minute of a deploy that was interrupted, that is the window: wait a minute and run it again"
+    return 0
+  fi
   remaining=$((ingested_at + TOKEN_WINDOW_SECONDS - SECONDS))
   ((remaining > 0)) || return 0
   log "waiting ${remaining}s: the ingestion reserved about 7,700 of the claims-triage tenant's 10,000 tokens a minute, so until that minute has passed a triage that asks the model can be refused"

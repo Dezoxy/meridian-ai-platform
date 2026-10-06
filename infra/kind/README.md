@@ -9,7 +9,8 @@ removes it.
 Status: **implemented** (S006, S041 for deploy and demo, S044 for the tool
 servers, S043 for the cost dashboard, S015 for the adjuster's decision,
 S016 for the adjuster's pages, S019 for the Helm chart and its hardening).
-Nothing here is deployed anywhere but your laptop; the Azure side is S007
+Nothing here is deployed anywhere but a local cluster (the laptop it was
+built on, and on 2026-10-06 a Linux virtual machine); the Azure side is S007
 onward. The services run in replay mode: no model is called, the model's
 text is canned and simulated, and so are the embeddings. A triage that asks
 the model its one question therefore gets no usable answer and goes to an
@@ -118,15 +119,24 @@ extension is enabled declaratively by a `Database` resource. The image ships
 PostgreSQL 17.11 with pgvector 0.8.6 (read from the image on 2026-10-02).
 
 For the walking skeleton `make up` also declares a second database,
-`meridian`, owned by the role `meridian_owner`, and seven more roles:
+`meridian`, owned by the role `meridian_owner`, and eight more roles:
 `claims_api`, `agent_runtime`, `model_gateway`, for the tool servers (S013)
 `policy_mcp` and `claims_mcp`, for the knowledge server (S046)
-`knowledge_mcp` and for the scheduled sweep (S052, below) `claims_sweep`. All
-eight can log in and nothing more (no superuser, createdb or createrole). The
-sweep's role may hold at most 4 connections: its job runs one pod at a time
-and holds one connection at a time, a run by hand beside the scheduled one
-makes two pods, and each may open a second connection while it replaces a
-broken one. The three tool-server roles may each hold at most 20
+`knowledge_mcp`, for the scheduled sweep (S052, below) `claims_sweep` and for
+the upkeep of the gateway's ledger (S066) `gateway_upkeep`. All nine can log in
+and nothing more (no superuser, createdb, createrole, bypassrls or
+replication, and a member of no role: migration 0020 refuses
+`gateway_upkeep` otherwise). The sweep's role may hold at most 4 connections:
+its job runs one pod at a time and holds one connection at a time, a run by
+hand beside the scheduled one makes two pods, and each may open a second
+connection while it replaces a broken one. The upkeep role may hold at most 2:
+the command opens one connection for milliseconds. That bounds what a holder
+of the credential can hold open; it does not stop one session from sitting in
+an open transaction. Only an operator uses `gateway_upkeep`, from a terminal
+(the runbook
+[budget exhaustion](../../docs/operations/runbooks/budget-exhaustion.md#the-upkeep-command)
+says how); no workload of the chart holds its Secret `gateway-upkeep-db`, and a
+test keeps it so. The three tool-server roles may each hold at most 20
 connections: a tool server runs at most eight calls at once, one connection
 each and one more for a failure's audit row, and during a rollout two of its
 pods run side by side; a runaway server cannot use up PostgreSQL's 100. The
@@ -140,7 +150,8 @@ first; `make smoke` looks for the extension in both databases. Each role's
 password is in a Secret of type `kubernetes.io/basic-auth` in `meridian`, with
 the keys `username`, `password` and `uri`: `meridian-owner-db`,
 `claims-api-db`, `agent-runtime-db`, `model-gateway-db`, `policy-mcp-db`,
-`claims-mcp-db`, `knowledge-mcp-db` and `claims-sweep-db`. `make up` creates
+`claims-mcp-db`, `knowledge-mcp-db`, `claims-sweep-db` and
+`gateway-upkeep-db`. `make up` creates
 a Secret only if it is absent, before the
 `platform-db` release installs (CloudNativePG cannot reconcile a role whose
 Secret is missing), from `openssl rand -hex 24`. The password goes to `kubectl`
@@ -169,7 +180,7 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 PostgreSQL itself enforces the database boundary, with `pg_hba` rules in
 [`values/platform-db.yaml`](values/platform-db.yaml) that CloudNativePG places
 before its default catch-all, after its own local, replication and pooler
-rules: a connection without TLS is rejected; the eight roles may log in to
+rules: a connection without TLS is rejected; the nine roles may log in to
 `meridian` over TLS with a SCRAM password and to no other database; no other
 role may log in to `meridian`. A client that asks for `sslmode=disable`, or a
 service that is pointed at the `app` or `postgres` database, is refused by the
@@ -185,12 +196,18 @@ answers 404.
 Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`
 and `make demo` also need `curl`. Tested with:
 
-| Tool | Version |
-|---|---|
-| kind | v0.33.0 (node image Kubernetes v1.36.4) |
-| helm | v4.3.0 |
-| kubectl | v1.37.0 |
-| Docker Desktop | 4.93.0 (engine 29.8.1), 7.65 GiB memory |
+| Tool | A laptop | A Linux virtual machine (2026-10-06) |
+|---|---|---|
+| kind | v0.33.0 (node image Kubernetes v1.36.4) | v0.33.0 (node image Kubernetes v1.36.4, as pinned) |
+| helm | v4.3.0 | v4.3.0 |
+| kubectl | v1.37.0 | v1.37.1 |
+| Docker | Docker Desktop 4.93.0 (engine 29.8.1), 7.65 GiB memory | Docker Engine 29.8.2, rootless, not Docker Desktop |
+| Processor | arm64 | amd64 |
+
+On the virtual machine every image the cluster pins resolved on amd64:
+`make up` from nothing ended with every release installed (5 min 04 s the
+first time, 4 min 28 s the second, with the images on the machine), then
+`make deploy`, `make demo` and `make smoke` passed.
 
 Give Docker at least 6 GiB. The first `make up` downloads about 30 images (the
 node image, Kubernetes components and the platform).
@@ -199,23 +216,50 @@ node image, Kubernetes components and the platform).
 
 | Command | What it does |
 |---|---|
-| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local), under a minute after. |
+| `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local, on the laptop; 5 min 04 s and 4 min 28 s on the Linux machine of the table above), under a minute after. |
 | `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. The first deploy of an image waits a minute after the ingestion (below). |
+| `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Run on the cluster on 2026-10-06: after three deploys it listed three `meridian:*` images in the engine and in the node, one `in use` and two `rollback` (an old ReplicaSet names each), kept with no removal command, and removed nothing; on the cluster made again from nothing it listed three in the engine, one in use and two unused (no ReplicaSet of the new cluster names them) with the `docker image rm` line printed for them, and one in the node. The refusal in a checkout without the cluster's credentials was tested against stub commands and not tried on the cluster. |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on. Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
-| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has spans from the services it must cross and its span counts have settled (unchanged for three readings, six seconds). |
+| `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. |
 
-`make smoke` checks ten things:
+`make smoke` checks eleven things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
    and Envoy.
-2. **Database.** `pg_extension` lists `vector` in the `app` database and in
-   the `meridian` database.
+2. **Database.** Five lines. `pg_extension` lists `vector` in the `app`
+   database and in the `meridian` database. Then three lines for the stores of
+   the `meridian` database, read in the primary's pod: `policy.policies` holds
+   policies (the seed Job writes them), `knowledge.chunks` holds chunks (the
+   query is the one `make deploy` counts with, in `common.sh`), and the
+   migrations ledger's newest file (`public.meridian_migrations`) is the newest
+   file under `src/meridian/platform/migrations` of the checkout the script
+   runs from, so a cluster deployed from another checkout says so. The lines
+   print counts and a file name, never a row. One SKIP line stands in for them
+   while the migrations ledger table is not there, which is when nothing was
+   ever migrated (after `make up`, before `make deploy`). Once the ledger is
+   there, a store's missing table (a half-applied or renamed migration) is that
+   store's FAIL, naming the table, and an answer of the probe that is not in
+   its form is one FAIL. A failed read of the database keeps its message,
+   cleaned and cut to 160 characters, in the FAIL line: it names relations and
+   roles, never a row. Every `psql` smoke runs has a statement timeout of 5
+   seconds and a lock timeout of 3 seconds (`PGOPTIONS` in the exec), so a
+   migration that holds a lock while smoke runs fails that line with psql's
+   message instead of hanging it (the two pgvector lines keep no message: they
+   say the extension is not installed). Those reads passed on the cluster on
+   2026-10-06, so `env` exists in the database's container; the migrations
+   line named `0019_audit_trail_seq.sql`, "the newest of this checkout", after
+   the deploy applied migrations 0017 to 0019 to the cluster's database. A
+   count above zero says the seed and
+   the ingestion wrote something, not what or how much, and not that the chunks
+   are the running image's (the ingestion Job of the image's tag, which
+   `make deploy` keeps, is that proof); the claims and runs tables are not
+   read, because `make demo` fills them.
 3. **Tools.** One call per tool server through the runtime's own client, run
    inside the Agent Runtime's pod (`python -m meridian.runtime.toolprobe`), so
    with the addresses the runtime itself was given. The call names a run that
@@ -230,9 +274,16 @@ node image, Kubernetes components and the platform).
    through the collector. The script then reads each back through Grafana's
    datasource proxy from Tempo, Loki and Prometheus, waiting up to 120 seconds
    each. It prints the trace ID and how to find the data in Grafana Explore.
+   What a PASS line prints of an answer (the trace ID, the log line, the
+   series count) is cleaned of control characters and newlines and cut to 120
+   characters: anyone who can push a log line to the collector chooses its
+   text.
 5. **Cost panel.** Three lines. The dashboard: Grafana serves
    `meridian-gateway-cost` as provisioned, with the same queries as the
-   file, and Prometheus runs each of them without an error. The gateway's
+   file, and Prometheus runs each of them without an error (a dashboard with
+   no query, or a target with no expression, is a FAIL, and the targets of
+   panels nested in rows count; the health dashboard of line 11 is read the
+   same way). The gateway's
    series: when the gateway is available and its ledger holds an attempt
    settled since its process started, Prometheus must hold its tokens,
    cost and calls series with a sample exported after the first of those
@@ -251,27 +302,69 @@ node image, Kubernetes components and the platform).
    the same policy and carries the banner's second sentence, which says that
    every value entered must be fictional (T-04); the request is a GET and
    changes no claim. Before `make deploy` this check prints SKIP.
-7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, is
-   not suspended, and the last of its Jobs to finish, scheduled or made by
-   hand, succeeded; the line says when it finished. It fails when the CronJob
-   is missing or suspended, when the last finished Job failed (the line gives
-   its reason, and `describe` and `logs` commands: a Job that hit its deadline
-   or whose pod never started has no log), when the CronJob was last
-   scheduled more than 15 minutes (three periods) after that Job finished
-   with nothing running, and when it was never scheduled although the API
-   holds a timestamp more than 15 minutes after its creation. Before
-   `make deploy`, while no Job of it has finished yet and while a CronJob that
-   never ran is younger than that, this line prints SKIP. Only timestamps the
-   API server set are compared, never this laptop's clock, so a schedule that
-   stopped after a success keeps printing PASS with that success's finish
-   time: read the time against `date -u`.
-8. **Network policy.** One line, read-only. From inside the Claims API's pod
-   a connection to the Model Gateway is tried, a path no rule allows, and it
-   must be blocked: that proves the cluster's network plugin enforces the
-   policies and not only stores them. The allowed paths are the tool check's
-   proof (line 3). It fails when the connection is made, and when the
-   NetworkPolicy `default-deny` is missing. Before `make deploy` this line
-   prints SKIP.
+7. **Sweep.** One line, read-only. The CronJob `meridian-sweep` exists, and
+   the last of its Jobs to finish, scheduled or made by hand, succeeded; the
+   line says when it finished. It fails when the CronJob is missing, when the
+   last finished Job failed (the line gives its reason, and `describe` and
+   `logs` commands: a Job that hit its deadline or whose pod never started has
+   no log), when the CronJob was last scheduled more than 15 minutes (three
+   periods) after that Job finished with nothing running, when that Job
+   finished more than 15 minutes before now with nothing running (the
+   schedule stopped after a success; the line says how long ago and what the
+   bound is), when no Job of it is left (a finished Job is removed a day after
+   it finished) and it was last scheduled more than 15 minutes before now with
+   nothing running, when it was never scheduled although it was created more
+   than 15 minutes ago, and when the clock below cannot be read (the line
+   keeps the reason, cleaned and cut). The period is read
+   from the CronJob's own `.spec.schedule` when that is `*/N * * * *`, else it
+   is the script's constant, five minutes. "Now" is the database's clock, the
+   primary's `now()`: the one the identity check already trusts for its audit
+   row, not this laptop's `date` (its clock is not the cluster's) and not the
+   controller manager's Lease (one more object to trust, for no gain). Before
+   `make deploy`, while no Job of it has finished yet, while a CronJob that
+   never ran is younger than 15 minutes, while the CronJob was deployed less
+   than one period ago (a Job of the CronJob it replaced is old, not overdue)
+   and while it is suspended (`.spec.suspend`: it makes no runs, so none is
+   overdue), this line prints SKIP. A PASS does not say the sweep did its
+   work, only that a Job finished.
+8. **Network policy.** Four lines. Each opens a TCP connection and sends
+   nothing, from Python in a pod (the image has no curl); a denied path passes
+   only when it times out (a refused connection or a name that does not
+   resolve fails), and a path that answers fails the line. The first line is
+   the control: the Claims API's pod reaches the Agent Runtime, which the
+   Claims API's policy and the Agent Runtime's both name, so a "blocked" below
+   is not a broken probe (if it fails, the other three are not printed). Then
+   the Claims API cannot reach the Model Gateway, which no rule names; the
+   Claims API cannot reach the API server's Service address
+   (`kubernetes.default.svc:443`), which no service's policy lists and which
+   answers when no policy applies, a target inside the cluster so that smoke
+   sends nothing off the machine; and a probe pod, which smoke starts from the
+   Claims API's own image and securityContext and deletes at the end (a
+   delete that fails is not forgotten: the exit trap tries again and says on
+   stderr, with the command to run by hand, when it fails too;
+   `smoke-network-<time>`, labelled `app.kubernetes.io/name=meridian-sweep` so
+   that the sweep's policy lets it reach DNS and the database, and not
+   `app.kubernetes.io/part-of=meridian`, which the database's ingress admits by),
+   cannot reach `platform-db-rw.meridian.svc:5432` until the same pod is given
+   that label, and then can. The pod also carries
+   `meridian-smoke=network-probe`, which no policy, Service or Deployment
+   selects. A run that is killed hard (SIGKILL, a power cut) leaves the pod as
+   a Failed object with the labels the policies select on, so the check starts
+   by listing the pods with that label and deletes by name those older than 300
+   seconds (a younger one is another run's; a list that cannot be read is not
+   an error). SIGHUP, SIGINT and SIGTERM each run the exit trap, which deletes
+   the pod (tested by starting the real script against stub commands; an
+   interrupted run was not tried on the cluster). The allowed paths are also
+   the tool check's proof (line 3). It fails when the NetworkPolicy
+   `default-deny` is missing. Before
+   `make deploy` one line prints SKIP in place of the four. It adds about 20
+   seconds. On 2026-10-06 the four lines passed on the cluster (the control,
+   the two denied paths out of the Claims API, and the database refusing a pod
+   without the label and taking one with it), and no probe pod was left in
+   `meridian` afterwards. What it does not prove, and stays by hand (S019): that a pod of
+   another namespace cannot reach the database, and that an address outside the
+   machine is unreachable (smoke sends nothing there); and it does not read the
+   policies, which the chart's tests render and compare.
 9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
@@ -285,22 +378,54 @@ node image, Kubernetes components and the platform).
    its own policy too), so the fourth line reads the audit table in the
    database's primary pod: a row of the gateway's refusal with the reason the
    identity rule writes (`caller-name-not-allowed`), the Agent Runtime as the
-   calling service and the tenant `evaluation`, recorded in the last 120
-   seconds by the database's own clock. The gateway writes it in a worker
-   thread and at most once per reason, tenant and minute, so the check asks
-   for a row that exists and is recent, never for a count that went up, and
-   tries for about ten seconds; the line says the row's age. The fifth line
-   presents a certificate of another CA: the probe makes a throwaway key and a
-   self-signed certificate that carries the runtime's own URI (the right name,
-   the wrong CA) in a directory under `/tmp` that is removed when the probe
-   ends, and the gateway must end the connection with a TLS alert, or close
-   it, before it answers: a status is a FAIL. The key is never printed, passed
+   calling service and the tenant `evaluation`, recorded at or after the start
+   of this run, which is the database's own clock read just before the 403's
+   request. The gateway writes it in a worker thread and at most once per
+   reason, tenant and minute, so the check asks for a row that exists, never
+   for a count that went up, and tries for about ten seconds; the line says the
+   row's age. A second run inside that minute causes no row of its own, and
+   the line is then a SKIP, not a PASS, when the newest row is from the minute
+   before this run started ("the gateway wrote this minute's refusal row for
+   an earlier run; run again in a minute"); with no row at all it is a FAIL.
+   What the row proves is a refusal by the identity rule, for that reason,
+   caller and tenant, at or after the mark; not that it is this run's own 403.
+   Two runs that overlap can share one row (another run's 403, written after
+   this run's mark while this run's own is throttled, passes this line), so the
+   PASS says "recorded at or after this run's mark". On the cluster on
+   2026-10-06 the line said "0 s old, recorded at or after this run's mark",
+   and a second run inside the gateway's minute was the SKIP described above.
+   The fifth line presents a certificate of another CA: the probe makes a
+   throwaway key and a self-signed certificate that carries the runtime's own
+   URI (the right name, the wrong CA) in a directory under `/tmp` that is
+   removed when the probe ends, and the gateway must end the connection
+   before it answers: a status is a FAIL. The probe reads before it writes, so
+   that under TLS 1.3, where the alert follows the handshake, it is the first
+   thing read, and it tells three endings apart. `refused` is the TLS alert for
+   an unknown CA (Python's `ssl` reports `TLSV1_ALERT_UNKNOWN_CA`); `reset` is
+   a connection that ended with no alert before any request was sent.
+   uvicorn, which the services run
+   under, ends an unknown CA's connection without delivering the alert (a
+   reset under TLS 1.3 and an EOF under 1.2, measured against the test server
+   that has the services' flags), so `reset` is the ending expected of the
+   gateway, and the line passes it, in other words than `refused`. On the
+   cluster on 2026-10-06 the answer was `reset` on every run (the connection
+   ended with no TLS alert, before any request was sent) and `refused`, the
+   alert, was never seen; the EOF under TLS 1.2 was measured against the test
+   server only. It is wider than a refusal for the unknown CA: a gateway
+   that died in that second would end the connection the same way. A
+   connection that ends after the request went out is a third answer,
+   `closed-after-request`, and a FAIL: it is what a gateway that accepted the
+   certificate and then closed without answering does, so the line says the
+   gateway may have accepted it. The price is that a gateway slower than the
+   probe's one-second read to end the connection turns a refusal into that
+   FAIL; it fails closed. Any other
+   TLS error (another alert, say) is a FAIL. The key is never printed, passed
    as an argument or kept. The probe checks the gateway's certificate against
    the CA and its DNS name; a traceback (a name that does not resolve, a
    certificate that does not verify, a refused connection) is a FAIL, never a
    refusal. Before `make deploy` this check prints SKIP.
-10. **Certificate policy.** Three lines, read-only, and never SKIP: the
-    objects exist after `make up`, so a missing one is a FAIL. The three
+10. **Certificate policy.** Four lines, never SKIP, the first three read-only:
+    the objects exist after `make up`, so a missing one is a FAIL. The three
     `CertificateRequestPolicy` objects are Ready. The Deployment
     `cert-manager-approver-policy` in `cert-manager` has an available replica.
     And cert-manager's own approver is off, read two ways that must agree: the
@@ -313,11 +438,108 @@ node image, Kubernetes components and the platform).
     certificate request once the cluster has its certificates, so an update of
     cert-manager or approver-policy that turned the built-in approver back on,
     or left the policies or the add-on gone, would pass the pull request that
-    brings it.
+    brings it. The fourth line is the one request smoke makes on purpose, and
+    one that the issuer must refuse (S062): a `CertificateRequest` named
+    `meridian-smoke-refused-<pid>-<random>` in the namespace `default`, for the
+    issuer `meridian-services`, with a URI under the Meridian prefix and a
+    duration that policy allows, so that only its namespace refuses it: the
+    namespace selector of `meridian-services` does not list `default`, and
+    `meridian-deny-unlisted`, which selects the issuer from every namespace,
+    permits nothing. It passes when the request is Denied and the approver's
+    whole message, judged before it is cut, names `meridian-deny-unlisted` as a
+    policy that evaluated the request and does not name `meridian-services` as
+    one (the line says the reason, cut to 60 characters, and the message, cut
+    to 120). The form it matches is the one approver-policy v0.28.0 wrote on
+    the cluster, `No policy approved this request: [meridian-deny-unlisted:
+    [spec.allowed.uris: Invalid value: ...`: a policy's name after `[`, `]` or
+    `,` and before a colon, so `meridian-services-ca` and the issuer's name do
+    not count. The check depends on approver-policy's wording at the pinned
+    version. A Denied request whose message names `meridian-services` as a
+    policy is a FAIL (that policy selected a request from another namespace),
+    and so is one whose message has neither form (the line says the approver's
+    message is not in the form this check reads, and prints it cut). It fails
+    when the request is Approved or carries a certificate (the issuer signed a
+    request it must refuse; with both conditions true the request is Approved,
+    whatever their order), and when neither condition is there after 30
+    seconds (the approver did not answer; a request that no policy the
+    requester may use selects is left the same way). The request is a
+    `CertificateRequest` and not a `Certificate` so that the key is made on
+    this machine, by `openssl`, and written to `/dev/null`: it is in no file, no
+    variable and no output, and the request holds the public half only. A
+    request makes no Secret; the certificate an issuer signed would be in the
+    request's own status, is never printed and is deleted with it. The request
+    is deleted as soon as it is read, by the script's EXIT trap when the run
+    ends first (an error, a FAIL, an interrupt) and, after a run that was
+    killed, at the start of the next one, which lists the requests with the
+    label `meridian-smoke=refused-request` and deletes by name those older than
+    300 seconds (a request lives two seconds). The age is the request's
+    `creationTimestamp` read with `jq` against this machine's clock, so a
+    skewed clock only delays the sweep, and a younger request is another
+    run's, which two runs at once leave to each other; a list that cannot be
+    read is not an error. A delete that fails, judged by `kubectl`'s exit
+    status and not by what it wrote, is a FAIL that names the request (with
+    "kubectl exited non-zero with no message" when it wrote nothing).
+    Approved: the line says the issuer signed it, and smoke
+    deleted it. What it does not prove: the request is made by whoever runs
+    smoke (kind's cluster-admin, which may use every policy), not by
+    cert-manager's account, so it shows what the namespace selector and the
+    approver do with a request from another namespace, not the role bindings
+    that let cert-manager use a policy (the plan's S056 section made those by
+    hand); and a request for an issuer that is not Meridian's, which no policy
+    answers, is not made. It adds a second or two when the approver is up, 30
+    seconds when it does not answer. Run on kind on 2026-10-06: the request in
+    `default` was Denied, with the reason `policy.cert-manager.io` and a message
+    that began "No policy approved this request: [meridian-deny-unlisted:
+    [spec.allowed.uris: Invalid value: ...", and deleted; no request with
+    smoke's label was left in `default`. The three other lines passed too. The
+    FAIL forms (a request Approved, a message in neither form, a request left
+    undecided, a delete that fails) were tested without a cluster and not seen
+    there.
+11. **Alert rules and health dashboard.** Four lines, read-only, run last.
+    The first three read Prometheus' `/api/v1/rules` through Grafana's
+    datasource proxy, for the `PrometheusRule` `meridian` that `make up`
+    applies. The four groups of `alerts/meridian.yaml` are loaded and every
+    rule in them has health `ok`: a FAIL names each rule that has not, with
+    its health and Prometheus' last error, cut to 120 printable characters
+    (a rule that has not been evaluated yet is `unknown`, which is not `ok`;
+    the line waits up to 120 seconds for the first evaluation). The loaded
+    group and rule names are the file's, in both directions, so a cluster
+    that runs an older rule file says which groups and rules differ (the
+    file's names are read with `awk` by their indentation, and a test keeps
+    that equal to a YAML parser's reading). And no alert of the Meridian
+    groups is firing: a firing alert is a FAIL that names it, and a pending
+    one is not a failure, so the line names it and passes. With no group of
+    the Meridian prefix loaded the third line fails: there is nothing to be
+    firing, so it cannot tell. One FAIL line replaces the three when the
+    `PrometheusRule` is not in `observability` (`make up` applies it, so the
+    line says to run it; any other error looking for it is a FAIL too), and
+    one FAIL line stands in for them when Prometheus does not answer with
+    status `success`. An answer of status `success` that has no usable
+    `data.groups` list fails each of the three lines, and the dashboard line
+    still runs. The fourth line is the cost dashboard's line (check 5)
+    for **Meridian: platform health** (uid `meridian-platform-health`):
+    Grafana serves it as provisioned with the queries of
+    `dashboards/platform-health.json`, and every query runs in Prometheus
+    with the range at an hour. No query is left out: the range variable
+    becomes 3600, and a query that finds no series on a quiet cluster still
+    answers with status `success`. The check does not prove that each series
+    a rule or a panel names exists: a rule over a missing series is healthy
+    and quiet, and a panel with no data is a success, so the series checklist
+    of [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster)
+    stays by hand; nor that a threshold is right; nor that anyone would be
+    told, because kind runs no Alertmanager. The four lines passed on the
+    cluster on every smoke run of 2026-10-06. Smoke was not run while the
+    renewal watch's short certificates were in place and the alert fired; a
+    firing alert is a FAIL of the third line, so it would have failed (see
+    "How long a certificate lasts" below).
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
-15 minutes after it finishes. The tool check leaves at most one refused
-`tool.call` row per server in the audit log per throttle window.
+15 minutes after it finishes. It creates one Pod in `meridian` for the network
+check (line 8) and one `CertificateRequest` in `default` for the certificate
+policy check (line 10), and deletes each as soon as its check is done and again
+when the script ends. The tool check leaves at most one refused `tool.call` row
+per server in the audit log per throttle window, and the identity check one
+refusal row per reason and minute.
 
 ## The services: `make deploy` and `make demo`
 
@@ -375,8 +597,35 @@ In order, `make deploy`:
    the issuer is Ready without them, but with cert-manager's own approver off
    nothing would approve the chart's Certificates, and the deploy would die at
    its wait for them, right after the release, with the Jobs already run. It
-   names every one that is wrong, and `make up` installs them.
-2. Builds and loads the image.
+   names every one that is wrong, and `make up` installs them. A policy that
+   is wrong is refused at once. When only the add-on has no available
+   replica, the script looks again every 5 seconds for 60 before it refuses:
+   right after a cold `make up` the add-on lost its leader election, exited
+   and was back in twenty seconds. The refusal then says the add-on "was not
+   available for 60s" and gives both remedies: `make up` for a cluster that
+   predates S056, a look at the pod (`kubectl -n cert-manager get pods`) for
+   one that has it and shows it restarting. When kubectl said something at
+   the last look (an API error, a refused read), the refusal quotes it on one
+   line, because that is not an absent add-on and `make up` is not its remedy.
+   (Tested against stub commands;
+   not yet seen on a cluster.)
+2. Builds and loads the image, tagged `meridian:<first 12 hex of its ID>`. A
+   deploy of a changed tree leaves the previous image in the Docker engine
+   and in the node, and images stay there until a person removes them.
+   `make images` lists them, each marked in use or unused by a workload, and
+   prints the commands that would remove the unused ones; it removes nothing.
+   "In use" means a pod template names the image now, or a Pod that exists
+   does. The chart sets no `revisionHistoryLimit`, so after a deploy that
+   changed the image the previous tag is what an old ReplicaSet would start
+   again on a rollback, and with `pullPolicy: Never` a removed image cannot be
+   pulled again: an image only an old ReplicaSet names is marked `rollback`
+   (a rollback's target), listed apart, and gets no removal command. In a
+   checkout with no `infra/kind/kubeconfig` it asks kind for the cluster: when
+   none exists every image is unused by definition, and when one does (its
+   credentials are in another checkout) it says it cannot tell which images
+   are in use, prints no command and exits non-zero. (The listing, the three
+   marks and the printed command were seen on the cluster on 2026-10-06; this
+   refusal was tested against stub commands and not run on a cluster.)
 3. Runs a Job `meridian-migrate-<tag>` with `meridian db migrate`, then a Job
    `meridian-seed-<tag>` with `meridian db seed-policies`, both as
    `meridian_owner`. Only the three Jobs read that Secret. The script renders
@@ -386,7 +635,11 @@ In order, `make deploy`:
    before anything else is applied; on failure the script prints the Job's
    log and exits non-zero. They run on every deploy (a Job of the same tag is
    deleted first; the runner skips what is applied and the seed mirrors its
-   source, so a rerun takes seconds) and end after 300 seconds at most. The
+   source, so a rerun takes seconds) and end after 300 seconds at most. A
+   finished migrate or seed Job removes itself an hour later
+   (`ttlSecondsAfterFinished: 3600`; on the cluster on 2026-10-06 the Jobs of
+   earlier images were gone an hour after they finished); only the ingestion
+   Job of the image in use stays (step 5), as its record. The
    seed comes before the services because a claim that meets an empty policy
    table gets a stored proposal "policy not found", and a stored proposal is
    final.
@@ -416,9 +669,18 @@ In order, `make deploy`:
    tokens in five requests, so a claim posted in the first seconds would be
    refused, and only two would fit in that minute. The wait makes a deploy
    end with the limits clear. A deploy that is interrupted after the
-   ingestion and run again within that minute does not wait. Whether
-   ingestion should spend a workload's budget at all is an open registry
-   decision (threat model T-60).
+   ingestion and run again within that minute finds the Job succeeded, does
+   not run the ingestion and does not wait: the script's only clock is its
+   own, and it reads no Kubernetes timestamp, so it cannot know how long ago
+   the Job finished and does not guess. It prints one line that says the
+   wait was skipped because this run did not run the ingestion (a repeat
+   deploy of the same image prints it too). A first request refused for the
+   tenant's token limit within a minute of an interrupted deploy is that
+   window: wait a minute and run it again. (On 2026-10-06 a repeat deploy
+   printed the line that the wait was skipped; the interrupted deploy and
+   the refused request were tested against stub commands and not seen on a
+   cluster.) Whether ingestion should spend a workload's
+   budget at all is an open registry decision (threat model T-60).
 
 Each pod gets its own role's connection string from its Secret, and the
 cluster CA's public certificate (`ca.crt` only, not the CA's private key that
@@ -516,7 +778,9 @@ database pod itself may reach DNS, the pods of its own Cluster and TCP port
 6443 at any address: its instance manager calls the API server, whose
 address is the node's own and changes with every new cluster, so the rule
 names the port and no address. From the database pod a connection to the
-internet timed out, and 40 of 40 to the API server were made (S019).
+internet timed out, and 40 of 40 to the API server were made (S019). That
+stays by hand; `make smoke` (line 8, passed on the cluster on 2026-10-06) tries the
+other direction of that policy: a pod without the `part-of` label on 5432.
 
 What the policies do not do:
 
@@ -554,8 +818,9 @@ creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
 
 - seven `Certificate` objects in `meridian`, signed by the `meridian-services`
   ClusterIssuer: ECDSA P-256, a new key at every renewal (`rotationPolicy:
-  Always`, set in the chart), cert-manager's default lifetime (90 days,
-  renewed at 60), the URI `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
+  Always`, set in the chart), a lifetime of `certificate.duration` (90 days by
+  default, renewed at 60: see "How long a certificate lasts" below), the URI
+  `spiffe://meridian.kind/ns/meridian/sa/<name>`, and
   for the five services that serve TLS the DNS name `<name>.meridian.svc`;
 - seven Secrets `<name>-tls` (`tls.crt`, `tls.key`, `ca.crt`), each mounted
   read-only at `/etc/meridian/tls` in its own pod and in no other;
@@ -569,6 +834,87 @@ is repeated in the values. The chart fails for a service that another workload
 calls (a `serviceUrl` or a `serviceMap` entry, the Jobs' included) and does not
 set `tls: true`; only the Claims API, which nobody inside the chart calls,
 stays plain HTTP.
+
+**How long a certificate lasts (S062).** Two chart values set the lifetime of
+every one of the seven Certificates; the defaults render what the chart
+rendered before they existed (`duration: 2160h`, no `renewBefore`, so
+cert-manager renews at a third of the lifetime, 60 days in):
+
+| Value | Meaning | Refused |
+|---|---|---|
+| `certificate.duration` | whole hours and minutes (`2160h`, `1h30m`; no days, no seconds) | above `2160h`, the most the issuer's policy signs (`maxDuration` of `meridian-services`); below `1h`, cert-manager's shortest; anything that is not hours and minutes, empty included |
+| `certificate.renewBefore` | how long before the end cert-manager renews; empty leaves it out | under `5m`, which cert-manager's webhook refuses (asked by a server-side dry run on 2026-10-06: `1m` and `4m` refused, `5m` accepted); not shorter than `certificate.duration`; anything that is not hours and minutes |
+
+A refused value fails `helm template`, `helm upgrade` and `make deploy`
+before anything is applied, with a message that names the value. The service's
+own margin is not one of them: from the smaller of 24 hours and a sixth of the
+lifetime before the end (`src/meridian/platform/common/certlife.py`) it reads
+the mounted file again, and `/healthz` answers 503 once the file holds a newer
+certificate. With the default `renewBefore` the renewal always comes before
+that margin starts.
+
+Run on the cluster on 2026-10-06, with the times of what was seen in the
+runbook [certificate-expiry](../../docs/operations/runbooks/certificate-expiry.md#watching-a-renewal-on-kind-run-on-2026-10-06):
+to watch a renewal, the 503 and the restart on kind, give the certificates a
+one-hour life for a while. In a
+working copy of `infra/kind/values/meridian.yaml`, never committed, add
+
+```yaml
+certificate:
+  duration: 1h
+  renewBefore: 30m
+```
+
+then run `make deploy`, which reissues the seven certificates and waits for
+them to be Ready. The services still hold the 90-day certificates they loaded,
+and a service looks at its file again only near the end of the one it loaded,
+so restart the Deployments once (the owner's command, as in the runbook
+[certificate-expiry](../../docs/operations/runbooks/certificate-expiry.md)):
+
+```sh
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian "$@"; }
+k -n meridian rollout restart deployment
+k -n meridian rollout status deployment/agent-runtime
+```
+
+The times below count from the issuance (the end of `make deploy`). Expect
+the renewal 30 minutes in, the 503 after 50 (the margin is a sixth of an
+hour, 10 minutes) and the container's restart about a minute later: the
+liveness probe asks every 10 seconds and fails the container on the sixth
+503. Each of these only reads:
+
+```sh
+k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian "$@"; }
+k -n meridian get certificate -o custom-columns=NAME:.metadata.name,READY:.status.conditions[0].status,NOTAFTER:.status.notAfter,RENEWAL:.status.renewalTime
+k -n meridian get certificaterequest
+k -n meridian get pods
+k -n meridian get events --field-selector type=Warning
+k -n meridian logs deployment/agent-runtime --previous
+```
+
+The Certificates' `NOTAFTER` moves an hour forward at the renewal, and a new
+CertificateRequest appears and is Approved. Pods keep `RESTARTS 0` until about
+50 minutes in, then each service shows `RESTARTS 1`; the Warning events say
+`Liveness probe failed` with status code 503, then that the container failed
+its liveness probe and will be restarted; the previous container's log has the
+warning that a renewed certificate is on disk. The renewed certificate lasts
+another hour, so every service restarts again half an hour later: stop after
+one cycle by removing the two lines and running `make deploy`. The services
+keep the one-hour certificates until the end margin of each, then load the
+90-day ones and stay (a restart of the Deployments does it at once). While the
+short certificates are in place `MeridianCertificateNotRenewed` fires after an
+hour (seen pending, then firing, on 2026-10-06), because the rule counts every
+certificate under 21 days from its end as a late renewal; any
+`certificate.duration` under 21 days trips it an hour after issuance.
+
+What the watch showed, beyond the marks above: all six services restart in the
+same minute, because one deploy issues their certificates in the same second,
+and with one replica each nothing answered for about a minute; and while the
+short certificates are in place `make smoke` fails on check 11, because a
+Meridian alert is firing (smoke itself was not run then: the failure follows
+from the firing alert and the check's rule). So the last step of the watch is
+to wait until the alert has cleared (within five minutes of the 90-day
+certificates' reissue it had), and only then to trust a smoke run.
 
 | Caller | What it proves | Callee | What the callee checks |
 |---|---|---|---|
@@ -591,13 +937,14 @@ What this does not cover, on purpose: the edge to the Claims API is plain HTTP
 and the Claims API's own certificate is for its calls out only (TLS at the edge
 is a backlog row); a service loads its certificate once, and cert-manager does
 not restart a Deployment's pods, so the service asks for the restart itself:
-inside the last 24 hours of the certificate it loaded it answers 503 on
-`/healthz` as soon as the mounted file holds a renewed one, and the kubelet
-restarts the container, about a minute in which a one-replica service does not
-answer; if cert-manager has not renewed it, the service stays healthy until the
-certificate ends and is unhealthy from then on, but two alerts fire long before
-(21 days left; not Ready); a renewed CA still reaches a service only when it
-restarts; no certificate is revoked; nothing limits which service's name a
+inside the last 24 hours of the certificate it loaded (the last sixth of its
+life, for one that lasts under six days) it answers 503 on `/healthz` as soon
+as the mounted file holds a renewed one, and the kubelet restarts the
+container, about a minute in which a one-replica service does not answer; if
+cert-manager has not renewed it, the service stays healthy until the
+certificate ends and is unhealthy from then on, but two alerts fire long
+before (21 days left; not Ready); a renewed CA still reaches a service only
+when it restarts; no certificate is revoked; nothing limits which service's name a
 request in `meridian` asks for (approver-policy lets the `meridian-services`
 issuer sign only a request from `meridian` with a URI under the Meridian
 prefix, so a request from another namespace is denied, but whoever can create
@@ -672,9 +1019,10 @@ only: no call to any service and no model. The deadline for documents is
 `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS`, 14 days of 24 hours from the
 claim's latest request for documents. The Claims API reads the same
 variable for the day its status page tells a claimant; the chart sets it
-on this CronJob alone, so set it on the Claims API too if you change it
-(the plan's backlog has the chart's part). `make smoke`'s seventh line
-checks that the job ran and finished on your cluster.
+on both from one value, `sweep.documentsDeadlineDays` (14), and a test
+holds the two rendered values equal (tested without a cluster).
+`make smoke`'s seventh line checks that the job ran and finished on your
+cluster.
 
 `concurrencyPolicy: Forbid` governs only what the schedule starts: a scheduled
 pass is skipped while another is running. A Job made by hand (below) runs
@@ -700,8 +1048,8 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 ```
 
 The by-hand Job counts as the sweep's last Job for `make smoke`. To stop the
-schedule, patch `suspend` to `true` on the CronJob; `make smoke` then fails
-until it is `false` again.
+schedule, patch `suspend` to `true` on the CronJob; `make smoke` then prints
+SKIP for the sweep until it is `false` again.
 
 ## The cost dashboard
 
@@ -736,8 +1084,12 @@ What the numbers are, which the dashboard also says on its first panel:
 ## The alert rules and the health dashboard
 
 [`alerts/meridian.yaml`](alerts/meridian.yaml) is one `PrometheusRule`
-(S024): a recorded series for the gateway's calls of the last 15 minutes,
-five alerts on it and three on the workloads, from kube-state-metrics. It
+(S024, S056) in four groups: `meridian.gateway.recording` (a recorded series
+for the gateway's calls of the last 15 minutes), `meridian.gateway` (alerts
+on that series), `meridian.workloads` (from kube-state-metrics) and
+`meridian.certificates` (from cert-manager's controller). It holds 12 alert
+rules and one recording rule: five on the gateway, three on the workloads
+and four on the certificates. It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:
@@ -754,12 +1106,18 @@ The gateway's counter is read without `increase()` or `rate()`, for the
 cost dashboard's reason (above); a unit test holds the case those would
 lose.
 
-Neither the rules nor the health dashboard has been applied to a cluster
-yet: S024 ran beside the step that owned it. What to look for on the
-first `make up` is in
+`make up` applies both: the rules with `kubectl apply`, the dashboard as a
+ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
+(check 11, passed on the cluster on 2026-10-06): Prometheus has loaded the
+four groups with every rule healthy, the loaded rule names are the file's,
+no Meridian alert is firing, and Grafana serves the health dashboard with
+the file's queries, every one of which runs in Prometheus. What stays by
+hand is whether each series a rule or a panel names exists: a rule over a
+series that is not there is healthy and quiet, and a panel with no data is a
+success. The checklist is in
 [the operations index](../../docs/operations/README.md#not-proved-on-a-cluster),
 which also links the objectives the rules watch and the runbooks they
-point to. `make smoke` checks neither.
+point to.
 
 ## If `make up` was interrupted
 
@@ -768,7 +1126,15 @@ Rerunning `make up` is the first thing to try. If a release is stuck in a
 `make up` again.
 
 If `make up` times out waiting for the Gateway to be programmed while the
-edge's proxy pod is ready, the condition is stale. Seen twice, with the edge
+edge's proxy pod is ready, the condition is stale. The script stops with
+"the wait for the Gateway edge to be Programmed ended without the condition
+(it waits up to 5m ...)", says the edge may be serving all the same, and
+prints the three commands below. The message does not say the wait ran five
+minutes, because `kubectl wait` also fails at once, with "not found"; the
+message kubectl prints above the error says which it was. (The wait after
+it, for the proxy Deployment to be `Available`, words its message the same
+way and stops with the pods and the controller's log to look at.) Seen
+twice, with the edge
 serving routes both times: `AddressNotAssigned` on 2026-10-01, on a cluster
 that had run for 18 hours, and `NoResources` ("Envoy replicas unavailable")
 on 2026-10-04, on one that had run for two. `kubectl -n envoy-gateway-system
@@ -781,6 +1147,9 @@ $K rollout restart deploy/envoy-gateway
 $K rollout status deploy/envoy-gateway
 $K annotate gateway edge meridian.local/reconcile-nudge="$(date -u +%FT%TZ)" --overwrite
 ```
+
+Then run `make up` again. The message is tested without a cluster; it has
+not yet been seen on one.
 
 ## Ports
 

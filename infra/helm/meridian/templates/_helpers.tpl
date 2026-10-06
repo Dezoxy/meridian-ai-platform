@@ -94,13 +94,37 @@ target serves.
 {{- end -}}
 
 {{- /*
+documentsDeadlineDays: sweep.documentsDeadlineDays as the text both workloads
+get, or the render fails with the value in the message. The Claims API and the
+sweep read it with deadline_days_of
+(src/meridian/workloads/claims_triage/lifecycle.py), which refuses anything but
+one to four ASCII digits that make a whole number from 1 to 365 when the
+process starts, so a bad value would crash-loop the Claims API. The two bounds
+are literals here: tests/meridian/test_helm_documents_deadline.py reads the
+code's and fails when they differ. A number from a values file arrives as a
+float and one from --set as an integer: toString makes both the digits that
+were written.
+*/ -}}
+{{- define "meridian.documentsDeadlineDays" -}}
+{{- $text := toString .Values.sweep.documentsDeadlineDays -}}
+{{- if not (and (regexMatch "^[0-9]{1,4}$" $text) (ge (atoi $text) 1) (le (atoi $text) 365)) -}}
+{{- fail (printf "sweep.documentsDeadlineDays is %q, which is not a whole number of days from 1 to 365 (the Claims API and the sweep refuse anything else when they start, so the Claims API would crash-loop: deadline_days_of in src/meridian/workloads/claims_triage/lifecycle.py)" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+
+{{- /*
 envItem: one variable of a values `env` list; takes root, item. The item has
-one of value, serviceUrl, serviceHost or serviceMap (values.yaml says which).
+one of value, serviceUrl, serviceHost, serviceMap or documentsDeadlineDays
+(values.yaml says which). documentsDeadlineDays takes the sweep's value of the
+same name, so the Claims API and the sweep's CronJob read one value.
 */ -}}
 {{- define "meridian.envItem" -}}
 - name: {{ .item.name }}
 {{- if hasKey .item "value" }}
   value: {{ .item.value | quote }}
+{{- else if hasKey .item "documentsDeadlineDays" }}
+  value: {{ include "meridian.documentsDeadlineDays" .root | quote }}
 {{- else if hasKey .item "serviceUrl" }}
   value: {{ include "meridian.url" (dict "root" .root "name" .item.serviceUrl) | quote }}
 {{- else if hasKey .item "serviceHost" }}
@@ -114,7 +138,7 @@ one of value, serviceUrl, serviceHost or serviceMap (values.yaml says which).
     {{- end }}
     }
 {{- else }}
-{{- fail (printf "env %s needs one of value, serviceUrl, serviceHost, serviceMap" .item.name) }}
+{{- fail (printf "env %s needs one of value, serviceUrl, serviceHost, serviceMap, documentsDeadlineDays" .item.name) }}
 {{- end }}
 {{- end -}}
 
@@ -298,22 +322,88 @@ callers' URIs start with. No container without the mount gets any of them.
 {{- end -}}
 
 {{- /*
+minutes: a duration of hours and minutes (2160h, 1h30m, 45m) in minutes; takes
+name (the value's, for the message) and value. Go's duration syntax has more
+units (cert-manager reads them); the chart reads these two so that it can
+compare one duration with another, and fails on any other text, an empty one
+included. The pattern is anchored, so a value with a line break cannot reach a
+Certificate. A number has at most nine digits: the policy's cap in minutes
+(129600) has six, and a longer one would overflow the parse and wrap into range
+instead of being refused.
+*/ -}}
+{{- define "meridian.minutes" -}}
+{{- $text := toString .value -}}
+{{- $pattern := "^(?:([0-9]{1,9})h)?(?:([0-9]{1,9})m)?$" -}}
+{{- if or (not $text) (not (regexMatch $pattern $text)) -}}
+{{- fail (printf "%s is %q, which is not a duration of hours and minutes, like 2160h or 1h30m (cert-manager reads more units; the chart reads these two so that it can compare the lifetime with the policy's cap and with renewBefore)" .name $text) -}}
+{{- end -}}
+{{- add (mul (atoi (regexReplaceAll $pattern $text "${1}")) 60) (atoi (regexReplaceAll $pattern $text "${2}")) -}}
+{{- end -}}
+
+{{- /*
+certificateLifetime: the duration and renewBefore of every Certificate, as JSON;
+takes the root. certificate.duration is 2160h and certificate.renewBefore is
+empty (left out of the Certificate) in values.yaml, which says what they mean.
+Refused, with the value's name in the message:
+
+  a duration above 2160h   the issuer's policy (maxDuration of meridian-services
+                           in infra/kind/manifests/certificate-policy.yaml)
+                           denies a longer request, and the Certificate would
+                           never be issued. The cap is a literal here, not a
+                           value: tests/meridian/test_helm_certificate_lifetime.py
+                           reads the policy and fails when the two differ
+  a duration below 1h      cert-manager's shortest lifetime
+  a renewBefore below 5m   cert-manager's webhook refuses it ("renewBefore must
+                           be greater than 5m0s"; 5m itself was accepted when
+                           the cluster was asked by a server-side dry run)
+  a renewBefore that is    cert-manager would renew a certificate as soon as it
+  not shorter than the     is issued, for ever
+  duration
+*/ -}}
+{{- define "meridian.certificateLifetime" -}}
+{{- $certificate := .Values.certificate | default dict -}}
+{{- $duration := $certificate.duration | default "" -}}
+{{- $renewBefore := $certificate.renewBefore | default "" -}}
+{{- $capMinutes := 129600 -}}
+{{- $minutes := include "meridian.minutes" (dict "name" "certificate.duration" "value" $duration) | int -}}
+{{- if gt $minutes $capMinutes -}}
+{{- fail (printf "certificate.duration is %s, above %dh, the most the issuer's policy signs (maxDuration in infra/kind/manifests/certificate-policy.yaml): a longer request is denied and the Certificate is never issued" $duration (div $capMinutes 60)) -}}
+{{- end -}}
+{{- if lt $minutes 60 -}}
+{{- fail (printf "certificate.duration is %s, below 1h, the shortest lifetime cert-manager accepts" $duration) -}}
+{{- end -}}
+{{- if $renewBefore -}}
+{{- $before := include "meridian.minutes" (dict "name" "certificate.renewBefore" "value" $renewBefore) | int -}}
+{{- if lt $before 5 -}}
+{{- fail (printf "certificate.renewBefore is %s, below 5m, the shortest renewBefore cert-manager's webhook accepts (it refused 1m and 4m and accepted 5m, 2026-10-06)" $renewBefore) -}}
+{{- end -}}
+{{- if ge $before $minutes -}}
+{{- fail (printf "certificate.renewBefore is %s, which is not shorter than certificate.duration (%s): cert-manager would renew a certificate as soon as it is issued, for ever" $renewBefore $duration) -}}
+{{- end -}}
+{{- end -}}
+{{- dict "duration" (toString $duration) "renewBefore" (toString $renewBefore) | toJson -}}
+{{- end -}}
+
+{{- /*
 certificate: one workload's Certificate, after a `---`; takes root, identity (the
 output of meridian.identity, as a dict), name (the workload's, also its
 ServiceAccount's) and server (it serves TLS: it also gets a DNS name and the
 server usage). templates/certificates.yaml says what each field is for. The
-duration is 90 days, a literal and said explicitly: the policy that lets the
-issuer sign (infra/kind/manifests/certificate-policy.yaml) caps it at 2160h and
+duration comes from certificate.duration (90 days, 2160h, by default) and is
+always said explicitly: the policy that lets the issuer sign
+(infra/kind/manifests/certificate-policy.yaml) caps it at 2160h and
 approver-policy (v0.28.0) cannot evaluate a request that names none while a cap
 is set: it panics, the request is tried again for ever and is neither approved
-nor denied, so a Certificate without one would never be issued. No renewBefore:
-cert-manager's default, a third of the lifetime (30 days), stays. The key is
-new at every
+nor denied, so a Certificate without one would never be issued.
+meridian.certificateLifetime checks both values. renewBefore is left out unless
+certificate.renewBefore is set: cert-manager's default, a third of the lifetime
+(30 days), stays. The key is new at every
 renewal by an explicit rotationPolicy: Always, not by cert-manager's default,
 which was Never before v1.18.0 (the CA's key, kept by Never, is in
 infra/kind/manifests/service-ca.yaml).
 */ -}}
 {{- define "meridian.certificate" -}}
+{{- $lifetime := include "meridian.certificateLifetime" .root | fromJson -}}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -324,7 +414,10 @@ metadata:
     {{- include "meridian.labels" .name | nindent 4 }}
 spec:
   secretName: {{ .name }}-tls
-  duration: 2160h
+  duration: {{ $lifetime.duration }}
+  {{- with $lifetime.renewBefore }}
+  renewBefore: {{ . }}
+  {{- end }}
   privateKey:
     algorithm: ECDSA
     size: 256

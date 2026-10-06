@@ -63,8 +63,9 @@ answered on 2026-10-06:
   amd64. Every image pinned by digest resolved there: `make up` from no
   cluster and the first `make deploy` both ended with exit 0, and
   `make smoke` passed every line. The versions table of
-  `infra/kind/README.md` still lists the laptop's tools; S062, the step
-  that ran these commands, adds the virtual machine's.
+  [`infra/kind/README.md`](../infra/kind/README.md#prerequisites) holds
+  the virtual machine's tools beside the laptop's, as the result of S062,
+  the step that ran these commands.
 - **kind on Linux.** The cluster's file-watch limits are the host's;
   no pod failed to start for them. Read kind's known issues if one does
   with "too many open files".
@@ -167,7 +168,7 @@ guess about another.
 | The whole suite beside the deployed cluster, 4 workers | 3 min 10 s | 5.5 GB still available |
 | `make up` from no cluster | 5 min 04 s | Every pinned image resolved on amd64 |
 | The first `make deploy` | 1 min 30 s | 61 s of it waits out the ingestion's token window |
-| `make smoke` | 40 to 43 s | |
+| `make smoke` | 40 to 52 s | Over 2026-10-06; 35 lines on the deployed cluster |
 | `make demo` on a deployed cluster | 30 s | |
 | The python job in CI | about 8 min | GitHub's four-core runner |
 | One contract at an `implementer` | 3 to 15 min | Reading, tests first, the change, its gates |
@@ -246,6 +247,10 @@ known.
 ### What to keep to
 
 - One whole suite at a time beside the cluster, with four workers.
+- A test database's port outside Linux's ephemeral range (32768 to
+  60999). On 2026-10-06 a run on port 55638 failed to bind because another
+  process had been given that port as a source port; this session's later
+  runs used a port below the range.
 - Nothing that an agent builds is committed unread: the reading is slower
   than the building and found a wrong design twice in two days (benign
   cases placed where they had to fail; a fingerprint that left out the

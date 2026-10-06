@@ -18,6 +18,7 @@ from dbsupport import (
     OWNER,
     ROLES_LOCK_KEY,
     SERVICE_ROLES,
+    UPKEEP_ROLE,
     WORKERINPUT_KEY,
     ensure_roles,
     new_passwords,
@@ -29,7 +30,7 @@ from sweepmigrationsupport import as_role_by_set_role
 
 THREADS = 8
 ROUNDS = 5
-ALL_ROLES = (OWNER, *SERVICE_ROLES)
+ALL_ROLES = (OWNER, *SERVICE_ROLES, UPKEEP_ROLE)
 # Long enough that a live lock holder is certain to outlast it, short enough
 # that the test does not wait: PostgreSQL ends the wait itself.
 SHORT_TIMEOUT_SECONDS = 0.2
