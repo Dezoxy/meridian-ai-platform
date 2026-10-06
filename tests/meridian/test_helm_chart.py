@@ -51,7 +51,9 @@ WORKFLOW = yaml.safe_load(
 # Keys that would hold a credential if one were put in a value. What they may
 # hold is the name of a Secret or the name of a key inside one, never a secret.
 CREDENTIAL_KEYS = {"password", "passwd", "uri", "token", "key", "apikey", "secret"}
-SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-db(-ca)?")
+# The database roles' Secrets and the rate store's (S066: `rate-store-credentials`,
+# the gateway's address and Redis's ACL file).
+SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-(db(-ca)?|credentials)")
 SECRET_KEY_NAMES = {"uri", "ca.crt"}
 CONNECTION_STRING = re.compile(r"postgres(ql)?://", re.IGNORECASE)
 

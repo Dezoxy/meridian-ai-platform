@@ -1,0 +1,292 @@
+{{- /*
+The rate store (S066, T-45): one Redis that holds the Model Gateway's two rate
+windows for every gateway pod. Rendered only when `rateStore.enabled` is true
+(values.yaml says what the values mean); nothing here is rendered otherwise.
+
+  ServiceAccount  rate-store, no token mounted
+  ConfigMap       rate-store: redis.conf, below. No secret in it
+  Deployment      rate-store: one replica, strategy Recreate (two stores side by
+                  side would each hold half of a window, and a rolling update
+                  would run two for a while). The official image, run as its own
+                  user (uid 999, gid 1000: docker-library/redis, v8.10.2,
+                  alpine/Dockerfile, `adduser -S -G redis -u 999 redis`; the
+                  image sets no USER and drops to it in its entrypoint) with the
+                  services' hardening: read-only root filesystem, no capability,
+                  no privilege escalation, the default seccomp profile, no
+                  service-account token. The command is `redis-server` itself,
+                  not the image's entrypoint: the entrypoint would load the
+                  image's four modules (search, JSON, time series, Bloom) beside
+                  the server, which the gateway's script does not use. No volume
+                  but the certificate, the ACL file and the configuration, all
+                  read-only: Redis writes nothing, so there is no /tmp either.
+  Service         rate-store, on the TLS port
+  Certificate     rate-store: from the services' issuer, under the policy that
+                  already admits the services' (namespace, a SPIFFE URI of the
+                  form spiffe://<trustDomain>/ns/<namespace>/sa/rate-store, the
+                  DNS name rate-store.<namespace>.svc, the same usages). The DNS
+                  name is the host of the address in the Secret's key `uri`,
+                  which the gateway checks the certificate against
+  NetworkPolicy   rate-store, when networkPolicy.enabled: ingress from the Model
+                  Gateway's pods on the port and from nobody else, no egress (it
+                  calls nothing, not even DNS). The gateway's own policy gains
+                  the matching egress rule (meridian.egress); no other workload's
+                  does
+
+The pod reads two Secrets: its Certificate's (rate-store-tls) and, for the one key
+users.acl, the credentials' (rateStore.secret). The gateway reads the other key of
+the latter, uri, as an environment variable (services.yaml).
+
+The directives of redis.conf, each from the documentation of Redis 8.10 (the
+redis.conf of the 8.10.2 source, which the pinned image is built from):
+
+  bind * -::*             The default is loopback only (bind 127.0.0.1 -::1), so
+                          the gateway's connections would never arrive. The
+                          NetworkPolicy and the TLS settings say who may connect
+  protected-mode yes      The default, said so. It refuses a non-local client
+                          only while the default user has no password; the ACL
+                          file turns that user off, so here it is a second layer
+                          that would apply if the file were ever lost, not the
+                          one that protects
+  port 0                  No plain port: Redis opens no TCP socket for it
+  tls-port 6379           The one port, TLS only (meridian.rateStorePort)
+  tls-cert-file,          The server's certificate and key, and the services' CA,
+  tls-key-file,           all from the Certificate's Secret. The CA is also what
+  tls-ca-cert-file        a client's certificate is checked against
+  tls-auth-clients yes    A client must present a certificate of that CA (the
+                          default, said so). The certificate alone does not say
+                          "the gateway": all six services hold one. The ACL
+                          user and its password do
+  tls-protocols           TLS 1.2 and 1.3 only (the default, said so)
+  "TLSv1.2 TLSv1.3"
+  aclfile                 The users come from the Secret's users.acl, mounted
+                          read-only. `user` lines in this file cannot be mixed
+                          with it (the server would not start), so the
+                          `default` user is turned off in that file, not here
+  save ""                 No snapshot: nothing is persisted. A restart hands
+  appendonly no           every tenant its windows again, as a gateway restart
+                          did; the budget (the ledger, in PostgreSQL) is not a
+                          window and is not reset by it
+  maxmemory               Redis's own ceiling (rateStore.maxmemory, checked to be
+                          below the memory limit)
+  maxmemory-policy        An evicting policy would drop a tenant's window without
+  noeviction              a word, which lifts that tenant's limit. Note that
+                          this does not make the store refuse the gateway's
+                          script: the script's first write is not a command Redis
+                          checks memory for, so the pod's memory limit is the
+                          real bound (values.yaml)
+  maxclients 256          The gateway's pool is as large as its thread pool (40
+                          connections a pod); this leaves room for six pods and a
+                          rolling update's overlap, and a stray client cannot
+                          take every slot of the 10000 the default allows
+  timeout 300             An idle connection is closed after five minutes. The
+                          gateway's client checks a pooled connection before it
+                          reuses it, so a close by the server costs it nothing
+                          (K1's measurement)
+  tcp-keepalive 60        A peer that vanished (a gateway pod that was killed) is
+                          found and its connection freed within about a minute
+                          (the default is 300 seconds)
+  busy-reply-threshold    A script that runs 100 ms is far past what the
+  100                     gateway's (microseconds) needs; past it Redis answers
+                          other clients with BUSY instead of leaving them to time
+                          out. The gateway's user cannot SCRIPT KILL, and no
+                          other user exists: a looping script is ended by
+                          deleting the pod (the runbook). `lua-time-limit` is
+                          this directive's old name
+  enable-protected-       The default for the three, said so: CONFIG SET of the
+  configs no,             directives that name files, DEBUG and MODULE are
+  enable-debug-command    blocked for every connection
+  no, enable-module-
+  command no
+  loglevel notice,        The log goes to the container's output, where the
+  logfile ""              kubelet collects it
+*/ -}}
+{{- define "meridian.rateStoreConfig" -}}
+{{- $store := include "meridian.rateStore" . | fromJson -}}
+{{- $tls := include "meridian.tlsDirectory" . -}}
+bind * -::*
+protected-mode yes
+port 0
+tls-port {{ include "meridian.rateStorePort" . }}
+tls-cert-file {{ $tls }}/tls.crt
+tls-key-file {{ $tls }}/tls.key
+tls-ca-cert-file {{ $tls }}/ca.crt
+tls-auth-clients yes
+tls-protocols "TLSv1.2 TLSv1.3"
+aclfile /etc/redis-acl/users.acl
+save ""
+appendonly no
+maxmemory {{ $store.maxmemory }}
+maxmemory-policy noeviction
+maxclients 256
+timeout 300
+tcp-keepalive 60
+busy-reply-threshold 100
+enable-protected-configs no
+enable-debug-command no
+enable-module-command no
+loglevel notice
+logfile ""
+{{- end -}}
+
+{{- /*
+probe: the same command for both probes. A TLS handshake with the store's own
+certificate as the client's, then PING. The default user is off, so the answer is
+NOAUTH, which redis-cli prints and exits 0 on: a zero exit says the server's
+certificate chain loaded, a client certificate was accepted and the server
+answered, with no credential in the pod's spec. A refused connection or a failed
+handshake exits 1. (A TCP check would pass the same and make the server log a
+warning for every probe: a connection that closes before its handshake.) Takes
+the root.
+*/ -}}
+{{- define "meridian.rateStoreProbe" -}}
+{{- $tls := include "meridian.tlsDirectory" . -}}
+exec:
+  command:
+    - redis-cli
+    - --tls
+    - --cacert
+    - {{ $tls }}/ca.crt
+    - --cert
+    - {{ $tls }}/tls.crt
+    - --key
+    - {{ $tls }}/tls.key
+    - -h
+    - 127.0.0.1
+    - -p
+    - {{ include "meridian.rateStorePort" . | quote }}
+    - ping
+timeoutSeconds: 3
+{{- end -}}
+
+{{- if .Values.rateStore.enabled }}
+{{- $store := include "meridian.rateStore" . | fromJson }}
+{{- $identity := include "meridian.identity" . | fromJson }}
+{{- /* The image's own user and group; the rest of the hardening is the services'. */}}
+{{- $podContext := include "meridian.podSecurityContext" . | fromYaml }}
+{{- $_ := set $podContext "runAsUser" 999 }}
+{{- $_ := set $podContext "runAsGroup" 1000 }}
+{{- $_ := set $podContext "fsGroup" 1000 }}
+{{- $containerContext := include "meridian.containerSecurityContext" . | fromYaml }}
+{{- $_ := set $containerContext "runAsUser" 999 }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+data:
+  redis.conf: |-
+    {{- include "meridian.rateStoreConfig" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rate-store
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.labels" "rate-store" | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "meridian.rateStoreConfig" . | sha256sum }}
+    spec:
+      serviceAccountName: rate-store
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $podContext | nindent 8 }}
+      containers:
+        - name: rate-store
+          image: {{ $store.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+          ports:
+            - name: tls
+              containerPort: {{ include "meridian.rateStorePort" . }}
+          readinessProbe:
+            {{- include "meridian.rateStoreProbe" . | nindent 12 }}
+            periodSeconds: 5
+          livenessProbe:
+            {{- include "meridian.rateStoreProbe" . | nindent 12 }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.rateStore.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $containerContext | nindent 12 }}
+          volumeMounts:
+            {{- include "meridian.tlsMount" . | nindent 12 }}
+            - name: acl
+              mountPath: /etc/redis-acl
+              readOnly: true
+            - name: config
+              mountPath: /etc/redis
+              readOnly: true
+      volumes:
+        {{- include "meridian.tlsVolume" "rate-store" | nindent 8 }}
+        - name: acl
+          secret:
+            secretName: {{ $store.secret }}
+            defaultMode: {{ 0440 }}
+            items:
+              - key: users.acl
+                path: users.acl
+        - name: config
+          configMap:
+            name: rate-store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rate-store
+  ports:
+    - name: tls
+      port: {{ include "meridian.rateStorePort" . }}
+      targetPort: tls
+{{ include "meridian.certificate" (dict "root" . "identity" $identity "name" "rate-store" "server" true) }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rate-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "rate-store" | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rate-store
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "meridian.rateStoreRule" (dict "direction" "from" "name" "model-gateway") | nindent 4 }}
+{{- end }}
+{{- end }}
