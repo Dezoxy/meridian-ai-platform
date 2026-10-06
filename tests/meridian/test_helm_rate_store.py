@@ -369,7 +369,8 @@ def test_the_probes_need_no_credential_and_open_no_plain_port() -> None:
     (port,) = container["ports"]
 
     assert port == {"name": "tls", "containerPort": PORT}
-    for probe in ("readinessProbe", "livenessProbe"):
+    # The liveness probe is a script (test_helm_rate_store_restart.py).
+    for probe in ("readinessProbe",):
         (command,) = [container[probe]["exec"]["command"]]
         assert command[0] == "redis-cli"
         assert "--tls" in command
@@ -382,7 +383,9 @@ def test_the_probes_need_no_credential_and_open_no_plain_port() -> None:
 def test_the_probe_presents_the_stores_own_certificate_to_its_own_server() -> None:
     container = store_container()
 
-    for probe in ("readinessProbe", "livenessProbe"):
+    # The liveness probe runs the same command first, as a script
+    # (test_helm_rate_store_restart.py).
+    for probe in ("readinessProbe",):
         command = container[probe]["exec"]["command"]
 
         assert command == [

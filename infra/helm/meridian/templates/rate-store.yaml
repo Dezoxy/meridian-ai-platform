@@ -36,6 +36,22 @@ The pod reads two Secrets: its Certificate's (rate-store-tls) and, for the one k
 users.acl, the credentials' (rateStore.secret). The gateway reads the other key of
 the latter, uri, as an environment variable (services.yaml).
 
+The probes. Readiness is a TLS handshake and PING (meridian.rateStoreProbe).
+Liveness is the same, and then fails when the certificate on the volume was
+written after the server process started (meridian.rateStoreLiveness, which
+says how). Redis reads its certificate once, at start; cert-manager renews it at
+60 of its 90 days and the kubelet rewrites the files, but the server would go on
+serving the old one, and when that ended every gateway call would be a 503 (no
+fallback: the owner's decision) until someone restarted the store. So a renewal
+fails the liveness probe and the kubelet restarts the container, which loads the
+new files, as the six services do through /healthz (certlife.py). It comes within
+60 seconds of the kubelet writing the new files into the pod (ten seconds a
+probe, six failures in a row), about one to three minutes after cert-manager
+renews, with 30 days of the old certificate left. A restart hands every tenant
+its windows again, once per renewal: accepted and stated (the budgets are in the
+ledger, in PostgreSQL, and are not windows). Implemented and tested; it has not
+run on a cluster, where a real renewal is the one thing left to prove.
+
 The directives of redis.conf, each from the documentation of Redis 8.10 (the
 redis.conf of the 8.10.2 source, which the pinned image is built from):
 
@@ -129,14 +145,14 @@ logfile ""
 {{- end -}}
 
 {{- /*
-probe: the same command for both probes. A TLS handshake with the store's own
-certificate as the client's, then PING. The default user is off, so the answer is
-NOAUTH, which redis-cli prints and exits 0 on: a zero exit says the server's
-certificate chain loaded, a client certificate was accepted and the server
-answered, with no credential in the pod's spec. A refused connection or a failed
-handshake exits 1. (A TCP check would pass the same and make the server log a
-warning for every probe: a connection that closes before its handshake.) Takes
-the root.
+probe: the readiness probe. A TLS handshake with the store's own certificate as
+the client's, then PING. The default user is off, so the answer is NOAUTH, which
+redis-cli prints and exits 0 on: a zero exit says the server's certificate chain
+loaded, a client certificate was accepted and the server answered, with no
+credential in the pod's spec. A refused connection or a failed handshake exits 1.
+(A TCP check would pass the same and make the server log a warning for every
+probe: a connection that closes before its handshake.) The liveness probe
+(meridian.rateStoreLiveness) runs this same command first. Takes the root.
 */ -}}
 {{- define "meridian.rateStoreProbe" -}}
 {{- $tls := include "meridian.tlsDirectory" . -}}
@@ -155,6 +171,85 @@ exec:
     - -p
     - {{ include "meridian.rateStorePort" . | quote }}
     - ping
+timeoutSeconds: 3
+{{- end -}}
+
+{{- /*
+rateStoreLiveness: the liveness probe: the readiness probe's handshake and PING,
+and then a check that the certificate on the volume is not newer than the server.
+The script is one literal. The directory and the port are its two arguments
+($1 and $2, after the name `rate-store-liveness` that stands for $0), always
+inside double quotes, so no value of the chart is ever text of a shell string.
+Takes the root.
+
+  server's start   the boot time (btime in /proc/stat) plus the start of PID 1,
+                   which is the server (the container runs `redis-server`
+                   itself), in clock ticks since boot (field 22 of
+                   /proc/1/stat, a hundred a second: the kernel's fixed USER_HZ),
+                   cut to the second. Not the time of the /proc/1 directory: the
+                   kernel sets that when the inode is first looked up, not when
+                   the process started. sed and cut cut the fields out after the
+                   `)` that ends the command's name, so a name with a space
+                   cannot move them
+  file's time      stat -L -c %Y on tls.crt: -L follows the link tls.crt ->
+                   ..data/tls.crt to the file itself. The kubelet writes a
+                   Secret's files into a new directory ..<timestamp>, then
+                   replaces the link ..data with one rename; the new file's own
+                   time is the moment it was written
+  the rule         unhealthy when the file's second is later than the server's.
+                   Equal is healthy: the kubelet writes the volume before the
+                   container starts, so every start has a file no newer than the
+                   process, and a container restart (not a new pod) leaves the
+                   process newer than the files, so a restart that loaded the
+                   renewed certificate is not followed by another. A time that
+                   cannot be read or is not a number is unhealthy and says so on
+                   standard error (the kubelet records it in the pod's events):
+                   a probe that cannot tell must not pass for ever and leave a
+                   certificate to expire in thirty days without a word
+  how long         the kubelet shows a Secret's update in the volume within about
+                   a minute or two of cert-manager writing it (its sync period
+                   and cache); then ten seconds a probe and six failures in a
+                   row (failureThreshold) is 60 seconds. The restart comes about
+                   one to three minutes after cert-manager renews, at 60 of the
+                   certificate's 90 days, with 30 days of the old one left
+  what it costs    the restart hands every tenant its windows again, once per
+                   renewal (the budgets in the ledger, in PostgreSQL, are not
+                   windows and are not touched), and for the few seconds the
+                   server takes to start every model call is a 503 (the
+                   gateway has no fallback: the owner's decision). The services
+                   restart themselves on a renewed certificate the same way
+                   (meridian.platform.common.certlife)
+  what it cannot   say that the server SERVES the new certificate (the image has
+                   no tool that prints a peer's certificate): it says the files
+                   are newer than the process, and the restart is what loads
+                   them
+*/ -}}
+{{- define "meridian.rateStoreLiveness" -}}
+exec:
+  command:
+    - sh
+    - -c
+    - |
+      redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" ping || exit 1
+      boot=$(sed -n 's/^btime //p' /proc/stat)
+      ticks=$(sed 's/^.*) //' /proc/1/stat | cut -d ' ' -f 20)
+      written=$(stat -L -c %Y "$1/tls.crt")
+      for n in "$boot" "$ticks" "$written"; do
+        case "$n" in
+          '' | *[!0-9]*)
+            echo "rate-store: cannot read a time (boot '$boot', start '$ticks', file '$written')" >&2
+            exit 1
+            ;;
+        esac
+      done
+      started=$((boot + ticks / 100))
+      if [ "$written" -gt "$started" ]; then
+        echo "rate-store: the certificate on disk is newer than the server (written $written, server started $started): restarting to serve it" >&2
+        exit 1
+      fi
+    - rate-store-liveness
+    - {{ include "meridian.tlsDirectory" . }}
+    - {{ include "meridian.rateStorePort" . | quote }}
 timeoutSeconds: 3
 {{- end -}}
 
@@ -227,7 +322,7 @@ spec:
             {{- include "meridian.rateStoreProbe" . | nindent 12 }}
             periodSeconds: 5
           livenessProbe:
-            {{- include "meridian.rateStoreProbe" . | nindent 12 }}
+            {{- include "meridian.rateStoreLiveness" . | nindent 12 }}
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 6

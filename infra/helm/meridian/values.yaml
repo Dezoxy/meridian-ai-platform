@@ -488,7 +488,11 @@ sweep:
 # or as replicas, do not each allow the full limits. Off by default; when it is
 # on, the gateway is given its address and the guard on the gateway's replicas
 # lets a second one through. Nothing is persisted: a restart of the store hands
-# every tenant its windows again, as a restart of the gateway did.
+# every tenant its windows again, as a restart of the gateway did. The store is
+# restarted once for each renewal of its certificate (its liveness probe fails
+# when the files on the volume are newer than the server, within about a minute
+# of the kubelet writing them), because Redis reads its certificate only at
+# start; its duration and renewal are the services' (`certificate`).
 #   enabled     renders the store
 #   image       the full reference, `<name>:<tag>@sha256:<64 hex digits>`: the
 #               digest is required (the chart fails without one) because a tag
@@ -514,8 +518,9 @@ sweep:
 #               The chart cannot read the Secret, so it cannot check that the
 #               file turns the `default` user off, that it gives the gateway's
 #               user exactly the script's commands (EVALSHA, SCRIPT LOAD, TIME,
-#               ZREMRANGEBYSCORE, ZRANGE, ZADD, PEXPIRE, HELLO, CLIENT SETINFO)
-#               on ~meridian:rate:* and nothing else, that the hash in it is the
+#               ZREMRANGEBYSCORE, ZRANGE, ZADD, PEXPIRE, HELLO)
+#               on ~meridian:rate:* and nothing else (no CLIENT command: the
+#               gateway's client no longer sends one), that the hash in it is the
 #               password in `uri`, or that the password is percent-encoded there.
 #               Whoever makes the Secret owns those checks.
 #   resources   a CPU request and a memory request and limit, no CPU limit, as
