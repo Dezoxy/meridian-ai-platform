@@ -2055,10 +2055,12 @@ three alerts that notice a series that is not there, and a fourth that
 notices the log agent not being ready). It holds 17 alert
 rules and three recording rules: six on the gateway, three on the workloads
 and four on the certificates (the gateway's sixth, `MeridianRateStoreRefusing`,
-fires when more than 5 percent of the calls of the last 15 minutes, and at
-least 5, were refused because the rate store gave no answer, for 2 minutes: one
-refused call no longer fires it; loaded and healthy on kind on 2026-10-06 in
-its earlier form (any refused call, for 5 minutes), and never seen firing), and, from
+fires when, of the calls of the last 15 minutes that the rate store could have
+counted, more than 5 percent and at least 5, or more than half and at least 2,
+were refused because the store gave no answer, for 2 minutes: one refused call
+no longer fires it, and calls refused before the store is asked do not dilute
+it; loaded and healthy on kind on 2026-10-06 in this form, after `make up`,
+since `make deploy` does not apply the rules; never seen firing), and, from
 S064, four on missing telemetry
 (loaded and healthy on kind on 2026-10-06, in the third run, and none seen
 firing; tested without a cluster, not seen firing on one): the Model Gateway's,

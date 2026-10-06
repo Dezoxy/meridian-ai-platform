@@ -5,7 +5,7 @@ seconds, tokens in a minute) is down, refuses the gateway, or has to be
 restarted. The gateway refuses every model call it cannot count.
 
 Status (S066): written from the code, the chart and `infra/kind/`, and from
-three runs of the store on kind on 2026-10-06 (below). Implemented and tested:
+five runs of the store on kind on 2026-10-06 (below). Implemented and tested:
 the gateway's refusal, the chart's store and its ACL, `make up`'s Secret and
 `make deploy`'s check of it. Seen on kind: the store running under that ACL and
 those probes, a real renewal of its certificate and the restart that followed
@@ -77,12 +77,19 @@ store's container had restarted once. The Warning event read `Liveness probe
 failed: rate-store: the certificate on disk is newer than the server ...`, and
 the previous container's output ended `User requested shutdown... Redis is now
 ready to exit`. Afterwards the Deployment had rolled out, `make demo` completed
-(its model calls counted by the restarted store), the Model Gateway's pod had no
-restart and `make smoke` printed 45 PASS.
+(its claim was decided by the rules with no model call, so it does not show a
+call counted after this restart), the Model Gateway's pod had no restart and
+`make smoke` printed 45 PASS.
 
-**Since the third run** (the third infra review's changes, implemented and
-tested outside a cluster, and not yet run by `make deploy` or `make smoke` on
-one): `maxmemory-clients 8mb` in the store's configuration (proved on the pinned
+**Since the third run** (the last two review passes' changes, implemented and
+tested outside a cluster; run by `make deploy` and `make smoke` on kind in a
+fourth and a fifth run on 2026-10-06, 16:01 to 16:43 UTC, where the store ran
+with them, `make deploy`'s new check passed on the existing Secret, `make
+smoke` printed 45 PASS, the upkeep Job's refusal ended in the script's new
+sentence, a chat call of `make demo` went through the gateway's last script,
+and the changed alert rule was loaded only after `make up`, since `make deploy`
+does not apply the rules; none of the failures these changes are for was
+produced there): `maxmemory-clients 8mb` in the store's configuration (proved on the pinned
 image under a 64 MiB limit, see "What `maxmemory-clients` bounds" below); a
 time limit of two seconds on the probes' `redis-cli` (proved against a paused
 container); `make deploy` comparing the ACL file the Secret holds and not only
@@ -558,11 +565,11 @@ about a minute of a renewed certificate reaching its volume, and every window
 starts again then, as for any restart. (Implemented, tested, and seen on kind
 on 2026-10-06: a renewal made at 14:37:32 UTC was followed about 100 seconds
 later by one restart of the container, with the event `Liveness probe failed:
-rate-store: the certificate on disk is newer than the server ...`, and the model
-calls of the next `make demo` were counted by the restarted store. That the
-server then serves the new certificate was not read from the store itself; its
-completed calls show the gateway verified one. This is the chart's, and the
-template says what the probe does today.) If that did not happen, the store
+rate-store: the certificate on disk is newer than the server ...`. The next
+`make demo` passed, but its claim was decided by the rules with no model call,
+so no call is shown counted after that restart, and that the server then serves
+the new certificate was not read from the store itself. This is the chart's,
+and the template says what the probe does today.) If that did not happen, the store
 would go on serving the old
 certificate to its end, and from then on every call would be a 503 with a
 `ConnectionError`: look at the Certificate's dates and at the pod's restarts, and
