@@ -28,6 +28,10 @@ SERVICE_ROLES = (
     "knowledge_mcp",
     "claims_sweep",
 )
+# The role of `meridian gateway` (0020, S066). It is not in SERVICE_ROLES: that
+# tuple is read as "the roles that append to the audit log" by tests that insert
+# as each of them, and this role holds no right on any table it could write.
+UPKEEP_ROLE = "gateway_upkeep"
 PASSWORD_BYTES = 24
 # The key under which the xdist controller hands its passwords to a worker.
 WORKERINPUT_KEY = "meridian_test_role_passwords"
@@ -58,7 +62,8 @@ PACKAGED_MIGRATIONS: tuple[tuple[str, str], ...] = tuple(migration_files())
 def new_passwords() -> dict[str, str]:
     """A fresh random password for the owner and each service role."""
     return {
-        role: secrets.token_urlsafe(PASSWORD_BYTES) for role in (OWNER, *SERVICE_ROLES)
+        role: secrets.token_urlsafe(PASSWORD_BYTES)
+        for role in (OWNER, *SERVICE_ROLES, UPKEEP_ROLE)
     }
 
 

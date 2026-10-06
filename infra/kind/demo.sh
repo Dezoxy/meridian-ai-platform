@@ -199,11 +199,15 @@ readonly SPANS_PER_SERVICE='
   | group_by(.service)[]
   | "\(.[0].service) \(map(.spans) | add)"'
 
-# has_every_service SERVICE...: true when ${counts} lists every service given.
+# has_every_service SERVICE...: true when ${counts} lists every service given
+# with at least one span. The list also names a service that is in Tempo's answer
+# with no span ("model-gateway 0": a resource that has sent nothing yet), which
+# is not "spans from" it, so a zero does not count. Such a line stays in
+# ${counts}, and FAIL prints it under "Tempo returned" with its zero.
 has_every_service() {
   local service
   for service in "$@"; do
-    grep -q "^${service} " <<<"${counts}" || return 1
+    grep -q "^${service} [1-9]" <<<"${counts}" || return 1
   done
 }
 
@@ -211,13 +215,15 @@ has_every_service() {
 # service given for the trace and the per-service counts have settled: the same
 # text in SETTLE_POLLS readings in a row, each with every service. Leaves the
 # last counts in ${counts}, and in ${complete} whether the last reading had
-# every service (yes or no). Tempo answers 404 until it has the trace, and the
-# services flush their spans separately, so an earlier answer can be partial.
+# every service (yes or no). ${complete_readings} and ${partial_readings} count
+# all the readings that had every service and all that did not (a 404 is one
+# of those). Tempo answers 404 until it has the trace, and the services flush
+# their spans separately, so an earlier answer can be partial.
 wait_for_trace() {
   local id=$1 deadline=$((SECONDS + POLL_TIMEOUT)) out http body
   local previous="" settled=0
   shift
-  counts="" complete=no
+  counts="" complete=no complete_readings=0 partial_readings=0
   while ((SECONDS < deadline)); do
     kill -0 "${pf_pid}" 2>/dev/null ||
       die "the Grafana port-forward died: $(clean "$(tail -n 3 "${pf_log}")")"
@@ -231,15 +237,15 @@ wait_for_trace() {
       200)
         counts="$(jq -r "${SPANS_PER_SERVICE}" <<<"${body}" 2>/dev/null | LC_ALL=C tr -cd '[:print:]\n')" || counts=""
         if has_every_service "$@"; then
-          complete=yes
+          complete=yes complete_readings=$((complete_readings + 1))
           if [[ "${counts}" == "${previous}" ]]; then settled=$((settled + 1)); else settled=1; fi
           previous="${counts}"
           if ((settled >= SETTLE_POLLS)); then return 0; fi
         else
-          complete=no settled=0 previous=""
+          complete=no settled=0 previous="" partial_readings=$((partial_readings + 1))
         fi
         ;;
-      404) complete=no settled=0 previous="" ;;
+      404) complete=no settled=0 previous="" partial_readings=$((partial_readings + 1)) ;;
       *) die "Tempo answered HTTP $(clean "${http}") through Grafana: $(clean "${body:0:200}")" ;;
     esac
     sleep "${POLL_INTERVAL}"
@@ -249,8 +255,14 @@ wait_for_trace() {
 
 # report_trace LABEL TRACE_ID SERVICE...: wait for the trace, print PASS or
 # FAIL; the status is the result. PASS means every service has spans and the
-# counts printed are the settled ones; FAIL says whether a service is missing or
-# the counts were still changing at the deadline.
+# counts printed are the settled ones; FAIL says whether a service is missing,
+# the counts were still changing at the deadline, or the readings alternated
+# between complete and partial (some complete, the last one not).
+# "Alternated" is an inference from those counts, and exact for a complete
+# reading followed by a partial one and then a complete one again. It is also
+# what is said when a complete reading is followed only by partial ones or 404s
+# until the deadline (Tempo lost the trace, or a service's spans are gone): the
+# script saw "complete, then not", never "complete, not, complete".
 report_trace() {
   local label=$1 id=$2 service count
   shift 2
@@ -265,6 +277,10 @@ report_trace() {
   fi
   if [[ "${complete}" == yes ]]; then
     printf 'FAIL  %s %s was still growing after %ss\n' "${label}" "${id}" "${POLL_TIMEOUT}"
+  elif ((complete_readings > 0)); then
+    printf 'FAIL  %s %s: readings alternated between complete and partial (%s complete, %s partial or missing) over %ss, Tempo was still settling\n' \
+      "${label}" "${id}" "${complete_readings}" "${partial_readings}" "${POLL_TIMEOUT}"
+    printf '      Look it up in a moment: make grafana, then Explore, Tempo, TraceQL { trace:id = "%s" }\n' "${id}"
   else
     printf 'FAIL  no %s %s with spans from all of: %s after %ss\n' \
       "${label}" "${id}" "$*" "${POLL_TIMEOUT}"

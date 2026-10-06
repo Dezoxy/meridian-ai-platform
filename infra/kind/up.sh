@@ -6,9 +6,9 @@
 #      that say who may ask for a certificate, and the CA that signs the
 #      services' certificates
 #   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
-#      the database "meridian" and its eight roles (the owner, six services and
-#      the scheduled sweep's); their password Secrets are created first, only if
-#      absent
+#      the database "meridian" and its nine roles (the owner, six services, the
+#      scheduled sweep's and the gateway's ledger upkeep's); their password
+#      Secrets are created first, only if absent
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
 #      observability, nothing else), kube-prometheus-stack, the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
@@ -258,9 +258,14 @@ install_release otel-collector observability "${OTEL_COLLECTOR_CHART}" \
   --set "image.digest=${OTEL_COLLECTOR_IMAGE_DIGEST}"
 
 log "edge: waiting for the Gateway to be programmed"
-kctl -n envoy-gateway-system wait --for=condition=Programmed gateway/edge --timeout=5m >/dev/null
+# Envoy Gateway has left Programmed False for hours while the edge served
+# (AddressNotAssigned, NoResources; README, "If make up was interrupted"), so
+# the message says the edge may be fine and gives the remedy.
+kctl -n envoy-gateway-system wait --for=condition=Programmed gateway/edge --timeout=5m >/dev/null ||
+  die "the wait for the Gateway edge to be Programmed ended without the condition (it waits up to 5m; kubectl's own message above says whether the time ran out or the wait failed at once, for instance with not found). The edge may be serving all the same: Envoy Gateway has left this condition False for hours with the proxy pod ready (the reason is in kubectl -n envoy-gateway-system get gateway edge -o yaml). If the proxy pod is ready, do what infra/kind/README.md says under 'If make up was interrupted', and then run 'make up' again: kubectl -n envoy-gateway-system rollout restart deploy/envoy-gateway; kubectl -n envoy-gateway-system rollout status deploy/envoy-gateway; kubectl -n envoy-gateway-system annotate gateway edge meridian.local/reconcile-nudge=<the time now> --overwrite"
 # Programmed does not mean the proxy pods are serving yet.
 kctl -n envoy-gateway-system wait --for=condition=Available deployment \
-  -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m >/dev/null
+  -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m >/dev/null ||
+  die "the wait for the edge's proxy Deployment to be Available ended without the condition (it waits up to 5m; kubectl's own message above says whether the time ran out or the wait failed at once, for instance with not found): look at its pods (kubectl -n envoy-gateway-system get pods -l gateway.envoyproxy.io/owning-gateway-name=edge; describe the one that is not ready) and at the controller's log (kubectl -n envoy-gateway-system logs deploy/envoy-gateway)"
 
 log "done. Next: make smoke | make grafana | export KUBECONFIG=${KUBECONFIG_FILE}"

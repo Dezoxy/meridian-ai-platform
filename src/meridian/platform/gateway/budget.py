@@ -20,9 +20,11 @@ reservation is then closed in one of three ways:
   reservation stays as the charge. Over-charging is the accepted side.
 
 Each counter always equals the sum of the charged amounts of the usage rows of
-its tenant and period. Statements use psycopg placeholders only (T-07). The
-tables hold identifiers and numbers, never content (T-03, T-25). A database
-error propagates: a call that cannot be reserved is not made.
+its tenant and period, less the credits of that period (``gateway.credits``,
+written only by the upkeep functions of migration 0020, S066). Statements use
+psycopg placeholders only (T-07). The tables hold identifiers and numbers, never
+content (T-03, T-25). A database error propagates: a call that cannot be
+reserved is not made.
 """
 
 import json
