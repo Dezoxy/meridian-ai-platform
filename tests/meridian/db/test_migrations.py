@@ -26,6 +26,54 @@ def test_migration_files_are_numbered_and_sorted() -> None:
     assert names[0] == "0001_schemas.sql"
     assert names == sorted(names)
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in names)
+    numbers = [name[:4] for name in names]
+    assert len(numbers) == len(set(numbers)), "two migrations share a number"
+
+
+def test_two_files_with_one_number_are_refused_naming_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = [("0017_a.sql", "SELECT 1;"), ("0017_b.sql", "SELECT 2;")]
+    monkeypatch.setattr(runner, "_packaged_files", lambda: files)
+
+    with pytest.raises(MigrationError) as raised:
+        migration_files()
+
+    message = str(raised.value)
+    assert "0017" in message
+    assert "0017_a.sql" in message
+    assert "0017_b.sql" in message
+
+
+def test_a_gap_in_the_numbers_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = [("0001_a.sql", "SELECT 1;"), ("0003_b.sql", "SELECT 2;")]
+    monkeypatch.setattr(runner, "_packaged_files", lambda: files)
+
+    assert migration_files() == files
+
+
+def test_a_refused_tree_applies_nothing_and_creates_no_ledger(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = [
+        ("0017_a.sql", "CREATE SCHEMA first_of_two;"),
+        ("0017_b.sql", "CREATE SCHEMA second_of_two;"),
+    ]
+    monkeypatch.setattr(runner, "_packaged_files", lambda: files)
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        with pytest.raises(MigrationError, match="0017"):
+            apply_migrations(conn)
+
+        ledger = conn.execute(
+            "SELECT to_regclass('public.meridian_migrations')"
+        ).fetchone()
+        schemas = conn.execute(
+            "SELECT count(*) FROM pg_namespace "
+            "WHERE nspname IN ('first_of_two', 'second_of_two')"
+        ).fetchone()
+
+    assert ledger == (None,)
+    assert schemas == (0,)
 
 
 def test_migrations_apply_in_name_order_and_are_recorded(

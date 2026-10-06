@@ -1,5 +1,6 @@
 """Shared by the database fixtures and the tests that use them."""
 
+import math
 import os
 import secrets
 from collections.abc import Mapping
@@ -28,6 +29,9 @@ WORKERINPUT_KEY = "meridian_test_role_passwords"
 # Every worker takes this advisory lock on the shared admin database, so the
 # workers set the roles up one after another (S054).
 ROLES_LOCK_KEY = "meridian-test-roles"
+# How long a worker waits for that lock before it gives up. A role set-up takes
+# milliseconds, so a minute means the holder is hung.
+ROLES_LOCK_TIMEOUT_SECONDS = 60
 
 
 def new_passwords() -> dict[str, str]:
@@ -50,16 +54,45 @@ def session_passwords(config: Any) -> dict[str, str]:
     return dict(workerinput[WORKERINPUT_KEY])
 
 
-def ensure_roles(admin_dsn: str, passwords: Mapping[str, str]) -> None:
+def ensure_roles(
+    admin_dsn: str,
+    passwords: Mapping[str, str],
+    lock_timeout_seconds: float = ROLES_LOCK_TIMEOUT_SECONDS,
+) -> None:
     """Create the roles if absent; give each its password.
 
     The roles are cluster-wide, so parallel workers all run this against one
     server. One transaction under an advisory lock serialises them: without it
     two workers both find no role and both CREATE it (a UniqueViolation), and
     two ALTERs of one role can fail with "tuple concurrently updated".
+
+    The transaction runs READ COMMITTED whatever the server defaults to, and
+    waits at most ``lock_timeout_seconds`` for the lock: a worker that holds it
+    for longer is hung, and the error says so. Zero or below is refused, for
+    PostgreSQL reads a ``lock_timeout`` of 0 as no timeout.
     """
+    if lock_timeout_seconds <= 0:
+        raise ValueError(
+            f"lock_timeout_seconds must be positive, got {lock_timeout_seconds}"
+        )
     with psycopg.connect(admin_dsn) as admin:
-        admin.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (ROLES_LOCK_KEY,))
+        admin.isolation_level = psycopg.IsolationLevel.READ_COMMITTED
+        # The first statement of the transaction; LOCAL, so it ends with it.
+        admin.execute(
+            sql.SQL("SET LOCAL lock_timeout = {}").format(
+                sql.Literal(math.ceil(lock_timeout_seconds * 1000))
+            )
+        )
+        try:
+            admin.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (ROLES_LOCK_KEY,)
+            )
+        except psycopg.errors.LockNotAvailable as exc:
+            raise RuntimeError(
+                f"gave up after waiting {lock_timeout_seconds} seconds for the "
+                f"test roles' advisory lock ({ROLES_LOCK_KEY!r}): another worker "
+                "holds it and has not let go"
+            ) from exc
         for role, password in passwords.items():
             exists = admin.execute(
                 "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
