@@ -46,9 +46,39 @@ def test_validate_passes_on_the_committed_registry_with_the_snapshot(
     )
 
     assert result.exit_code == 0, result.output
-    summary, terraform = result.stdout.splitlines()
-    assert SUMMARY.fullmatch(summary), summary
-    assert terraform == f"terraform outputs OK: {len(snapshot)} deployments match"
+    # Read by content: a NOTE line (an agent the runtime may name and no tenant
+    # lists) may sit between the two, and none of them is this test's business.
+    lines = result.stdout.splitlines()
+    assert len([line for line in lines if SUMMARY.fullmatch(line)]) == 1, lines
+    terraform = [line for line in lines if line.startswith("terraform outputs")]
+    assert terraform == [f"terraform outputs OK: {len(snapshot)} deployments match"]
+
+
+def test_a_note_between_the_summary_and_the_terraform_line_is_not_a_failure(
+    real_registry: Path, snapshot_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli_registry, "unlisted_runtime_agents", lambda registry: ("fraud-review",)
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "registry",
+            "validate",
+            "--registry-dir",
+            str(real_registry),
+            "--terraform-outputs",
+            str(snapshot_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert len(lines) == 3, lines
+    assert len([line for line in lines if SUMMARY.fullmatch(line)]) == 1, lines
+    assert len([line for line in lines if line.startswith("NOTE: ")]) == 1, lines
+    assert len([line for line in lines if line.startswith("terraform outputs OK")]) == 1
 
 
 def test_validate_without_terraform_outputs_prints_only_the_summary(
@@ -59,7 +89,9 @@ def test_validate_without_terraform_outputs_prints_only_the_summary(
     )
 
     assert result.exit_code == 0, result.output
-    assert SUMMARY.fullmatch(result.stdout.strip()), result.stdout
+    lines = result.stdout.splitlines()
+    assert len([line for line in lines if SUMMARY.fullmatch(line)]) == 1, lines
+    assert not [line for line in lines if line.startswith("terraform outputs")]
 
 
 def test_validate_prints_every_error_to_stderr_and_exits_1(registry_copy: Path) -> None:

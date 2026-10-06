@@ -36,11 +36,12 @@ def validate(root: Path) -> tuple[int, list[str]]:
 
 def list_in_a_tenant(root: Path) -> None:
     path = root / "config" / "registry" / "tenants.yaml"
-    old = "agents: [claims-triage, knowledge-ingestion]"
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(old, old.replace("]", f", {NAME}]")),
-        encoding="utf-8",
-    )
+    tenant = load_registry(root / "config" / "registry").tenant("claims-triage")
+    assert tenant is not None
+    old = f"agents: [{', '.join(tenant.agents)}]"
+    text = path.read_text(encoding="utf-8")
+    assert old in text  # the line is the registry's own list, not a literal
+    path.write_text(text.replace(old, old.replace("]", f", {NAME}]")), encoding="utf-8")
 
 
 def test_the_new_agent_validates_with_one_note_until_a_tenant_lists_it(

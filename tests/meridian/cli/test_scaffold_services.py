@@ -51,9 +51,6 @@ REGISTRY = "config/registry"
 RUNTIME_ENTRY = "  - id: agent-runtime"
 AGENTS_KEY = "    agents:"
 RUNTIME_LINE = "    agents: [claims-triage]"
-# The runtime's line in the committed file: a tenant lists claim-brief too, so a
-# test that rewrites the line in a copy of the committed file keeps it listed.
-COMMITTED_RUNTIME_LINE = "    agents: [claims-triage, claim-brief]"
 RUNTIME_COMMENT = "  # the agent of the run it was asked for"
 # The edit logic is tested on this text, not on the committed file, whose list
 # changes whenever the runtime may name another agent. It holds what the edit
@@ -143,7 +140,10 @@ def validate(root: Path) -> Any:
 
 
 def list_in_a_tenant(root: Path) -> None:
-    old = "agents: [claims-triage, knowledge-ingestion, claim-brief]"
+    tenant = load_registry(root / REGISTRY).tenant("claims-triage")
+    assert tenant is not None
+    old = f"agents: [{', '.join(tenant.agents)}]"
+    assert old in (root / "config/registry/tenants.yaml").read_text(encoding="utf-8")
     edit(
         root / "config/registry/tenants.yaml",
         lambda text: text.replace(old, old.replace("]", f", {NAME}]")),
@@ -194,12 +194,14 @@ def test_the_same_hand_edit_fails_with_the_rules_message_without_the_write(
     new_workload(root)
     (root / SERVICES).write_bytes(old.encode("utf-8"))
     list_in_a_tenant(root)
+    services = yaml.safe_load(old)["services"]
+    position = [service["id"] for service in services].index("agent-runtime")
 
     with pytest.raises(RegistryError) as refused:
         load_registry(root / REGISTRY)
 
     assert (
-        "services.yaml: services[1].agents: graph agent "
+        f"services.yaml: services[{position}].agents: graph agent "
         f"{NAME!r} is listed by a tenant, so add it to the agents of "
         "'agent-runtime': without it every call for the agent is refused"
     ) in refused.value.errors
@@ -241,15 +243,18 @@ def test_the_name_goes_inside_the_brackets_and_a_trailing_comment_survives(
 
 
 def test_a_comment_on_the_runtime_line_survives_the_whole_command(root: Path) -> None:
+    before = runtime_agents(root)
     edit(
         root / SERVICES,
-        lambda text: with_runtime_agents(text, COMMITTED_RUNTIME_LINE + "  # kept"),
+        lambda text: with_runtime_agents(
+            text, f"    agents: [{', '.join(before)}]  # kept"
+        ),
     )
 
     result = new_workload(root)
 
     assert result.exit_code == 0, result.stderr
-    kept = f"    agents: [claims-triage, claim-brief, {NAME}]  # kept"
+    kept = f"    agents: [{', '.join((*before, NAME))}]  # kept"
     assert kept in read(root).split("\n")
 
 
