@@ -830,11 +830,11 @@ that day; the rest stand as their step recorded them.
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | open | S074 |
 | `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | open; seen once, under load | S074 |
 | Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
-| The scaffold's undo has windows that only a lock would close, and it names more than it touched: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); the "check by hand" list can name a path the command never touched and a temporary that is already gone; an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; an error the undo raises after an interrupt ends the command as a write error (exit 1), not as the interrupt; `_replace` leaks a descriptor if an interrupt lands inside `os.fdopen`, before it takes the descriptor over | S076 (fifth review; reports of C8, F3, F4, F5) | open; low. No step owns the command-line tool, so S075, the developer's own tools, is the nearest | S075 |
-| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); `one_line` in `services_edit` compares the parser's lines, so a flow list with a U+2028 inside is refused as not on one line; `line_of` at the end of a text that ends with a newline names the line after the last; `yaml.compose` in `_runtime_agents` has no `RecursionError` catch, which the registry's loader makes unreachable from the command; a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | open; low; S075 for the reason in the row above | S075 |
-| `meridian registry schemas`: the write follows a link that is the `schemas` directory itself (`mkdir(exist_ok=True)` succeeds and the writes go through it; only a schema file that is a link is refused); `--check` on a linked file tells the person to run the command, which then refuses with `SchemaPathIsALink`; the write is not all-or-nothing | S076 (reports of C7 and F2) | open; low; S075 for the reason above | S075 |
+| The scaffold's undo has windows that only a lock would close, and it names more than it touched: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); the "check by hand" list can name a path the command never touched and a temporary that is already gone; an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; an error the undo raises after an interrupt ends the command as a write error (exit 1), not as the interrupt; `_replace` leaks a descriptor if an interrupt lands inside `os.fdopen`, before it takes the descriptor over | S076 (fifth review; reports of C8, F3, F4, F5) | open; low. No step owns the command-line tool; S074 (the suite and its files, without the cluster) is the nearest that is still open | S074 |
+| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); `one_line` in `services_edit` compares the parser's lines, so a flow list with a U+2028 inside is refused as not on one line; `line_of` at the end of a text that ends with a newline names the line after the last; `yaml.compose` in `_runtime_agents` has no `RecursionError` catch, which the registry's loader makes unreachable from the command; a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | open; low; S074 for the reason in the row above | S074 |
+| `meridian registry schemas`: the write follows a link that is the `schemas` directory itself (`mkdir(exist_ok=True)` succeeds and the writes go through it; only a schema file that is a link is refused); `--check` on a linked file tells the person to run the command, which then refuses with `SchemaPathIsALink`; the write is not all-or-nothing | S076 (reports of C7 and F2) | open; low; S074 for the reason above | S074 |
 | The loaders: `load_trusted_entry_point` catches `Exception`, not `BaseException`, so a `sys.exit()` or an interrupt raised at import by a module under the trusted root reaches the caller with its own message; `_loaded_in` and `_in_trusted_root` read `__file__`, which such a module can set, so they are sanity checks and not a boundary; a directory that calls itself `meridian` can still choose up to ten ID-shaped names and a count for a "known" list, and a class under the trusted root a name of up to 64 identifier characters for a cause (both need a write to the Python path or to the trusted package, T-40) | S076 (security review 2; reports of F1 and F2) | open; low; S069 is the nearest, the step of the runtime's edges, where the graphs' loader is | S069 |
-| The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S067 is the nearest, the next step to touch the evaluation's reports and baselines | S067 |
+| The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | open | S075 |
 
@@ -11175,8 +11175,16 @@ editing the runtime's loader, so the graphs' wording waited. At 15:20 UTC,
 before the session changed the order of the scaffold's contracts on its own:
 the change stood, with one sharpening, that C9's README paragraph has a
 named anchor and not "somewhere short", which merges badly. Before the pull
-request, because F5 and C10 had been read by no reviewer (Part A, step 4):
-ADVISOR-BEFORE-PR.
+request, because F5 and C10 had been read by no reviewer (Part A, step 4), at
+about 18:46 UTC: it read both from the session's transcript (F5's `_replace`:
+the temporary's name noted before the file exists, created with
+`O_CREAT|O_EXCL`, an existing file never removed, an interrupt after the
+replacement ends in an unlink of a path that is gone; C10's loader: one line
+over the shared table, the exhaustiveness now the table's import-time check,
+both sides of the trusted root resolved, nothing of another party quoted) and
+asked for no sixth review. It changed two things: one backlog row the session
+had re-homed to S071, the paid step, went to S074 instead, and the final
+suite's result is written with its first, unusable run.
 
 **Work log:**
 
@@ -11258,7 +11266,13 @@ ADVISOR-BEFORE-PR.
   closer to a signal than a stand-in and is not a terminal's Ctrl-C.
 - **The whole suite**, alone on a quiet machine: 12,161 passed, run before
   the last three fix contracts and before `main` with S037 was merged in.
-  Its run on the final tree: FINAL-SUITE-RESULT.
+  Its run on the final tree, twice: the first on a machine that was swapping
+  (it ran beside four implementers' own test runs and a kind cluster made
+  twenty minutes before; the load average reached 207) ended with 10 failed
+  and 3 errors, all timeouts, in 13 minutes, and is not a result; the second,
+  alone with six workers, 13,873 passed, 8 skipped, in 3 minutes 29 seconds.
+  The evaluation's free replay passed twice on that tree (`eval compare:
+  passed`).
 - **Each contract's own run** (from its report; the paths are what the
   contract named, so the numbers are not additive):
 
@@ -11286,7 +11300,8 @@ ADVISOR-BEFORE-PR.
 - **The screen digest did not move**: `test_screen_fingerprint.py` holds it
   equal to both committed baselines and passed in C5, F1 (20 passed) and F2.
   No contract ran the evaluation gate, whose name the harness refuses an
-  implementer; no baseline, report shape or fingerprint was meant to change.
+  implementer; the session ran the free replay on the final tree (above), and
+  no baseline, report shape or fingerprint changed.
 - **Red first.** Each contract's report says which tests it saw fail before
   the change; some it could not (a pin that must pass from the start, and
   F3, which wrote the implementation before running its tests). F3 and F2
@@ -11348,20 +11363,20 @@ ADVISOR-BEFORE-PR.
   baseline was made with**; the README says so. `Report.workload` is not
   tied to the golden set's manifest by a validator.
 - **The import test is a tripwire**: its docstring lists what it cannot see.
-- **No contract ran the evaluation gate, and nothing ran on a cluster.**
+- **Nothing ran on a cluster.**
 
 **Follow-ups:**
 
-- In the backlog, each with its step: the undo's windows and what it names
-  too much, the scaffold's smaller ends, the `schemas` directory that is a
-  link and a `--check` that points at a refusing command, and the merge of
-  `main` that left a test red (S075, the nearest step for the developer's
-  own tools: none owns the command-line tool, and its rule for an
-  implementer that edits through the shell is the one F1 and F4 broke); the
-  loaders' residuals and the scaffold for the second host (S069); the
-  report's workload validator and the manifest read several times (S067);
-  the import test's blind spots (S074); a generated workload that has never
-  run through the run API, re-homed from S076 to S073.
+- In the backlog, each with its step: the undo's windows and what it names too
+  much, the scaffold's smaller ends, and the `schemas` directory that is a link
+  with a `--check` that points at a refusing command (S074, the nearest step
+  that is still open: none owns the command-line tool); the merge of `main`
+  that left a test red (S075, which closes it with a sentence in Part A); the
+  loaders' residuals and the scaffold for the second host (S069); the report's
+  workload validator and the manifest read several times (S074, the nearest
+  that is still open and costs nothing); the import test's blind spots (S074);
+  a generated
+  workload that has never run through the run API, re-homed from S076 to S073.
 - Rows closed: the eight that named S076 as home (the note, `services_edit`,
   the scaffold's small ends, the loaders' small ends, the digest, the report
   builders, the schemas' traceback, the second graph of subgraphs); one
