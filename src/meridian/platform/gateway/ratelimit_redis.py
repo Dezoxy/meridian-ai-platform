@@ -39,6 +39,31 @@ which is the longest wait the script can compute from what it keeps and the
 ceiling ``_refusal`` puts on one (a longer wait is not the script's). Both end
 with the member's own score passing out of the window.
 
+Two more things a member can be, and what the script does with each (S066, H3a).
+A count of digits too big for a float (309 digits or more are ``inf`` in Lua)
+is read as one more than the token limit: that fills the window, a 429 until the
+member leaves, and never the error the sum of an ``inf`` ended in. Every count
+the pattern accepts is a finite whole number or that ``inf``; a sign, an
+exponent, a point, a name or any non-digit stops the match, so the member reads
+as no tokens. And a window holding more members than the script can have written
+(``_ENTRIES_PER_REQUEST_LIMIT`` times the request limit) is not read to its end:
+one call reads that many and one more, and the one more is answered as a
+refusal for the request window, with that window's wait and no walk, so what one
+tenant's key holds does not slow the calls of the others (they run one at a
+time on the server). That refusal changes nothing in the key.
+
+What a holder of the gateway's credential can still do, with those two closed: it
+can fill a tenant's window with members inside what the script keeps, a 429 for
+that tenant alone (a wait of at most 70 s on the request window, 120 s on the
+token window, or the request window's own length over the read bound) until the
+members leave, so about every two minutes it must plant again; it can empty a
+window, which hands the tenant its limits again; and it can load and run a
+script of its own that loops, which the store's probe answers by restarting the
+store. None of this reaches the ledger in PostgreSQL, whose budgets are the hard
+limits: these windows are flood control. One cost stays outside the bound: the
+two removals take every member scored outside what is kept in one call, so a
+plant of many such members costs one slow call before it is gone.
+
 Rolling update. A pod of the previous image and one of this one share the keys and
 each loads its own script, which the server keeps under its own hash, so neither
 replaces the other. Both write the same member (a digit string, a colon, 16 hex
@@ -95,7 +120,19 @@ DEFAULT_PREFIX = "meridian:rate"
 
 _TENANT_ID = re.compile(ENTITY_ID_PATTERN)
 _ADMITTED, _REQUEST_RATE, _TOKEN_RATE = 0, 1, 2
+_REQUEST_WINDOW_MS = round(REQUEST_WINDOW_SECONDS * 1000)
 _TOKEN_WINDOW_MS = round(TOKEN_WINDOW_SECONDS * 1000)
+# The most entries the script can have written per unit of the request limit, and
+# so the most one call reads (times the limit, and one more). The script writes an
+# entry only while fewer than R entries scored after now - 10 s (those in the
+# future too) are there, so any 10 s span of scores holds at most R, whatever the
+# order the clock gave them. After the two removals what is kept is scored in
+# (now - 60 s, now + 60 s], a span of two token windows: twelve request windows,
+# so 12 R. On a clock that only moves forward nothing is scored after now and it
+# is six (the span is one token window); the other six are the server's clock
+# stepping back by up to a window, which leaves what it had written in the
+# future. A bound of seven (six and one for the boundary) would cut that case.
+_ENTRIES_PER_REQUEST_LIMIT = 2 * _TOKEN_WINDOW_MS // _REQUEST_WINDOW_MS
 # The longest wait the script can compute from what it keeps. It keeps members
 # scored up to one token window after its own now (the margin below), and a kept
 # one leaves the token window a token window after its score: twice the window
@@ -127,12 +164,18 @@ local max_tokens = tonumber(ARGV[3])
 local tokens = tonumber(ARGV[4])
 local request_window = tonumber(ARGV[6])
 local token_window = tonumber(ARGV[7])
+local most_entries = tonumber(ARGV[8]) * max_requests
 
 -- A member this script did not write may be in the key (the gateway's Redis
 -- user can ZADD to it): one whose count is not digits before a colon is read as
--- no tokens, not an error that fails every call of the tenant.
+-- no tokens, not an error that fails every call of the tenant. A count of digits
+-- can still be too big for a float (309 digits are inf, and inf - inf is nan, so
+-- the walk below would end in its error reply): it is read as at most one more
+-- than the limit, which is already more than the window holds, and a sum of
+-- those stays a whole number. The bound goes first: math.min keeps its first
+-- argument against a nan.
 local function tokens_of(member)
-  return tonumber(string.match(member, '^(%d+):') or '0')
+  return math.min(max_tokens + 1, tonumber(string.match(member, '^(%d+):') or '0'))
 end
 
 local oldest_to_keep = string.format('%.0f', now - token_window)
@@ -143,7 +186,15 @@ redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', oldest_to_keep)
 -- or it would count for as long as it takes the clock to reach it.
 local latest_to_keep = string.format('%.0f', now + token_window)
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '(' .. latest_to_keep, '+inf')
-local entries = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
+-- Read the oldest entries, as many as the script can have written and one more
+-- (the call's cost must not depend on what somebody planted: every tenant's
+-- calls wait behind this one). The one more says the window holds what the
+-- script never wrote, and the answer is the request window's own wait, without
+-- a walk. The reply is flat (a score after each member): two elements an entry.
+local entries = redis.call('ZRANGE', KEYS[1], 0, most_entries, 'WITHSCORES')
+if #entries > 2 * most_entries then
+  return {1, request_window}
+end
 
 local requests, oldest, used = 0, nil, 0
 for i = 1, #entries, 2 do
@@ -220,8 +271,9 @@ class RedisRateLimiter:
                     limits.tokens_per_minute,
                     tokens,
                     f"{tokens}:{secrets.token_hex(8)}",
-                    round(REQUEST_WINDOW_SECONDS * 1000),
+                    _REQUEST_WINDOW_MS,
                     _TOKEN_WINDOW_MS,
+                    _ENTRIES_PER_REQUEST_LIMIT,
                 ],
             )
         except (redis.RedisError, ValueError, OverflowError) as exc:
