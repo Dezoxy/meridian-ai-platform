@@ -197,12 +197,21 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-netwo
 
 log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
-  "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml
+  "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml \
+  --set "global.images.envoyGateway.image=${ENVOY_GATEWAY_IMAGE_REPOSITORY}:${ENVOY_GATEWAY_IMAGE_TAG}@${ENVOY_GATEWAY_IMAGE_DIGEST}"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yaml" >/dev/null
 
 log "identity: cert-manager, who may ask for a certificate, and the CA for the services"
 install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
-  "${CERT_MANAGER_VERSION}" "${CERT_MANAGER_REPO}" cert-manager.yaml
+  "${CERT_MANAGER_VERSION}" "${CERT_MANAGER_REPO}" cert-manager.yaml \
+  --set "image.tag=${CERT_MANAGER_CONTROLLER_IMAGE_TAG}" \
+  --set "image.digest=${CERT_MANAGER_CONTROLLER_IMAGE_DIGEST}" \
+  --set "webhook.image.tag=${CERT_MANAGER_WEBHOOK_IMAGE_TAG}" \
+  --set "webhook.image.digest=${CERT_MANAGER_WEBHOOK_IMAGE_DIGEST}" \
+  --set "cainjector.image.tag=${CERT_MANAGER_CAINJECTOR_IMAGE_TAG}" \
+  --set "cainjector.image.digest=${CERT_MANAGER_CAINJECTOR_IMAGE_DIGEST}" \
+  --set "startupapicheck.image.tag=${CERT_MANAGER_STARTUPAPICHECK_IMAGE_TAG}" \
+  --set "startupapicheck.image.digest=${CERT_MANAGER_STARTUPAPICHECK_IMAGE_DIGEST}"
 # cert-manager's own approver is off (values/cert-manager.yaml), so nothing is
 # approved until approver-policy and its policies are there. On a cluster where
 # cert-manager already ran with its approver on, this order turns the approver
@@ -210,7 +219,9 @@ install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
 # not touched, and a request made in between waits and is then decided. Later
 # can be minutes (Helm's wait for approver-policy, then the apply's retries).
 install_release approver-policy cert-manager "${APPROVER_POLICY_CHART}" \
-  "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml
+  "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml \
+  --set "image.tag=${APPROVER_POLICY_IMAGE_TAG}" \
+  --set "image.digest=${APPROVER_POLICY_IMAGE_DIGEST}"
 apply_certificate_policy
 # The policies must be Ready before the CA is requested, or its request would
 # find none that is appropriate and wait.
@@ -228,7 +239,8 @@ kctl wait --for=condition=Ready clusterissuer/meridian-services \
 
 log "database: CloudNativePG operator"
 install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
-  "${CNPG_REPO}" cnpg.yaml
+  "${CNPG_REPO}" cnpg.yaml \
+  --set "image.tag=${CNPG_OPERATOR_IMAGE_TAG}@${CNPG_OPERATOR_IMAGE_DIGEST}"
 ensure_database_secrets
 log "database: platform-db (PostgreSQL 17, pgvector)"
 install_release platform-db meridian "${CNPG_CLUSTER_CHART}" "${CNPG_CLUSTER_VERSION}" \
@@ -248,7 +260,21 @@ log "observability: Grafana's Role (ConfigMaps in observability only)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/grafana-rbac.yaml" >/dev/null
 log "observability: Prometheus and Grafana"
 install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" \
-  "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml
+  "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml \
+  --set "prometheusOperator.image.tag=${PROMETHEUS_OPERATOR_IMAGE_TAG}" \
+  --set "prometheusOperator.image.sha=${PROMETHEUS_OPERATOR_IMAGE_DIGEST#sha256:}" \
+  --set "prometheusOperator.prometheusConfigReloader.image.tag=${PROMETHEUS_CONFIG_RELOADER_IMAGE_TAG}" \
+  --set "prometheusOperator.prometheusConfigReloader.image.sha=${PROMETHEUS_CONFIG_RELOADER_IMAGE_DIGEST#sha256:}" \
+  --set "prometheusOperator.admissionWebhooks.patch.image.tag=${KUBE_WEBHOOK_CERTGEN_IMAGE_TAG}" \
+  --set "prometheusOperator.admissionWebhooks.patch.image.sha=${KUBE_WEBHOOK_CERTGEN_IMAGE_DIGEST#sha256:}" \
+  --set "prometheus.prometheusSpec.image.tag=${PROMETHEUS_IMAGE_TAG}" \
+  --set "prometheus.prometheusSpec.image.sha=${PROMETHEUS_IMAGE_DIGEST#sha256:}" \
+  --set "kube-state-metrics.image.tag=${KUBE_STATE_METRICS_IMAGE_TAG}" \
+  --set "kube-state-metrics.image.sha=${KUBE_STATE_METRICS_IMAGE_DIGEST}" \
+  --set "grafana.image.tag=${GRAFANA_IMAGE_TAG}" \
+  --set "grafana.image.sha=${GRAFANA_IMAGE_DIGEST#sha256:}" \
+  --set "grafana.sidecar.image.tag=${GRAFANA_SIDECAR_IMAGE_TAG}" \
+  --set "grafana.sidecar.image.sha=${GRAFANA_SIDECAR_IMAGE_DIGEST#sha256:}"
 kctl -n observability wait --for=condition=Available \
   prometheus/kube-prometheus-stack-prometheus --timeout=10m >/dev/null
 apply_dashboards
@@ -258,10 +284,13 @@ log "observability: Prometheus scrapes cert-manager's metrics"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
-  "${GRAFANA_COMMUNITY_REPO}" tempo.yaml
+  "${GRAFANA_COMMUNITY_REPO}" tempo.yaml \
+  --set "tempo.tag=${TEMPO_IMAGE_TAG}@${TEMPO_IMAGE_DIGEST}"
 log "observability: Loki"
 install_release loki observability "${LOKI_CHART}" "${LOKI_VERSION}" \
-  "${GRAFANA_COMMUNITY_REPO}" loki.yaml
+  "${GRAFANA_COMMUNITY_REPO}" loki.yaml \
+  --set "loki.image.tag=${LOKI_IMAGE_TAG}" \
+  --set "loki.image.digest=${LOKI_IMAGE_DIGEST}"
 log "observability: OpenTelemetry Collector"
 install_release otel-collector observability "${OTEL_COLLECTOR_CHART}" \
   "${OTEL_COLLECTOR_VERSION}" "${OTEL_REPO}" otel-collector.yaml \

@@ -10,6 +10,7 @@ another shape (a new file, a variable that does not end in _IMAGE or
 _VERSION) needs a line there as well as a reader.
 """
 
+import fnmatch
 import json
 import re
 import unittest
@@ -179,6 +180,33 @@ class Readers(unittest.TestCase):
         self.assertEqual(
             version, re.search(r"^APPROVER_POLICY_VERSION=(\S+)$", text, re.M).group(1)
         )
+
+    def test_cert_manager_and_approver_policy_arrive_in_one_group(self) -> None:
+        # approver-policy v0.28.0 is built against one cert-manager release, so
+        # the two charts and cert-manager's images move together (S063).
+        text = (ROOT / PINS).read_text(encoding="utf-8")
+        names = [m.group("depName") for m in self.comment_reader(PINS).finditer(text)]
+        rules = self.config["packageRules"]
+        (group,) = [r for r in rules if r.get("groupName") == "cert-manager"]
+        (platform,) = [r for r in rules if r.get("groupName") == "kind platform"]
+
+        def in_group(name: str) -> bool:
+            return any(fnmatch.fnmatchcase(name, p) for p in group["matchPackageNames"])
+
+        family = [
+            name
+            for name in names
+            if name in ("cert-manager", "cert-manager-approver-policy")
+            or name.startswith("quay.io/jetstack/")
+        ]
+        self.assertEqual(len(family), 7)
+        self.assertEqual([name for name in names if in_group(name)], family)
+        self.assertFalse(in_group("quay.io/prometheus/prometheus"))
+        # A later rule wins, so the group must come after the platform's.
+        self.assertGreater(rules.index(group), rules.index(platform))
+        note = " ".join(group["prBodyNotes"])
+        for words in ("approver-policy", "cert-manager", "`make up`", "`make smoke`"):
+            self.assertIn(words, note)
 
     def test_a_split_image_carries_its_digest(self) -> None:
         digest = "sha256:" + "a" * 64

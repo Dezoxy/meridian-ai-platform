@@ -42,6 +42,90 @@ Jobs are in [`manifests/`](manifests/). The Meridian
 services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
 which `make deploy` installs (below).
 
+### The images the charts run (S063)
+
+Pinned means a digest, or an image that is never pulled (S019). Since S063
+every image a chart starts here is pinned by the multi-architecture index
+digest of its tag, each in [`pins.env`](pins.env) as `X_IMAGE_TAG` and
+`X_IMAGE_DIGEST` under a `# renovate:` comment, and `make up` passes both to
+the chart with `--set`. The tag is the one the chart installs by default at
+its pinned version: a chart upgrade moves the tags with it, and Renovate
+proposes a tag of its own that may not be the chart's, so read the chart's
+defaults again (below) before merging. What a chart's key takes is not
+uniform: `digest` takes `sha256:<hex>`; `sha` in kube-prometheus-stack and
+Grafana takes the hex alone (their templates write `@sha256:` themselves) and
+`up.sh` strips the prefix; `sha` in kube-state-metrics takes the whole digest;
+Tempo and CloudNativePG have no digest key, so the tag key carries
+`tag@digest`; Loki and the collector print the reference without the tag. The
+tests in `tests/meridian/test_kind_platform_images.py` hold what the files
+say; they cannot hold that this list is complete, which needs the network.
+Status: pins and tests implemented and tested without a cluster; the
+digests were read from the registries on 2026-10-06 (each is an index with
+`linux/amd64` and `linux/arm64`).
+
+| Release | Image (digest in `pins.env`) | Where the chart takes it | By digest |
+|---|---|---|---|
+| envoy-gateway | `docker.io/envoyproxy/gateway:v1.9.2` | `global.images.envoyGateway.image`: the controller, the certgen hook Job and the proxy's shutdown manager (named in the controller's configuration) | yes |
+| envoy-gateway | `docker.io/envoyproxy/envoy:distroless-v1.39.1` | the proxy pods: the controller's built-in default (v1.9.2 source), a digest already; `manifests/gateway.yaml` names none | yes, not set here |
+| envoy-gateway | `docker.io/envoyproxy/ratelimit:0482748e` | `global.images.ratelimit.image`, in the controller's configuration; started only for a global rate-limit policy, and there is none | left by tag, never started |
+| cert-manager | `quay.io/jetstack/cert-manager-controller:v1.21.2` | `image.tag`, `image.digest` | yes |
+| cert-manager | `quay.io/jetstack/cert-manager-webhook:v1.21.2` | `webhook.image.tag`, `.digest` | yes |
+| cert-manager | `quay.io/jetstack/cert-manager-cainjector:v1.21.2` | `cainjector.image.tag`, `.digest` | yes |
+| cert-manager | `quay.io/jetstack/cert-manager-startupapicheck:v1.21.2` | `startupapicheck.image.tag`, `.digest` (a post-install hook Job) | yes |
+| cert-manager | `quay.io/jetstack/cert-manager-acmesolver:v1.21.2` | the controller's flag `--acme-http01-solver-image`; `acmesolver.image.digest` exists | left by tag, never started (no ACME issuer) |
+| approver-policy | `quay.io/jetstack/cert-manager-approver-policy:v0.28.0` | `image.tag`, `image.digest` | yes |
+| cnpg | `ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1` | `image.tag` as `tag@digest`; the chart passes it as `OPERATOR_IMAGE_NAME` too, so the init container of every database pod is by digest as well | yes, through the tag key |
+| platform-db | `ghcr.io/cloudnative-pg/postgresql:17.11-standard-trixie` | `cluster.imageName` (`POSTGRES_IMAGE`) | yes |
+| platform-db | `alpine:3.17` | the chart's `helm test` Job, started by `helm test` only | left by tag, never started |
+| kube-prometheus-stack | `quay.io/prometheus-operator/prometheus-operator:v0.94.1` | `prometheusOperator.image.tag`, `.sha` | yes |
+| kube-prometheus-stack | `quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1` | `prometheusOperator.prometheusConfigReloader.image.tag`, `.sha` (the operator's flag `--prometheus-config-reloader`; the sidecar of Prometheus) | yes |
+| kube-prometheus-stack | `ghcr.io/jkroepke/kube-webhook-certgen:1.8.9` | `prometheusOperator.admissionWebhooks.patch.image.tag`, `.sha` (the create and patch hook Jobs) | yes |
+| kube-prometheus-stack | `quay.io/prometheus/prometheus:v3.15.0-distroless` | `prometheus.prometheusSpec.image.tag`, `.sha` (a field of the Prometheus resource) | yes |
+| kube-prometheus-stack | `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0` | `kube-state-metrics.image.tag`, `.sha` | yes |
+| kube-prometheus-stack | `docker.io/grafana/grafana:13.2.3-distroless` | `grafana.image.tag`, `.sha` | yes |
+| kube-prometheus-stack | `quay.io/kiwigrid/k8s-sidecar:2.11.2` | `grafana.sidecar.image.tag`, `.sha` (both sidecar containers) | yes |
+| kube-prometheus-stack | `quay.io/thanos/thanos:v0.42.4` | the operator's flag `--thanos-default-base-image`; `prometheusOperator.thanosImage.sha` exists | left by tag, never started (no Thanos sidecar) |
+| kube-prometheus-stack | `quay.io/prometheus/node-exporter:v1.12.1-distroless` | `prometheus-node-exporter.image.digest` | not pinned: switched off on kind (S063); on again, it needs a pin |
+| tempo | `docker.io/grafana/tempo:3.1.0` | `tempo.tag` as `tag@digest` | yes, through the tag key |
+| loki | `docker.io/grafana/loki:3.7.8` | `loki.image.tag`, `.digest` | yes |
+| otel-collector | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:0.162.0` | `image.repository`, `.tag`, `.digest` (before S063) | yes |
+
+The Prometheus tag is also the Makefile's `PROMTOOL_IMAGE`. Every image left
+by tag is one that nothing starts: if an ACME issuer, a rate-limit policy, a
+Thanos sidecar or `helm test` is added, its image needs a pin first.
+
+To read what a chart installs by default (its tags must be the ones in
+`pins.env`), render it without the `--set` arguments, here for cert-manager;
+the other releases take their chart, repository, version and values file from
+`up.sh` the same way. With the `--set` arguments `up.sh` passes, every line
+this prints ends in a digest, except the images the table says are left by tag
+or not pinned:
+
+```sh
+set -a; source infra/kind/pins.env; set +a
+helm template cert-manager "${CERT_MANAGER_CHART}" --repo "${CERT_MANAGER_REPO}" \
+  --version "${CERT_MANAGER_VERSION}" --namespace cert-manager \
+  --values infra/kind/values/cert-manager.yaml |
+  grep -oE '(docker\.io|quay\.io|ghcr\.io|registry\.k8s\.io)/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?' |
+  sort -u
+```
+
+On the cluster, after `make up` (with `KUBECONFIG` set as `make up` prints),
+this prints one line for each container, init containers included, outside
+the node's own namespaces, that runs an image without a digest. It should
+print only containers of `meridian` pods whose image is the local
+`meridian:<id>` (their pull policy is `Never`; the image never leaves the
+node):
+
+```sh
+kubectl get pods -A -o go-template='{{range .items}}{{$pod := printf "%s/%s" .metadata.namespace .metadata.name}}{{range .spec.initContainers}}{{$pod}} {{.image}}{{"\n"}}{{end}}{{range .spec.containers}}{{$pod}} {{.image}}{{"\n"}}{{end}}{{end}}' |
+  grep -vE '^(kube-system|local-path-storage)/' | grep -v '@sha256:'
+```
+
+`make up` on a running cluster installs each release again in place
+(`helm upgrade --install`): the Deployments and StatefulSets whose image
+reference changed roll once.
+
 How telemetry flows: a Meridian service sends OTLP over HTTP to
 `otel-collector.observability:4318`. The collector also listens for gRPC on
 `:4317`, but since S063 that port is admitted from no namespace and no pod

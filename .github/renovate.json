@@ -163,7 +163,20 @@
       ],
       "groupName": "kind platform",
       "prBodyNotes": [
-        "CI does not start the kind platform. Before merging, run `make up` and `make smoke` on this branch, put what they printed in a comment, and bring the versions table in `infra/kind/README.md` up to date."
+        "CI does not start the kind platform. Before merging, run `make up` and `make smoke` on this branch, put what they printed in a comment, and bring the versions table in `infra/kind/README.md` up to date.",
+        "The images in `pins.env` that a chart runs (`X_IMAGE_TAG` and `X_IMAGE_DIGEST`) are the tags that chart version installs by default. A tag Renovate proposes that is not the chart's own belongs with a newer chart: leave it, or move the chart too, and read the chart's defaults again with the command in `infra/kind/README.md`."
+      ]
+    },
+    {
+      "description": "approver-policy is built against one cert-manager release (the plan's backlog records v0.28.0 against v1.21.2), so the two charts and cert-manager's images arrive in one pull request. This rule comes after the 'kind platform' one so that its group wins.",
+      "matchPackageNames": [
+        "cert-manager",
+        "cert-manager-approver-policy",
+        "quay.io/jetstack/cert-manager-*"
+      ],
+      "groupName": "cert-manager",
+      "prBodyNotes": [
+        "approver-policy and cert-manager arrive together. Look up which cert-manager version the new approver-policy release is built against (its release notes or go.mod), and move both charts, and the images of cert-manager's components, to versions that agree. CI does not start the platform; run `make up` and `make smoke` on this branch and put what they printed in a comment."
       ]
     },
     {

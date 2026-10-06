@@ -4259,11 +4259,17 @@ def test_up_installs_cert_manager_from_its_pin_into_its_own_namespace() -> None:
         if line.startswith("install_release cert-manager ")
     ]
 
-    assert installed == (
+    assert installed.startswith(
         "install_release cert-manager cert-manager"
         ' "${CERT_MANAGER_CHART}" "${CERT_MANAGER_VERSION}"'
-        ' "${CERT_MANAGER_REPO}" cert-manager.yaml'
+        ' "${CERT_MANAGER_REPO}" cert-manager.yaml --set '
     )
+    # The four components' images by digest, and nothing else is set (S063).
+    assert re.findall(r'--set "([A-Za-z.]+)=', installed) == [
+        f"{component}image.{leaf}"
+        for component in ("", "webhook.", "cainjector.", "startupapicheck.")
+        for leaf in ("tag", "digest")
+    ]
 
 
 def test_up_installs_the_issuer_before_the_database_and_waits_for_it() -> None:
